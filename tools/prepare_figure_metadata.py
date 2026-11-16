@@ -1828,18 +1828,26 @@ def capture_member_paths(root, *, include_markers=False):
     return members, directories
 
 
-def payload(root):
+def payload(root, *, _verified_raw=None):
     result = {}
     members, directories = capture_member_paths(root)
     for name, path in members.items():
-        identity = evidence.fingerprint(path)
-        result[name] = {'bytes': identity['size'], 'sha256': identity['sha256']}
+        if (_verified_raw is not None and name == ROLES['figure-sizing-raw']):
+            resolved, stamp, identity = _verified_raw
+            if path.resolve(strict=True) != resolved or evidence.stamp(path) != stamp:
+                raise ValueError('Figure verified raw changed before content authentication')
+            result[name] = dict(identity)
+            if evidence.stamp(path) != stamp:
+                raise ValueError('Figure verified raw changed during content authentication')
+        else:
+            identity = evidence.fingerprint(path)
+            result[name] = {'bytes': identity['size'], 'sha256': identity['sha256']}
     if any(complete_capture_directory_stamp(path) != before for path, before in directories.items()):
         raise ValueError('Figure capture membership changed while hashing')
     return result
 
 
-def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None):
+def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None, _raw_payload_out=None):
     """Replay original source captures, retaining their exact finite scope."""
     if _inventory_sources_out is not None and (type(_inventory_sources_out) is not dict or _inventory_sources_out):
         raise ValueError('Verified inventory source output must be an empty dictionary')
@@ -1861,7 +1869,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
             retained_cache=retained_cache, inventory_cache=inventory_cache,
             regenerate_projection=regenerate_projection, _reprojection_records=_reprojection_records,
-            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out)
+            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out, _raw_payload_out=_raw_payload_out)
     with (root / ROLES['figure-sizing']).open('rb') as source:
         first = source.readline(STREAM_HEADER_LIMIT + 1)
     try:
@@ -1871,7 +1879,7 @@ def replay(root, wiki, date, *, retained_cache=None, inventory_cache=None, regen
     if isinstance(stream_header, dict) and stream_header.get('schema') == FILES_STREAM_SCHEMA:
         return replay_stream_capture(root, wiki, date, defaults, namespace, general,
             retained_cache=retained_cache, inventory_cache=inventory_cache,
-            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out)
+            _raw_index_out=_raw_index_out, _inventory_sources_out=_inventory_sources_out, _raw_payload_out=_raw_payload_out)
     projection_raw = small(root / ROLES['figure-sizing'])
     projection = decode(projection_raw)
     file_level = isinstance(projection, dict) and projection.get('schema') == FILES_SCHEMA
@@ -1955,14 +1963,14 @@ def _figure_capture_manifest(root, require_complete=True):
     return manifest_raw, manifest
 
 
-def _authenticate_figure_capture_files(root, manifest, inventory_cache):
+def _authenticate_figure_capture_files(root, manifest, inventory_cache, *, _verified_raw=None):
     directory_stamp = complete_capture_directory_stamp(root)
     members, member_directories = capture_member_paths(root, include_markers=True)
     before = {path: evidence.stamp(path) for path in members.values()}
-    artifacts = payload(root)
+    artifacts = payload(root, _verified_raw=_verified_raw)
     if manifest.get('artifacts') != artifacts:
         raise ValueError('Figure capture differs from source replay')
-    # Each output is already fully hashed in this invocation's payload. Bind
+    # Each output is already fully hashed in this invocation. Bind
     # both manifest views to those bytes while the exact members stay unchanged.
     outputs = {role: artifacts[filename]['sha256'] for role, filename in output_roles(root).items()}
     if manifest.get('outputs') != outputs:
@@ -1996,8 +2004,9 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if raw_index is not None:
         generation['_raw_index_out'] = raw_index
     inventory_sources = {}
+    raw_payload = {}
     defaults, coverage = replay(root, manifest.get('wiki'), manifest.get('date'), retained_cache=retained_cache, inventory_cache=inventory_cache,
-                               _inventory_sources_out=inventory_sources, **generation)
+                               _inventory_sources_out=inventory_sources, _raw_payload_out=raw_payload, **generation)
     if coverage['kind'] == 'file-logical-axes':
         keys = ('wiki', 'date', 'name', 'url', 'size', 'sha1')
         if inventory_sources:
@@ -2016,7 +2025,8 @@ def verify(root, require_complete=True, *, retained_cache=None, inventory_cache=
     if (manifest.get('namespace_registry_sha256') != defaults['namespace_registry_sha256'] or
             manifest.get('coverage') != coverage):
         raise ValueError('Figure capture differs from source replay')
-    _authenticate_figure_capture_files(root, manifest, inventory_cache)
+    _authenticate_figure_capture_files(root, manifest, inventory_cache,
+        _verified_raw=raw_payload.get('proof'))
     if regenerate_projection is not None and os.path.lexists(root / COMPLETE):
         raise ValueError('Figure capture completed during projection regeneration')
     if _raw_index_out is not None:
@@ -2702,13 +2712,15 @@ def replay_http_source(root, source, batch, wiki, http_files, *, light, stage=''
 
 
 
-def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None):
+def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, retained_cache=None, inventory_cache=None, regenerate_projection=None, _reprojection_records=None, _raw_index_out=None, _inventory_sources_out=None, _raw_payload_out=None):
     if _inventory_sources_out is not None and (type(_inventory_sources_out) is not dict or _inventory_sources_out):
         raise ValueError('Verified inventory source output must be an empty dictionary')
     if _raw_index_out is not None and (type(_raw_index_out) is not dict or _raw_index_out):
         raise ValueError('Verified raw index output must be an empty dictionary')
     site_raw = small(root / ROLES['figure-sizing-site'], MAX_RESPONSE)
     raw_path = root / ROLES['figure-sizing-raw']
+    if _raw_payload_out is not None and (type(_raw_payload_out) is not dict or _raw_payload_out):
+        raise ValueError('Verified raw payload output must be an empty dictionary')
     def raw_identity():
         return (raw_path.resolve(), evidence.stamp(raw_path), complete_capture_directory_stamp(root))
     raw_before = raw_identity()
@@ -2777,7 +2789,7 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     prefix_sources, light_requests, ordinary_requests, lean_requests = [], set(), set(), set()
     complete_sources = []
     offsets = [] if materialized is not None or _raw_index_out is not None else None
-    replay_identity = {} if offsets is not None else None
+    replay_identity = {} if offsets is not None or _raw_payload_out is not None else None
     batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
     header = next(batches)
     sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
@@ -2915,6 +2927,15 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             (REPLAY_CONTRACT_V2, REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT))
         _raw_index_out.update(header=header, offsets=offsets, encoding=encoding,
                               identity=replay_identity, stamp=raw_before[1])
+    if _raw_payload_out is not None:
+        if (replay_identity != {'size': projection['raw_bytes'], 'sha256': projection['raw_sha256']} or
+                raw_identity() != raw_before):
+            raise ValueError('Verified raw payload differs from its completed stream')
+        # stream_values publishes only after forward complete-byte iteration,
+        # exact EOF and held-descriptor/path checks. Publish after all replay
+        # semantics pass; partial/failed replay cannot mint this proof.
+        _raw_payload_out['proof'] = (raw_before[0], raw_before[1],
+            {'bytes': replay_identity['size'], 'sha256': replay_identity['sha256']})
     if _inventory_sources_out is not None:
         _inventory_sources_out.update(path=inventory_before[0], stamp=inventory_before[1], sources=sources)
     return defaults, coverage

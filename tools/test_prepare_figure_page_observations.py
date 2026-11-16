@@ -885,5 +885,96 @@ class SelectedFullGetRootContract(unittest.TestCase):
 
 
 
+class RootOnlyObservationTests(unittest.TestCase):
+ def setUp(self):
+  root=Path(__file__).parent/'testdata'
+  self.snapshot_path=root/'ru-current-table-root/figure-page-observations.json'
+  self.namespace_path=root/'ru-denaske114/namespace-registry.tsv'
+  self.defaults_path=root/'ru-current5573/normal-figure-siteinfo.raw.json'
+  self.raw=self.snapshot_path.read_bytes();self.namespace=self.namespace_path.read_bytes();self.defaults=self.defaults_path.read_bytes()
+
+ def test_genuine_root_only_pack_and_snapshot_roundtrip(self):
+  self.assertEqual(observed.digest(self.raw),'fbc9d52baa6cdad8e66206890cae0a7644a77d80096c8aa8bf80f9a393e8eee9')
+  doc=observed.validate_document(self.raw,self.namespace,self.defaults);self.assertEqual(doc['pages'],[]);self.assertTrue(doc['table_roots'])
+  with tempfile.TemporaryDirectory() as tmp:
+   out=Path(tmp)/'pack';record=observed.pack(self.snapshot_path,self.namespace_path,self.defaults_path,out)
+   self.assertEqual((out/observed.SNAPSHOT).read_bytes(),self.raw);self.assertEqual(observed.validate_snapshot(out/observed.SNAPSHOT,'ruwiktionary','20261001'),record)
+ def test_empty_pages_and_roots_refused(self):
+  doc=json.loads(self.raw);doc['table_roots']=[]
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+ def test_invalid_root_refused(self):
+  doc=json.loads(self.raw);doc['table_roots']=[{}]
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+ def test_root_digest_grammar_and_namespace_authentication_retained(self):
+  doc=json.loads(self.raw);doc['namespace_sha256']='0'*64
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+  doc=json.loads(self.raw);root=doc['table_roots'][0];root['raw_sha256']='not-a-sha256'
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+
+ def test_first_row_and_header_source_boundaries(self):
+  for old,new in (('|-\n!colspan="11"','|-\n|-\n!colspan="11"'),('|-\n!colspan="11"','|- style="color:red"\n!colspan="11"'),('!colspan="11"','!colspan="0"'),('!colspan="11"','!colspan="65536"')):
+   with self.subTest(new=new):
+    doc=json.loads(self.raw);root=doc['table_roots'][0];assert old in root['source'];root['source']=root['source'].replace(old,new,1)
+    with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+ def altered_response(self,old,new):
+  doc=json.loads(self.raw);root=doc['table_roots'][0];response=root['response'];opening=response.encode()[root['observed_table']['start']:root['observed_table']['end']]
+  assert old in response;root['response']=response.replace(old,new,1);raw=root['response'].encode();at=raw.find(opening);assert at>=0 and raw.find(opening,at+1)<0;root['observed_table']=dict(start=at,end=at+len(opening))
+  receipt=json.loads(root['receipt']);receipt['sources'][0].update(bytes=len(raw),sha256=observed.digest(raw));root['receipt']=json.dumps(receipt)
+  return doc
+ def test_authored_parent_and_captured_attribute_guards(self):
+  for old,new in (('style="width:auto;margin:0px;overflow:auto;"','style="width:auto;margin:1px;overflow:auto;"'),('style="width:auto;margin:0px;overflow:auto;"','style="width:auto;margin:0px;overflow:auto;" onclick="bad"')):
+   with self.subTest(new=new):
+    doc=self.altered_response(old,new)
+    with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+  doc=json.loads(self.raw);root=doc['table_roots'][0];root['source']=root['source'].replace('<div style="width:auto;margin:0px;overflow:auto;">','<div style="width:auto;margin:0px;overflow:auto;" class="foreign">');delta=len(root['source'].encode())-len(json.loads(self.raw)['table_roots'][0]['source'].encode());root['source_table']={k:v+delta for k,v in root['source_table'].items()}
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+ def test_unicode_section_tokens_keep_native_byte_and_identity_limits(self):
+  for old,new in (('data-mw-section-id="1"','data-mw-section-id="-1"'),('data-mw-section-id="1"','data-mw-section-id="01"'),('aria-labelledby="Японский"','aria-labelledby="Япон ский"'),('aria-labelledby="Японский"','aria-labelledby="'+('я'*129)+'"')):
+   with self.subTest(new=new[:80]):
+    doc=self.altered_response(old,new)
+    with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+
+ def test_source_prefix_and_closed_style_match_native_custody(self):
+  for prefix in ('<span>\n','<nav>\n'):
+   with self.subTest(prefix=prefix):
+    source=(prefix+'<div style="width:auto;margin:0px;overflow:auto;">\n{|').encode()
+    with self.assertRaises(ValueError):observed.table_root_source_parent(source,len(source)-2)
+  for style in ('background:url(https://x)','width:calc(100% - 1px)','width:10px\\bad','color:"red"'):
+   with self.subTest(style=style):
+    source=('<div style="'+style+'">\n{|').encode()
+    with self.assertRaises(ValueError):observed.table_root_source_parent(source,len(source)-2)
+
+ def test_root_parent_block_boundary_and_first_header_child(self):
+  for prefix in ('preceding text\n','preceding text\n\n ','preceding text\n\n\t','preceding text\n \n'):
+   source=(prefix+'<div style="width:auto;margin:0px;overflow:auto;">\n{|').encode()
+   with self.subTest(prefix=prefix),self.assertRaises(ValueError):observed.table_root_source_parent(source,len(source)-2)
+  doc=json.loads(self.raw);response=doc['table_roots'][0]['response'];opening=response.encode()[doc['table_roots'][0]['observed_table']['start']:doc['table_roots'][0]['observed_table']['end']].decode();at=response.index(opening)+len(opening);tail=response[at:];th=tail.index('<th');needle=tail[th:tail.index('>',th)+1]
+  doc=self.altered_response(needle,'<td>foreign</td>'+needle)
+  with self.assertRaises(ValueError):observed.validate_document(observed.encoded(doc),self.namespace,self.defaults)
+
+ def test_native_configuration_prelude_and_json_boundaries(self):
+  import html.parser
+  response=json.loads(self.raw)['table_roots'][0]['response']
+  class Scripts(html.parser.HTMLParser):
+   def __init__(self):super().__init__();self.in_script=False;self.items=[];self.classes=None
+   def handle_starttag(self,tag,attrs):
+    if tag=='html':self.classes=dict(attrs)['class']
+    if tag=='script':self.in_script=True
+   def handle_endtag(self,tag):
+    if tag=='script':self.in_script=False
+   def handle_data(self,text):
+    if self.in_script and 'RLCONF='in text:self.items.append(text)
+  parser=Scripts();parser.feed(response);text,=parser.items
+  self.assertEqual(observed.table_root_configuration(text,parser.classes)['wgArticleId'],1500042)
+  with self.assertRaises(ValueError):observed.table_root_configuration(text,parser.classes+' foreign')
+  marker=text.index('RLCONF=')
+  for bad in ('x'+text, text+'RLCONF={};',text[:marker]+'RLCONF={"x":'+('['*33)+'0'+(']'*33)+'};',text[:marker]+'RLCONF={"x":1,"x":2};',text[:marker]+'RLCONF={} ',text[:marker]+'RLCONF=[];'):
+   with self.subTest(bad=bad[-70:]),self.assertRaises(ValueError):observed.table_root_configuration(bad,parser.classes)
+  self.assertEqual(observed.table_root_configuration('RLCONF={"x":1};',None),{'x':1})
+
+  for token in ('NaN','Infinity','-Infinity'):
+   with self.subTest(token=token),self.assertRaises(ValueError):observed.table_root_configuration('RLCONF={"x":'+token+'};',None)
+
+
 if __name__ == '__main__':
     unittest.main()

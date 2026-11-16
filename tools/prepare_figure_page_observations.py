@@ -4,6 +4,7 @@ import argparse
 import base64
 import zlib
 import hashlib
+import html
 from html.parser import HTMLParser
 import json
 from pathlib import Path
@@ -1577,6 +1578,109 @@ def table_root_opening_attributes(text, name):
     return parser.attributes
 
 
+def table_root_configuration(text, html_classes):
+    # Exact non-selected prelude inventory from page_language_prefix.zig.
+    marker = text.find('RLCONF=')
+    if marker < 0: raise ValueError('Missing table configuration')
+    if marker:
+        hashes = {
+            '4596a0a448783bdf5cd823d3b017520464502eba17da6e0277049df0c171bf39',
+            '296e5797ae51141a36d124508c23b7e0aeb2cb5be620e060fc6eb5aceb39cc89',
+            'ff0406678d57587b7409bfba7f818a44a9ec8dd418eb27da4b32823b3e19ed0d',
+            '50617cc2b928696b5f738520ed06f6814b186a4a6ddcadd9743d34abd74a8d5d',
+            '1e6d52df99a5b900fc18cec459f5e77aee670a50858da0923389f6c308ac7c49',
+            '1a3d0fcd4371047de9a485248822f83026e5d7361fb2e9ec9b547c0093bf1bb0',
+            'f8b4a82d07b0c2847a010739493119441c8ce97437e68ba0dac16f921ee322a8',
+            '932b9910c9e926e55516112a7ce9644909c06c20035d794b10947a5eec4e3f94',
+            'e925dc8ae7861a33fd0b23132dbc9eeae57bba470d42e81320a4b43ed0a6a5e1'}
+        if len(text[:marker].encode()) not in (952,956) or digest(text[:marker].encode()) not in hashes:
+            raise ValueError('Unproved table configuration program')
+        lead = '(function(){var className="'; finish = text.find('";var cookie=')
+        if (not text.startswith(lead) or not isinstance(html_classes,str) or not html_classes.startswith('client-nojs ')
+                or text[len(lead):finish] != 'client-js ' + html_classes[len('client-nojs '):]):
+            raise ValueError('Table root class/program mismatch')
+    start = marker + 7
+    if text[start:start+1] != '{': raise ValueError('Non-object table configuration')
+    stack = []; quoted = False; escaped = False; end = None
+    for index in range(start,len(text)):
+        char = text[index]
+        if quoted:
+            if escaped: escaped = False
+            elif char == '\\': escaped = True
+            elif char == '"': quoted = False
+        elif char == '"': quoted = True
+        elif char in '{[':
+            stack.append(char)
+            if len(stack)>32: raise ValueError('Table configuration exceeds native depth')
+        elif char in '}]':
+            if not stack or (stack.pop(),char) not in (('{','}'),('[',']')):
+                raise ValueError('Unbalanced table configuration')
+            if not stack: end=index+1; break
+    if end is None or text[end:end+1] != ';' or 'RLCONF' in text[end+1:]:
+        raise ValueError('Ambiguous table configuration')
+    def unique(pairs):
+        value = {}
+        for key,item in pairs:
+            if key in value: raise ValueError('Duplicate table configuration key')
+            value[key] = item
+        return value
+    def reject_constant(token):
+        raise ValueError('Nonstandard table configuration constant')
+    value=json.loads(text[start:end],object_pairs_hook=unique,parse_constant=reject_constant)
+    if not isinstance(value,dict): raise ValueError('Non-object table configuration')
+    return value
+
+
+def table_root_source_parent(source, start):
+    # Conservative native-equivalent prefix custody, not a general HTML parser.
+    prefix = source[:start].decode()
+    class SourcePrefix(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True); self.stack = []; self.nodes = 0; self.offsets = [0]
+            self.offsets += [i + 1 for i, ch in enumerate(prefix) if ch == '\n']
+        def handle_starttag(self, tag, attrs):
+            self.nodes += 1
+            if tag not in {'span','ul','li','div'} or self.nodes > 16384 or len(self.stack) >= 128:
+                raise ValueError('Unsupported table source prefix owner')
+            opening = self.get_starttag_text(); line, col = self.getpos()
+            at = self.offsets[line - 1] + col
+            values = dict(attrs)
+            if len(values) != len(attrs) or len(attrs) > 64 or any(value is None for _, value in attrs):
+                raise ValueError('Ambiguous table source prefix attributes')
+            if tag == 'div':
+                match = re.fullmatch(r"<div[ \t]+(align|style)[ \t]*=[ \t]*([\"'])(.*?)\2[ \t]*>", opening)
+                if (match is None or (at and (at < 2 or prefix[at - 2:at] != '\n\n')) or self.stack):
+                    raise ValueError('Unproved table source parent')
+                key, value = match[1], match[3]
+                if (not value or any(c in value for c in '{}[]<>|\r\n\0') or '__' in value
+                        or (key == 'align' and value != 'center')):
+                    raise ValueError('Invalid table source parent attribute')
+                if key == 'style':
+                    for raw in value.split(';'):
+                        declaration = raw.strip(' ')
+                        if not declaration: continue
+                        if ':' not in declaration: raise ValueError('Nonliteral table source style')
+                        prop, content = (part.strip(' ') for part in declaration.split(':', 1))
+                        if re.fullmatch(r'[A-Za-z-]+', prop) is None or re.fullmatch(r'[A-Za-z0-9 #.,%+\-]+', content) is None:
+                            raise ValueError('Nonliteral table source style')
+                values = {key: html.unescape(value)}
+            self.stack.append((tag, values, at + len(opening)))
+        def handle_endtag(self, tag):
+            if not self.stack or self.stack[-1][0] != tag:
+                raise ValueError('Unbalanced table source prefix')
+            self.stack.pop()
+        def handle_startendtag(self, tag, attrs):
+            raise ValueError('Self-closing table source prefix owner')
+    parser = SourcePrefix(); parser.feed(prefix); parser.close()
+    if not parser.stack: return None
+    if len(parser.stack) != 1 or parser.stack[0][0] != 'div':
+        raise ValueError('Foreign active table source owner')
+    _, attrs, end = parser.stack[0]
+    if prefix[end:].strip(' \t\r\n'):
+        raise ValueError('Table source parent is not adjacent')
+    return attrs
+
+
 def validate_table_roots(roots, doc, defaults):
     # Structural packaging only. The native selector additionally proves the
     # complete source/observed parent graph and exact live expanded-source match.
@@ -1607,15 +1711,24 @@ def validate_table_roots(roots, doc, defaults):
         source = root['source'].encode(); start, end = root['source_table']['start'], root['source_table']['end']
         if ((start and source[start - 1:start] != b'\n') or source[start:start + 2] != b'{|' or source.find(b'\n', start) != end):
             raise ValueError('Table source interval is not one complete opening line')
-        table_attrs = table_root_opening_attributes('<table' + source[start + 2:end].decode() + '>', 'table')
-        header_end = source.find(b'\n', end + 1)
-        header = source[end + 1:header_end]
+        table_attrs = table_root_opening_attributes('<table ' + source[start + 2:end].decode() + '>', 'table')
+        source_parent = table_root_source_parent(source, start)
+        header_start = end + 1
+        header_end = source.find(b'\n', header_start)
+        header = source[header_start:header_end]
+        if header == b'|-':
+            header_start = header_end + 1
+            header_end = source.find(b'\n', header_start)
+            header = source[header_start:header_end]
         if header_end < 0 or not header.startswith(b'!') or header.startswith(b'!!') or b'|' not in header:
             raise ValueError('Missing literal table signature')
         attributes, label = header[1:].split(b'|', 1); label = label.strip(b' \t\r').decode()
         if not label or any(c in label for c in '<>&[]{}\r\n'):
             raise ValueError('Nonliteral table signature')
         header_attrs = table_root_opening_attributes('<th ' + attributes.decode() + '>', 'th')
+        for span in ('colspan', 'rowspan'):
+            if span in header_attrs and (re.fullmatch(r'[0-9]+', header_attrs[span]) is None or not 1 <= int(header_attrs[span]) <= 65535):
+                raise ValueError('Invalid literal table header span')
         response = root['response']; raw = response.encode()
         receipt = table_root_transport_receipt(root['receipt'], [response], 'text/html')
         origin = 'https://' + doc['wiki'][:-len('wiktionary')].replace('_', '-') + '.wiktionary.org'
@@ -1632,7 +1745,7 @@ def validate_table_roots(roots, doc, defaults):
                 self.path = []; self.script = None; self.configs = []; self.html_classes = None
                 self.body_end = None; self.head_closed = False; self.root_count = 0; self.tables = []
                 self.root_stack = []; self.root_closed = False; self.root_nodes = 0
-                self.selected = None; self.header = None; self.header_text = ''; self.header_done = False
+                self.selected = None; self.header = None; self.header_text = ''; self.header_done = False; self.first_row = None; self.table_depth = None; self.tbody = False
             def position(self):
                 line, col = self.getpos(); return offsets[line - 1] + col
             def handle_starttag(self, tag, attrs):
@@ -1671,22 +1784,38 @@ def validate_table_roots(roots, doc, defaults):
                         # and the native CSS graph; this is only structural intake.
                         parents = self.root_stack[1:-1]
                         if parents and parents[-1][0] == 'div':
-                            if parents[-1][1].get('align') != 'center': raise ValueError('Unsupported table local parent')
+                            captured_parent = parents[-1][1]
+                            if (source_parent is None or not set(captured_parent) <= set(source_parent) | {'about','typeof','id','data-mw'}
+                                    or any(captured_parent.get(k) != v for k, v in source_parent.items())):
+                                raise ValueError('Unsupported table local parent')
                             parents = parents[:-1]
+                        elif source_parent is not None:
+                            raise ValueError('Missing captured table source parent')
                         if len(parents) > 32: raise ValueError('Too many generated table section ancestors')
                         for parent_tag, parent_attrs in parents:
                             section_id = parent_attrs.get('data-mw-section-id') or ''
-                            if (parent_tag != 'section' or set(parent_attrs) != {'data-mw-section-id', 'id', 'aria-labelledby'} or
-                                    re.fullmatch(r'(?:-1|0|[1-9][0-9]{0,19})', section_id) is None or
-                                    (section_id != '-1' and int(section_id) > (1 << 64) - 1) or
-                                    any(re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', parent_attrs.get(key) or '') is None for key in ('id', 'aria-labelledby'))):
+                            if (parent_tag != 'section' or set(parent_attrs) != {'data-mw-section-id', 'id', 'aria-labelledby'} or section_id == '-1'):
                                 raise ValueError('Unproved generated table section ancestor')
-                        self.selected = values
+                            current_literal_section(parent_attrs)
+                        self.selected = values; self.table_depth = len(self.root_stack)
                 if self.selected is not None and not self.header_done:
-                    if tag == 'th':
-                        if self.header is not None: raise ValueError('Ambiguous table header')
+                    depth = len(self.root_stack)
+                    if tag == 'table':
+                        if depth != self.table_depth: raise ValueError('Nested table before literal signature')
+                    elif tag == 'tbody':
+                        if self.tbody or self.first_row is not None or depth != self.table_depth + 1:
+                            raise ValueError('Unproved table row container')
+                        self.tbody = True
+                    elif tag == 'tr':
+                        if self.first_row is not None or values or depth != self.table_depth + 1 + int(self.tbody):
+                            raise ValueError('Unproved first table row')
+                        self.first_row = values
+                    elif tag == 'th':
+                        if self.first_row is None or self.header is not None or depth != self.table_depth + 2 + int(self.tbody):
+                            raise ValueError('Missing first-child literal table signature')
                         self.header = values
-                    elif self.header is not None: raise ValueError('Nonliteral observed table header')
+                    else:
+                        raise ValueError('Nonliteral observed table header')
             def handle_startendtag(self, tag, attrs):
                 if tag not in self.void: raise ValueError('Self-closing table container')
                 self.handle_starttag(tag, attrs)
@@ -1696,12 +1825,8 @@ def validate_table_roots(roots, doc, defaults):
                     begin, attrs, direct = self.script; self.script = None; text = response[begin:at]
                     marker = text.find('RLCONF=')
                     if marker >= 0:
-                        if attrs or not direct or digest(text[:marker].encode()) != '932b9910c9e926e55516112a7ce9644909c06c20035d794b10947a5eec4e3f94': raise ValueError('Unproved table configuration program')
-                        lead = '(function(){var className="'; finish = text.find('";var cookie=')
-                        if not text.startswith(lead) or not isinstance(self.html_classes, str) or not self.html_classes.startswith('client-nojs ') or text[len(lead):finish] != 'client-js ' + self.html_classes[len('client-nojs '):]: raise ValueError('Table root class/program mismatch')
-                        payload = text[marker + 7:]; _, finish = json.JSONDecoder().raw_decode(payload)
-                        if payload[finish:finish + 1] != ';' or 'RLCONF' in payload[finish + 1:]: raise ValueError('Ambiguous table configuration')
-                        self.configs.append(decode(payload[:finish]))
+                        if attrs or not direct: raise ValueError('Unproved table configuration script')
+                        self.configs.append(table_root_configuration(text,self.html_classes))
                 if self.body_end is None:
                     if not self.path or self.path[-1] != tag: raise ValueError('Unbalanced table head')
                     if tag == 'head': self.head_closed = True
@@ -1712,6 +1837,8 @@ def validate_table_roots(roots, doc, defaults):
                     self.root_stack.pop()
                     if not self.root_stack: self.root_closed = True
             def handle_data(self, text):
+                if self.selected is not None and self.header is None and not self.header_done and text.strip(' \t\r\n'):
+                    raise ValueError('Nonliteral content before first table header')
                 if self.header is not None and not self.header_done: self.header_text += text
         context = Context(); context.feed(response); context.close()
         if (context.body_end is None or context.root_count != 1 or not context.root_closed or context.root_stack or len(context.configs) != 1 or
@@ -1765,7 +1892,8 @@ def validate_document(raw, namespace, defaults):
             not re.fullmatch('[0-9]{8}', doc.get('date', '')) or
             doc.get('namespace_sha256') != digest(namespace) or
             doc.get('defaults_sha256') != digest(defaults) or
-            not isinstance(doc.get('pages'), list) or not 1 <= len(doc['pages']) <= 256):
+            not isinstance(doc.get('pages'), list) or len(doc['pages']) > 256 or
+            (not doc['pages'] and not doc.get('table_roots'))):
         raise ValueError('Invalid observation document identity')
     if 'table_roots' in doc:
         validate_table_roots(doc['table_roots'], doc, defaults)

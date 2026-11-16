@@ -3724,8 +3724,8 @@ class FigureFileTests(unittest.TestCase):
              patch.object(figure, 'verify_stream_document', wraps=figure.verify_stream_document) as semantic:
             figure.verify_tuple(paths, self.wiki, self.date)
             semantic.assert_called_once()
-            # Both full content guards remain; member-name checking adds none.
-            self.assertEqual(payload.call_count, 2)
+            # One final payload guard remains; member-name checking adds none.
+            self.assertEqual(payload.call_count, 1)
 
     def test_stream_membership_refuses_missing_extra_and_nonregular_members(self):
         args = self.args()
@@ -3764,7 +3764,7 @@ class FigureFileTests(unittest.TestCase):
             raw.write_bytes(value[:-2]+bytes([value[-2]^1])+value[-1:])
             return result
         with patch.object(figure, 'replay_stream_capture', side_effect=mutate):
-            with self.assertRaisesRegex(ValueError, 'Figure capture differs from source replay'):
+            with self.assertRaisesRegex(ValueError, 'Figure verified raw changed before content authentication'):
                 figure.verify_tuple(paths, self.wiki, self.date)
         self.assertEqual(completed, [True])
 
@@ -5037,9 +5037,9 @@ class FigureOutputDigestTests(unittest.TestCase):
                         if semantic_done and Path(path) in paths.values():
                             reads.append(Path(path))
                         return original_fingerprint(path)
-                    def payload(path):
+                    def payload(path, **options):
                         payload_boundaries.append((Path(path), semantic_done))
-                        return original_payload(path)
+                        return original_payload(path, **options)
                     with patch.object(figure, 'replay', side_effect=replay) as semantic, \
                             patch.object(figure.evidence, 'fingerprint', side_effect=fingerprint), \
                             patch.object(figure, 'payload', side_effect=payload):
@@ -5056,7 +5056,8 @@ class FigureOutputDigestTests(unittest.TestCase):
                     legacy_membership = [(root, False)] if root == legacy else []
                     self.assertEqual(payload_boundaries, legacy_membership + [(root, True)] * expected)
                     self.assertEqual({path: reads.count(path) for path in paths.values()},
-                                     {path: expected for path in paths.values()})
+                                     {path: (0 if root != legacy and path == paths['figure-sizing-raw'] else expected)
+                                      for path in paths.values()})
 
     def test_output_digest_reuse_refuses_late_content_inode_and_member_changes(self):
         root = self.args.output
@@ -5068,9 +5069,9 @@ class FigureOutputDigestTests(unittest.TestCase):
                 invoked = False
                 old_root = root.with_name('old-root')
                 replacement = root.with_name('replacement-provider')
-                def payload(path):
+                def payload(path, **options):
                     nonlocal invoked
-                    result = original_payload(path)
+                    result = original_payload(path, **options)
                     self.assertEqual(Path(path), root)
                     invoked = True
                     if mutation in ('content', 'restored-content'):
@@ -5170,6 +5171,58 @@ class FigureOutputDigestTests(unittest.TestCase):
                 patch.object(figure.evidence, 'stamp', side_effect=unchanged):
             with self.assertRaisesRegex(ValueError, 'Figure source capture changed during validation'):
                 figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+
+
+    def test_raw_digest_reuse_refuses_changes_after_semantic_completion(self):
+        target = self.paths['figure-sizing-raw']
+        saved = target.read_bytes()
+        original_replay = figure.replay
+        for mutation in ('content', 'restored-content', 'inode'):
+            with self.subTest(mutation=mutation):
+                def replay(*values, **options):
+                    result = original_replay(*values, **options)
+                    if mutation == 'inode':
+                        replacement = target.with_name('raw-replacement')
+                        replacement.write_bytes(saved); replacement.replace(target)
+                    else:
+                        target.write_bytes(saved + b'changed')
+                        if mutation == 'restored-content': target.write_bytes(saved)
+                    return result
+                try:
+                    with patch.object(figure, 'replay', side_effect=replay):
+                        with self.assertRaisesRegex(ValueError, 'verified raw changed'):
+                            figure.verify(self.args.output)
+                finally:
+                    target.write_bytes(saved)
+
+    def test_raw_stream_identity_requires_complete_eof_and_exact_bytes(self):
+        target = self.paths['figure-sizing-raw']
+        raw = target.read_bytes()
+        identity = {}
+        values = figure.stream_values(target, figure.RAW_STREAM_SCHEMA, identity_out=identity)
+        next(values); values.close()
+        self.assertEqual(identity, {})
+        list(figure.stream_values(target, figure.RAW_STREAM_SCHEMA, identity_out=identity))
+        self.assertEqual(identity, {'size': len(raw), 'sha256': figure.digest(raw)})
+        identity = {}
+        target.write_bytes(raw + b' ')
+        with self.assertRaisesRegex(ValueError, 'Trailing Figure stream'):
+            list(figure.stream_values(target, figure.RAW_STREAM_SCHEMA, identity_out=identity))
+        self.assertEqual(identity, {})
+        target.write_bytes(raw)
+
+    def test_raw_digest_proof_is_not_published_on_late_semantic_failure(self):
+        original_replay = figure.replay
+        proof = {}
+        # A malformed complete manifest is a late replay refusal after streams.
+        path = self.args.output / figure.MANIFEST
+        manifest = json.loads(path.read_bytes()); manifest['capture_format'] = 'wrong'
+        path.write_bytes(figure.encoded(manifest))
+        with self.assertRaises(ValueError):
+            original_replay(self.args.output, self.fixture.wiki, self.fixture.date,
+                           _raw_payload_out=proof)
+        self.assertEqual(proof, {})
+
 
 class FigureStreamDigestTests(unittest.TestCase):
     def setUp(self):
@@ -6341,7 +6394,8 @@ class MaterializedRootReplayTests(unittest.TestCase):
         lean_companions = sum(source['kind'] == 'http-archived-lean' and 'tiff_batch' in source for source in sources)
         self.assertEqual(counts['semantic_scopes']['lean-titles'], lean_frames)
         self.assertEqual(counts['semantic_scopes']['lean-final'], lean_companions)
-        self.assertGreater(counts['raw_fingerprints'], 0)
+        # Complete semantic streams now carry the exact raw digest to payload.
+        self.assertEqual(counts['raw_fingerprints'], 0)
 
     def test_root_reuse_matches_original_manifest_and_eliminates_one_raw_semantic_pass(self):
         args = self.complete()

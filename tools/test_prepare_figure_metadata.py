@@ -84,25 +84,26 @@ class FigureInputTests(unittest.TestCase):
         self.assertEqual(record['coverage']['whole_edition'], False)
         self.assertEqual((record['coverage']['files'], record['coverage']['occurrences']), (1, 1))
         snapshots = self.snapshots(root)
-        with patch.object(figure, 'verify', wraps=figure.verify) as replay:
-            discovered = builder.discover_auxiliary_generation(self.root, 'figure-inputs',
-                tuple(figure.ROLES), self.wiki, self.date)
-            self.assertEqual(discovered, {name: snapshots[name] for name in figure.ROLES})
-            self.assertEqual(replay.call_count, 1)
-        with patch.object(figure, 'verify', wraps=figure.verify) as replay:
-            started = time.monotonic()
-            hashes = builder.verified_auxiliary_hashes(snapshots, self.wiki, self.date)
-            elapsed = time.monotonic() - started
-            self.assertEqual(replay.call_count, 1)
-            print(json.dumps({'figure_tuple_replays': replay.call_count,
-                              'fixture_validation_wall_seconds': elapsed,
-                              'figure_fixture_bytes': sum(row['bytes'] for row in record['artifacts'].values())}))
-        pinned = builder.pinned_auxiliary_snapshots(snapshots, hashes, self.root/'pinned')
-        self.assertEqual({pinned[name].parent for name in figure.ROLES}, {self.root/'pinned'/'figure-inputs'})
-        self.assertEqual(figure.verify(pinned['figure-sizing'].parent), record)
-        for role, filename in figure.ROLES.items():
-            self.assertEqual(pinned[role].read_bytes(), (root/filename).read_bytes())
-            self.assertIn('--'+role+'-snapshot', builder.auxiliary_snapshot_args(pinned))
+        with patch.object(builder, '_FIGURE_TUPLE_REPLAYS', {}):
+            with patch.object(figure, 'verify', wraps=figure.verify) as replay:
+                discovered = builder.discover_auxiliary_generation(self.root, 'figure-inputs',
+                    tuple(figure.ROLES), self.wiki, self.date)
+                self.assertEqual(discovered, {name: snapshots[name] for name in figure.ROLES})
+                self.assertEqual(replay.call_count, 1)
+            with patch.object(figure, 'verify', wraps=figure.verify) as replay:
+                started = time.monotonic()
+                hashes = builder.verified_auxiliary_hashes(snapshots, self.wiki, self.date)
+                elapsed = time.monotonic() - started
+                self.assertEqual(replay.call_count, 0)  # Same invocation reuses the guarded complete tuple.
+                print(json.dumps({'figure_tuple_replays': replay.call_count,
+                                  'fixture_validation_wall_seconds': elapsed,
+                                  'figure_fixture_bytes': sum(row['bytes'] for row in record['artifacts'].values())}))
+            pinned = builder.pinned_auxiliary_snapshots(snapshots, hashes, self.root/'pinned')
+            self.assertEqual({pinned[name].parent for name in figure.ROLES}, {self.root/'pinned'/'figure-inputs'})
+            self.assertEqual(figure.verify(pinned['figure-sizing'].parent), record)
+            for role, filename in figure.ROLES.items():
+                self.assertEqual(pinned[role].read_bytes(), (root/filename).read_bytes())
+                self.assertIn('--'+role+'-snapshot', builder.auxiliary_snapshot_args(pinned))
 
     def test_incomplete_roles_and_missing_production_inputs_fail_before_native_work(self):
         root = self.stage()
