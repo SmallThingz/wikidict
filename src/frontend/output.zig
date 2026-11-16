@@ -132,10 +132,10 @@ pub const PoemProjection = struct {
 
 const RubyTypes = @import("blob_encoder").presentation_types;
 fn hasRecursiveSpans(values: []const model.Span) bool {
-    for (values) |span| if (span.ruby != null or span.inline_padding_group != null) return true;
+    for (values) |span| if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null) return true;
     return false;
 }
-// A transient semantic leaf view for Ruby and inline padding groups.
+// A transient semantic leaf view for Ruby, padding and ordinary action groups.
 // Padding contributes no text or terminal cells. Preserve the existing whole-array
 // terminal line grouping and state machine, rather than resetting it per child.
 const RubyFallbackView = struct {
@@ -163,15 +163,25 @@ const RubyOwnerNotices = struct {
     inline_style: bool = false,
     css_font: bool = false,
     inline_padding: bool = false,
+    inline_action: bool = false,
     fn merge(self: *@This(), other: @This()) void {
         self.inline_style = self.inline_style or other.inline_style;
         self.css_font = self.css_font or other.css_font;
         self.inline_padding = self.inline_padding or other.inline_padding;
+        self.inline_action = self.inline_action or other.inline_action;
     }
 };
 fn rubyOwnerNotices(values: []const model.Span, depth: usize) error{InvalidPresentation}!RubyOwnerNotices {
     var result: RubyOwnerNotices = .{};
     for (values) |span| {
+        if (span.inline_action_group) |group| {
+            if (depth >= RubyTypes.max_content_depth or !RubyTypes.validInlineActionGroupOwner(span) or
+                !RubyTypes.validInlineActionGroup(group.*)) return error.InvalidPresentation;
+            result.inline_action = true;
+            result.inline_style = result.inline_style or span.inline_style != null;
+            result.css_font = result.css_font or span.font_scale_basis == .css_px;
+            result.merge(try rubyOwnerNotices(group.spans, depth + 1));
+        }
         if (span.inline_padding_group) |group| {
             if (depth >= RubyTypes.max_content_depth or !RubyTypes.validInlinePaddingGroupOwner(span) or
                 !RubyTypes.validInlinePaddingGroup(group.*)) return error.InvalidPresentation;
@@ -309,6 +319,14 @@ fn visitRubySpanLists(values: []const model.Span, visitor: anytype,
     }
     if (try visitor.spans(values)) return true;
     for (values) |span| {
+        if (span.inline_action_group) |group| {
+            if (content_depth >= RubyTypes.max_content_depth or !RubyTypes.validInlineActionGroupOwner(span) or
+                !RubyTypes.validInlineActionGroup(group.*)) return error.InvalidPresentation;
+            try RubyTypes.validateInlineActionGroupTree(span, content_depth, ruby_depth);
+            // Visit the stored action owner once, then charge its semantic
+            // children against the same entry budget without consuming Ruby depth.
+            if (try visitRubySpanLists(group.spans, visitor, content_depth + 1, ruby_depth, remaining, .body)) return true;
+        }
         if (span.inline_padding_group) |group| {
             if (content_depth >= RubyTypes.max_content_depth or !RubyTypes.validInlinePaddingGroupOwner(span) or
                 !RubyTypes.validInlinePaddingGroup(group.*)) return error.InvalidPresentation;
@@ -575,7 +593,8 @@ fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, co
 fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8) !void {
     return spansTextDisplayWithPaint(w, spans, color, projection, ordinary, cell_background, inherited_header, detail_depth, null);
 }
-const SpanDisplayState = struct { whitespace: OrdinaryDisplayWhitespace = .{}, scripts: ScriptDisplayRuns = .{}, css_font_reported: bool = false, link_paint_reported: bool = false, image_paint_reported: bool = false, inline_style_reported: bool = false, inline_padding_reported: bool = false };
+const SpanDisplayState = struct { whitespace: OrdinaryDisplayWhitespace = .{}, scripts: ScriptDisplayRuns = .{}, css_font_reported: bool = false, link_paint_reported: bool = false, image_paint_reported: bool = false, inline_style_reported: bool = false, inline_padding_reported: bool = false, inline_action_reported: bool = false };
+const terminal_action_group_notice = "[grouped link hit regions unavailable; preserving semantic text and targets]\n";
 fn spansTextDisplayWithPaint(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8, container_paint: ?SpanContainerPaint) !void {
     var state: SpanDisplayState = .{};
     return spansTextDisplayWithState(w, spans, color, projection, ordinary, cell_background, inherited_header, detail_depth, container_paint, &state);
@@ -585,6 +604,12 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
         var fallback = try RubyFallbackView.init(if (projection) |parent| parent.allocator else std.heap.page_allocator, spans);
         defer fallback.deinit();
         const notices = try rubyOwnerNotices(spans, 0);
+        if (notices.inline_action and !state.inline_action_reported) {
+            // Effective leaf targets are a terminal projection, not native
+            // shared hit regions, focus ownership or pixel geometry.
+            try w.writeAll(terminal_action_group_notice);
+            state.inline_action_reported = true;
+        }
         if (notices.inline_padding and !state.inline_padding_reported) {
             // The TTY has no CSS inline-fragment geometry. Retain semantic
             // children and effective actions, never approximate edges as spaces.
@@ -1983,7 +2008,7 @@ fn containerUniformScale(block: model.Block) ?f32 {
     if (block.table != null or block.figure != null or block.flow != null or block.container != null) return null;
     var scale: ?f32 = null;
     for (block.spans) |span| {
-        if (span.ruby != null or span.inline_padding_group != null or span.font_scale_basis == .css_px) return null;
+        if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null or span.font_scale_basis == .css_px) return null;
         if (span.text.len == 0 and span.trail.len == 0) continue;
         const value = span.font_scale orelse 1;
         if (!std.math.isFinite(value) or value <= 0) return null;
@@ -3208,6 +3233,14 @@ const Abbreviations = struct {
         var at: usize = 0;
         while (at < values.len) {
             const explanation = values[at].explanation;
+            if (values[at].inline_action_group != null and explanation.len != 0) {
+                var grouped_label: std.Io.Writer.Allocating = .init(self.allocator);
+                defer grouped_label.deinit();
+                try spansPlainText(&grouped_label.writer, values[at .. at + 1]);
+                try self.add(grouped_label.written(), explanation);
+                at += 1;
+                continue;
+            }
             if (explanation.len == 0) {
                 at += 1;
                 continue;
@@ -3215,7 +3248,7 @@ const Abbreviations = struct {
             label.clearRetainingCapacity();
             // Formatting may split an abbreviation into adjacent spans. A new
             // span list is a structural boundary, even if its explanation matches.
-            while (at < values.len and std.mem.eql(u8, values[at].explanation, explanation)) : (at += 1) {
+            while (at < values.len and values[at].inline_action_group == null and std.mem.eql(u8, values[at].explanation, explanation)) : (at += 1) {
                 const value = values[at];
                 if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
                 try label.appendSlice(self.allocator, value.trail);
@@ -3238,8 +3271,9 @@ const Abbreviations = struct {
 
 fn entryHasAbbreviations(entry: model.Entry) bool {
     const Presence = struct {
-        fn spans(_: *@This(), values: []const model.Span) error{}!bool {
+        fn spans(_: *@This(), values: []const model.Span) error{InvalidPresentation}!bool {
             for (values) |value| {
+                if (value.inline_action_group != null and value.explanation.len != 0 and try spansPresent(&.{value})) return true;
                 if (value.explanation.len != 0 and
                     ((value.kind != .line_break and std.mem.trim(u8, value.text, " \t\r\n").len != 0) or
                         std.mem.trim(u8, value.trail, " \t\r\n").len != 0)) return true;
@@ -3301,10 +3335,18 @@ const Advisories = struct {
         var at: usize = 0;
         while (at < values.len) {
             const tooltip = effectiveAdvisory(values[at]) orelse { at += 1; continue; };
+            if (values[at].inline_action_group != null) {
+                var grouped_label: std.Io.Writer.Allocating = .init(self.allocator);
+                defer grouped_label.deinit();
+                try spansPlainText(&grouped_label.writer, values[at .. at + 1]);
+                try self.add(grouped_label.written(), tooltip);
+                at += 1;
+                continue;
+            }
             label.clearRetainingCapacity();
             while (at < values.len) : (at += 1) {
                 const candidate = effectiveAdvisory(values[at]) orelse break;
-                if (!std.mem.eql(u8, candidate, tooltip)) break;
+                if (values[at].inline_action_group != null or !std.mem.eql(u8, candidate, tooltip)) break;
                 const value = values[at];
                 if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
                 try label.appendSlice(self.allocator, value.trail);
@@ -9543,6 +9585,144 @@ test "U padding temporary semantic view preserves stored ownership through alloc
             for (view.values) |leaf| try std.testing.expectEqualStrings("Reading", leaf.target);
             try std.testing.expect(original[0].inline_padding_group != null);
             try std.testing.expectEqualStrings("", original[0].inline_padding_group.?.spans[0].target);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Run.call, .{values[0..]});
+}
+
+const InlineActionTerminalTest = struct {
+    fn owner(a: std.mem.Allocator, children: []const model.Span) !model.Span {
+        const group = try a.create(RubyTypes.InlineActionGroup(model.Span));
+        group.* = .{ .spans = children };
+        return .{ .kind = .link, .text = "", .target = "d", .target_fragment = "part", .inline_action_group = group };
+    }
+};
+
+test "V action groups preserve copied text distinct stored owners and effective leaf metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const first = try InlineActionTerminalTest.owner(a, &.{.{ .text = "d", .italic = true, .font_scale = 1.25 }, .{ .text = "a", .font_scale = 0.8, .superscript = true }});
+    const second = try InlineActionTerminalTest.owner(a, &.{.{ .text = "d" }, .{ .text = "a" }});
+    var external = try InlineActionTerminalTest.owner(a, &.{.{ .text = "web" }, .{ .text = "site" }});
+    external.kind = .external_link; external.target = "https://example.test/path#part"; external.target_fragment = null;
+    const values = [_]model.Span{ first, second, external };
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &values);
+    try std.testing.expectEqualStrings("dadawebsite", plain.written());
+    var actions: InlinePaddingTerminalTest.Actions = .{};
+    _ = try visitEntrySpanLists(.{ .title = "owners", .kind = .supplemental, .preamble_spans = &values }, &actions);
+    try std.testing.expectEqual(@as(usize, 3), actions.count);
+    var view = try RubyFallbackView.init(a, &values); defer view.deinit();
+    try std.testing.expectEqual(@as(usize, 6), view.values.len);
+    for (view.values[0..4]) |leaf| {
+        try std.testing.expectEqualStrings("d", leaf.target);
+        try std.testing.expectEqualStrings("part", leaf.target_fragment.?);
+        try std.testing.expect(leaf.inline_action_group == null);
+    }
+    for (view.values[4..]) |leaf| {
+        try std.testing.expectEqual(@as(@TypeOf(leaf.kind), .external_link), leaf.kind);
+        try std.testing.expectEqualStrings("https://example.test/path#part", leaf.target);
+        try std.testing.expect(leaf.target_fragment == null);
+    }
+    try std.testing.expect(view.values[0].italic and view.values[1].superscript);
+    try std.testing.expectEqual(@as(?f32, 1.25), view.values[0].font_scale);
+    try std.testing.expectEqual(@as(?f32, 0.8), view.values[1].font_scale);
+    try std.testing.expectEqualStrings("", first.inline_action_group.?.spans[0].target);
+    var tty: std.Io.Writer.Allocating = .init(a); try spansText(&tty.writer, &.{ second, second }, false);
+    try std.testing.expectEqualStrings(terminal_action_group_notice ++ "dada", tty.written());
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tty.written(), terminal_action_group_notice));
+    const heading: model.Section = .{ .title = "da", .level = 2, .blocks = &.{.{ .kind = .heading, .level = 2, .spans = &.{second} }} };
+    try std.testing.expect(sectionHeadingCompanion(heading) != null);
+}
+
+test "V grouped advisory and abbreviation labels retain complete child text" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var owner = try InlineActionTerminalTest.owner(a, &.{.{ .text = "read" }, .{ .text = "ing" }});
+    owner.tooltip = "advice"; owner.explanation = "expansion";
+    const entry: model.Entry = .{ .title = "details", .kind = .supplemental, .preamble_spans = &.{owner} };
+    try std.testing.expect(entryHasAdvisories(entry) and entryHasAbbreviations(entry));
+    var advisories = try Advisories.init(a, entry); defer advisories.deinit();
+    var abbreviations = try Abbreviations.init(a, entry); defer abbreviations.deinit();
+    try std.testing.expectEqual(@as(usize, 1), advisories.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+    try std.testing.expectEqualStrings("reading", advisories.items.items[0].label);
+    try std.testing.expectEqualStrings("advice", advisories.items.items[0].tooltip);
+    try std.testing.expectEqualStrings("reading", abbreviations.items.items[0].label);
+    try std.testing.expectEqualStrings("expansion", abbreviations.items.items[0].explanation);
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &.{owner});
+    try std.testing.expectEqualStrings("reading", plain.written());
+}
+
+test "V action groups inside Ruby U deep cells and references roundtrip with one owner per occurrence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const owner = try InlineActionTerminalTest.owner(a, &.{.{ .text = "read" }, .{ .text = "ing" }});
+    const padding = try InlinePaddingTerminalTest.owner(a, &.{owner});
+    const ruby = try RubyTerminalTest.owner(a, &.{.{ .text = "base" }}, &.{padding}, &.{}, &.{});
+    var table: model.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{ruby} }} }} };
+    for (1..32) |_| {
+        const blocks = try a.alloc(model.Block, 1); blocks[0] = .{ .kind = .table, .table = table };
+        const cells = try a.alloc(RubyTypes.Cell, 1); cells[0] = .{ .blocks = blocks };
+        const rows = try a.alloc(RubyTypes.Row, 1); rows[0] = .{ .cells = cells }; table = .{ .rows = rows };
+    }
+    const entry: model.Entry = .{ .title = "nested V", .kind = .supplemental, .display_title = &.{owner}, .preamble_spans = &.{owner},
+        .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .table, .table = table }} }},
+        .references = &.{.{ .number = 1, .group_number = 1, .name = "note", .blocks = &.{.{ .kind = .paragraph, .spans = &.{ruby} }} }} };
+    var actions: InlinePaddingTerminalTest.Actions = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 4), actions.count);
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &.{ruby});
+    try std.testing.expectEqualStrings("base（reading）", plain.written());
+    const encoded = try @import("blob_encoder").presentation_codec.encodeAlloc(a, .{ .entry = entry });
+    try std.testing.expectEqualStrings("DPRV", encoded[0..4]);
+    const decoded = try @import("blob_encoder").presentation_codec.decodeAlloc(a, encoded, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    var machine: std.Io.Writer.Allocating = .init(a); try std.json.Stringify.value(entry, .{}, &machine.writer);
+    try std.testing.expect(std.mem.indexOf(u8, machine.written(), "inline_action_group") != null);
+    // The inverse topology retains the action owner above Ruby and genuine U.
+    const inner_padding = try InlinePaddingTerminalTest.owner(a, &.{.{ .text = "reading" }});
+    const inner_ruby = try RubyTerminalTest.owner(a, &.{.{ .text = "base" }}, &.{inner_padding}, &.{}, &.{});
+    const outer_action = try InlineActionTerminalTest.owner(a, &.{inner_ruby});
+    actions = .{}; _ = try visitEntrySpanLists(.{ .title = "outer", .kind = .supplemental, .preamble_spans = &.{outer_action} }, &actions);
+    try std.testing.expectEqual(@as(usize, 1), actions.count);
+    var view = try RubyFallbackView.init(a, &.{outer_action}); defer view.deinit();
+    try std.testing.expectEqual(@as(usize, 4), view.values.len);
+    try std.testing.expectEqualStrings("d", view.values[0].target);
+    try std.testing.expectEqualStrings("d", view.values[2].target);
+    try std.testing.expectEqualStrings("", view.values[1].target);
+    try std.testing.expectEqualStrings("", view.values[3].target);
+}
+
+test "V structural action visitor rejects competing children cycles conflicts and shared limit excess" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var owner = try InlineActionTerminalTest.owner(a, &.{.{ .text = "a" }, .{ .text = "b" }});
+    var visitor: InlinePaddingTerminalTest.Actions = .{}; var remaining: usize = 2;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    remaining = 3; _ = try visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary);
+    try std.testing.expectEqual(@as(usize, 0), remaining);
+    owner.text = "invalid"; remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    owner = try InlineActionTerminalTest.owner(a, &.{.{ .kind = .link, .text = "a", .target = "d", .target_fragment = "part" }});
+    remaining = 100; try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    owner = try InlineActionTerminalTest.owner(a, &.{.{ .text = "a" }});
+    const padding = try InlinePaddingTerminalTest.owner(a, &.{.{ .text = "b" }});
+    owner.inline_padding_group = padding.inline_padding_group; remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    owner.inline_padding_group = null;
+    remaining = 100; _ = try visitRubySpanLists(&.{owner}, &visitor, RubyTypes.max_content_depth - 1, 0, &remaining, .ordinary);
+    remaining = 100; try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, RubyTypes.max_content_depth, 0, &remaining, .ordinary));
+    const cycle = try a.create(RubyTypes.InlineActionGroup(model.Span));
+    const cycle_children = try a.alloc(model.Span, 1);
+    owner.inline_action_group = cycle; cycle_children[0] = owner; cycle.* = .{ .spans = cycle_children };
+    remaining = 100; try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+}
+
+test "V temporary action leaf projection preserves stored ownership through allocation failures" {
+    const group: RubyTypes.InlineActionGroup(model.Span) = .{ .spans = &.{.{ .text = "split" }, .{ .text = "label" }} };
+    const values = [_]model.Span{.{ .kind = .link, .text = "", .target = "Target", .target_fragment = "part", .inline_action_group = &group }};
+    const Run = struct {
+        fn call(a: std.mem.Allocator, original: []const model.Span) !void {
+            var view = try RubyFallbackView.init(a, original); defer view.deinit();
+            try std.testing.expectEqual(@as(usize, 2), view.values.len);
+            for (view.values) |leaf| { try std.testing.expectEqualStrings("Target", leaf.target); try std.testing.expectEqualStrings("part", leaf.target_fragment.?); }
+            try std.testing.expect(original[0].inline_action_group != null);
+            try std.testing.expectEqualStrings("", original[0].inline_action_group.?.spans[0].target);
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Run.call, .{values[0..]});

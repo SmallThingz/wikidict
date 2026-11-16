@@ -670,6 +670,102 @@ fn delimiterByte(text: []const u8, needle: u8, start: usize) ?usize {
     }
     return null;
 }
+// Shared table-phase boundaries. Ordinary rendering and source role proofs
+// must split the same original bytes before inline link processing.
+pub fn wikiTableProtectedEnd(input: []const u8, at: usize, scan: *OpaqueScan, no_more_close: ?*bool) ?usize {
+    if (scan.protectedEnd(input, at, no_more_close)) |end| return end;
+    const tag = scan.tagAt(input, at, no_more_close) orelse return null;
+    if (tag.closing or !tag.is("includeonly")) return null;
+    if (tag.self_closing) return tag.end;
+    // The shared matcher uses the first raw whitespace-only view closer,
+    // not nested HTML balancing. Unclosed/malformed cases retain old rules.
+    const pair = matchingTagWithOpaqueScan(input, tag, scan) orelse return null;
+    return pair.end;
+}
+
+pub fn cellAttributePipe(raw: []const u8) ?usize {
+    // Ordinary containers stop at the opening physical line. Earlier strip
+    // regions are one opaque token to the table parser, even across lines.
+    var end = std.mem.indexOfAny(u8, raw, "\r\n") orelse raw.len;
+    const interesting = [_]u8{ '|', '<', '{', '[' };
+    var i: usize = 0;
+    var opaque_scan: OpaqueScan = .{};
+    while (i < end) {
+        const line = raw[0..end];
+        i += std.mem.indexOfAny(u8, line[i..], &interesting) orelse return null;
+        if (line[i] == '|') return i;
+        if (line[i] == '<') {
+            if (wikiTableProtectedEnd(raw, i, &opaque_scan, null)) |protected_end| {
+                if (protected_end > end) {
+                    // Missing opaque closers fall back to the opening tag's
+                    // end. That fallback cannot extend the physical line.
+                    if (starts(raw[i..], "<!--")) {
+                        if (!std.mem.endsWith(u8, raw[i..protected_end], "-->")) return null;
+                    } else {
+                        const opening = opaque_scan.tagAt(raw, i, null) orelse return null;
+                        if (!opening.self_closing and protected_end <= opening.end) return null;
+                    }
+                    end = protected_end + (std.mem.indexOfAny(u8, raw[protected_end..], "\r\n") orelse raw[protected_end..].len);
+                }
+                i = protected_end;
+                continue;
+            }
+            if (tagAt(line, i)) |tag| {
+                i = tag.end;
+                continue;
+            }
+        }
+        // Parser::handleTables declines cell attributes when a real [[
+        // precedes the first delimiter. Earlier opaque/armored tokens were
+        // skipped above; their contents cannot supply this source proof.
+        if (starts(line[i..], "[[")) return null;
+        if (starts(line[i..], "{{")) {
+            if (balanced(line, i)) |pair| {
+                i = pair.end;
+                continue;
+            }
+            return null;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+pub fn wikiTableArmoredTag(tag: Tag) bool {
+    const names = &[_][]const u8{
+        "b",      "bdi",  "del",  "i",    "ins",    "u",          "font", "big",  "small", "sub",   "sup",
+        "h1",     "h2",   "h3",   "h4",   "h5",     "h6",         "cite", "code", "em",    "s",     "strike",
+        "strong", "tt",   "var",  "div",  "center", "blockquote", "ol",   "ul",   "dl",    "table", "caption",
+        "pre",    "ruby", "rb",   "rp",   "rt",     "rtc",        "p",    "span", "abbr",  "dfn",   "kbd",
+        "samp",   "data", "time", "mark", "br",     "wbr",        "hr",   "li",   "dt",    "dd",    "tr",
+        "td",     "th",   "q",    "bdo",
+    };
+    for (names) |name| if (tag.is(name)) return true;
+    return (tag.is("meta") and tag.attr("itemprop") != null and tag.attr("content") != null) or
+        (tag.is("link") and tag.attr("itemprop") != null and tag.attr("href") != null);
+}
+
+pub fn wikiCellDelimiterWithScan(line: []const u8, needle: []const u8, start: usize, opaque_scan: *OpaqueScan, no_more_nowiki_close: *bool) ?usize {
+    var i = start;
+    while (i < line.len) {
+        if (starts(line[i..], needle)) return i;
+        if (line[i] == '<') {
+            if (wikiTableProtectedEnd(line, i, opaque_scan, no_more_nowiki_close)) |end| {
+                i = end;
+                continue;
+            }
+            if (opaque_scan.tagAt(line, i, no_more_nowiki_close)) |tag| {
+                if (wikiTableArmoredTag(tag)) {
+                    i = tag.end;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    return null;
+}
+
 pub fn delimiter(text: []const u8, needle: []const u8, start: usize) ?usize {
     var no_more_nowiki_close = false;
     var opaque_scan: OpaqueScan = .{};

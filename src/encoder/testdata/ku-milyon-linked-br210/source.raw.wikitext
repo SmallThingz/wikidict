@@ -1,0 +1,151 @@
+{{h-bnr|mîlyon}}
+== {{ziman|ku}} ==
+
+=== Bilêvkirin ===
+* {{ku-IPA}}
+* {{deng|ku|LL-Q36163 (kmr)-Ebulfîda-milyon.wav|dever=Bidlîs}}
+* {{ku-kîte}}
+
+=== Hejmar ===
+{{hejmar|ku}}
+# [[jimare]] 1.000.000('''<span style="text-decoration:overline">M</span>'''), 10<sup>6</sup>
+
+==== Formên alternatîv ====
+* [[mîlyon]]
+
+==== Etîmolojî ====
+{{bêetîmolojî|ku}}
+
+==== Herwiha binêre ====
+{{hejmar/ku}}
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|af}}: {{W+|af|miljoen}}
+* {{Z|sq}}: {{W+|sq|milion}}
+* {{Z|de}}: {{W+|de|Million|m}}
+* {{Z|ast}}: {{W+|ast|millón}}
+* {{Z|az}}: {{W+|az|milyon}}
+* {{Z|eu}}: {{W-|eu|milioi}}
+* {{Z|be}}: {{W+|be|мільён|n}}
+* {{Z|bn}}: {{W-|bn|নুযুত|sc=Beng}}, {{W-|bn|মিলিয়ন|sc=Beng}}
+* {{Z|br}}: {{W+|br|milion}}
+* {{Z|bg}}: {{W-|bg|милио́н|n}}
+* {{Z|my}}: {{W+|my|သန်း|sc=Mymr}}
+* {{Z|bua}}: {{W-|bua|сая}}
+* {{Z|ce}}: {{W-|ce|миллион}}
+* {{Z|cs}}: {{W+|cs|milión|n}}
+* {{Z|zh}}:
+*: {{Z|yue}}: {{W-|yue|百萬|tr=baak3 maan6}}
+*: {{Z|cmn}}: {{W+|cmn|百萬|tr=bǎi-wàn}}
+* {{Z|chk}}: {{W-|chk|minion}}
+* {{Z|da}}: {{W+|da|million|g}}
+* {{Z|id}}: {{W+|id|sejuta}}, {{W+|id|juta}}
+* {{Z|ar}}: {{W-|ar|مِلْيُون|n|tr=milyōn}}, {{W-|ar|١٠٠٠٠٠٠}}
+*: {{Z|acw}}: {{W-|acw|مِلْيون|n|tr=milyōn}}
+* {{Z|hy}}: {{W+|hy|միլիոն}}
+* {{Z|eo}}: {{W+|eo|miliono}}
+* {{Z|et}}: {{W+|et|miljon}}
+* {{Z|fa}}: {{W+|fa|میلیون|tr=milyon}}
+* {{Z|fi}}: {{W+|fi|miljoona}}
+* {{Z|frm}}: {{W-|frm|million|n}}
+* {{Z|fr}}: {{W+|fr|million|n}}
+* {{Z|gd}}: {{W-|gd|millean|n}}, {{W-|gd|muillean|n}}
+* {{Z|gu}}: {{W-|gu|દશ લાખ|sc=Gujr}}
+* {{Z|ka}}: {{W-|ka|მილიონი|sc=Geor}}
+* {{Z|gn}}: {{W-|gn|sua}}
+* {{Z|haw}}: {{W-|haw|miliona}}
+* {{Z|hi}}: {{W-|hi|दस लाख}}, {{W-|hi|१००००००}}, {{W+|hi|नियुत|n}}
+* {{Z|hil}}: {{W-|hil|hambad}}, {{W-|hil|milyon}}, {{W-|hil|ramak}}
+* {{Z|nl}}: {{W+|nl|miljoen|nt}}
+* {{Z|he}}: {{W+|he|מִילְיוֹן|tr=milyón}}
+* {{Z|en}}: {{W+|en|million}}
+* {{Z|ia}}: {{W-|ia|million|cuda=un million}}
+* {{Z|ga}}: {{W+|ga|milliún|n}}
+* {{Z|it}}: {{W+|it|milione|n}}
+* {{Z|is}}: {{W-|is|milljón}}, {{W+|is|miljón|m}}
+* {{Z|ja}}: {{W+|ja|百万|tr=ひゃくまん, hyaku-man}}
+* {{Z|jv}}: {{W+|jv|yuta}}
+* {{Z|xal}}: {{W-|xal|сай}}
+* {{Z|pam}}: {{W-|pam|sangyuta}}, {{W-|pam|milyun}}
+* {{Z|ca}}: {{W+|ca|milió|n}}
+* {{Z|qu}}: {{W-|qu|hunu}}
+* {{Z|ky}}: {{W+|ky|миллион|sc=Cyrl}}
+* {{Z|si}}: {{W-|si|මිලියනය|sc=Sinh}}
+* {{Z|ko}}: {{W+|ko|백만}}
+* {{Z|lou}}: {{W-|lou|milyon}}
+* {{Z|la}}: {{W-|la|milliō|n}}
+* {{Z|lv}}: {{W-|lv|miljons|n}}
+* {{Z|lo}}: {{W+|lo|ລ້ານ}}
+* {{Z|lt}}: {{W+|lt|milijonas|n}}
+* {{Z|khb}}: {{W-|khb|ᦟᦱᧃᧉ}}
+* {{Z|lnd}}: {{W-|lnd|ribet}}
+* {{Z|mk}}: {{W+|mk|милио́н|n}}
+* {{Z|ml}}: {{W-|ml|ദശലക്ഷം}}, {{W-|ml|പത്തുലക്ഷം}}
+* {{Z|ms}}: {{W+|ms|juta}}
+* {{Z|mt}}: {{W-|mt|miljun}}
+* {{Z|mnc}}: {{W-|mnc|[[ᡨ᠋ᠠᠩᡤᡡ]] [[ᡨᡠ᠋ᠮᡝᠨ]]}}
+* {{Z|gv}}: {{W-|gv|millioon}}
+* {{Z|mi}}: {{W-|mi|miriona}}
+* {{Z|hu}}: {{W+|hu|millió}}
+* {{Z|egy}}: {{W-egy|ḥḥ|h=C11}}
+* {{Z|mn}}: {{W+|mn|сая|sc=Cyrl}}
+* {{Z|nv}}: {{W-|nv|tʼááłáhádí míiltsoh}}, {{W-|nv|miiltsoh}}
+* {{Z|nrf}}: {{W-|nrf|millaon}}
+* {{Z|no}}:
+*: {{Z|nb}}: {{W+|nb|million|n}}
+*: {{Z|nn}}: {{W+|nn|million|n}}
+* {{Z|oj}}: {{W-|oj|midaaswaak daso-midaawaak}}
+* {{Z|oc}}: {{W+|oc|milion}}
+* {{Z|om}}: {{W+|om|kitila}}
+* {{Z|ug}}: {{W-|ug|مىليون}}
+* {{Z|uz}}: {{W+|uz|million}}
+* {{Z|pl}}: {{W+|pl|milion|m-in}}
+* {{Z|pt}}: {{W+|pt|milhão|n}}
+* {{Z|pa}}: {{W-|pa|ਦਸ ਲਾਖ|tr=das lākh|sc=Guru}}
+* {{Z|kk}}: {{W+|kk|миллион|sc=Cyrl}}
+* {{Z|ro}}: {{W+|ro|milion|nt}}
+* {{Z|ru}}: {{W+|ru|миллио́н|n}}
+* {{Z|sa}}: {{W-|sa|दशलक्षं}}, {{W+|sa|नियुत}}
+* {{Z|ceb}}: {{W-|ceb|yukot}}, {{W-|ceb|milyon}}
+* {{Z|sh}}:
+*: Kirîlî: {{W-|sh|милѝо̄н|n|sc=Cyrl}}, {{W-|sh|милѝјӯн|n|sc=Cyrl}}
+*: Latînî: {{W+|sh|milìōn|n}}, {{W+|sh|milìjūn|n}}
+* {{Z|cu}}: {{W-|cu|леодръ}}
+* {{Z|sk}}: {{W+|sk|milión|n}}
+* {{Z|sl}}: {{W+|sl|milijon}}
+* {{Z|es}}: {{W+|es|millón|n}}
+* {{Z|sv}}: {{W+|sv|miljon|g}}, {{W+|sv|million|g}}
+* {{Z|shn}}: {{W-|shn|လၢၼ်ႉ}}
+* {{Z|tg}}: {{W-|tg|миллион|sc=Cyrl}}
+* {{Z|tl}}: {{W-|tl|milyon}}, {{W-|tl|angaw}}
+* {{Z|th}}: {{W+|th|ล้าน}}
+* Turkish: bir {{W+|tr|milyon}}
+* {{Z|te}}: {{W-|te|పది లక్షలు}}
+* {{Z|crh}}: {{W-|crh|million}}
+* {{Z|tt}}: {{W+|tt|миллион|sc=Cyrl}}
+* {{Z|tk}}: {{W-|tk|million}}
+* {{Z|tyv}}: {{W-|tyv|сая}}, {{W-|tyv|миллион}}
+* {{Z|ur}}: {{W-|ur|دس لاکھ|tr=das lākh}}
+* {{Z|uk}}: {{W+|uk|мільйо́н|n}}
+* {{Z|vi}}: {{W+|vi|triệu}}
+* {{Z|vo}}: {{W+|vo|balion}}
+* {{Z|cy}}: {{W+|cy|miliwn}}
+* {{Z|km}}: {{W-|km|មួយលាន}}
+* {{Z|sah}}: {{W-|sah|муҥ}}, {{W-|sah|мөлүйүөн}}
+* {{Z|yi}}: {{W-|yi|מיליאָן|sc=Hebr}}
+* {{Z|yo}}: {{W-|yo|àádọ́ta ọ̀kẹ́}}, {{W-|yo|ẹgbẹ̀ẹgbẹ̀rún}}, {{W-|yo|mílíọ̀nù}}
+* {{Z|esu}}: {{W-|esu|miilicaaq}}
+* {{Z|el}}: {{W+|el|εκατομμύριο|nt}}
+{{werger-bin}}
+:{{werger çavkanî|en|million|beş=Ev qismê Wergerê|oldid=76598985}}
+
+=== Navdêr ===
+{{navdêr|ku|z=m/n}}
+# [[hejmar|Hejmara]] [[1000000]] (10<sup>6</sup>).
+
+==== Werger ====
+{{werger-ser}}
+* {{Z|fr}}: {{W+|fr|million|n}}
+* {{Z|en}}: {{W+|en|million}}
+{{werger-bin}}

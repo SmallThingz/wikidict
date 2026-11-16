@@ -569,8 +569,217 @@ pub const EmptyMissingFigureCaptionProof = struct {
     operations: []const EmptyMissingCaptionOperation,
 };
 
+// A complete ordinary source-link label is text, not an attribute-name input.
+// The Book additionally qualifies every token through the ordinary destination
+// resolver; the consuming census replays these bounded source offsets.
+pub const SourcePlainLinkLabel = struct { start: usize, end: usize, label_start: usize, label_end: usize };
+pub const SourcePlainLinkLabelNamespace = struct {
+    catalog: *const @import("namespace_registry").Registry,
+    sha256: [32]u8,
+};
+pub const SourcePlainLinkLabels = struct {
+    source: []const u8,
+    namespace_catalog: *const @import("namespace_registry").Registry,
+    namespace_sha256: [32]u8,
+    interwiki_rows: @FieldType(@import("namespace_registry").Registry, "interwiki_rows"),
+    interwiki_magic: ?bool,
+    labels: []const SourcePlainLinkLabel,
+};
+
+fn sourcePlainLinkLabelNamespaceMatches(labels: ?*const SourcePlainLinkLabels, identity: ?SourcePlainLinkLabelNamespace) bool {
+    const proof = labels orelse return identity == null;
+    const selected = identity orelse return false;
+    return selected.catalog == proof.namespace_catalog and std.mem.eql(u8, &selected.sha256, &proof.namespace_sha256);
+}
+
+fn sourcePlainLabelEntityText(raw: []const u8) bool {
+    if (raw.len == 0 or raw.len > 4096 or std.mem.indexOfAny(u8, raw, "<>[]{}|='\"\\\r\n\t\x00") != null) return false;
+    var at: usize = 0;
+    while (at < raw.len) : (at += 1) {
+        if (raw[at] != '&') continue;
+        const limit = at + @min(raw.len - at, 66);
+        const relative = std.mem.indexOfScalar(u8, raw[at + 1..limit], ';') orelse return false;
+        const end = at + 1 + relative;
+        const name = raw[at + 1..end];
+        if (name.len == 0) return false;
+        if (name[0] == '#') {
+            const hex = name.len > 1 and (name[1] == 'x' or name[1] == 'X');
+            const digits = name[if (hex) @as(usize, 2) else 1..];
+            const cp = std.fmt.parseInt(u21, digits, if (hex) 16 else 10) catch return false;
+            if (cp == 0 or cp == 0xfffd or cp > 0x10ffff or (cp >= 0xd800 and cp <= 0xdfff) or
+                (cp < 128 and (cp < 0x20 or std.mem.indexOfScalar(u8, "<>[]{}|='\"\\", @intCast(cp)) != null))) return false;
+        } else {
+            const decoded = @import("shared_xml_decode").html_entities.lookupHtmlNamedEntity(name) orelse return false;
+            for (decoded) |byte| if (byte < 0x20 or std.mem.indexOfScalar(u8, "<>[]{}|='\"\\", byte) != null) return false;
+        }
+        at = end;
+    }
+    return true;
+}
+
+// Cell delimiters run before inline links. Only an attributed physical cell's
+// actual body may lend this role; its attribute prefix remains outside the map.
+fn sourcePlainLabelWikiCellBody(source: []const u8, start: usize, end: usize) bool {
+    const syntax = @import("blob_encoder").wikitext_syntax;
+    const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |at| at + 1 else 0;
+    const line_end = std.mem.indexOfScalarPos(u8, source, start, '\n') orelse source.len;
+    const line = std.mem.trim(u8, source[line_start..line_end], " \t\r\n");
+    if (line.len == 0 or (line[0] != '|' and line[0] != '!')) return true;
+    if (std.mem.startsWith(u8, line, "|-") or std.mem.startsWith(u8, line, "|+") or std.mem.startsWith(u8, line, "|}")) return false;
+    const relative_start = start - (@intFromPtr(line.ptr) - @intFromPtr(source.ptr));
+    const relative_end = end - (@intFromPtr(line.ptr) - @intFromPtr(source.ptr));
+    const header = line[0] == '!';
+    var offset: usize = 1;
+    var scan: syntax.OpaqueScan = .{};
+    var no_more_close = false;
+    while (offset <= line.len) {
+        const split_at = if (header)
+            @min(syntax.wikiCellDelimiterWithScan(line, "!!", offset, &scan, &no_more_close) orelse line.len,
+                syntax.wikiCellDelimiterWithScan(line, "||", offset, &scan, &no_more_close) orelse line.len)
+        else syntax.wikiCellDelimiterWithScan(line, "||", offset, &scan, &no_more_close) orelse line.len;
+        if (relative_start >= offset and relative_start < split_at) {
+            if (relative_end > split_at) return false;
+            const raw = line[offset..split_at];
+            const pipe = syntax.cellAttributePipe(raw) orelse return false;
+            // Preserve the previous refusal for token-looking attribute input,
+            // including the ordinary parser's no-attributes fallback at [[.
+            if (std.mem.indexOfAny(u8, raw[0..pipe], "[]{}<>\r\n\x00") != null) return false;
+            var quote: ?u8 = null;
+            for (raw[0..pipe]) |byte| {
+                if (quote) |held| { if (byte == held) quote = null; }
+                else if (byte == '\'' or byte == '"') quote = byte;
+            }
+            if (quote != null) return false;
+            return relative_start >= offset + pipe + 1;
+        }
+        if (split_at == line.len) break;
+        offset = split_at + 2;
+    }
+    return false;
+}
+
+// This scanner reuses source token/tag boundaries, not returned-HTML boundaries.
+// It never qualifies link-looking bytes in a tag, opaque body, comment or wiki
+// table attribute line. Unsupported boundaries stop further label issuance.
+pub fn nextSourcePlainLinkLabel(source: []const u8, ns: *const @import("namespace_registry").Registry,
+    cursor: *usize) ?SourcePlainLinkLabel
+{
+    const syntax = @import("blob_encoder").wikitext_syntax;
+    const ir = @import("blob_encoder").document_ir;
+    if (source.len > 4 * 1024 * 1024) { cursor.* = source.len; return null; }
+    while (cursor.* < source.len) {
+        const at = cursor.*;
+        if (at == 0 or source[at - 1] == '\n') {
+            const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+            const line = std.mem.trimStart(u8, source[at..end], " \t");
+            if (std.mem.startsWith(u8, line, "{|") or std.mem.startsWith(u8, line, "|-") or
+                std.mem.startsWith(u8, line, "|+") or std.mem.startsWith(u8, line, "|}")) {
+                cursor.* = if (end < source.len) end + 1 else end; continue;
+            }
+        }
+        if (std.mem.startsWith(u8, source[at..], "<!--")) {
+            const end = std.mem.indexOfPos(u8, source, at + 4, "-->") orelse { cursor.* = source.len + 1; return null; };
+            cursor.* = end + 3; continue;
+        }
+        if (source[at] == '<') {
+            const tag = syntax.tagAt(source, at) orelse { cursor.* = source.len + 1; return null; };
+            // Do not publish a later text role after an unfinished attribute
+            // quote, even though the source tokenizer ends at the first '>'.
+            var quote: ?u8 = null;
+            for (tag.attrs) |byte| {
+                if (quote) |held| { if (byte == held) quote = null; }
+                else if (byte == '\'' or byte == '"') quote = byte;
+            }
+            if (quote != null) { cursor.* = source.len + 1; return null; }
+            if (!tag.closing and (syntax.isOpaqueTag(tag.name) or tag.is("style") or tag.is("script") or tag.is("textarea") or tag.is("title") or
+                tag.is("includeonly") or tag.is("a") or tag.is("select") or tag.is("option") or tag.is("button") or tag.is("form") or tag.is("iframe") or tag.is("xmp") or tag.is("plaintext"))) {
+                cursor.* = if (tag.self_closing) tag.end else (syntax.matchingTag(source, tag) orelse { cursor.* = source.len + 1; return null; }).end;
+            } else cursor.* = tag.end;
+            continue;
+        }
+        if (source[at] == '[' and !std.mem.startsWith(u8, source[at..], "[[") and ir.hasExternalProtocol(source[at + 1..])) {
+            var external_iterator: ir.InlineIterator = .{ .input = source, .cursor = at, .renderer_boundaries = true };
+            const external = external_iterator.next() orelse { cursor.* = source.len + 1; return null; };
+            if (external.kind != .external_link or external_iterator.cursor <= at or external_iterator.cursor > source.len) {
+                cursor.* = source.len + 1; return null;
+            }
+            // Its URL and complete label belong to the external producer. An
+            // internal-looking child cannot borrow this ordinary source-A role.
+            cursor.* = external_iterator.cursor; continue;
+        }
+        if (ir.doubleOpeningExternalToken(source, at)) {
+            var external_iterator: ir.InlineIterator = .{ .input = source, .cursor = at + 1, .renderer_boundaries = true };
+            const external = external_iterator.next() orelse { cursor.* = source.len + 1; return null; };
+            if (external.kind != .external_link or external_iterator.cursor <= at + 1 or external_iterator.cursor > source.len) {
+                cursor.* = source.len + 1; return null;
+            }
+            cursor.* = external_iterator.cursor; continue;
+        }
+        if (ir.hasExternalProtocol(source[at..])) {
+            var external_iterator: ir.InlineIterator = .{ .input = source, .cursor = at, .renderer_boundaries = true };
+            if (external_iterator.next()) |external| {
+                if (external.kind == .external_link and external.target.ptr == source[at..].ptr and
+                    external_iterator.cursor > at and external_iterator.cursor <= source.len) {
+                    cursor.* = external_iterator.cursor; continue;
+                }
+                if (external.kind == .text and external.text.ptr == source[at..].ptr and
+                    external_iterator.cursor > at and external_iterator.cursor <= source.len) {
+                    // A refused free protocol remains the maintained text
+                    // token; do not rescan its whole suffix at every byte.
+                    cursor.* = external_iterator.cursor; continue;
+                }
+            }
+        }
+        if (!std.mem.startsWith(u8, source[at..], "[[")) { cursor.* += 1; continue; }
+        const pair = syntax.balanced(source, at) orelse { cursor.* = source.len + 1; return null; };
+        cursor.* = pair.end;
+        if (pair.end - at > 8192) continue;
+        var iterator: ir.InlineIterator = .{ .input = source[at..pair.end], .renderer_boundaries = true };
+        const node = iterator.next() orelse continue;
+        if (node.kind != .link or !node.link_has_pipe or node.link_empty_label or node.link_label_restored_close or
+            node.trail.len != 0 or iterator.cursor != pair.end - at or node.target.len == 0 or
+            std.mem.trim(u8, node.target, " \t\r\n").len != node.target.len or
+            std.mem.indexOfAny(u8, node.target, "<>[]{}|&%#'\"\\\r\n\t\x00") != null or
+            node.target.ptr != source[at + 2..].ptr or at + 2 + node.target.len >= pair.inner_end or
+            source[at + 2 + node.target.len] != '|' or
+            node.text.ptr != source[at + 3 + node.target.len..].ptr or
+            node.text.len != pair.inner_end - (at + 3 + node.target.len) or
+            std.mem.indexOfScalar(u8, node.text, '&') == null or !sourcePlainLabelEntityText(node.text)) continue;
+        // No File/Media/Category option or metadata token receives a text role.
+        const title = if (node.target[0] == ':') node.target[1..] else node.target;
+        if (title.len == 0 or title[0] == ':') continue;
+        const id = ns.ofTitle(title).id;
+        if (id < 0 or id == 6 or id == 14) continue;
+        if (std.mem.indexOfScalar(u8, title, ':')) |colon| {
+            if (std.mem.trim(u8, title[0..colon], " \t").len != colon) continue;
+            var special = false;
+            for (ns.interwiki_rows) |row| if (std.ascii.eqlIgnoreCase(row.prefix, title[0..colon]) and (row.is_interlanguage or row.is_current_wiki)) { special = true; break; };
+            if (special) continue;
+        }
+        if (!sourcePlainLabelWikiCellBody(source, at, pair.end)) continue;
+        return .{ .start = at, .end = pair.end, .label_start = at + 3 + node.target.len, .label_end = pair.inner_end };
+    }
+    return null;
+}
+
+pub fn sourcePlainLinkLabelsCurrent(proof: *const SourcePlainLinkLabels, source: []const u8) bool {
+    if (source.len == 0 or source.len > 4 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(source) or std.mem.indexOfScalar(u8, source, 0) != null or
+        proof.source.ptr != source.ptr or proof.source.len != source.len or proof.labels.len == 0 or proof.labels.len > 64 or
+        !std.mem.eql(u8, &proof.namespace_sha256, &proof.namespace_catalog.source_sha256) or
+        proof.interwiki_rows.ptr != proof.namespace_catalog.interwiki_rows.ptr or proof.interwiki_rows.len != proof.namespace_catalog.interwiki_rows.len or
+        proof.interwiki_magic != proof.namespace_catalog.interwiki_magic) return false;
+    var cursor: usize = 0;
+    for (proof.labels) |expected| {
+        const actual = nextSourcePlainLinkLabel(source, proof.namespace_catalog, &cursor) orelse return false;
+        if (!std.meta.eql(actual, expected)) return false;
+    }
+    return nextSourcePlainLinkLabel(source, proof.namespace_catalog, &cursor) == null and cursor <= source.len;
+}
+
 pub const RowColorOwner = struct { attrs_start: usize, attrs_end: usize };
 pub const ClosedRowColorProof = struct {
+    plain_link_labels: ?*const SourcePlainLinkLabels = null,
+    plain_link_namespace: ?SourcePlainLinkLabelNamespace = null,
     // Only the complete zero-owner variant owns this immutable source snapshot.
     // Ordinary positive-owner proofs keep their existing consumption obligation.
     absent_source: ?[]const u8 = null,
@@ -618,14 +827,24 @@ pub fn rowColorAbsenceValidationCounts() RowColorAbsenceValidationCounts {
 // Named references use the maintained HTML entity table; numeric references use
 // the same std integer grammar as the source attribute decoder.
 pub fn rowColorSourceAbsent(source: []const u8) bool {
+    return rowColorSourceAbsentWithLabels(source, null);
+}
+
+pub fn rowColorSourceAbsentWithLabels(source: []const u8, labels: ?*const SourcePlainLinkLabels) bool {
     if (comptime @import("builtin").is_test) if (RowColorAbsenceTraceState.enabled.load(.monotonic)) {
         _ = RowColorAbsenceTraceState.lexical_calls.fetchAdd(1, .monotonic);
         _ = RowColorAbsenceTraceState.lexical_input_bytes.fetchAdd(@intCast(source.len), .monotonic);
     };
-    return sourceAttributeNameConstructionClosed(source, "bgcolor");
+    return sourceAttributeNameConstructionClosedWithLabels(source, "bgcolor", labels);
 }
 
 fn sourceAttributeNameConstructionClosed(source: []const u8, comptime forbidden_attribute: ?[]const u8) bool {
+    return sourceAttributeNameConstructionClosedWithLabels(source, forbidden_attribute, null);
+}
+fn sourceAttributeNameConstructionClosedWithLabels(source: []const u8, comptime forbidden_attribute: ?[]const u8,
+    labels: ?*const SourcePlainLinkLabels) bool
+{
+    if (labels) |proof| if (!sourcePlainLinkLabelsCurrent(proof, source)) return false;
     if (source.len == 0 or source.len > 4 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(source) or
         std.mem.indexOfScalar(u8, source, 0) != null or std.mem.indexOf(u8, source, "{{") != null or
         std.mem.indexOf(u8, source, "}}") != null or std.mem.indexOf(u8, source, "-{") != null) return false;
@@ -634,6 +853,11 @@ fn sourceAttributeNameConstructionClosed(source: []const u8, comptime forbidden_
         if (forbidden_attribute) |name| if (source.len - at >= name.len and
             std.ascii.eqlIgnoreCase(source[at..][0..name.len], name)) return false;
         if (source[at] != '&' or at + 1 == source.len) continue;
+        if (labels) |proof| {
+            var text_label = false;
+            for (proof.labels) |label| if (at >= label.label_start and at < label.label_end) { text_label = true; break; };
+            if (text_label) continue;
+        }
         // Every ampersand examines at most a supported 64-byte name plus
         // its terminator. Bare ampersands never rescan the remaining source.
         const look_end = at + @min(source.len - at, 66);
@@ -662,6 +886,7 @@ pub fn closedRowColorAbsenceValid(proof: *const ClosedRowColorProof) bool {
         _ = RowColorAbsenceTraceState.validation_calls.fetchAdd(1, .monotonic);
         _ = RowColorAbsenceTraceState.validation_input_bytes.fetchAdd(@intCast(proof.source.len), .monotonic);
     };
+    if (!sourcePlainLinkLabelNamespaceMatches(proof.plain_link_labels, proof.plain_link_namespace)) return false;
     const snapshot = proof.absent_source orelse return false;
     // An owned independent copy detects mutation of either side. It cannot be
     // replaced with the current borrowed slice to manufacture an empty census.
@@ -675,12 +900,14 @@ pub fn closedRowColorAbsenceValid(proof: *const ClosedRowColorProof) bool {
         _ = RowColorAbsenceTraceState.snapshot_input_bytes.fetchAdd(@intCast(proof.source.len), .monotonic);
     };
     if (!std.mem.eql(u8, snapshot, proof.source)) return false;
-    return rowColorSourceAbsent(proof.source);
+    return rowColorSourceAbsentWithLabels(proof.source, proof.plain_link_labels);
 }
 
 // The Book retains this independent complete page image before caller-side
 // preparation. It proves current bytes, not row colors or any CSS property.
 pub const PageSourceImage = struct {
+    plain_link_labels: ?*const SourcePlainLinkLabels = null,
+    plain_link_namespace: ?SourcePlainLinkLabelNamespace = null,
     styles: *const Profile,
     root: *const TextElement,
     source: []const u8,
@@ -693,7 +920,10 @@ pub fn pageSourceImageCurrent(image: *const PageSourceImage) bool {
     const snapshot = @intFromPtr(image.snapshot.ptr);
     if ((snapshot <= current and current - snapshot < image.snapshot.len) or
         (current <= snapshot and snapshot - current < image.source.len)) return false;
-    return std.mem.eql(u8, image.source, image.snapshot);
+    if (!std.mem.eql(u8, image.source, image.snapshot) or
+        !sourcePlainLinkLabelNamespaceMatches(image.plain_link_labels, image.plain_link_namespace)) return false;
+    if (image.plain_link_labels) |labels| if (!sourcePlainLinkLabelsCurrent(labels, image.source)) return false;
+    return true;
 }
 
 pub fn unobservedCounterSourceCurrent(proof: *const UnobservedCounterResetProof) bool {
@@ -882,7 +1112,10 @@ fn counterLiteralStrings(raw: []const u8) bool {
     return true;
 }
 fn counterSourceClosed(source: []const u8) bool {
-    if (!sourceAttributeNameConstructionClosed(source, null)) return false;
+    return counterSourceClosedWithLabels(source, null);
+}
+fn counterSourceClosedWithLabels(source: []const u8, labels: ?*const SourcePlainLinkLabels) bool {
+    if (!sourceAttributeNameConstructionClosedWithLabels(source, null, labels)) return false;
     // Exact captured inline inventories are checked separately. Conservative
     // source candidates also cover omitted/protected literal CSS and prevent
     // an unresolved construction from enrolling a new counter operation.
@@ -986,7 +1219,7 @@ pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Prof
     complete_inline_styles: []const u8) !?UnobservedCounterResetProof
 {
     if (styles.globally_unresolved or source_image.styles != styles or source_image.root != root or
-        !pageSourceImageCurrent(source_image) or !counterSourceClosed(source_image.source) or
+        !pageSourceImageCurrent(source_image) or !counterSourceClosedWithLabels(source_image.source, source_image.plain_link_labels) or
         contexts.len != 2 or unique_root_class.len == 0) return null;
     const snapshot = source_image.snapshot;
     for (contexts) |context| {
@@ -1081,6 +1314,582 @@ pub fn observedUnobservedCounterResets(a: std.mem.Allocator, styles: *const Prof
         .rules = styles.container_rules, .resets = try covered.toOwnedSlice(a) };
 }
 
+pub const page_source_focus_max_actions: usize = 4096;
+pub const PageSourceFocusAction = struct { token: []const u8, subjects: [2]u32, original_hrefs: [2]?[]const u8 = .{ null, null } };
+const PageSourceFocusActionSnapshot = struct { offset: usize, bytes: usize, subjects: [2]u32, original_hrefs: [2]?[]const u8 };
+const PageSourceFocusGraphSnapshot = struct {
+    context: ObservedInlineLinkPaintContext,
+    nodes: []const ObservedStyleNode,
+    rules: []const ObservedFigureRule,
+    sources: []const SourceRange,
+};
+
+// A provisional, build-only obligation. It never establishes action paint or
+// native emission. The Document consumer must discharge every action ordinal.
+pub const PageSourceFocusProof = struct {
+    storage: std.heap.ArenaAllocator,
+    source_image: *const PageSourceImage,
+    styles: *const Profile,
+    root: *const TextElement,
+    complete_root: *const TextElement,
+    native_snapshot: []const PageSourceFocusNativeSnapshot,
+    source: []const u8,
+    source_image_snapshot: []const u8,
+    actions: []const PageSourceFocusAction,
+    action_snapshot: []const PageSourceFocusActionSnapshot,
+    rules: []const ContainerRule,
+    rule_snapshot: []const ContainerRule,
+    observed_rules: []const ObservedFigureRule,
+    observed_snapshot: []const ObservedFigureRule,
+    sources: []const SourceRange,
+    source_snapshot: []const SourceRange,
+    covered_rules: []const usize,
+    covered_snapshot: []const usize,
+    graphs: [2]PageSourceFocusGraphSnapshot,
+
+    pub fn deinit(self: *@This()) void { self.storage.deinit(); self.* = undefined; }
+};
+
+// Complete action-only source has one declaring inline root in each independent
+// graph. Its font strut is separate from each A's effective font/paint snapshot.
+// This receipt cannot account for ordinary text outside those exact actions.
+pub const PageSourceInlineOwnerProof = struct {
+    focus: *const PageSourceFocusProof,
+    style: types.ContainerStyle,
+    style_snapshot: types.ContainerStyle,
+    language: []const u8,
+    language_snapshot: []const u8,
+    absent_rules: []const usize,
+    absent_snapshot: []const usize,
+    covered_rules: []const usize,
+    covered_snapshot: []const usize,
+
+    pub fn jsonStringify(_: @This(), _: anytype) std.Io.Writer.Error!void { return error.WriteFailed; }
+    pub fn jsonParse(_: std.mem.Allocator, _: anytype, _: std.json.ParseOptions) !@This() { return error.UnexpectedToken; }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, _: std.json.Value, _: std.json.ParseOptions) !@This() { return error.UnexpectedToken; }
+};
+
+pub fn pageSourceInlineOwnerCurrent(proof: *const PageSourceInlineOwnerProof) bool {
+    return pageSourceFocusCurrent(proof.focus) and proof.language.len != 0 and
+        std.mem.eql(u8, proof.language, proof.language_snapshot) and
+        observedFigureDataEqual([]const usize, proof.absent_rules, proof.absent_snapshot, 0) and
+        observedFigureDataEqual(types.ContainerStyle, proof.style, proof.style_snapshot, 0) and
+        observedFigureDataEqual([]const usize, proof.covered_rules, proof.covered_snapshot, 0);
+}
+
+fn sourceInlineOwnerProperty(name: []const u8) bool {
+    for ([_][]const u8{ "font-family", "font-size", "font-weight", "font-style", "line-height", "color",
+        "text-decoration", "text-decoration-line", "outline", "outline-color", "outline-width", "outline-style", "outline-offset" }) |property|
+        if (std.ascii.eqlIgnoreCase(name, property)) return true;
+    return false;
+}
+
+fn sourceInlineOwnerObservedOrigin(styles: *const Profile, candidate: ContainerRule, observed_styles: *const Profile) ?usize {
+    const origin = candidate.provenance orelse return null;
+    if (candidate.rank_unknown or candidate.viewport != .all or origin.conditions.len != 0 or
+        origin.source_index >= styles.sources.len) return null;
+    return sourceInlineOwnerObservedIdentity(styles, candidate, observed_styles);
+}
+
+fn sourceInlineOwnerObservedIdentity(styles: *const Profile, candidate: ContainerRule, observed_styles: *const Profile) ?usize {
+    const origin = candidate.provenance orelse return null;
+    if (origin.source_index >= styles.sources.len) return null;
+    const source = styles.sources[origin.source_index];
+    for (observed_styles.observed_figure_rules, 0..) |rule, index| {
+        if (rule.source_index >= observed_styles.sources.len or rule.source_byte_start != origin.css_byte_start or
+            !std.mem.eql(u8, rule.raw_selector, origin.selector) or !std.mem.eql(u8, rule.css, candidate.css) or
+            !pageSourceFocusSourceEqual(source, observed_styles.sources[rule.source_index])) continue;
+        return index;
+    }
+    return null;
+}
+
+// Refutation uses the maintained selector matcher with unknown action state.
+// Every captured node and pseudo subject in both graphs must be impossible;
+// rank and condition uncertainty cannot revive a selector that matches nowhere.
+fn sourceInlineOwnerRuleAbsent(styles: *const Profile, candidate: ContainerRule, contexts: []const ObservedInlineLinkPaintContext) bool {
+    for (contexts) |context| {
+        const index = sourceInlineOwnerObservedIdentity(styles, candidate, context.styles) orelse return false;
+        const observed = context.styles.observed_figure_rules[index];
+        for (context.nodes, 0..) |_, subject| {
+            for ([_]?GeneratedFigurePseudo{ null, .before, .after, .other }) |pseudo|
+                if (observedStyleRuleMatch(observed, context.nodes, null, @intCast(subject), pseudo, .{}) != .no) return false;
+        }
+    }
+    return true;
+}
+
+fn sourceInlineOwnerFocusDeclaration(proof: *const PageSourceFocusProof, context: ObservedInlineLinkPaintContext,
+    declaration: ObservedFigureDeclaration) bool
+{
+    if (!std.ascii.eqlIgnoreCase(declaration.name, "outline-color")) return false;
+    for (proof.covered_rules) |index| {
+        if (index >= proof.styles.container_rules.len) return false;
+        const observed = pageSourceFocusObservedOrigin(proof.styles, proof.styles.container_rules[index], context.styles) orelse continue;
+        const rule = context.styles.observed_figure_rules[observed];
+        if (declaration.source_index == rule.source_index and declaration.source_byte_start == rule.source_byte_start) return true;
+    }
+    return false;
+}
+
+pub fn observedPageSourceInlineOwnerAlloc(a: std.mem.Allocator, focus: *const PageSourceFocusProof) std.mem.Allocator.Error!?PageSourceInlineOwnerProof {
+    return observedPageSourceInlineOwnerIn(a, focus) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    };
+}
+
+fn observedPageSourceInlineOwnerIn(a: std.mem.Allocator, focus: *const PageSourceFocusProof) !?PageSourceInlineOwnerProof {
+    if (!pageSourceFocusCurrent(focus) or focus.actions.len == 0) return null;
+    // Use the maintained inline parser for transparent balanced emphasis. Its
+    // exact source slices, not label equality, identify every issued action.
+    const InlineIterator = @import("blob_encoder").document_ir.InlineIterator;
+    var iterator: InlineIterator = .{ .input = focus.source, .renderer_boundaries = true };
+    var action_index: usize = 0;
+    while (iterator.next()) |token| {
+        if (token.kind == .text and token.text.len == 0) continue;
+        if ((token.kind != .link and token.kind != .external_link) or action_index >= focus.actions.len or
+            token.trail.len != 0 or token.literal_tail or token.link_label_restored_close) return null;
+        const action = focus.actions[action_index];
+        const offset = pageSourceFocusTokenOffset(focus.source, action.token) orelse return null;
+        var selected: InlineIterator = .{ .input = action.token, .renderer_boundaries = true };
+        const expected = selected.next() orelse return null;
+        if (selected.cursor != action.token.len or iterator.cursor != offset + action.token.len or
+            token.kind != expected.kind or token.text.ptr != expected.text.ptr or token.text.len != expected.text.len or
+            token.target.ptr != expected.target.ptr or token.target.len != expected.target.len) return null;
+        action_index += 1;
+    }
+    if (iterator.cursor != focus.source.len or iterator.bold or iterator.italic or action_index != focus.actions.len) return null;
+    const contexts = [_]ObservedInlineLinkPaintContext{ focus.graphs[0].context, focus.graphs[1].context };
+    const samples = (try observedInlineLinkViewportSamples(a, &contexts)) orelse return null;
+    var style: ?types.ContainerStyle = null;
+    var language: ?[]const u8 = null;
+    for (contexts, 0..) |context, arm| for (samples) |sample| {
+        const owner = (try observedInlineDeclaringOwnerFont(a, context, context.root, null, sample.width)) orelse return null;
+        if (owner.language.len == 0 or owner.font_scale_basis != .normal_body or owner.font_scale == null or owner.font_family == null or
+            owner.bold or owner.italic or owner.code or owner.small or owner.superscript or owner.subscript or
+            owner.font_features != null or owner.role != .normal or owner.classes.len != 0) return null;
+        if (language) |held| {
+            if (!std.mem.eql(u8, held, owner.language)) return null;
+        } else language = owner.language;
+        const value: types.ContainerStyle = .{ .font_family = owner.font_family, .owner_font_scale = owner.font_scale };
+        if (style) |prior| {
+            if (!observedFigureDataEqual(types.ContainerStyle, prior, value, 0)) return null;
+        } else style = value;
+        for (context.nodes, 0..) |node, index| {
+            var inside_action = false;
+            for (focus.actions) |action| if (authoredElementDescendant(context.nodes, @intCast(index), action.subjects[arm])) {
+                inside_action = true; break;
+            };
+            if (inside_action) continue;
+            // A focus census does not represent direction, presentational box
+            // attributes or activation. Keep only inert metadata and the exact
+            // stylesheet declarations accounted below; never infer an initial
+            // direction from a non-LTR/automatic captured attribute.
+            for (node.attributes) |attribute| {
+                if (std.ascii.eqlIgnoreCase(attribute.name, "dir")) {
+                    if (!std.ascii.eqlIgnoreCase(attribute.value, "ltr")) return null;
+                    continue;
+                }
+                var metadata = false;
+                for ([_][]const u8{ "class", "id", "lang", "title", "style", "typeof", "about", "data-mw", "data-mw-i18n",
+                    "data-mw-section-id", "data-mw-parsoid-version", "data-mw-html-version", "data-mw-ve-target-container" }) |name|
+                    if (std.ascii.eqlIgnoreCase(attribute.name, name)) { metadata = true; break; };
+                if (!metadata) return null;
+            }
+            // Only root ancestry and consumed emphasis can own this anonymous
+            // inline source outside an A. No paragraph margin or other box
+            // borrows the action census or this root's font strut.
+            if (authoredElementDescendant(context.nodes, @intCast(index), context.root) and node.has_text != false) return null;
+            if (!authoredElementDescendant(context.nodes, context.root, @intCast(index))) {
+                const emphasis = std.ascii.eqlIgnoreCase(node.tag, "i") or std.ascii.eqlIgnoreCase(node.tag, "b");
+                if (!emphasis) return null;
+                const declaring = (try observedInlineDeclaringOwnerFont(a, context, @intCast(index), null, sample.width)) orelse return null;
+                var owns_action = false;
+                for (focus.actions) |action| if (authoredElementDescendant(context.nodes, action.subjects[arm], @intCast(index))) {
+                    owns_action = true;
+                    if (emphasis) {
+                        const child_font = (try observedInlineDeclaringLinkFont(a, context, action.subjects[arm], sample.width)) orelse return null;
+                        if (!observedFigureDataEqual(types.InlineFontSnapshot, declaring, child_font, 0)) return null;
+                    }
+                };
+                if (!owns_action) return null;
+            }
+            for ([_]bool{ false, true }) |motion| {
+                var declarations = (try observedStyleNodeDeclarations(a, context.styles, context.nodes, @intCast(index), null, null,
+                    .{ .viewport_width = sample.width, .reduced_motion = motion })) orelse return null;
+                defer declarations.deinit(a);
+                for (declarations.items) |declaration| {
+                    if (customName(declaration.name) and !declaration.syntax_unknown) continue;
+                    if (sourceInlineOwnerFocusDeclaration(focus, context, declaration)) continue;
+                    if (!std.ascii.eqlIgnoreCase(declaration.name, "font-family") and
+                        !std.ascii.eqlIgnoreCase(declaration.name, "font-size") and
+                        !std.ascii.eqlIgnoreCase(declaration.name, "font-weight") and
+                        !std.ascii.eqlIgnoreCase(declaration.name, "font-style") and
+                        !std.ascii.eqlIgnoreCase(declaration.name, "color")) return null;
+                }
+            }
+        }
+    };
+    var covered: std.ArrayList(usize) = .empty;
+    var absent: std.ArrayList(usize) = .empty;
+    for (focus.styles.container_rules, 0..) |rule, index| {
+        if (sourceInlineOwnerRuleAbsent(focus.styles, rule, &contexts)) {
+            try absent.append(a, index);
+            try covered.append(a, index);
+            continue;
+        }
+        for (contexts) |context| _ = sourceInlineOwnerObservedOrigin(focus.styles, rule, context.styles) orelse return null;
+        var position: usize = 0;
+        while (try nextDeclarationAlloc(a, rule.css, &position)) |raw| {
+            defer a.free(raw);
+            if (trim(raw).len == 0) continue;
+            const colon = std.mem.indexOfScalar(u8, raw, ':') orelse return null;
+            const name = trim(raw[0..colon]);
+            const priority = customPriority(raw[colon + 1 ..]);
+            if (priority.unknown or trim(priority.value).len == 0 or
+                (!customName(name) and !sourceInlineOwnerProperty(name))) return null;
+        }
+        try covered.append(a, index);
+    }
+    const owned_style = style orelse return null;
+    const indices = try covered.toOwnedSlice(a);
+    const absent_indices = try absent.toOwnedSlice(a);
+    return .{ .absent_rules = absent_indices, .absent_snapshot = try a.dupe(usize, absent_indices),
+        .focus = focus, .style = owned_style, .language = language.?, .language_snapshot = try a.dupe(u8, language.?),
+        .style_snapshot = try observedFigureDataClone(types.ContainerStyle, a, owned_style, 0),
+        .covered_rules = indices, .covered_snapshot = try a.dupe(usize, indices) };
+}
+
+fn pageSourceFocusTokenOffset(source: []const u8, token: []const u8) ?usize {
+    const base = @intFromPtr(source.ptr); const address = @intFromPtr(token.ptr);
+    if (token.len == 0 or address < base or address - base > source.len or token.len > source.len - (address - base)) return null;
+    return address - base;
+}
+
+pub fn pageSourceFocusCurrent(proof: *const PageSourceFocusProof) bool {
+    if (proof.styles != proof.source_image.styles or proof.root != proof.source_image.root or
+        proof.source.ptr != proof.source_image.source.ptr or proof.source.len != proof.source_image.source.len or
+        proof.source_image_snapshot.ptr != proof.source_image.snapshot.ptr or proof.source_image_snapshot.len != proof.source_image.snapshot.len or
+        !pageSourceImageCurrent(proof.source_image) or proof.styles.globally_unresolved or proof.styles.reading_target != .screen or
+        proof.rules.ptr != proof.styles.container_rules.ptr or proof.rules.len != proof.styles.container_rules.len or
+        proof.observed_rules.ptr != proof.styles.observed_figure_rules.ptr or proof.observed_rules.len != proof.styles.observed_figure_rules.len or
+        proof.covered_rules.len == 0 or proof.actions.len > page_source_focus_max_actions or
+        proof.actions.len != proof.action_snapshot.len or
+        !observedFigureDataEqual([]const ContainerRule, proof.rules, proof.rule_snapshot, 0) or
+        !observedFigureDataEqual([]const ObservedFigureRule, proof.observed_rules, proof.observed_snapshot, 0) or
+        proof.sources.ptr != proof.styles.sources.ptr or proof.sources.len != proof.styles.sources.len or
+        !observedFigureDataEqual([]const SourceRange, proof.sources, proof.source_snapshot, 0) or
+        !observedFigureDataEqual([]const usize, proof.covered_rules, proof.covered_snapshot, 0)) return false;
+    if (!pageSourceFocusAlternativesConsistent(proof.complete_root)) return false;
+    for (proof.native_snapshot) |snapshot| if (!pageSourceFocusNativeCurrent(snapshot)) return false;
+    if (!pageSourceFocusWeakGraph(proof.root, proof.graphs[0].context) or
+        !pageSourceFocusNativeGraph(proof.complete_root, proof.graphs[0].context) or
+        !pageSourceFocusNativeGraph(proof.complete_root.alternative_ancestry orelse proof.complete_root, proof.graphs[1].context)) return false;
+    for (proof.actions, proof.action_snapshot) |action, snapshot| {
+        const offset = pageSourceFocusTokenOffset(proof.source, action.token) orelse return false;
+        if (offset != snapshot.offset or action.token.len != snapshot.bytes or !std.meta.eql(action.subjects, snapshot.subjects) or
+            !observedFigureDataEqual([2]?[]const u8, action.original_hrefs, snapshot.original_hrefs, 0)) return false;
+    }
+    for (proof.graphs) |graph| {
+        const context = graph.context;
+        if (context.styles.globally_unresolved or context.styles.reading_target != .screen or
+            !observedStyleGraphValid(context.styles, context.nodes, context.root) or
+            !observedFigureDataEqual([]const ObservedStyleNode, context.nodes, graph.nodes, 0) or
+            !observedFigureDataEqual([]const ObservedFigureRule, context.styles.observed_figure_rules, graph.rules, 0) or
+            !observedFigureDataEqual([]const SourceRange, context.styles.sources, graph.sources, 0)) return false;
+    }
+    return true;
+}
+
+fn pageSourceFocusSourceEqual(left: SourceRange, right: SourceRange) bool {
+    return left.byte_start == right.byte_start and left.bytes == right.bytes and
+        std.mem.eql(u8, left.base_url, right.base_url) and std.mem.eql(u8, &left.css_sha256, &right.css_sha256);
+}
+fn pageSourceFocusObservedOrigin(styles: *const Profile, candidate: ContainerRule, observed_styles: *const Profile) ?usize {
+    const origin = candidate.provenance orelse return null;
+    if (candidate.rank_unknown or candidate.viewport != .all or origin.conditions.len != 0 or
+        !std.mem.eql(u8, trim(origin.selector), ":focus") or origin.source_index >= styles.sources.len) return null;
+    const source = styles.sources[origin.source_index];
+    for (observed_styles.observed_figure_rules, 0..) |rule, index| {
+        if (rule.source_index >= observed_styles.sources.len or rule.source_byte_start != origin.css_byte_start or
+            !std.mem.eql(u8, rule.raw_selector, origin.selector) or !std.mem.eql(u8, rule.css, candidate.css) or
+            !pageSourceFocusSourceEqual(source, observed_styles.sources[rule.source_index])) continue;
+        return index;
+    }
+    return null;
+}
+
+fn pageSourceFocusRuleEligible(a: std.mem.Allocator, styles: *const Profile, rule: ContainerRule) !bool {
+    const original = pageSourceFocusObservedOrigin(styles, rule, styles) orelse return false;
+    return tableSourceFocusRule(a, styles.observed_figure_rules[original]);
+}
+
+pub fn hasPageSourceFocusObligation(styles: *const Profile) bool {
+    if (styles.globally_unresolved or styles.reading_target != .screen or styles.page_style_parent == null) return false;
+    var buffer: [512]u8 = undefined;
+    for (styles.container_rules) |rule| {
+        var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+        const eligible = pageSourceFocusRuleEligible(fixed.allocator(), styles, rule) catch
+            (pageSourceFocusRuleEligible(std.heap.page_allocator, styles, rule) catch false);
+        if (eligible) return true;
+    }
+    return false;
+}
+
+fn pageSourceFocusNeutralAttributes(node: ObservedStyleNode, original_href: ?[]const u8) bool {
+    var supported = false;
+    for ([_][]const u8{ "html", "body", "main", "article", "section", "div", "span", "b", "strong", "i", "em", "u", "s", "small", "big", "sup", "sub", "abbr", "cite", "p", "h1", "h2", "h3", "h4", "h5", "h6", "dl", "dt", "dd", "ul", "ol", "li", "figure", "figcaption", "table", "caption", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col", "img", "br", "hr", "wbr", "meta", "link", "style", "code", "pre", "mark", "bdi", "bdo", "ruby", "rp", "rt", "a" }) |tag|
+        if (std.ascii.eqlIgnoreCase(node.tag, tag)) { supported = true; break; };
+    if (!supported) return false;
+    const anchor = std.ascii.eqlIgnoreCase(node.tag, "a");
+    if (anchor and (observedFigureAttribute(node, "href") orelse return false).len == 0) return false;
+    // Inert normalization metadata is admitted only as an exact per-operation
+    // input already consumed by Book's source/captured target join. This query
+    // does not normalize a URL or establish that independent correspondence.
+    if (original_href) |expected| {
+        if (!anchor or expected.len == 0 or !std.mem.eql(u8,
+            observedFigureAttribute(node, "data-mw-original-href") orelse return false, expected)) return false;
+    } else if (observedFigureAttribute(node, "data-mw-original-href") != null) return false;
+    for (node.attributes) |attribute| {
+        const name = attribute.name;
+        if (name.len >= 2 and std.ascii.eqlIgnoreCase(name[0..2], "on")) return false;
+        for ([_][]const u8{ "contenteditable", "tabindex", "autofocus", "accesskey", "role", "draggable", "hidden", "inert", "controls", "usemap", "ismap" }) |activation|
+            if (std.ascii.eqlIgnoreCase(name, activation)) return false;
+        var known = false;
+        for ([_][]const u8{ "class", "id", "lang", "dir", "title", "style", "align", "width", "height", "rowspan", "colspan", "border", "cellpadding", "cellspacing", "src", "alt", "typeof", "about", "data-mw", "data-mw-i18n", "data-mw-section-id", "data-mw-parsoid-version", "data-mw-html-version", "data-mw-ve-target-container", "data-column-count", "aria-labelledby", "aria-hidden" }) |plain|
+            if (std.ascii.eqlIgnoreCase(name, plain)) { known = true; break; };
+        if (anchor and (std.ascii.eqlIgnoreCase(name, "href") or std.ascii.eqlIgnoreCase(name, "rel"))) known = true;
+        if (anchor and original_href != null and std.ascii.eqlIgnoreCase(name, "data-mw-original-href")) known = true;
+        if (!known) return false;
+        if (std.ascii.eqlIgnoreCase(name, "class")) {
+            var classes = std.mem.tokenizeAny(u8, attribute.value, " \t\r\n\x0c");
+            while (classes.next()) |class| for ([_][]const u8{ "NavFrame", "NavContent", "collapsible", "sortable", "mw-collapsible", "mw-collapsed", "mw-collapsible-content", "oo-ui-widget", "mw-ui-button" }) |hook|
+                if (std.mem.eql(u8, class, hook)) return false;
+        }
+    }
+    return true;
+}
+
+fn pageSourceFocusGraphClosed(a: std.mem.Allocator, contexts: []const ObservedInlineLinkPaintContext,
+    actions: []const PageSourceFocusAction) !bool
+{
+    if (contexts.len != 2) return false;
+    for (contexts, 0..) |context, arm| {
+        if (context.styles.globally_unresolved or context.styles.reading_target != .screen or context.nodes.len > 16384 or
+            !observedStyleGraphValid(context.styles, context.nodes, context.root)) return false;
+        var anchors: usize = 0;
+        for (context.nodes, 0..) |node, index| {
+            if (!std.ascii.eqlIgnoreCase(node.tag, "a")) {
+                if (!pageSourceFocusNeutralAttributes(node, null)) return false;
+                continue;
+            }
+            if (!authoredElementDescendant(context.nodes, @intCast(index), context.root)) return false;
+            var found: usize = 0;
+            var original_href: ?[]const u8 = null;
+            for (actions) |action| {
+                if (action.subjects[arm] == index) { found += 1; original_href = action.original_hrefs[arm]; }
+            }
+            if (found != 1 or !pageSourceFocusNeutralAttributes(node, original_href)) return false;
+            anchors += 1;
+        }
+        if (anchors != actions.len) return false;
+    }
+    const samples = (try observedInlineLinkViewportSamples(a, contexts)) orelse return false;
+    var scratch_storage = std.heap.ArenaAllocator.init(a); defer scratch_storage.deinit();
+    for (contexts) |context| for (samples) |sample| for ([_]bool{ false, true }) |motion| {
+        _ = scratch_storage.reset(.retain_capacity); const scratch = scratch_storage.allocator();
+        const environments = try scratch.alloc(CustomEnvironment, context.nodes.len);
+        for (context.nodes, 0..) |node, index| {
+            const parent: CustomEnvironment = if (node.parent) |parent_index| environments[parent_index] else .{ .complete = true };
+            var collected = (try observedStyleNodeDeclarations(scratch, context.styles, context.nodes, @intCast(index), null, null,
+                .{ .viewport_width = sample.width, .reduced_motion = motion })) orelse return false;
+            defer collected.deinit(scratch);
+            const environment = try observedFigureCustomEnvironment(scratch, collected.items, parent, true);
+            environments[index] = environment;
+            if (!tableSourceStaticFocusDeclarations(collected.items) or !try observedFigureStaticMotion(scratch, collected.items, environment)) return false;
+            if (std.ascii.eqlIgnoreCase(node.tag, "a")) continue;
+            // A scrollable non-A owner has a real independent focus obligation.
+            // No Table/Figure count or absent tabindex can discharge it here.
+            for ([_][]const u8{ "overflow", "overflow-x", "overflow-y" }) |property| {
+                const value = try observedFigureKeyword(scratch, collected.items, property,
+                    if (std.mem.eql(u8, property, "overflow")) &.{} else &.{"overflow"}, environment,
+                    &.{"visible"}, "visible", null, false, "visible");
+                if (value.unresolved or value.value == null or !std.mem.eql(u8, value.value.?, "visible")) return false;
+            }
+        }
+    };
+    return true;
+}
+
+pub fn observedPageSourceFocusAlloc(a: std.mem.Allocator, styles: *const Profile, root: *const TextElement,
+    complete_root: *const TextElement, source_image: *const PageSourceImage, contexts: []const ObservedInlineLinkPaintContext,
+    actions: []const PageSourceFocusAction) std.mem.Allocator.Error!?PageSourceFocusProof
+{
+    if (styles.globally_unresolved or styles.reading_target != .screen or styles.page_style_parent == null or
+        source_image.styles != styles or source_image.root != root or !pageSourceImageCurrent(source_image) or
+        contexts.len != 2 or contexts[0].nodes.ptr == contexts[1].nodes.ptr or actions.len > page_source_focus_max_actions) return null;
+    if (!pageSourceFocusAlternativesConsistent(complete_root)) return null;
+    if (!pageSourceFocusWeakGraph(root, contexts[0]) or !pageSourceFocusNativeGraph(complete_root, contexts[0]) or
+        !pageSourceFocusNativeGraph(complete_root.alternative_ancestry orelse complete_root, contexts[1])) return null;
+    var storage = std.heap.ArenaAllocator.init(a); var retain = false; defer if (!retain) storage.deinit();
+    const owned = storage.allocator();
+    var prior_end: usize = 0;
+    for (actions, 0..) |action, index| {
+        const offset = pageSourceFocusTokenOffset(source_image.source, action.token) orelse return null;
+        if (offset < prior_end) return null;
+        prior_end = offset + action.token.len;
+        for (contexts, 0..) |context, arm| {
+            const subject = action.subjects[arm];
+            if (subject >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[subject].tag, "a") or
+                (index != 0 and subject <= actions[index - 1].subjects[arm])) return null;
+        }
+    }
+    if (!(pageSourceFocusGraphClosed(owned, contexts, actions) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory, else => return null,
+    })) return null;
+    var covered: std.ArrayList(usize) = .empty;
+    for (styles.container_rules, 0..) |rule, index| {
+        if (!try pageSourceFocusRuleEligible(owned, styles, rule)) continue;
+        var complete = true;
+        for (contexts) |context| {
+            const observed = pageSourceFocusObservedOrigin(styles, rule, context.styles) orelse { complete = false; break; };
+            if (!try tableSourceFocusRule(owned, context.styles.observed_figure_rules[observed])) { complete = false; break; }
+        }
+        if (complete) try covered.append(owned, index);
+    }
+    if (covered.items.len == 0) return null;
+    var graphs: [2]PageSourceFocusGraphSnapshot = undefined;
+    for (contexts, 0..) |context, arm| graphs[arm] = .{
+        .context = context,
+        .nodes = observedFigureDataClone([]const ObservedStyleNode, owned, context.nodes, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+        .rules = observedFigureDataClone([]const ObservedFigureRule, owned, context.styles.observed_figure_rules, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+        .sources = observedFigureDataClone([]const SourceRange, owned, context.styles.sources, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+    };
+    const snapshots = try owned.alloc(PageSourceFocusActionSnapshot, actions.len);
+    for (actions, snapshots) |action, *snapshot| snapshot.* = .{ .offset = pageSourceFocusTokenOffset(source_image.source, action.token).?,
+        .bytes = action.token.len, .subjects = action.subjects,
+        .original_hrefs = observedFigureDataClone([2]?[]const u8, owned, action.original_hrefs, 0) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        } };
+    const covered_rules = try covered.toOwnedSlice(owned);
+    var proof: PageSourceFocusProof = .{
+        .storage = undefined, .source_image = source_image, .styles = styles, .root = root, .source = source_image.source, .source_image_snapshot = source_image.snapshot,
+        .complete_root = complete_root, .native_snapshot = try pageSourceFocusNativeSnapshots(owned, root, complete_root),
+        .actions = try owned.dupe(PageSourceFocusAction, actions), .action_snapshot = snapshots,
+        .rules = styles.container_rules,
+        .rule_snapshot = observedFigureDataClone([]const ContainerRule, owned, styles.container_rules, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+        .observed_rules = styles.observed_figure_rules,
+        .observed_snapshot = observedFigureDataClone([]const ObservedFigureRule, owned, styles.observed_figure_rules, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+        .sources = styles.sources,
+        .source_snapshot = observedFigureDataClone([]const SourceRange, owned, styles.sources, 0) catch |err| switch (err) { error.OutOfMemory => return error.OutOfMemory, else => return null },
+        .covered_rules = covered_rules, .covered_snapshot = try owned.dupe(usize, covered_rules), .graphs = graphs,
+    };
+    proof.storage = storage;
+    if (!pageSourceFocusCurrent(&proof)) return null;
+    retain = true;
+    return proof;
+}
+
+const PageSourceFocusNativeSnapshot = struct {
+    node: *const TextElement,
+    tag: []const u8, classes: []const u8, id: []const u8, language: ?[]const u8,
+    inline_style: ?[]const u8, attributes: ?AttributePresenceSource,
+    parent: ?*const TextElement, alternative: ?*const TextElement,
+    ancestry_complete: bool, physical_complete: bool,
+};
+fn pageSourceFocusOptionalEqual(left: ?[]const u8, right: ?[]const u8) bool {
+    if (left) |value| return if (right) |other| std.mem.eql(u8, value, other) else false;
+    return right == null;
+}
+fn pageSourceFocusNativeCurrent(snapshot: PageSourceFocusNativeSnapshot) bool {
+    const node = snapshot.node;
+    if (!std.mem.eql(u8, node.tag, snapshot.tag) or !std.mem.eql(u8, node.classes, snapshot.classes) or
+        !std.mem.eql(u8, node.id, snapshot.id) or !pageSourceFocusOptionalEqual(node.language, snapshot.language) or
+        !pageSourceFocusOptionalEqual(node.observed_inline_style, snapshot.inline_style) or
+        node.parent != snapshot.parent or node.alternative_ancestry != snapshot.alternative or
+        node.ancestry_complete != snapshot.ancestry_complete or node.physical_ancestry_complete != snapshot.physical_complete) return false;
+    if (snapshot.attributes) |retained| {
+        const current = node.attribute_presence orelse return false;
+        if (current.ctx != retained.ctx or current.get != retained.get) return false;
+    } else if (node.attribute_presence != null) return false;
+    return true;
+}
+fn pageSourceFocusNativeGraph(root: *const TextElement, context: ObservedInlineLinkPaintContext) bool {
+    var native: ?*const TextElement = root;
+    var observed: ?u32 = context.root;
+    var remaining: usize = 64;
+    while (native) |node| {
+        if (remaining == 0) return false;
+        remaining -= 1;
+        const index = observed orelse return false;
+        if (index >= context.nodes.len or !node.ancestry_complete or !node.physical_ancestry_complete) return false;
+        const captured = context.nodes[index];
+        if (!std.ascii.eqlIgnoreCase(node.tag, captured.tag) or
+            !std.mem.eql(u8, node.classes, observedFigureAttribute(captured, "class") orelse "") or
+            !std.mem.eql(u8, node.id, observedFigureAttribute(captured, "id") orelse "") or
+            !pageSourceFocusOptionalEqual(node.language, observedFigureAttribute(captured, "lang")) or
+            !std.mem.eql(u8, node.observed_inline_style orelse return false, observedFigureAttribute(captured, "style") orelse "")) return false;
+        const attributes = node.attribute_presence orelse return false;
+        for (captured.attributes) |attribute| if (attributes.get(attributes.ctx, attribute.name) != .present) return false;
+        for ([_][]const u8{ "tabindex", "contenteditable", "autofocus", "accesskey", "role", "draggable", "hidden", "inert", "controls", "usemap", "ismap", "onfocus", "onblur", "onclick", "onkeydown", "onmouseover" }) |activation| {
+            if (attributes.get(attributes.ctx, activation) != .absent) return false;
+        }
+        native = node.parent; observed = captured.parent;
+    }
+    return observed == null;
+}
+fn pageSourceFocusWeakGraph(root: *const TextElement, context: ObservedInlineLinkPaintContext) bool {
+    var native: ?*const TextElement = root; var observed: ?u32 = context.root;
+    var remaining: usize = 64;
+    while (native) |node| {
+        if (remaining == 0) return false; remaining -= 1;
+        const index = observed orelse return false;
+        if (index >= context.nodes.len) return false;
+        const captured = context.nodes[index];
+        // The weak path must not contain contradictory native activation or
+        // inline-style information. Book's weak path intentionally has neither.
+        if (node.attribute_presence != null or node.observed_inline_style != null or node.alternative_ancestry != null or
+            !std.ascii.eqlIgnoreCase(node.tag, captured.tag) or
+            !std.mem.eql(u8, node.classes, observedFigureAttribute(captured, "class") orelse "")) return false;
+        native = node.parent; observed = captured.parent;
+    }
+    return true;
+}
+fn pageSourceFocusNativeSnapshots(a: std.mem.Allocator, weak: *const TextElement, complete: *const TextElement) std.mem.Allocator.Error![]const PageSourceFocusNativeSnapshot {
+    var snapshots: std.ArrayList(PageSourceFocusNativeSnapshot) = .empty;
+    for ([_]*const TextElement{ weak, complete, complete.alternative_ancestry orelse complete }) |root| {
+        var cursor: ?*const TextElement = root;
+        var remaining: usize = 64;
+        while (cursor) |node| {
+            if (remaining == 0) break; remaining -= 1;
+            try snapshots.append(a, .{ .node = node, .tag = try a.dupe(u8, node.tag), .classes = try a.dupe(u8, node.classes),
+                .id = try a.dupe(u8, node.id), .language = if (node.language) |value| try a.dupe(u8, value) else null,
+                .inline_style = if (node.observed_inline_style) |value| try a.dupe(u8, value) else null,
+                .attributes = node.attribute_presence, .parent = node.parent, .alternative = node.alternative_ancestry,
+                .ancestry_complete = node.ancestry_complete, .physical_complete = node.physical_ancestry_complete });
+            cursor = node.parent;
+        }
+    }
+    return snapshots.toOwnedSlice(a);
+}
+
+fn pageSourceFocusAlternativesConsistent(root: *const TextElement) bool {
+    var primary: ?*const TextElement = root;
+    var alternative: ?*const TextElement = root.alternative_ancestry;
+    const has_alternative = alternative != null;
+    var remaining: usize = 64;
+    while (primary) |node| {
+        if (remaining == 0) return false; remaining -= 1;
+        if (has_alternative) {
+            const other = alternative orelse return false;
+            if (node.alternative_ancestry != other or other.alternative_ancestry != null) return false;
+            alternative = other.parent;
+        } else if (node.alternative_ancestry != null) return false;
+        primary = node.parent;
+    }
+    return alternative == null;
+}
+
 pub const PageStaticMotionProof = struct {
     styles: *const Profile,
     source: []const u8,
@@ -1089,6 +1898,8 @@ pub const PageStaticMotionProof = struct {
 
 pub const BoundedTextClassScope = struct {
     page_source_image: ?*const PageSourceImage = null,
+    page_source_focus: ?*const PageSourceFocusProof = null,
+    page_source_inline_owner: ?*const PageSourceInlineOwnerProof = null,
     unobserved_counter_resets: ?UnobservedCounterResetProof = null,
     page_static_motion: ?PageStaticMotionProof = null,
     closed_row_colors: ?ClosedRowColorProof = null,
@@ -2305,8 +3116,8 @@ fn observedFigureSelectorMatchWithEffects(selector: GeneratedFigureSelector, con
         selected = observedFigureSiblingEvaluationValidated(context, evaluation);
     return observedStyleSelectorMatchValidated(selector, context.nodes, context.media, subject, pseudo, selected);
 }
-// A complete captured DIV child inventory can refute a necessary terminal
-// previous relation. It supplies neither a positive sibling match nor rank.
+// A complete captured DIV or closed inline child inventory can refute a necessary terminal
+// sibling relation. It supplies neither a positive sibling match nor rank.
 // Outer/root siblings have no such parent certificate. Reciprocal links and
 // the exact first-child position keep incomplete or foreign edges unknown.
 fn observedCompletePreviousRefutes(selector: GeneratedFigureSelector, nodes: []const ObservedStyleNode, subject: u32) bool {
@@ -2315,23 +3126,34 @@ fn observedCompletePreviousRefutes(selector: GeneratedFigureSelector, nodes: []c
     if (parent >= subject or !nodes[parent].known_complete_child_elements) return false;
     const closed_dd = std.ascii.eqlIgnoreCase(nodes[parent].tag, "dd") and
         (if (nodes[parent].parent) |outer| outer < parent and std.ascii.eqlIgnoreCase(nodes[outer].tag, "dl") else false);
-    if (!std.ascii.eqlIgnoreCase(nodes[parent].tag, "div") and !closed_dd) return false;
-    if (closed_dd) if (selector.necessary_has_next) |required| {
-        if (node.known_no_next_element_sibling) {
-            if (node.known_next_element_sibling != null) return false;
-            // This initial ordinary-A domain is a leaf. The next captured
-            // element must already be outside its explicitly closed DD.
-            if (subject + 1 == nodes.len) return true;
-            const following_parent = nodes[subject + 1].parent orelse return false;
-            return following_parent < parent;
+    const closed_inline = std.ascii.eqlIgnoreCase(nodes[parent].tag, "i") or
+        std.ascii.eqlIgnoreCase(nodes[parent].tag, "em") or std.ascii.eqlIgnoreCase(nodes[parent].tag, "b") or
+        std.ascii.eqlIgnoreCase(nodes[parent].tag, "strong") or std.ascii.eqlIgnoreCase(nodes[parent].tag, "span");
+    if (!std.ascii.eqlIgnoreCase(nodes[parent].tag, "div") and !closed_dd and !closed_inline) return false;
+    if (selector.necessary_has_next) |required| {
+        // The same closed parent inventory owns both sibling directions. A
+        // rich subject's descendants precede its next sibling in this exact
+        // source preorder; they are not candidate next element siblings.
+        var following: usize = @as(usize, subject) + 1;
+        var remaining: usize = 4096;
+        while (following < nodes.len) : (following += 1) {
+            if (remaining == 0) return false;
+            remaining -= 1;
+            const owner = nodes[following].parent orelse return false;
+            if (owner >= following) return false;
+            if (owner < subject) break;
         }
-        if (node.known_next_element_sibling) |next| {
-            if (next <= subject or next >= nodes.len or nodes[next].parent != parent or
-                nodes[next].known_previous_element_sibling != subject or nodes[next].known_no_previous_element_sibling) return false;
-            var next_budget: usize = 4096;
-            if (observedFigureCompoundMatchIn(required, nodes[next], false, &next_budget, false, null) == .no) return true;
-        }
-    };
+        const next: ?u32 = if (following == nodes.len) null else next: {
+            const owner = nodes[following].parent.?;
+            if (owner > parent) return false;
+            break :next if (owner == parent) @as(u32, @intCast(following)) else null;
+        };
+        if (node.known_next_element_sibling != next or node.known_no_next_element_sibling != (next == null)) return false;
+        if (next) |index| {
+            if (nodes[index].known_previous_element_sibling != subject or nodes[index].known_no_previous_element_sibling) return false;
+            if (observedFigureCompoundMatchIn(required, nodes[index], false, &remaining, false, null) == .no) return true;
+        } else return true;
+    }
     // necessary_has_next is extracted only from the terminal compound. Its
     // impossibility refutes the conjunction even with earlier ancestor terms.
     // Previous-combinator projection retains its original one-compound bound.
@@ -2561,6 +3383,8 @@ const ObservedFigureEvaluation = struct {
     focus_visible_supported: bool = false,
     // Issued only for a validated empty HR with complete nonediting ancestry.
     authored_rule_focus_absent: ?struct { nodes: []const ObservedStyleNode, subject: u32 } = null,
+    // Query-local closed rich-child census; never a page or ancestor grant.
+    rich_inline_focus_absent: ?*const ObservedRichInlineFocusAbsent = null,
     // Operation-local source proof; only exact generated SECTION ancestors.
     generated_section_focus_absent: ?struct { nodes: []const ObservedStyleNode, root: u32, frame: u32 } = null,
     // Set only by a validated source-proved Figure wrapper, tied to this graph identity.
@@ -8396,6 +9220,10 @@ pub const Profile = struct {
     }
 
     fn pageAncestorEffectBlockerWithRowColorAndStaticMotionIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool, motion: ?PageStaticMotionProof, counters: ?*const UnobservedCounterResetProof, complete_ids: ?[]const u8) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageAncestorEffectBlockerWithSourceFocusIn(a, root, figures, ready, complete_classes, row_colors, row_color_required, motion, counters, complete_ids, null, null, null);
+    }
+
+    fn pageAncestorEffectBlockerWithSourceFocusIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool, motion: ?PageStaticMotionProof, counters: ?*const UnobservedCounterResetProof, complete_ids: ?[]const u8, focus: ?*const PageSourceFocusProof, focus_required: ?*bool, inline_owner: ?*const PageSourceInlineOwnerProof) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
         const motion_covered = if (motion) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 else false;
         const missing_covered = if (figures) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false;
         const figures_covered = missing_covered or (if (ready) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false);
@@ -8436,6 +9264,11 @@ pub const Profile = struct {
                         if (customName(name) and !value.unknown) continue;
                         if (motion_covered and !value.unknown and pageStaticMotionProperty(name)) continue;
                         if (self.unobservedCounterDeclarationCovered(root, counters, rule.css, rule.order, rule.provenance, name, value)) continue;
+                        if (self.pageSourceFocusDeclarationCovered(root, focus, rule.css, rule.order, rule.provenance, name, value) or
+                            self.pageSourceInlineOwnerDeclarationCovered(root, focus, inline_owner, rule.css, rule.order, rule.provenance, name, value)) {
+                            if (focus_required) |required| required.* = true;
+                            continue;
+                        }
                         if (!rule.rank_unknown and rule.viewport == .all and self.rowColorDeclarationCovered(root, row_colors, rule.closed_row_attribute, name, value.unknown)) {
                             if (row_color_required) |required| if (row_colors.?.owners.len != 0) { required.* = true; };
                             continue;
@@ -8478,10 +9311,19 @@ pub const Profile = struct {
         return self.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, root, figures, ready, complete_classes, row_colors, row_color_required, motion, null, null);
     }
     pub fn pageUnprovedInheritanceBlockerWithClosedCountersIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool, motion: ?PageStaticMotionProof, counters: ?*const UnobservedCounterResetProof, complete_ids: ?[]const u8) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageUnprovedInheritanceBlockerWithClosedCountersAndSourceFocusIn(a, root, figures, ready, complete_classes, row_colors, row_color_required, motion, counters, complete_ids, null, null);
+    }
+
+    pub fn pageUnprovedInheritanceBlockerWithClosedCountersAndSourceFocusIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool, motion: ?PageStaticMotionProof, counters: ?*const UnobservedCounterResetProof, complete_ids: ?[]const u8, focus: ?*const PageSourceFocusProof, focus_required: ?*bool) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
+        return self.pageUnprovedInheritanceBlockerWithSourceInlineOwnerIn(a, root, figures, ready, complete_classes,
+            row_colors, row_color_required, motion, counters, complete_ids, focus, focus_required, null);
+    }
+
+    pub fn pageUnprovedInheritanceBlockerWithSourceInlineOwnerIn(self: *const Profile, a: std.mem.Allocator, root: ?*const TextElement, figures: ?ClosedMissingFigureProof, ready: ?ClosedReadyFigureProof, complete_classes: ?[]const u8, row_colors: ?*const ClosedRowColorProof, row_color_required: ?*bool, motion: ?PageStaticMotionProof, counters: ?*const UnobservedCounterResetProof, complete_ids: ?[]const u8, focus: ?*const PageSourceFocusProof, focus_required: ?*bool, inline_owner: ?*const PageSourceInlineOwnerProof) std.mem.Allocator.Error!?PageAncestorEffectBlocker {
         const motion_covered = if (motion) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 else false;
         const missing_covered = if (figures) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false;
         const figures_covered = missing_covered or (if (ready) |proof| proof.styles == self and proof.root == root and proof.source.len != 0 and proof.operations > 0 and proof.operations <= 64 else false);
-        if (try self.pageAncestorEffectBlockerWithRowColorAndStaticMotionIn(a, root, figures, ready, complete_classes, row_colors, row_color_required, motion, counters, complete_ids)) |failure| return failure;
+        if (try self.pageAncestorEffectBlockerWithSourceFocusIn(a, root, figures, ready, complete_classes, row_colors, row_color_required, motion, counters, complete_ids, focus, focus_required, inline_owner)) |failure| return failure;
         if (self.page_style_parent == null) return null;
         for (self.container_rules) |rule| {
             if (complete_classes) |classes| if (rule.selector.absentFromCompleteClasses(classes)) continue;
@@ -8499,6 +9341,11 @@ pub const Profile = struct {
                     if (customName(name) and !value.unknown) continue;
                     if (motion_covered and !value.unknown and pageStaticMotionProperty(name)) continue;
                     if (self.unobservedCounterDeclarationCovered(root, counters, rule.css, rule.order, rule.provenance, name, value)) continue;
+                        if (self.pageSourceFocusDeclarationCovered(root, focus, rule.css, rule.order, rule.provenance, name, value) or
+                            self.pageSourceInlineOwnerDeclarationCovered(root, focus, inline_owner, rule.css, rule.order, rule.provenance, name, value)) {
+                            if (focus_required) |required| required.* = true;
+                            continue;
+                        }
                     if (!rule.rank_unknown and rule.viewport == .all and self.rowColorDeclarationCovered(root, row_colors, rule.selector.completeOwnAttribute(), name, value.unknown)) {
                         if (row_color_required) |required| if (row_colors.?.owners.len != 0) { required.* = true; };
                         continue;
@@ -8511,6 +9358,52 @@ pub const Profile = struct {
             }
         }
         return null;
+    }
+
+    fn pageSourceInlineOwnerDeclarationCovered(self: *const Profile, root: ?*const TextElement,
+        focus: ?*const PageSourceFocusProof, maybe: ?*const PageSourceInlineOwnerProof,
+        css: []const u8, order: u32, provenance: ?ContainerRuleProvenance,
+        property: []const u8, value: CustomPriorityValue) bool
+    {
+        const proof = maybe orelse return false;
+        if (proof.focus != focus or proof.focus.styles != self or proof.focus.root != root or
+            !pageSourceInlineOwnerCurrent(proof)) return false;
+        const origin = provenance orelse return false;
+        for (proof.covered_rules) |index| {
+            if (index >= self.container_rules.len) return false;
+            const rule = self.container_rules[index];
+            const retained = rule.provenance orelse return false;
+            if (rule.css.ptr == css.ptr and rule.css.len == css.len and rule.order == order and
+                origin.source_index == retained.source_index and origin.css_byte_start == retained.css_byte_start and
+                std.mem.eql(u8, origin.selector, retained.selector)) {
+                // The constructor checked every node/pseudo in both graphs.
+                // Currentness above retains those exact inventories and the
+                // independent absent-index snapshot; do not repeat that work
+                // for each declaration of the same rule.
+                for (proof.absent_rules) |absent| if (absent == index) return true;
+                return !value.unknown and sourceInlineOwnerProperty(property) and !rule.rank_unknown and rule.viewport == .all;
+            }
+        }
+        return false;
+    }
+
+    fn pageSourceFocusDeclarationCovered(self: *const Profile, root: ?*const TextElement,
+        maybe: ?*const PageSourceFocusProof, css: []const u8, order: u32, provenance: ?ContainerRuleProvenance,
+        property: []const u8, value: CustomPriorityValue) bool
+    {
+        if (value.unknown or !std.ascii.eqlIgnoreCase(property, "outline-color")) return false;
+        const proof = maybe orelse return false;
+        if (proof.styles != self or proof.root != root or !pageSourceFocusCurrent(proof)) return false;
+        const origin = provenance orelse return false;
+        for (proof.covered_rules) |index| {
+            if (index >= self.container_rules.len) return false;
+            const rule = self.container_rules[index];
+            const retained = rule.provenance orelse return false;
+            if (!rule.rank_unknown and rule.viewport == .all and rule.css.ptr == css.ptr and rule.css.len == css.len and rule.order == order and
+                origin.source_index == retained.source_index and origin.css_byte_start == retained.css_byte_start and
+                std.mem.eql(u8, origin.selector, retained.selector)) return true;
+        }
+        return false;
     }
 
     fn unobservedCounterDeclarationCovered(self: *const Profile, root: ?*const TextElement,
@@ -9966,6 +10859,14 @@ fn observedFigureStateAt(nodes: []const ObservedStyleNode, index: u32,
     evaluation: ObservedFigureEvaluation) ?ObservedFigureLinkState
 {
     if (evaluation.link_subject == index) return evaluation.link_state;
+    if (evaluation.rich_inline_focus_absent) |issued| {
+        if (issued.nodes.ptr == nodes.ptr and issued.nodes.len == nodes.len and
+            evaluation.link_subject == issued.link and index < nodes.len)
+        {
+            for (issued.descendants) |subject| if (subject == index)
+                return .{ .focus = false, .focus_visible = false, .focus_within = false };
+        }
+    }
     if (evaluation.authored_rule_focus_absent) |rule| {
         if (rule.nodes.ptr == nodes.ptr and rule.nodes.len == nodes.len and rule.subject == index)
             return .{ .focus = false, .focus_visible = false, .focus_within = false };
@@ -30806,12 +31707,18 @@ pub const ObservedInlineLinkPaintContext = struct {
 const ObservedInlineLinkPaintOperation = struct {
     allocator: std.mem.Allocator,
     context: ObservedInlineLinkPaintContext,
+    rich_focus_absent: ?*const ObservedRichInlineFocusAbsent = null,
     candidates: std.ArrayList(ObservedFigureRuleCandidates) = .empty,
     fn rulesFor(self: *@This(), subject: u32) !std.DynamicBitSetUnmanaged {
         return observedLinkCandidateRules(self.allocator, self.context.styles, self.context.nodes, &self.candidates, subject);
     }
     fn computedPath(self: *@This(), a: std.mem.Allocator, subject: u32, evaluation: ObservedFigureEvaluation) !?[]const ObservedFigureComputedNode {
-        return observedLinkComputedPath(a, self.context.styles, self.context.nodes, self, subject, evaluation);
+        var current = evaluation;
+        if (self.rich_focus_absent) |issued| {
+            if (!issued.binds(self.context, evaluation.link_subject orelse return null)) return null;
+            current.rich_inline_focus_absent = issued;
+        }
+        return observedLinkComputedPath(a, self.context.styles, self.context.nodes, self, subject, current);
     }
     fn deinit(self: *@This()) void {
         for (self.candidates.items) |*candidate| candidate.rules.deinit(self.allocator);
@@ -30831,6 +31738,13 @@ pub fn resolveObservedInlineLinkPaint(a: std.mem.Allocator, context: ObservedInl
 fn resolveObservedInlineLinkPaintIn(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
     link: u32, text: u32, viewport: f64, font_scale: f32, comptime typed_wrap: bool) !?TableLinkPaintResult(false, typed_wrap)
 {
+    return resolveObservedInlineLinkPaintWithRichFocus(a, context, link, text, viewport, font_scale, typed_wrap, null);
+}
+
+fn resolveObservedInlineLinkPaintWithRichFocus(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, text: u32, viewport: f64, font_scale: f32, comptime typed_wrap: bool,
+    rich_focus_absent: ?*const ObservedRichInlineFocusAbsent) !?TableLinkPaintResult(false, typed_wrap)
+{
     if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or
         link >= context.nodes.len or text >= context.nodes.len or
         !std.math.isFinite(viewport) or viewport < 0 or !std.math.isFinite(font_scale) or font_scale <= 0 or
@@ -30844,7 +31758,9 @@ fn resolveObservedInlineLinkPaintIn(a: std.mem.Allocator, context: ObservedInlin
         traceObservedPaintRefusal(true, context.styles, context.nodes, context.root, link, "inline_entry", null);
         return null;
     }
-    var operation: ObservedInlineLinkPaintOperation = .{ .allocator = a, .context = context };
+    if (rich_focus_absent) |issued| if (!issued.binds(context, link)) return null;
+    var operation: ObservedInlineLinkPaintOperation = .{ .allocator = a, .context = context,
+        .rich_focus_absent = rich_focus_absent };
     defer operation.deinit();
     // Dynamic font/layout/ancestor/sibling effects cannot be represented by a
     // LinkPaint. Keep all possibly relevant unsupported state rules refused.
@@ -30987,16 +31903,39 @@ pub const ObservedPlainInlineLinkStyle = struct { font: types.InlineFontSnapshot
 pub fn resolveObservedPlainInlineLinkStyle(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
     link: u32, viewport: f64) !?ObservedPlainInlineLinkStyle
 {
+    return resolveObservedInlineLinkOwnerStyleIn(a, context, link, viewport, false, &.{});
+}
+
+fn resolveObservedInlineLinkOwnerStyleIn(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, viewport: f64, comptime rich: bool, descendants: []const u32) !?ObservedPlainInlineLinkStyle
+{
     if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or link >= context.nodes.len or
-        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or context.nodes[link].has_text != true or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or (if (rich) context.nodes[link].has_text == null else context.nodes[link].has_text != true) or
         !authoredElementDescendant(context.nodes, link, context.root)) return null;
-    for (context.nodes) |node| if (node.parent == link) return null;
+    if (rich) {
+        if (!observedRichInlineLinkCensus(context, link, descendants)) return null;
+    } else for (context.nodes) |node| if (node.parent == link) return null;
+    const font = (try observedInlineDeclaringLinkFont(a, context, link, viewport)) orelse return null;
+    // CSS-pixel fonts need no fabricated CSS/body ratio when the source outline
+    // is entirely in CSS pixels. Any surviving font-relative geometry refuses.
+    const scale: f32 = if (font.font_scale_basis == .normal_body) font.font_scale.? else 1;
+    const sampled = if (rich) (try observedRichInlineLinkPaint(a, context, link, descendants, viewport, scale)) orelse return null
+        else (try resolveObservedInlineLinkPaintIn(a, context, link, link, viewport, scale, true)) orelse return null;
+    return observedInlineLinkOwnerResult(font, sampled);
+}
+
+fn observedInlineDeclaringLinkFont(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext, link: u32, viewport: f64) !?types.InlineFontSnapshot {
+    return observedInlineDeclaringOwnerFont(a, context, link, link, viewport);
+}
+
+fn observedInlineDeclaringOwnerFont(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    owner: u32, link_subject: ?u32, viewport: f64) !?types.InlineFontSnapshot {
     const Metric = cell_font_metrics.FontMetric(types.FontScaleBasis);
     var agreed: ?types.InlineFontSnapshot = null;
     for ([_]bool{ false, true }) |motion| {
         const computed = (try resolveObservedElementTextPathValidatedIn(a,
-            .{ .styles = context.styles, .nodes = context.nodes, .root = context.root, .element = link },
-            .{ .viewport_width = viewport, .reduced_motion = motion, .link_subject = link, .focus_visible_supported = true,
+            .{ .styles = context.styles, .nodes = context.nodes, .root = context.root, .element = owner },
+            .{ .viewport_width = viewport, .reduced_motion = motion, .link_subject = link_subject, .focus_visible_supported = true,
                 .link_state = .{ .visited = false, .hover = false, .active = false, .focus = false, .focus_visible = false, .focus_within = false } },
             false, null, false, false, true, false, false, false, null, false, null)) orelse return null;
         var metric = Metric.normalBody(1) catch return null;
@@ -31011,7 +31950,7 @@ pub fn resolveObservedPlainInlineLinkStyle(a: std.mem.Allocator, context: Observ
             for ([_][]const u8{ "html", "body", "div", "span", "p", "a", "b", "strong", "i", "em",
                 "ul", "ol", "li", "dl", "dt", "dd", "main", "section" }) |supported| if (std.ascii.eqlIgnoreCase(tag, supported)) { supported_owner = true; break; };
             if (!supported_owner) return null;
-            if (node.index == link and node.line_height != .inherit) return null;
+            if ((node.index == owner or link_subject == null) and node.line_height != .inherit) return null;
             switch (node.font_size orelse .inherit) {
                 .inherit => {},
                 .absolute => |size| metric = Metric.normalBody(size) catch return null,
@@ -31035,18 +31974,362 @@ pub fn resolveObservedPlainInlineLinkStyle(a: std.mem.Allocator, context: Observ
         if (!types.validInlineFontSnapshot(font) or font.font_scale == null or font.font_scale.? <= 0) return null;
         if (agreed) |prior| { if (!observedFigureDataEqual(types.InlineFontSnapshot, prior, font, 0)) return null; } else agreed = font;
     }
-    const font = agreed orelse return null;
-    // CSS-pixel fonts need no fabricated CSS/body ratio when the source outline
-    // is entirely in CSS pixels. Any surviving font-relative geometry refuses.
-    const scale: f32 = if (font.font_scale_basis == .normal_body) font.font_scale.? else 1;
-    const sampled = (try resolveObservedInlineLinkPaintIn(a, context, link, link, viewport, scale, true)) orelse return null;
-    const paint = sampled.paint;
-    if (font.font_scale_basis != .normal_body) if (paint.focus_outline) |outline| {
+    return agreed;
+}
+
+// This query supplies the declaring A metrics and one complete interaction
+// policy only. Source correspondence and each child font/geometry consumer
+// remain separate obligations; no child font is inferred from this owner.
+pub fn resolveObservedRichInlineLinkOwnerStyle(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, viewport: f64) !?ObservedPlainInlineLinkStyle
+{
+    return resolveObservedInlineLinkOwnerStyleIn(a, context, link, viewport, true, descendants);
+}
+
+fn observedRichInlineLinkCensus(context: ObservedInlineLinkPaintContext, link: u32, descendants: []const u32) bool {
+    return observedRichInlineLinkCensusIn(context, link, descendants, false, &.{});
+}
+
+fn observedRichInlineLinkCensusIn(context: ObservedInlineLinkPaintContext, link: u32, descendants: []const u32, comptime with_scripts: bool, script_subjects: []const u32) bool {
+    if (descendants.len == 0 or descendants.len > 4096) return false;
+    var at: usize = 0; var script_at: usize = 0;
+    var visible = context.nodes[link].has_text == true;
+    for (context.nodes, 0..) |node, index| {
+        if (index == link or !authoredElementDescendant(context.nodes, @intCast(index), link)) continue;
+        if (at >= descendants.len or descendants[at] != index or node.has_text == null) return false;
+        at += 1; visible = visible or node.has_text == true;
+        const is_script = with_scripts and std.ascii.eqlIgnoreCase(node.tag, "sup");
+        if (is_script) {
+            if (node.parent != link or node.has_text != true or script_at >= script_subjects.len or script_subjects[script_at] != index) return false;
+            script_at += 1;
+            for (context.nodes) |child| if (child.parent) |parent| {
+                if (@as(usize, parent) == index) return false;
+            };
+        } else if (!std.ascii.eqlIgnoreCase(node.tag, "span") and !std.ascii.eqlIgnoreCase(node.tag, "b") and
+            !std.ascii.eqlIgnoreCase(node.tag, "strong") and !std.ascii.eqlIgnoreCase(node.tag, "i") and
+            !std.ascii.eqlIgnoreCase(node.tag, "em")) return false;
+        for (node.attributes) |attribute| {
+            if (is_script and std.ascii.eqlIgnoreCase(attribute.name, "lang")) return false;
+            var supported = false;
+            for ([_][]const u8{ "class", "id", "lang", "title", "style" }) |name| {
+                if (std.ascii.eqlIgnoreCase(attribute.name, name)) { supported = true; break; }
+            }
+            if (!supported) return false;
+        }
+    }
+    return at == descendants.len and visible and script_at == script_subjects.len;
+}
+
+// This receipt lives only within one synchronous rich query. No callback,
+// retained cache, or source operation may store it. Book separately proves the
+// complete source/captured correspondence and revalidates its saved inventory.
+const ObservedRichInlineFocusAbsent = struct {
+    styles: *const Profile,
+    nodes: []const ObservedStyleNode,
+    root: u32,
+    link: u32,
+    descendants: []const u32,
+    rules: []const ObservedFigureRule,
+
+    fn binds(self: @This(), context: ObservedInlineLinkPaintContext, link: u32) bool {
+        return self.styles == context.styles and self.nodes.ptr == context.nodes.ptr and
+            self.nodes.len == context.nodes.len and self.root == context.root and self.link == link and
+            self.rules.ptr == context.styles.observed_figure_rules.ptr and
+            self.rules.len == context.styles.observed_figure_rules.len;
+    }
+};
+
+fn observedRichInlineFocusAbsent(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, comptime with_scripts: bool,
+    script_subjects: []const u32) !?ObservedRichInlineFocusAbsent
+{
+    if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or link >= context.nodes.len or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or
+        (observedFigureAttribute(context.nodes[link], "href") orelse return null).len == 0 or
+        !authoredElementDescendant(context.nodes, link, context.root) or
+        !observedRichInlineLinkCensusIn(context, link, descendants, with_scripts, script_subjects)) return null;
+    // The census excludes controls, nested actions, tabindex, activation attrs,
+    // and editing attrs on every child, not merely the selected text node.
+    // Check inherited editing and CSS focus extensions on the complete physical
+    // path with unknown state; the absence being proved must not prune it.
+    const checked = try a.alloc(bool, context.nodes.len);
+    defer a.free(checked);
+    @memset(checked, false);
+    for (descendants) |subject| {
+        var cursor: ?u32 = subject;
+        var remaining: usize = 512;
+        while (cursor) |index| : (cursor = context.nodes[index].parent) {
+            if (index >= context.nodes.len or remaining == 0) return null;
+            remaining -= 1;
+            if (checked[index]) break;
+            checked[index] = true;
+            if (observedFigureAttribute(context.nodes[index], "contenteditable") != null) return null;
+            var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, context.styles,
+                context.nodes, index, null, null, .{}, true)) orelse return null;
+            defer declarations.deinit(a);
+            if (!tableSourceStaticFocusDeclarations(declarations.items)) return null;
+        }
+    }
+    return .{ .styles = context.styles, .nodes = context.nodes, .root = context.root, .link = link,
+        .descendants = descendants, .rules = context.styles.observed_figure_rules };
+}
+
+fn observedRichInlineLinkChildrenNeutral(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, viewport: f64, rich_focus_absent: *const ObservedRichInlineFocusAbsent) !bool
+{
+    if (!rich_focus_absent.binds(context, link)) return false;
+    var operation: ObservedInlineLinkPaintOperation = .{ .allocator = a, .context = context,
+        .rich_focus_absent = rich_focus_absent };
+    defer operation.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+        for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus|
+            for ([_]bool{ false, true }) |motion| for (descendants) |subject| {
+                _ = arena.reset(.retain_capacity); const scratch = arena.allocator();
+                const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport, .reduced_motion = motion,
+                    .link_subject = link, .focus_visible_supported = true,
+                    .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                        .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+                const path = (try operation.computedPath(scratch, subject, evaluation)) orelse return false;
+                var found = false;
+                for (path) |computed| {
+                    if (computed.index != subject) continue;
+                    found = true;
+                    const observed = context.nodes[subject];
+                    // Color is consumed independently by the full state sampler
+                    // below, including every descendant/direct text occurrence.
+                    var box_declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+                    defer box_declarations.deinit(scratch);
+                    for (computed.declarations) |declaration| {
+                        if (!declaration.syntax_unknown and std.ascii.eqlIgnoreCase(declaration.name, "color")) continue;
+                        try box_declarations.append(scratch, declaration);
+                    }
+                    var box = computed; box.declarations = box_declarations.items;
+                    const tag = if (std.ascii.eqlIgnoreCase(observed.tag, "strong")) "b"
+                        else if (std.ascii.eqlIgnoreCase(observed.tag, "em")) "i" else observed.tag;
+                    if (!try tableInlineMinimumInlineBox(scratch, box, tag)) return false;
+                    const own: AuthoredElementObservedContext = .{ .styles = context.styles, .nodes = context.nodes,
+                        .root = context.root, .element = subject };
+                    if (!try authoredElementPseudoEmpty(scratch, own, subject, .before, computed.environment) or
+                        !try authoredElementPseudoEmpty(scratch, own, subject, .after, computed.environment) or
+                        !observedTableOtherPseudoEmpty(own, subject)) return false;
+                }
+                if (!found) return false;
+            };
+    return true;
+}
+
+fn observedRichInlineLinkPaint(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, viewport: f64, scale: f32) !?TableLinkPaintResult(false, true)
+{
+    const issued = (try observedRichInlineFocusAbsent(a, context, link, descendants, false, &.{})) orelse return null;
+    if (!try observedRichInlineLinkChildrenNeutral(a, context, link, descendants, viewport, &issued)) return null;
+    return observedRichInlineLinkPaintSamples(a, context, link, descendants, viewport, scale, &issued);
+}
+
+fn observedRichInlineLinkPaintSamples(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, viewport: f64, scale: f32,
+    rich_focus_absent: *const ObservedRichInlineFocusAbsent) !?TableLinkPaintResult(false, true)
+{
+    var agreed: ?TableLinkPaintResult(false, true) = null;
+    if (context.nodes[link].has_text == true) agreed = (try resolveObservedInlineLinkPaintWithRichFocus(a, context, link, link, viewport, scale, true, rich_focus_absent)) orelse return null;
+    for (descendants) |subject| {
+        if (context.nodes[subject].has_text != true) continue;
+        const sampled = (try resolveObservedInlineLinkPaintWithRichFocus(a, context, link, subject, viewport, scale, true, rich_focus_absent)) orelse return null;
+        if (agreed) |prior| {
+            if (!observedFigureDataEqual(TableLinkPaintResult(false, true), prior, sampled, 0)) return null;
+        } else agreed = sampled;
+    }
+    return agreed;
+}
+
+pub const ObservedInlineScriptConstraint = struct {
+    subject: u32,
+    // CSS inheritance before the intrinsic native SUP transformation. This is
+    // NOT a numeric UA script font or a used line-box measurement.
+    declaring_parent_font: types.InlineFontSnapshot,
+    line_height: AuthoredElementLineHeight,
+};
+pub const ObservedRichInlineLinkScriptStyle = struct {
+    owner: ObservedPlainInlineLinkStyle,
+    scripts: []const ObservedInlineScriptConstraint,
+};
+
+fn observedInlineLinkOwnerResult(font: types.InlineFontSnapshot,
+    sampled: TableLinkPaintResult(false, true)) ?ObservedPlainInlineLinkStyle
+{
+    if (font.font_scale_basis != .normal_body) if (sampled.paint.focus_outline) |outline| {
         for ([_]types.StyleLength{ outline.width, outline.radius, outline.offset }) |outline_length|
             if (outline_length.unit != .px and outline_length.value != 0) return null;
     };
-    return .{ .font = font, .paint = paint, .wrap = sampled.wrap };
+    return .{ .font = font, .paint = sampled.paint, .wrap = sampled.wrap };
 }
+
+fn observedInlineSupConstraints(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, subjects: []const u32, viewport: f64, parent_font: types.InlineFontSnapshot,
+    rich_focus_absent: *const ObservedRichInlineFocusAbsent) !?[]const ObservedInlineScriptConstraint
+{
+    if (!rich_focus_absent.binds(context, link)) return null;
+    const constraints = try a.alloc(ObservedInlineScriptConstraint, subjects.len);
+    var retain = false; defer if (!retain) a.free(constraints);
+    var operation: ObservedInlineLinkPaintOperation = .{ .allocator = a, .context = context,
+        .rich_focus_absent = rich_focus_absent };
+    defer operation.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    for (subjects, constraints) |subject, *constraint| {
+        var agreed: ?AuthoredElementLineHeight = null;
+        for ([_]bool{ false, true }) |visited| for ([_]bool{ false, true }) |hover|
+            for ([_]bool{ false, true }) |active| for ([_]ObservedFigureFocusMode{ .unfocused, .focused, .focus_visible }) |focus|
+                for ([_]bool{ false, true }) |motion| {
+                    _ = arena.reset(.retain_capacity); const scratch = arena.allocator();
+                    const evaluation: ObservedFigureEvaluation = .{ .viewport_width = viewport, .reduced_motion = motion,
+                        .link_subject = link, .focus_visible_supported = true,
+                        .link_state = .{ .visited = visited, .hover = hover, .active = active,
+                            .focus = focus != .unfocused, .focus_visible = focus == .focus_visible, .focus_within = focus != .unfocused } };
+                    const path = (try operation.computedPath(scratch, subject, evaluation)) orelse return null;
+                    var found = false;
+                    for (path) |computed| {
+                        if (computed.index != subject) continue;
+                        found = true;
+                        const height = try authoredElementLineHeight(scratch, computed.declarations, computed.environment);
+                        const factor: f32 = switch (height) { .multiplier => |value| value, .font_relative => |value| value, else => return null };
+                        if (!std.math.isFinite(factor) or factor < 0) return null;
+                        if (agreed) |prior| {
+                            if (!observedFigureDataEqual(AuthoredElementLineHeight, prior, height, 0)) return null;
+                        } else agreed = height;
+                        // Only color and the separately retained numeric height
+                        // have another consumer. Every other authored box/font
+                        // declaration keeps the strict existing inline refusal.
+                        var declarations: std.ArrayList(ObservedFigureDeclaration) = .empty;
+                        defer declarations.deinit(scratch);
+                        for (computed.declarations) |declaration| {
+                            if (!declaration.syntax_unknown and (std.ascii.eqlIgnoreCase(declaration.name, "color") or
+                                std.ascii.eqlIgnoreCase(declaration.name, "line-height"))) continue;
+                            try declarations.append(scratch, declaration);
+                        }
+                        var box = computed; box.declarations = declarations.items;
+                        if (!try tableInlineMinimumInlineBox(scratch, box, "span")) return null;
+                        const own: AuthoredElementObservedContext = .{ .styles = context.styles, .nodes = context.nodes,
+                            .root = context.root, .element = subject };
+                        if (!try authoredElementPseudoEmpty(scratch, own, subject, .before, computed.environment) or
+                            !try authoredElementPseudoEmpty(scratch, own, subject, .after, computed.environment) or
+                            !observedTableOtherPseudoEmpty(own, subject)) return null;
+                    }
+                    if (!found) return null;
+                };
+        constraint.* = .{ .subject = subject, .declaring_parent_font = parent_font, .line_height = agreed orelse return null };
+    }
+    retain = true;
+    return constraints;
+}
+
+// Provisional source-owned SUP constraints. Final emission must bind every
+// complete source SUP opening/body/end to an actual normal-renderer font and
+// consume that exact metric occurrence once. No UA size/shift is inferred.
+pub fn resolveObservedRichInlineLinkOwnerStyleWithScripts(a: std.mem.Allocator, context: ObservedInlineLinkPaintContext,
+    link: u32, descendants: []const u32, script_subjects: []const u32, viewport: f64) !?ObservedRichInlineLinkScriptStyle
+{
+    if (script_subjects.len == 0) {
+        const owner = (try resolveObservedRichInlineLinkOwnerStyle(a, context, link, descendants, viewport)) orelse return null;
+        return .{ .owner = owner, .scripts = &.{} };
+    }
+    if (!observedStyleGraphValid(context.styles, context.nodes, context.root) or link >= context.nodes.len or
+        !std.ascii.eqlIgnoreCase(context.nodes[link].tag, "a") or context.nodes[link].has_text == null or
+        !authoredElementDescendant(context.nodes, link, context.root) or
+        !observedRichInlineLinkCensusIn(context, link, descendants, true, script_subjects)) return null;
+    const font = (try observedInlineDeclaringLinkFont(a, context, link, viewport)) orelse return null;
+    if (font.small or font.superscript or font.subscript or font.code) return null;
+    const issued = (try observedRichInlineFocusAbsent(a, context, link, descendants, true, script_subjects)) orelse return null;
+    const constraints = (try observedInlineSupConstraints(a, context, link, script_subjects, viewport, font, &issued)) orelse return null;
+    var retain = false; defer if (!retain) a.free(constraints);
+    var ordinary: std.ArrayList(u32) = .empty; defer ordinary.deinit(a);
+    for (descendants) |subject| if (!std.ascii.eqlIgnoreCase(context.nodes[subject].tag, "sup")) try ordinary.append(a, subject);
+    if (!try observedRichInlineLinkChildrenNeutral(a, context, link, ordinary.items, viewport, &issued)) return null;
+    const scale: f32 = if (font.font_scale_basis == .normal_body) font.font_scale.? else 1;
+    const sampled = (try observedRichInlineLinkPaintSamples(a, context, link, descendants, viewport, scale, &issued)) orelse return null;
+    const owner = observedInlineLinkOwnerResult(font, sampled) orelse return null;
+    retain = true;
+    return .{ .owner = owner, .scripts = constraints };
+}
+
+const ObservedStyleInventoryData = struct {
+    reading_target: ReadingTarget,
+    sources: []const SourceRange,
+    retained_sources: []const Source,
+    rules: []const Rule,
+    classes: []const []const u8,
+    ancestor_classes: []const []const u8,
+    admitted_rule_numbers: []const u32,
+    has_unsupported_rules: bool,
+    globally_unresolved: bool,
+    text_rules: []const TextRule,
+    observed_figure_rules: []const ObservedFigureRule,
+    block_rules: []const TextRule,
+    container_rules: []const ContainerRule,
+    figure_rules: []const TextRule,
+    missing_link_custom_rules: []const TextRule,
+    display_rules: []const DisplayRule,
+    display_classes: []const []const u8,
+    custom_data: ?CustomProfile,
+};
+fn observedStyleInventoryData(styles: *const Profile) ObservedStyleInventoryData {
+    comptime {
+        for (@typeInfo(Profile).@"struct".field_names) |name| {
+            if (std.mem.eql(u8, name, "arena") or std.mem.eql(u8, name, "page_style_parent") or
+                std.mem.eql(u8, name, "custom_properties")) continue;
+            if (!@hasField(ObservedStyleInventoryData, name)) @compileError("Profile semantic field missing from inventory snapshot");
+        }
+    }
+    return .{ .reading_target = styles.reading_target, .sources = styles.sources, .retained_sources = styles.retained_sources,
+        .rules = styles.rules, .classes = styles.classes, .ancestor_classes = styles.ancestor_classes,
+        .admitted_rule_numbers = styles.admitted_rule_numbers, .has_unsupported_rules = styles.has_unsupported_rules,
+        .globally_unresolved = styles.globally_unresolved, .text_rules = styles.text_rules,
+        .observed_figure_rules = styles.observed_figure_rules, .block_rules = styles.block_rules,
+        .container_rules = styles.container_rules, .figure_rules = styles.figure_rules,
+        .missing_link_custom_rules = styles.missing_link_custom_rules, .display_rules = styles.display_rules,
+        .display_classes = styles.display_classes, .custom_data = if (styles.custom_properties) |custom| custom.* else null };
+}
+
+// Immutable cache-currentness data only. It issues no CSS, source, focus,
+// operation, geometry, or descendant authority and never reparses a sheet.
+pub const ObservedStyleInventorySnapshot = struct {
+    storage: std.heap.ArenaAllocator,
+    styles: *const Profile,
+    parent: ?*const Profile,
+    custom: ?*const CustomProfile,
+    original: ObservedStyleInventoryData,
+    snapshot: ObservedStyleInventoryData,
+
+    pub fn init(a: std.mem.Allocator, styles: *const Profile) (std.mem.Allocator.Error || error{InvalidStyleProfile})!@This() {
+        var storage = std.heap.ArenaAllocator.init(a); errdefer storage.deinit();
+        const original = observedStyleInventoryData(styles);
+        const snapshot = try observedFigureDataClone(ObservedStyleInventoryData, storage.allocator(), original, 0);
+        const result: @This() = .{ .storage = storage, .styles = styles, .parent = styles.page_style_parent,
+            .custom = styles.custom_properties, .original = original, .snapshot = snapshot };
+        if (!result.current()) return error.InvalidStyleProfile;
+        return result;
+    }
+    pub fn current(self: *const @This()) bool {
+        if (self.styles.page_style_parent != self.parent or self.styles.custom_properties != self.custom) return false;
+        const present = observedStyleInventoryData(self.styles);
+        // Preserve exact top-level inventory identity as well as independent
+        // deep values. Replacing an inventory with a same-byte alias is not a
+        // continuation of the originally retained cache input.
+        inline for (@typeInfo(ObservedStyleInventoryData).@"struct".field_names) |name| {
+            if (comptime @typeInfo(@FieldType(ObservedStyleInventoryData, name)) == .pointer) {
+                const prior = @field(self.original, name); const value = @field(present, name);
+                if (prior.ptr != value.ptr or prior.len != value.len) return false;
+            }
+        }
+        if (self.original.custom_data) |prior| {
+            const value = present.custom_data orelse return false;
+            if (prior.rules.ptr != value.rules.ptr or prior.rules.len != value.rules.len or
+                prior.classes.ptr != value.classes.ptr or prior.classes.len != value.classes.len) return false;
+        }
+        return observedFigureDataEqual(ObservedStyleInventoryData, present, self.snapshot, 0);
+    }
+    pub fn deinit(self: *@This()) void { self.storage.deinit(); self.* = undefined; }
+};
 
 // The ordinary producer must obtain agreement over every returned width and
 // every retained shell context; a single current viewport cannot authorize a
@@ -31663,4 +32946,830 @@ test "source Ruby unitless line height requires native declarations and static m
     node.alternative_ancestry = null;
     node.tag = "rt";
     try std.testing.expect(try profile.sourceRubyUnitlessLineHeightAlloc(a, &node, css, &.{css}, false) == null);
+}
+
+
+const PageSourceFocusTesting = struct {
+    const css = ":focus{outline-color:var(--outline-color-progressive--focus,#36c)}";
+    fn selected(a: std.mem.Allocator, stylesheet: []const u8) !*Profile {
+        const parent = try a.create(Profile);
+        parent.* = try parseForTargetAlloc(a, stylesheet, .screen);
+        const page = try a.create(Profile);
+        page.* = try joinPageSourcesAlloc(a, parent, &.{}, &.{});
+        return page;
+    }
+    fn presence(ctx: ?*const anyopaque, name: []const u8) AttributePresence {
+        const node: *const ObservedStyleNode = @ptrCast(@alignCast(ctx orelse return .unknown));
+        return if (observedFigureAttribute(node.*, name) != null) .present else .absent;
+    }
+    fn native(a: std.mem.Allocator, graph: []const ObservedStyleNode) !*TextElement {
+        const result = try a.alloc(TextElement, 3);
+        for (result, 0..) |*node, index| node.* = .{
+            .tag = graph[index].tag, .classes = observedFigureAttribute(graph[index], "class") orelse "",
+            .id = observedFigureAttribute(graph[index], "id") orelse "", .language = observedFigureAttribute(graph[index], "lang"),
+            .observed_inline_style = observedFigureAttribute(graph[index], "style") orelse "",
+            .attribute_presence = .{ .ctx = &graph[index], .get = presence },
+            .parent = if (index == 0) null else &result[index - 1], .ancestry_complete = true, .physical_ancestry_complete = true,
+        };
+        return &result[2];
+    }
+    fn nodes() [4]ObservedStyleNode {
+        return .{
+            .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "de" }} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = "a", .parent = 2, .attributes = &.{.{ .name = "href", .value = "/wiki/target" }}, .has_text = true },
+        };
+    }
+};
+
+test "source page focus plan binds exact bare rule and complete independent action graphs without changing legacy preflight" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = try PageSourceFocusTesting.selected(a, PageSourceFocusTesting.css);
+    defer styles.deinit(); defer @constCast(styles.page_style_parent.?).deinit();
+    var left = PageSourceFocusTesting.nodes(); var right = PageSourceFocusTesting.nodes();
+    const contexts = [_]ObservedInlineLinkPaintContext{ .{ .styles = styles, .nodes = &left, .root = 2 }, .{ .styles = styles, .nodes = &right, .root = 2 } };
+    const source = try a.dupe(u8, "[[target]]");
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const image: PageSourceImage = .{ .styles = styles, .root = &root, .source = source, .snapshot = try a.dupe(u8, source) };
+    right[2].attributes = &.{ .{ .name = "class", .value = "mw-parser-output get-root" }, .{ .name = "id", .value = "get-root-id" }, .{ .name = "lang", .value = "de" } };
+    const complete_root = try PageSourceFocusTesting.native(a, &left);
+    const alternative_root = try PageSourceFocusTesting.native(a, &right);
+    var primary_cursor: ?*TextElement = complete_root;
+    var alternate_cursor: ?*TextElement = alternative_root;
+    while (primary_cursor) |node| {
+        const other = alternate_cursor orelse return error.TestUnexpectedResult;
+        node.alternative_ancestry = other;
+        primary_cursor = if (node.parent) |parent| @constCast(parent) else null;
+        alternate_cursor = if (other.parent) |parent| @constCast(parent) else null;
+    }
+    try std.testing.expect(alternate_cursor == null);
+    const actions = [_]PageSourceFocusAction{.{ .token = source, .subjects = .{ 3, 3 } }};
+    try std.testing.expect(hasPageSourceFocusObligation(styles));
+    const known_screen = try PageSourceFocusTesting.selected(a, "@media screen{:focus{outline-color:red}}");
+    defer known_screen.deinit(); defer @constCast(known_screen.page_style_parent.?).deinit();
+    try std.testing.expect(hasPageSourceFocusObligation(known_screen));
+    var proof = (try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) orelse return error.TestUnexpectedResult;
+    defer proof.deinit();
+    try std.testing.expect(pageSourceFocusCurrent(&proof));
+    const alternative_id = alternative_root.id; alternative_root.id = "wrong-get-id";
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); alternative_root.id = alternative_id;
+    const middle = @constCast(complete_root.parent.?);
+    const middle_alternative = middle.alternative_ancestry; middle.alternative_ancestry = null;
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); middle.alternative_ancestry = middle_alternative;
+    const native_tag = complete_root.tag; complete_root.tag = "button";
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); complete_root.tag = native_tag;
+    complete_root.physical_ancestry_complete = false;
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); complete_root.physical_ancestry_complete = true;
+    try std.testing.expectEqual(@as(usize, 1), proof.covered_rules.len);
+    try std.testing.expectEqual(@as(usize, 1), proof.actions.len);
+    try std.testing.expect(proof.actions[0].token.ptr == source.ptr);
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, &root, null, null, null, null, null, null, null, null)) != null);
+    var required = false;
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithClosedCountersAndSourceFocusIn(a, &root, null, null, null, null, null, null, null, null, &proof, &required)) == null);
+    try std.testing.expect(required);
+    // No emission or descendant paint is asserted by this provisional plan.
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithClosedCountersIn(a, &root, null, null, null, null, null, null, null, null)) != null);
+    const zero_contexts = [_]ObservedInlineLinkPaintContext{ .{ .styles = styles, .nodes = left[0..3], .root = 2 }, .{ .styles = styles, .nodes = right[0..3], .root = 2 } };
+    var zero = (try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &zero_contexts, &.{})) orelse return error.TestUnexpectedResult;
+    defer zero.deinit();
+    try std.testing.expect(pageSourceFocusCurrent(&zero));
+}
+
+test "source page focus refuses unclaimed foreign activated scroll and unknown graph obligations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = try PageSourceFocusTesting.selected(a, PageSourceFocusTesting.css);
+    defer styles.deinit(); defer @constCast(styles.page_style_parent.?).deinit();
+    const source = try a.dupe(u8, "[[target]]");
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const image: PageSourceImage = .{ .styles = styles, .root = &root, .source = source, .snapshot = try a.dupe(u8, source) };
+    const actions = [_]PageSourceFocusAction{.{ .token = source, .subjects = .{ 3, 3 } }};
+    var left = PageSourceFocusTesting.nodes(); var right = PageSourceFocusTesting.nodes();
+    const complete_root = try PageSourceFocusTesting.native(a, &left);
+    var contexts = [_]ObservedInlineLinkPaintContext{ .{ .styles = styles, .nodes = &left, .root = 2 }, .{ .styles = styles, .nodes = &right, .root = 2 } };
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &.{}) == null);
+    const native_tag = complete_root.tag; complete_root.tag = "button";
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions) == null);
+    complete_root.tag = native_tag;
+    var weak_conflict = root;
+    weak_conflict.observed_inline_style = "overflow:auto";
+    var weak_image = image; weak_image.root = &weak_conflict;
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &weak_conflict, complete_root, &weak_image, &contexts, &actions) == null);
+    weak_conflict.observed_inline_style = null;
+    weak_conflict.attribute_presence = complete_root.attribute_presence;
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &weak_conflict, complete_root, &weak_image, &contexts, &actions) == null);
+    var foreign = actions; foreign[0].token = try a.dupe(u8, source);
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &foreign) == null);
+    foreign = actions; foreign[0].subjects[1] = 2;
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &foreign) == null);
+    contexts[1].nodes = &left;
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions) == null);
+    contexts[1].nodes = &right;
+    for ([_][]const u8{ "tabindex", "contenteditable", "role", "autofocus", "onclick", "draggable" }) |name| {
+        const attrs = [_]FigureObservedAttribute{.{ .name = name, .value = "0" }};
+        left[2].attributes = &attrs;
+        try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions) == null);
+    }
+    left = PageSourceFocusTesting.nodes();
+    left[2].attributes = &.{.{ .name = "class", .value = "NavFrame" }};
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions) == null);
+    left = PageSourceFocusTesting.nodes(); left[2].tag = "button";
+    try std.testing.expect(try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions) == null);
+    for ([_][]const u8{ "div{overflow:auto}", "div{transition-duration:1s}", "div{appearance:none}", "div{user-focus:normal}", "@media(orientation:landscape){div{overflow:auto}}" }) |extra| {
+        const altered = try PageSourceFocusTesting.selected(a, try std.mem.concat(a, u8, &.{ PageSourceFocusTesting.css, extra }));
+        defer altered.deinit(); defer @constCast(altered.page_style_parent.?).deinit();
+        left = PageSourceFocusTesting.nodes(); right = PageSourceFocusTesting.nodes();
+        const views = [_]ObservedInlineLinkPaintContext{ .{ .styles = altered, .nodes = &left, .root = 2 }, .{ .styles = altered, .nodes = &right, .root = 2 } };
+        const held: PageSourceImage = .{ .styles = altered, .root = &root, .source = source, .snapshot = image.snapshot };
+        try std.testing.expect(try observedPageSourceFocusAlloc(a, altered, &root, complete_root, &held, &views, &actions) == null);
+    }
+    for ([_][]const u8{ ":focus{outline-color:red;color:red}", ":focus-visible{outline-color:red}", "a:focus{outline-color:red}", "@media(orientation:landscape){:focus{outline-color:red}}" }) |stylesheet| {
+        const altered = try PageSourceFocusTesting.selected(a, stylesheet);
+        defer altered.deinit(); defer @constCast(altered.page_style_parent.?).deinit();
+        try std.testing.expect(!hasPageSourceFocusObligation(altered));
+    }
+}
+
+test "source page focus currentness rejects changed source ordinal rule and graph while unrelated declarations remain held" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = try PageSourceFocusTesting.selected(a, PageSourceFocusTesting.css ++ ".unrepresented{margin-left:3px}");
+    defer styles.deinit(); defer @constCast(styles.page_style_parent.?).deinit();
+    var left = PageSourceFocusTesting.nodes(); var right = PageSourceFocusTesting.nodes();
+    const contexts = [_]ObservedInlineLinkPaintContext{ .{ .styles = styles, .nodes = &left, .root = 2 }, .{ .styles = styles, .nodes = &right, .root = 2 } };
+    const complete_root = try PageSourceFocusTesting.native(a, &left);
+    const source = try a.dupe(u8, "[[target]]"); const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    var image: PageSourceImage = .{ .styles = styles, .root = &root, .source = source, .snapshot = try a.dupe(u8, source) };
+    const actions = [_]PageSourceFocusAction{.{ .token = source, .subjects = .{ 3, 3 } }};
+    var proof = (try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) orelse return error.TestUnexpectedResult;
+    defer proof.deinit();
+    var required = false;
+    try std.testing.expect((try styles.pageUnprovedInheritanceBlockerWithClosedCountersAndSourceFocusIn(a, &root, null, null, null, null, null, null, null, null, &proof, &required)) != null);
+    const original_snapshot = image.snapshot;
+    image.snapshot = try a.dupe(u8, source);
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); image.snapshot = original_snapshot;
+    source[2] = 'X'; try std.testing.expect(!pageSourceFocusCurrent(&proof)); source[2] = 't';
+    const saved_action = proof.actions[0];
+    @constCast(proof.actions)[0].subjects[0] = 2;
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); @constCast(proof.actions)[0] = saved_action;
+    const saved_rule = styles.container_rules[0];
+    @constCast(styles.container_rules)[0].css = "outline-color:red";
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); @constCast(styles.container_rules)[0] = saved_rule;
+    left[3].attributes = &.{.{ .name = "href", .value = "/wiki/foreign" }};
+    try std.testing.expect(!pageSourceFocusCurrent(&proof)); left = PageSourceFocusTesting.nodes();
+    try std.testing.expect(pageSourceFocusCurrent(&proof));
+}
+
+test "source page focus normalization metadata requires exact claimed per arm operation receipts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = try PageSourceFocusTesting.selected(a, PageSourceFocusTesting.css);
+    defer styles.deinit(); defer @constCast(styles.page_style_parent.?).deinit();
+    const original = "http://example.test/entry";
+    const attrs = [_]FigureObservedAttribute{
+        .{ .name = "href", .value = "https://example.test/entry" },
+        .{ .name = "data-mw-original-href", .value = original },
+    };
+    var left = PageSourceFocusTesting.nodes(); var right = PageSourceFocusTesting.nodes();
+    left[3].attributes = &attrs; right[3].attributes = &attrs;
+    const contexts = [_]ObservedInlineLinkPaintContext{ .{ .styles = styles, .nodes = &left, .root = 2 }, .{ .styles = styles, .nodes = &right, .root = 2 } };
+    const complete_root = try PageSourceFocusTesting.native(a, &left);
+    const source = try a.dupe(u8, "[http://example.test/entry label]");
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const image: PageSourceImage = .{ .styles = styles, .root = &root, .source = source, .snapshot = try a.dupe(u8, source) };
+    var actions = [_]PageSourceFocusAction{.{ .token = source, .subjects = .{ 3, 3 }, .original_hrefs = .{ original, original } }};
+    var proof = (try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) orelse return error.TestUnexpectedResult;
+    defer proof.deinit();
+    try std.testing.expect(pageSourceFocusCurrent(&proof));
+    @constCast(proof.actions)[0].original_hrefs[0] = "http://foreign.test/entry";
+    try std.testing.expect(!pageSourceFocusCurrent(&proof));
+    @constCast(proof.actions)[0].original_hrefs[0] = original;
+    try std.testing.expect(pageSourceFocusCurrent(&proof));
+    actions[0].original_hrefs = .{ null, null };
+    try std.testing.expect((try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) == null);
+    actions[0].original_hrefs = .{ original, "http://foreign.test/entry" };
+    try std.testing.expect((try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) == null);
+    actions[0].original_hrefs = .{ original, original };
+    left[3].attributes = &.{.{ .name = "href", .value = "https://example.test/entry" }};
+    try std.testing.expect((try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) == null);
+    left[3].attributes = &attrs;
+    try std.testing.expect((try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &.{})) == null);
+    left[2].attributes = &.{ .{ .name = "class", .value = "mw-parser-output" }, .{ .name = "data-mw-original-href", .value = original } };
+    try std.testing.expect((try observedPageSourceFocusAlloc(a, styles, &root, complete_root, &image, &contexts, &actions)) == null);
+    // The Profile result asserts metadata/currentness only. Book independently
+    // authenticates original source URL and its exact permitted scheme change.
+}
+
+
+test "rich ordinary A owner query retains declaring font and full shared child interaction policy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    var styles = try parseForTargetAlloc(a, T.css ++ ".label{color:inherit}", .screen); defer styles.deinit();
+    var plain = T.nodes[0..5].*; plain[4].has_text = true;
+    const expected = (try resolveObservedPlainInlineLinkStyle(a, .{ .styles = &styles, .nodes = &plain, .root = 2 }, 4, 900)) orelse return error.TestUnexpectedResult;
+    for ([_][]const u8{ "b", "strong", "i", "em", "span" }) |tag| {
+        var nodes = T.nodes; nodes[5].tag = tag; nodes[5].attributes = &.{.{ .name = "class", .value = "label" }};
+        const before = nodes;
+        const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+        const observed = (try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(expected, observed);
+        try std.testing.expect(!observed.font.bold and !observed.font.italic);
+        try std.testing.expect((try resolveObservedPlainInlineLinkStyle(a, context, 4, 900)) == null);
+        nodes[4].has_text = true;
+        try std.testing.expectEqualDeep(expected, (try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) orelse return error.TestUnexpectedResult);
+        nodes[4].has_text = false; try std.testing.expectEqualDeep(before, nodes);
+    }
+    var nested: [7]ObservedStyleNode = undefined; @memcpy(nested[0..6], &T.nodes);
+    nested[5].tag = "span"; nested[5].has_text = false;
+    nested[6] = .{ .tag = "i", .parent = 5, .attributes = &.{}, .has_text = true };
+    try std.testing.expectEqualDeep(expected, (try resolveObservedRichInlineLinkOwnerStyle(a,
+        .{ .styles = &styles, .nodes = &nested, .root = 2 }, 4, &.{ 5, 6 }, 900)) orelse return error.TestUnexpectedResult);
+}
+
+test "rich ordinary A owner query refuses incomplete foreign duplicate and unsupported child scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    var styles = try parseForTargetAlloc(a, T.css, .screen); defer styles.deinit();
+    var nodes = T.nodes;
+    const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+    for ([_][]const u32{ &.{}, &.{4}, &.{ 5, 5 }, &.{3}, &.{99} }) |subjects|
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, subjects, 900)) == null);
+    for ([_][]const u8{ "sup", "sub", "ruby", "rt", "a", "img", "button", "unknown" }) |tag| {
+        nodes = T.nodes; nodes[5].tag = tag;
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+    }
+    for ([_][]const u8{ "hidden", "inert", "tabindex", "contenteditable", "onclick", "role", "dir" }) |attribute| {
+        nodes = T.nodes; nodes[5].attributes = &.{.{ .name = attribute, .value = "" }};
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+    }
+    nodes = T.nodes; nodes[5].has_text = null;
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+    nodes = T.nodes; nodes[5].parent = 2;
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+}
+
+test "rich ordinary A owner query independently refuses descendant paint geometry pseudos motion and unknown metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    for ([_][]const u8{ ".label{color:red}", "a:hover .label{color:red}", ".label{display:none}", ".label{opacity:.5}",
+        ".label{padding:1px}", ".label{position:relative}", ".label{vertical-align:super}", ".label{font-size:80%}",
+        ".label{line-height:1.6}", ".label::before{content:'x'}", ".label::after{content:'x'}", ".label{transition-duration:1s}",
+        ".label{text-decoration:underline}", "@media(orientation:landscape){.label{display:none}}" }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.css, extra }), .screen); defer styles.deinit();
+        var nodes = T.nodes; nodes[5].tag = "span"; nodes[5].attributes = &.{.{ .name = "class", .value = "label" }};
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a,
+            .{ .styles = &styles, .nodes = &nodes, .root = 2 }, 4, &.{5}, 900)) == null);
+    }
+}
+
+
+test "observed style inventory snapshots bind parent selected inputs and same byte replacements without CSS authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var parent = try parseForTargetAlloc(a, "html,body{font-family:sans-serif;color:#202122}a{color:#36c}", .screen); defer parent.deinit();
+    var selected = try joinPageSourcesAlloc(a, &parent, &.{}, &.{}); defer selected.deinit();
+    var parent_snapshot = try ObservedStyleInventorySnapshot.init(a, &parent); defer parent_snapshot.deinit();
+    var selected_snapshot = try ObservedStyleInventorySnapshot.init(a, &selected); defer selected_snapshot.deinit();
+    try std.testing.expect(parent_snapshot.current() and selected_snapshot.current());
+    // Allocator bookkeeping is deliberately excluded from semantic snapshots.
+    _ = try parent.arena.allocator().alloc(u8, 4096);
+    try std.testing.expect(parent_snapshot.current());
+    const source = parent.retained_sources[0];
+    @constCast(parent.retained_sources)[0].css = "html{font-family:serif}";
+    try std.testing.expect(!parent_snapshot.current());
+    try std.testing.expect(selected_snapshot.current());
+    @constCast(parent.retained_sources)[0] = source;
+    try std.testing.expect(parent_snapshot.current());
+    const sources = parent.retained_sources;
+    parent.retained_sources = try a.dupe(Source, sources);
+    try std.testing.expect(!parent_snapshot.current()); parent.retained_sources = sources;
+    const ranges = parent.sources;
+    parent.sources = try a.dupe(SourceRange, ranges);
+    try std.testing.expect(!parent_snapshot.current()); parent.sources = ranges;
+    parent.reading_target = .print;
+    try std.testing.expect(!parent_snapshot.current()); parent.reading_target = .screen;
+    const unsupported = parent.has_unsupported_rules; parent.has_unsupported_rules = !unsupported;
+    try std.testing.expect(!parent_snapshot.current()); parent.has_unsupported_rules = unsupported;
+    const parent_link = selected.page_style_parent; selected.page_style_parent = null;
+    try std.testing.expect(!selected_snapshot.current()); selected.page_style_parent = parent_link;
+    try std.testing.expect(parent_snapshot.current() and selected_snapshot.current());
+    try std.testing.expectError(error.OutOfMemory, ObservedStyleInventorySnapshot.init(std.testing.failing_allocator, &parent));
+}
+
+test "observed style inventory snapshots retain custom profile identity and complete independent pointee values" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var styles = try CustomPropertyFixture.profile(a, ":root{--ink:#123456} .label{--ink:#654321}"); defer styles.deinit();
+    var snapshot = try ObservedStyleInventorySnapshot.init(a, &styles); defer snapshot.deinit();
+    const custom = @constCast(styles.custom_properties orelse return error.TestUnexpectedResult);
+    try std.testing.expect(snapshot.current());
+    const replacement = custom.*;
+    styles.custom_properties = &replacement;
+    try std.testing.expect(!snapshot.current()); styles.custom_properties = custom;
+    const title = custom.page_title; custom.page_title = "foreign";
+    try std.testing.expect(!snapshot.current()); custom.page_title = title;
+    const was_opaque = custom.is_opaque; custom.is_opaque = !was_opaque;
+    try std.testing.expect(!snapshot.current()); custom.is_opaque = was_opaque;
+    const complete = custom.root_environment.complete; custom.root_environment.complete = !complete;
+    try std.testing.expect(!snapshot.current()); custom.root_environment.complete = complete;
+    if (custom.rules.len == 0) return error.TestUnexpectedResult;
+    const rule = custom.rules[0]; @constCast(custom.rules)[0].css = "--ink:red";
+    try std.testing.expect(!snapshot.current()); @constCast(custom.rules)[0] = rule;
+    const rules = custom.rules; custom.rules = try a.dupe(CustomRule, rules);
+    try std.testing.expect(!snapshot.current()); custom.rules = rules;
+    try std.testing.expect(snapshot.current());
+}
+
+
+test "provisional SUP query retains declaring A policy and tagged own height without inventing a script font" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    // Exact retained Mai declarations, in their observed source order. This
+    // synthetic graph checks the query, not Book source/captured authority.
+    const css = T.css ++ "sub,sup{line-height:1}sup,sub{line-height:1em}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    var nodes = T.nodes; nodes[5].tag = "sup"; nodes[5].attributes = &.{.{ .name = "class", .value = "dewikttm" }};
+    const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+    const observed = (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 900)) orelse return error.TestUnexpectedResult;
+    var plain = T.nodes[0..5].*; plain[4].has_text = true;
+    const expected = (try resolveObservedPlainInlineLinkStyle(a, .{ .styles = &styles, .nodes = &plain, .root = 2 }, 4, 900)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(expected, observed.owner);
+    try std.testing.expectEqual(@as(usize, 1), observed.scripts.len);
+    try std.testing.expectEqual(@as(u32, 5), observed.scripts[0].subject);
+    try std.testing.expectEqualDeep(expected.font, observed.scripts[0].declaring_parent_font);
+    try std.testing.expect(!observed.scripts[0].declaring_parent_font.superscript);
+    try std.testing.expect(observed.scripts[0].line_height == .font_relative);
+    try std.testing.expectEqual(@as(f32, 1), observed.scripts[0].line_height.font_relative);
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{}, 900)) == null);
+    nodes[4].has_text = true;
+    try std.testing.expectEqualDeep(observed, (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 900)) orelse return error.TestUnexpectedResult);
+}
+
+test "provisional SUP query preserves multiplier font relative and responsive height distinctions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    for ([_][]const u8{ "1", "1em", "0", "2.5" }, 0..) |height, index| {
+        var styles = try parseForTargetAlloc(a, try std.fmt.allocPrint(a, "{s}sup{{line-height:{s}}}", .{ T.css, height }), .screen); defer styles.deinit();
+        var nodes = T.nodes; nodes[5].tag = "sup";
+        const observed = (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, .{ .styles = &styles, .nodes = &nodes, .root = 2 }, 4, &.{5}, &.{5}, 900)) orelse return error.TestUnexpectedResult;
+        const value = observed.scripts[0].line_height;
+        if (index == 1) {
+            try std.testing.expect(value == .font_relative); try std.testing.expectEqual(@as(f32, 1), value.font_relative);
+        } else {
+            try std.testing.expect(value == .multiplier); try std.testing.expectEqual(([_]f32{ 1, 1, 0, 2.5 })[index], value.multiplier);
+        }
+    }
+    var styles = try parseForTargetAlloc(a, T.css ++ "sup{line-height:1em}@media(min-width:640px){sup{line-height:2em}}", .screen); defer styles.deinit();
+    var nodes = T.nodes; nodes[5].tag = "sup";
+    const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+    const narrow = (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 639)) orelse return error.TestUnexpectedResult;
+    const wide = (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 640)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 1), narrow.scripts[0].line_height.font_relative);
+    try std.testing.expectEqual(@as(f32, 2), wide.scripts[0].line_height.font_relative);
+    try std.testing.expectEqualDeep(narrow.owner, wide.owner);
+}
+
+test "provisional SUP query refuses missing reset foreign nested script and unconsumed font box paint changes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    for ([_][]const u8{ "", "sup{line-height:normal}", "sup{line-height:inherit}", "sup{line-height:unset}",
+        "sup{line-height:var(--missing)}", "sup{line-height:20px}", "sup{line-height:1rem}",
+        "sup{line-height:1em;font-size:80%}", "sup{line-height:1em;font-family:serif}",
+        "sup{line-height:1em;vertical-align:super}", "sup{line-height:1em;position:relative}",
+        "sup{line-height:1em;display:none}", "sup{line-height:1em;opacity:.5}",
+        "sup{line-height:1em;color:red}", "sup{line-height:1em;padding:1px}",
+        "sup{line-height:1em}sup::after{content:'x'}", "sup{line-height:1em;transition-duration:1s}",
+        "sup{line-height:1em}a:hover sup{line-height:2em}",
+    }) |extra| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.css, extra }), .screen); defer styles.deinit();
+        var nodes = T.nodes; nodes[5].tag = "sup";
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, .{ .styles = &styles, .nodes = &nodes, .root = 2 }, 4, &.{5}, &.{5}, 900)) == null);
+    }
+    var styles = try parseForTargetAlloc(a, T.css ++ "sup{line-height:1em}", .screen); defer styles.deinit();
+    var nodes = T.nodes; nodes[5].tag = "sup";
+    const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+    for ([_][]const u32{ &.{4}, &.{ 5, 5 }, &.{99} }) |subjects|
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, subjects, 900)) == null);
+    nodes[5].tag = "sub";
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 900)) == null);
+    nodes[5].tag = "sup"; nodes[5].parent = 3;
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, context, 4, &.{5}, &.{5}, 900)) == null);
+    var nested: [7]ObservedStyleNode = undefined; @memcpy(nested[0..6], &T.nodes);
+    nested[5].tag = "sup"; nested[6] = .{ .tag = "span", .parent = 5, .attributes = &.{}, .has_text = true };
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, .{ .styles = &styles, .nodes = &nested, .root = 2 }, 4, &.{ 5, 6 }, &.{5}, 900)) == null);
+}
+
+const SourcePlainLinkLabelCensusTest = struct {
+    fn identity(labels: *const SourcePlainLinkLabels) SourcePlainLinkLabelNamespace {
+        return .{ .catalog = labels.namespace_catalog, .sha256 = labels.namespace_sha256 };
+    }
+    fn proof(a: std.mem.Allocator, ns: *const @import("namespace_registry").Registry, source: []const u8) !?*SourcePlainLinkLabels {
+        var cursor: usize = 0;
+        const label = nextSourcePlainLinkLabel(source, ns, &cursor) orelse return null;
+        if (nextSourcePlainLinkLabel(source, ns, &cursor) != null or cursor > source.len) return null;
+        const ranges = try a.alloc(SourcePlainLinkLabel, 1); ranges[0] = label;
+        const result = try a.create(SourcePlainLinkLabels);
+        result.* = .{ .source = source, .namespace_catalog = ns, .namespace_sha256 = ns.source_sha256,
+            .interwiki_rows = ns.interwiki_rows, .interwiki_magic = ns.interwiki_magic, .labels = ranges };
+        return if (sourcePlainLinkLabelsCurrent(result, source)) result else null;
+    }
+};
+
+test "ordinary source label entities retain strict generic census and independent source currentness" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    const source = try a.dupe(u8, "before <span>[[Target|&amp;#38291;]]</span> after");
+    const snapshot = try a.dupe(u8, source);
+    const labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!rowColorSourceAbsent(source));
+    try std.testing.expect(rowColorSourceAbsentWithLabels(source, labels));
+    try std.testing.expect(!counterSourceClosed(source) and counterSourceClosedWithLabels(source, labels));
+    var styles = try parseForTargetAlloc(a, "[bgcolor]{color:#333}", .screen); defer styles.deinit();
+    var root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    var rows: ClosedRowColorProof = .{ .styles = &styles, .root = &root, .source = source,
+        .attribute = "bgcolor", .owners = &.{}, .absent_source = snapshot, .plain_link_labels = labels,
+        .plain_link_namespace = SourcePlainLinkLabelCensusTest.identity(labels) };
+    try std.testing.expect(closedRowColorAbsenceValid(&rows));
+    const image: PageSourceImage = .{ .styles = &styles, .root = &root, .source = source,
+        .snapshot = snapshot, .plain_link_labels = labels, .plain_link_namespace = SourcePlainLinkLabelCensusTest.identity(labels) };
+    try std.testing.expect(pageSourceImageCurrent(&image));
+    rows.plain_link_labels = null;
+    try std.testing.expect(!closedRowColorAbsenceValid(&rows));
+    rows.plain_link_labels = labels;
+    try std.testing.expect(closedRowColorAbsenceValid(&rows));
+    const visible_name = "[[Target|&#98;gcolor]]";
+    const name_labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, visible_name)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(rowColorSourceAbsentWithLabels(visible_name, name_labels));
+    const raw_name = "[[Target|bgcolor &amp;]]";
+    const raw_labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, raw_name)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!rowColorSourceAbsentWithLabels(raw_name, raw_labels));
+}
+
+test "ordinary label receipt excludes File Category attributes protected nested and malformed roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    for ([_][]const u8{
+        "[[File:x.png|&amp;#38291;]]", "[[Category:X|&amp;#38291;]]", "[[:Category:X|&amp;#38291;]]", "[[Media:x|&amp;#38291;]]",
+        "<span title='[[Target|&amp;#38291;]]'>value</span>", "<nowiki>[[Target|&amp;#38291;]]</nowiki>",
+        "<pre>[[Target|&amp;#38291;]]</pre>", "<script>[[Target|&amp;#38291;]]</script>",
+        "<style>[[Target|&amp;#38291;]]</style>", "<a href='/wiki/X'>[[Target|&amp;#38291;]]</a>",
+        "<!--[[Target|&amp;#38291;]]-->", "{| title='[[Target|&amp;#38291;]]'\n|value\n|}",
+        "| style='[[Target|&amp;#38291;]]'|value", "[[Target|<span title='x'>&amp;#38291;</span>]]",
+        "[[Target|[[Other|&amp;#38291;]]]]", "[[Target|&lt;b&gt;&amp;]]", "[[Target|&#60;b&#62;&amp;]]",
+        "[[Target|title=&#98;gcolor]]", "[[Target|&amp;#38291;]", "[[Tar&amp;get|&amp;#38291;]]",
+        "<span title='[[Target|&amp;#38291;]]'", "[[Target|&amp;#38291;]]<!--unclosed",
+        "<span title='>[[Target|&amp;#38291;]]'>", "[[Target|&amp;#38291;]]<span title='unclosed>",
+        "[https://example.test [[Target|&amp;#38291;]]]", "[https://example.test/path[[Target|&amp;#38291;]]]",
+        "[//example.test/path[[Target|&amp;#38291;]]]", "[mailto:user@example.test [[Target|&amp;#38291;]]]",
+        "[[https://example.test [[Target|&amp;#38291;]]]]", "[https://example.test [[Target|&amp;#38291;]]",
+        "[https://example.test unclosed\n[[Target|&amp;#38291;]]",
+        "[https:// [[Target|&amp;#38291;]]]",
+    }) |source| {
+        try std.testing.expect((try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) == null);
+        try std.testing.expect(!rowColorSourceAbsent(source));
+    }
+    ns.interwiki_rows = &.{
+        .{ .prefix = "self", .url = "https://example.test/$1", .is_current_wiki = true },
+        .{ .prefix = "language", .url = "https://example.test/$1", .is_current_wiki = false, .is_interlanguage = true },
+    };
+    for ([_][]const u8{ "[[self:Target|&amp;#38291;]]", "[[self :File:x|&amp;#38291;]]", "[[language:Target|&amp;#38291;]]" }) |source| {
+        try std.testing.expect((try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) == null);
+        try std.testing.expect(!rowColorSourceAbsent(source));
+    }
+    const constructed = "{{unknown}} [[Target|&amp;#38291;]]";
+    const labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, constructed)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!rowColorSourceAbsentWithLabels(constructed, labels));
+    const attribute = "<div &#98;gcolor='red'>[[Target|&amp;#38291;]]</div>";
+    const attribute_labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, attribute)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(!rowColorSourceAbsentWithLabels(attribute, attribute_labels));
+}
+
+test "source label receipt replays offsets namespace role source snapshot and foreign slice mutations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    var foreign_ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer foreign_ns.deinit();
+    const original = "[[Target|&amp;#38291;]] tail";
+    const source = try a.dupe(u8, original); const snapshot = try a.dupe(u8, source); const foreign = try a.dupe(u8, source);
+    const labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) orelse return error.TestUnexpectedResult;
+    var styles = try parseForTargetAlloc(a, "", .screen); defer styles.deinit();
+    var root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+    const image: PageSourceImage = .{ .styles = &styles, .root = &root, .source = source,
+        .snapshot = snapshot, .plain_link_labels = labels, .plain_link_namespace = SourcePlainLinkLabelCensusTest.identity(labels) };
+    const original_range = labels.labels[0];
+    const namespace_sha256 = ns.source_sha256;
+    for (0..13) |mode| {
+        var changed = labels.*;
+        const range = try a.alloc(SourcePlainLinkLabel, 1); range[0] = original_range; changed.labels = range;
+        var current = image; current.plain_link_labels = &changed;
+        switch (mode) {
+            0 => range[0].start += 1,
+            1 => range[0].label_start += 1,
+            2 => range[0].label_end -= 1,
+            3 => range[0].end = source.len + 1,
+            4 => changed.source = foreign,
+            5 => changed.namespace_sha256[0] ^= 1,
+            6 => @memcpy(source[2..8], "File:x"),
+            7 => source[source.len - 1] = 'X',
+            8 => snapshot[snapshot.len - 1] = 'X',
+            9 => changed.interwiki_magic = true,
+            10 => changed.interwiki_rows = &.{.{ .prefix = "other", .url = "https://example.test/$1", .is_current_wiki = false }},
+            11 => ns.source_sha256[0] ^= 1,
+            12 => { changed.namespace_catalog = &foreign_ns; changed.interwiki_rows = foreign_ns.interwiki_rows; changed.interwiki_magic = foreign_ns.interwiki_magic; },
+            else => unreachable,
+        }
+        try std.testing.expect(!pageSourceImageCurrent(&current));
+        if (mode <= 6) try std.testing.expect(!sourcePlainLinkLabelsCurrent(&changed, source));
+        if (mode == 12) try std.testing.expect(sourcePlainLinkLabelsCurrent(&changed, source));
+        ns.source_sha256 = namespace_sha256;
+        @memcpy(source, original); @memcpy(snapshot, original);
+        try std.testing.expect(pageSourceImageCurrent(&image));
+    }
+    var empty = labels.*; empty.labels = &.{};
+    try std.testing.expect(!sourcePlainLinkLabelsCurrent(&empty, source));
+    try std.testing.expect(!sourcePlainLinkLabelsCurrent(labels, foreign));
+}
+
+test "source label scanner retains whole external tokens and independent following ordinary links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    const ir = @import("blob_encoder").document_ir;
+    const token = "[[Target|&amp;#38291;]]";
+    for ([_]struct { prefix: []const u8, target: []const u8 }{
+        .{ .prefix = "https://example.test/path", .target = "https://example.test/path" },
+        .{ .prefix = "[https://example.test label] ", .target = "https://example.test" },
+    }) |case| {
+        const source = try std.mem.concat(a, u8, &.{case.prefix, token});
+        var iterator: ir.InlineIterator = .{ .input = source, .renderer_boundaries = true };
+        const first = iterator.next() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(first.kind == .external_link);
+        try std.testing.expectEqualStrings(case.target, first.target);
+        var found = false;
+        while (iterator.next()) |node| {
+            if (node.kind != .link) continue;
+            try std.testing.expect(!found); found = true;
+            try std.testing.expectEqualStrings("Target", node.target);
+            try std.testing.expectEqualStrings("&amp;#38291;", node.text);
+        }
+        try std.testing.expect(found);
+        const labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.prefix.len, labels.labels[0].start);
+        try std.testing.expect(!rowColorSourceAbsent(source) and rowColorSourceAbsentWithLabels(source, labels));
+    }
+    const refused_prefix = "http:// no address ";
+    const refused_source = refused_prefix ++ token;
+    var refused: ir.InlineIterator = .{ .input = refused_source, .renderer_boundaries = true };
+    const text = refused.next() orelse return error.TestUnexpectedResult;
+    try std.testing.expect(text.kind == .text);
+    try std.testing.expectEqualStrings(refused_prefix, text.text);
+    const refused_labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, refused_source)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(refused_prefix.len, refused_labels.labels[0].start);
+}
+
+
+test "ordinary entity labels use maintained attributed physical cell bodies and compact boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    for ([_][]const u8{
+        "{| class='wikitable'\n|-\n| style=\"width: 70px;\" colspan=\"2\" | <table><tr><td>value</td><td>[[Target|&amp;#38291;]]</td></tr></table>\n|}",
+        "| class='first' | one || class='second' | [[Target|&amp;#38291;]]",
+        "! class='first' | one !! class='second' | [[Target|&amp;#38291;]]",
+        "! class='first' | one || class='second' | [[Target|&amp;#38291;]]",
+        "| class='x' | <nowiki>literal||text</nowiki> [[Target|&amp;#38291;]]",
+        "| class='x' | <span title='literal||text'>[[Target|&amp;#38291;]]</span>",
+    }) |raw| {
+        const source = try a.dupe(u8, raw);
+        const labels = (try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), labels.labels.len);
+        const label = labels.labels[0];
+        try std.testing.expectEqualStrings("&amp;#38291;", source[label.label_start..label.label_end]);
+        try std.testing.expect(sourcePlainLinkLabelsCurrent(labels, source));
+        try std.testing.expect(!rowColorSourceAbsent(source));
+        try std.testing.expect(rowColorSourceAbsentWithLabels(source, labels));
+        const snapshot = try a.dupe(u8, source);
+        var styles = try parseForTargetAlloc(a, "[bgcolor]{color:#333}", .screen); defer styles.deinit();
+        var root: TextElement = .{ .tag = "div", .classes = "mw-parser-output" };
+        const rows: ClosedRowColorProof = .{ .styles = &styles, .root = &root, .source = source,
+            .attribute = "bgcolor", .owners = &.{}, .absent_source = snapshot, .plain_link_labels = labels,
+            .plain_link_namespace = SourcePlainLinkLabelCensusTest.identity(labels) };
+        try std.testing.expect(closedRowColorAbsenceValid(&rows));
+        const foreign = try a.dupe(u8, source);
+        try std.testing.expect(!sourcePlainLinkLabelsCurrent(labels, foreign));
+        source[label.label_start] = 'X';
+        try std.testing.expect(!sourcePlainLinkLabelsCurrent(labels, source));
+        try std.testing.expect(!closedRowColorAbsenceValid(&rows));
+        source[label.label_start] = '&';
+        try std.testing.expect(closedRowColorAbsenceValid(&rows));
+    }
+}
+
+test "attributed cell label roles retain attribute compact opaque and no delimiter refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try @import("namespace_registry").Registry.init(a, @import("namespace_registry").english_test_fixture); defer ns.deinit();
+    for ([_][]const u8{
+        "| style='[[Target|&amp;#38291;]]'|value",
+        "| style='unclosed | [[Target|&amp;#38291;]]",
+        "| style='literal|pipe' | [[Target|&amp;#38291;]]",
+        "| title=<span>value</span> | [[Target|&amp;#38291;]]",
+        "| title={{value}} | [[Target|&amp;#38291;]]",
+        "| title=<!--value--> | [[Target|&amp;#38291;]]",
+        "| class='x' | [[Target|&amp;#38291;||tail]]",
+        "! class='x' | [[Target|&amp;#38291;!!tail]]",
+        "| class='x' | one || title='[[Target|&amp;#38291;]]' | other",
+        "! class='x' | one !! title='[[Target|&amp;#38291;]]' | other",
+        "|+ class='x' | [[Target|&amp;#38291;]]",
+        "|- title='[[Target|&amp;#38291;]]'",
+        "| class='x' | <nowiki>[[Target|&amp;#38291;]]</nowiki>",
+        "| class='x' | <includeonly>[[Target|&amp;#38291;]]</includeonly>",
+        "| class='x' | [[File:x.png|&amp;#38291;]]",
+        "| class='x' | [[Category:X|&amp;#38291;]]",
+        // Bare cells remain outside this receipt's supported scope.
+        "| [[Target|&amp;#38291;]]", "! [[Target|&amp;#38291;]]",
+    }) |source| {
+        try std.testing.expect((try SourcePlainLinkLabelCensusTest.proof(a, &ns, source)) == null);
+        try std.testing.expect(!rowColorSourceAbsent(source));
+    }
+}
+
+
+test "rich child focus absence is exact to the closed graph and leaves action ancestor hover and active independent" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    var styles = try parseForTargetAlloc(a, T.css, .screen); defer styles.deinit();
+    var nodes: [7]ObservedStyleNode = undefined; @memcpy(nodes[0..6], &T.nodes);
+    nodes[5].tag = "span"; nodes[5].has_text = false;
+    nodes[6] = .{ .tag = "i", .parent = 5, .attributes = &.{}, .has_text = true };
+    const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &nodes, .root = 2 };
+    const issued = (try observedRichInlineFocusAbsent(a, context, 4, &.{ 5, 6 }, false, &.{})) orelse return error.TestUnexpectedResult;
+    const evaluation: ObservedFigureEvaluation = .{ .link_subject = 4,
+        .link_state = .{ .visited = true, .hover = true, .active = true, .focus = true, .focus_visible = true, .focus_within = true },
+        .rich_inline_focus_absent = &issued };
+    try std.testing.expectEqualDeep(evaluation.link_state, observedFigureStateAt(&nodes, 4, evaluation).?);
+    for ([_]u32{ 5, 6 }) |subject| {
+        const state = observedFigureStateAt(&nodes, subject, evaluation) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(ObservedFigureLinkState{ .focus = false, .focus_visible = false, .focus_within = false }, state);
+        try std.testing.expect(state.hover == null and state.active == null and state.visited == null);
+    }
+    try std.testing.expect(observedFigureStateAt(&nodes, 3, evaluation) == null);
+    const copied_nodes = nodes;
+    try std.testing.expect(observedFigureStateAt(&copied_nodes, 5, evaluation) == null);
+    var other_evaluation = evaluation; other_evaluation.link_subject = 3;
+    try std.testing.expect(observedFigureStateAt(&nodes, 5, other_evaluation) == null);
+    try std.testing.expect(!issued.binds(.{ .styles = &styles, .nodes = &copied_nodes, .root = 2 }, 4));
+    try std.testing.expect(!issued.binds(context, 3));
+    try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{5}, false, &.{})) == null);
+    try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{ 6, 5 }, false, &.{})) == null);
+    try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{ 5, 6, 6 }, false, &.{})) == null);
+    for ([_][]const u8{ "tabindex", "contenteditable", "autofocus", "role", "onclick" }) |attribute_name| {
+        nodes[6].attributes = &.{.{ .name = attribute_name, .value = "0" }};
+        try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{ 5, 6 }, false, &.{})) == null);
+    }
+    nodes[6].attributes = &.{};
+    nodes[6].tag = "input";
+    try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{ 5, 6 }, false, &.{})) == null);
+    nodes[6].tag = "i";
+    nodes[0].attributes = &.{.{ .name = "contenteditable", .value = "false" }};
+    try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{ 5, 6 }, false, &.{})) == null);
+    nodes[0].attributes = &.{};
+    const rules_before = styles.observed_figure_rules;
+    styles.observed_figure_rules = try a.dupe(ObservedFigureRule, rules_before);
+    try std.testing.expect(!issued.binds(context, 4));
+    styles.observed_figure_rules = rules_before;
+    try std.testing.expect(issued.binds(context, 4));
+    const actual = (try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{ 5, 6 }, 900)) orelse return error.TestUnexpectedResult;
+    var plain = T.nodes[0..5].*; plain[4].has_text = true;
+    const reference = (try resolveObservedPlainInlineLinkStyle(a, .{ .styles = &styles, .nodes = &plain, .root = 2 }, 4, 900)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(reference, actual);
+    try std.testing.expect(actual.paint.focus_outline != null and actual.paint.underline_on_focus);
+}
+
+test "rich and SUP focus closure retains literal CSS and refuses inherited editing activation and independent state effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OrdinaryInlinePaintQueryTest;
+    for ([_][]const u8{ "body{-webkit-user-modify:read-write}", "html{user-input:enabled}",
+        "span:hover{-moz-user-focus:normal}", "@media(min-width:1px){body{appearance:auto}}",
+        "body{behavior:url(edit.htc)}" }) |activation_css| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.css, activation_css }), .screen); defer styles.deinit();
+        const context: ObservedInlineLinkPaintContext = .{ .styles = &styles, .nodes = &T.nodes, .root = 2 };
+        try std.testing.expect((try observedRichInlineFocusAbsent(a, context, 4, &.{5}, false, &.{})) == null);
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, context, 4, &.{5}, 900)) == null);
+    }
+    for ([_][]const u8{ "b:hover{color:red}", "b:active{color:red}", "span:focus-within b{color:red}",
+        "b{outline:2px solid red}" }) |state_css| {
+        var styles = try parseForTargetAlloc(a, try std.mem.concat(a, u8, &.{ T.css, state_css }), .screen); defer styles.deinit();
+        try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyle(a, .{ .styles = &styles, .nodes = &T.nodes, .root = 2 }, 4, &.{5}, 900)) == null);
+    }
+    var sup_styles = try parseForTargetAlloc(a, T.css ++ "sup{line-height:1em}", .screen); defer sup_styles.deinit();
+    var sup_nodes = T.nodes; sup_nodes[5].tag = "sup";
+    const sup_context: ObservedInlineLinkPaintContext = .{ .styles = &sup_styles, .nodes = &sup_nodes, .root = 2 };
+    const observed = (try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, sup_context, 4, &.{5}, &.{5}, 900)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), observed.scripts.len);
+    try std.testing.expectEqual(@as(u32, 5), observed.scripts[0].subject);
+    try std.testing.expect(observed.scripts[0].line_height == .font_relative);
+    try std.testing.expectEqual(@as(f32, 1), observed.scripts[0].line_height.font_relative);
+    try std.testing.expect(observed.owner.paint.focus_outline != null and observed.owner.paint.underline_on_focus);
+    sup_nodes[1].attributes = &.{.{ .name = "contenteditable", .value = "true" }};
+    try std.testing.expect((try resolveObservedRichInlineLinkOwnerStyleWithScripts(a, sup_context, 4, &.{5}, &.{5}, 900)) == null);
+}
+
+test "closed inline sibling proof refutes edit section brackets without consuming a real edit neighbour" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    // Exact retained Mai GET stylesheet rule, including both content declarations.
+    const css = ".client-nojs a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.client-nojs a.mw-editsection-visualeditor:first-of-type + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + a::before{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    try std.testing.expect(styles.observed_figure_rules.len != 0);
+    for ([_][]const u8{ "i", "em", "b", "strong", "span" }) |parent_tag| {
+        var nodes = [_]ObservedStyleNode{
+            .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "class", .value = "client-nojs ve-not-available" }} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = parent_tag, .parent = 2, .attributes = &.{}, .known_complete_child_elements = true },
+            .{ .tag = "span", .parent = 3, .attributes = &.{.{ .name = "lang", .value = "la" }},
+                .known_next_element_sibling = 5, .known_no_previous_element_sibling = true },
+            .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "https://la.wiktionary.org/wiki/Special:Search/mensis" }},
+                .known_previous_element_sibling = 4, .known_no_next_element_sibling = true },
+        };
+        for (styles.observed_figure_rules) |rule|
+            try std.testing.expectEqual(ContainerSelectorMatch.no, observedStyleRuleMatch(rule, &nodes, null, 5, .before, .{}));
+        for (0..5) |mode| {
+            var changed = nodes;
+            switch (mode) {
+                0 => changed[3].known_complete_child_elements = false,
+                1 => changed[5].known_previous_element_sibling = null,
+                2 => changed[4].known_next_element_sibling = null,
+                3 => changed[4].parent = 2,
+                4 => changed[3].tag = "p",
+                else => unreachable,
+            }
+            var retained = false;
+            for (styles.observed_figure_rules) |rule|
+                retained = retained or observedStyleRuleMatch(rule, &changed, null, 5, .before, .{}) != .no;
+            try std.testing.expect(retained);
+        }
+        for ([_][]const u8{ "mw-editsection-divider", "mw-editsection-visualeditor" }) |class_name| {
+            nodes[4].tag = "a";
+            nodes[4].attributes = &.{.{ .name = "class", .value = class_name }};
+            var retained = false;
+            for (styles.observed_figure_rules) |rule|
+                retained = retained or observedStyleRuleMatch(rule, &nodes, null, 5, .before, .{}) != .no;
+            try std.testing.expect(retained);
+        }
+    }
+}
+
+test "complete inline sibling proof refutes after brackets beyond rich descendants without granting edit rank" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const css = ".client-nojs a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after,.ve-not-available a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after,.client-nojs a:has(+ a.mw-editsection-visualeditor:last-of-type)::after,.ve-not-available a:has(+ a.mw-editsection-visualeditor:last-of-type)::after{content:']';content:']' / '';margin-left:0.25em;margin-inline:0.25em 0}";
+    var styles = try parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+    try std.testing.expect(styles.observed_figure_rules.len != 0);
+    for ([_][]const u8{ "div", "i", "em", "b", "strong", "span", "dd" }) |parent_tag| {
+        var nodes = [_]ObservedStyleNode{
+            .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "class", .value = "client-nojs ve-not-available" }} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{} },
+            .{ .tag = "dl", .parent = 1, .attributes = &.{} },
+            .{ .tag = parent_tag, .parent = 2, .attributes = &.{}, .known_complete_child_elements = true },
+            .{ .tag = "span", .parent = 3, .attributes = &.{.{ .name = "lang", .value = "la" }}, .known_next_element_sibling = 5, .known_no_previous_element_sibling = true },
+            .{ .tag = "a", .parent = 3, .attributes = &.{.{ .name = "href", .value = "/wiki/Target" }}, .known_previous_element_sibling = 4, .known_no_next_element_sibling = true },
+            .{ .tag = "sup", .parent = 5, .attributes = &.{.{ .name = "class", .value = "dewikttm" }}, .has_text = true },
+            .{ .tag = "span", .parent = 6, .attributes = &.{}, .has_text = true },
+            .{ .tag = "p", .parent = 2, .attributes = &.{}, .has_text = true },
+        };
+        for (styles.observed_figure_rules) |rule| {
+            const weak = rule.weak_selector orelse return error.TestUnexpectedResult;
+            try std.testing.expect(weak.necessary_has_next != null and !weak.syntax_known);
+            try std.testing.expectEqual(ContainerSelectorMatch.no, observedStyleRuleMatch(rule, &nodes, null, 5, .after, .{}));
+            try std.testing.expectEqual(ContainerSelectorMatch.no, observedStyleRuleMatch(rule, nodes[0..8], null, 5, .after, .{}));
+        }
+        // A different real following child is also a valid necessary-fact
+        // refutation; it cannot be confused with either SUP descendant.
+        var following = nodes;
+        following[5].known_no_next_element_sibling = false;
+        following[5].known_next_element_sibling = 8;
+        following[8].tag = "span"; following[8].parent = 3;
+        following[8].known_previous_element_sibling = 5;
+        for (styles.observed_figure_rules) |rule|
+            try std.testing.expectEqual(ContainerSelectorMatch.no, observedStyleRuleMatch(rule, &following, null, 5, .after, .{}));
+        for (0..10) |mode| {
+            var changed = nodes;
+            switch (mode) {
+                0 => changed[3].known_complete_child_elements = false,
+                1 => changed[5].known_no_next_element_sibling = false,
+                2 => changed[5].known_next_element_sibling = 8,
+                3 => changed[8].parent = 4,
+                4 => changed[6].parent = 6,
+                5 => changed[3].tag = "p",
+                6 => { changed = following; changed[8].known_previous_element_sibling = 4; },
+                7 => { changed = following; changed[8].known_no_previous_element_sibling = true; },
+                8 => { changed = following; changed[8].tag = "a"; changed[8].attributes = &.{.{ .name = "class", .value = "mw-editsection-visualeditor" }}; },
+                9 => { changed = following; changed[8].attributes = &.{.{ .name = "class", .value = "mw-editsection-divider" }}; },
+                else => unreachable,
+            }
+            var retained = false;
+            for (styles.observed_figure_rules) |rule|
+                retained = retained or observedStyleRuleMatch(rule, &changed, null, 5, .after, .{}) != .no;
+            try std.testing.expect(retained);
+        }
+        // The bounded query must not manufacture absence on exhausted work.
+        const large = try a.alloc(ObservedStyleNode, 4103);
+        @memcpy(large[0..6], nodes[0..6]);
+        for (large[6..]) |*child| child.* = .{ .tag = "span", .parent = 5, .attributes = &.{}, .has_text = true };
+        for (styles.observed_figure_rules) |rule|
+            try std.testing.expect(observedStyleRuleMatch(rule, large, null, 5, .after, .{}) != .no);
+    }
 }

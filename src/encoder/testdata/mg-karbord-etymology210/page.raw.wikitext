@@ -1,0 +1,34 @@
+=={{=fa=}}==
+
+{{-etim-}}
+:{{fa}} ''کار<tr:kâr><t:work>'' + ''برد<tr:bord><pos:past stem of {{m|fa|بردن|tr=bordan|t=to carry}}>''.
+{{-ana-|fa}}
+'''کاربرد''' 
+# [[fampiasana]], [[fampiharana]]
+#* ''کاربردهای هوش مصنوعی''
+
+{{-fanononana-}}
+* {{fa-IPA|ir=kārˈburd|dari=kārˈburd}}
+
+{{-teny mifandraika-}}
+* [[به کار بردن]]
+* [[کاربردی]]
+
+{{-tsiahy-}}
+{{wikibolana|en|کاربرد}}
+=={{=fa=}}==
+
+{{-ana-|fa}}
+'''کاربرد''' (kârbord)
+# [[fampiasana]], [[fampiharana]]
+#* '''''کاربردها'''ی هوش مصنوعی''
+
+{{-fanononana-}}
+* {{fa-IPA|ir=kārˈburd|dari=kārˈburd}}
+
+{{-teny mifandraika-}}
+* [[به کار بردن]]
+* [[کاربردی]]
+
+{{-tsiahy-}}
+{{wikibolana|en|کاربرد}}

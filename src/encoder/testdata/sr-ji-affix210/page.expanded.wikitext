@@ -1,0 +1,713 @@
+<div class="disambig-see-also">''Такође погледајте:'' <b class="Latn">[[EI]]</b>, <b class="Latn">[[El]]</b>, <b class="Hani">[[曰]]</b>, <b class="Hani">[[臼]]</b>, <b class="Hani">[[白]]</b>, <b class="Hani">[[冃]]</b>, <b class="Hani">[[甘]]</b>, <b class="Hani">[[𭺫]]</b>, <b class="Hani">[[𭺪]]</b>, <b class="Hang">[[티]]</b>, <b class="Ital">[[𐌇]]</b><span class='serial-comma'>,</span>''<span class='serial-and'> и</span>'' <b class="Sarb">[[𐩳]]</b>&lrm;</div>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+<strong class="error"><span class="scribunto-error">Lua error in Модул:character info: NotImplemented</span></strong>
+<div class="noprint" style="clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; spacing: 0px; text-align: left; float: right;">
+<div style="float: left;">[[Image:Commons-logo.svg|50px|none|Commons:Category]]</div>
+<div style="margin-left: 60px;">[[commons:Main_Page|Wikimedia Commons]] has more media related to:
+<div style="margin-left: 10px;">'''''[[Commons:Category:日|日]]'''''</div>
+</div>
+</div>
+
+[[Категорија:Међународни говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Flag of the United Nations.svg|border|32px]] ''међународно''</big></big></big></div>==
+<br>
+{| class="floatright wikitable" style="text-align:center;"
+! colspan="4" | Редослед писања
+|-
+| style="padding:5px;" | [[File:日-bw.png|200px|4 потеза]]
+|}
+{| class="floatright wikitable" style="text-align:center;"
+! colspan="4" | Редослед писања
+|-
+| style="padding:5px;" | [[File:日-order.gif|100px]]
+|}
+
+===Han character===
+<div class="noprint" style="border:solid #aaa 1px;margin:0;font-size:74%;background:#f9f3f6;width:120px;padding:3px;spacing:0;text-align:center;float:right"><div style="float:left">[[Image:Commons-logo.svg|24px|none|link=Commons:Category:Radical 072]]</div>[[Commons:Category:Radical 072-0|Види слике од <br>'''Радикал 72 <big>日</big>''']]</div>[[Категорја:Хан карактер радикали| ]]<span class="headword-line"><strong class="Hani headword" lang="mul">日</strong></span>[[Категорија:Међународни леме|日00日]][[Категорија:Међународни symbols|日00日]][[Категорија:Међународни terms with redundant script codes|日00日]][[Категорија:Међународни terms with redundant head parameter|日00日]][[Категорија:Међународни уноси са нетачним заглављем језика|日00日]][[Категорија:Међународни terms with non-redundant non-automated sortkeys|日00日]][[Категорија:Стране са 2 уноса|工46]] (''[[Kangxi radical]] 72, '' [[Додатак:Кинески радикал/日|日]]+0, 4 strokes, ''[[Додатак:Кинески Канџи|cangjie input]]'' 日 ([[Додатак:Кинески Канџи/a|A]]), ''[[Додатак:Кинески четири угла|четири-угла]]'' [[Додатак:Кинески четири угла/6|6010<sub>0</sub>]], ''[[w:Chinese character description languages#Ideographic Description Sequences|composition]]'' ⿴[[囗]][[一]])[[Категорија:Хан текст карактери|日00日]]
+
+# [[Кангци радикал]] #72, <i class="Hani mention" lang="mul">[[⽇#Међународни|⽇]]</i>.&#32;&#32;
+# [[w:Shuowen Jiezi|''Shuowen Jiezi'']] radical №231[[Категорија:Shuowen radicals|日00]][[Категорија:Међународни terms with non-redundant non-automated sortkeys|日00]]
+
+====Usage notes====
+* Not to be confused with <span class="Hani" lang="mul">[[曰#Међународни|曰]]</span> (Kangxi radical #73), which is generally wider and shorter.
+
+====Derived characters====
+* [[Додатак:Кинески радикал/日]]
+* <span class="None" lang="mul">[[𬽪#Међународни|𬽪]], [[𠯐#Међународни|𠯐]], [[𡉭#Међународни|𡉭]], [[𪥨#Међународни|𪥨]], [[𡥌#Међународни|𡥌]], [[𫴸#Међународни|𫴸]], [[𡯙#Међународни|𡯙]], [[𢁯#Међународни|𢁯]], [[抇#Међународни|抇]], [[汨#Међународни|汨]], [[𤝍#Међународни|𤝍]], [[阳#Међународни|阳]], [[𨑨#Међународни|𨑨]], [[𣏬#Међународни|𣏬]], [[𣬰#Међународни|𣬰]], [[𭴌#Међународни|𭴌]], [[𡯒#Међународни|𡯒]], [[𡯟#Међународни|𡯟]], [[𥎭#Међународни|𥎭]], [[𥘗#Међународни|𥘗]], [[衵#Међународни|衵]], [[𮇇#Међународни|𮇇]], [[𥿀#Међународни|𥿀]], [[𦨙#Међународни|𦨙]], [[蚎#Међународни|蚎]], [[𧠗#Међународни|𧠗]], [[𧥵#Међународни|𧥵]], [[𧲥#Међународни|𧲥]], [[𧺝#Међународни|𧺝]], [[𧿭#Међународни|𧿭]], [[𡲉#Међународни|𡲉]], [[鈤#Међународни|鈤]], [[䖑#Међународни|䖑]], [[䫻#Међународни|䫻]]([[𫗇#Међународни|𫗇]]), [[𩚣#Међународни|𩚣]], [[𫽰#Међународни|𫽰]], [[馹#Међународни|馹]]([[驲#Међународни|驲]]), [[䵒#Међународни|䵒]], [[𪕈#Међународни|𪕈]]</span> 
+* <span class="None" lang="mul">[[欥#Међународни|欥]], [[炚#Међународни|炚]], [[甠#Међународни|甠]], [[圼#Међународни|圼]], [[妟#Међународни|妟]], [[𢗭#Међународни|𢗭]], [[杲#Међународни|杲]], [[炅#Међународни|炅]], [[𭴋#Међународни|𭴋]], [[𤘵#Међународни|𤘵]], [[𦐇#Међународни|𦐇]], [[𧦊#Међународни|𧦊]], [[𧰮#Међународни|𧰮]], [[𣃸#Међународни|𣃸]], [[𦃙#Међународни|𦃙]], [[𧏒#Међународни|𧏒]], [[𨍯#Међународни|𨍯]], [[𠘗#Међународни|𠘗]], [[𡦬#Међународни|𡦬]], [[𠕌#Међународни|𠕌]], [[𫧍#Међународни|𫧍]], [[𪜌#Међународни|𪜌]], [[間#Међународни|間]]([[间#Међународни|间]]), [[𧗧#Међународни|𧗧]]</span> 
+* <span class="None" lang="mul">[[㒲#Међународни|㒲]], [[𠕾#Међународни|𠕾]], [[𠯭#Међународни|𠯭]], [[𡰶#Међународни|𡰶]], [[㞱#Међународни|㞱]], [[𢎃#Међународни|𢎃]], [[䒤#Међународни|䒤]], [[杳#Међународни|杳]], [[𣥜#Међународни|𣥜]], [[氜#Међународни|氜]], [[沓#Међународни|沓]], [[㸓#Међународни|㸓]], [[者#Међународни|者]], [[𤵖#Међународни|𤵖]], [[香#Међународни|香]], [[音#Међународни|音]], [[亯#Међународни|亯]], [[𫂵#Међународни|𫂵]], [[耆#Међународни|耆]], [[𧖮#Међународни|𧖮]], [[𡥨#Међународни|𡥨]], [[𡸱#Међународни|𡸱]], [[孴#Међународни|孴]], [[𢧋#Међународни|𢧋]], [[𡦏#Међународни|𡦏]], [[稥#Међународни|稥]], [[𦳜#Међународни|𦳜]], [[𪎗#Међународни|𪎗]], [[𮏥#Међународни|𮏥]], [[𪏰#Међународни|𪏰]], [[𡾡#Међународни|𡾡]]</span> 
+
+====Descendants====
+* <span class="Bopo" lang="mul">[[ㄖ#Међународни|ㄖ]]</span> <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[Zhuyin]] letter</span><span class="ib-brac qualifier-brac">)</span>
+
+====References====
+
+* KangXi:  [http://www.kangxizidian.com/kangxi/0489.gif page 489], карактер 1
+* Dai Kanwa Jiten: карактер 13733
+* Dae Jaweon:  страна 848, карактер 14
+* Hanyu Da Zidian:  том 2, страна 1482, карактер 1
+* [http://www.unicode.org/cgi-bin/GetUnihanData.pl?codepoint=65E5 Unihan data за U+65E5]
+
+====Further reading====
+* [[Image:Wikidata-logo.svg|15px|link=Wikidata:Q3594977]] <b class="None" lang="sh">[[:Wikidata&#x3A;Q3594977|日]]</b>[[Категорија:Српскохрватски terms in nonstandard scripts|工46]] на  Wikidata.<span class="interProject">[[Wikidata:Q3594977|Wikidata ]]</span>
+
+----
+
+<templatestyles src="Модул:minitoc/styles.css"></templatestyles><div class="NavFrame" data-toggle-category="table of contents" style="max-width:40em;margin:0.5em 0" data-minitoc-length="2"><div class="NavHead" style="background:#eee;padding: 0.25em 0.5em">Језици (2)</div><div class="NavContent" style="text-align:center;padding:0.5em"><span style="white-space:nowrap;">[[#Okinawan|Okinawan]]</span> • <span style="white-space:nowrap;">[[#Old Japanese|Old Japanese]]</span><hr>[[#catlinks|Страна категорија]]</div></div><div data-toc-length="2">__TOC__</div>
+[[Категорија:Кинески говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> [[Image:Flag_of_the_People%27s_Republic_of_China.svg|32px]] Кинески </big></big></big></div>==
+<br>
+
+===Glyph origin===
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-glyph: FileMetadataSnapshotMissing</span></strong>
+Pictogram (<i class="Hani mention" lang="zh">[[象形#Кинески|象形]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="zh-Latn" class="mention-tr tr Latn">xiàngxíng</span><span class="mention-gloss-paren annotation-paren">)</span>) [[Категорија:Хан пиктограми|工46]] – the Sun. A dot or line was added in the centre to distinguish it from visually similar characters, e.g. <span class="Hani" lang="zh">[[囗#Кинески|囗]]</span> (early form of <span class="Hani" lang="zh">[[丁#Кинески|丁]]</span>). Compare earlier forms of the character with the astronomical and astrological symbol for the Sun ([[☉]]) and the Egyptian hieroglyph <i class="Egyp mention" lang="egy">[[𓇳#Egyptian|𓇳]]</i>.
+
+===Etymology 1===
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #E0FFFF;font-weight: normal;font-size: smaller;" colspan="2" |[[Simplified Chinese|једн.]] and [[Traditional Chinese|трад.]]<br>
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hani" class="Hani" | [[日#Кинески|日]]
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #F0FFE0;font-weight: normal;font-size: smaller;" colspan="2" |alternative forms
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-; padding-top: 10px; padding-bottom: 10px; border-right: 1px solid #aaa; border-bottom: 1px solid #aaa" colspan="1"|<div class="vsSwitcher" data-toggle-category="Chinese alternative forms"><div class="vsShow"><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[囸#Chinese|囸]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡆠#Chinese|𡆠]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡇁#Chinese|𡇁]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡆸#Chinese|𡆸]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡇗#Chinese|𡇗]]</span></span></div><div class="vsHide"><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[囸#Chinese|囸]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡆠#Chinese|𡆠]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡇁#Chinese|𡇁]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡆸#Chinese|𡆸]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡇗#Chinese|𡇗]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[𡈎#Chinese|𡈎]]</span></span></div><span class="vsToggleElement" style="display:block;width:fit-content;margin:auto">&nbsp;</span></div>
+|}
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q45961 site=enwiki</span></strong>. Cognate to <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q34271 site=enwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q9228 site=enwiki</span></strong>, <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q56410 site=enwiki</span></strong>, and <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q34235 site=enwiki</span></strong>.
+
+====Pronunciation====
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-pron: Invalid syllable: 5nyiq,5zeq. Wugniu expected, but another romanisation is supplied.</span></strong>
+
+====Definitions====
+<span class="headword-line"><strong class="Hani headword" lang="zh">日</strong></span>[[Категорија:Кинески Хан карактери|工46]][[Категорија:Кинески уноси са нетачним заглављем језика|工46]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[astronomy]][[Категорија:zh:Stars|工46]]</span><span class="ib-brac">)</span></span> [[Sun]]
+# [[daytime]]; [[time]] between [[sunrise]] and [[sunset]]
+#: <span lang="zh-Hant" class="Hant">[[日班#Кинески|<b>日</b>班]]</span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i><b>rì</b>bān</i></span>&nbsp; ―&nbsp; '''day''' shift[[Категорија:Мандарин terms with usage examples]]
+#: <span style="background:#FFF2E0" class="defdate">[[Appendix:Glossary#antonym|Antonyms]]:</span> <small style="font-size:85%;"><span class="Hani" lang="zh">[[夜#Chinese|夜]]</span>, <span class="Hant" lang="zh-Hant">[[夜間#Chinese|夜間]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[夜间#Chinese|夜间]]</span>, <span class="Hani" lang="zh">[[夜晚#Chinese|夜晚]]</span>[[Category:Chinese redlinks/zh-l]], <span class="Hani" lang="zh">[[晚上#Chinese|晚上]]</span></small>
+# [[day]]; [[twenty-four]] [[hour]]s
+# [[everyday]]; [[daily]]; [[day-to-day]]
+# [[day]] of the [[month]]
+#: <span lang="zh-Hant" class="Hant">[[三月#Кинески|三月]][[四#Кинески|四]]<b>日</b></span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i>sān yuè sì <b>rì</b></i></span>&nbsp; ―&nbsp; March 4[[Категорија:Мандарин terms with usage examples]]
+#: <span style="background:#FFF2E0" class="defdate">Синоними:</span> <small><span class="Hant" lang="zh-Hant">[[號#Chinese|號]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[号#Chinese|号]]</span></small>
+# [[some]] [[day]]; some [[other]] [[time]]
+# [[former]] [[time]]s; [[previous]] times; the [[past]]
+# [[time]]; [[period]]; [[age]]
+# <i>Класификатор за [[day]]s.</i>
+# <i>Short for</i> <span class="Hani" lang="zh">[[日本#Chinese|日本]]</span> (<i><span class="tr Latn">Rìběn</span></i>, “[[Japan]]; [[Japanese]]; [[Nippo-]]”):[[Category:Chinese short forms]]
+#: <span lang="zh-Hant" class="Hant">[[中日#Кинески|中<b>日</b>]][[詞典#Кинески|詞典]]</span><span lang="zh-Hani" class="Hani">／</span><span lang="zh-Hans" class="Hans">[[中日#Кинески|中<b>日</b>]][[词典#Кинески|词典]]</span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i>zhōng<b>rì</b> cídiǎn</i></span>&nbsp; ―&nbsp; Chinese-'''Japanese''' dictionary[[Категорија:Мандарин terms with usage examples]]
+# <sup><span class="explain" title="Obsolete sense in Modern Standard Chinese—may be preserved in fossilised compounds and expressions or other varieties of Chinese.">†</span></sup>[[Category:Chinese terms with obsolete senses|日]] <i>Alternative form of</i> <span class="Hani" lang="zh">[[二#Chinese|二]]</span> (<i><span class="tr Latn">èr</span></i>, “[[two]]”).
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Додатак:Речник#obsolete|obsolete]][[Категорија:Кинески terms with obsolete senses|工46]]</span><span class="ib-brac">)</span></span> <i>Short for</i> <span class="Hant" lang="zh-Hant">[[日斯巴尼亞#Chinese|日斯巴尼亞]]</span><span class="Hani" lang="zh">／</span><span class="Hans" lang="zh-Hans">[[日斯巴尼亚#Chinese|日斯巴尼亚]]</span> (“[[Spain]]”)[[Category:Chinese redlinks/zh-l]].[[Category:Chinese short forms]]
+# <span class="Hani" lang="zh">(</span><span class="Hani" lang="zh">～[[母#Кинески|母]]</span><span class="Hani" lang="zh">)</span> <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">[[Chinese]] [[linguistics]][[Категорија:zh:Linguistics|工46]]</span><span class="ib-brac">)</span></span> the [[Middle Chinese]] [[initial]] of <span class="Hani" lang="zh">[[日#Chinese|日]]</span>
+
+=====Synonyms=====
+
+* The dial-syn page 「<span class="Hant" lang="zh">太陽</span>」 does not yet exist. <span class="plainlinks">[https://sr.wiktionary.org/w/index.php?title=Модул:zh/data/dial-syn/太陽&action=edit&preload=Модул:zh/data/dial-syn Create the data page] and [https://sr.wiktionary.org/w/index.php?title=Шаблон:zh-dial-map/太陽&action=edit&preload=Шаблон:zh-dial-map/template the map]!</span>
+
+* The dial-syn page 「<span class="Hani" lang="zh">白天</span>」 does not yet exist. <span class="plainlinks">[https://sr.wiktionary.org/w/index.php?title=Модул:zh/data/dial-syn/白天&action=edit&preload=Модул:zh/data/dial-syn Create the data page] and [https://sr.wiktionary.org/w/index.php?title=Шаблон:zh-dial-map/白天&action=edit&preload=Шаблон:zh-dial-map/template the map]!</span>
+
+* The dial-syn page 「<span class="Hani" lang="zh">天</span>」 does not yet exist. <span class="plainlinks">[https://sr.wiktionary.org/w/index.php?title=Модул:zh/data/dial-syn/天&action=edit&preload=Модул:zh/data/dial-syn Create the data page] and [https://sr.wiktionary.org/w/index.php?title=Шаблон:zh-dial-map/天&action=edit&preload=Шаблон:zh-dial-map/template the map]!</span>
+
+====Compounds====
+* Види [[日/изведени термини#Chinese|日/изведени термини § Chinese]].
+
+====Descendants====
+<div style="background-color:#EFF8EC; max-width:500px;">''[[Sino-Xenic]]'' (<span class="Hani" lang="zh">日</span>):
+* <span class="desc-arr" title="borrowed">→</span> Јапански:<templatestyles src="Module:etymology/style.css"/> <span class="Jpan" lang="ja">[[日#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichi#Јапански|<span class="mention-tr tr">nichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<nowiki>;</nowiki> <span class="Jpan" lang="ja">[[日#Јапански|<ruby>日<rp>(</rp><rt>じつ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jitsu#Јапански|<span class="mention-tr tr">jitsu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="desc-arr" title="borrowed">→</span> Okinawan:<templatestyles src="Module:etymology/style.css"/> <span class="Jpan" lang="ryu">[[日#Okinawan|<ruby>日<rp> (</rp><rt>なち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">nachi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]<nowiki>;</nowiki> <span class="Jpan" lang="ryu">[[日#Okinawan|<ruby>日<rp> (</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">nichi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]
+* <span class="desc-arr" title="borrowed">→</span> Корејски: <span class="Kore" lang="ko">[[일#Корејски|일(日)]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">il</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+* <span class="desc-arr" title="borrowed">→</span> Вијетнамски: <span class="Latn" lang="vi">[[nhật#Вијетнамски|nhật]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="vi-Latn" class="tr Latn"><span class="Hani" lang="vi">[[日#Вијетнамски|日]]</span>[[Категорија:Вијетнамски terms with redundant script codes|工46]]</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/></div>
+
+===Etymology 2===
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #E0FFFF;font-weight: normal;font-size: smaller;" colspan="2" |[[Simplified Chinese|једн.]] and [[Traditional Chinese|трад.]]<br>
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hani" class="Hani" | [[日#Кинески|日]]
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #F0FFE0;font-weight: normal;font-size: smaller;" colspan="2" |alternative forms
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-; padding-top: 10px; padding-bottom: 10px; border-right: 1px solid #aaa; border-bottom: 1px solid #aaa" colspan="1"|<span style="white-space:nowrap;"><span class="Hani" lang="zh">[[入#Chinese|入]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[㒲#Chinese|㒲]]</span></span><br><span style="white-space:nowrap;"><span class="Hani" lang="zh">[[肏#Chinese|肏]]</span></span>
+|}
+Essentially a substitute character for <span class="Hani" lang="zh">[[入#Chinese|入]]</span> (“to enter”) that preserves the expected modern pronunciation of <span class="Hani" lang="zh">入</span>; see the etymology there for more.
+
+====Pronunciation====
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-pron: NotCallable</span></strong>
+
+====Definitions====
+<span class="headword-line"><strong class="Hani headword" lang="zh">日</strong></span>[[Категорија:Кинески Хан карактери|工46]][[Категорија:Кинески уноси са нетачним заглављем језика|工46]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">dialectal [[w:Mandarin Chinese|Mandarin]][[Категорија:Mandarin Chinese|工46]]<span class="ib-comma">,</span>&#32;dialectal [[w:Jin Chinese|Jin]][[Категорија:Jin Chinese|工46]]<span class="ib-comma">,</span>&#32;dialectal [[w:Wu Chinese|Wu]][[Категорија:Wu Chinese|工46]]<span class="ib-comma">,</span>&#32;dialectal [[w:Xiang Chinese|Xiang]][[Категорија:Xiang Chinese|工46]]<span class="ib-comma">,</span>&#32;[[Додатак:Речник#vulgar|vulgar]][[Категорија:Кинески vulgarities|工46]]<span class="ib-comma">,</span>&#32;often in [[abuse]]s</span><span class="ib-brac">)</span></span> to [[fuck]]; to have [[sexual intercourse]] with
+#: <span lang="zh-Hant" class="Hant">[[狗日#Кинески|狗<b>日</b>]]</span>&nbsp; ―&nbsp; <span lang="zh-Latn" style="color:#404D52"><i>gǒu<b>rì</b></i></span>&nbsp; ―&nbsp; fucking[[Категорија:Мандарин terms with usage examples]]
+#* <dl class="zhusex"><span lang="zh-Hant" class="Hant">[[我#Кинески|我]]<b>日</b>[[他們#Кинески|他們]][[十八#Кинески|十八]][[輩兒#Кинески|輩兒]][[的#Кинески|的]][[祖宗#Кинески|祖宗]]！</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Traditional Chinese|trad.]]</i>&#93;</span><br><span lang="zh-Hans" class="Hans">[[我#Кинески|我]]<b>日</b>[[他们#Кинески|他们]][[十八#Кинески|十八]][[辈儿#Кинески|辈儿]][[的#Кинески|的]][[祖宗#Кинески|祖宗]]！</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Simplified Chinese|simp.]]</i>&#93;</span><dd><small><i>From:</i> '''1944''', <span class="Hani" lang="zh">[[:w&#x3A;zh&#x3A;老舍|老舍]]</span>[[Категорија:Кинески links with redundant wikilinks|工46]][[Категорија:Кинески links with redundant alt parameters|工46]] ([[w:Lao She|Lao She]]), <span class="Hani" lang="zh">《惶惑》</span> (''Bewilderment''), in <span class="Hani" lang="zh">《[[:w&#x3A;zh&#x3A;四世同堂|四世同堂]]》</span> (''[[w:Four Generations Under One Roof|Four Generations Under One Roof]]'')</small></dd><dd><span lang="zh-Latn" style="color:#404D52"><i>Wǒ <b>rì</b> tāmen shíbā bèir de zǔzōng!</i></span> <span style="color:darkgreen; font-size:x-small;">&#91;Pinyin&#93;</span></dd><dd>'''Screw''' their ancestors to the eighteenth generation!</dd></dl>[[Категорија:Мандарин terms with quotations]]
+#* <dl class="zhusex"><span lang="zh-Hant" class="Hant">[[一#Кинески|一]][[句#Кинески|句]][[話#Кинески|話]]，[[于#Кинески|于]][[瘸子#Кинески|瘸子]][[把#Кинески|把]][[小姨#Кинески|小姨]]<b>日</b>[[了#Кинески|了]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Traditional Chinese|trad.]]</i>&#93;</span><br><span lang="zh-Hans" class="Hans">[[一#Кинески|一]][[句#Кинески|句]][[话#Кинески|话]]，[[于#Кинески|于]][[瘸子#Кинески|瘸子]][[把#Кинески|把]][[小姨#Кинески|小姨]]<b>日</b>[[了#Кинески|了]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Simplified Chinese|simp.]]</i>&#93;</span><dd><small><i>From:</i> '''2003''', <span class="Hani" lang="zh">董立勃</span>, <span class="Hans" lang="zh">风吹草低</span>, in <span class="Hans" lang="zh">《当代》</span>, issue 4</small></dd><dd><span lang="zh-Latn" style="color:#404D52"><i>Yī jù huà, Yú quézi bǎ xiǎoyí <b>rì</b> le.</i></span> <span style="color:darkgreen; font-size:x-small;">&#91;Pinyin&#93;</span></dd><dd>In one sentence ― Yu the Lame '''fucked''' mum's youngest sister.</dd></dl>[[Категорија:Мандарин terms with quotations]]
+#* <dl class="zhusex"><span lang="zh-Hant" class="Hant">[[甚至#Кинески|甚至]][[在#Кинески|在]][[別人#Кинески|別人]][[的#Кинески|的]][[慫恿#Кинески|慫恿]][[下#Кинески|下]]，[[對#Кинески|對]][[着#Кинески|着]][[蘇#Кинески|蘇]][[婕#Кинески|婕]][[說#Кинески|說]]，[[我#Кинески|我]][[想#Кинески|想]]<b>日</b>[[你#Кинески|你]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Traditional Chinese|trad.]]</i>&#93;</span><br><span lang="zh-Hans" class="Hans">[[甚至#Кинески|甚至]][[在#Кинески|在]][[别人#Кинески|别人]][[的#Кинески|的]][[怂恿#Кинески|怂恿]][[下#Кинески|下]]，[[对#Кинески|对]][[着#Кинески|着]][[苏#Кинески|苏]][[婕#Кинески|婕]][[说#Кинески|说]]，[[我#Кинески|我]][[想#Кинески|想]]<b>日</b>[[你#Кинески|你]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Simplified Chinese|simp.]]</i>&#93;</span><dd><small><i>From:</i> '''2004''', <span class="Hans" lang="zh">锦璐</span>, <span class="Hans" lang="zh">双人床</span>, in <span class="Hans" lang="zh">《当代》</span>, issue 2</small></dd><dd><span lang="zh-Latn" style="color:#404D52"><i>Shènzhì zài biérén de sǒngyǒng xià, duì zhe Sū Jié shuō, wǒ xiǎng <b>rì</b> nǐ.</i></span> <span style="color:darkgreen; font-size:x-small;">&#91;Pinyin&#93;</span></dd><dd>At others' instigation, (he would) even say to Su Jie's face that “I want to '''fuck''' you”.</dd></dl>[[Категорија:Мандарин terms with quotations]]
+#* <dl class="zhusex"><span lang="zh-Hant" class="Hant">[[朱#Кинески|朱]][[山#Кинески|山]][[也#Кинески|也]][[不敢#Кинески|不敢]][[踢#Кинески|踢]][[我#Кинески|我]]，[[甚至#Кинески|甚至]][[罵#Кинески|罵]][[我#Кинески|我]][[說#Кинески|說]]，<b>日</b>[[你#Кинески|你]][[媽#Кинески|媽]]，[[我#Кинески|我]][[的#Кинески|的]][[豆腐#Кинески|豆腐]][[你#Кинески|你]][[也#Кинески|也]][[敢#Кинески|敢]][[吃#Кинески|吃]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Traditional Chinese|trad.]]</i>&#93;</span><br><span lang="zh-Hans" class="Hans">[[朱#Кинески|朱]][[山#Кинески|山]][[也#Кинески|也]][[不敢#Кинески|不敢]][[踢#Кинески|踢]][[我#Кинески|我]]，[[甚至#Кинески|甚至]][[骂#Кинески|骂]][[我#Кинески|我]][[说#Кинески|说]]，<b>日</b>[[你#Кинески|你]][[妈#Кинески|妈]]，[[我#Кинески|我]][[的#Кинески|的]][[豆腐#Кинески|豆腐]][[你#Кинески|你]][[也#Кинески|也]][[敢#Кинески|敢]][[吃#Кинески|吃]]。</span> <span style="color:darkgreen; font-size:x-small;">&#91;[[w:Standard Chinese|MSC]], <i>[[w:Simplified Chinese|simp.]]</i>&#93;</span><dd><small><i>From:</i> '''2014''', <span class="Hans" lang="zh">余显斌</span>, <span class="Hani" lang="zh">我真的很牛皮</span>, in <span class="Hans" lang="zh">《满族文学》</span>, issue 6</small></dd><dd><span lang="zh-Latn" style="color:#404D52"><i>Zhū Shān yě bùgǎn tī wǒ, shènzhì mà wǒ shuō, <b>rì</b> nǐ mā, wǒ de dòufu nǐ yě gǎn chī.</i></span> <span style="color:darkgreen; font-size:x-small;">&#91;Pinyin&#93;</span></dd><dd>Zhu Shan would no longer dare kick me, or insult me, and say "'''fuck''' you, how dare you flirt with my woman!"</dd></dl>[[Категорија:Мандарин terms with quotations]]
+
+=====Synonyms=====
+* See [[肏#Synonyms|肏 § Synonyms]].
+
+===Etymology 3===
+
+{| class="floatright" style="clear: right;margin: 1em 0 1em 1em;border-collapse: collapse;text-align: center"
+|-
+! style="padding: 0.5em;border: 1px solid #aaa;background: #E0FFFF;font-weight: normal;font-size: smaller;" colspan="2" |[[Simplified Chinese|једн.]] and [[Traditional Chinese|трад.]]<br>
+| style="padding: 0.5em; background-color:white;border-right: 1px solid #aaa;border: 1px solid #aaa; font-size:x-large" lang="zh-Hani" class="Hani" | [[日#Кинески|日]]
+|}
+
+====Pronunciation====
+<strong class="error"><span class="scribunto-error">Lua error in Модул:zh-pron: NotCallable</span></strong>
+
+====Definitions====
+<span class="headword-line"><strong class="Hani headword" lang="zh">日</strong></span>[[Категорија:Кинески Хан карактери|工46]][[Категорија:Кинески уноси са нетачним заглављем језика|工46]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class="use-with-mention"><span class="Latn" lang="en">Only used in <span class="Hant" lang="zh">日[[磾#Кинески|磾]]</span><span class="Zsym mention" style="font-size:100%;">／</span><span class="Hans" lang="zh">日[[䃅#Кинески|䃅]]</span>, a [[Han#Енглески|Han]] [[dynasty#Енглески|dynasty]]-era personal name borne by [[:w&#x3A;Jin Midi|Jin Midi]] (<span class="Hant" lang="zh">[[:w&#x3A;zh&#x3A;金日磾|金日磾]]</span><span class="Zsym mention" style="font-size:100%;">／</span><span class="Hans" lang="zh">[[:w&#x3A;zh&#x3A;金日䃅|金日䃅]]</span>[[:Категорија&#x3A;Кинески links with redundant wikilinks#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant alt parameters#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant wikilinks#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant alt parameters#Енглески|工46]]) and [[:w&#x3A;Ma Midi|Ma Midi]] (<span class="Hant" lang="zh">[[:w&#x3A;zh&#x3A;馬日磾|馬日磾]]</span><span class="Zsym mention" style="font-size:100%;">／</span><span class="Hans" lang="zh">[[:w&#x3A;zh&#x3A;马日䃅|马日䃅]]</span>[[:Категорија&#x3A;Кинески links with redundant wikilinks#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant alt parameters#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant wikilinks#Енглески|工46]][[:Категорија&#x3A;Кинески links with redundant alt parameters#Енглески|工46]]).</span></span>
+
+===Etymology 4===
+
+{| class="wikitable" style="border:1px solid #797979; margin-left: 1px; text-align:left; min-width:70%"
+|-
+| style="background-color: #eeeeee; padding-left: 0.5em" | '''За изговор и дефиниције од '''<span lang="zh" class="Hani">[[日#Кинески|日]]</span>''' – види <span lang="zh" class="Hani">[[時#Кинески|時]]</span>.'''<br>(Овај character, <span lang="zh" class="Hani">日</span>, је  ''an ancient'' облик од <span lang="zh" class="Hani">時</span>.)
+|}[[Категорија:Кинески црвене везе/zh-see]]
+
+===References===
+* [http://humanum.arts.cuhk.edu.hk/Lexis/lexi-mf/search.php?word=日 Multi-function Chinese Character Database (<span class="Hant" lang="zh">漢語多功能字庫</span>)]
+* [http://dict.variants.moe.edu.tw/variants/rbt/word_attribute.rbt?educode=A01771 Dictionary of Chinese Character Variants (<span class="Hant" lang="zh">教育部異體字字典</span>), A01771]
+* <span class="citation-whole"><span class="cited-source">“<span class="None" lang="und">[https://sutian.moe.edu.tw/zh-hant/su/810 Entry #810]</span>”, in <cite><span class="Hant" lang="zh">臺灣閩南語常用詞辭典</span>[[Категорија:Кинески terms with redundant script codes|工46]]</cite> &#91;<cite><span class="e-translation">[[w:Dictionary of Frequently-Used Taiwan Minnan|Dictionary of Frequently-Used Taiwan Minnan]]</span></cite>&#93; (overall work in Мандарин and Hokkien), [[:w&#x3A;Ministry of Education (Taiwan)|Ministry of Education, R.O.C.]], <span class="None" lang="und">2023</span></span></span>.
+
+[[Категорија:zh:Beginning|日00]]
+
+----
+
+[[Категорија:Јапански индекс]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Flag_of_Japan.svg|border|32px]] Јапански </big></big></big></div>==
+<br>
+
+===Kanji===
+[[:Шаблон:ja-kanji]]
+
+====Readings====
+
+* '''[[Додатак:Јапански речник#goon|Go-on]]''': <span class="on-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[にち#Јапански|にち]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[nichi#Јапански|nichi]]</span>, <span class="ann-pos">[[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]</mark></span>
+* '''[[Додатак:Јапански речник#kan'on|Kan-on]]''': <span class="on-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[じつ#Јапански|じつ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[jitsu#Јапански|jitsu]]</span>, <span class="ann-pos">[[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]</mark></span>
+* '''[[Додатак:Јапански речник#kun'yomi|Kun]]''': <span class="kun-yomi"><mark class="jouyou-reading"><i class="Hira mention" lang="ja">[[ひ#Јапански|ひ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[hi#Јапански|<u>hi</u>]]</span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[日#Јапански|日]]</i>, [[w:Jōyō kanji|<abbr title="This reading is listed in the Jōyō kanji table. Click for the Wikipedia article about the Jōyō kanji.">Jōyō</abbr>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]</mark>; <i class="Hira mention" lang="ja">[[か#Јапански|か]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ka#Јапански|<u>ka</u>]]</span>, <span class="ann-pos"><i class="Jpan mention" lang="ja">[[日#Јапански|日]]</i></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]; <i class="Hira mention" lang="ja">[[び#Јапански|び]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[bi#Јапански|bi]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[が#Јапански|が]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ga#Јапански|ga]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]</span>
+* '''[[Додатак:Јапански речник#nanori|Nanori]]''': <span class="nanori-yomi"><i class="Hira mention" lang="ja">[[あき#Јапански|あき]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[aki#Јапански|aki]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[てる#Јапански|てる]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[teru#Јапански|teru]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[とき#Јапански|とき]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[toki#Јапански|toki]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[はる#Јапански|はる]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[haru#Јапански|haru]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[ひる#Јапански|ひる]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[hiru#Јапански|hiru]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[にっ#Јапански|にっ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ni'#Јапански|ni']]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[に#Јапански|に]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ni#Јапански|ni]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[いる#Јапански|いる]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[iru#Јапански|iru]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[す#Јапански|す]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[su#Јапански|su]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[につ#Јапански|につ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[nitsu#Јапански|nitsu]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[あ#Јапански|あ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[a#Јапански|a]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[へ#Јапански|へ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[he#Јапански|he]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[こう#Јапански|こう]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[kō#Јапански|kō]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[たち#Јапански|たち]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[tachi#Јапански|tachi]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[く#Јапански|く]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[ku#Јапански|ku]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ja">[[くさ#Јапански|くさ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">[[kusa#Јапански|kusa]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with redundant transliterations|工46]]</span>[[Категорија:Јапански kanji with  goon reading にち|工46]][[Категорија:Јапански kanji with  kan'on reading じつ|工46]][[Категорија:Јапански kanji with  kun reading ひ|工46]][[Категорија:Јапански kanji with  kun reading か|工46]][[Категорија:Јапански kanji with  kun reading び|工46]][[Категорија:Јапански kanji with kun readings missing okurigana designation|工46]][[Категорија:Јапански kanji with  kun reading が|工46]][[Категорија:Јапански kanji with kun readings missing okurigana designation|工46]][[Категорија:Јапански kanji with  nanori reading あき|工46]][[Категорија:Јапански kanji with  nanori reading てる|工46]][[Категорија:Јапански kanji with  nanori reading とき|工46]][[Категорија:Јапански kanji with  nanori reading はる|工46]][[Категорија:Јапански kanji with  nanori reading ひる|工46]][[Категорија:Јапански kanji with  nanori reading にっ|工46]][[Категорија:Јапански kanji with  nanori reading に|工46]][[Категорија:Јапански kanji with  nanori reading いる|工46]][[Категорија:Јапански kanji with  nanori reading す|工46]][[Категорија:Јапански kanji with  nanori reading につ|工46]][[Категорија:Јапански kanji with  nanori reading あ|工46]][[Категорија:Јапански kanji with  nanori reading へ|工46]][[Категорија:Јапански kanji with  nanori reading こう|工46]][[Категорија:Јапански kanji with  nanori reading たち|工46]][[Категорија:Јапански kanji with  nanori reading く|工46]][[Категорија:Јапански kanji with  nanori reading くさ|工46]]<templatestyles src="Шаблон:ja-readings/style.css"/>
+
+====Compounds====
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left;">Compounds</div>
+<div class="NavContent derivedterms ul-column-count" data-column-count="3" style="text-align: left;">
+
+* <span class="Jpan" lang="ja">[[日蓮#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>蓮<rp>(</rp><rt>れん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichiren#Јапански|<span class="mention-tr tr">Nichiren</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日本#Јапански|<ruby>日<rp>(</rp><rt>に</rt><rp>)</rp></ruby><ruby>本<rp>(</rp><rt>ほん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nihon#Јапански|<span class="mention-tr tr">Nihon</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ja">[[日本#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>本<rp>(</rp><rt>ぽん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nippon#Јапански|<span class="mention-tr tr">Nippon</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[明日#Јапански|<ruby>明日<rp>(</rp><rt>あした</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ashita#Јапански|<span class="mention-tr tr">ashita</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ja">[[明日#Јапански|<ruby>明日<rp>(</rp><rt>あす</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[asu#Јапански|<span class="mention-tr tr">asu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[明日香#Јапански|<ruby>明日香<rp>(</rp><rt>あすか</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Asuka#Јапански|<span class="mention-tr tr">Asuka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[春日#Јапански|<ruby>春日<rp>(</rp><rt>かすが</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Kasuga#Јапански|<span class="mention-tr tr">Kasuga</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[昨日#Јапански|<ruby>昨日<rp>(</rp><rt>きそ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kiso#Јапански|<span class="mention-tr tr">kiso</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[一日#Јапански|<ruby>一日<rp>(</rp><rt>ついたち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[tsuitachi#Јапански|<span class="mention-tr tr">tsuitachi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ja">[[朔日#Јапански|<ruby>朔日<rp>(</rp><rt>ついたち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[tsuitachi#Јапански|<span class="mention-tr tr">tsuitachi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[明後日#Јапански|<ruby>明後日<rp>(</rp><rt>あさって</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[asatte#Јапански|<span class="mention-tr tr">asatte</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[百日紅#Јапански|<ruby>百日紅<rp>(</rp><rt>サルスベリ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[sarusuberi#Јапански|<span class="mention-tr tr">sarusuberi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+</div></div>
+
+===Etymology 1===
+
+{| class="wikitable kanji-table" style="text-align: center; font-size: small; float: right;"
+! style="font-weight: normal;" | [[Додатак:Јапански_речник#kanji|Kanji]] in this term
+|- lang="ja" class="Jpan" style="font-size: 2em; background: white; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[日#Јапански|日]]
+|- style="background: white;"
+| <span class="Jpan" lang="ja">にち</span><br/><small>[[Додатак:Јапански_речник#kyōiku_kanji|Степен: 1]]</small>
+|-
+| colspan="1" |[[Додатак:Јапански_речник#goon|goon]]
+|}[[Категорија:Јапански термини који се пишу са 日 читани као にち|にち]][[Категорија:Јапански термини читани са goon|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]]
+<span class="IPA">/nʲitɨ/</span> → <span class="IPA">/nit͡ɕi/</span>
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/derived: Wikibase sitelink snapshot missing entity=Q2016252 site=enwiki</span></strong> <span class="Hani" lang="zh">[[日#Chinese|日]]</span>.
+
+The <i class="Jpan mention" lang="ja">[[呉音#Јапански|呉音]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">goon</span>, literally <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[Wu]] [[sound]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> reading, so likely the initial borrowing from <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q2016252 site=enwiki</span></strong>.
+
+====Pronunciation====
+
+<ul><li><span class="ib-brac">(</span><span class="ib-content"></span><span class="ib-brac">)</span> <span lang="ja" class="Jpan"><span style="border-top:1px solid;position:relative;padding:1px;">に<span style="position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;"></span></span>ち</span> <span class="Latn"><samp>[níꜜchì]</samp></span> ([[頭高型|Atamadaka]] – [1])<ref name="DJR"><span class="book">'''2006''', <cite><span class="Jpan" lang="ja">大辞林</span> (''[[w:Daijirin|Daijirin]]'')</cite>, Third Edition (in Japanese), [[w:Tōkyō|Tōkyō]]: [[w:Sanseidō|Sanseidō]], [[Special:BookSources/4-385-13905-9|→ISBN]]&nbsp;4-385-13905-9</span></ref> as a noun</li><li>[[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Јапански изговор|кључ]])</sup>:&#32;<span class="IPA">[ɲ̟it͡ɕi]</span>[[Категорија:Јапански термини са ИПА изговором|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|工46]]</li></ul><div class="noprint request-box" style="width: auto; margin: 0; padding: 0.5em; border-collapse: collapse;overflow: hidden;">
+{| style="background:#FFFFFF; width:90%; margin: auto; border:1px dashed #999999; text-align:left"
+| [[Image:Headset_icon.svg|20px]]
+| This entry needs [[:Category:Requests for audio pronunciation in Јапански entries|audio files]]. If you have a microphone, please [[Help:Audio pronunciations|record some]] and [[commons:Special:Upload|upload]] them. <small>(For audio required quickly, visit [[WT:APR]].)</small>
+|}
+</div>[[Категорија:Requests for audio pronunciation in Јапански entries|工46]]
+
+====Noun====
+<span class="headword-line"><span id="Јапански:_にち" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[にち#Јапански|にち]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[nichi#Јапански|nichi]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански именице|にち]][[Категорија:Јапански terms spelled with first grade kanji|にち]][[Категорија:Јапански terms written with one Han script character|にち]][[Категорија:Јапански terms spelled with 日|にち]][[Категорија:Јапански single-kanji terms|にち]][[Категорија:Јапански уноси са нетачним заглављем језика|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class='form-of-definition use-with-mention'>Short for <span class='form-of-definition-link'><i class="Jpan mention" lang="ja">[[日曜日#Јапански|日曜日]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">nichiyōbi</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>[[Категорија:Јапански short forms|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]]: [[Sunday]]
+
+====Counter====
+<span class="headword-line"><span id="Јапански:_にち" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[にち#Јапански|にち]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[-nichi#Јапански|-nichi]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански леме|にち]][[Категорија:Јапански counters|にち]][[Категорија:Јапански terms spelled with first grade kanji|にち]][[Категорија:Јапански terms written with one Han script character|にち]][[Категорија:Јапански terms spelled with 日|にち]][[Категорија:Јапански single-kanji terms|にち]][[Категорија:Јапански уноси са нетачним заглављем језика|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]][[Категорија:Стране са 2 уноса|工46]]
+
+# [[ordinal]] [[day]] of a [[month]]
+#: <span class="h-usage-example"><i class="Jpan mention e-example" lang="ja"><span lang="ja" class="Jpan"><ruby>２７<rp>(</rp><rt>にじゅうしち</rt><rp>)</rp></ruby>'''<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>'''</span></i> ― <i class="e-transliteration tr">nijūshichi-'''nichi'''</i> ― <span class="e-translation">the 27'''th'''</span></span>[[Категорија:Јапански terms with usage examples|工46]]
+# [[number]] of [[days]]
+#: <span class="h-usage-example"><i class="Jpan mention e-example" lang="ja"><span lang="ja" class="Jpan"><ruby>誕<rp>(</rp><rt>たん</rt><rp>)</rp></ruby><ruby>生<rp>(</rp><rt>じょう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>び</rt><rp>)</rp></ruby>まであと<ruby>１２<rp>(</rp><rt>じゅうに</rt><rp>)</rp></ruby>'''<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>'''だ</span></i> ― <i class="e-transliteration tr">tanjōbi made ato jūni-'''nichi''' da</i> ― <span class="e-translation">My birthday is in 12 '''days'''.</span></span>[[Категорија:Јапански terms with usage examples|工46]]
+
+=====Usage notes=====
+Sometimes shortened to <span class="Jpan" lang="ja">[[んち#Јапански|んち]]</span>&#32;(&#8203;''<span class="Latn" lang="ja">-nchi</span>[[Категорија:Јапански terms with non-redundant manual script codes|工46]]'') or <span class="Jpan" lang="ja">[[ち#Јапански|ち]]</span>&#32;(&#8203;''<span class="Latn" lang="ja">-chi</span>[[Категорија:Јапански terms with non-redundant manual script codes|工46]]'').
+
+=====Derived terms=====
+
+* <span class="Jpan" lang="ja">[[一日#Јапански|<ruby>一<rp>(</rp><rt>いち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ichinichi#Јапански|<span class="mention-tr tr">ichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[幾日#Јапански|<ruby>幾<rp>(</rp><rt>いく</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ikunichi#Јапански|<span class="mention-tr tr">ikunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+
+=====See also=====
+{| class="wikitable mw-collapsible mw-expanded" style="text-align:center"
+|-
+! colspan=11| Japanese number-counter combinations for <span class="Jpan" lang="ja">[[日#Јапански|日]]</span>
+|-
+!
+! 1(st)
+! 2(nd)
+! 3(rd)
+! 4(th)
+! 5(th)
+! 6(th)
+! 7(th)
+! 8(th)
+! 9(th)
+! 10(th)
+|-
+!How many?
+|<span class="Jpan" lang="ja">[[一日#Јапански|<ruby>一<rp>(</rp><rt>いち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ichinichi#Јапански|<span class="mention-tr tr">ichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[二日#Јапански|<ruby>二<rp>(</rp><rt>ふつ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[futsuka#Јапански|<span class="mention-tr tr">futsuka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[三日#Јапански|<ruby>三<rp>(</rp><rt>みっ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[mikka#Јапански|<span class="mention-tr tr">mikka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[四日#Јапански|<ruby>四<rp>(</rp><rt>よっ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[yokka#Јапански|<span class="mention-tr tr">yokka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[五日#Јапански|<ruby>五<rp>(</rp><rt>いつ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[itsuka#Јапански|<span class="mention-tr tr">itsuka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[六日#Јапански|<ruby>六<rp>(</rp><rt>むい</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[muika#Јапански|<span class="mention-tr tr">muika</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[七日#Јапански|<ruby>七<rp>(</rp><rt>なの</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nanoka#Јапански|<span class="mention-tr tr">nanoka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[七日#Јапански|<ruby>七<rp>(</rp><rt>なぬ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nanuka#Јапански|<span class="mention-tr tr">nanuka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[八日#Јапански|<ruby>八<rp>(</rp><rt>よう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[yōka#Јапански|<span class="mention-tr tr">yōka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[九日#Јапански|<ruby>九<rp>(</rp><rt>ここの</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kokonoka#Јапански|<span class="mention-tr tr">kokonoka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|rowspan=2|<span class="Jpan" lang="ja">[[十日#Јапански|<ruby>十<rp>(</rp><rt>とお</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[tōka#Јапански|<span class="mention-tr tr">tōka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|-
+!What day?
+|<span class="Jpan" lang="ja">[[一日#Јапански|<ruby>一日<rp>(</rp><rt>ついたち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[tsuitachi#Јапански|<span class="mention-tr tr">tsuitachi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[一日#Јапански|<ruby>一<rp>(</rp><rt>いっ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>ぴ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ippi#Јапански|<span class="mention-tr tr">ippi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|-
+!rowspan=4|
+! 11(th)
+! 12(th)
+! 13(th)
+! 14(th)
+! 15(th)
+! 16(th)
+! 17(th)
+! 18(th)
+! 19(th)
+! 20(th)
+|-
+|<span class="Jpan" lang="ja">[[十一#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>一<rp>(</rp><rt>いち</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūichinichi#Јапански|<span class="mention-tr tr">jūichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十二#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>二<rp>(</rp><rt>に</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūninichi#Јапански|<span class="mention-tr tr">jūninichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十三#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>三<rp>(</rp><rt>さん</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūsannichi#Јапански|<span class="mention-tr tr">jūsannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十四日#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>四<rp>(</rp><rt>よっ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūyokka#Јапански|<span class="mention-tr tr">jūyokka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十五#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>五<rp>(</rp><rt>ご</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūgonichi#Јапански|<span class="mention-tr tr">jūgonichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十六#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>六<rp>(</rp><rt>ろく</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūrokunichi#Јапански|<span class="mention-tr tr">jūrokunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十七日#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>七<rp>(</rp><rt>しち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūshichinichi#Јапански|<span class="mention-tr tr">jūshichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十八#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>八<rp>(</rp><rt>はち</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūhachinichi#Јапански|<span class="mention-tr tr">jūhachinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[十九日#Јапански|<ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>九<rp>(</rp><rt>く</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[jūkunichi#Јапански|<span class="mention-tr tr">jūkunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[二十日#Јапански|<ruby>二十<rp>(</rp><rt>はつ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hatsuka#Јапански|<span class="mention-tr tr">hatsuka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|-
+! 24(th)
+! 27(th)
+! 29(th)
+! 30(th)
+! 40(th)
+! 50(th)
+! 100(th)
+! 1,000(th)
+! 10,000(th)
+! ?
+|-
+|<span class="Jpan" lang="ja">[[二十四日#Јапански|<ruby>二<rp>(</rp><rt>に</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>四<rp>(</rp><rt>よっ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nijūyokka#Јапански|<span class="mention-tr tr">nijūyokka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[二十七日#Јапански|<ruby>二<rp>(</rp><rt>に</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>七<rp>(</rp><rt>しち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nijūshichinichi#Јапански|<span class="mention-tr tr">nijūshichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[二十九日#Јапански|<ruby>二<rp>(</rp><rt>に</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby><ruby>九<rp>(</rp><rt>く</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nijūkunichi#Јапански|<span class="mention-tr tr">nijūkunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[三十#Јапански|<ruby>三<rp>(</rp><rt>さん</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[sanjūnichi#Јапански|<span class="mention-tr tr">sanjūnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[三十日#Јапански|<ruby>三<rp>(</rp><rt>み</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>そ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[misoka#Јапански|<span class="mention-tr tr">misoka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[四十#Јапански|<ruby>四<rp>(</rp><rt>し</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[shijūnichi#Јапански|<span class="mention-tr tr">shijūnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[四十日#Јапански|<ruby>四<rp>(</rp><rt>よ</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>そ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[yosoka#Јапански|<span class="mention-tr tr">yosoka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[五十#Јапански|<ruby>五<rp>(</rp><rt>ご</rt><rp>)</rp></ruby><ruby>十<rp>(</rp><rt>じゅう</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[gojūnichi#Јапански|<span class="mention-tr tr">gojūnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[五十日#Јапански|<ruby>五十<rp>(</rp><rt>い</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ika#Јапански|<span class="mention-tr tr">ika</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[百日#Јапански|<ruby>百<rp>(</rp><rt>ひゃく</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hyakunichi#Јапански|<span class="mention-tr tr">hyakunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<br><span class="Jpan" lang="ja">[[百日#Јапански|<ruby>百<rp>(</rp><rt>もも</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[momoka#Јапански|<span class="mention-tr tr">momoka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[千日#Јапански|<ruby>千<rp>(</rp><rt>せん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[sennichi#Јапански|<span class="mention-tr tr">sennichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[一万#Јапански|<ruby>一<rp>(</rp><rt>いち</rt><rp>)</rp></ruby><ruby>万<rp>(</rp><rt>まん</rt><rp>)</rp></ruby>]]<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby></span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ichimannichi#Јапански|<span class="mention-tr tr">ichimannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|<span class="Jpan" lang="ja">[[何日#Јапански|<ruby>何<rp>(</rp><rt>なん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nannichi#Јапански|<span class="mention-tr tr">nannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+|}[[Категорија:ja:Време]]
+
+====Affix====
+<span class="headword-line"><span id="Јапански:_にち" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[にち#Јапански|にち]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[nichi#Јапански|nichi]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански леме|にち]][[Категорија:Јапански affixes|にち]][[Категорија:Јапански terms spelled with first grade kanji|にち]][[Категорија:Јапански terms written with one Han script character|にち]][[Категорија:Јапански terms spelled with 日|にち]][[Категорија:Јапански single-kanji terms|にち]][[Категорија:Јапански уноси са нетачним заглављем језика|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]][[Категорија:Стране са 2 уноса|工46]]
+
+# [[sun]]
+# [[daytime]], [[daylight]]
+# [[day]]
+# <span class='form-of-definition use-with-mention'>Short for <span class='form-of-definition-link'><i class="Jpan mention" lang="ja">[[日本#Јапански|日本]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">Nihon, Nippon</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>:[[Категорија:Јапански short forms|にち]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|にち]] [[Japan]], [[Japanese]], [[Nippo-]]
+# <span class='form-of-definition use-with-mention'>Short for <span class='form-of-definition-link'><i class="Jpan mention" lang="ja">[[日向国#Јапански|日向国]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">Hyūga-no-kuni</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>:[[Категорија:Јапански short forms|工46]] [[w:Hyūga Province|Hyūga Province]]
+
+=====Derived terms=====
+<div class="NavFrame">
+<div class="NavHead" style="text-align: left;">Изведени термини</div>
+<div class="NavContent derivedterms ul-column-count" data-column-count="3" style="text-align: left;">
+
+* <span class="Jpan" lang="ja">[[日日#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichinichi#Јапански|<span class="mention-tr tr">nichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ja">[[日々#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>々<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichinichi#Јапански|<span class="mention-tr tr">nichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日英#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>英<rp>(</rp><rt>えい</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichi-Ei#Јапански|<span class="mention-tr tr">Nichi-Ei</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日月#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>月<rp>(</rp><rt>がつ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichigatsu#Јапански|<span class="mention-tr tr">nichigatsu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日銀#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>銀<rp>(</rp><rt>ぎん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichigin#Јапански|<span class="mention-tr tr">Nichigin</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日月#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>月<rp>(</rp><rt>げつ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichigetsu#Јапански|<span class="mention-tr tr">nichigetsu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日限#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>限<rp>(</rp><rt>げん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichigen#Јапански|<span class="mention-tr tr">nichigen</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日時#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>時<rp>(</rp><rt>じ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichiji#Јапански|<span class="mention-tr tr">nichiji</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日常#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>常<rp>(</rp><rt>じょう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichijō#Јапански|<span class="mention-tr tr">nichijō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日南#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>南<rp>(</rp><rt>なん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichinan#Јапански|<span class="mention-tr tr">Nichinan</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日米#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>米<rp>(</rp><rt>べい</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichi-Bei#Јапански|<span class="mention-tr tr">Nichi-Bei</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日暮#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>暮<rp>(</rp><rt>ぼ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichibo#Јапански|<span class="mention-tr tr">nichibo</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日没#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>没<rp>(</rp><rt>ぼつ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichibotsu#Јапански|<span class="mention-tr tr">nichibotsu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ja">[[日没#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>没<rp>(</rp><rt>もつ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichimotsu#Јапански|<span class="mention-tr tr">nichimotsu</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日夜#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>夜<rp>(</rp><rt>や</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichiya#Јапански|<span class="mention-tr tr">nichiya</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日用#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>用<rp>(</rp><rt>よう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichiyō#Јапански|<span class="mention-tr tr">nichiyō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日曜#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>曜<rp>(</rp><rt>よう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichiyō#Јапански|<span class="mention-tr tr">nichiyō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日輪#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>輪<rp>(</rp><rt>りん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nichirin#Јапански|<span class="mention-tr tr">nichirin</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日ロ#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>ロ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichi-Ro#Јапански|<span class="mention-tr tr">Nichi-Ro</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日露#Јапански|<ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby><ruby>露<rp>(</rp><rt>ろ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nichi-Ro#Јапански|<span class="mention-tr tr">Nichi-Ro</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日課#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>課<rp>(</rp><rt>か</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nikka#Јапански|<span class="mention-tr tr">nikka</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日記#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>記<rp>(</rp><rt>き</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nikki#Јапански|<span class="mention-tr tr">nikki</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日脚#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>脚<rp>(</rp><rt>きゃく</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nikkyaku#Јапански|<span class="mention-tr tr">nikkyaku</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日給#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>給<rp>(</rp><rt>きゅう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nikkyū#Јапански|<span class="mention-tr tr">nikkyū</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日系#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>系<rp>(</rp><rt>けい</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nikkei#Јапански|<span class="mention-tr tr">Nikkei</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日光#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>光<rp>(</rp><rt>こう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nikkō#Јапански|<span class="mention-tr tr">nikkō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日誌#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>誌<rp>(</rp><rt>し</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nisshi#Јапански|<span class="mention-tr tr">nisshi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日射#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>射<rp>(</rp><rt>しゃ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nissha#Јапански|<span class="mention-tr tr">nissha</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日州#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>州<rp>(</rp><rt>しゅう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nisshū#Јапански|<span class="mention-tr tr">Nisshū</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日照#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>照<rp>(</rp><rt>しょう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nisshō#Јапански|<span class="mention-tr tr">nisshō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日食#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>食<rp>(</rp><rt>しょく</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nisshoku#Јапански|<span class="mention-tr tr">nisshoku</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日進#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>進<rp>(</rp><rt>しん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nisshin#Јапански|<span class="mention-tr tr">nisshin</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日中#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>中<rp>(</rp><rt>ちゅう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nitchū#Јапански|<span class="mention-tr tr">nitchū</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日程#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>程<rp>(</rp><rt>てい</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nittei#Јапански|<span class="mention-tr tr">nittei</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日葡#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>葡<rp>(</rp><rt>ぽ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nippo#Јапански|<span class="mention-tr tr">Nippo</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日豊#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>豊<rp>(</rp><rt>ぽう</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nippō#Јапански|<span class="mention-tr tr">Nippō</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[縁日#Јапански|<ruby>縁<rp>(</rp><rt>えん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[ennichi#Јапански|<span class="mention-tr tr">ennichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[隔日#Јапански|<ruby>隔<rp>(</rp><rt>かく</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kakunichi#Јапански|<span class="mention-tr tr">kakunichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[元日#Јапански|<ruby>元<rp>(</rp><rt>がん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[gannichi#Јапански|<span class="mention-tr tr">gannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[期日#Јапански|<ruby>期<rp>(</rp><rt>き</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kinichi#Јапански|<span class="mention-tr tr">kinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[吉日#Јапански|<ruby>吉<rp>(</rp><rt>きち</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kichinichi#Јапански|<span class="mention-tr tr">kichinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[抗日#Јапански|<ruby>抗<rp>(</rp><rt>こう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[kōnichi#Јапански|<span class="mention-tr tr">kōnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[今日#Јапански|<ruby>今<rp>(</rp><rt>こん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[konnichi#Јапански|<span class="mention-tr tr">konnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[在日#Јапански|<ruby>在<rp>(</rp><rt>ざい</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[zainichi#Јапански|<span class="mention-tr tr">zainichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[親日#Јапански|<ruby>親<rp>(</rp><rt>しん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[shinnichi#Јапански|<span class="mention-tr tr">shinnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[中日#Јапански|<ruby>中<rp>(</rp><rt>ちゅう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[chūnichi#Јапански|<span class="mention-tr tr">chūnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[駐日#Јапански|<ruby>駐<rp>(</rp><rt>ちゅう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[chūnichi#Јапански|<span class="mention-tr tr">chūnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[半日#Јапански|<ruby>半<rp>(</rp><rt>はん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hannichi#Јапански|<span class="mention-tr tr">hannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[反日#Јапански|<ruby>反<rp>(</rp><rt>はん</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hannichi#Јапански|<span class="mention-tr tr">hannichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日日#Јапански|<ruby>日<rp>(</rp><rt>ひ</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hinichi#Јапански|<span class="mention-tr tr">hinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[毎日#Јапански|<ruby>毎<rp>(</rp><rt>まい</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[mainichi#Јапански|<span class="mention-tr tr">mainichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[明日#Јапански|<ruby>明<rp>(</rp><rt>みょう</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[myōnichi#Јапански|<span class="mention-tr tr">myōnichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[命日#Јапански|<ruby>命<rp>(</rp><rt>めい</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[meinichi#Јапански|<span class="mention-tr tr">meinichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[来日#Јапански|<ruby>来<rp>(</rp><rt>らい</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[rainichi#Јапански|<span class="mention-tr tr">rainichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日章旗#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>章<rp>(</rp><rt>しょう</rt><rp>)</rp></ruby><ruby>旗<rp>(</rp><rt>き</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[Nisshōki#Јапански|<span class="mention-tr tr">Nisshōki</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[明後日#Јапански|<ruby>明<rp>(</rp><rt>みょう</rt><rp>)</rp></ruby><ruby>後<rp>(</rp><rt>ご</rt><rp>)</rp></ruby><ruby>日<rp>(</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[myōgonichi#Јапански|<span class="mention-tr tr">myōgonichi</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ja">[[日進月歩#Јапански|<ruby>日<rp>(</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>進<rp>(</rp><rt>しん</rt><rp>)</rp></ruby><ruby>月<rp>(</rp><rt>げっ</rt><rp>)</rp></ruby><ruby>歩<rp>(</rp><rt>ぽ</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[nisshingeppo#Јапански|<span class="mention-tr tr">nisshingeppo</span>]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]
+</div></div>
+
+===Etymology 2===
+
+{| class="wikitable kanji-table" style="text-align: center; font-size: small; float: right;"
+! style="font-weight: normal;" | [[Додатак:Јапански_речник#kanji|Kanji]] in this term
+|- lang="ja" class="Jpan" style="font-size: 2em; background: white; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[日#Јапански|日]]
+|- style="background: white;"
+| <span class="Jpan" lang="ja">じつ</span><br/><small>[[Додатак:Јапански_речник#kyōiku_kanji|Степен: 1]]</small>
+|-
+| colspan="1" |[[Додатак:Јапански_речник#kan'on|kan'on]]
+|}[[Категорија:Јапански термини који се пишу са 日 читани као じつ|しつ]][[Категорија:Јапански термини читани са kan'on|しつ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|しつ]]
+<span class="IPA">/d͡ʑitʉ/</span> → <span class="IPA">/d͡ʑit͡su/</span> → <span class="IPA">/ʑit͡su/</span>
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/derived: Wikibase sitelink snapshot missing entity=Q2016252 site=enwiki</span></strong> <span class="Hani" lang="zh">[[日#Chinese|日]]</span>. The <i class="Jpan mention" lang="ja">[[漢音#Јапански|漢音]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">kan'on</span>, literally <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[Han]]  [[sound]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> reading, so likely a later borrowing from <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q2016252 site=enwiki</span></strong>.
+
+Compare modern <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q36495 site=enwiki</span></strong>.
+
+====Pronunciation====
+
+<ul><li>[[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Јапански изговор|кључ]])</sup>:&#32;<span class="IPA">[d͡ʑit͡sɨᵝ]</span>[[Категорија:Јапански термини са ИПА изговором|しつ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|工46]]</li></ul><div class="noprint request-box" style="width: auto; margin: 0; padding: 0.5em; border-collapse: collapse;overflow: hidden;">
+{| style="background:#FFFFFF; width:90%; margin: auto; border:1px dashed #999999; text-align:left"
+| [[Image:Headset_icon.svg|20px]]
+| This entry needs [[:Category:Requests for audio pronunciation in Јапански entries|audio files]]. If you have a microphone, please [[Help:Audio pronunciations|record some]] and [[commons:Special:Upload|upload]] them. <small>(For audio required quickly, visit [[WT:APR]].)</small>
+|}
+</div>[[Категорија:Requests for audio pronunciation in Јапански entries|工46]]
+
+====Affix====
+<span class="headword-line"><span id="Јапански:_じつ" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[じつ#Јапански|じつ]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[jitsu#Јапански|jitsu]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански леме|しつ]][[Категорија:Јапански affixes|しつ]][[Категорија:Јапански terms spelled with first grade kanji|しつ]][[Категорија:Јапански terms written with one Han script character|しつ]][[Категорија:Јапански terms spelled with 日|しつ]][[Категорија:Јапански single-kanji terms|しつ]][[Категорија:Јапански уноси са нетачним заглављем језика|しつ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|しつ]][[Категорија:Стране са 2 уноса|工46]]
+
+# [[sun]]
+# [[day]]
+
+=====Derived terms=====
+* Види [[日/изведени термини#Japanese|日/изведени термини § Japanese]].
+
+===Etymology 3===
+
+{| class="wikitable kanji-table" style="text-align: center; font-size: small; float: right;"
+! style="font-weight: normal;" | [[Додатак:Јапански_речник#kanji|Kanji]] in this term
+|- lang="ja" class="Jpan" style="font-size: 2em; background: white; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[日#Јапански|日]]
+|- style="background: white;"
+| <span class="Jpan" lang="ja">ひ</span><br/><small>[[Додатак:Јапански_речник#kyōiku_kanji|Степен: 1]]</small>
+|-
+| colspan="1" |[[Додатак:Јапански_речник#kun'yomi|kun'yomi]]
+|}[[Категорија:Јапански термини који се пишу са 日 читани као ひ|ひ]][[Категорија:Јапански термини читани са kun'yomi|ひ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|ひ]]
+<span class="IPA">⟨pi<sub>1</sub>⟩</span> → *<span class="IPA">/pʲi/</span> → <span class="IPA">/ɸi/</span> → <span class="IPA">/hi/</span>
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q5736700 site=enwiki</span></strong>.
+
+====Alternative forms====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">sun, sunlight, daytime</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> <span class="Jpan" lang="ja">[[陽#Јапански|陽]]</span>
+
+====Pronunciation====
+
+<ul><li><span class="ib-brac">(</span><span class="ib-content"></span><span class="ib-brac">)</span> <span lang="ja" class="Jpan">ひ<span style="border-top:1px solid"></span></span> <span class="Latn"><samp>[hì]</samp></span> ([[平板型|Heiban]] – [0])<ref name="DJR"><span class="book">'''2006''', <cite><span class="Jpan" lang="ja">大辞林</span> (''[[w:Daijirin|Daijirin]]'')</cite>, Third Edition (in Japanese), [[w:Tōkyō|Tōkyō]]: [[w:Sanseidō|Sanseidō]], [[Special:BookSources/4-385-13905-9|→ISBN]]&nbsp;4-385-13905-9</span></ref></li><li>[[Викиречник:International Phonetic Alphabet|МФА]]<sup>([[Додатак:Јапански изговор|кључ]])</sup>:&#32;<span class="IPA">[çi]</span>[[Категорија:Јапански термини са ИПА изговором|ひ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|工46]]</li></ul>
+
+* <templatestyles src="audio/styles.css"/><table class="audiotable" style="vertical-align: middle; display: inline-block; list-style: none; line-height: 1em; border-collapse: collapse; margin: 0;"><tr><td>Audio<span class="ib-colon qualifier-colon">:</span></td><td class="audiofile">[[File:Ja-Hi.oga|noicon|175px]]</td><td class="audiometa" style="font-size: 80%;">([[:File:Ja-Hi.oga|file]])</td></tr></table>[[Категорија:Јапански појмови са аудио везама|工46]]
+
+====Noun====
+<span class="headword-line"><span id="Јапански:_ひ" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[ひ#Јапански|ひ]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[hi#Јапански|hi]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански именице|ひ]][[Категорија:Јапански terms spelled with first grade kanji|ひ]][[Категорија:Јапански terms written with one Han script character|ひ]][[Категорија:Јапански terms spelled with 日|ひ]][[Категорија:Јапански single-kanji terms|ひ]][[Категорија:Јапански уноси са нетачним заглављем језика|ひ]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|ひ]][[Категорија:Стране са 2 уноса|工46]]
+
+# the [[sun]]
+#: <span class="nyms синоним"><span class="defdate">Синоними:</span> <span class="Jpan" lang="ja">[[太陽#Јапански|太陽]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">taiyō</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[日輪#Јапански|日輪]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">nichirin</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# [[sunlight]], [[sunshine]]
+#: <span class="nyms синоним"><span class="defdate">Синоним:</span> <span class="Jpan" lang="ja">[[日光#Јапански|日光]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">nikkō</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# [[daytime]], [[daylight]]
+#: <span class="nyms синоним"><span class="defdate">Синоним:</span> <span class="Jpan" lang="ja">[[昼間#Јапански|昼間]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">hiruma</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# a [[day]]
+# [[time]] and [[date]]
+# a [[daily]] Галицијски
+#: <span class="nyms синоним"><span class="defdate">Синоними:</span> <span class="Jpan" lang="ja">[[日々#Јапански|日々]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">hibi</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[毎日#Јапански|毎日]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">mainichi</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# the [[weather]]
+#: <span class="nyms синоним"><span class="defdate">Синоним:</span> <span class="Jpan" lang="ja">[[天気#Јапански|天気]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">tenki</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# a Галицијски [[case]], [[event]], [[situation]]
+# the [[times]] Галицијски
+#: <span class="nyms синоним"><span class="defdate">Синоними:</span> <span class="Jpan" lang="ja">[[頃#Јапански|頃]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">koro</span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[時代#Јапански|時代]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">jidai</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# an [[auspicious]] or [[inauspicious]] [[aspect]] of a [[given#Adjective|given]] day
+#: <span class="nyms синоним"><span class="defdate">Синоним:</span> <span class="Jpan" lang="ja">[[日柄#Јапански|日柄]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">higara</span><span class="mention-gloss-paren annotation-paren">)</span></span>
+# a <i class="Jpan mention" lang="ja">[[家紋#Јапански|家紋]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">kamon</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[family]] [[crest]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span> with a sun-[[shaped]] [[design]]
+
+=====Derived terms=====
+* Види [[日/изведени термини#Japanese|日/изведени термини § Japanese]].
+
+===Etymology 4===
+
+{| class="wikitable kanji-table" style="text-align: center; font-size: small; float: right;"
+! style="font-weight: normal;" | [[Додатак:Јапански_речник#kanji|Kanji]] in this term
+|- lang="ja" class="Jpan" style="font-size: 2em; background: white; line-height: 1em;"
+
+| style="padding: 0.5em;" | [[日#Јапански|日]]
+|- style="background: white;"
+| <span class="Jpan" lang="ja">か</span><br/><small>[[Додатак:Јапански_речник#kyōiku_kanji|Степен: 1]]</small>
+|-
+| colspan="1" |[[Додатак:Јапански_речник#kun'yomi|kun'yomi]]
+|}[[Категорија:Јапански термини који се пишу са 日 читани као か|か]][[Категорија:Јапански термини читани са kun'yomi|か]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|か]]
+
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q5736700 site=enwiki</span></strong>.
+
+====Counter====
+<span class="headword-line"><span id="Јапански:_か" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[か#Јапански|か]]</rt><rp>)</rp></ruby></strong></span> <i>or</i> <span id="Јапански:_counter" class="senseid"><strong class="Jpan headword" lang="ja"><ruby>日<rp>(</rp><rt>[[counter#Јапански|counter]]</rt><rp>)</rp></ruby></strong></span> (<span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[ka#Јапански|ka]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span> <i>or</i> <span lang="ja-Latn" class="headword-tr tr Latn" dir="ltr">[[counter#Јапански|counter]]</span>[[Категорија:Јапански links with redundant wikilinks|工46]]</span>)&nbsp;<i></i></span>[[Категорија:Јапански [[:Шаблон:error]]|か]][[Категорија:Јапански terms with multiple readings|か]][[Категорија:Јапански terms spelled with first grade kanji|か]][[Категорија:Јапански terms written with one Han script character|か]][[Категорија:Јапански terms spelled with 日|か]][[Категорија:Јапански single-kanji terms|か]][[Категорија:Јапански уноси са нетачним заглављем језика|か]][[Категорија:Јапански terms with non-redundant non-automated sortkeys|か]][[Категорија:Стране са 2 уноса|工46]]
+
+# [[daytime]]s
+# [[number]] of [[day]]s
+
+=====Derived terms=====
+* Види [[日/изведени термини#Japanese|日/изведени термини § Japanese]].
+
+===References===
+<references/>
+
+[[Category:ja:Time|sort=ひ]]
+
+----
+
+[[Категорија:Корејски говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big>[[File:Hangugeo-Chosonmal.svg|border|32px]] Корејски</big></big></big></div>==
+<br>
+
+===Etymology===
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/derived: Wikibase sitelink snapshot missing entity=Q2016252 site=enwiki</span></strong> <span class="Hani" lang="zh">[[日#Chinese|日]]</span>.
+ 
+		{| class="mw-collapsible mw-collapsed wikitable" style="width:60%; background-color:#f8f9fa;"
+		|-
+		! colspan="3" style="text-align:center" | Historical Readings
+		|-
+				| colspan="3" style="text-align:center; background-color:#eaecf0;" | <span class="explain" title="A system of somewhat artificial readings that had sought to capture traditional phonetic distinctions of Middle Chinese which were often unrealistic in Korean—fell out of use after the 1480s."><b>Dongguk Jeongun Reading</b></span>
+		|-
+		| colspan="1" style="text-align:center; background-color:#ffffff;" | <i>Dongguk Jeongun</i>, 1448 || colspan="2" style="text-align:center; background-color:#ffffff; min-width:65%;" | <i class="Kore mention" lang="okm">ᅀᅵᇙ〮</i> ([[w:Yale romanization of Korean|Yale]]: ''zílq'')		
+		|- 
+	
+				| colspan="3" style="text-align:center; background-color:#eaecf0;" | <b>Middle Korean</b>
+        |-
+		| colspan="1" rowspan="2" style="text-align:center; background-color:#f8f9fa;" | <b>Text</b> || colspan="2" style="text-align:center; background-color:#f8f9fa; min-width:65%;" | <b>[[음훈|Eumhun]]</b>
+        |-
+        | colspan="1" style="text-align:center; background-color:#f8f9fa;" | <b>Gloss (<i>hun</i>)</b> || colspan="1" style="text-align:center; background-color:#f8f9fa; min-width:25%;" | <b>Reading</b> 
+        		
+		|- 
+	
+		        | style="text-align:center; background-color:#ffffff;" | <i>Hunmong Jahoe</i>, 1527<sup>[https://ko.wikisource.org/wiki/%ED%9B%88%EB%AA%BD%EC%9E%90%ED%9A%8C/天文#상01A]</sup> || style="text-align:center; background-color:#ffffff;" | <i class="Kore mention" lang="okm">[[날#Middle Korean|날〮]]</i> ([[w:Yale romanization of Korean|Yale]]: ''nál'') || style="text-align:center; background-color:#ffffff;" | <i class="Kore mention" lang="okm">[[ᅀᅵᆯ#Middle Korean|ᅀᅵᆯ〮]]</i> ([[w:Yale romanization of Korean|Yale]]: ''zíl'')		
+		|- 
+	
+				
+		|- 
+	
+				
+		|- 
+	
+				
+		|- 
+	
+				
+		|- 
+	
+				
+		|- 
+	
+		 
+		|}
+
+===Pronunciation===
+<ul><li>(<i>[[w:South Korean standard language|SK Standard]]/[[w:Seoul dialect|Seoul]]</i>) [[Викиречник:International Phonetic Alphabet|IPA]]<sup>([[Додатак:Корејски изговор|кључ]])</sup>: <span class="IPA">[iɭ]</span></li><li class="ko-pron__ph">Phonetic hangul: <span class="Kore" lang="ko">[<span>일</span>]</span></li></ul><templatestyles src="Template:ko-IPA/style.css"/>
+
+===Hanja===
+<div class="sister-wikisource sister-project noprint floatright" style="clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; text-align: left; float: right;">
+<div style="float: left;">[[Image:Wikisource-logo.svg|45px|none|alt=]]</div>
+<div style="margin-left: 60px;">Korean [[w:ko:위키문헌|Wikisource]] has texts containing the [[hanja]]:
+<div style="margin-left: 10px;">'''''[[wikisource:ko:Special:Search/"日"|<span class="Kore" lang="ko">日</span>[[Категорија:Корејски terms with redundant script codes|工46]]]]'''''</div>
+</div>
+</div>
+<span class="interProject">[[d:日|Wikisource]]</span>
+
+<span class="headword-line"><strong class="Kore headword" lang="ko">日</strong> (<i>[[음훈#Корејски|eumhun]]</i> <b class="Kore" lang="ko">[[날#Корејски|날]] [[일#Корејски|일]]</b> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="tr Latn">nal il</span><span class="mention-gloss-paren annotation-paren">)</span>)</span>[[Категорија:Корејски Хан карактери|일]][[Категорија:Корејски уноси са нетачним заглављем језика|일]][[Категорија:Корејски terms with non-redundant non-automated sortkeys|일]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class="use-with-mention">[[hanja#Енглески|Hanja]] form<sup>[[Додатак:Корејски текст|?]]</sup> of <i class="Kore mention" lang="ko">[[일#Корејски|일]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[day]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>.</span>
+# <span class="use-with-mention">[[hanja#Енглески|Hanja]] form<sup>[[Додатак:Корејски текст|?]]</sup> of <i class="Kore mention" lang="ko">[[일#Корејски|일]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[sun]]; [[daytime]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>.</span>
+# <span class="use-with-mention">[[hanja#Енглески|Hanja]] form<sup>[[Додатак:Корејски текст|?]]</sup> of <i class="Kore mention" lang="ko">[[일#Корејски|일]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-gloss-double-quote">“</span><span class="mention-gloss"><span class='form-of-definition use-with-mention'>Short for <span class='form-of-definition-link'><i class="Kore mention" lang="ko">[[일요일#Корејски|일요일(日曜日)]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="mention-tr tr Latn">iryoil</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[Sunday]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>.</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>.</span>
+
+====Compounds====
+* Види [[日/изведени термини#Korean|日/изведени термини § Korean]].
+
+===Proper noun===
+<table class="floatright wikitable" style="text-align:center; font-size:small;"><tr><th colspan="1" style="font-weight:normal;">[[hanja|Hanja]] in this term</th></tr><tr lang="ko" class="Hani" style="font-size:2em; background:white; line-height:1em;"><td style="padding:0.5em;">[[日#Korean|日]]</td></tr></table>
+<span class="headword-line"><strong class="Kore headword" lang="ko">日</strong> (<span lang="ko-Latn" class="headword-tr manual-tr tr Latn" dir="ltr">il</span>) (<i>hangeul</i> <b class="Kore" lang="ko">[[일#Корејски|일]]</b>)</span>[[Категорија:Корејски властите именице|일]][[Категорија:Корејски terms with redundant script codes|일]][[Категорија:Корејски уноси са нетачним заглављем језика|일]][[Категорија:Корејски terms with non-redundant non-automated sortkeys|일]][[Категорија:Стране са 2 уноса|工46]]
+
+# <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">in news headlines</span><span class="ib-brac qualifier-brac">)</span> <span class='form-of-definition use-with-mention'>Short for <span class='form-of-definition-link'><i class="Kore mention" lang="ko"><templatestyles src="ruby/styles.css"></templatestyles>[[일본#Корејски|<ruby><rb>日</rb><rt>일</rt></ruby><ruby><rb>本</rb><rt>본</rt></ruby>]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ko-Latn" class="mention-tr tr Latn">Ilbon</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[Japan]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Корејски terms with non-redundant manual transliterations|工46]]</span></span>.[[Категорија:Корејски short forms|日]]
+
+====Usage notes====
+In news headlines, this is almost always written solely in the ''[[Hanja]]'' form, even in contemporary Korean text otherwise devoid of any ''[[Hanja]]''.
+
+===References===
+* <span class="Kore" lang="ko">국제퇴계학회 대구경북지부 (國際退溪學會 大邱慶北支部)</span> (2007). Digital Hanja Dictionary, <span class="Kore" lang="ko">전자사전／電子字典</span>. [http://hanjadoc.com/dic/read.asp?table=board&m_no=4538]
+
+[[Category:ko:Days of the week|일]]
+
+----
+
+==Okinawan==
+
+===Kanji===
+<div><span lang="ryu" class="Jpan" style="font-size:275%; line-height:1;">日</span></div>''([[w:Kyōiku kanji|grade 1 “Kyōiku” kanji]]'')[[Category:Okinawan Han characters|日00]]
+[[Category:Grade 1 kanji|日00]]
+
+====Readings====
+
+* '''[[音読み|On]]''': <span class="on-yomi"><i class="Hira mention" lang="ryu">[[なち#Okinawan|なち]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="mention-tr tr Latn">nachi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ryu">[[にち#Okinawan|にち]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="mention-tr tr Latn">nichi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with redundant transliterations|工46]]; <i class="Hira mention" lang="ryu">[[じち#Okinawan|じち]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="mention-tr tr Latn">jichi</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with redundant transliterations|工46]]<sup>←<i class="Hira mention" lang="ryu">[[じつぃ#Okinawan|じつぃ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="mention-tr tr Latn">jitsi</span>, <span class="ann-pos">[[w:Historical kana orthography|historical]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with redundant transliterations|工46]]</sup></span>
+* '''[[訓読み|Kun]]''': <span class="kun-yomi"><i class="Hira mention" lang="ryu">[[ふぃー#Okinawan|ふぃー]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="mention-tr tr Latn"><u>fī</u></span>, <span class="ann-pos"><i class="Jpan mention" lang="ryu">[[日#Okinawan|日]]</i></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]</span>[[Category:Okinawan kanji with  on reading なち|日00]]
+[[Category:Okinawan kanji with  on reading にち|日00]]
+[[Category:Requests for attention concerning Okinawan|2]]
+[[Category:Okinawan kanji with  on reading じち|日00]]
+[[Category:Okinawan kanji with historical on reading じつぃ|日00]]
+[[Category:Okinawan kanji with  kun reading ふぃー|日00]]<templatestyles src="Template:ja-readings/style.css"/>
+
+====Compounds====
+* <span class="Jpan" lang="ryu">[[生日#Okinawan|<ruby>生日<rp> (</rp><rt>っんまりびー</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">&#39;nmaribī</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ryu">[[毎日#Okinawan|<ruby>毎<rp> (</rp><rt>めー</rt><rp>)</rp></ruby><ruby>日<rp> (</rp><rt>なち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">mēnachi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]], <span class="Jpan" lang="ryu">[[毎日#Okinawan|<ruby>毎<rp> (</rp><rt>めー</rt><rp>)</rp></ruby><ruby>日<rp> (</rp><rt>にち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">mēnichi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ryu">[[日記#Okinawan|<ruby>日<rp> (</rp><rt>にっ</rt><rp>)</rp></ruby><ruby>記<rp> (</rp><rt>ち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">nitchi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]
+* <span class="Jpan" lang="ryu">[[元日#Okinawan|<ruby>元<rp> (</rp><rt>ぐゎん</rt><rp>)</rp></ruby><ruby>日<rp> (</rp><rt>じち</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ryu-Latn" class="tr Latn"><span lang="ryu-Latn" class="mention-tr tr Latn">gwanjichi</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Okinawan terms with non-redundant manual transliterations|工46]]
+
+----
+
+==Old Japanese==
+
+===Compounds===
+<div class="derivedterms" style="column-count: 2; -moz-column-count: 2; -ms-column-count: 2; -o-column-count: 2; -webkit-column-count: 2;;">
+* <span class="Jpan" lang="ojp">[[明日#Old Japanese|明日]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">asu</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[明日香#Old Japanese|明日香]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">Asuka</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[春日#Old Japanese|春日]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">Kasuga</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[日本#Old Japanese|日本]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">Yamato<sub>2</sub></span><span class="mention-gloss-paren annotation-paren">)</span>
+</div>
+
+===Etymology 1===
+From <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/inherited: Wikibase sitelink snapshot missing entity=Q3924309 site=enwiki</span></strong>.
+
+Distinct from <i class="Jpan mention" lang="ojp">[[火#Old Japanese|火]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="mention-tr tr Latn">pi<sub>2</sub></span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">[[fire]]</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>. See [[w:Jōdai Tokushu Kanazukai|Jōdai Tokushu Kanazukai]] for details on <strong class="error"><span class="scribunto-error">Lua error in Модул:etymology/templates/cognate: Wikibase sitelink snapshot missing entity=Q5736700 site=enwiki</span></strong> readings.
+
+====Noun====
+<span class="headword-line"><strong class="Jpan headword" lang="ojp">日</strong>[[Категорија:Old Japanese nouns|ひ]][[Category:Old Japanese lemmas|ひ]] (<span lang="ojp-Latn" class="headword-tr manual-tr tr Latn" dir="ltr">pi<sub>1</sub></span>) <nowiki/>([[:Шаблон:head-lite/form]])</span>[[Category:Pages using lite templates]]
+
+# the [[sun]]
+# [[sunlight]], [[sunshine]]
+# [[daytime]], [[daylight]]
+# a [[day]]
+# a [[reference]] to the [[imperial]] [[family]] or [[lineage]], thought to be [[descend]]ed from the sun [[goddess]] [[Amaterasu]]
+
+=====Derived terms=====
+See [[日/derived terms#Old_Japanese_etymology_1|日/derived terms § Old_Japanese_etymology_1]].
+
+=====Descendants=====
+* Јапански: <span class="Jpan" lang="ja">[[日#Јапански|日]], [[陽#Јапански|陽]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">[[hi#Јапански|hi]]</span><span class="mention-gloss-paren annotation-paren">)</span>[[Категорија:Јапански terms with non-redundant manual transliterations|工46]]<templatestyles src="Module:etymology/style.css"/>
+
+=====See also=====
+* <span class="Jpan" lang="ojp">[[茜さす#Old Japanese|茜さす]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">akane sasu</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[天傳ふ#Old Japanese|天傳ふ]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">amadutapu</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[高照らす#Old Japanese|高照らす]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">takaterasu</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ojp">[[高光る#Old Japanese|高光る]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="tr Latn">takapi<sub>1</sub>karu</span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===Etymology 2===
+<span class="maintenance-line" style="color: #777777;">(This [[Wiktionary:Etymology|etymology]] is missing or incomplete. Please add to it, or discuss it at the [[Wiktionary:Etymology scriptorium|Etymology scriptorium]].)</span>[[Category:Requests for etymologies in Old Japanese entries]]
+
+====Suffix====
+<span class="headword-line"><strong class="Jpan headword" lang="ojp">日</strong>[[Категорија:Old Japanese suffixes|か]][[Category:Old Japanese lemmas|か]] (<span lang="ojp-Latn" class="headword-tr manual-tr tr Latn" dir="ltr">-ka</span>) <nowiki/>([[:Шаблон:head-lite/form]])</span>[[Category:Pages using lite templates]]
+
+# [[daytime]]s
+# [[number]] of [[day]]s
+
+=====Derived terms=====
+See [[日/derived terms#Old_Japanese_etymology_2|日/derived terms § Old_Japanese_etymology_2]].
+
+=====Descendants=====
+* Јапански: <span class="Jpan" lang="ja">[[日#Јапански|日]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr">-ka</span><span class="mention-gloss-paren annotation-paren">)</span><templatestyles src="Module:etymology/style.css"/>
+
+===Etymology 3===
+[[apophony|Apophonic]] form of ''ka'' above, possibly by the fusion of ancient nominal particle <i class="Jpan mention" lang="ojp">[[い#Old Japanese|い]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="ojp-Latn" class="mention-tr tr Latn">i</span><span class="mention-gloss-paren annotation-paren">)</span>.
+
+====Noun====
+<span class="headword-line"><strong class="Jpan headword" lang="ojp">日</strong>[[Категорија:Old Japanese nouns]][[Category:Old Japanese lemmas]] (<span lang="ojp-Latn" class="headword-tr manual-tr tr Latn" dir="ltr">ke<sub>2</sub></span>) <nowiki/>([[:Шаблон:head-lite/form]])</span>[[Category:Pages using lite templates]]
+
+# <span class="usage-label-sense"><span class="ib-brac">(</span><span class="ib-content">plural only[[Категорија:Old Japanese pluralia tantum|け]]</span><span class="ib-brac">)</span></span> [[day]]s
+#* ''[[Додатак:Речник#c.|c.]]'' '''759''', ''[[w:Man'yōshū|Man'yōshū]]'' (book 4, poem 484), text [https://web.archive.org/web/20220626150734/http://jti.lib.virginia.edu/japanese/manyoshu/Man4Yos.html#484 here]
+#*: <div class="h-usage-example"><i class="Jpan mention e-example" lang="ojp">一日社人母待吉長'''氣'''乎如此耳待者有不得勝</i><dl><dd><i lang="ojp-Latn" class="e-transliteration tr Latn">pi<sub>1</sub>to<sub>1</sub>pi<sub>1</sub> ko<sub>2</sub>so<sub>2</sub> pi<sub>1</sub>to<sub>2</sub> mo mati yo<sub>2</sub>ki<sub>1</sub> nagaki<sub>1</sub> '''ke<sub>2</sub>''' wo kaku nomi<sub>2</sub> mateba arikatu</i></dd><dd><small>(please add an English translation of this usage example)</small></dd></dl></div>[[Категорија:Old Japanese terms with usage examples|け]][[Категорија:Requests for translations of Old Japanese usage examples|け]]
+
+=====Derived terms=====
+See [[日/derived terms#Old_Japanese_etymology_3|日/derived terms § Old_Japanese_etymology_3]].
+
+----
+
+[[Категорија:Вијетнамски говор]]__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> [[Image:Natively_Vietnamese-speaking_areas.png|32px]] Вијетнамски </big></big></big></div>==
+<br>
+
+===Han character===
+<span class='Hani' lang='vi' style='font-size: 135%;'>日</span>: '''[[Hán Việt]]''' readings: <span class="Latn" lang="vi">[[nhật-tdcndg;tdcntd;gdhn#Вијетнамски|nhật-tdcndg&#x3B;tdcntd&#x3B;gdhn]]</span> (<span lang='vi' style='font-size: 135%;'><ruby><rb><span class='Hani'>[[人#Вијетнамски|人]]</span></rb><rp>(</rp><rt><span style='padding: 0 0.25em; font-size: 135%;'>[[nhân#Вијетнамски|nhân]]</span></rt><rp>)</rp></ruby><ruby><rb><span class='Hani'>[[質#Вијетнамски|質]]</span></rb><rp>(</rp><rt><span style='padding: 0 0.25em; font-size: 135%;'>[[chất#Вијетнамски|chất]]</span></rt><rp>)</rp></ruby></span>[[fanqie|<span lang='vi' style='font-size: 135%;'><ruby><rb><span class='Hani' style='color:#000000;'>切</span></rb><rp>(</rp><rt><span style='padding: 0 0.25em;'>thiết</span></rt><rp>)</rp></ruby></span>]]), <span class="Latn" lang="vi">[[nhựt-gdhn#Вијетнамски|nhựt-gdhn]]</span>[[Категорија:Vietnamese Han tu|日00]]</br>
+<span class='Hani' lang='vi' style='font-size: 135%;'>日</span>: '''[[chữ Nôm|Nôm]]''' readings: <span class="Latn" lang="vi">[[nhặt-tdcndg;tdcntd;gdhn;btcn;taberd#Вијетнамски|nhặt-tdcndg&#x3B;tdcntd&#x3B;gdhn&#x3B;btcn&#x3B;taberd]]</span>, <span class="Latn" lang="vi">[[nhật-tdcndg;tdcntd;taberd#Вијетнамски|nhật-tdcndg&#x3B;tdcntd&#x3B;taberd]]</span>, <span class="Latn" lang="vi">[[nhạt-tdcntd;gdhn#Вијетнамски|nhạt-tdcntd&#x3B;gdhn]]</span>, <span class="Latn" lang="vi">[[nhựt-tdcntd;taberd#Вијетнамски|nhựt-tdcntd&#x3B;taberd]]</span>, <span class="Latn" lang="vi">[[nhờn-tdcndg#Вијетнамски|nhờn-tdcndg]]</span>[[Категорија:Vietnamese Nom|日00]]</br>
+
+# <span class="use-with-mention">[[Hán tự]] form of <i class="Latn mention" lang="vi">[[nhật#Вијетнамски|nhật]]</i></span>, “[[sun]]; [[day]]”[[Category:Vietnamese Han tu]]
+
+====Compounds====
+* Види [[日/изведени термини#Vietnamese|日/изведени термини § Vietnamese]].
+
+===References===
+<references/>
+
+[[Category:CJKV radicals| ]]

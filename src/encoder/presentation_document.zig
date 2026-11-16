@@ -85,18 +85,34 @@ pub const ObservedPreScope = struct {
 };
 pub const PreparedBodySource = struct {
     source: []const u8,
+    body_link_continuations: ?*const compiler.BodyLinkContinuations = null,
     missing: ?MissingText = null,
     fallbacks: Fallbacks,
 };
 pub fn prepareBodySourceAlloc(a: A, title: []const u8, source: []const u8) !PreparedBodySource {
     var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(), .table_viewport_trace = try tableViewportTraceFromEnv() } };
     const prepared = try renderer.prepareBodySource(source);
-    return .{ .source = prepared, .fallbacks = renderer.fallbacks };
+    return .{ .source = prepared, .body_link_continuations = renderer.context.body_link_continuations, .fallbacks = renderer.fallbacks };
 }
 pub fn prepareBodySourceWithMissingAlloc(a: A, title: []const u8, source: MissingText) !PreparedBodySource {
-    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .title = title, .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(), .table_viewport_trace = try tableViewportTraceFromEnv() } };
+    return prepareBodySourceInContextWithMissingAlloc(a, source, .{ .title = title,
+        .unclosed_fragment_trace = try unclosedFragmentTraceFromEnv(), .table_viewport_trace = try tableViewportTraceFromEnv() }, null);
+}
+pub fn prepareBodySourceInContextWithMissingAlloc(a: A, source: MissingText, context: compiler.Context,
+    projection: ?*const compiler.SourceElementProjection) !PreparedBodySource
+{
+    var renderer: compiler.Renderer = .{ .a = a, .context = context };
+    renderer.context.unclosed_fragment_trace = context.unclosed_fragment_trace or try unclosedFragmentTraceFromEnv();
+    renderer.context.table_viewport_trace = context.table_viewport_trace or try tableViewportTraceFromEnv();
+    if (projection) |selected| if (context.local_link_targets) |targets| {
+        if (selected.prepared.ptr == source.bytes.ptr and selected.prepared.len == source.bytes.len and
+            selected.original.bytes.ptr == targets.source.ptr and selected.original.bytes.len == targets.source.len and
+            !source.unknown and !source.lost_missing_range and source.generated_source == null)
+            renderer.local_link_binding = .{ .projection = selected, .owner = source, .page_start = 0 };
+    };
     const prepared = try renderer.prepareBodySourceWithMissing(source);
-    return .{ .source = prepared.bytes, .missing = prepared, .fallbacks = renderer.fallbacks };
+    return .{ .source = prepared.bytes, .missing = prepared,
+        .body_link_continuations = renderer.context.body_link_continuations, .fallbacks = renderer.fallbacks };
 }
 pub const PreObservation = struct {
     // Shared owned ancestry is deduplicated per probe element, not cloned per
@@ -425,6 +441,7 @@ fn observePreScopesSourceAlloc(a: A, title: []const u8, source: []const u8, sour
             .display_title_precedence = reference_context.display_title_precedence,
             .normal_title_defaults = reference_context.normal_title_defaults,
             .local_link_targets = reference_context.local_link_targets,
+            .body_link_continuations = reference_context.body_link_continuations,
             .external_links_prepared = reference_context.citations != null,
         },
     };
@@ -826,6 +843,13 @@ const CompilerWalk = struct {
         } else if (comptime part == .body) {
             for (values) |span| if (!types.validRubyBodyChild(span)) return error.InvalidPresentation;
         }
+        for (values) |span| if (span.inline_action_group) |group| {
+            if (part == .gap or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+            try types.validateInlineActionGroupTree(span, self.content_depth, self.ruby_depth);
+            self.content_depth += 1;
+            defer self.content_depth -= 1;
+            try self.spansIn(context, group.spans, .body);
+        };
         for (values) |span| if (span.inline_padding_group) |group| {
             if (part == .gap or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
             try types.validateInlinePaddingGroupTree(span, self.content_depth, self.ruby_depth);
@@ -1297,12 +1321,39 @@ fn completeContentFragments(source: MissingText, fragments: []const SourceFragme
     return .parser_output;
 }
 
+const CompleteActionFocus = struct {
+    renderer: *compiler.Renderer,
+    fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
+        for (values) |span| try self.renderer.consumeCompletedActionFocus(span);
+    }
+    fn block(self: *@This(), value: *compiler.Block) anyerror!void { self.renderer.consumeCompletedInlineOwner(value); }
+};
+
+fn completeActionFocus(renderer: *compiler.Renderer, work: Work) !void {
+    if (renderer.required_page_source_focus == null) return;
+    var context: CompleteActionFocus = .{ .renderer = renderer };
+    var walk: CompilerWalk = .{};
+    for (work.sections) |section| {
+        try walk.spans(&context, section.title_spans);
+        try walk.blocks(&context, section.blocks, 0);
+    }
+    try walk.references(&context, work.references);
+    for (work.media_caption_spans) |caption| try walk.spans(&context, caption);
+    renderer.finishCompletedActionFocus();
+}
+
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool) !Work {
+    return workAllocWithMissingFragmentsIn(a, title, language, tracked, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root, final_document_body, null);
+}
+
+fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool, native_body_language: ?[]const u8) !Work {
     const whole_body = for (fragments) |fragment| {
         if (fragment.whole_body) break true;
     } else false;
     var renderer: compiler.Renderer = .{
         .a = a,
+        .page_source_focus_completion = true,
+        .native_body_language = native_body_language,
         .literal_url_root = tracked.bytes,
         .content_root = if (whole_body) content_root else completeContentFragments(tracked, fragments, content_root),
         .context = .{
@@ -1320,6 +1371,7 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
             .display_title_precedence = reference_context.display_title_precedence,
             .normal_title_defaults = reference_context.normal_title_defaults,
             .local_link_targets = reference_context.local_link_targets,
+            .body_link_continuations = reference_context.body_link_continuations,
             .external_links_prepared = reference_context.citations != null,
         },
     };
@@ -1352,7 +1404,7 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
     } else try builder.renderFragments(fragments);
     renderer.traceDocumentBody(.end, tracked, fragments.len, null);
     body_finished = true;
-    return .{
+    var result: Work = .{
         .sections = try builder.sections.toOwnedSlice(a),
         .references = try renderer.finishReferences(),
         .media = try renderer.media.toOwnedSlice(a),
@@ -1361,9 +1413,16 @@ fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, 
         .unresolved_templates = renderer.unresolved_templates,
         .fallbacks = renderer.fallbacks,
     };
+    try completeActionFocus(&renderer, result);
+    result.fallbacks = renderer.fallbacks;
+    return result;
 }
 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
+    return workWithHeadingOffsetsAllocIn(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, observe_wiki_scope, observe_structure_only, figure_sizing, content_root, null);
+}
+
+fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, native_body_language: ?[]const u8) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
     var root_tables: std.ArrayList(usize) = .empty;
@@ -1378,7 +1437,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     defer wiki_all_openings.deinit(a);
     var wiki_rule_openings: std.ArrayList(usize) = .empty;
     defer wiki_rule_openings.deinit(a);
-    var renderer: compiler.Renderer = .{ .a = a, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
+    var renderer: compiler.Renderer = .{ .a = a, .native_body_language = native_body_language, .page_source_focus_completion = !observe_structure_only, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
     renderer.context.observe_structure_only = observe_structure_only;
     // This function has separate structural-observation and final callers.
     // Only the latter enters the existing opt-in diagnostic lifetime.
@@ -1398,6 +1457,7 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     renderer.context.normal_title_defaults = reference_context.normal_title_defaults;
     renderer.context.citations = reference_context.citations;
     renderer.context.local_link_targets = reference_context.local_link_targets;
+    renderer.context.body_link_continuations = reference_context.body_link_continuations;
     renderer.context.content_conversion = try compiler.pageContentConversion(a, source.bytes, .{ .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .content_conversion = reference_context.content_conversion });
     renderer.context.external_links_prepared = reference_context.citations != null;
     renderer.page_reference_definitions = reference_context.items;
@@ -1440,7 +1500,10 @@ fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, so
     }
     renderer.traceDocumentBody(.end, source, fragments.len, null);
     body_finished = true;
-    return .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .page_root_wiki_table_openings = try root_tables.toOwnedSlice(a), .page_top_level_wiki_table_openings = try top_level_tables.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    var result: Work = .{ .sections = try builder.sections.toOwnedSlice(a), .page_html_openings = try html_openings.toOwnedSlice(a), .page_wiki_openings = try wiki_openings.toOwnedSlice(a), .page_wiki_content_openings = try wiki_content_openings.toOwnedSlice(a), .page_wiki_all_openings = try wiki_all_openings.toOwnedSlice(a), .page_wiki_rule_openings = try wiki_rule_openings.toOwnedSlice(a), .page_root_wiki_table_openings = try root_tables.toOwnedSlice(a), .page_top_level_wiki_table_openings = try top_level_tables.toOwnedSlice(a), .references = try renderer.finishReferences(), .media = try renderer.media.toOwnedSlice(a), .media_caption_spans = try renderer.media_caption_spans.toOwnedSlice(a), .rendered_templates = renderer.rendered_templates, .unresolved_templates = renderer.unresolved_templates, .fallbacks = renderer.fallbacks };
+    try completeActionFocus(&renderer, result);
+    result.fallbacks = renderer.fallbacks;
+    return result;
 }
 
 pub fn observeHeadingAnchorsAlloc(a: A, title: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase) !HeadingObservation {
@@ -1941,9 +2004,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         break :current if (defaults.current(title, namespace_catalog)) defaults else null;
     } else null;
     const work = if (heading_observation != null)
-        try workWithHeadingOffsetsAlloc(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root)
+        try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code)
     else
-        try workAllocWithMissingFragments(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true);
+        try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
@@ -15972,4 +16035,107 @@ test "inline padding groups survive normal Document validation complete semantic
     try std.testing.expect(fallback.reading and fallback.owned);
     try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, try codec.encodeAlloc(a, stored),
         "padding source", .language, .{ .code = "vi", .heading = "Vietnamese" }));
+}
+
+test "Document compiler walk visits each inline action owner and rich child once with shared work" {
+    const children = [_]compiler.Span{
+        .{ .text = "Erster " }, .{ .text = "Mai", .flags = .{ .italic = true } },
+    };
+    const group = types.InlineActionGroup(compiler.Span){ .spans = &children };
+    const owner = compiler.Span{ .kind = .link, .text = "", .target = "Erster Mai", .inline_action_group = &group };
+    // Repeated equal payloads still represent two structural occurrences.
+    const values = [_]compiler.Span{owner, owner};
+    const Inspect = struct {
+        owners: usize = 0, children: usize = 0, italic: usize = 0,
+        fn spans(self: *@This(), current: []const compiler.Span) !void {
+            for (current) |span| {
+                if (span.inline_action_group != null) {
+                    try std.testing.expect(span.kind == .link and span.text.len == 0);
+                    try std.testing.expectEqualStrings("Erster Mai", span.target);
+                    self.owners += 1;
+                } else {
+                    try std.testing.expect(span.kind == .text and span.target.len == 0);
+                    self.children += 1;
+                    if (span.flags.italic) self.italic += 1;
+                }
+            }
+        }
+        fn block(_: *@This(), _: *compiler.Block) error{}!void {}
+    };
+    var inspect: Inspect = .{};
+    var walk: CompilerWalk = .{ .remaining = 6 };
+    try walk.spans(&inspect, &values);
+    try std.testing.expectEqual(@as(usize, 2), inspect.owners);
+    try std.testing.expectEqual(@as(usize, 4), inspect.children);
+    try std.testing.expectEqual(@as(usize, 2), inspect.italic);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    try std.testing.expectEqual(@as(usize, 0), walk.content_depth);
+    var short: CompilerWalk = .{ .remaining = 5 };
+    var refused: Inspect = .{};
+    try std.testing.expectError(error.InvalidPresentation, short.spans(&refused, &values));
+    try std.testing.expectEqual(@as(usize, 0), short.content_depth);
+    var at_limit: CompilerWalk = .{ .content_depth = types.max_content_depth };
+    try std.testing.expectError(error.InvalidPresentation, at_limit.spans(&refused, &values));
+}
+
+
+
+test "normal body preparation carries crossing action and numbered source identity through pre observation and Document" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    const source = "[https://example.org]\n<div><b>[[gh|one\n</div>\ntwo]]</b>\nTail [[Other|last]]";
+    const Proof = struct {
+        source: []const u8,
+        calls: usize = 0,
+        fn resolve(raw: ?*const anyopaque, _: A, operation: compiler.TableSourceAnchorOperation) compiler.Error!?[]const u8 {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(raw orelse return null)));
+            const token_at = std.math.sub(usize, @intFromPtr(operation.token.ptr), @intFromPtr(self.source.ptr)) catch return null;
+            if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+                token_at > self.source.len or operation.token.len > self.source.len - token_at) return null;
+            if (std.mem.eql(u8, operation.target, "gh")) { self.calls += 1; return "Resolved"; }
+            if (std.mem.eql(u8, operation.target, "Other")) return "Other resolved";
+            return null;
+        }
+    };
+    var proof: Proof = .{ .source = source };
+    const context: compiler.Context = .{ .title = "Entry", .namespace_catalog = &ns, .observe_source_elements = true,
+        .local_link_targets = .{ .source = source, .namespace_sha256 = ns.source_sha256, .context = &proof, .resolve = Proof.resolve } };
+    const numbered = try preparePageExternalLinksWithMissingAlloc(a, MissingText.untracked(source), context);
+    const projection = numbered.source_element_projection orelse return error.TestUnexpectedResult;
+    try std.testing.expect(numbered.source.ptr != source.ptr);
+    const prepared = try prepareBodySourceInContextWithMissingAlloc(a, numbered.missing, context, &projection);
+    try std.testing.expect(prepared.body_link_continuations != null);
+    try std.testing.expectEqual(@as(usize, 1), proof.calls);
+    var references = try referenceDefinitionsWithMissingAlloc(a, prepared.missing.?);
+    references.local_link_targets = context.local_link_targets;
+    references.body_link_continuations = prepared.body_link_continuations;
+    references.citations = numbered.citations;
+    const observation = try observePreScopesWithTextPaintAndMissingAlloc(a, "Entry", prepared.missing.?, .{}, &ns, null, null, references, null, null);
+    defer observation.deinitTextAncestry(a);
+    try std.testing.expect(observation.scopes.len != 0);
+    var report: Fallbacks = .{};
+    const bytes = try compileReportedWithReferencesAlloc(a, "Entry", .language, "English", "en", prepared.source,
+        null, .{}, &ns, null, null, references, &report);
+    const stored = try codec.decodeAlloc(a, bytes, "Entry", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    const Check = struct {
+        one: bool = false, two: bool = false, other: bool = false, external: bool = false,
+        fn blocks(self: *@This(), body: []const types.Block) !void {
+            for (body) |block| {
+                for (block.spans) |span| {
+                    if (std.mem.indexOf(u8, span.text, "one") != null) { try std.testing.expectEqualStrings("Resolved", span.target); self.one = true; }
+                    if (std.mem.indexOf(u8, span.text, "two") != null) { try std.testing.expectEqualStrings("Resolved", span.target); self.two = true; }
+                    if (std.mem.indexOf(u8, span.text, "last") != null) { try std.testing.expectEqualStrings("Other resolved", span.target); self.other = true; }
+                    if (std.mem.eql(u8, span.target, "https://example.org") and std.mem.eql(u8, span.text, "[1]")) self.external = true;
+                }
+                if (block.container) |container| try self.blocks(container.blocks);
+            }
+        }
+    };
+    var check: Check = .{};
+    for (stored.entry.sections) |section| try check.blocks(section.blocks);
+    try std.testing.expect(check.one and check.two and check.other and check.external);
+    try std.testing.expectEqual(@as(usize, 1), proof.calls);
+    try std.testing.expect(!report.literal_markup);
 }

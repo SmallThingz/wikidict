@@ -87,6 +87,7 @@ pub const Registry = struct {
     reviewed_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
     reviewed_varieties: std.StringHashMapUnmanaged(void) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
+    source_equals_labels: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_linked_heading: ?SourceLinkedHeading = null,
@@ -135,6 +136,7 @@ pub const Registry = struct {
         self.reviewed_aliases.deinit(self.arena.allocator());
         self.reviewed_varieties.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
+        self.source_equals_labels.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
         self.source_code_declarations.deinit(self.arena.allocator());
         self.source_headword_codes.deinit(self.arena.allocator());
@@ -476,6 +478,26 @@ pub const Registry = struct {
         // The authenticated formatter labels this parameter as the language.
         // The lemma, category and edition supply no owner or new global alias.
         return self.resolveStrong(name) orelse self.resolveTrusted(name);
+    }
+
+    /// A complete static =code= template certifies only its exact emitted label.
+    /// This map never promotes the label into ordinary aliases or trusted names.
+    pub fn addSourceEqualsLabel(self: *Registry, code_value: []const u8, label: []const u8) !void {
+        if (!self.codes.contains(code_value) or label.len == 0 or label.len > 256 or
+            !std.unicode.utf8ValidateSlice(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t\r\n")) or
+            std.mem.indexOfAny(u8, label, "[]{}<>&|=\"'") != null) return;
+        for (label) |byte| if (byte < 0x20 or byte == 0x7f) return;
+        if (!self.sourceBannerLiteralCodeNameCompatible(code_value, label) or self.isLanguageBoundary(label)) return;
+        if (self.source_equals_labels.getPtr(code_value)) |stored| {
+            if (stored.*) |previous| if (!std.mem.eql(u8, previous, label)) { stored.* = null; };
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_equals_labels.put(a, try a.dupe(u8, code_value), try a.dupe(u8, label));
+    }
+    pub fn sourceEqualsLabel(self: *const Registry, code_value: []const u8) ?[]const u8 {
+        const stored = (self.source_equals_labels.get(code_value) orelse return null) orelse return null;
+        return if (!self.isLanguageBoundary(stored) and self.sourceBannerLiteralCodeNameCompatible(code_value, stored)) stored else null;
     }
 
     pub fn matchesSourceLanguageBanner(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
@@ -5839,4 +5861,31 @@ pub fn sourceNaslovTemplateRole(source: []const u8, role: NaslovTemplateRole) bo
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
     return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
+}
+
+test "MG exact equals template labels remain source bound and reject collisions" {
+    var registry = Registry.empty(std.testing.allocator); defer registry.deinit();
+    try registry.addTsv("# mediawiki\nbr\tbreton\nen\tEnglish\n");
+    try std.testing.expect(registry.sourceEqualsLabel("br") == null);
+    try registry.addSourceEqualsLabel("br", "Bretôna");
+    try std.testing.expectEqualStrings("Bretôna", registry.sourceEqualsLabel("br").?);
+    try std.testing.expect(registry.resolve("Bretôna") == null);
+    try std.testing.expect(registry.resolveTrusted("Bretôna") == null);
+    try std.testing.expect(registry.resolveStrong("Bretôna") == null);
+    try std.testing.expect(registry.sourceEqualsLabel("en") == null);
+    for ([_][]const u8{ "{{Bretôna}}", "<span>Bretôna</span>", "Bretôna\n", " Bretôna", "Bretôna[[Category:br]]", "Bretôna\x7f", "Bretôna&x;", "English" }) |bad| {
+        var isolated = Registry.empty(std.testing.allocator); defer isolated.deinit();
+        try isolated.addTsv("# mediawiki\nbr\tbreton\nen\tEnglish\n");
+        try isolated.addSourceEqualsLabel("br", bad);
+        try std.testing.expect(isolated.sourceEqualsLabel("br") == null);
+    }
+    try registry.addSourceEqualsLabel("br", "Other local label");
+    try std.testing.expect(registry.sourceEqualsLabel("br") == null);
+    try registry.addSourceEqualsLabel("br", "Bretôna");
+    try std.testing.expect(registry.sourceEqualsLabel("br") == null);
+    var changed = Registry.empty(std.testing.allocator); defer changed.deinit();
+    try changed.addTsv("# mediawiki\nbr\tbreton\nen\tEnglish\n");
+    try changed.addSourceEqualsLabel("br", "Bretôna");
+    try changed.addTsv("# mediawiki\nen\tEnglish\tBretôna\n");
+    try std.testing.expect(changed.sourceEqualsLabel("br") == null);
 }

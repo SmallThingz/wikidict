@@ -1,0 +1,5 @@
+&lt;includeonly&gt;[[Категорија:Међународни говор]]&lt;/includeonly&gt;__NOEDITSECTION__
+==&lt;div id=&quot;toc&quot; class=&quot;toccolours&quot; &gt;&lt;big&gt;&lt;big&gt;&lt;big&gt;[[File:Flag of the United Nations.svg|border|32px]] ''међународно''&lt;/big&gt;&lt;/big&gt;&lt;/big&gt;&lt;/div&gt;==
+&lt;br&gt;&lt;noinclude&gt;
+[[Категорија:Сви шаблони за језик]]
+&lt;/noinclude&gt;

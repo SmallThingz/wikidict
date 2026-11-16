@@ -943,6 +943,9 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
     sizing_source.resolve_inline_missing_fn = null;
     sizing_source.ordinary_link_paint_ctx = null;
     sizing_source.resolve_ordinary_link_paint_fn = null;
+    sizing_source.ordinary_action_group_ctx = null;
+    sizing_source.resolve_ordinary_action_group_fn = null;
+    sizing_source.resolve_ordinary_action_group_script_fn = null;
     sizing_source.authored_element_style_ctx = null;
     sizing_source.resolve_authored_element_style_fn = null;
     sizing_source.page_observation_ctx = null;
@@ -1030,6 +1033,9 @@ fn attachFigurePageObservation(a: std.mem.Allocator, codes: *encoder.blob_builde
         if (styles.ordinary_link_page != null) {
             sizing_source.ordinary_link_paint_ctx = styles;
             sizing_source.resolve_ordinary_link_paint_fn = figure_page_observations.SelectedPageStyles.ordinaryLinkPaint;
+            sizing_source.ordinary_action_group_ctx = styles;
+            sizing_source.resolve_ordinary_action_group_fn = figure_page_observations.SelectedPageStyles.ordinaryActionGroup;
+            sizing_source.resolve_ordinary_action_group_script_fn = figure_page_observations.SelectedPageStyles.ordinaryActionGroupScript;
         }
     }
 }
@@ -1919,7 +1925,7 @@ const LanguageTemplateRows = struct {
 };
 
 // Discover authenticated source banners without changing ordinary registry trust.
-// Open/checksum template data only for a registered code or hyphen-code title.
+// Open/checksum template data only for registered code declarations or selected roles.
 fn loadSourceLanguageBanners(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry) !void {
     var view: LanguageTemplateRows = .{ .io = io, .a = a, .root = root, .namespaces = namespaces };
     defer view.deinit();
@@ -1940,10 +1946,26 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     var naslov_proven = [_]bool{ false, false };
     var nom_template_seen = false;
     var parenthetical_template_seen = false;
+    var equals_seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var keys = equals_seen.keyIterator();
+        while (keys.next()) |key| a.free(key.*);
+        equals_seen.deinit(a);
+    }
     while (try candidates.next()) |entry| {
         const row = entry.row;
         const this_ordinal = entry.ordinal;
         const parenthetical_title = namespaces.ofTitle(row.title);
+        const equals_code: ?[]const u8 = if (parenthetical_title.id == 10 and parenthetical_title.text.len >= 3 and
+            parenthetical_title.text[0] == '=' and parenthetical_title.text[parenthetical_title.text.len - 1] == '=' and
+            registry.codes.contains(parenthetical_title.text[1 .. parenthetical_title.text.len - 1]))
+            parenthetical_title.text[1 .. parenthetical_title.text.len - 1] else null;
+        if (equals_code) |selected_code| {
+            if (equals_seen.contains(selected_code)) return error.DuplicateLanguageTemplateSource;
+            // Iterator row storage may be reused on its next advance.
+            const owned = try a.dupe(u8, selected_code);
+            equals_seen.put(a, owned, {}) catch |err| { a.free(owned); return err; };
+        }
         const naslov_role: ?usize = if (parenthetical_title.id != 10) null else
             if (std.mem.eql(u8, parenthetical_title.text, "Наслов")) 0 else
             if (std.mem.eql(u8, parenthetical_title.text, "Значење")) 1 else null;
@@ -1976,8 +1998,9 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         const fixed_linked_tail = std.mem.eql(u8, title.text, "CMN");
         const parenthetical_heading = std.mem.eql(u8, title.text, "přeserbšćenje");
         const name_table = std.mem.eql(u8, title.text, "codetolang");
-        const message_link = !nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and registry.codes.contains(title.text);
-        const code = if (nom_section or linked_heading or fixed_linked_tail or parenthetical_heading or name_table) "" else if (message_link) title.text else blk: {
+        const equals_label = title.text.len >= 3 and title.text[0] == '=' and title.text[title.text.len - 1] == '=';
+        const message_link = !equals_label and !nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and registry.codes.contains(title.text);
+        const code = if (nom_section or linked_heading or fixed_linked_tail or parenthetical_heading or name_table) "" else if (message_link) title.text else if (equals_label) title.text[1 .. title.text.len - 1] else blk: {
             if (title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
             break :blk title.text[1 .. title.text.len - 1];
         };
@@ -1993,7 +2016,10 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         if (raw.len > 4096) continue;
         const decoded = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw) else null;
         defer if (decoded) |value| a.free(value);
-        if (nom_section) {
+        if (equals_label) {
+            if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
+            try registry.addSourceEqualsLabel(code, decoded orelse raw);
+        } else if (nom_section) {
             if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
             registry.source_nom_role = std.mem.eql(u8, decoded orelse raw, if (registry.source_nom_name_format)
                 @embedFile("testdata/fr-named-owner/langue.wikitext") else @embedFile("testdata/shy-nom-owner/langue.wikitext"));
@@ -2264,6 +2290,12 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
                 return value.matchesSourceParagraphCall(code_value, template_name, line);
             }
         }.matches,
+        .source_equals_fn = if (registry.source_equals_labels.count() != 0) struct {
+            fn label(raw: ?*const anyopaque, code_value: []const u8) ?[]const u8 {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
+                return value.sourceEqualsLabel(code_value);
+            }
+        }.label else null,
         .source_banner_fn = struct {
             fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
@@ -59444,21 +59476,6 @@ const DeMaiObservedSaved = struct {
             try actual_records.append(a, .{ .entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], heading, "Mai") });
             try reference_records.append(a, .{ .entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], heading, "Mai") });
         }
-        checkpoint = "all owner statistics and report validation";
-        try std.testing.expectEqualDeep(stats[1], stats[0]);
-        try std.testing.expectEqual(@as(usize, 1), stats[0].pages_seen);
-        try std.testing.expectEqual(@as(usize, 3), stats[0].language_records);
-        try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
-        try std.testing.expectEqual(@as(usize, 1), stats[0].fallback_pages);
-        try std.testing.expectEqualStrings(manifests[1], manifests[0]);
-        try std.testing.expectEqualStrings(reports[1], reports[0]);
-        const Report = struct { title: []const u8, reasons: []const []const u8 };
-        var report_lines = std.mem.tokenizeScalar(u8, reports[0], '\n');
-        const report = try std.json.parseFromSlice(Report, a, report_lines.next() orelse return error.TestUnexpectedResult, .{ .ignore_unknown_fields = true }); defer report.deinit();
-        try std.testing.expect(report_lines.next() == null);
-        try std.testing.expectEqualStrings("Mai", report.value.title);
-        try std.testing.expectEqual(@as(usize, 1), report.value.reasons.len);
-        try std.testing.expectEqualStrings("unsupported_parser_function", report.value.reasons[0]);
         checkpoint = "all owner body and complete Stored codec parity";
         const ranges = [_][2]usize{ .{ 1, 8 }, .{ 8, 9 }, .{ 9, 10 } };
         var total_cells: usize = 0;
@@ -59503,6 +59520,21 @@ const DeMaiObservedSaved = struct {
             total_cells += scan.cells;
         }
         try std.testing.expectEqual(@as(usize, 61), total_cells);
+        checkpoint = "all owner statistics and report validation";
+        try std.testing.expectEqualDeep(stats[1], stats[0]);
+        try std.testing.expectEqual(@as(usize, 1), stats[0].pages_seen);
+        try std.testing.expectEqual(@as(usize, 3), stats[0].language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats[0].supplemental_records);
+        try std.testing.expectEqual(@as(usize, 1), stats[0].fallback_pages);
+        try std.testing.expectEqualStrings(manifests[1], manifests[0]);
+        try std.testing.expectEqualStrings(reports[1], reports[0]);
+        const Report = struct { title: []const u8, reasons: []const []const u8 };
+        var report_lines = std.mem.tokenizeScalar(u8, reports[0], '\n');
+        const report = try std.json.parseFromSlice(Report, a, report_lines.next() orelse return error.TestUnexpectedResult, .{ .ignore_unknown_fields = true }); defer report.deinit();
+        try std.testing.expect(report_lines.next() == null);
+        try std.testing.expectEqualStrings("Mai", report.value.title);
+        try std.testing.expectEqual(@as(usize, 1), report.value.reasons.len);
+        try std.testing.expectEqualStrings("unsupported_parser_function", report.value.reasons[0]);
     }
 };
 
@@ -63279,21 +63311,8 @@ const ThJianRetained349 = struct {
         try prefix_scan.entry(a, prefix_entry);
         try std.testing.expect(std.mem.indexOf(u8, prefix_scan.text.items, "CJK UNIFIED IDEOGRAPH-9593") != null);
         try std.testing.expectEqual(@as(usize, 0), prefix_scan.figures);
-        checkpoint = "strict authentic Lua and unowned-prefix report with whole-source witnesses";
+        checkpoint = "complete Stored body actions and media before strict report";
         report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{output, "fallback-pages.jsonl"}), a, .limited(64 * 1024));
-        const Report = struct { namespace: u32, title: []const u8, reasons: []const []const u8 };
-        const parsed = try std.json.parseFromSlice(Report, a, report, .{}); defer parsed.deinit();
-        try std.testing.expectEqual(@as(u32, 0), parsed.value.namespace); try std.testing.expectEqualStrings(title, parsed.value.title);
-        // The meaningful table prefix has no earned language owner. Preserve
-        // its explicit record and normal diagnostic, never lend it to Common.
-        try std.testing.expectEqual(@as(usize, 2), parsed.value.reasons.len);
-        var lua_reason = false; var prefix_reason = false;
-        for (parsed.value.reasons) |reason| {
-            if (std.mem.eql(u8, reason, "rendered_lua_error")) { try std.testing.expect(!lua_reason); lua_reason = true; }
-            else if (std.mem.eql(u8, reason, "missing_language_heading")) { try std.testing.expect(!prefix_reason); prefix_reason = true; }
-            else return error.TestUnexpectedResult;
-        }
-        try std.testing.expect(lua_reason and prefix_reason);
         try std.testing.expectEqual(@as(usize, 1), stats.pages_seen); try std.testing.expectEqual(@as(usize, 4), stats.language_records);
         try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records); try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
         var scan: Scan = .{ .remote_target = remote, .missing_href = missing_href orelse return error.TestUnexpectedResult, .missing_label = missing_label orelse return error.TestUnexpectedResult };
@@ -63318,6 +63337,20 @@ const ThJianRetained349 = struct {
             try std.testing.expectEqual(T.MediaKind.audio, media.kind); audio += 1;
         };
         try std.testing.expectEqual(@as(usize, 1), audio);
+        checkpoint = "strict authentic Lua and unowned-prefix report with whole-source witnesses";
+        const Report = struct { namespace: u32, title: []const u8, reasons: []const []const u8 };
+        const parsed = try std.json.parseFromSlice(Report, a, report, .{}); defer parsed.deinit();
+        try std.testing.expectEqual(@as(u32, 0), parsed.value.namespace); try std.testing.expectEqualStrings(title, parsed.value.title);
+        // The meaningful table prefix has no earned language owner. Preserve
+        // its explicit record and normal diagnostic, never lend it to Common.
+        try std.testing.expectEqual(@as(usize, 2), parsed.value.reasons.len);
+        var lua_reason = false; var prefix_reason = false;
+        for (parsed.value.reasons) |reason| {
+            if (std.mem.eql(u8, reason, "rendered_lua_error")) { try std.testing.expect(!lua_reason); lua_reason = true; }
+            else if (std.mem.eql(u8, reason, "missing_language_heading")) { try std.testing.expect(!prefix_reason); prefix_reason = true; }
+            else return error.TestUnexpectedResult;
+        }
+        try std.testing.expect(lua_reason and prefix_reason);
     }
 };
 
@@ -64939,11 +64972,9 @@ pub const KuFullGetWriterOracleTesting = if (@import("builtin").is_test) struct 
     try std.testing.expectEqualSlices(u8, bytes, encoded);
     try std.testing.expectEqualDeep(stored.?, try encoder.presentation_codec.decodeAlloc(a, encoded, F.title, .supplemental, null));
     report = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{output, "fallback-pages.jsonl"}), a, .limited(64 * 1024));
-    try std.testing.expectEqualStrings("", report);
     try std.testing.expectEqual(@as(usize, 1), stats.pages_seen);
     try std.testing.expectEqual(@as(usize, 1), stats.supplemental_records);
     try std.testing.expectEqual(@as(usize, 0), stats.language_records);
-    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
     try std.testing.expect(entry.kind == .supplemental and entry.language == null and entry.language_code.len == 0);
     try std.testing.expectEqualStrings(F.title, entry.title);
     const oracle = try std.json.parseFromSliceLeaky(F.Expected, a, @embedFile("testdata/ku-full-get53658/tables-from-get.json"), .{});
@@ -65035,6 +65066,8 @@ pub const KuFullGetWriterOracleTesting = if (@import("builtin").is_test) struct 
     try std.testing.expectEqual(bibliography.len, item_index);
     // The hash-bound source and selected operation have remained complete.
     try F.hash(source, "ed942971342411e72720f64881ff55ebbc3d36a3a019d96da2b5ce8f199bcb42");
+    try std.testing.expectEqualStrings("", report);
+    try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
     }
 } else struct {};
 
@@ -66453,4 +66486,157 @@ test "normal template loader requires both exact Naslov noun and meaning contrac
         try std.testing.expectEqual(mode == 0, registry.source_naslov_noun);
         try std.testing.expectEqual(mode == 0, languageCodes(&registry, &ns).source_naslov_noun);
     }
+}
+
+const MgEqualsPrefixTest = struct {
+    const namespaces = "# wikidict-namespace-registry-v1\n# wiki\tmgwiktionary\n# dump-date\t20261001\n# content-language\tmg\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tEndrika\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tsokajy\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const registry = "# content-language\tmg\n# mediawiki\nmg\tMalagasy\nbr\tbreton\nfr\tFrantsay\nen\tAnglisy\nde\tGerman\n";
+    // Exact strict03 selected-template bytes: Endrika:=br= p123944/r7195830
+    // SHA256 51ffc433361365f9c198ca418170c4a5de9f07440f0b92905e2d94287c4031ed.
+    const br = "Bretôna";
+    // Exact p2322/r22075352 is dynamic and deliberately does not grant a label.
+    const fr = "{{=langue=|Frantsay|code=fr}}";
+    // These three actual tag210 headings surround a marked synthetic body.
+    // The later malformed table stays open and its H2 stays inside that table.
+    const first = "==Bretôna==\n===Verb form===\n# BRETON '''bold''' [[BretonTarget|label]]\n";
+    const second = "==<span id=\"fr\">Frantsay [[sokajy:frantsay]]</span>==\n===Noun===\n# FRENCH ''italic'' [[FrenchTarget]]\n";
+    const third = "==Anglisy==\n===Verb===\n# ENGLISH [[EnglishTarget]]\n{| class=\"wikitable\"\n|\n<h2>Usage notes</h2>\n# HTML SUPPORT\n==Frantsay==\n# NESTED [[Deep|leaf]] ''style''\n";
+    const expanded = first ++ second ++ third;
+    const raw = "=={{=br=}}==\n===Verb form===\n# BRETON '''bold''' [[BretonTarget|label]]\n" ++
+        "=={{=fr=}}==\n===Noun===\n# FRENCH ''italic'' [[FrenchTarget]]\n" ++
+        "=={{=en=}}==\n===Verb===\n# ENGLISH [[EnglishTarget]]\n=={{=fr=}}==\n# NESTED [[Deep|leaf]] ''style''\n";
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, body: []const u8, spelling: []const u8) !void {
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "manifest.jsonl"}), .data = "" });
+        const index = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        const rows = try std.fmt.allocPrint(a, "0\t0\tEndrika:{s}\t\t123944\t7195830\t2012-05-13T17:27:41Z\tJagwar\twikitext\t10\t1\t0\n" ++
+            "0\t0\tEndrika:=fr=\t\t2322\t22075352\t2015-10-01T23:01:42Z\tJagwar\twikitext\t10\t1\t0\n", .{spelling});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = rows });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 123944, 7195830, body); try writer.append(1, 2322, 22075352, fr); try writer.finish(index);
+    }
+    fn entry(a: std.mem.Allocator, root: []const u8, owner: []const u8, title: []const u8) !encoder.presentation_types.Entry {
+        var name: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner, &name)});
+        var mapped = try mmapPath(std.testing.io, path); defer mapped.deinit();
+        const bytes = try a.dupe(u8, mapped.bytes);
+        const blob = try encoder.blob_format.inspect(bytes);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)) orelse return error.TestUnexpectedResult;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+};
+
+test "MG normal template loader selects static equals declarations without trusting aliases" {
+    const F = MgEqualsPrefixTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    inline for (.{ .{ F.br, "=br=", true }, .{ F.br, "-br-", false }, .{ F.br, "br", false }, .{ "{{dynamic}}", "=br=", false }, .{ "<span>Bretôna</span>", "=br=", false } }) |row| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(std.testing.io, a, root, row[0], row[1]);
+        var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry);
+        try loadSourceLanguageBanners(std.testing.io, a, root, &ns, &registry);
+        try std.testing.expectEqual(row[2], registry.sourceEqualsLabel("br") != null);
+        try std.testing.expect(registry.sourceEqualsLabel("fr") == null);
+        try std.testing.expect(registry.resolve(F.br) == null);
+        try std.testing.expect(registry.resolveStrong(F.br) == null);
+        try std.testing.expect(registry.resolveTrusted(F.br) == null);
+        if (row[2]) try std.testing.expectEqualStrings(F.br, languageCodes(&registry, &ns).source_equals_fn.?( &registry, "br").?);
+    }
+    for ([_]bool{ false, true }) |reverse| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = try std.fs.path.join(a, &.{root, "manifest.jsonl"}), .data = "" });
+        const index = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = index, .data =
+            "0\t0\tEndrika:=br=\t\t123944\t7195830\t2012-05-13T17:27:41Z\tJagwar\twikitext\t10\t1\t0\n" ++
+            "0\t0\tEndrika:=br=\t\t123945\t7195831\t2012-05-13T17:27:41Z\tJagwar\twikitext\t10\t1\t0\n" });
+        var template_writer = try dump_source.TemplateSourceWriter.init(std.testing.io, a, root); defer template_writer.deinit();
+        try template_writer.append(0, 123944, 7195830, if (reverse) "{{dynamic}}" else F.br);
+        try template_writer.append(1, 123945, 7195831, if (reverse) F.br else "{{dynamic}}");
+        try template_writer.finish(index);
+        var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry);
+        try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadSourceLanguageBanners(std.testing.io, a, root, &ns, &registry));
+    }
+}
+
+test "MG source proved prefix preserves three owners and complete malformed table body actions codec" {
+    const F = MgEqualsPrefixTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, F.namespaces); defer ns.deinit();
+    try std.testing.expect(encoder.language_source.mayHaveLanguageHtmlHeading(F.expanded, &ns));
+    var raw_sections = encoder.language_source.Iterator.init(F.raw);
+    var expanded_sections = encoder.language_source.Iterator.init(F.expanded);
+    var raw_count: usize = 0; var expanded_count: usize = 0;
+    while (raw_sections.next() != null) raw_count += 1;
+    while (expanded_sections.next() != null) expanded_count += 1;
+    try std.testing.expectEqual(@as(usize, 4), raw_count);
+    try std.testing.expectEqual(@as(usize, 3), expanded_count);
+    var original_sections: ?[]const encoder.presentation_types.Section = null;
+    for (0..4) |arm| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(std.testing.io, a, root, if (arm == 2) "Conflicting label" else F.br, "=br=");
+        var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry);
+        if (arm != 0) try loadSourceLanguageBanners(std.testing.io, a, root, &ns, &registry);
+        const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{root, "output"});
+        var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        const expanded = if (arm == 3) try std.mem.replaceOwned(u8, a, F.expanded, "==Bretôna==", "==German==") else F.expanded;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "tag-prefix-control", expanded, F.raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, if (arm == 1) 3 else 1), stats.language_records);
+        if (arm != 1) {
+            const unknown = try F.entry(a, output, "Unclassified", "tag-prefix-control");
+            try std.testing.expectEqualStrings("", unknown.language_code);
+            if (arm == 3) {
+                try std.testing.expectEqualStrings("German", unknown.sections[0].title);
+                try std.testing.expectEqualDeep(original_sections.?[1..], unknown.sections[1..]);
+                try std.testing.expectEqualDeep(original_sections.?[0].blocks, unknown.sections[0].blocks);
+            } else if (original_sections) |sections| try std.testing.expectEqualDeep(sections, unknown.sections) else original_sections = unknown.sections;
+            continue;
+        }
+        var sections: std.ArrayList(encoder.presentation_types.Section) = .empty;
+        inline for (.{ .{ "breton", "br" }, .{ "Frantsay", "fr" }, .{ "Anglisy", "en" } }) |row| {
+            const entry = try F.entry(a, output, row[0], "tag-prefix-control");
+            try std.testing.expectEqualStrings(row[1], entry.language_code);
+            try sections.appendSlice(a, entry.sections);
+            var body = std.Io.Writer.Allocating.init(a); defer body.deinit();
+            try std.json.Stringify.value(entry.sections, .{}, &body.writer);
+            const json = body.written();
+            try std.testing.expect(std.mem.indexOf(u8, json, if (std.mem.eql(u8, row[1], "br")) "BretonTarget" else if (std.mem.eql(u8, row[1], "fr")) "FrenchTarget" else "EnglishTarget") != null);
+            if (std.mem.eql(u8, row[1], "en")) {
+                try std.testing.expect(std.mem.indexOf(u8, json, "Deep") != null);
+                try std.testing.expect(std.mem.indexOf(u8, json, "leaf") != null);
+                try std.testing.expect(std.mem.indexOf(u8, json, "NESTED") != null);
+                try std.testing.expect(std.mem.indexOf(u8, json, "\"table\":{") != null);
+            }
+        }
+        // Every complete section graph, including formatting/actions and the
+        // authored open table, survives the ownership split unchanged.
+        try std.testing.expectEqualDeep(original_sections.?, sections.items);
+    }
+    // A genuine leading support heading has no equals declaration. Even with
+    // a later table changing raw/expanded counts, its existing owner policy stays.
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try F.install(std.testing.io, a, root, F.br, "=br=");
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry);
+    try loadSourceLanguageBanners(std.testing.io, a, root, &ns, &registry);
+    const codes = languageCodes(&registry, &ns);
+    const output = try std.fs.path.join(a, &.{root, "support"});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    const support_raw = "==Pronunciation==\n# SUPPORT [[SupportTarget]]\n=={{=en=}}==\n# ENGLISH\n=={{=fr=}}==\n# NESTED\n";
+    const support = "==Pronunciation==\n# SUPPORT [[SupportTarget]]\n==Anglisy==\n# ENGLISH\n{|\n|\n==Frantsay==\n# NESTED\n";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "support-control", support, support_raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    const entry = try F.entry(a, output, "Anglisy", "support-control");
+    const body = try std.json.Stringify.valueAlloc(a, entry.sections, .{});
+    for ([_][]const u8{ "SUPPORT", "SupportTarget", "ENGLISH", "NESTED" }) |word| try std.testing.expect(std.mem.indexOf(u8, body, word) != null);
 }

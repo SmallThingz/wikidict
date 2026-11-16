@@ -1,0 +1,78 @@
+==Persana==
+
+===<span class="icone">[[Image:Nuvola apps bookcase.svg|30px|link=Fanoroana:Etimôlôjia|Fiaviana ary tantaran'i « کاربرد »]]</span>&nbsp;Etimôlôjia===
+:persana ''کار<tr:kâr><t:work>'' + ''برد<tr:bord><pos:past stem of <i class="Arab fa-Arab mention" lang="fa">[[:بردن#Persian|بردن]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span lang="fa-Latn" class="mention-tr tr Latn">bordan</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">to carry</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>>''.
+===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Anarana iombonana [[sokajy:persana]][[Catégorie:Anarana iombonana amin'ny teny persana]]===
+'''کاربرد''' 
+# [[fampiasana]], [[fampiharana]]
+#* ''کاربردهای هوش مصنوعی''
+
+====<span title="Fampahalalàna ara-peo an'ilay teny کاربرد">[[Image:Nuvola apps edu languages.svg|30px|link=help:fanononana]] Fanononana</span>==== 
+* <div class="vsSwitcher" data-toggle-category="pronunciations" style="width: 42em; max-width:100%;"><span class="vsToggleElement" style="float: right;">&nbsp;</span>
+<div class="vsShow" style="display:none">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari Persian|Dari, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div>
+<div class="vsHide">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari Persian|Dari, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari#South-Eastern|Kabuli]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Hazaragi dialect|Hazaragi]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɔːɾ.búɹd̪̥]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div></div>
+<div>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Iranian Persian|Iran, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɒːɹ.bóɹd̪̥]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div>
+<span></span>
+{|class="fa-IPA mw-collapsed mw-collapsible" 
+! colspan="2" |Readings
+|- 
+
+|-
+! Dari reading<sup><small>[[Wiktionary:Persian transliteration/Classical|?]]</small></sup>
+|kārburd
+|-
+! Iranian reading<sup><small>[[Wiktionary:Persian transliteration/Iranian|?]]</small></sup>
+|kârbord
+|-
+
+|}<templatestyles src="Template:fa-IPA/style.css" />
+
+<h3><span title="Teny na fomba fiteny mifandraika amin'i « کاربرد »">Teny mifandraika</span></h3>
+* [[به کار بردن]]
+* [[کاربردی]]
+
+<h4>[[File:Books-aj.svg aj ashton 01f.svg|35px|link=Wiktionary:Tsiahy]] Tsiahy</h4>
+* Ity pejy ity dia nadika avy amin'ny pejy [[:en:کاربرد|کاربرد]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//w/index.php?title=%DA%A9%D8%A7%D8%B1%D8%A8%D8%B1%D8%AF&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]
+==Persana==
+
+===[[Image:Open book 01.svg|30px|link=help:karazan-teny]] Anarana iombonana [[sokajy:persana]][[Catégorie:Anarana iombonana amin'ny teny persana]]===
+'''کاربرد''' (kârbord)
+# [[fampiasana]], [[fampiharana]]
+#* '''''کاربردها'''ی هوش مصنوعی''
+
+====<span title="Fampahalalàna ara-peo an'ilay teny کاربرد">[[Image:Nuvola apps edu languages.svg|30px|link=help:fanononana]] Fanononana</span>==== 
+* <div class="vsSwitcher" data-toggle-category="pronunciations" style="width: 42em; max-width:100%;"><span class="vsToggleElement" style="float: right;">&nbsp;</span>
+<div class="vsShow" style="display:none">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari Persian|Dari, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div>
+<div class="vsHide">
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari Persian|Dari, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Dari#South-Eastern|Kabuli]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɑːɾ.bʊ́ɹd̪]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]
+** <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Hazaragi dialect|Hazaragi]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɔːɾ.búɹd̪̥]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div></div>
+<div>
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">[[w:Iranian Persian|Iran, formal]]</span><span class="ib-brac qualifier-brac">)</span> [[Wiktionary:International Phonetic Alphabet|IPA]]<sup>([[Appendix:Persian pronunciation|key]])</sup>:&#32;<span class="IPA nowrap">[kʰɒːɹ.bóɹd̪̥]</span>[[Category:Persian terms with IPA pronunciation|کاربرد]]</div>
+<span></span>
+{|class="fa-IPA mw-collapsed mw-collapsible" 
+! colspan="2" |Readings
+|- 
+
+|-
+! Dari reading<sup><small>[[Wiktionary:Persian transliteration/Classical|?]]</small></sup>
+|kārburd
+|-
+! Iranian reading<sup><small>[[Wiktionary:Persian transliteration/Iranian|?]]</small></sup>
+|kârbord
+|-
+
+|}<templatestyles src="Template:fa-IPA/style.css" />
+
+<h3><span title="Teny na fomba fiteny mifandraika amin'i « کاربرد »">Teny mifandraika</span></h3>
+* [[به کار بردن]]
+* [[کاربردی]]
+
+<h4>[[File:Books-aj.svg aj ashton 01f.svg|35px|link=Wiktionary:Tsiahy]] Tsiahy</h4>
+* Ity pejy ity dia nadika avy amin'ny pejy [[:en:کاربرد|کاربرد]] tao amin'ny Wikibolana amin'ny teny anglisy. ([http://en.wiktionary.org//w/index.php?title=%DA%A9%D8%A7%D8%B1%D8%A8%D8%B1%D8%AF&action=history lisitry ny mpandray anjara])[[sokajy:Pejy avy any amin'ny wikibolana anglisy]]

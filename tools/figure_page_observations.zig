@@ -486,8 +486,21 @@ fn figureStyleFlowSourceProofsIn(a: A, ns: *const namespaces.Registry, source: [
 fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, source: []const u8,
     ranges: []const FigureStyleRange, ready_caption: bool, v11_missing_caption: bool, selected_get: ?SelectedGetFlow) ![]FigureStyleProof
 {
+    return figureStyleFlowSourceProofsWithNative(a, ns, source, ranges, ready_caption, v11_missing_caption, selected_get, null);
+}
+const ReadyFigureNativeContext = struct { files: *const sizing.Registry, context: compiler.Context };
+fn figureStyleFlowSourceProofsWithNative(a: A, ns: *const namespaces.Registry, source: []const u8,
+    ranges: []const FigureStyleRange, ready_caption: bool, v11_missing_caption: bool,
+    selected_get: ?SelectedGetFlow, ready_native: ?ReadyFigureNativeContext) ![]FigureStyleProof
+{
     if (ready_caption and v11_missing_caption) return invalid;
-    if (ranges.len == 0 or ranges.len > 64 or std.mem.indexOf(u8, source, "__") != null) return invalid;
+    if (ready_native != null and (!ready_caption or v11_missing_caption or selected_get != null)) return invalid;
+    if (ready_native) |native| {
+        const behavior = native.context.behavior_switches orelse return invalid;
+        if (native.context.namespace_catalog != ns or
+            !std.mem.eql(u8, &behavior.namespace_sha256, &ns.source_sha256)) return invalid;
+    }
+    if (ranges.len == 0 or ranges.len > 64 or (ready_native == null and std.mem.indexOf(u8, source, "__") != null)) return invalid;
     const proofs = try a.alloc(FigureStyleProof, ranges.len);
     var previous: usize = 0;
     var mixed_caption = false;
@@ -517,11 +530,12 @@ fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, sour
             for (caption_shape.nodes) |caption_node| if (caption_node.kind == .span or caption_node.kind == .line_break or
                 caption_node.kind == .link) { mixed_caption = true; };
         } else if (!empty_caption) try styleSourceLabelIn(a, ns, node.text[caption_at..], true, 0, false, v11_missing_caption);
-        for (proofs[0..index]) |old| if (equal(old.canonical_file, canonical)) return invalid;
-        proof.* = .{ .range = range, .canonical_file = canonical, .options_start = options_start,
+        const observed_file = if (ready_native) |native| try readyFigureCanonicalFile(a, ns, native.files, canonical) else null;
+        for (proofs[0..index]) |old| if (equal(old.observed_canonical_file orelse old.canonical_file, observed_file orelse canonical)) return invalid;
+        proof.* = .{ .range = range, .canonical_file = canonical, .observed_canonical_file = observed_file, .options_start = options_start,
             .options_end = options_start + node.text.len, .caption_start = options_start + caption_at, .empty_caption = empty_caption, .v11_missing_left = v11_missing_caption };
     }
-    if (ready_caption and !mixed_caption) return invalid;
+    if (ready_caption and !mixed_caption and ready_native == null) return invalid;
     var complete_missing_figures = !ready_caption;
     const seen = try a.alloc(usize, ranges.len); @memset(seen, 0);
     var tags: [missing_style_body_tags.len]usize = @splat(0);
@@ -529,10 +543,24 @@ fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, sour
     var newline_links: std.ArrayList(V11SourceNewlineLink) = .empty;
     var at: usize = 0;
     while (at < source.len) {
+        if (ready_native) |native| {
+            // These are the same registered non-File controls consumed by the
+            // normal renderer. Unknown switches and dynamic conversion remain closed.
+            const behavior = native.context.behavior_switches orelse return invalid;
+            if (try behavior.matchAt(a, source, at)) |end| {
+                if (end <= at or end > source.len) return invalid;
+                at = end; continue;
+            }
+            if (std.mem.startsWith(u8, source[at..], "__")) return invalid;
+            if (std.mem.startsWith(u8, source[at..], "-{")) {
+                at = try authoredRuleRuleFreeConversionEnd(a, ns, source, at); continue;
+            }
+        }
         const line_start = at == 0 or source[at - 1] == '\n';
         if (line_start and std.mem.startsWith(u8, source[at..], "{|")) {
             if (wiki_tables == 64) return invalid;
             const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse return invalid;
+            if (ready_native != null and std.mem.indexOf(u8, source[at..end], "__") != null) return invalid;
             if (v11_missing_caption) try v11MissingWikiTableSourceAttributes(a, source[at + 2..end]) else {
                 const text = try std.fmt.allocPrint(a, "<table {s}>", .{source[at + 2..end]});
                 try missingStyleSourceAttributes(a, syntax.tagAt(text, 0) orelse return invalid);
@@ -547,6 +575,7 @@ fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, sour
         if (source[at] == '<') {
             if (v11_missing_caption and v11MissingLiteralLessThan(source, at)) { at += 1; continue; }
             const tag = syntax.tagAt(source, at) orelse return invalid;
+            if (ready_native != null and std.mem.indexOf(u8, source[at..tag.end], "__") != null) return invalid;
             try missingStyleSourceAttributesIn(a, tag, v11_missing_caption);
             if (tag.is("center")) {
                 if (selected_get == null or wiki_tables == 0) return invalid;
@@ -587,6 +616,8 @@ fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, sour
             var iterator: encoder.document_ir.InlineIterator = .{ .input = source, .cursor = at, .renderer_boundaries = true };
             const node = iterator.next() orelse return invalid;
             if ((node.kind != .link and node.kind != .external_link) or node.link_label_restored_close or iterator.cursor <= at) return invalid;
+            // Whole link labels are skipped here, not a behavior-control domain.
+            if (ready_native != null and std.mem.indexOf(u8, source[at..iterator.cursor], "__") != null) return invalid;
             if (std.mem.indexOfAny(u8, source[at..iterator.cursor], "\r\n") != null) {
                 if (!v11_missing_caption or newline_links.items.len == 64) return invalid;
                 try newline_links.append(a, try v11MissingNewlineLink(a, ns, source, at, iterator.cursor, node));
@@ -595,8 +626,9 @@ fn figureStyleFlowSourceProofsWithGet(a: A, ns: *const namespaces.Registry, sour
             var selected_ready = false;
             var selected_figure = false;
             if (node.kind == .link) if (try compiler.figureObservationFileTargetAlloc(a, node.target, .{ .namespace_catalog = ns })) |target| {
-                const canonical = try canonicalFile(a, ns, target);
-                for (proofs, seen) |*proof, *count| if (equal(proof.canonical_file, canonical)) {
+                const canonical = if (ready_native) |native| try readyFigureCanonicalFile(a, ns, native.files, target)
+                    else try canonicalFile(a, ns, target);
+                for (proofs, seen) |*proof, *count| if (equal(proof.observed_canonical_file orelse proof.canonical_file, canonical)) {
                     if (at != proof.range.start or end != proof.range.end or wiki_tables != 0) return invalid;
                     // An ordinary unclosed UL does not suppress File expansion.
                     // It issues no ancestry: every other active markup scope and
@@ -1369,6 +1401,8 @@ const FigureStyleCandidate = struct { frame: u32, anchor: u32, media: u32, capti
 const FigureStyleProof = struct {
     range: FigureStyleRange,
     canonical_file: []const u8,
+    // Separate authenticated media identity; source token/options keep their lexical key.
+    observed_canonical_file: ?[]const u8 = null,
     options_start: usize,
     options_end: usize,
     caption_start: usize,
@@ -1798,13 +1832,13 @@ fn figureStyleCandidatesIn(a: A, ns: *const namespaces.Registry, html: []const u
             const anchor = nodes[anchor_index];
             if (!anchor.tag.is("a")) continue;
             const file = (try fileHref(a, ns, anchor.attributes.get("href") orelse continue)) orelse continue;
-            if (!equal(file, proof.canonical_file)) continue;
+            if (!equal(file, proof.observed_canonical_file orelse proof.canonical_file)) continue;
             const frame_index = anchor.parent orelse return invalid;
             const frame = nodes[frame_index];
             if (!frame.tag.is("figure") or !equal(frame.attributes.get("typeof") orelse "", "mw:File/Thumb") or
                 !profile.Profile.hasClass(anchor.attributes.get("class") orelse "", "mw-file-description") or
                 !profile.Profile.hasClass(media.attributes.get("class") orelse "", "mw-file-element")) return invalid;
-            try imageSource(a, ns, media.attributes.get("src") orelse return invalid, proof.canonical_file);
+            try imageSource(a, ns, media.attributes.get("src") orelse return invalid, proof.observed_canonical_file orelse proof.canonical_file);
             const anchor_end = anchor.inner_end orelse return invalid;
             if (frame.first_child != anchor_index or anchor.first_child != media_index or
                 frame.tag.end != anchor.start or anchor.tag.end != media.start or media.tag.end != anchor_end) return invalid;
@@ -1882,7 +1916,7 @@ fn figureObservedHasText(html: []const u8, nodes: []const ObservedSiblingNode, i
     return false;
 }
 // A complete returned subtree has a physical element inventory. Publish only
-// direct-child facts owned by a closed DIV, after revalidating every opening,
+// direct-child facts owned by closed supported parents, after revalidating every opening,
 // explicit close, raw-text STYLE and unfiltered child gap. The captured root's
 // own siblings and the external shell remain unknown.
 fn figureSiblingGap(raw: []const u8, text_allowed: bool) bool {
@@ -2006,7 +2040,11 @@ fn figureObservedCompleteSiblings(a: A, html: []const u8, source: []const Observ
     for (source, 0..) |node, index| if (node.parent) |parent| {
         const closed_dd = source[parent].tag.is("dd") and
             (if (source[parent].parent) |outer| source[outer].tag.is("dl") else false);
-        if (!source[parent].tag.is("div") and !closed_dd) continue;
+        // Explicitly closed formatting/neutral inline parents use the same
+        // full raw inventory proof. No implied/adoption-agency tree is issued.
+        const closed_inline = source[parent].tag.is("i") or source[parent].tag.is("em") or
+            source[parent].tag.is("b") or source[parent].tag.is("strong") or source[parent].tag.is("span");
+        if (!source[parent].tag.is("div") and !closed_dd and !closed_inline) continue;
         nodes[parent + shift].known_complete_child_elements = true;
         nodes[index + shift].known_previous_element_sibling = if (node.previous) |previous| @intCast(previous + shift) else null;
         nodes[index + shift].known_no_previous_element_sibling = node.previous == null;
@@ -2273,6 +2311,60 @@ fn blockMediaOperationRanges(a: A, ns: *const namespaces.Registry, source: []con
             node.text.ptr != inside[pipe + 1..].ptr or node.text.len != inside.len - pipe - 1) return invalid;
         _ = (try compiler.figureObservationFileTargetAlloc(a, node.target, .{ .namespace_catalog = ns })) orelse return invalid;
     }
+}
+
+// Resolve only through the same fully authenticated normal Registry used by
+// Book intake. A captured href is never an alias certificate.
+fn readyFigureCanonicalFile(a: A, ns: *const namespaces.Registry, files: *const sizing.Registry, file: []const u8) ![]const u8 {
+    if (!files.file_authority or !std.mem.eql(u8, &files.namespace_catalog.source_sha256, &ns.source_sha256)) return invalid;
+    const lexical = try canonicalFile(a, ns, file);
+    defer a.free(lexical);
+    if (try sizing.Registry.resolveCanonicalFile(files, a, lexical)) |resolved| {
+        defer a.free(resolved);
+        return canonicalFile(a, ns, resolved);
+    }
+    return a.dupe(u8, lexical);
+}
+fn hasAliasedReadyFigureRanges(a: A, ns: *const namespaces.Registry, files: *const sizing.Registry,
+    source: []const u8, ranges: []const FigureStyleRange) !bool
+{
+    if (ranges.len == 0 or ranges.len > 64) return false;
+    var previous: usize = 0;
+    var aliased = false;
+    for (ranges) |range| {
+        if (range.media_kind != .image or range.start < previous or range.start >= range.end or range.end > source.len) return false;
+        previous = range.end;
+        const token = source[range.start..range.end];
+        var iterator: encoder.document_ir.InlineIterator = .{ .input = token, .renderer_boundaries = true };
+        const node = iterator.next() orelse return false;
+        if (node.kind != .link or !node.link_has_pipe or node.link_empty_label or node.link_label_restored_close or
+            node.trail.len != 0 or iterator.cursor != token.len) return false;
+        const target = (try compiler.figureObservationFileTargetAlloc(a, node.target, .{ .namespace_catalog = ns })) orelse return false;
+        const lexical = try canonicalFile(a, ns, target);
+        const resolved = try readyFigureCanonicalFile(a, ns, files, lexical);
+        if (!equal(lexical, resolved)) aliased = true;
+    }
+    return aliased;
+}
+fn selectedReadyFigureOperations(a: A, ns: *const namespaces.Registry, registry: ?*const sizing.Registry,
+    source: []const u8, stored: *const PageStyleData, selected_context: ?compiler.Context) !*const PageStyleData
+{
+    if (!stored.deferred_ready_styles) return stored;
+    const context = selected_context orelse return invalid;
+    const files = registry orelse return invalid;
+    if (context.namespace_catalog != ns or !equal(context.title, stored.page.title) or
+        context.behavior_switches == null or context.image_options == null) return invalid;
+    const ranges = stored.page.figure_style_operations orelse return invalid;
+    if (!try hasAliasedReadyFigureRanges(a, ns, files, source, ranges)) return invalid;
+    const proofs = try figureStyleFlowSourceProofsWithNative(a, ns, source, ranges, true, false, null,
+        .{ .files = files, .context = context });
+    try figureStyleCandidates(a, ns, stored.observed_html, stored.observed_nodes, proofs);
+    const result = try a.create(PageStyleData);
+    result.* = stored.*;
+    result.figure_styles = proofs;
+    result.deferred_ready_styles = false;
+    if (stored.page.figure_style_assets) |assets| result.figure_assets = try figureStyleAssets(a, ns, assets, result);
+    return result;
 }
 
 fn selectedBlockMediaOperations(a: A, ns: *const namespaces.Registry, source: []const u8,
@@ -2960,6 +3052,7 @@ const PageStyleData = struct {
     observed_nodes: []const ObservedSiblingNode = &.{},
     observed_html: []const u8 = "",
     figure_styles: []const FigureStyleProof = &.{},
+    deferred_ready_styles: bool = false,
     figure_assets: []const compiler.FigureObservedAsset = &.{},
     block_renditions: ?FigureBlockRenditions = null,
     source_custom_elements: []const profile.SourceCustomElementProof = &.{},
@@ -3610,6 +3703,258 @@ fn selectInlineMissingStyles(a: A, ns: *const namespaces.Registry, registry: ?*c
     return result.toOwnedSlice(a);
 }
 
+const OrdinaryActionGroupSpelling = struct {
+    external_source: bool,
+    explicit_label: bool,
+    target: []const u8,
+    label: []const u8,
+    trail: []const u8,
+};
+
+// A complete ordinary operation includes its link trail. The normal tokenizer
+// and namespace resolver retain ownership of spelling and destination rules.
+fn ordinaryActionGroupSpelling(a: A, selected: *const SelectedPageStyles,
+    operation: compiler.OrdinaryActionGroupOperation) !?OrdinaryActionGroupSpelling
+{
+    const owner = selected.ordinary_link_page orelse return null;
+    const start = std.math.sub(usize, @intFromPtr(operation.token.ptr), @intFromPtr(selected.source.ptr)) catch return null;
+    if (operation.token.len == 0 or start >= selected.source.len or operation.token.len > selected.source.len - start or
+        !equal(operation.token, selected.source[start..][0..operation.token.len])) return null;
+    var parser: encoder.document_ir.InlineIterator = .{ .input = selected.source[start..],
+        .renderer_boundaries = true, .link_trail = owner.context.link_trail };
+    const item = parser.next() orelse return null;
+    if (parser.cursor != operation.token.len or item.target.len == 0) return null;
+    if (item.kind == .link) {
+        const pair = syntax.balanced(operation.token, 0) orelse return null;
+        if (item.link_empty_label or item.link_label_restored_close or pair.end > operation.token.len or
+            pair.end + item.trail.len != operation.token.len) return null;
+        const destination = (try compiler.literalSourceLinkDestinationAlloc(a, selected.namespace_catalog, item.target)) orelse return null;
+        if (!equal(destination.target, operation.target) or destination.external != operation.external or
+            operation.interwiki != destination.external) return null;
+        return .{ .external_source = false, .explicit_label = item.link_has_pipe,
+            .target = item.target, .label = item.text, .trail = item.trail };
+    }
+    if (item.kind != .external_link or !operation.external or operation.interwiki or item.trail.len != 0 or
+        item.external_label_prefix.len != 0 or !equal(item.target, operation.target) or
+        !encoder.document_ir.validExternalUrl(item.target) or
+        std.mem.indexOfAny(u8, item.target, "<>\\\x00\r\n\t ") != null) return null;
+    const explicit_label = item.text.ptr != item.target.ptr;
+    if (explicit_label and (item.text.len == 0 or operation.token[0] != '[' or operation.token[operation.token.len - 1] != ']')) return null;
+    return .{ .external_source = true, .explicit_label = explicit_label,
+        .target = item.target, .label = item.text, .trail = "" };
+}
+
+fn ordinaryActionGroupExternalHref(source: []const u8, explicit_label: bool, attrs: Inventory) ?[]const u8 {
+    const href = attrs.get("href") orelse return null;
+    if (!equal(attrs.get("class") orelse return null, if (explicit_label) "external text" else "external free")) return null;
+    if (attrs.get("rel")) |rel| if (!equal(rel, "nofollow")) return null;
+    for (attrs.attributes) |attribute| {
+        if (!equal(attribute.name, "href") and !equal(attribute.name, "class") and
+            !equal(attribute.name, "rel") and !equal(attribute.name, "data-mw-original-href")) return null;
+    }
+    const original = attrs.get("data-mw-original-href");
+    if (equal(href, source)) {
+        if (original) |value| if (!equal(value, source)) return null;
+        return href;
+    }
+    // This is the same literal upgrade witness used by selectedGetBareLinkEnd.
+    // No host, path, query, fragment, or percent-decoding rewrite is inferred.
+    if (!std.mem.startsWith(u8, source, "http://") or !std.mem.startsWith(u8, href, "https://") or
+        !equal(href[8..], source[7..]) or !equal(original orelse return null, source)) return null;
+    return href;
+}
+
+fn ordinaryActionGroupCapturedTarget(a: A, selected: *const SelectedPageStyles,
+    operation: compiler.OrdinaryActionGroupOperation, spelling: OrdinaryActionGroupSpelling,
+    node: ObservedSiblingNode, html: []const u8) !?[]const u8
+{
+    if (!node.tag.is("a") or node.tag.closing or node.tag.self_closing or node.inner_end == null) return null;
+    const pair = syntax.matchingTag(html, node.tag) orelse return null;
+    const closing = currentLiteralHtmlTagAt(html, pair.inner_end) orelse return null;
+    if (node.start >= pair.end or pair.end > html.len or node.inner_end.? != pair.inner_end or
+        !closing.closing or closing.attrs.len != 0) return null;
+    const owner = selected.ordinary_link_page orelse return null;
+    if (!spelling.external_source) {
+        if (!try noteInlineCorrespondsIn(a, selected.namespace_catalog, operation.token, html[node.start..pair.end],
+            0, false, true, owner.context, null)) return null;
+        return operation.target;
+    }
+    const href = ordinaryActionGroupExternalHref(spelling.target, spelling.explicit_label, node.attributes) orelse return null;
+    if (spelling.explicit_label) {
+        if (!try noteInlineCorrespondsIn(a, selected.namespace_catalog, spelling.label,
+            html[node.tag.end..pair.inner_end], 0, true, true, owner.context, null)) return null;
+    } else {
+        if (node.first_child != null) return null;
+        const label = decodedAttribute(a, html[node.tag.end..pair.inner_end]) catch |err| switch (err) {
+            error.OutOfMemory => return err, else => return null,
+        };
+        if (!equal(label, spelling.label) or !equal(spelling.label, spelling.target)) return null;
+    }
+    return href;
+}
+
+// Only the neutral inline descendants admitted by the current rich sampler are
+// flattened here. Ruby, script metrics, media and line breaks need their own
+// structured correspondence and are deliberately not reduced to plain text.
+fn ordinaryActionGroupCapturedText(a: A, raw: []const u8) !?[]const u8 {
+    if (raw.len > 65536) return null;
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    var at: usize = 0;
+    var depth: usize = 0;
+    while (at < raw.len) {
+        if (raw[at] == '<') {
+            const tag = currentLiteralHtmlTagAt(raw, at) orelse return null;
+            var supported = false;
+            for ([_][]const u8{ "b", "strong", "i", "em", "span" }) |name| if (tag.is(name)) { supported = true; break; };
+            if (!supported or tag.self_closing) return null;
+            if (tag.closing) {
+                if (depth == 0 or tag.attrs.len != 0) return null;
+                depth -= 1;
+            } else {
+                if (depth == 16) return null;
+                _ = syntax.matchingTag(raw, tag) orelse return null;
+                depth += 1;
+            }
+            at = tag.end;
+        } else {
+            const end = std.mem.indexOfScalarPos(u8, raw, at, '<') orelse raw.len;
+            const value = decodedAttribute(a, raw[at..end]) catch |err| switch (err) {
+                error.OutOfMemory => return err, else => return null,
+            };
+            if (!std.unicode.utf8ValidateSlice(value) or std.mem.indexOfAny(u8, value, "\x00\r\n\t\x0c") != null) return null;
+            try out.appendSlice(a, value);
+            at = end;
+        }
+    }
+    if (depth != 0 or out.items.len == 0) return null;
+    return try out.toOwnedSlice(a);
+}
+
+fn ordinaryActionGroupStyleClone(a: A, original: profile.ObservedPlainInlineLinkStyle) !profile.ObservedPlainInlineLinkStyle {
+    var result = original;
+    result.font.language = try a.dupe(u8, original.font.language);
+    result.font.classes = try a.dupe(u8, original.font.classes);
+    if (original.font.font_family) |family| switch (family) {
+        .sans_serif => {},
+        .stack => |stack| {
+            var copied = stack;
+            const names = try a.alloc([]const u8, stack.names.len);
+            for (names, stack.names) |*name, source| name.* = try a.dupe(u8, source);
+            copied.names = names;
+            result.font.font_family = .{ .stack = copied };
+        },
+    };
+    inline for (.{ "normal", "hover", "active", "hover_active", "visited", "visited_hover", "visited_active", "visited_hover_active" }) |name|
+        @field(result.paint, name).foreground = try a.dupe(u8, @field(original.paint, name).foreground);
+    if (original.paint.focus_outline) |outline| {
+        if (outline.color.value) |value| result.paint.focus_outline.?.color.value = try a.dupe(u8, value);
+    }
+    return result;
+}
+
+const OrdinaryActionGroupSupSource = struct {
+    token: []const u8,
+    opening_len: usize,
+    body_len: usize,
+    classes: []const u8,
+};
+
+fn ordinaryActionGroupSupSource(a: A, operation: compiler.OrdinaryActionGroupOperation,
+    spelling: OrdinaryActionGroupSpelling) !?OrdinaryActionGroupSupSource
+{
+    if (spelling.trail.len != 0 or spelling.label.len == 0 or spelling.label[0] != '<') return null;
+    const tag = syntax.tagAt(spelling.label, 0) orelse return null;
+    if (!tag.is("sup") or tag.closing or tag.self_closing) return null;
+    const pair = syntax.matchingTag(spelling.label, tag) orelse return null;
+    if (pair.end != spelling.label.len or pair.inner_end <= tag.end) return null;
+    const closing = syntax.tagAt(spelling.label, pair.inner_end) orelse return null;
+    if (!closing.closing or closing.attrs.len != 0) return null;
+    const start = @intFromPtr(spelling.label.ptr);
+    const base = @intFromPtr(operation.token.ptr);
+    if (start < base or start - base > operation.token.len or spelling.label.len > operation.token.len - (start - base)) return null;
+    const attrs = (try siblingSourceAttributes(a, tag)) orelse return null;
+    for (attrs.attributes) |attribute| if (!equal(attribute.name, "class")) return null;
+    const body = spelling.label[tag.end..pair.inner_end];
+    // This receipt is the complete text-only SUP body. Nested HTML, wiki
+    // actions, formatting markers and generated constructs retain their routes.
+    if (std.mem.indexOfAny(u8, body, "<>[]{}\r\n\t\x0c") != null or std.mem.indexOf(u8, body, "''") != null) return null;
+    const text_value = (try ordinaryActionGroupCapturedText(a, body)) orelse return null;
+    if (std.mem.trim(u8, text_value, " \t\r\n").len == 0) return null;
+    return .{ .token = spelling.label, .opening_len = tag.end, .body_len = pair.inner_end - tag.end,
+        .classes = attrs.get("class") orelse "" };
+}
+
+fn ordinaryActionGroupFontEqual(left: encoder.presentation_types.InlineFontSnapshot,
+    right: encoder.presentation_types.InlineFontSnapshot) bool
+{
+    if (!equal(left.language, right.language) or !equal(left.classes, right.classes) or
+        (left.font_family == null) != (right.font_family == null)) return false;
+    if (left.font_family) |family| {
+        const other = right.font_family.?;
+        if (std.meta.activeTag(family) != std.meta.activeTag(other)) return false;
+        switch (family) {
+            .sans_serif => {},
+            .stack => |stack| {
+                if (stack.fallback != other.stack.fallback or stack.names.len != other.stack.names.len) return false;
+                for (stack.names, other.stack.names) |one, two| if (!equal(one, two)) return false;
+            },
+        }
+    }
+    var normalized = left;
+    normalized.language = right.language;
+    normalized.classes = right.classes;
+    normalized.font_family = right.font_family;
+    return std.meta.eql(normalized, right);
+}
+
+fn ordinaryActionGroupFontClone(a: A, original: encoder.presentation_types.InlineFontSnapshot) !encoder.presentation_types.InlineFontSnapshot {
+    var result = original;
+    result.language = try a.dupe(u8, original.language);
+    result.classes = try a.dupe(u8, original.classes);
+    if (original.font_family) |family| switch (family) {
+        .sans_serif => {},
+        .stack => |stack| {
+            var copied = stack;
+            const names = try a.alloc([]const u8, stack.names.len);
+            for (names, stack.names) |*name, source| name.* = try a.dupe(u8, source);
+            copied.names = names;
+            result.font_family = .{ .stack = copied };
+        },
+    };
+    return result;
+}
+
+fn ordinaryActionGroupSupClasses(actual: []const u8, source_classes: []const u8, interwiki: bool) bool {
+    var values = std.mem.tokenizeAny(u8, actual, " \t\r\n\x0c");
+    while (values.next()) |value| if (!(interwiki and equal(value, "extiw")) and !profile.Profile.hasClass(source_classes, value)) return false;
+    values = std.mem.tokenizeAny(u8, source_classes, " \t\r\n\x0c");
+    while (values.next()) |value| if (!profile.Profile.hasClass(actual, value)) return false;
+    return !interwiki or profile.Profile.hasClass(actual, "extiw");
+}
+
+fn ordinaryActionGroupSupFont(actual: encoder.presentation_types.InlineFontSnapshot,
+    parent: encoder.presentation_types.InlineFontSnapshot, source_classes: []const u8, interwiki: bool) bool
+{
+    if (!encoder.presentation_types.validInlineFontSnapshot(actual) or !encoder.presentation_types.validInlineFontSnapshot(parent) or
+        !actual.superscript or actual.subscript or actual.small or actual.code or !actual.font_normalized or
+        parent.superscript or parent.subscript or parent.small or parent.code or !parent.font_normalized or parent.classes.len != 0 or
+        !ordinaryActionGroupSupClasses(actual.classes, source_classes, interwiki)) return false;
+    var css_base = actual;
+    css_base.superscript = false;
+    css_base.classes = parent.classes;
+    return ordinaryActionGroupFontEqual(css_base, parent);
+}
+
+fn ordinaryActionGroupLineHeightEqual(left: profile.AuthoredElementLineHeight, right: profile.AuthoredElementLineHeight) bool {
+    if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+    return switch (left) {
+        .multiplier => |value| std.math.isFinite(value) and value >= 0 and value == right.multiplier,
+        .font_relative => |value| std.math.isFinite(value) and value >= 0 and value == right.font_relative,
+        else => false,
+    };
+}
+
 const OrdinaryPlainLinkPage = struct {
     // Selection-owned storage outlives every temporary observation Renderer.
     // Callback allocators may be destroyed before final page compilation.
@@ -3623,6 +3968,153 @@ const OrdinaryPlainLinkPage = struct {
     contexts: ?[]const profile.ObservedInlineLinkPaintContext = null,
     html: ?[]const u8 = null,
     cache: std.ArrayList(Entry) = .empty,
+    action_group_parent_snapshot: ?profile.ObservedStyleInventorySnapshot = null,
+    action_group_selected_snapshot: ?profile.ObservedStyleInventorySnapshot = null,
+    action_group_entries: std.ArrayList(*ActionGroupEntry) = .empty,
+    action_group_context_snapshots: []const ActionGroupContextSnapshot = &.{},
+    focus_capture: ?FocusCapture = null,
+    const ActionGroupEntry = struct {
+        token: []const u8,
+        native_target: []const u8,
+        external: bool,
+        interwiki: bool,
+        source_image: *const profile.PageSourceImage,
+        source_snapshot: []const u8,
+        observation: compiler.OrdinaryActionGroupObservation,
+        script: ?*ActionGroupScriptEntry = null,
+    };
+
+    const ActionGroupScriptEntry = struct {
+        source: OrdinaryActionGroupSupSource,
+        declaring_parent_font: encoder.presentation_types.InlineFontSnapshot,
+        line_height: profile.AuthoredElementLineHeight,
+    };
+
+    fn actionGroupContextsCurrent(self: *const OrdinaryPlainLinkPage) bool {
+        const parent = self.action_group_parent_snapshot orelse return false;
+        const selected = self.action_group_selected_snapshot orelse return false;
+        return parent.current() and selected.current() and self.actionGroupGraphsCurrent();
+    }
+
+    const ActionGroupContextSnapshot = struct {
+        context: profile.ObservedInlineLinkPaintContext,
+        styles: profile.ObservedStyleInventorySnapshot,
+        nodes: []const profile.ObservedStyleNode,
+    };
+
+    fn captureActionGroupContexts(self: *OrdinaryPlainLinkPage) !void {
+        if (self.action_group_parent_snapshot != null or self.action_group_selected_snapshot != null or
+            self.action_group_context_snapshots.len != 0) return invalid;
+        const contexts = self.contexts orelse return invalid;
+        if (contexts.len != 2) return invalid;
+        const a = self.allocator;
+        var parent = try profile.ObservedStyleInventorySnapshot.init(a, self.parent);
+        errdefer parent.deinit();
+        var selected = try profile.ObservedStyleInventorySnapshot.init(a, self.selected_profile);
+        errdefer selected.deinit();
+        const copies = try a.alloc(ActionGroupContextSnapshot, contexts.len);
+        var initialized: usize = 0;
+        errdefer for (copies[0..initialized]) |*copy| copy.styles.deinit();
+        for (contexts, copies) |context, *copy| {
+            var styles = try profile.ObservedStyleInventorySnapshot.init(a, context.styles);
+            errdefer styles.deinit();
+            const nodes = try a.dupe(profile.ObservedStyleNode, context.nodes);
+            for (context.nodes, nodes) |node, *out| {
+                out.tag = try a.dupe(u8, node.tag);
+                const attributes = try a.alloc(profile.FigureObservedAttribute, node.attributes.len);
+                for (node.attributes, attributes) |attribute, *result| result.* = .{
+                    .name = try a.dupe(u8, attribute.name), .value = try a.dupe(u8, attribute.value) };
+                out.attributes = attributes;
+                if (node.captured_entity_text) |value| out.captured_entity_text = try a.dupe(u8, value);
+                if (node.custom_environment) |environment| {
+                    const values = try a.alloc(profile.CustomBinding, environment.values.len);
+                    for (environment.values, values) |entry, *result| {
+                        result.* = .{ .name = try a.dupe(u8, entry.name), .value = entry.value };
+                        if (entry.value == .known) result.value = .{ .known = try a.dupe(u8, entry.value.known) };
+                    }
+                    out.custom_environment = .{ .complete = environment.complete, .values = values };
+                }
+            }
+            copy.* = .{ .context = context, .styles = styles, .nodes = nodes };
+            initialized += 1;
+        }
+        self.action_group_parent_snapshot = parent;
+        self.action_group_selected_snapshot = selected;
+        self.action_group_context_snapshots = copies;
+    }
+
+    fn actionGroupGraphsCurrent(self: *const OrdinaryPlainLinkPage) bool {
+        const contexts = self.contexts orelse return false;
+        const snapshots = self.action_group_context_snapshots;
+        if (snapshots.len != 2 or contexts.len != snapshots.len) return false;
+        for (contexts, snapshots) |context, snapshot| {
+            if (context.styles != snapshot.context.styles or context.root != snapshot.context.root or
+                context.nodes.ptr != snapshot.context.nodes.ptr or context.nodes.len != snapshot.nodes.len or
+                !snapshot.styles.current()) return false;
+            for (context.nodes, snapshot.nodes) |actual, expected| {
+                if (!equal(actual.tag, expected.tag) or actual.attributes.len != expected.attributes.len) return false;
+                for (actual.attributes, expected.attributes) |left, right|
+                    if (!equal(left.name, right.name) or !equal(left.value, right.value)) return false;
+                if ((actual.captured_entity_text == null) != (expected.captured_entity_text == null) or
+                    (actual.captured_entity_text != null and !equal(actual.captured_entity_text.?, expected.captured_entity_text.?))) return false;
+                if ((actual.custom_environment == null) != (expected.custom_environment == null)) return false;
+                if (actual.custom_environment) |left| {
+                    const right = expected.custom_environment.?;
+                    if (left.complete != right.complete or left.values.len != right.values.len) return false;
+                    for (left.values, right.values) |l, r| {
+                        if (!equal(l.name, r.name) or std.meta.activeTag(l.value) != std.meta.activeTag(r.value)) return false;
+                        if (l.value == .known and !equal(l.value.known, r.value.known)) return false;
+                    }
+                }
+                var normalized = actual;
+                normalized.tag = expected.tag;
+                normalized.attributes = expected.attributes;
+                normalized.captured_entity_text = expected.captured_entity_text;
+                normalized.custom_environment = expected.custom_environment;
+                if (!std.meta.eql(normalized, expected)) return false;
+            }
+        }
+        return true;
+    }
+
+    const FocusCapture = struct {
+        html: []const u8,
+        original_html: []const u8,
+        live_nodes: []const ObservedSiblingNode,
+        nodes: []const ObservedSiblingNode,
+    };
+
+    fn captureFocus(self: *OrdinaryPlainLinkPage) !void {
+        const a = self.allocator;
+        const html = self.html orelse return invalid;
+        const nodes = try a.dupe(ObservedSiblingNode, self.stored.observed_nodes);
+        for (nodes) |*node| {
+            const attributes = try a.alloc(Attribute, node.attributes.attributes.len);
+            for (node.attributes.attributes, attributes) |attribute, *out| out.* = .{
+                .name = try a.dupe(u8, attribute.name), .value = try a.dupe(u8, attribute.value) };
+            node.attributes = .{ .attributes = attributes };
+        }
+        self.focus_capture = .{ .html = html, .original_html = try a.dupe(u8, html),
+            .live_nodes = self.stored.observed_nodes, .nodes = nodes };
+    }
+
+    fn focusCurrent(self: *const OrdinaryPlainLinkPage) bool {
+        const snapshot = self.focus_capture orelse return false;
+        const html = self.html orelse return false;
+        const nodes = self.stored.observed_nodes;
+        if (html.ptr != snapshot.html.ptr or html.len != snapshot.html.len or !equal(html, snapshot.original_html) or
+            nodes.ptr != snapshot.live_nodes.ptr or nodes.len != snapshot.nodes.len) return false;
+        for (nodes, snapshot.nodes) |actual, expected| {
+            if (!std.meta.eql(actual.tag, expected.tag) or actual.start != expected.start or
+                actual.parent != expected.parent or actual.previous != expected.previous or
+                actual.first_child != expected.first_child or actual.inner_end != expected.inner_end or
+                actual.attributes.attributes.len != expected.attributes.attributes.len) return false;
+            for (actual.attributes.attributes, expected.attributes.attributes) |left, right|
+                if (!equal(left.name, right.name) or !equal(left.value, right.value)) return false;
+        }
+        return true;
+    }
+
     const Entry = struct { token: []const u8, target: []const u8, observation: compiler.OrdinaryLinkPaintObservation };
 
     fn create(a: A, ns: *const namespaces.Registry, parent: *const profile.Profile, selected: *const profile.Profile,
@@ -3649,6 +4141,7 @@ const OrdinaryPlainLinkPage = struct {
         }
         self.html = try selectedStoredHtml(a, self.stored);
         self.contexts = contexts;
+        try self.captureActionGroupContexts();
     }
 
     fn same(a: A, first: profile.ObservedPlainInlineLinkStyle, second: profile.ObservedPlainInlineLinkStyle) !bool {
@@ -3669,6 +4162,8 @@ pub const SelectedPageStyles = struct {
     scope: profile.BoundedTextClassScope,
     source: []const u8,
     namespace_catalog: *const namespaces.Registry,
+    file_registry: ?*const sizing.Registry = null,
+    ready_behavior: ?*const namespaces.behavior_switches.Registry = null,
     figure_styles: []const SelectedFigureStyle = &.{},
     figure_assets: []const compiler.FigureObservedAsset = &.{},
     pub fn ordinaryLinkPaint(raw: ?*const anyopaque, a: A, operation: compiler.OrdinaryLinkPaintOperation) A.Error!?compiler.OrdinaryLinkPaintObservation {
@@ -3713,7 +4208,7 @@ pub const SelectedPageStyles = struct {
             const destination = (try compiler.literalSourceLinkDestinationAlloc(validation.allocator(), self.namespace_catalog, token.target)) orelse return null;
             if (destination.external or !equal(destination.target, operation.target)) return null;
         }
-        for (owner.cache.items) |entry| if (equal(entry.token, operation.token) and equal(entry.target, operation.target)) return entry.observation;
+        for (owner.cache.items) |entry| if (equal(entry.token, operation.token) and equal(entry.target, operation.target)) return self.focusObservation(operation.token, entry.observation);
         try owner.prepare();
         const contexts = owner.contexts orelse return null;
         const html = owner.html orelse return null;
@@ -3750,7 +4245,429 @@ pub const SelectedPageStyles = struct {
         const target = try a.dupe(u8, operation.target);
         errdefer a.free(target);
         try owner.cache.append(a, .{ .token = operation.token, .target = target, .observation = result });
+        return self.focusObservation(operation.token, result);
+    }
+
+    fn focusObservation(self: *const SelectedPageStyles, token: []const u8,
+        value: compiler.OrdinaryLinkPaintObservation) ?compiler.OrdinaryLinkPaintObservation
+    {
+        var result = value;
+        const proof = self.scope.page_source_focus orelse return result;
+        const owner = self.ordinary_link_page orelse return null;
+        if (!owner.focusCurrent() or proof.root != self.scope.page_style_root or
+            proof.complete_root != self.scope.page_style_complete_root or proof.source_image != self.scope.page_source_image) return null;
+        const contexts = owner.contexts orelse return null;
+        if (contexts.len != proof.graphs.len) return null;
+        for (contexts, proof.graphs) |context, graph| {
+            if (context.styles != graph.context.styles or context.root != graph.context.root or
+                context.nodes.ptr != graph.context.nodes.ptr or context.nodes.len != graph.context.nodes.len) return null;
+        }
+        if (!profile.pageSourceFocusCurrent(proof)) return null;
+        for (proof.actions, 0..) |action, ordinal| {
+            if (action.token.ptr != token.ptr or action.token.len != token.len) continue;
+            result.focus_proof = proof;
+            result.focus_action = ordinal;
+            return result;
+        }
+        return null;
+    }
+
+    fn selectSourceFocus(self: *SelectedPageStyles) !?*const profile.PageSourceFocusProof {
+        const owner = self.ordinary_link_page orelse return null;
+        const image = self.scope.page_source_image orelse return null;
+        const root = self.scope.page_style_root orelse return null;
+        const complete_root = self.scope.page_style_complete_root orelse return null;
+        const a = owner.allocator;
+        // The first supported domain contains only complete plain internal
+        // wiki links. Unsupported source operations decline the whole census.
+        var tokens: std.ArrayList([]const u8) = .empty;
+        defer tokens.deinit(a);
+        var targets: std.ArrayList([]const u8) = .empty;
+        defer targets.deinit(a);
+        var cursor: usize = 0;
+        while (std.mem.indexOfPos(u8, self.source, cursor, "[[")) |start| {
+            if (tokens.items.len == profile.page_source_focus_max_actions) return null;
+            var parser: encoder.document_ir.InlineIterator = .{ .input = self.source[start..],
+                .renderer_boundaries = true, .link_trail = owner.context.link_trail };
+            const item = parser.next() orelse return null;
+            if (item.kind != .link or item.link_has_pipe or item.link_empty_label or item.link_label_restored_close or
+                item.trail.len != 0 or item.target.len == 0 or parser.cursor == 0 or
+                std.mem.indexOfAny(u8, item.target, "<>{}[]&'|#\t\r\n\x0c") != null) return null;
+            const token = self.source[start..][0..parser.cursor];
+            const pair = syntax.balanced(token, 0) orelse return null;
+            if (pair.end != token.len) return null;
+            const destination = (try compiler.literalSourceLinkDestinationAlloc(a, self.namespace_catalog, item.target)) orelse return null;
+            if (destination.external or destination.target.len == 0) return null;
+            try tokens.append(a, token);
+            try targets.append(a, destination.target);
+            cursor = start + parser.cursor;
+        }
+        // The first Book transport closes its independent capture currentness
+        // through at least one required operation callback at final consumption.
+        if (tokens.items.len == 0) return null;
+        try owner.prepare();
+        const contexts = owner.contexts orelse return null;
+        if (contexts.len != 2) return null;
+        const html = owner.html orelse return null;
+        var captures: std.ArrayList(usize) = .empty;
+        defer captures.deinit(a);
+        for (owner.stored.observed_nodes, 0..) |node, index| {
+            if (!node.tag.is("a")) continue;
+            if (node.attributes.get("href") == null) return null;
+            if (captures.items.len == tokens.items.len or node.first_child != null) return null;
+            try captures.append(a, index);
+        }
+        if (captures.items.len != tokens.items.len) return null;
+        const actions = try a.alloc(profile.PageSourceFocusAction, tokens.items.len);
+        for (tokens.items, targets.items, captures.items, actions) |token, target, index, *action| {
+            const node = owner.stored.observed_nodes[index];
+            const pair = syntax.matchingTag(html, node.tag) orelse return null;
+            if (node.inner_end == null or node.inner_end.? != pair.inner_end or node.start >= pair.end or pair.end > html.len) return null;
+            if (!try noteInlineCorrespondsIn(a, self.namespace_catalog, token, html[node.start..pair.end],
+                0, false, true, owner.context, null)) return null;
+            // This callback checks every equal captured spelling, complete
+            // declaring font and all paint states at every sampled viewport.
+            _ = (try self.ordinaryLinkPaintIn(.{ .source = self.source, .token = token, .target = target,
+                .title = owner.context.title, .namespace_sha256 = owner.namespace_sha256, .scope = &self.scope })) orelse return null;
+            const subject: u32 = @intCast(owner.stored.outer.ancestors.len + index);
+            for (contexts) |context| {
+                if (subject >= context.nodes.len or !std.ascii.eqlIgnoreCase(context.nodes[subject].tag, "a")) return null;
+            }
+            action.* = .{ .token = token, .subjects = .{ subject, subject } };
+        }
+        // Both graphs were constructed from the independently authenticated
+        // API/GET inventory. Profile independently checks their complete A and
+        // non-A focus-owner census and exact rule provenance before issuing.
+        var value = (try profile.observedPageSourceFocusAlloc(a, self.styles, root, complete_root, image, contexts, actions)) orelse return null;
+        errdefer value.deinit();
+        const proof = try a.create(profile.PageSourceFocusProof);
+        errdefer a.destroy(proof);
+        try owner.captureFocus();
+        proof.* = value;
+        if (try profile.observedPageSourceInlineOwnerAlloc(a, proof)) |owner_style| {
+            const retained = try a.create(profile.PageSourceInlineOwnerProof);
+            retained.* = owner_style;
+            self.scope.page_source_inline_owner = retained;
+        }
+        return proof;
+    }
+
+    pub fn ordinaryActionGroup(raw: ?*const anyopaque, a: A,
+        operation: compiler.OrdinaryActionGroupOperation) A.Error!?compiler.OrdinaryActionGroupObservation
+    {
+        _ = a;
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return self.ordinaryActionGroupIn(operation) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+    }
+
+    fn ordinaryActionGroupIn(self: *const SelectedPageStyles,
+        operation: compiler.OrdinaryActionGroupOperation) !?compiler.OrdinaryActionGroupObservation
+    {
+        const owner = self.ordinary_link_page orelse return null;
+        if (operation.source.ptr != self.source.ptr or operation.source.len != self.source.len or
+            operation.scope != &self.scope or self.scope.page_styles != self.styles or self.styles != owner.selected_profile or
+            !equal(operation.title, owner.context.title) or !equal(operation.title, owner.stored.page.title) or
+            !std.mem.eql(u8, &operation.namespace_sha256, &owner.namespace_sha256) or
+            !std.mem.eql(u8, &self.namespace_catalog.source_sha256, &owner.namespace_sha256) or
+            owner.context.namespace_catalog != self.namespace_catalog or !equal(self.source, owner.original_source)) return null;
+        const source_image = self.scope.page_source_image orelse return null;
+        if (source_image.styles != self.styles or source_image.root != self.scope.page_style_root or
+            source_image.source.ptr != self.source.ptr or source_image.source.len != self.source.len or
+            !profile.pageSourceImageCurrent(source_image)) return null;
+        var temporary = std.heap.ArenaAllocator.init(owner.allocator);
+        defer temporary.deinit();
+        const work = temporary.allocator();
+        const spelling = (try ordinaryActionGroupSpelling(work, self, operation)) orelse return null;
+        const script_source = try ordinaryActionGroupSupSource(work, operation, spelling);
+        try owner.prepare();
+        if (!owner.actionGroupContextsCurrent()) return null;
+        if (owner.focus_capture == null) try owner.captureFocus();
+        if (!owner.focusCurrent()) return null;
+        const contexts = owner.contexts orelse return null;
+        const html = owner.html orelse return null;
+        if (contexts.len != 2) return null;
+        const samples = (try profile.observedInlineLinkViewportSamples(work, contexts)) orelse return null;
+        var agreed: ?profile.ObservedPlainInlineLinkStyle = null;
+        var agreed_script: ?profile.ObservedInlineScriptConstraint = null;
+        var label: ?[]const u8 = null;
+        var target: ?[]const u8 = null;
+        var matched: usize = 0;
+        for (owner.stored.observed_nodes, 0..) |node, index| {
+            if (!node.tag.is("a")) continue;
+            const actual_target = (try ordinaryActionGroupCapturedTarget(work, self, operation, spelling, node, html)) orelse continue;
+            const pair = syntax.matchingTag(html, node.tag) orelse return null;
+            var label_body = html[node.tag.end..pair.inner_end];
+            if (script_source != null) {
+                const script_tag = currentLiteralHtmlTagAt(html, node.tag.end) orelse return null;
+                if (!script_tag.is("sup") or script_tag.closing or script_tag.self_closing) return null;
+                const script_pair = syntax.matchingTag(html, script_tag) orelse return null;
+                if (script_pair.end != pair.inner_end) return null;
+                label_body = html[script_tag.end..script_pair.inner_end];
+            }
+            const actual_label = (try ordinaryActionGroupCapturedText(work, label_body)) orelse return null;
+            if (label) |prior| { if (!equal(prior, actual_label)) return null; } else label = actual_label;
+            if (target) |prior| { if (!equal(prior, actual_target)) return null; } else target = actual_target;
+            const shift = owner.stored.outer.ancestors.len;
+            const subject: u32 = std.math.cast(u32, shift + index) orelse return null;
+            var descendants: std.ArrayList(u32) = .empty;
+            defer descendants.deinit(work);
+            // Ordered raw interval membership is checked again against each
+            // complete graph by Profile; it grants neither font nor ancestry.
+            for (owner.stored.observed_nodes, 0..) |child, child_index| {
+                if (child.start <= node.start or child.start >= pair.inner_end) continue;
+                if (child.inner_end == null or child.inner_end.? > pair.inner_end) return null;
+                try descendants.append(work, std.math.cast(u32, shift + child_index) orelse return null);
+            }
+            for (contexts) |context| for (samples) |sample| {
+                const value = if (script_source != null) scripts: {
+                    if (descendants.items.len != 1) return null;
+                    const rich = (try profile.resolveObservedRichInlineLinkOwnerStyleWithScripts(work, context,
+                        subject, descendants.items, descendants.items, sample.width)) orelse return null;
+                    if (rich.scripts.len != 1 or rich.scripts[0].subject != descendants.items[0]) return null;
+                    const constraint = rich.scripts[0];
+                    if (!ordinaryActionGroupLineHeightEqual(constraint.line_height, constraint.line_height)) return null;
+                    if (agreed_script) |prior| {
+                        if (!ordinaryActionGroupFontEqual(prior.declaring_parent_font, constraint.declaring_parent_font) or
+                            !ordinaryActionGroupLineHeightEqual(prior.line_height, constraint.line_height)) return null;
+                    } else agreed_script = constraint;
+                    break :scripts rich.owner;
+                } else (if (descendants.items.len == 0)
+                    try profile.resolveObservedPlainInlineLinkStyle(work, context, subject, sample.width)
+                else try profile.resolveObservedRichInlineLinkOwnerStyle(work, context, subject,
+                    descendants.items, sample.width)) orelse return null;
+                if (agreed) |prior| { if (!try OrdinaryPlainLinkPage.same(work, prior, value)) return null; } else agreed = value;
+            };
+            matched += 1;
+        }
+        if (matched == 0 or !owner.focusCurrent() or !owner.actionGroupContextsCurrent()) return null;
+        const value = agreed orelse return null;
+        const final_label = label orelse return null;
+        const final_target = target orelse return null;
+        // Every same-spelling capture agreed. Source identity remains the exact
+        // token interval, so distinct adjacent equal-target As never coalesce.
+        var entry: ?*OrdinaryPlainLinkPage.ActionGroupEntry = null;
+        for (owner.action_group_entries.items) |candidate| {
+            if (candidate.token.ptr != operation.token.ptr or candidate.token.len != operation.token.len) continue;
+            if (!equal(candidate.native_target, operation.target) or candidate.external != operation.external or
+                candidate.interwiki != operation.interwiki or candidate.source_image != source_image or
+                candidate.source_snapshot.ptr != source_image.snapshot.ptr or candidate.source_snapshot.len != source_image.snapshot.len) return null;
+            const old = candidate.observation;
+            if (!equal(old.label, final_label) or !equal(old.target, final_target) or
+                !try OrdinaryPlainLinkPage.same(work, .{ .font = old.font, .paint = old.paint, .wrap = old.wrap }, value)) return null;
+            if ((candidate.script == null) != (script_source == null)) return null;
+            if (candidate.script) |held| {
+                const current = script_source.?;
+                const constraint = agreed_script orelse return null;
+                if (held.source.token.ptr != current.token.ptr or held.source.token.len != current.token.len or
+                    held.source.opening_len != current.opening_len or held.source.body_len != current.body_len or
+                    !equal(held.source.classes, current.classes) or
+                    !ordinaryActionGroupFontEqual(held.declaring_parent_font, constraint.declaring_parent_font) or
+                    !ordinaryActionGroupLineHeightEqual(held.line_height, constraint.line_height) or
+                    candidate.observation.scripts.len != 1) return null;
+                const script_descriptor = candidate.observation.scripts[0];
+                if (script_descriptor.source_receipt != @as(*const anyopaque, held) or script_descriptor.token.ptr != current.token.ptr or script_descriptor.token.len != current.token.len or
+                    script_descriptor.opening_len != current.opening_len or script_descriptor.body_len != current.body_len) return null;
+            } else if (candidate.observation.scripts.len != 0) return null;
+            entry = candidate;
+            break;
+        }
+        if (entry == null) {
+            if (owner.action_group_entries.items.len == profile.page_source_focus_max_actions) return null;
+            const owned = try ordinaryActionGroupStyleClone(owner.allocator, value);
+            const created = try owner.allocator.create(OrdinaryPlainLinkPage.ActionGroupEntry);
+            created.* = .{ .token = operation.token, .native_target = try owner.allocator.dupe(u8, operation.target),
+                .external = operation.external, .interwiki = operation.interwiki, .source_image = source_image,
+                .source_snapshot = source_image.snapshot,
+                .observation = .{ .profile = self.styles, .source_receipt = created,
+                    .label = try owner.allocator.dupe(u8, final_label), .target = try owner.allocator.dupe(u8, final_target),
+                    .font = owned.font, .paint = owned.paint, .wrap = owned.wrap } };
+            if (script_source) |source_value| {
+                const constraint = agreed_script orelse return null;
+                const held = try owner.allocator.create(OrdinaryPlainLinkPage.ActionGroupScriptEntry);
+                var owned_source = source_value;
+                owned_source.classes = try owner.allocator.dupe(u8, source_value.classes);
+                held.* = .{ .source = owned_source,
+                    .declaring_parent_font = try ordinaryActionGroupFontClone(owner.allocator, constraint.declaring_parent_font),
+                    .line_height = constraint.line_height };
+                const descriptors = try owner.allocator.alloc(compiler.OrdinaryActionGroupScript, 1);
+                descriptors[0] = .{ .source_receipt = held, .token = source_value.token,
+                    .opening_len = source_value.opening_len, .body_len = source_value.body_len };
+                created.script = held;
+                created.observation.scripts = descriptors;
+            }
+            try owner.action_group_entries.append(owner.allocator, created);
+            entry = created;
+        }
+        var result = entry.?.observation;
+        if (self.scope.page_source_focus) |proof| {
+            if (!profile.pageSourceFocusCurrent(proof) or proof.styles != self.styles or proof.source_image != source_image or
+                proof.root != self.scope.page_style_root or proof.complete_root != self.scope.page_style_complete_root) return null;
+            for (proof.actions, 0..) |action, ordinal| {
+                if (action.token.ptr != operation.token.ptr or action.token.len != operation.token.len) continue;
+                result.focus_proof = proof;
+                result.focus_action = ordinal;
+                return result;
+            }
+            return null;
+        }
         return result;
+    }
+
+    pub fn ordinaryActionGroupScript(raw: ?*const anyopaque, a: A,
+        operation: compiler.OrdinaryActionGroupScriptOperation) A.Error!?compiler.OrdinaryActionGroupScriptObservation
+    {
+        const self: *const SelectedPageStyles = @ptrCast(@alignCast(raw orelse return null));
+        return self.ordinaryActionGroupScriptIn(a, operation) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory, else => return null,
+        };
+    }
+
+    fn ordinaryActionGroupScriptIn(self: *const SelectedPageStyles, a: A,
+        operation: compiler.OrdinaryActionGroupScriptOperation) !?compiler.OrdinaryActionGroupScriptObservation
+    {
+        // Recompute the complete source/captured policy and its immutable
+        // inventory joins before consuming any provisional child constraint.
+        const observed = (try self.ordinaryActionGroupIn(operation.owner)) orelse return null;
+        if (observed.source_receipt != operation.owner_receipt or observed.scripts.len != 1) return null;
+        const owner = self.ordinary_link_page orelse return null;
+        var matched: ?*const OrdinaryPlainLinkPage.ActionGroupScriptEntry = null;
+        for (owner.action_group_entries.items) |entry| {
+            if (entry.observation.source_receipt != observed.source_receipt) continue;
+            if (matched != null) return null;
+            const script = entry.script orelse return null;
+            if (operation.script.source_receipt != @as(*const anyopaque, script) or operation.script.token.ptr != script.source.token.ptr or
+                operation.script.token.len != script.source.token.len or operation.script.opening_len != script.source.opening_len or
+                operation.script.body_len != script.source.body_len) return null;
+            matched = script;
+        }
+        const held = matched orelse return null;
+        if (!ordinaryActionGroupSupFont(operation.font, held.declaring_parent_font, held.source.classes,
+            operation.owner.interwiki)) return null;
+        const factor: f32 = switch (held.line_height) {
+            .multiplier => |value| value,
+            .font_relative => |value| value,
+            else => return null,
+        };
+        if (!std.math.isFinite(factor) or factor < 0) return null;
+        return .{ .source_receipt = held,
+            .line_height = .{ .font_relative = .{ .factor = factor, .font = try ordinaryActionGroupFontClone(a, operation.font) } } };
+    }
+
+    fn selectRichSourceFocus(self: *SelectedPageStyles) !?*const profile.PageSourceFocusProof {
+        const owner = self.ordinary_link_page orelse return null;
+        const image = self.scope.page_source_image orelse return null;
+        const root = self.scope.page_style_root orelse return null;
+        const complete_root = self.scope.page_style_complete_root orelse return null;
+        const a = owner.allocator;
+        var operations: std.ArrayList(compiler.OrdinaryActionGroupOperation) = .empty;
+        defer operations.deinit(a);
+        var cursor: usize = 0;
+        while (cursor < self.source.len) {
+            if (std.mem.startsWith(u8, self.source[cursor..], "<!--")) {
+                const end = std.mem.indexOfPos(u8, self.source, cursor + 4, "-->") orelse return null;
+                cursor = end + 3;
+                continue;
+            }
+            if (self.source[cursor] == '<') if (syntax.tagAt(self.source, cursor)) |tag| {
+                if (!tag.closing and !tag.self_closing and tag.isOpaque()) {
+                    const pair = syntax.matchingTag(self.source, tag) orelse return null;
+                    cursor = pair.end;
+                } else cursor = tag.end;
+                continue;
+            };
+            const internal = std.mem.startsWith(u8, self.source[cursor..], "[[");
+            const external = std.mem.startsWith(u8, self.source[cursor..], "[http://") or
+                std.mem.startsWith(u8, self.source[cursor..], "[https://") or
+                std.mem.startsWith(u8, self.source[cursor..], "http://") or
+                std.mem.startsWith(u8, self.source[cursor..], "https://");
+            if (!internal and !external) { cursor += 1; continue; }
+            var parser: encoder.document_ir.InlineIterator = .{ .input = self.source[cursor..],
+                .renderer_boundaries = true, .link_trail = owner.context.link_trail };
+            const item = parser.next() orelse return null;
+            if ((internal and item.kind != .link) or (!internal and item.kind != .external_link) or parser.cursor == 0) return null;
+            const token = self.source[cursor..][0..parser.cursor];
+            if (internal and item.target.len != 0 and item.target[0] != ':' and self.namespace_catalog.ofTitle(item.target).id == 14) {
+                // The ordinary parser consumes complete hidden Category metadata
+                // without an A. It cannot discharge a visible source occurrence.
+                const pair = syntax.balanced(token, 0) orelse return null;
+                if (item.link_empty_label or item.link_label_restored_close or
+                    std.mem.trim(u8, item.target, " \t\r\n").len != item.target.len or
+                    std.mem.indexOfAny(u8, item.target, "[]{}<>|&'#\r\n") != null or
+                    self.namespace_catalog.ofTitle(item.target).text.len == 0 or
+                    (item.link_has_pipe and try noteInlineText(a, item.text) == null)) return null;
+                cursor += pair.end;
+                continue;
+            }
+            if (operations.items.len == profile.page_source_focus_max_actions) return null;
+            var operation: compiler.OrdinaryActionGroupOperation = .{ .source = self.source, .token = token,
+                .target = item.target, .external = !internal, .interwiki = false,
+                .title = owner.context.title, .namespace_sha256 = owner.namespace_sha256, .scope = &self.scope };
+            if (internal) {
+                const destination = (try compiler.literalSourceLinkDestinationAlloc(a, self.namespace_catalog, item.target)) orelse return null;
+                operation.target = destination.target;
+                operation.external = destination.external;
+                operation.interwiki = destination.external;
+            }
+            _ = (try ordinaryActionGroupSpelling(a, self, operation)) orelse return null;
+            try operations.append(a, operation);
+            cursor += parser.cursor;
+        }
+        if (operations.items.len == 0) return null;
+        try owner.prepare();
+        if (!owner.actionGroupContextsCurrent()) return null;
+        const contexts = owner.contexts orelse return null;
+        if (contexts.len != 2) return null;
+        const html = owner.html orelse return null;
+        var captures: std.ArrayList(usize) = .empty;
+        defer captures.deinit(a);
+        for (owner.stored.observed_nodes, 0..) |node, index| {
+            if (!node.tag.is("a")) continue;
+            if (node.attributes.get("href") == null or captures.items.len == operations.items.len) return null;
+            try captures.append(a, index);
+        }
+        if (captures.items.len != operations.items.len) return null;
+        const actions = try a.alloc(profile.PageSourceFocusAction, operations.items.len);
+        for (operations.items, captures.items, actions) |operation, index, *action| {
+            const spelling = (try ordinaryActionGroupSpelling(a, self, operation)) orelse return null;
+            _ = (try ordinaryActionGroupCapturedTarget(a, self, operation, spelling, owner.stored.observed_nodes[index], html)) orelse return null;
+            // Full source order and complete captured-A order are joined before
+            // any declaration can be deferred. Each operation still revalidates
+            // its own captured policy and final rendered owner independently.
+            _ = (try self.ordinaryActionGroupIn(operation)) orelse return null;
+            const subject: u32 = std.math.cast(u32, owner.stored.outer.ancestors.len + index) orelse return null;
+            action.* = .{ .token = operation.token, .subjects = .{ subject, subject } };
+            // Only the complete source/HTML correspondence above may transport
+            // this normalization metadata. Each observed arm must agree with
+            // that same source-bound capture before Profile sees the receipt.
+            if (owner.stored.observed_nodes[index].attributes.get("data-mw-original-href")) |original| {
+                if (!spelling.external_source or !equal(original, spelling.target)) return null;
+                for (contexts, 0..) |context, arm| {
+                    if (subject >= context.nodes.len) return null;
+                    var captured: ?[]const u8 = null;
+                    for (context.nodes[subject].attributes) |attribute| {
+                        if (!equal(attribute.name, "data-mw-original-href")) continue;
+                        if (captured != null) return null;
+                        captured = attribute.value;
+                    }
+                    if (!equal(captured orelse return null, original)) return null;
+                    action.original_hrefs[arm] = captured;
+                }
+            }
+        }
+        if (!owner.focusCurrent() or !owner.actionGroupContextsCurrent()) return null;
+        var value = (try profile.observedPageSourceFocusAlloc(a, self.styles, root, complete_root, image, contexts, actions)) orelse return null;
+        errdefer value.deinit();
+        const proof = try a.create(profile.PageSourceFocusProof);
+        errdefer a.destroy(proof);
+        proof.* = value;
+        if (try profile.observedPageSourceInlineOwnerAlloc(a, proof)) |owner_style| {
+            const retained = try a.create(profile.PageSourceInlineOwnerProof);
+            retained.* = owner_style;
+            self.scope.page_source_inline_owner = retained;
+        }
+        return proof;
     }
 
     pub fn inlineMissing(raw: ?*const anyopaque, a: A, operation: compiler.InlineMissingOperation) A.Error!?compiler.InlineMissingObservation {
@@ -3857,6 +4774,16 @@ pub const SelectedPageStyles = struct {
                 operation.options.ptr != options.ptr or operation.options.len != options.len or
                 operation.caption.ptr != caption.ptr or operation.caption.len != caption.len or
                 !equal(canonical, proof.canonical_file)) continue;
+            if (proof.observed_canonical_file) |observed_file| {
+                const files = self.file_registry orelse return null;
+                const behavior = self.ready_behavior orelse return null;
+                if (!std.mem.eql(u8, &behavior.namespace_sha256, &self.namespace_catalog.source_sha256)) return null;
+                const resolved = readyFigureCanonicalFile(a, self.namespace_catalog, files, canonical) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory, else => return null,
+                };
+                defer a.free(resolved);
+                if (!equal(observed_file, resolved)) return null;
+            }
             const block: ?compiler.FigureBlockMediaObservation = if (proof.block_renditions) |pair| .{
                 .preferred_width = proof.block_preferred_width orelse return null,
                 .natural_width = pair[0].width, .natural_height = pair[0].height,
@@ -4090,13 +5017,25 @@ pub const Book = struct {
                         try figureStyleCandidates(a, ns, source_and_html.html, observed_nodes.items, selected);
                         break :relation selected;
                     } else ordinary: {
-                        const selected = try figureStyleOperationProofsWithObservedOwner(a, ns, source_and_html.source, ranges,
-                            source_and_html.html, observed_nodes.items);
+                        const selected = figureStyleOperationProofsWithObservedOwner(a, ns, source_and_html.source, ranges,
+                            source_and_html.html, observed_nodes.items) catch |err| switch (err) {
+                            error.InvalidFigurePageObservations => {
+                                // An authenticated alias may need the native behavior registry.
+                                // Keep no Figure authority until that complete source proof runs.
+                                if (!try hasAliasedReadyFigureRanges(a, ns, registry, source_and_html.source, ranges)) return err;
+                                selected_styles.deferred_ready_styles = true;
+                                break :ordinary &.{};
+                            },
+                            else => return err,
+                        };
                         break :ordinary selected;
                     };
                     selected_styles.figure_styles = proofs;
                     proved_style_operation = proved_style_operation or proofs.len != 0;
-                    if (page.figure_style_assets) |assets| selected_styles.figure_assets = try figureStyleAssets(a, ns, assets, selected_styles);
+                    if (!selected_styles.deferred_ready_styles) {
+                        if (page.figure_style_assets) |assets|
+                            selected_styles.figure_assets = try figureStyleAssets(a, ns, assets, selected_styles);
+                    }
                     }
                 }
                 if (page.authored_style_operations == null and selected_styles.figure_styles.len != 0 and
@@ -4393,11 +5332,13 @@ pub const Book = struct {
             }
             scope.page_styles = styles;
             scope.page_style_root = root;
-            scope.closed_row_colors = try observedClosedRowColors(a, styles, root, expanded,
-                stored.observed_nodes, complete, alternative);
-            scope.page_source_image = try selectedPageSourceImage(a, styles, root, expanded, page.source,
-                if (scope.closed_row_colors) |*rows| rows else null);
-            const figure_operations = try selectedBlockMediaOperations(a, ns, expanded, stored, context);
+            const plain_link_labels = try observedSourcePlainLinkLabels(a, ns, expanded);
+            scope.closed_row_colors = try observedClosedRowColorsWithLabels(a, styles, root, expanded,
+                stored.observed_nodes, complete, alternative, plain_link_labels);
+            scope.page_source_image = try selectedPageSourceImageWithLabels(a, styles, root, expanded, page.source,
+                if (scope.closed_row_colors) |*rows| rows else null, plain_link_labels);
+            const ready_operations = try selectedReadyFigureOperations(a, ns, self.file_registry, expanded, stored, context);
+            const figure_operations = try selectedBlockMediaOperations(a, ns, expanded, ready_operations, context);
             const selected_figures = try selectFigureStylesIn(a, parent, figure_operations, .{ .source = expanded, .root = root });
             scope.unobserved_counter_resets = try observedUnobservedPageCounters(a, stored, styles, root, expanded,
                 scope.page_source_image, selected_figures, context);
@@ -4423,10 +5364,15 @@ pub const Book = struct {
             }
             const result = try a.create(SelectedPageStyles);
             result.* = .{ .ordinary_link_page = try OrdinaryPlainLinkPage.create(a, ns, parent, styles, stored, expanded, context),
-                .prefix_table = try selectedPrefixTableAlloc(a, ns, parent, stored, expanded), .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns,
+                .prefix_table = try selectedPrefixTableAlloc(a, ns, parent, stored, expanded), .styles = styles, .scope = scope, .source = expanded, .namespace_catalog = ns, .file_registry = self.file_registry,
+                .ready_behavior = if (context) |native| native.behavior_switches else null,
                 .figure_styles = selected_figures, .figure_assets = figure_operations.figure_assets,
                 .inline_missing = try selectInlineMissingStyles(a, ns, self.file_registry, parent, stored, expanded, context),
                 .authored_element_original = expanded, .intrinsic_tables = intrinsic_tables, .floating_tables = selected_tables, .authored_element_styles = try selectAuthoredElementStyles(a, parent, stored) };
+            if (profile.hasPageSourceFocusObligation(styles)) {
+                result.scope.page_source_focus = try result.selectSourceFocus();
+                if (result.scope.page_source_focus == null) result.scope.page_source_focus = try result.selectRichSourceFocus();
+            }
             return result;
         }
         return null;
@@ -7885,8 +8831,39 @@ fn uniqueCounterRootClass(a: A, stored: *const PageStyleData, source: []const u8
 }
 // The selected Page.source is authenticated Book-arena storage. Counter
 // currentness may share it on pages that still owe positive row-color owners.
+fn observedSourcePlainLinkLabels(a: A, ns: *const namespaces.Registry, source: []const u8) !?*const profile.SourcePlainLinkLabels {
+    if (source.len == 0 or source.len > 4 * 1024 * 1024) return null;
+    if (std.mem.indexOfScalar(u8, source, '&') == null) return null;
+    if (!std.unicode.utf8ValidateSlice(source) or std.mem.indexOfScalar(u8, source, 0) != null) return null;
+    var labels: std.ArrayList(profile.SourcePlainLinkLabel) = .empty;
+    defer labels.deinit(a);
+    var cursor: usize = 0;
+    var validation = std.heap.ArenaAllocator.init(a); defer validation.deinit();
+    while (profile.nextSourcePlainLinkLabel(source, ns, &cursor)) |label| {
+        if (labels.items.len == 64) return null;
+        // Qualify the ordinary displayed-link role with the maintained target
+        // resolver. Balanced File/Category options alone lend no label evidence.
+        const target = source[label.start + 2..label.label_start - 1];
+        _ = (try compiler.literalSourceLinkDestinationAlloc(validation.allocator(), ns, target)) orelse return null;
+        try labels.append(a, label);
+    }
+    if (cursor > source.len or labels.items.len == 0) return null;
+    const proof = try a.create(profile.SourcePlainLinkLabels);
+    proof.* = .{ .source = source, .namespace_catalog = ns, .namespace_sha256 = ns.source_sha256,
+        .interwiki_rows = ns.interwiki_rows, .interwiki_magic = ns.interwiki_magic,
+        .labels = try labels.toOwnedSlice(a) };
+    if (!profile.sourcePlainLinkLabelsCurrent(proof, source)) return null;
+    return proof;
+}
+
 fn selectedPageSourceImage(a: A, styles: *const profile.Profile, root: *const profile.TextElement,
     source: []const u8, retained: []const u8, rows: ?*const profile.ClosedRowColorProof) !?*const profile.PageSourceImage
+{
+    return selectedPageSourceImageWithLabels(a, styles, root, source, retained, rows, null);
+}
+fn selectedPageSourceImageWithLabels(a: A, styles: *const profile.Profile, root: *const profile.TextElement,
+    source: []const u8, retained: []const u8, rows: ?*const profile.ClosedRowColorProof,
+    labels: ?*const profile.SourcePlainLinkLabels) !?*const profile.PageSourceImage
 {
     if (!equal(source, retained)) return null;
     var snapshot = retained;
@@ -7897,7 +8874,8 @@ fn selectedPageSourceImage(a: A, styles: *const profile.Profile, root: *const pr
         if (row.absent_source) |owned| snapshot = owned;
     };
     const value: profile.PageSourceImage = .{ .styles = styles, .root = root,
-        .source = source, .snapshot = snapshot };
+        .source = source, .snapshot = snapshot, .plain_link_labels = labels,
+        .plain_link_namespace = if (labels) |label_proof| .{ .catalog = label_proof.namespace_catalog, .sha256 = label_proof.namespace_sha256 } else null };
     if (!profile.pageSourceImageCurrent(&value)) return null;
     const result = try a.create(profile.PageSourceImage); result.* = value;
     return result;
@@ -17994,7 +18972,12 @@ fn sourceRowColorOwners(a: A, source: []const u8) !?[]const profile.RowColorOwne
 }
 
 fn observedRowColorOwners(a: A, source: []const u8, nodes: []const ObservedSiblingNode) !?[]const profile.RowColorOwner {
-    if (profile.rowColorSourceAbsent(source)) {
+    return observedRowColorOwnersWithLabels(a, source, nodes, null);
+}
+fn observedRowColorOwnersWithLabels(a: A, source: []const u8, nodes: []const ObservedSiblingNode,
+    labels: ?*const profile.SourcePlainLinkLabels) !?[]const profile.RowColorOwner
+{
+    if (profile.rowColorSourceAbsentWithLabels(source, labels)) {
         if (nodes.len == 0) return null;
         for (nodes) |node| if (node.attributes.get("bgcolor") != null) return null;
         return &.{};
@@ -18029,10 +19012,18 @@ fn observedClosedRowColors(a: A, styles: *const profile.Profile, root: *const pr
     source: []const u8, nodes: []const ObservedSiblingNode,
     complete: []const profile.TextElement, alternative: []const profile.TextElement) !?profile.ClosedRowColorProof
 {
+    return observedClosedRowColorsWithLabels(a, styles, root, source, nodes, complete, alternative, null);
+}
+fn observedClosedRowColorsWithLabels(a: A, styles: *const profile.Profile, root: *const profile.TextElement,
+    source: []const u8, nodes: []const ObservedSiblingNode,
+    complete: []const profile.TextElement, alternative: []const profile.TextElement,
+    labels: ?*const profile.SourcePlainLinkLabels) !?profile.ClosedRowColorProof
+{
     if (!rowColorOuterAbsent(complete) or !rowColorOuterAbsent(alternative)) return null;
-    const owners = (try observedRowColorOwners(a, source, nodes)) orelse return null;
+    const owners = (try observedRowColorOwnersWithLabels(a, source, nodes, labels)) orelse return null;
     return .{ .styles = styles, .source = source, .root = root, .attribute = "bgcolor", .owners = owners,
-        .absent_source = if (owners.len == 0) try a.dupe(u8, source) else null };
+        .absent_source = if (owners.len == 0) try a.dupe(u8, source) else null, .plain_link_labels = labels,
+        .plain_link_namespace = if (labels) |value| .{ .catalog = value.namespace_catalog, .sha256 = value.namespace_sha256 } else null };
 }
 
 fn rowColorOuterAbsent(nodes: []const profile.TextElement) bool {
@@ -19615,10 +20606,20 @@ fn authoredHeadContext(a: A, page: RawPage) ![]const u8 {
     const value = page.authored_head_context orelse return invalid;
     const outer = page.outer_context orelse return invalid;
     const current = outer.current_identity orelse return invalid;
+    // This authenticates only the same-page stylesheet head. Ready operation
+    // authority still requires its independent complete source and media proof.
+    if (page.figure_style_operations) |ranges| {
+        if (ranges.len == 0 or ranges.len > 64) return invalid;
+        var previous: usize = 0;
+        for (ranges) |range| {
+            if (range.media_kind != .image or range.start < previous or range.start >= range.end) return invalid;
+            previous = range.end;
+        }
+    }
     if (!page.text_class_scope or page.occurrences.len != 0 or page.page_styles == null or
         (page.authored_style_operations orelse return invalid).len == 0 or
         !equal(current.mode, "canonical-current-v1") or current.historical or outer.selected_body != null or
-        page.missing_head_context != null or page.figure_style_operations != null or page.figure_style_assets != null or
+        page.missing_head_context != null or page.figure_style_assets != null or
         page.image_map_no_link != null or page.missing_served_set != null or page.current_get_literal != null or page.figure_block_renditions != null) return invalid;
     return authenticatedAuthoredRuleHeadContext(a, page, value);
 }
@@ -25230,4 +26231,1251 @@ test "retained positive KU rows reuse authenticated Book source image without er
     try std.testing.expect(!profile.pageSourceImageCurrent(image) and !profile.unobservedCounterSourceCurrent(&proof));
     @constCast(supplied.source)[0] = old;
     try std.testing.expect(profile.unobservedCounterSourceCurrent(&proof));
+}
+
+
+const CompleteSourceFocusTest = struct {
+    const css = "html,body{font-family:sans-serif;color:#202122}" ++
+        "a{color:#36c;text-decoration:none}a:visited{color:#6a60b0}" ++
+        "a:hover{color:#3056a9;text-decoration:underline}a:active{color:#233566;text-decoration:underline}" ++
+        "a:focus{text-decoration:underline}:focus{outline-color:var(--outline-color-progressive--focus,#36c)}" ++
+        "a:focus-visible{outline:solid 2px #36c}";
+    const source = "[[Target]][[Target]]";
+    const html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>Target</a><a href='/wiki/Target' title='Target'>Target</a></div>";
+
+    fn selected(a: A, ns: *const namespaces.Registry, text: []const u8, markup: []const u8) !*SelectedPageStyles {
+        return selectedWithCss(a, ns, text, markup, css);
+    }
+    fn selectedWithCss(a: A, ns: *const namespaces.Registry, text: []const u8, markup: []const u8, fixture_css: []const u8) !*SelectedPageStyles {
+        return selectedWithCssAndCompleteSiblings(a, ns, text, markup, fixture_css, false);
+    }
+    fn selectedWithCssAndCompleteSiblings(a: A, ns: *const namespaces.Registry, text: []const u8, markup: []const u8,
+        fixture_css: []const u8, complete_siblings: bool) !*SelectedPageStyles {
+        const parent = try a.create(profile.Profile); parent.* = try profile.parseForTargetAlloc(a, fixture_css, .screen);
+        const styles = try a.create(profile.Profile); styles.* = try profile.joinPageSourcesAlloc(a, parent, &.{}, &.{});
+        const source_value = try a.dupe(u8, text); const html_value = try a.dupe(u8, markup);
+        var nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        const observed_scope = try observedTextClassScopeWithElements(a, ns, html_value, &nodes);
+        const contexts = try a.alloc(profile.ObservedInlineLinkPaintContext, 2);
+        for (contexts) |*context| {
+            const graph = try a.alloc(profile.ObservedStyleNode, nodes.items.len + 2);
+            graph[0] = .{ .tag = "html", .parent = null, .attributes = &.{.{ .name = "lang", .value = "de" }} };
+            graph[1] = .{ .tag = "body", .parent = 0, .attributes = &.{} };
+            for (nodes.items, 0..) |node, index| graph[index + 2] = .{ .tag = node.tag.name,
+                .parent = if (node.parent) |owner| @intCast(owner + 2) else 1,
+                .attributes = try figureObservedAttributes(a, node.attributes),
+                .has_text = figureObservedHasText(html_value, nodes.items, index) };
+            if (complete_siblings) try std.testing.expect(try figureObservedCompleteSiblings(a, html_value,
+                nodes.items, graph, 2, nodes.items[0].attributes));
+            for (graph) |*node| node.custom_environment = .{ .complete = true };
+            context.* = .{ .styles = styles, .nodes = graph, .root = 2 };
+        }
+        const outer = try a.dupe(OuterObservedNode, &.{ .{ .tag = "html", .attributes = .{ .attributes = &.{} } },
+            .{ .tag = "body", .attributes = .{ .attributes = &.{} } } });
+        const stored = try a.create(PageStyleData);
+        stored.* = .{ .authored_sources = &.{}, .context_sources = &.{},
+            .page = .{ .namespace_id = 0, .page_id = 1, .revision_id = 1, .title = "Page", .raw_sha256 = "", .occurrences = &.{} },
+            .scope = .{ .root_tag = observed_scope.root_tag, .root_classes = observed_scope.root_classes, .subtree_classes = observed_scope.subtree_classes },
+            .outer = .{ .classes = "", .ancestors = outer, .html_classes = "" }, .observed_nodes = nodes.items, .observed_html = html_value };
+        const owner = try a.create(OrdinaryPlainLinkPage);
+        owner.* = .{ .allocator = a, .stored = stored, .parent = parent, .selected_profile = styles,
+            .context = .{ .title = "Page", .namespace_catalog = ns }, .original_source = try a.dupe(u8, source_value),
+            .namespace_sha256 = ns.source_sha256, .contexts = contexts, .html = html_value };
+        const complete = try a.alloc(profile.TextElement, 3);
+        const alternative = try a.alloc(profile.TextElement, 3);
+        for ([_][]profile.TextElement{ complete, alternative }, contexts) |path, context| {
+            for (path, context.nodes[0..3], 0..) |*element, node, index| {
+                const attributes = try a.alloc(Attribute, node.attributes.len);
+                for (attributes, node.attributes) |*out, attribute| out.* = .{ .name = attribute.name, .value = attribute.value };
+                const node_inventory = try a.create(Inventory); node_inventory.* = .{ .attributes = attributes };
+                element.* = .{ .tag = node.tag, .classes = node_inventory.get("class") orelse "", .id = node_inventory.get("id") orelse "",
+                    .language = node_inventory.get("lang"), .parent = if (index == 0) null else &path[index - 1],
+                    .attribute_presence = .{ .ctx = node_inventory, .get = Inventory.presence },
+                    .observed_inline_style = node_inventory.get("style") orelse "", .observed_custom_environment = node.custom_environment,
+                    .ancestry_complete = true, .physical_ancestry_complete = true, .page_style_root = &path[2] };
+            }
+        }
+        for (complete, alternative) |*primary, *other| primary.alternative_ancestry = other;
+        const weak = try a.alloc(profile.TextElement, 3);
+        for (weak, complete, 0..) |*element, node, index| element.* = .{ .tag = node.tag, .classes = node.classes,
+            .id = node.id, .language = node.language, .parent = if (index == 0) null else &weak[index - 1] };
+        const root = &weak[2];
+        const image = try a.create(profile.PageSourceImage);
+        image.* = .{ .styles = styles, .root = root, .source = source_value, .snapshot = try a.dupe(u8, source_value) };
+        const result = try a.create(SelectedPageStyles);
+        result.* = .{ .ordinary_link_page = owner, .styles = styles,
+            .scope = .{ .root_tag = observed_scope.root_tag, .root_classes = observed_scope.root_classes, .subtree_classes = observed_scope.subtree_classes,
+                .complete_ancestor_class_superset = observed_scope.subtree_classes, .page_styles = styles, .page_style_root = root,
+                .page_style_complete_root = &complete[2], .page_source_image = image }, .source = source_value, .namespace_catalog = ns };
+        result.scope.page_source_focus = try result.selectSourceFocus();
+        return result;
+    }
+    fn ownedBlocks(selected_value: *const SelectedPageStyles, blocks: []const encoder.presentation_types.Block) ![]const encoder.presentation_types.Block {
+        const proof = selected_value.scope.page_source_inline_owner orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const owner = blocks[0].container orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(proof.style, owner.style);
+        return owner.blocks;
+    }
+    fn fixtureSizing(_: ?*const anyopaque, _: A, _: []const u8, _: encoder.presentation_types.FigureFormat,
+        _: ?u32, _: ?u32) A.Error!?encoder.presentation_types.FigureSizingPolicy { return null; }
+    fn sizingSource(selected_value: *const SelectedPageStyles) compiler.FigureSizingSource {
+        return .{ .resolve_fn = fixtureSizing, .text_class_scope = .{ .source = selected_value.source, .scope = &selected_value.scope },
+            .ordinary_link_paint_ctx = selected_value, .resolve_ordinary_link_paint_fn = SelectedPageStyles.ordinaryLinkPaint };
+    }
+    fn compile(a: A, selected_value: *const SelectedPageStyles, report: *encoder.presentation_document.Fallbacks) ![]u8 {
+        return encoder.presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a,
+            "Page", .language, "German", "de", .{ .bytes = selected_value.source }, null, .{}, selected_value.namespace_catalog,
+            null, null, .{}, report, null, &.{}, null, &.{}, null, selected_value.styles, sizingSource(selected_value), .parser_output);
+    }
+    fn operation(selected_value: *const SelectedPageStyles, ordinal: usize) compiler.OrdinaryLinkPaintOperation {
+        const proof = selected_value.scope.page_source_focus.?;
+        return .{ .source = selected_value.source, .token = proof.actions[ordinal].token, .target = "Target", .title = "Page",
+            .namespace_sha256 = selected_value.namespace_catalog.source_sha256, .scope = &selected_value.scope };
+    }
+};
+
+test "complete source focus binds repeated same target occurrences through final Document and unchanged codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const selected = try T.selected(a, &ns, T.source, T.html);
+    const proof = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), proof.actions.len);
+    try std.testing.expect(proof.actions[0].token.ptr != proof.actions[1].token.ptr);
+    const first = (try SelectedPageStyles.ordinaryLinkPaint(selected, a, T.operation(selected, 0))) orelse return error.TestUnexpectedResult;
+    const second = (try SelectedPageStyles.ordinaryLinkPaint(selected, a, T.operation(selected, 1))) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(?usize, 0), first.focus_action);
+    try std.testing.expectEqual(@as(?usize, 1), second.focus_action);
+    try std.testing.expect(first.focus_proof == proof and second.focus_proof == proof);
+    try std.testing.expectEqual(@as(usize, 1), selected.ordinary_link_page.?.cache.items.len);
+    try std.testing.expectEqualDeep(first.paint, second.paint);
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const encoded = try T.compile(a, selected, &report);
+    try std.testing.expect(!report.any());
+    const codec = encoder.presentation_codec;
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "de", .heading = "German" });
+    var actions: usize = 0;
+    for (decoded.entry.sections) |section| for (try CompleteSourceFocusTest.ownedBlocks(selected, section.blocks)) |block| for (block.spans) |span| {
+        if (span.kind != .link) continue;
+        actions += 1;
+        try std.testing.expectEqualStrings("Target", span.text);
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqualDeep(first.paint, span.link_paint.?);
+        try std.testing.expectEqualDeep(encoder.presentation_types.StyleLength{ .unit = .px, .value = 2 }, span.link_paint.?.focus_outline.?.width);
+        try std.testing.expect(span.link_paint.?.focus_outline.?.color.kind == .rgb);
+        try std.testing.expectEqualStrings("#3366cc", span.link_paint.?.focus_outline.?.color.value.?);
+    };
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    // Existing output paint stays identical. Only the independently completed
+    // source/action obligation can discharge the otherwise strict page report.
+    selected.scope.page_source_focus = null;
+    var before: encoder.presentation_document.Fallbacks = .{};
+    const reference = try T.compile(a, selected, &before);
+    try std.testing.expect(before.unresolved_table_style);
+    try std.testing.expectEqualSlices(u8, reference, encoded);
+    selected.scope.page_source_focus = proof;
+}
+
+test "complete source focus refuses unsupported or unmatched source and captured actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const one = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>Target</a></div>";
+    const baseline = try T.selected(a, &ns, "[[Target]]", one);
+    try std.testing.expect(baseline.scope.page_source_focus != null);
+    const Case = struct { source: []const u8, html: []const u8 };
+    for ([_]Case{
+        .{ .source = "[[Target|Target]]", .html = one },
+        .{ .source = "[[Target]]s", .html = one },
+        .{ .source = "[[Target]]", .html = T.html },
+        .{ .source = T.source, .html = one },
+        .{ .source = "[[Other]]", .html = one },
+        .{ .source = "[https://example.test Target]", .html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='https://example.test'>Target</a></div>" },
+        .{ .source = "[[Target]]", .html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'><b>Target</b></a></div>" },
+        .{ .source = "[[Target]]", .html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><div tabindex='0'><a href='/wiki/Target' title='Target'>Target</a></div></div>" },
+    }) |case| {
+        const value = try T.selected(a, &ns, case.source, case.html);
+        try std.testing.expect(value.scope.page_source_focus == null);
+    }
+}
+
+test "complete source focus rechecks raw capture inventory source and operation after cached consensus" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const selected = try T.selected(a, &ns, T.source, T.html);
+    _ = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    const operation_value = T.operation(selected, 1);
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) != null);
+    const owner = selected.ordinary_link_page.?;
+    const markup = @constCast(owner.html.?); const old_byte = markup[markup.len - 2];
+    markup[markup.len - 2] = 'x';
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    markup[markup.len - 2] = old_byte;
+    const nodes = @constCast(owner.stored.observed_nodes); const old_parent = nodes[1].parent;
+    nodes[1].parent = null;
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    nodes[1].parent = old_parent;
+    const attrs = @constCast(nodes[1].attributes.attributes); const old_value = attrs[0].value;
+    attrs[0].value = "foreign";
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    attrs[0].value = old_value;
+    const source_value = @constCast(selected.source); source_value[2] = 'X';
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    source_value[2] = 'T';
+    const complete_root = selected.scope.page_style_complete_root;
+    selected.scope.page_style_complete_root = selected.scope.page_style_root;
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    selected.scope.page_style_complete_root = complete_root;
+    const original_image = selected.scope.page_source_image;
+    var copied_image = original_image.?.*;
+    selected.scope.page_source_image = &copied_image;
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    selected.scope.page_source_image = original_image;
+    const contexts = @constCast(owner.contexts.?); const original_nodes = contexts[0].nodes;
+    contexts[0].nodes = try a.dupe(profile.ObservedStyleNode, original_nodes);
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) == null);
+    contexts[0].nodes = original_nodes;
+    for (0..4) |mode| {
+        var foreign = operation_value;
+        switch (mode) {
+            0 => foreign.token = try a.dupe(u8, operation_value.token),
+            1 => foreign.title = "Foreign",
+            2 => foreign.target = "Other",
+            else => foreign.namespace_sha256[0] ^= 1,
+        }
+        try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, foreign)) == null);
+    }
+    try std.testing.expect((try SelectedPageStyles.ordinaryLinkPaint(selected, a, operation_value)) != null);
+}
+
+test "complete source focus final consumption refuses omitted duplicated changed and unbound emitted actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const selected = try T.selected(a, &ns, T.source, T.html);
+    const proof = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    for (0..10) |mode| {
+        var renderer: compiler.Renderer = .{ .a = a, .native_body_language = "de", .content_root = .parser_output, .page_source_focus_completion = true,
+            .bounded_text_class_scope = &selected.scope, .bounded_text_class_source = selected.source,
+            .context = .{ .title = "Page", .namespace_catalog = &ns, .table_styles = selected.styles, .figure_sizing = T.sizingSource(selected) } };
+        const blocks = try renderer.renderBody(selected.source);
+        try std.testing.expect(renderer.required_page_source_focus == proof);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const owner = blocks[0].container orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(selected.scope.page_source_inline_owner.?.style, owner.style);
+        try std.testing.expectEqual(@as(usize, 1), owner.blocks.len);
+        try std.testing.expectEqual(@as(usize, 2), owner.blocks[0].spans.len);
+        var first = owner.blocks[0].spans[0]; const second = owner.blocks[0].spans[1];
+        renderer.consumeCompletedInlineOwner(&blocks[0]);
+        try std.testing.expect(first.action_focus != null and second.action_focus != null);
+        switch (mode) {
+            3 => first.text = "foreign",
+            4 => first.target = "Other",
+            5 => first.link_paint.?.focus_outline.?.color = .{ .kind = .rgb, .value = "#ffffff" },
+            6 => first.font_scale = 2,
+            7 => first.action_focus = null,
+            9 => renderer.context.title = "Foreign",
+            else => {},
+        }
+        try renderer.consumeCompletedActionFocus(first);
+        if (mode != 1) try renderer.consumeCompletedActionFocus(second);
+        if (mode == 2) try renderer.consumeCompletedActionFocus(first);
+        if (mode == 8) try renderer.consumeCompletedActionFocus(.{ .kind = .link, .text = "extra", .target = "Extra" });
+        renderer.finishCompletedActionFocus();
+        try std.testing.expectEqual(mode != 0, renderer.fallbacks.unresolved_table_style);
+    }
+}
+
+
+const OrdinaryActionGroupBookTest = struct {
+    fn selected(a: A, ns: *const namespaces.Registry, source: []const u8, html: []const u8) !*SelectedPageStyles {
+        const result = try CompleteSourceFocusTest.selected(a, ns, source, html);
+        // This fixture constructs the same two semantic contexts directly; bind
+        // them once, just as the production prepare method does after issuance.
+        const owner = result.ordinary_link_page.?;
+        if (owner.action_group_parent_snapshot == null) try owner.captureActionGroupContexts();
+        return result;
+    }
+    fn operation(selected_value: *const SelectedPageStyles, start: usize, len: usize, target: []const u8,
+        external: bool) compiler.OrdinaryActionGroupOperation
+    {
+        return .{ .source = selected_value.source, .token = selected_value.source[start..][0..len],
+            .target = target, .external = external, .interwiki = false, .title = "Page",
+            .namespace_sha256 = selected_value.namespace_catalog.source_sha256, .scope = &selected_value.scope };
+    }
+    fn observe(a: A, selected_value: *const SelectedPageStyles,
+        value: compiler.OrdinaryActionGroupOperation) !?compiler.OrdinaryActionGroupObservation
+    {
+        return SelectedPageStyles.ordinaryActionGroup(selected_value, a, value);
+    }
+    fn compile(a: A, selected_value: *const SelectedPageStyles, report: *encoder.presentation_document.Fallbacks) ![]u8 {
+        var sizing_source = CompleteSourceFocusTest.sizingSource(selected_value);
+        sizing_source.ordinary_action_group_ctx = selected_value;
+        sizing_source.resolve_ordinary_action_group_fn = SelectedPageStyles.ordinaryActionGroup;
+        sizing_source.resolve_ordinary_action_group_script_fn = SelectedPageStyles.ordinaryActionGroupScript;
+        return encoder.presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a,
+            "Page", .language, "German", "de", .{ .bytes = selected_value.source }, null, .{}, selected_value.namespace_catalog,
+            null, null, .{}, report, null, &.{}, null, &.{}, null, selected_value.styles, sizing_source, .parser_output);
+    }
+};
+
+test "ordinary source action Book binds each trail occurrence independently and keeps complete policy" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = OrdinaryActionGroupBookTest;
+    const token = "[[Target]]s";
+    const source = token ++ " " ++ token;
+    const markup = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>Targets</a> <a href='/wiki/Target' title='Target'>Targets</a></div>";
+    const selected = try T.selected(a, &ns, source, markup);
+    const first_op = T.operation(selected, 0, token.len, "Target", false);
+    const next_op = T.operation(selected, token.len + 1, token.len, "Target", false);
+    const first = (try T.observe(a, selected, first_op)) orelse return error.TestUnexpectedResult;
+    const next = (try T.observe(a, selected, next_op)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(first.source_receipt != next.source_receipt);
+    try std.testing.expectEqualStrings("Targets", first.label);
+    try std.testing.expectEqualStrings("Target", first.target);
+    try std.testing.expectEqualDeep(first.font, next.font);
+    try std.testing.expectEqualDeep(first.paint, next.paint);
+    try std.testing.expect(first.paint.focus_outline != null);
+    try std.testing.expectEqualStrings("#3366cc", first.paint.focus_outline.?.color.value.?);
+    try std.testing.expectEqual(@as(f32, 2), first.paint.focus_outline.?.width.value);
+    const again = (try T.observe(a, selected, first_op)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(again.source_receipt == first.source_receipt);
+    var shortened = first_op; shortened.token = shortened.token[0 .. shortened.token.len - 1];
+    try std.testing.expect((try T.observe(a, selected, shortened)) == null);
+    var foreign = first_op; foreign.token = try a.dupe(u8, foreign.token);
+    try std.testing.expect((try T.observe(a, selected, foreign)) == null);
+    selected.scope.page_source_focus = try selected.selectRichSourceFocus();
+    const proof = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), proof.actions.len);
+    const completed = (try T.observe(a, selected, next_op)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(completed.focus_proof == proof);
+    try std.testing.expectEqual(@as(?usize, 1), completed.focus_action);
+}
+
+test "ordinary source action Book proves complete rich label and refuses omitted markup or foreign interaction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = OrdinaryActionGroupBookTest;
+    const source = "[[Target|der ''Mai'' ist gekommen]]";
+    const markup = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>der <i>Mai</i> ist gekommen</a></div>";
+    const selected = try T.selected(a, &ns, source, markup);
+    const operation_value = T.operation(selected, 0, source.len, "Target", false);
+    const value = (try T.observe(a, selected, operation_value)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("der Mai ist gekommen", value.label);
+    try std.testing.expect(!value.font.italic);
+    const captures = selected.ordinary_link_page.?.stored.observed_nodes;
+    try std.testing.expect(captures[2].tag.is("i"));
+    for ([_][]const u8{
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>der Mai ist gekommen</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>der <i>Foreign</i> ist gekommen</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Other' title='Other'>der <i>Mai</i> ist gekommen</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>der <i style='color:#ff0000'>Mai</i> ist gekommen</a></div>",
+    }) |changed| {
+        const bad = try T.selected(a, &ns, source, changed);
+        try std.testing.expect((try T.observe(a, bad, T.operation(bad, 0, source.len, "Target", false))) == null);
+    }
+    const unsupported = "[[Target|<sup>Mai</sup>]]";
+    const sup = try T.selected(a, &ns, unsupported,
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'><sup>Mai</sup></a></div>");
+    try std.testing.expect((try T.observe(a, sup, T.operation(sup, 0, unsupported.len, "Target", false))) == null);
+}
+
+test "ordinary source action Book normalizes only authenticated captured HTTP upgrade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = OrdinaryActionGroupBookTest;
+    const source = "http://en.wiktionary.org/wiki";
+    const selected = try T.selected(a, &ns, source,
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external free' data-mw-original-href='http://en.wiktionary.org/wiki' href='https://en.wiktionary.org/wiki'>http://en.wiktionary.org/wiki</a></div>");
+    const value = (try T.observe(a, selected, T.operation(selected, 0, source.len, source, true))) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(source, value.label);
+    try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki", value.target);
+    selected.scope.page_source_focus = try selected.selectRichSourceFocus();
+    const proof = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), proof.actions.len);
+    for (proof.actions[0].original_hrefs) |original| try std.testing.expectEqualStrings(source, original.?);
+    const completed = (try T.observe(a, selected, T.operation(selected, 0, source.len, source, true))) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(completed.focus_proof == proof);
+    try std.testing.expectEqual(@as(?usize, 0), completed.focus_action);
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const encoded = try T.compile(a, selected, &report);
+    try std.testing.expect(!report.any());
+    try std.testing.expectEqualStrings("DPRV", encoded[0..4]);
+    const codec = encoder.presentation_codec;
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "de", .heading = "German" });
+    var groups: usize = 0;
+    for (decoded.entry.sections) |section| for (try CompleteSourceFocusTest.ownedBlocks(selected, section.blocks)) |block| for (block.spans) |span| {
+        const group = span.inline_action_group orelse continue;
+        groups += 1;
+        try std.testing.expectEqual(encoder.presentation_types.InlineKind.external_link, span.kind);
+        try std.testing.expectEqualStrings("https://en.wiktionary.org/wiki", span.target);
+        try std.testing.expectEqualDeep(value.paint, span.link_paint.?);
+        try std.testing.expectEqual(@as(usize, 1), group.spans.len);
+        try std.testing.expectEqualStrings(source, group.spans[0].text);
+        try std.testing.expectEqual(encoder.presentation_types.InlineKind.text, group.spans[0].kind);
+        try std.testing.expectEqualStrings("", group.spans[0].target);
+    };
+    try std.testing.expectEqual(@as(usize, 1), groups);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    selected.scope.page_source_focus = null;
+    var unproved: encoder.presentation_document.Fallbacks = .{};
+    const same_output = try T.compile(a, selected, &unproved);
+    try std.testing.expect(unproved.unresolved_table_style);
+    try std.testing.expectEqualSlices(u8, encoded, same_output);
+    selected.scope.page_source_focus = proof;
+    for ([_][]const u8{
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external free' href='https://en.wiktionary.org/wiki'>http://en.wiktionary.org/wiki</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external free' data-mw-original-href='http://en.wiktionary.org/wiki' href='https://foreign.example/wiki'>http://en.wiktionary.org/wiki</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external free' data-mw-original-href='http://en.wiktionary.org/wiki' href='https://en.wiktionary.org/wiki?changed=1'>http://en.wiktionary.org/wiki</a></div>",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external free' data-mw-original-href='http://foreign.example/wiki' href='https://en.wiktionary.org/wiki'>http://en.wiktionary.org/wiki</a></div>",
+    }) |markup| {
+        const bad = try T.selected(a, &ns, source, markup);
+        try std.testing.expect((try T.observe(a, bad, T.operation(bad, 0, source.len, source, true))) == null);
+    }
+    const labelled = "[https://example.org/doc a ''label'']";
+    const bracket = try T.selected(a, &ns, labelled,
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a class='external text' rel='nofollow' href='https://example.org/doc'>a <i>label</i></a></div>");
+    const named = (try T.observe(a, bracket, T.operation(bracket, 0, labelled.len, "https://example.org/doc", true))) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a label", named.label);
+    try std.testing.expectEqualStrings("https://example.org/doc", named.target);
+}
+
+test "ordinary source action Book revokes source capture context and parent identities without new receipt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = OrdinaryActionGroupBookTest;
+    const source = "[[Target|<i>Label</i>]]";
+    const selected = try T.selected(a, &ns, source,
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'><i>Label</i></a></div>");
+    const operation_value = T.operation(selected, 0, source.len, "Target", false);
+    const value = (try T.observe(a, selected, operation_value)) orelse return error.TestUnexpectedResult;
+    const owner = selected.ordinary_link_page.?;
+    const image = @constCast(selected.scope.page_source_image.?);
+    const snapshot = image.snapshot;
+    image.snapshot = try a.dupe(u8, snapshot);
+    try std.testing.expect((try T.observe(a, selected, operation_value)) == null);
+    image.snapshot = snapshot;
+    const parent = @constCast(owner.parent);
+    const rules = parent.container_rules;
+    parent.container_rules = try a.dupe(@TypeOf(rules[0]), rules);
+    try std.testing.expect((try T.observe(a, selected, operation_value)) == null);
+    parent.container_rules = rules;
+    const graph = @constCast(owner.contexts.?[0].nodes);
+    const has_text = graph[3].has_text;
+    graph[3].has_text = !(has_text orelse false);
+    try std.testing.expect((try T.observe(a, selected, operation_value)) == null);
+    graph[3].has_text = has_text;
+    const nodes = @constCast(owner.stored.observed_nodes);
+    const old_tag = nodes[2].tag;
+    nodes[2].tag.name = "span";
+    try std.testing.expect((try T.observe(a, selected, operation_value)) == null);
+    nodes[2].tag = old_tag;
+    var altered = operation_value; altered.external = true;
+    try std.testing.expect((try T.observe(a, selected, altered)) == null);
+    altered = operation_value; altered.title = "Foreign";
+    try std.testing.expect((try T.observe(a, selected, altered)) == null);
+    const restored = (try T.observe(a, selected, operation_value)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(restored.source_receipt == value.source_receipt);
+}
+
+
+test "ordinary source action SUP receipt preserves actual child font entity and complete focus through V" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    const T = OrdinaryActionGroupBookTest;
+    const token = "[[:la:Special:Search/mensis|<sup class=\"dewikttm\">→&nbsp;la</sup>]]";
+    const source = "''" ++ token ++ "''";
+    const markup = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><i><a href='https://la.wiktionary.org/wiki/Special:Search/mensis' class='extiw' title='la:Special:Search/mensis'><sup class='dewikttm'>→&#160;la</sup></a></i></div>";
+    const selected = try CompleteSourceFocusTest.selectedWithCss(a, &ns, source, markup,
+        CompleteSourceFocusTest.css ++ "sup{line-height:1em}");
+    try selected.ordinary_link_page.?.captureActionGroupContexts();
+    try std.testing.expect(profile.Profile.hasClass(selected.scope.subtree_classes, "extiw"));
+    try std.testing.expect(profile.Profile.hasClass(selected.scope.subtree_classes, "dewikttm"));
+    try std.testing.expect(profile.Profile.hasClass(selected.scope.complete_ancestor_class_superset.?, "dewikttm"));
+    var operation_value = T.operation(selected, 2, token.len, "https://la.wiktionary.org/wiki/Special:Search/mensis", true);
+    operation_value.interwiki = true;
+    const observed = (try T.observe(a, selected, operation_value)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("→\xc2\xa0la", observed.label);
+    try std.testing.expect(observed.font.italic and !observed.font.superscript);
+    try std.testing.expectEqual(@as(usize, 1), observed.scripts.len);
+    const script = observed.scripts[0];
+    try std.testing.expectEqualStrings("<sup class=\"dewikttm\">→&nbsp;la</sup>", script.token);
+    try std.testing.expectEqualStrings("→&nbsp;la", script.token[script.opening_len..][0..script.body_len]);
+    var actual_font = observed.font;
+    actual_font.superscript = true;
+    actual_font.classes = "extiw dewikttm";
+    const child_operation: compiler.OrdinaryActionGroupScriptOperation = .{ .owner = operation_value,
+        .owner_receipt = observed.source_receipt, .script = script, .font = actual_font };
+    const child = (try SelectedPageStyles.ordinaryActionGroupScript(selected, a, child_operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(child.source_receipt == script.source_receipt and child.line_height == .font_relative);
+    try std.testing.expectEqual(@as(f32, 1), child.line_height.font_relative.factor);
+    try std.testing.expect(ordinaryActionGroupFontEqual(actual_font, child.line_height.font_relative.font));
+    for (0..9) |mode| {
+        var changed = child_operation;
+        switch (mode) {
+            0 => changed.font.superscript = false,
+            1 => changed.font.subscript = true,
+            2 => changed.font.font_scale = 2,
+            3 => changed.font.language = "foreign",
+            4 => changed.font.classes = "extiw foreign",
+            5 => changed.font.italic = false,
+            6 => changed.script.token = try a.dupe(u8, script.token),
+            7 => changed.script.opening_len += 1,
+            8 => changed.owner_receipt = script.source_receipt,
+            else => unreachable,
+        }
+        try std.testing.expect((try SelectedPageStyles.ordinaryActionGroupScript(selected, a, changed)) == null);
+    }
+    selected.scope.page_source_focus = try selected.selectRichSourceFocus();
+    const proof = selected.scope.page_source_focus orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), proof.actions.len);
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const encoded = try T.compile(a, selected, &report);
+    try std.testing.expect(!report.any());
+    try std.testing.expectEqualStrings("DPRV", encoded[0..4]);
+    const codec = encoder.presentation_codec;
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "de", .heading = "German" });
+    var count: usize = 0;
+    for (decoded.entry.sections) |section| for (try CompleteSourceFocusTest.ownedBlocks(selected, section.blocks)) |block| for (block.spans) |span| {
+        const group = span.inline_action_group orelse continue;
+        count += 1;
+        try std.testing.expectEqualStrings(operation_value.target, span.target);
+        try std.testing.expectEqualDeep(observed.paint, span.link_paint.?);
+        try std.testing.expect(span.italic and !span.superscript);
+        try std.testing.expect(profile.Profile.hasClass(span.classes, "extiw"));
+        try std.testing.expectEqual(@as(usize, 3), group.spans.len);
+        for (group.spans, [_][]const u8{ "→", "\xc2\xa0", "la" }) |leaf, text_value| {
+            try std.testing.expectEqualStrings(text_value, leaf.text);
+            try std.testing.expect(leaf.kind == .text and leaf.target.len == 0 and leaf.link_paint == null);
+            try std.testing.expect(leaf.italic and leaf.superscript);
+            try std.testing.expect(profile.Profile.hasClass(leaf.classes, "extiw") and profile.Profile.hasClass(leaf.classes, "dewikttm"));
+            const line = leaf.inline_style.?.line_height.?;
+            try std.testing.expect(line == .font_relative);
+            try std.testing.expectEqual(@as(f32, 1), line.font_relative.factor);
+            try std.testing.expect(line.font_relative.font.superscript and line.font_relative.font.italic);
+            try std.testing.expect(leaf.inline_style.?.baseline_shift == null);
+        }
+    };
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    selected.scope.page_source_focus = null;
+    var unproved: encoder.presentation_document.Fallbacks = .{};
+    const same_output = try T.compile(a, selected, &unproved);
+    try std.testing.expect(unproved.unresolved_table_style);
+    try std.testing.expectEqualSlices(u8, encoded, same_output);
+    selected.scope.page_source_focus = proof;
+}
+
+test "ordinary retained Mai SUP owner binds source and captured numeric constraint without inventing child metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/de-mai-figure-style/interwiki-map.tsv"));
+    var files = try MaiCenteredTest.registry(a, &ns); defer files.deinit();
+    const defaults = Testing.hash(@embedFile("testdata/de-mai301/figure-siteinfo.raw.json"));
+    var parent = try profile.parseForTargetAlloc(a, PageStylesV7Testing.css, .screen); defer parent.deinit();
+    for ([_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") }) |bytes| {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        const source = try a.dupe(u8, supplied.source);
+        var book = try Book.init(a, bytes, &ns, &files, defaults, 250); defer book.deinit();
+        const selected = (try book.selectPageStylesForCompiler(a, &ns, 0, 721, 10777072, "Mai", PageStylesV7Testing.raw,
+            source, defaults, &parent, .{ .title = "Mai", .namespace_catalog = &ns })) orelse return error.TestUnexpectedResult;
+        const prefix = "[[:la:Special:Search/mensis|";
+        const at = std.mem.indexOf(u8, source, prefix) orelse return error.TestUnexpectedResult;
+        const pair = syntax.balanced(source, at) orelse return error.TestUnexpectedResult;
+        const operation_value: compiler.OrdinaryActionGroupOperation = .{ .source = source, .token = source[at..pair.end],
+            .target = "https://la.wiktionary.org/wiki/Special:Search/mensis", .external = true, .interwiki = true,
+            .title = "Mai", .namespace_sha256 = ns.source_sha256, .scope = &selected.scope };
+        const observed = (try SelectedPageStyles.ordinaryActionGroup(selected, a, operation_value)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("→\xc2\xa0la", observed.label);
+        try std.testing.expectEqualStrings(operation_value.target, observed.target);
+        try std.testing.expect(observed.font.italic and !observed.font.superscript and observed.font.font_normalized);
+        try std.testing.expectEqualStrings("#3366cc", observed.paint.normal.foreground);
+        try std.testing.expectEqual(@as(usize, 1), observed.scripts.len);
+        const script = observed.scripts[0];
+        try std.testing.expectEqualStrings("→&nbsp;la", script.token[script.opening_len..][0..script.body_len]);
+        const repeated = (try SelectedPageStyles.ordinaryActionGroup(selected, a, operation_value)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(repeated.source_receipt == observed.source_receipt and repeated.scripts[0].source_receipt == script.source_receipt);
+        // This is an initial constraint only. The actual normal Renderer font
+        // and complete final owner remain required by the separate callback.
+        var foreign = operation_value;
+        foreign.token = try a.dupe(u8, operation_value.token);
+        try std.testing.expect((try SelectedPageStyles.ordinaryActionGroup(selected, a, foreign)) == null);
+        const script_start = @intFromPtr(script.token.ptr) - @intFromPtr(source.ptr);
+        const saved = source[script_start + script.opening_len];
+        source[script_start + script.opening_len] = 'x';
+        try std.testing.expect((try SelectedPageStyles.ordinaryActionGroup(selected, a, operation_value)) == null);
+        source[script_start + script.opening_len] = saved;
+        try std.testing.expect((try SelectedPageStyles.ordinaryActionGroup(selected, a, operation_value)) != null);
+    }
+}
+
+test "retained TH ordinary entity label issues source bound zero row proof without lending File or foreign authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile(ThPaletteTesting.prefix ++ "namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachInterwikiMap(@embedFile("testdata/th-kip-role/interwiki-map.tsv"));
+    const defaults = Testing.hash(@embedFile(ThPaletteTesting.prefix ++ "figure-siteinfo.raw.json"));
+    const doc = try std.json.parseFromSliceLeaky(Document, a, MissingFigureOwnStyleTesting.bytes, .{ .allocate = .alloc_always });
+    var files = try ThPaletteTesting.registry(a, &ns, doc); defer files.deinit();
+    var book = try Book.init(a, MissingFigureOwnStyleTesting.bytes, &ns, &files, defaults, 250); defer book.deinit();
+    var parent = try profile.parseForTargetAlloc(a, @embedFile(ThPaletteTesting.prefix ++ "common.css"), .screen); defer parent.deinit();
+    const original = @embedFile("testdata/th-page-palette-current/page.expanded.wikitext");
+    const source = try a.dupe(u8, original);
+    try std.testing.expectEqual(@as(usize, 60551), source.len);
+    try std.testing.expect(digestMatches(source, "137238f617ab7c056dff9a2fca60e50a5e5182732784cc35a2755cf0d78045df"));
+    const selected = (try book.selectPageStyles(a, &ns, 0, 108817, 2190988, "間",
+        @embedFile(ThPaletteTesting.prefix ++ "page.raw.wikitext"), source, defaults, &parent)) orelse return error.TestUnexpectedResult;
+    const rows = if (selected.scope.closed_row_colors) |*value| value else return error.TestUnexpectedResult;
+    const labels = rows.plain_link_labels orelse return error.TestUnexpectedResult;
+    try std.testing.expect(rows.styles == selected.styles and rows.root == selected.scope.page_style_root and
+        rows.source.ptr == source.ptr and rows.source.len == source.len and rows.owners.len == 0 and rows.absent_source != null);
+    try std.testing.expect(!profile.rowColorSourceAbsent(source));
+    try std.testing.expect(profile.closedRowColorAbsenceValid(rows));
+    try std.testing.expectEqual(@as(usize, 1), labels.labels.len);
+    try std.testing.expect(labels.namespace_catalog == &ns);
+    const label = labels.labels[0];
+    try std.testing.expectEqual(@as(usize, 313), label.label_start);
+    try std.testing.expectEqualStrings("&amp;#38291;", source[label.label_start..label.label_end]);
+    const target = source[label.start + 2..label.label_start - 1];
+    try std.testing.expectEqualStrings("w:List of XML and HTML character entity references", target);
+    const destination = (try compiler.literalSourceLinkDestinationAlloc(a, &ns, target)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(destination.external);
+    try std.testing.expectEqualStrings("https://th.wikipedia.org/wiki/List_of_XML_and_HTML_character_entity_references", destination.target);
+    const image = selected.scope.page_source_image orelse return error.TestUnexpectedResult;
+    try std.testing.expect(image.plain_link_labels == labels and profile.pageSourceImageCurrent(image));
+    const snapshot = rows.absent_source.?;
+    try std.testing.expect(snapshot.ptr != source.ptr and equal(snapshot, source));
+    source[313] = 'X';
+    try std.testing.expect(!profile.closedRowColorAbsenceValid(rows) and !profile.pageSourceImageCurrent(image));
+    source[313] = '&';
+    try std.testing.expect(profile.closedRowColorAbsenceValid(rows) and profile.pageSourceImageCurrent(image));
+    var changed = rows.*;
+    changed.source = try a.dupe(u8, source);
+    try std.testing.expect(!profile.closedRowColorAbsenceValid(&changed));
+    var wrong_role = labels.*;
+    const range = try a.alloc(profile.SourcePlainLinkLabel, 1); range[0] = label; range[0].label_start -= 1;
+    wrong_role.labels = range; changed = rows.*; changed.plain_link_labels = &wrong_role;
+    try std.testing.expect(!profile.closedRowColorAbsenceValid(&changed));
+    // Even the same ordinary-role metadata cannot excuse a File option token.
+    try std.testing.expect((try observedSourcePlainLinkLabels(a, &ns, "[[File:x.png|&amp;#38291;]]")) == null);
+    try std.testing.expect((try observedSourcePlainLinkLabels(a, &ns, "[[หมวดหมู่:X|&amp;#38291;]]")) == null);
+    try std.testing.expect((try observedSourcePlainLinkLabels(a, &ns, "[[Target|plain]]")) == null);
+    try std.testing.expectEqualStrings(original, source);
+}
+
+// Exact retained Alexander body and four independently replayed selected file facts.
+// The four-request Registry framing is a portable derived subset, not the normal catalog.
+const AlexanderReady210Testing = if (@import("builtin").is_test) struct {
+    const prefix = "testdata/sr-authored-head/ready-figure210/";
+    const source = @embedFile("testdata/sr-authored-head/source.expanded.wikitext");
+    const raw = @embedFile("testdata/sr-authored-head/source.raw.wikitext");
+    const requested = "Napoli BW 2013-05-16 16-24-01.jpg";
+    const remote_one = "https://sr.wikipedia.org/wiki/en:Alexander_the_Great";
+    const remote_two = "https://sr.wikipedia.org/wiki/%D0%90%D0%BB%D0%B5%D0%BA%D1%81%D0%B0%D0%BD%D0%B4%D0%B0%D1%80_%D0%92%D0%B5%D0%BB%D0%B8%D0%BA%D0%B8";
+    const range: FigureStyleRange = .{ .start = 1091, .end = 1286 };
+    const Env = struct {
+        ns: namespaces.Registry,
+        behavior: namespaces.behavior_switches.Registry,
+        images: namespaces.image_options.Registry,
+        files: sizing.Registry,
+        parent: profile.Profile,
+        book: Book,
+        context: compiler.Context,
+        bound: *const SelectedPageStyles,
+        defaults: [32]u8,
+        last_report: encoder.presentation_document.Fallbacks = .{},
+        fn init(a: A, enroll: bool) !*@This() {
+            const self = try a.create(@This());
+            self.ns = try namespaces.Registry.init(a, @embedFile("testdata/sr-authored-head/namespace-registry.tsv"));
+            try self.ns.attachInterwikiMap(@embedFile("testdata/sr-authored-head/interwiki-map.tsv"));
+            try self.ns.attachLanguageConversion(@embedFile("testdata/sr-admiral/namespace-siteinfo.raw.json"));
+            // The normal loader retains converter authority separately from the
+            // later figure-default capture. Copy only its validated value fields.
+            var default_ns = try namespaces.Registry.init(a, @embedFile("testdata/sr-authored-head/namespace-registry.tsv"));
+            defer default_ns.deinit();
+            try default_ns.attachLanguageConversion(@embedFile("testdata/sr-authored-head/figure-siteinfo.raw.json"));
+            self.ns.figure_source_defaults = default_ns.figure_source_defaults orelse return error.TestUnexpectedResult;
+            const behavior_bytes = @embedFile("testdata/sr-admiral/behavior-switches.tsv");
+            self.behavior = try namespaces.behavior_switches.Registry.init(a, behavior_bytes,
+                self.ns.wiki, self.ns.dump_date, self.ns.content_language, self.ns.source_sha256);
+            self.images = try namespaces.image_options.Registry.init(a, @embedFile("testdata/sr-admiral/image-options.tsv"),
+                self.ns.wiki, self.ns.dump_date, self.ns.content_language, self.ns.source_sha256, Testing.hash(behavior_bytes));
+            self.files = try sizing.Registry.init(a, @embedFile(prefix ++ "figure-sizing.json"),
+                @embedFile(prefix ++ "figure-sizing.raw.json"), @embedFile(prefix ++ "figure-sizing.site.json"),
+                &self.ns, "f45897451256aa3799aecc5d7ee320ade22beaec", "");
+            const common_css = @embedFile("testdata/sr-iniuria129/common.css");
+            if (!digestMatches(common_css, "58c27434e6c436e00e12aa98839fc5ae94cad6f233046331bde49d66b7c8b5da")) return error.TestUnexpectedResult;
+            self.parent = try profile.parseForTargetAlloc(a, common_css, .screen);
+            self.defaults = Testing.hash(@embedFile("testdata/sr-authored-head/figure-siteinfo.raw.json"));
+            // Preserve the original shared styling/default inputs. Only the
+            // unrelated six page records are omitted from this four-file fixture.
+            // Preserve raw JSON field presence: typed MissingLinkStyles has
+            // legacy response/receipt defaults which are forbidden beside served_set.
+            var document = try std.json.parseFromSliceLeaky(Value, a,
+                @embedFile("testdata/sr-authored-head/candidate-seven01.json"), .{ .allocate = .alloc_always });
+            const original_styles = try field(document, "missing_link_styles");
+            try std.testing.expect(original_styles == .object and original_styles.object.count() == 3);
+            try std.testing.expect(original_styles.object.get("response") == null and original_styles.object.get("receipt") == null);
+            const originals = try field(document, "pages");
+            if (originals != .array) return error.TestUnexpectedResult;
+            var chosen: ?Value = null;
+            for (originals.array.items) |candidate| {
+                if (try number(candidate, "page_id") == 12600) {
+                    if (chosen != null) return error.TestUnexpectedResult;
+                    chosen = candidate;
+                }
+            }
+            var page = chosen orelse return error.TestUnexpectedResult;
+            if (enroll) {
+                const ready_operations = [_]struct { start: usize, end: usize }{.{ .start = range.start, .end = range.end }};
+                try page.object.put(a, "figure_style_operations", try std.json.parseFromSliceLeaky(Value, a,
+                    try std.json.Stringify.valueAlloc(a, ready_operations, .{}), .{}));
+            }
+            var pages: std.ArrayList(Value) = .empty;
+            try pages.append(a, page);
+            try document.object.put(a, "pages", .{ .array = pages.toManaged(a) });
+            self.book = try Book.init(a, try std.json.Stringify.valueAlloc(a, document, .{ .emit_null_optional_fields = false }),
+                &self.ns, &self.files, self.defaults, 250);
+            self.context = .{ .title = "Alexander", .namespace_catalog = &self.ns, .behavior_switches = &self.behavior,
+                .image_options = &self.images, .table_styles = &self.parent, .figure_sizing = .{
+                    .ctx = &self.files, .resolve_fn = sizing.Registry.resolve,
+                    .resolve_canonical_file_fn = sizing.Registry.resolveCanonicalFile,
+                    .resolve_svg_explicit_box_fn = sizing.Registry.resolveSvgExplicitBox,
+                    .resolve_width_limit_fn = sizing.Registry.resolveWidthLimit,
+                    .source_context = .{ .namespace_sha256 = self.ns.source_sha256,
+                        .defaults = self.ns.figure_source_defaults.?, .missing_media_profile = .f45897 },
+                } };
+            self.bound = (try self.book.selectPageStylesForCompiler(a, &self.ns, 0, 12600, 676512, "Alexander", raw,
+                source, self.defaults, &self.parent, self.context)) orelse return error.TestUnexpectedResult;
+            return self;
+        }
+        fn deinit(self: *@This()) void {
+            self.book.deinit(); self.parent.deinit(); self.files.deinit(); self.images.deinit();
+            self.behavior.deinit(); self.ns.deinit();
+        }
+        fn operation(self: *const @This()) compiler.FigureStyleOperation {
+            const proof = self.bound.figure_styles[0].proof;
+            return .{ .source = source, .token = source[proof.range.start..proof.range.end],
+                .options = source[proof.options_start..proof.options_end],
+                .caption = source[proof.caption_start..proof.options_end], .file = requested, .format = .thumbnail };
+        }
+        fn sized(self: *const @This()) compiler.FigureSizingSource {
+            var result = self.context.figure_sizing.?;
+            result.text_class_scope = .{ .source = source, .scope = &self.bound.scope };
+            result.figure_style_ctx = self.bound;
+            result.resolve_figure_style_fn = SelectedPageStyles.figureStyle;
+            if (self.bound.inline_missing.len != 0) result.resolve_inline_missing_fn = SelectedPageStyles.inlineMissing;
+            result.authored_element_style_ctx = self.bound;
+            result.resolve_authored_element_style_fn = SelectedPageStyles.authoredElementStyle;
+            if (self.bound.ordinary_link_page != null) {
+                result.ordinary_link_paint_ctx = self.bound;
+                result.resolve_ordinary_link_paint_fn = SelectedPageStyles.ordinaryLinkPaint;
+            }
+            result.table_containing_direction = if (self.bound.tablePrefixSource()) |prefix_table| prefix_table else self.bound.tableIntrinsicSource();
+            if (self.bound.floating_tables.len != 0) result.table_float_source = .{
+                .source = source, .context = self.bound, .observe = SelectedPageStyles.floatingTable };
+            return result;
+        }
+        fn documentBytes(self: *@This(), a: A, sized_source: compiler.FigureSizingSource) ![]u8 {
+            var report: encoder.presentation_document.Fallbacks = .{};
+            defer self.last_report = report;
+            return encoder.presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, "Alexander",
+                .language, "Unclassified", "", .{ .bytes = source }, null, .{}, &self.ns, &self.behavior, &self.images,
+                .{}, &report, null, &.{}, null, &.{}, null, self.bound.styles, sized_source, .parser_output);
+        }
+    };
+    fn countTarget(spans: anytype, target: []const u8) anyerror!usize {
+        const Probe = struct {
+            target: []const u8,
+            count: usize = 0,
+            fn visit(self: *@This(), span: anytype) !void {
+                if (equal(span.target, self.target)) self.count += 1;
+            }
+        };
+        var probe: Probe = .{ .target = target };
+        try encoder.presentation_types.visitRubyFallback(spans, &probe, Probe.visit);
+        return probe.count;
+    }
+    fn targetBlocks(blocks: anytype, target: []const u8) anyerror!usize {
+        var count: usize = 0;
+        for (blocks) |block| {
+            count += try countTarget(block.spans, target);
+            if (block.container) |container| count += try targetBlocks(container.blocks, target);
+            if (block.figure) |figure| {
+                count += try countTarget(figure.caption, target);
+                if (figure.caption_blocks) |children| count += try targetBlocks(children, target);
+            }
+            if (block.flow) |parts| {
+                for (parts) |part| {
+                    count += try countTarget(part.spans, target);
+                    if (part.figure) |figure| {
+                        count += try countTarget(figure.caption, target);
+                        if (figure.caption_blocks) |children| count += try targetBlocks(children, target);
+                    }
+                }
+            }
+            if (block.table) |table| count += try targetTable(table, target);
+        }
+        return count;
+    }
+    fn targetTable(table: anytype, target: []const u8) anyerror!usize {
+        var count = try countTarget(table.caption, target);
+        if (table.caption_blocks) |blocks| count += try targetBlocks(blocks, target);
+        for (table.rows) |row| {
+            for (row.cells) |cell| {
+                count += try countTarget(cell.spans, target);
+                if (cell.blocks) |blocks| count += try targetBlocks(blocks, target);
+                if (cell.nested_table) |nested| count += try targetTable(nested, target);
+            }
+        }
+        return count;
+    }
+    fn inspectFigure(a: A, figure: encoder.presentation_types.Figure, resolved: []const u8, count: *usize) anyerror!void {
+        if (figure.content != .image) return;
+        const image = figure.content.image.span.image orelse return error.TestUnexpectedResult;
+        if (!equal(image.file, resolved)) return;
+        count.* += 1;
+        try std.testing.expect(figure.format == .thumbnail and figure.placement == .float_right);
+        try std.testing.expectEqual(@as(?u32, 180), image.width_px);
+        try std.testing.expectEqual(@as(usize, 1), try countTarget(figure.caption, remote_one));
+        try std.testing.expectEqual(@as(usize, 1), try countTarget(figure.caption, remote_two));
+        const Text = struct {
+            a: A,
+            value: std.ArrayList(u8) = .empty,
+            fn emit(self: *@This(), span: anytype) !void { try self.value.appendSlice(self.a, span.text); }
+        };
+        var text: Text = .{ .a = a }; defer text.value.deinit(a);
+        try encoder.presentation_types.visitRubyFallback(figure.caption, &text, Text.emit);
+        try std.testing.expectEqualStrings("[1] Alexander the Great (Александар Велики)", text.value.items);
+    }
+    fn inspectTable(a: A, table: encoder.presentation_types.Table, resolved: []const u8, count: *usize) anyerror!void {
+        if (table.caption_blocks) |blocks| try inspectBlocks(a, blocks, resolved, count);
+        for (table.rows) |row| {
+            for (row.cells) |cell| {
+                if (cell.blocks) |blocks| try inspectBlocks(a, blocks, resolved, count);
+                if (cell.nested_table) |nested| try inspectTable(a, nested, resolved, count);
+            }
+        }
+    }
+    fn inspectBlocks(a: A, blocks: []const encoder.presentation_types.Block, resolved: []const u8, count: *usize) anyerror!void {
+        for (blocks) |block| {
+            if (block.figure) |figure| {
+                try inspectFigure(a, figure, resolved, count);
+                if (figure.caption_blocks) |children| try inspectBlocks(a, children, resolved, count);
+            }
+            if (block.container) |container| try inspectBlocks(a, container.blocks, resolved, count);
+            if (block.table) |table| try inspectTable(a, table, resolved, count);
+            if (block.flow) |parts| {
+                for (parts) |part| {
+                    if (part.figure) |figure| {
+                        try inspectFigure(a, figure, resolved, count);
+                        if (figure.caption_blocks) |children| try inspectBlocks(a, children, resolved, count);
+                    }
+                }
+            }
+        }
+    }
+} else struct {};
+
+test "Alexander retained Ready source enrolls its exact aliased operation only with current native context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AlexanderReady210Testing; const env = try T.Env.init(a, true); defer env.deinit();
+    try std.testing.expectEqual(@as(usize, 4073), T.source.len);
+    try std.testing.expectEqual(@as(usize, 1092), T.raw.len);
+    try std.testing.expect(digestMatches(T.raw, "1b49f09ae438fd1e440dcc6b155479870dae13385b22e5ec7e72d41585a6d277"));
+    try std.testing.expect(env.files.file_authority);
+    try std.testing.expect(try sizing.Registry.isMissingFile(&env.files, a, "En-Alexander.ogg"));
+    try std.testing.expect(!try sizing.Registry.isMissingFile(&env.files, a, T.requested));
+    try std.testing.expect(digestMatches(T.source, "08637660cc604388c68e15420028a33d00e44928b1b4d232bb9a9faad6d36226"));
+    try std.testing.expectEqual(@as(usize, 1), env.bound.figure_styles.len);
+    const proof = env.bound.figure_styles[0].proof;
+    try std.testing.expectEqualDeep(T.range, proof.range);
+    try std.testing.expectEqualStrings("Датотека:Napoli BW 2013-05-16 16-24-01.jpg", proof.canonical_file);
+    try std.testing.expect(!equal(proof.observed_canonical_file orelse return error.TestUnexpectedResult, proof.canonical_file));
+    try std.testing.expectEqual(@as(usize, 1), proof.candidates.len);
+    try std.testing.expectEqual(@as(usize, 2), env.bound.figure_styles[0].contexts.len);
+    try std.testing.expectError(invalid, env.book.selectPageStyles(a, &env.ns, 0, 12600, 676512, "Alexander",
+        T.raw, T.source, env.defaults, &env.parent));
+    for (0..4) |mode| {
+        var context = env.context;
+        switch (mode) {
+            0 => context.behavior_switches = null,
+            1 => context.image_options = null,
+            2 => context.namespace_catalog = null,
+            3 => context.title = "foreign",
+            else => unreachable,
+        }
+        try std.testing.expectError(invalid, env.book.selectPageStylesForCompiler(a, &env.ns, 0, 12600, 676512,
+            "Alexander", T.raw, T.source, env.defaults, &env.parent, context));
+    }
+    const original_behavior_sha = env.behavior.namespace_sha256; env.behavior.namespace_sha256[0] ^= 1;
+    try std.testing.expectError(invalid, env.book.selectPageStylesForCompiler(a, &env.ns, 0, 12600, 676512,
+        "Alexander", T.raw, T.source, env.defaults, &env.parent, env.context));
+    env.behavior.namespace_sha256 = original_behavior_sha;
+    const shape = try json(a, @embedFile("testdata/sr-authored-head/alexander.page.json"));
+    try std.testing.expect(shape.object.get("figure_style_operations") == null);
+    const old_env = try T.Env.init(a, false); defer old_env.deinit();
+    try std.testing.expectEqual(@as(usize, 0), old_env.bound.figure_styles.len);
+}
+
+test "Alexander Ready callback preserves original slices and revokes changed alias and behavior authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AlexanderReady210Testing; const env = try T.Env.init(a, true); defer env.deinit();
+    const operation = env.operation();
+    const observed = (try SelectedPageStyles.figureStyle(env.bound, std.testing.allocator, operation)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(observed.profile == env.bound.styles and observed.contexts.len == 2);
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, SelectedPageStyles.figureStyle(env.bound, failing.allocator(), operation));
+    for (0..6) |mode| {
+        var changed = operation;
+        switch (mode) {
+            0 => changed.source = try a.dupe(u8, operation.source),
+            1 => changed.token = try a.dupe(u8, operation.token),
+            2 => changed.options = try a.dupe(u8, operation.options),
+            3 => changed.caption = try a.dupe(u8, operation.caption),
+            4 => changed.file = "Other.jpg",
+            5 => changed.format = .framed,
+            else => unreachable,
+        }
+        try std.testing.expect((try SelectedPageStyles.figureStyle(env.bound, a, changed)) == null);
+    }
+    env.files.file_authority = false;
+    try std.testing.expect((try SelectedPageStyles.figureStyle(env.bound, a, operation)) == null);
+    env.files.file_authority = true;
+    const original_files = env.files.resolved_files;
+    const changed_files = try a.dupe([]const u8, original_files); env.files.resolved_files = changed_files;
+    for (env.files.records, 0..) |record, index| if (std.mem.endsWith(u8, record.canonical_file, T.requested)) {
+        changed_files[index] = "Датотека:Unproved.jpg";
+    };
+    try std.testing.expect((try SelectedPageStyles.figureStyle(env.bound, a, operation)) == null);
+    env.files.resolved_files = original_files;
+    const original_behavior_sha = env.behavior.namespace_sha256; env.behavior.namespace_sha256[0] ^= 1;
+    try std.testing.expect((try SelectedPageStyles.figureStyle(env.bound, a, operation)) == null);
+    env.behavior.namespace_sha256 = original_behavior_sha;
+    try std.testing.expect((try SelectedPageStyles.figureStyle(env.bound, a, operation)) != null);
+}
+
+test "Alexander complete retained source uses Document preserves caption actions media and byte codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AlexanderReady210Testing; const env = try T.Env.init(a, true); defer env.deinit();
+    const bytes = try env.documentBytes(a, env.sized());
+    const report = env.last_report;
+    const saved = try encoder.presentation_codec.decodeAlloc(a, bytes, "Alexander", .language, .{ .heading = "Unclassified", .code = "" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, saved));
+    var first: usize = 0; var second: usize = 0;
+    try std.testing.expectEqualStrings("Alexander", saved.entry.title);
+    for (saved.entry.sections) |section| {
+        first += try T.targetBlocks(section.blocks, T.remote_one);
+        second += try T.targetBlocks(section.blocks, T.remote_two);
+    }
+    try std.testing.expectEqual(@as(usize, 1), first);
+    try std.testing.expectEqual(@as(usize, 1), second);
+    const resolved = (try sizing.Registry.resolveCanonicalFile(&env.files, a, T.requested)) orelse return error.TestUnexpectedResult;
+    var image_count: usize = 0; var figures: usize = 0;
+    for (saved.entry.media) |media| { if (equal(media.file, resolved)) image_count += 1; }
+    for (saved.entry.sections) |section| try T.inspectBlocks(a, section.blocks, resolved, &figures);
+    try std.testing.expectEqual(@as(usize, 1), image_count);
+    try std.testing.expectEqual(@as(usize, 1), figures);
+    var without_figure = env.sized(); without_figure.resolve_figure_style_fn = null;
+    try std.testing.expectError(error.UncompiledPresentation, env.documentBytes(a, without_figure));
+    try std.testing.expect(digestMatches(T.source, "08637660cc604388c68e15420028a33d00e44928b1b4d232bb9a9faad6d36226"));
+    // Retain full body evidence before a strict report failure, as in other
+    // affected whole-page controls. The original assertions remain fatal.
+    if (report.any()) std.debug.print("ALEXANDER_READY_REPORT {s}\nALEXANDER_READY_STORED {s}\n", .{
+        try std.json.Stringify.valueAlloc(a, report, .{}), try std.json.Stringify.valueAlloc(a, saved, .{}),
+    });
+    try std.testing.expect(!report.any());
+}
+
+
+test "Alexander Ready full source native census refuses hidden switches dynamic conversions and protected producers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AlexanderReady210Testing; const env = try T.Env.init(a, true); defer env.deinit();
+    try std.testing.expectError(invalid, figureStyleOperationProofs(a, &env.ns, T.source, &.{T.range}));
+    const baseline = try figureStyleFlowSourceProofsWithNative(a, &env.ns, T.source, &.{T.range}, true, false, null,
+        .{ .files = &env.files, .context = env.context });
+    try std.testing.expectEqual(@as(usize, 1), baseline.len);
+    for ([_][]const u8{
+        "__NOT_A_REGISTERED_SWITCH__", "[[Target|__NOT_A_REGISTERED_SWITCH__]]", "[[Target|__TOC__]]",
+        "<span title='__NOT_A_REGISTERED_SWITCH__'>text</span>", "{| title='__NOT_A_REGISTERED_SWITCH__'\n|text\n|}",
+        "-{sr:one;sr-el:two}-", "-{R|text}-", "-{one=>two}-", "-{{nested}}-", "-{unfinished",
+        "[[Слика:Napoli BW 2013-05-16 16-24-01.jpg|thumb|duplicate]]",
+    }) |suffix| {
+        const changed = try std.mem.concat(a, u8, &.{ T.source, "\n", suffix });
+        try std.testing.expectError(invalid, figureStyleFlowSourceProofsWithNative(a, &env.ns, changed, &.{T.range}, true, false, null,
+            .{ .files = &env.files, .context = env.context }));
+    }
+    const token = T.source[T.range.start..T.range.end];
+    for ([_][2][]const u8{
+        .{ "<nowiki>", "</nowiki>" }, .{ "<!--", "-->" }, .{ "<span title='", "'>text</span>" },
+        .{ "[[Target|", "]]" }, .{ "[https://example.test/ ", "]" }, .{ "{{Template|", "}}" },
+    }) |wrapper| {
+        const changed = try std.mem.concat(a, u8, &.{ T.source[0..T.range.start], wrapper[0], token, wrapper[1], T.source[T.range.end..] });
+        var shifted = T.range; shifted.start += wrapper[0].len; shifted.end += wrapper[0].len;
+        try std.testing.expectError(invalid, figureStyleFlowSourceProofsWithNative(a, &env.ns, changed, &.{shifted}, true, false, null,
+            .{ .files = &env.files, .context = env.context }));
+    }
+    var cut = T.range; cut.end -= 1;
+    try std.testing.expectError(invalid, figureStyleFlowSourceProofsWithNative(a, &env.ns, T.source, &.{cut}, true, false, null,
+        .{ .files = &env.files, .context = env.context }));
+    const changed = try a.dupe(u8, T.source); changed[0] ^= 1;
+    try std.testing.expect((try env.book.selectPageStylesForCompiler(a, &env.ns, 0, 12600, 676512, "Alexander", T.raw,
+        changed, env.defaults, &env.parent, env.context)) == null);
+    try std.testing.expect((try env.book.selectPageStylesForCompiler(a, &env.ns, 0, 12600, 676513, "Alexander", T.raw,
+        T.source, env.defaults, &env.parent, env.context)) == null);
+}
+
+
+test "complete source inline owner preserves declaring font independently of action overrides" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const selected = try T.selectedWithCss(a, &ns, T.source, T.html,
+        T.css ++ "body{font-size:125%}a{font-size:80%}");
+    const owner = selected.scope.page_source_inline_owner orelse return error.TestUnexpectedResult;
+    try std.testing.expect(profile.pageSourceInlineOwnerCurrent(owner));
+    try std.testing.expectEqual(@as(?f32, 1.25), owner.style.owner_font_scale);
+    try std.testing.expect(owner.style.font_family.? == .sans_serif);
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const encoded = try T.compile(a, selected, &report);
+    try std.testing.expect(!report.any());
+    const codec = encoder.presentation_codec;
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "de", .heading = "German" });
+    var actions: usize = 0;
+    for (decoded.entry.sections) |section| for (try T.ownedBlocks(selected, section.blocks)) |block| for (block.spans) |span| {
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings("Target", span.text);
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expectEqual(@as(?f32, 1), span.font_scale);
+        try std.testing.expect(span.font_scale_basis == .normal_body and span.font_family.? == .sans_serif);
+        try std.testing.expect(span.link_paint != null);
+        actions += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    // Keep complete declarations, including unrepresented generated content.
+    // The exact complete graph refutes this absent ancestor at every subject.
+    const absent = try T.selectedWithCss(a, &ns, T.source, T.html,
+        T.css ++ "body{font-size:125%}a{font-size:80%}.absent > a::before{content:'not rendered';padding:3px}");
+    try std.testing.expect(absent.scope.page_source_inline_owner != null);
+    var absent_report: encoder.presentation_document.Fallbacks = .{};
+    try std.testing.expectEqualSlices(u8, encoded, try T.compile(a, absent, &absent_report));
+    try std.testing.expect(!absent_report.any());
+    const absent_owner = @constCast(absent.scope.page_source_inline_owner.?);
+    try std.testing.expect(absent_owner.absent_rules.len != 0);
+    const retained_absence = absent_owner.absent_rules;
+    absent_owner.absent_rules = &.{};
+    try std.testing.expect(!profile.pageSourceInlineOwnerCurrent(absent_owner));
+    absent_owner.absent_rules = retained_absence;
+    try std.testing.expect(profile.pageSourceInlineOwnerCurrent(absent_owner));
+    for ([_][]const u8{ "div > a::before{content:'visible';padding:3px}", "a:unrepresented::before{content:'unknown';padding:3px}" }) |extra| {
+        const possible = try T.selectedWithCss(a, &ns, T.source, T.html,
+            try std.fmt.allocPrint(a, "{s}{s}", .{T.css, extra}));
+        try std.testing.expect(possible.scope.page_source_inline_owner == null);
+    }
+    selected.scope.page_source_focus = null;
+    var unproved: encoder.presentation_document.Fallbacks = .{};
+    try std.testing.expectEqualSlices(u8, encoded, try T.compile(a, selected, &unproved));
+    try std.testing.expect(unproved.unresolved_table_style);
+}
+
+test "complete source inline owner refuses nonaction text unrepresented roots and changed custody" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const one = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><a href='/wiki/Target' title='Target'>Target</a></div>";
+    for ([_][]const u8{ "before[[Target]]", "[[Target]]after", "[[Target]] [[Target]]", "''[[Target]]" }) |source| {
+        const selected = try T.selected(a, &ns, source, if (std.mem.count(u8, source, "[[Target]]") == 2) T.html else one);
+        try std.testing.expect(selected.scope.page_source_inline_owner == null);
+    }
+    for ([_][]const u8{ "body{font-weight:bold}", "body{font-size:20px}", "body{line-height:1.5}",
+        "body{padding:1px}", "body{text-decoration:underline}", "a{margin-left:1px}", "a{unknown-property:1}",
+        "body{font-feature-settings:'kern' 0}" }) |extra| {
+        const selected = try T.selectedWithCss(a, &ns, T.source, T.html, try std.fmt.allocPrint(a, "{s}{s}", .{T.css, extra}));
+        try std.testing.expect(selected.scope.page_source_inline_owner == null);
+    }
+    const paragraph = try T.selected(a, &ns, "[[Target]]",
+        "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><p><a href='/wiki/Target' title='Target'>Target</a></p></div>");
+    try std.testing.expect(paragraph.scope.page_source_inline_owner == null);
+    for ([_][]const u8{ "rtl", "auto" }) |direction| {
+        try std.testing.expectError(error.InvalidFigurePageObservations, T.selected(a, &ns, T.source,
+            try std.mem.replaceOwned(u8, a, T.html, "dir='ltr'", try std.fmt.allocPrint(a, "dir='{s}'", .{direction}))));
+    }
+    for ([_][]const u8{ "align='center'", "width='200'", "hidden=''" }) |attribute| {
+        try std.testing.expectError(error.InvalidFigurePageObservations, T.selected(a, &ns, T.source,
+            try std.mem.replaceOwned(u8, a, T.html, "dir='ltr'", try std.fmt.allocPrint(a, "dir='ltr' {s}", .{attribute}))));
+    }
+    const selected = try T.selected(a, &ns, T.source, T.html);
+    const owner = @constCast(selected.scope.page_source_inline_owner orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqualStrings("de", owner.language);
+    const original_language = owner.language;
+    owner.language = "fr";
+    try std.testing.expect(!profile.pageSourceInlineOwnerCurrent(owner));
+    owner.language = original_language;
+    const original_style = owner.style;
+    owner.style.owner_font_scale = 2;
+    try std.testing.expect(!profile.pageSourceInlineOwnerCurrent(owner));
+    owner.style = original_style;
+    const nodes = @constCast(owner.focus.graphs[1].context.nodes);
+    const old_parent = nodes[3].parent;
+    nodes[3].parent = null;
+    try std.testing.expect(!profile.pageSourceInlineOwnerCurrent(owner));
+    nodes[3].parent = old_parent;
+    try std.testing.expect(profile.pageSourceInlineOwnerCurrent(owner));
+}
+
+test "complete source inline owner requires actual final container once with unchanged declaring font" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const selected = try T.selected(a, &ns, T.source, T.html);
+    const proof = selected.scope.page_source_inline_owner orelse return error.TestUnexpectedResult;
+    for (0..9) |mode| {
+        var renderer: compiler.Renderer = .{ .a = a, .native_body_language = "de", .content_root = .parser_output, .page_source_focus_completion = true,
+            .bounded_text_class_scope = &selected.scope, .bounded_text_class_source = selected.source,
+            .context = .{ .title = "Page", .namespace_catalog = &ns, .table_styles = selected.styles, .figure_sizing = T.sizingSource(selected) } };
+        const blocks = try renderer.renderBody(selected.source);
+        try std.testing.expect(renderer.required_page_inline_owner == proof);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const owner = blocks[0].container orelse return error.TestUnexpectedResult;
+        for (owner.blocks) |block| for (block.spans) |span| try renderer.consumeCompletedActionFocus(span);
+        var actual = blocks[0];
+        switch (mode) {
+            3 => actual.container.?.style.font_family = null,
+            4 => actual.container.?.style.owner_font_scale = 2,
+            5 => actual.container.?.blocks = try a.dupe(compiler.Block, owner.blocks),
+            6 => selected.scope.page_source_inline_owner = null,
+            7 => renderer.native_body_language = null,
+            8 => renderer.native_body_language = "fr",
+            else => {},
+        }
+        if (mode != 1) renderer.consumeCompletedInlineOwner(&actual);
+        if (mode == 2) renderer.consumeCompletedInlineOwner(&actual);
+        renderer.finishCompletedActionFocus();
+        try std.testing.expectEqual(mode != 0, renderer.fallbacks.unresolved_table_style);
+        selected.scope.page_source_inline_owner = proof;
+    }
+}
+
+test "retained Mai inline parent publishes exact complete neighbours without changing source or edit CSS" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const input_bytes = [_][]const u8{ @embedFile("testdata/de-mai-figure-style/original.json"), @embedFile("testdata/de-mai-figure-style/reference.json") };
+    const source_hashes = [_][]const u8{ "01d3e7a45d3f9d3504311fdba3eebed4c8a1a2d9f8760c0f9bc11f75b8b00ed8", "c7ef6b7be66571891d5ccc0451498d9fdff241ed11f51babadf5d607eb70259b" };
+    for (input_bytes, source_hashes) |bytes, expected_source_hash| {
+        const doc = try std.json.parseFromSliceLeaky(Document, a, bytes, .{ .allocate = .alloc_always });
+        const supplied = try responseSource(a, &ns, doc.pages[0]);
+        try std.testing.expect(digestMatches(supplied.source, expected_source_hash));
+        const css = (doc.pages[0].page_styles orelse return error.TestUnexpectedResult).responses[2];
+        try std.testing.expect(digestMatches(css, "04f054a2123759416e4f7934df96d14ef63945e80f04ab831a8c77d170a99922"));
+        try std.testing.expect(std.mem.indexOf(u8, css, "a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before") != null);
+        const bracket_declarations = "content:'[';content:'[' / '';";
+        try std.testing.expectEqualStrings(bracket_declarations, css[17692..][0..bracket_declarations.len]);
+        const after_declarations = "content:']';content:']' / '';";
+        try std.testing.expectEqualStrings(after_declarations, css[18114..][0..after_declarations.len]);
+        var inventory_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = try observedTextClassScopeWithElements(a, &ns, supplied.html, &inventory_nodes);
+        const mapped = try CompleteCapturedSiblingsTesting.observed(a, inventory_nodes.items);
+        try std.testing.expect(try figureObservedCompleteSiblings(a, supplied.html, inventory_nodes.items, mapped, 0, inventory_nodes.items[0].attributes));
+        var found: usize = 0;
+        for (inventory_nodes.items, 0..) |node, index| {
+            if (!node.tag.is("a") or !equal(node.attributes.get("href") orelse "", "https://la.wiktionary.org/wiki/Special:Search/mensis")) continue;
+            found += 1;
+            const parent = node.parent orelse return error.TestUnexpectedResult;
+            const previous = node.previous orelse return error.TestUnexpectedResult;
+            try std.testing.expect(inventory_nodes.items[parent].tag.is("i") and mapped[parent].known_complete_child_elements);
+            try std.testing.expect(inventory_nodes.items[previous].tag.is("span"));
+            try std.testing.expectEqualStrings("la", inventory_nodes.items[previous].attributes.get("lang") orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqual(@as(?u32, @intCast(previous)), mapped[index].known_previous_element_sibling);
+            try std.testing.expectEqual(@as(?u32, @intCast(index)), mapped[previous].known_next_element_sibling);
+            try std.testing.expectEqualStrings("<sup class=\"dewikttm\">→&#160;la</sup>", supplied.html[node.tag.end..node.inner_end.?]);
+            // The SUP is a descendant; the next sibling is the separate Maius span.
+            const next: usize = mapped[index].known_next_element_sibling orelse return error.TestUnexpectedResult;
+            try std.testing.expect(!mapped[index].known_no_next_element_sibling and next > index + 1 and next < mapped.len);
+            try std.testing.expect(inventory_nodes.items[next].parent == parent and inventory_nodes.items[next].tag.is("span"));
+            try std.testing.expectEqualStrings("la", inventory_nodes.items[next].attributes.get("lang") orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqual(@as(?u32, @intCast(index)), mapped[next].known_previous_element_sibling);
+            try std.testing.expectEqualStrings("<a href=\"/wiki/Maius#Maius_(Latein)\" title=\"Maius\">Maius</a>", supplied.html[inventory_nodes.items[next].tag.end..inventory_nodes.items[next].inner_end.?]);
+            const last: usize = mapped[next].known_next_element_sibling orelse return error.TestUnexpectedResult;
+            try std.testing.expect(last > next and last + 1 < mapped.len and inventory_nodes.items[last].parent == parent and inventory_nodes.items[last].tag.is("a"));
+            try std.testing.expectEqualStrings("https://la.wiktionary.org/wiki/Special:Search/Maius", inventory_nodes.items[last].attributes.get("href") orelse return error.TestUnexpectedResult);
+            try std.testing.expectEqual(@as(?u32, @intCast(next)), mapped[last].known_previous_element_sibling);
+            try std.testing.expectEqualStrings("<sup class=\"dewikttm\">→&#160;la</sup>", supplied.html[inventory_nodes.items[last].tag.end..inventory_nodes.items[last].inner_end.?]);
+            try std.testing.expect(mapped[last].known_no_next_element_sibling and mapped[last].known_next_element_sibling == null);
+            try std.testing.expect(inventory_nodes.items[last + 1].tag.is("sup") and (if (mapped[last + 1].parent) |parent_index| @as(usize, parent_index) == last else false));
+            try std.testing.expect(index + 1 < mapped.len and (if (mapped[index + 1].parent) |parent_index| @as(usize, parent_index) == index else false));
+            try std.testing.expect(inventory_nodes.items[index + 1].tag.is("sup"));
+        }
+        try std.testing.expectEqual(@as(usize, 1), found);
+    }
+}
+
+test "closed inline sibling publication refuses incomplete foreign and formatting recovery inventories" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, namespaces.english_test_fixture); defer ns.deinit();
+    const prefix = "<div class='mw-content-ltr mw-parser-output' lang='en' dir='ltr'>";
+    const html_value = prefix ++ "<i><span>previous</span> <a href='/wiki/Target'>Target</a></i></div>";
+    var inventory_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+    _ = try observedTextClassScopeWithElements(a, &ns, html_value, &inventory_nodes);
+    try std.testing.expectEqual(@as(usize, 4), inventory_nodes.items.len);
+    for (0..7) |mode| {
+        const changed = try a.dupe(ObservedSiblingNode, inventory_nodes.items);
+        const mapped = try CompleteCapturedSiblingsTesting.observed(a, changed);
+        var supplied_html: []const u8 = html_value;
+        var supplied_nodes: []const ObservedSiblingNode = changed;
+        switch (mode) {
+            0 => changed[1].inner_end = null,
+            1 => changed[3].previous = null,
+            2 => changed[3].parent = 0,
+            3 => changed[1].first_child = 3,
+            4 => supplied_nodes = changed[0..3],
+            5 => supplied_html = try a.dupe(u8, supplied_html),
+            6 => mapped[3].parent = 0,
+            else => unreachable,
+        }
+        try std.testing.expect(!try figureObservedCompleteSiblings(a, supplied_html, supplied_nodes, mapped, 0, changed[0].attributes));
+        for (mapped) |node| try std.testing.expect(!node.known_complete_child_elements and node.known_previous_element_sibling == null);
+    }
+    for ([_][]const u8{ "<i><span>x</i></span>", "<i><div>x</div></i>", "<i><a href='/wiki/A'><a href='/wiki/B'>x</a></a></i>", "<i><span>x</span>", "<i/><a href='/wiki/Target'>Target</a>" }) |body| {
+        const html = try std.mem.concat(a, u8, &.{ prefix, body, "</div>" });
+        var source_nodes: std.ArrayList(ObservedSiblingNode) = .empty;
+        _ = observedTextClassScopeWithElements(a, &ns, html, &source_nodes) catch |err| { try std.testing.expect(err == invalid); continue; };
+        const mapped = try CompleteCapturedSiblingsTesting.observed(a, source_nodes.items);
+        try std.testing.expect(!try figureObservedCompleteSiblings(a, html, source_nodes.items, mapped, 0, source_nodes.items[0].attributes));
+    }
+}
+
+test "closed inline sibling edit rules preserve full body actions and codec through final source focus" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/de-polish-states/namespace-registry.tsv")); defer ns.deinit();
+    const T = CompleteSourceFocusTest;
+    const source = "''[[Target]][[Target]]''";
+    const html = "<div class='mw-content-ltr mw-parser-output' lang='de' dir='ltr'><i><a href='/wiki/Target' title='Target'>Target</a><a href='/wiki/Target' title='Target'>Target</a></i></div>";
+    const edit_css = ".client-nojs a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + .mw-editsection-divider + a::before,.client-nojs a.mw-editsection-visualeditor:first-of-type + a::before,.ve-not-available a.mw-editsection-visualeditor:first-of-type + a::before{content:'[';content:'[' / '';margin-right:0.25em;margin-inline:0 0.25em}.client-nojs a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after,.ve-not-available a:has(+ .mw-editsection-divider + a.mw-editsection-visualeditor:last-of-type)::after,.client-nojs a:has(+ a.mw-editsection-visualeditor:last-of-type)::after,.ve-not-available a:has(+ a.mw-editsection-visualeditor:last-of-type)::after{content:']';content:']' / '';margin-left:0.25em;margin-inline:0.25em 0}";
+    const selected = try T.selectedWithCssAndCompleteSiblings(a, &ns, source, html, T.css ++ edit_css, true);
+    const reference = try T.selectedWithCssAndCompleteSiblings(a, &ns, source, html, T.css, true);
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const encoded = try T.compile(a, selected, &report);
+    var reference_report: encoder.presentation_document.Fallbacks = .{};
+    const expected = try T.compile(a, reference, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, encoded);
+    const codec = encoder.presentation_codec;
+    const decoded = try codec.decodeAlloc(a, encoded, "Page", .language, .{ .code = "de", .heading = "German" });
+    var actions: usize = 0;
+    for (decoded.entry.sections) |section| for (try T.ownedBlocks(selected, section.blocks)) |block| for (block.spans) |span| {
+        try std.testing.expect(span.kind == .link and span.italic);
+        try std.testing.expectEqualStrings("Target", span.text);
+        try std.testing.expectEqualStrings("Target", span.target);
+        try std.testing.expect(span.link_paint != null and span.link_paint.?.focus_outline != null);
+        actions += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 2), actions);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    try std.testing.expect(!reference_report.any());
+    try std.testing.expect(!report.any());
 }

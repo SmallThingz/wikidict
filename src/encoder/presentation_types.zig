@@ -285,7 +285,7 @@ pub fn validSpanInlineStyle(span: anytype) bool {
     if (std.mem.eql(u8, kind, "text")) {
         if (span.target.len != 0) return false;
         if (span.text.len == 0 and !spanHasRuby(span) and !spanHasInlinePaddingGroup(span) and (value.line_height == null or value.cursor != null or value.wrap != null)) return false;
-    } else if (span.target.len == 0 or (span.text.len == 0 and !spanHasInlinePaddingGroup(span))) return false;
+    } else if (span.target.len == 0 or (span.text.len == 0 and !spanHasInlinePaddingGroup(span) and !spanHasInlineActionGroup(span))) return false;
     const scale: ?f32 = if (comptime @hasField(@TypeOf(span), "font_scale")) span.font_scale else null;
     const basis: FontScaleBasis = if (comptime @hasField(@TypeOf(span), "font_scale_basis")) span.font_scale_basis else .context;
     if (value.baseline_shift != null) if (value.line_height) |height| if (height == .font_relative) {
@@ -372,7 +372,7 @@ pub fn spanHasRuby(span: anytype) bool {
     return if (comptime @hasField(@TypeOf(span), "ruby")) span.ruby != null else false;
 }
 pub fn validRubyOwner(span: anytype) bool {
-    if (!validRubyChild(span) or spanHasInlinePaddingGroup(span)) return false;
+    if (!validRubyChild(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) return false;
     if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.text.len != 0 or span.target.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
@@ -419,7 +419,7 @@ pub fn validRubyBodyChild(span: anytype) bool {
 pub fn validRubyGap(spans: anytype) bool {
     if (spans.len > max_presentation_items) return false;
     for (spans) |span| {
-        if (!validRubyChild(span) or !std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span)) return false;
+        if (!validRubyChild(span) or !std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) return false;
         if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
         if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
         for (span.text) |byte| if (byte != ' ' and byte != '\t' and byte != '\n' and byte != '\r' and byte != 0x0c) return false;
@@ -493,6 +493,7 @@ const RubyFallbackDecoration = struct {
 
 const RubyFallbackBudget = struct {
     remaining: usize = max_presentation_items,
+    action_group_depth: usize = 0,
     fn items(self: *RubyFallbackBudget, count: usize) error{InvalidPresentation}!void {
         if (count > self.remaining) return error.InvalidPresentation;
         self.remaining -= count;
@@ -510,7 +511,19 @@ pub fn visitRubyFallbackAt(spans: anytype, context: anytype, comptime emit: anyt
 fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anytype, content_depth: usize, ruby_depth: usize, gap: bool, decoration: RubyFallbackDecoration, inherited_action: ?InlinePaddingGroupAction, inside_group: bool, budget: *RubyFallbackBudget) anyerror!void {
     try budget.items(spans.len);
     for (spans) |span| {
+        // U-only traversal keeps its existing contract. A new action owner also
+        // checks each nested declaring Span before entering Ruby or padding.
+        if (budget.action_group_depth != 0) if (inherited_action) |action| try action.check(span);
         if (inherited_action != null and (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0)) return error.InvalidPresentation;
+        if (comptime @hasField(@TypeOf(span), "inline_action_group")) if (span.inline_action_group) |group| {
+            if (gap or content_depth >= max_content_depth or !validInlineActionGroupOwner(span)) return error.InvalidPresentation;
+            const action = InlinePaddingGroupAction.from(span) orelse return error.InvalidPresentation;
+            budget.action_group_depth += 1;
+            defer budget.action_group_depth -= 1;
+            try visitRubyFallbackInner(group.spans, context, emit, content_depth + 1, ruby_depth, false,
+                decoration.including(span), action, true, budget);
+            continue;
+        };
         if (comptime @hasField(@TypeOf(span), "inline_padding_group")) if (span.inline_padding_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlinePaddingGroupOwner(span)) return error.InvalidPresentation;
             const action = InlinePaddingGroupAction.from(span) orelse inherited_action;
@@ -564,6 +577,11 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
 fn rubyFallbackHasText(spans: anytype, content_depth: usize, ruby_depth: usize, budget: *RubyFallbackBudget) error{InvalidPresentation}!bool {
     try budget.items(spans.len);
     for (spans) |span| {
+        if (comptime @hasField(@TypeOf(span), "inline_action_group")) if (span.inline_action_group) |group| {
+            if (content_depth >= max_content_depth or !validInlineActionGroupOwner(span)) return error.InvalidPresentation;
+            if (try rubyFallbackHasText(group.spans, content_depth + 1, ruby_depth, budget)) return true;
+            continue;
+        };
         if (comptime @hasField(@TypeOf(span), "inline_padding_group")) if (span.inline_padding_group) |group| {
             if (content_depth >= max_content_depth or !validInlinePaddingGroupOwner(span)) return error.InvalidPresentation;
             if (try rubyFallbackHasText(group.spans, content_depth + 1, ruby_depth, budget)) return true;
@@ -616,7 +634,7 @@ pub fn validInlinePaddingGroup(value: anytype) bool {
 }
 pub fn validInlinePaddingGroupOwner(span: anytype) bool {
     if (!spanHasInlinePaddingGroup(span) or !validRubyBodyChild(span) or
-        span.text.len != 0 or spanHasRuby(span)) return false;
+        span.text.len != 0 or spanHasRuby(span) or spanHasInlineActionGroup(span)) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
     if (comptime @hasField(@TypeOf(span), "inline_padding_group"))
@@ -629,6 +647,42 @@ pub fn validInlinePaddingGroupOwner(span: anytype) bool {
 /// semantics without emitting characters or allocating a second representation.
 pub fn validateInlinePaddingGroupTree(owner: anytype, content_depth: usize, ruby_depth: usize) error{InvalidPresentation}!void {
     if (!validInlinePaddingGroupOwner(owner)) return error.InvalidPresentation;
+    const Noop = struct {
+        fn emit(_: void, _: @TypeOf(owner)) error{}!void {}
+    };
+    var budget: RubyFallbackBudget = .{};
+    visitRubyFallbackInner(&[_]@TypeOf(owner){owner}, {}, Noop.emit, content_depth, ruby_depth,
+        false, .{}, null, false, &budget) catch return error.InvalidPresentation;
+}
+
+/// One authored action occurrence, independently of its rich child runs.
+/// The owner carries destination and declaring metrics; children carry all text.
+pub fn InlineActionGroup(comptime Child: type) type {
+    return struct { spans: []const Child };
+}
+pub fn spanHasInlineActionGroup(span: anytype) bool {
+    return if (comptime @hasField(@TypeOf(span), "inline_action_group")) span.inline_action_group != null else false;
+}
+pub fn validInlineActionGroup(value: anytype) bool {
+    return value.spans.len != 0 and value.spans.len <= max_presentation_items;
+}
+pub fn validInlineActionGroupOwner(span: anytype) bool {
+    if (!spanHasInlineActionGroup(span) or !validRubyBodyChild(span) or
+        span.text.len != 0 or span.target.len == 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span)) return false;
+    const kind = @tagName(span.kind);
+    if (!std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
+    if (comptime @hasField(@TypeOf(span), "self_link")) if (span.self_link) return false;
+    if (comptime @hasField(@TypeOf(span), "inline_action_group"))
+        return validInlineActionGroup(span.inline_action_group.?.*);
+    return false;
+}
+/// Structural consumers retain their containing entry budget. This local
+/// traversal checks rich children and the single stored action owner without
+/// copying visible text or installing actions on stored descendants.
+pub fn validateInlineActionGroupTree(owner: anytype, content_depth: usize, ruby_depth: usize) error{InvalidPresentation}!void {
+    if (!validInlineActionGroupOwner(owner)) return error.InvalidPresentation;
     const Noop = struct {
         fn emit(_: void, _: @TypeOf(owner)) error{}!void {}
     };
@@ -735,6 +789,7 @@ pub const Span = struct {
     image: ?InlineImage = null,
     ruby: ?*const Ruby(@This()) = null,
     inline_padding_group: ?*const InlinePaddingGroup(@This()) = null,
+    inline_action_group: ?*const InlineActionGroup(@This()) = null,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -756,11 +811,12 @@ pub const Span = struct {
             const image_field = comptime std.mem.eql(u8, field_name, "image");
             const ruby_field = comptime std.mem.eql(u8, field_name, "ruby");
             const padding_group_field = comptime std.mem.eql(u8, field_name, "inline_padding_group");
+            const action_group_field = comptime std.mem.eql(u8, field_name, "inline_action_group");
             const features_field = comptime std.mem.eql(u8, field_name, "font_features");
             const family_field = comptime std.mem.eql(u8, field_name, "font_family");
             const link_paint_field = comptime std.mem.eql(u8, field_name, "link_paint");
             const inline_style_field = comptime std.mem.eql(u8, field_name, "inline_style");
-            if ((!padding_group_field or self.inline_padding_group != null) and (!ruby_field or self.ruby != null) and (!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
+            if ((!action_group_field or self.inline_action_group != null) and (!padding_group_field or self.inline_padding_group != null) and (!ruby_field or self.ruby != null) and (!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
                 (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis != .context))) and
                 (!basis_field or self.font_scale_basis != .context) and (!features_field or self.font_features != null) and
                 (!link_paint_field or self.link_paint != null) and (!inline_style_field or self.inline_style != null) and (!family_field or self.font_family != null))
@@ -1817,7 +1873,7 @@ pub fn validSectionHeadingCompanion(section: anytype) bool {
     for (heading.spans) |span| {
         // Generic build spans without ruby must not instantiate its stricter
         // child/decoration contract, even when this runtime arm is unreachable.
-        if (comptime @hasField(@TypeOf(span), "ruby") or @hasField(@TypeOf(span), "inline_padding_group")) if (spanHasRuby(span) or spanHasInlinePaddingGroup(span)) {
+        if (comptime @hasField(@TypeOf(span), "ruby") or @hasField(@TypeOf(span), "inline_padding_group") or @hasField(@TypeOf(span), "inline_action_group")) if (spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) {
             const Match = struct {
                 title: []const u8, offset: usize,
                 fn emit(self: *@This(), child: @TypeOf(span)) error{InvalidPresentation}!void {
@@ -2418,9 +2474,11 @@ pub const ImageCatalogIndex = struct {
 pub const DeepTableWork = struct {
     remaining: usize = max_presentation_items,
     inline_group_found: bool = false,
+    inline_action_group_found: bool = false,
     inline_group_font_family: bool = false,
     inline_group_text_flow: bool = false,
     discover_inline_group: bool = false,
+    discover_inline_action_group: bool = false,
     const Error = error{ InvalidPresentation, PresentationTooLarge };
     fn take(self: *DeepTableWork, count: usize) Error!void {
         if (count > self.remaining) return error.PresentationTooLarge;
@@ -2441,6 +2499,12 @@ pub const DeepTableWork = struct {
         try self.take(values.len);
         for (values) |value| {
             self.inlineFeatures(value);
+            if (comptime @hasField(@TypeOf(value), "inline_action_group")) if (value.inline_action_group) |group| {
+                self.inline_action_group_found = true;
+                if (self.discover_inline_action_group) return error.InvalidPresentation;
+                if (content_depth >= max_content_depth) return error.InvalidPresentation;
+                try self.spans(group.spans, content_depth + 1, ruby_depth);
+            };
             if (comptime @hasField(@TypeOf(value), "inline_padding_group")) if (value.inline_padding_group) |group| {
                 self.inline_group_found = true;
                 // Private discovery stops here. Its caller consumes the marker,
@@ -2477,6 +2541,11 @@ pub const DeepTableWork = struct {
     /// Discovery never changes historical group-free validation/count semantics.
     /// A group beyond this budget cannot form a valid U entry; the legacy encoder
     /// still refuses that unsupported field if it reaches it later.
+    pub fn hasInlineActionGroups(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_inline_action_group = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.inline_action_group_found;
+    }
     pub fn hasInlinePaddingGroups(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_inline_group = true };
         work.entry(display, sections, preamble, references) catch {};
@@ -2556,6 +2625,7 @@ const ImageValidation = struct {
     in_reference: bool = false,
     inline_padding_action: ?InlinePaddingGroupAction = null,
     in_inline_padding_group: bool = false,
+    in_inline_action_group: bool = false,
     link_paint: ?FigureLinkPaint = null,
 
     fn deinit(self: *ImageValidation) void {
@@ -2607,11 +2677,25 @@ fn validateRubyContent(value: Ruby(Span), media: *ImageValidation) ValidationErr
 
 fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationError!void {
     for (spans) |span| {
-        if (media.in_inline_padding_group and !validRubyBodyChild(span)) return error.InvalidPresentation;
+        if ((media.in_inline_padding_group or media.in_inline_action_group) and !validRubyBodyChild(span)) return error.InvalidPresentation;
+        if (media.in_inline_action_group) if (media.inline_padding_action) |action| try action.check(span);
         if (media.inline_padding_action != null and (span.kind != .text or span.target.len != 0)) return error.InvalidPresentation;
-        if (span.inline_padding_group) |group| {
+        if (span.inline_action_group) |group| {
+            if (!validInlineActionGroupOwner(span) or media.content_depth >= max_content_depth or
+                (!media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
+                !media.maps.items(group.spans.len)) return error.InvalidPresentation;
+            const previous_action = media.inline_padding_action;
+            const previous_group = media.in_inline_action_group;
+            media.inline_padding_action = InlinePaddingGroupAction.from(span) orelse return error.InvalidPresentation;
+            media.in_inline_action_group = true;
+            media.content_depth += 1;
+            defer media.content_depth -= 1;
+            defer media.in_inline_action_group = previous_group;
+            defer media.inline_padding_action = previous_action;
+            try validateSpanColors(group.spans, media);
+        } else if (span.inline_padding_group) |group| {
             if (!validInlinePaddingGroupOwner(span) or media.content_depth >= max_content_depth or
-                (!media.in_inline_padding_group and media.ruby_depth == 0 and !media.maps.items(1)) or
+                (!media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
                 !media.maps.items(group.spans.len)) return error.InvalidPresentation;
             const previous_action = media.inline_padding_action;
             const previous_group = media.in_inline_padding_group;
@@ -2626,7 +2710,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             _ = try action.project(span);
         };
         if (span.ruby) |ruby| {
-            if (!validRubyOwner(span) or (media.ruby_depth == 0 and !media.maps.items(1))) return error.InvalidPresentation;
+            if (!validRubyOwner(span) or (media.ruby_depth == 0 and !media.in_inline_action_group and !media.maps.items(1))) return error.InvalidPresentation;
             try validateRubyContent(ruby.*, media);
         }
         if (span.font_family) |family| if (!validContainerFontFamily(family)) return error.InvalidPresentation;
@@ -7367,4 +7451,198 @@ test "inline padding fallback retains empty metric owners and explicit inherited
     inline for (.{ "normal", "hover", "active", "hover_active", "visited", "visited_hover", "visited_active", "visited_hover_active" }) |name|
         try std.testing.expect(@field(painted.link_paint.?, name).underline);
     try std.testing.expect(!paint.normal.underline and !paint.active.underline);
+}
+
+test "inline action groups preserve rich runs trails and distinct equal-target owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Source-shaped mixed-font and trail controls. Numeric font snapshots are
+    // explicit model inputs, not a claim about a captured page's computed CSS.
+    const mixed = [_]Span{
+        .{ .text = "der " }, .{ .text = "Mai", .italic = true }, .{ .text = " ist gekommen" },
+    };
+    const trail = [_]Span{ .{ .text = "d" }, .{ .text = "a" } };
+    const first = InlineActionGroup(Span){ .spans = &mixed };
+    const second = InlineActionGroup(Span){ .spans = &trail };
+    const paint = OrdinaryLinkPaintModelTesting.paint();
+    const owners = [_]Span{
+        .{ .kind = .link, .target = "Same", .target_fragment = "section", .inline_action_group = &first, .link_paint = paint, .tooltip = "advice" },
+        .{ .kind = .link, .target = "Same", .target_fragment = "section", .inline_action_group = &second, .link_paint = paint },
+    };
+    for (owners) |owner| {
+        try std.testing.expect(validInlineActionGroupOwner(owner));
+        try std.testing.expect(!validInlinePaddingGroupOwner(owner) and !validRubyOwner(owner));
+        try validateInlineActionGroupTree(owner, 0, 0);
+    }
+    try std.testing.expect(owners[0].inline_action_group != owners[1].inline_action_group);
+    var validation: ImageValidation = .{ .a = a, .media = &.{} }; defer validation.deinit();
+    try validateSpanColors(&owners, &validation);
+    const Collector = struct {
+        values: [5]Span = undefined, count: usize = 0,
+        fn emit(self: *@This(), span: Span) !void {
+            if (self.count >= self.values.len) return error.TestUnexpectedResult;
+            self.values[self.count] = span; self.count += 1;
+        }
+    };
+    var collected: Collector = .{};
+    try visitRubyFallback(&owners, &collected, Collector.emit);
+    try std.testing.expectEqual(@as(usize, 5), collected.count);
+    for (collected.values, 0..) |span, index| {
+        try std.testing.expect(span.inline_action_group == null and span.inline_padding_group == null and span.ruby == null);
+        try std.testing.expect(span.kind == .link);
+        try std.testing.expectEqualStrings("Same", span.target);
+        try std.testing.expectEqualStrings("section", span.target_fragment.?);
+        try std.testing.expectEqualDeep(@as(?LinkPaint, paint), span.link_paint);
+        try std.testing.expectEqual(index == 1, span.italic);
+    }
+    try std.testing.expectEqualStrings("d", collected.values[3].text);
+    try std.testing.expectEqualStrings("a", collected.values[4].text);
+    try std.testing.expectEqualStrings("advice", collected.values[1].tooltip.?);
+    for (mixed) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    for (trail) |span| try std.testing.expect(span.kind == .text and span.target.len == 0);
+    const legacy_json = try std.json.Stringify.valueAlloc(a, mixed[0], .{});
+    try std.testing.expect(std.mem.indexOf(u8, legacy_json, "inline_action_group") == null);
+    const json = try std.json.Stringify.valueAlloc(a, owners[0], .{});
+    const decoded = try std.json.parseFromSlice(Span, a, json, .{}); defer decoded.deinit();
+    try std.testing.expectEqualDeep(owners[0], decoded.value);
+    try validateInlineActionGroupTree(decoded.value, 0, 0);
+}
+
+test "inline action groups retain Ruby and padding descendants with actionless synthetic punctuation" {
+    const glyphs = [_]Span{.{ .text = "B", .font_scale = 1.2, .font_scale_basis = .normal_body }};
+    const reading = [_]Span{.{ .text = "reading", .superscript = true, .italic = true }};
+    const padding = InlinePaddingGroup(Span){ .left = .{ .unit = .em, .value = 0.25 },
+        .right = .{ .unit = .em, .value = 0.25 }, .spans = &reading };
+    const padded = [_]Span{.{ .inline_padding_group = &padding }};
+    const ruby = Ruby(Span){ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &glyphs }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &padded }},
+    }} };
+    const metric = Span{ .inline_style = .{ .line_height = .{ .font_relative = .{ .factor = 1, .font = .{} } } } };
+    const children = [_]Span{metric, .{ .ruby = &ruby }};
+    const group = InlineActionGroup(Span){ .spans = &children };
+    const paint = OrdinaryLinkPaintModelTesting.paint();
+    const owner = Span{ .kind = .external_link, .target = "https://example.org/", .inline_action_group = &group, .link_paint = paint };
+    try validateInlineActionGroupTree(owner, 0, 0);
+    const Collector = struct {
+        values: [5]Span = undefined, count: usize = 0,
+        fn emit(self: *@This(), span: Span) !void {
+            if (self.count >= self.values.len) return error.TestUnexpectedResult;
+            self.values[self.count] = span; self.count += 1;
+        }
+    };
+    var result: Collector = .{};
+    try visitRubyFallback(&[_]Span{owner}, &result, Collector.emit);
+    try std.testing.expectEqual(@as(usize, 5), result.count);
+    try std.testing.expectEqualDeep(metric, result.values[0]);
+    // A stored action owner may have only a metric child. It remains one
+    // structural owner although semantic fallback emits no action interval.
+    const metric_children = [_]Span{metric};
+    const metric_group = InlineActionGroup(Span){ .spans = &metric_children };
+    const metric_owner = Span{ .kind = .link, .target = "Metric", .inline_action_group = &metric_group };
+    try validateInlineActionGroupTree(metric_owner, 0, 0);
+    var metric_result: Collector = .{};
+    try visitRubyFallback(&[_]Span{metric_owner}, &metric_result, Collector.emit);
+    try std.testing.expectEqual(@as(usize, 1), metric_result.count);
+    try std.testing.expectEqualDeep(metric, metric_result.values[0]);
+    try std.testing.expect(metric_owner.kind == .link and metric_owner.target.len != 0);
+    for ([_]usize{1, 3}) |index| {
+        try std.testing.expect(result.values[index].kind == .external_link);
+        try std.testing.expectEqualStrings(owner.target, result.values[index].target);
+        try std.testing.expectEqualDeep(@as(?LinkPaint, paint), result.values[index].link_paint);
+    }
+    for ([_]usize{2, 4}) |index| try std.testing.expect(result.values[index].kind == .text and result.values[index].target.len == 0 and result.values[index].link_paint == null);
+    try std.testing.expectEqualStrings("reading", result.values[3].text);
+    try std.testing.expect(result.values[3].superscript and result.values[3].italic);
+    try std.testing.expectEqual(@as(?f32, 1.2), result.values[1].font_scale);
+    try std.testing.expectEqual(FontScaleBasis.normal_body, result.values[1].font_scale_basis);
+    try std.testing.expect(owner.inline_padding_group == null and owner.text.len == 0);
+}
+
+test "inline action group shape and descendants reject duplicate actions and conflicting declaring paint" {
+    const plain = [_]Span{.{ .text = "child" }};
+    const padding = InlinePaddingGroup(Span){ .left = .{ .unit = .px, .value = 1 },
+        .right = .{ .unit = .px, .value = 0 }, .spans = &plain };
+    const ruby = Ruby(Span){ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &plain }} }} };
+    var group = InlineActionGroup(Span){ .spans = &plain };
+    const good = Span{ .kind = .link, .target = "Owner", .inline_action_group = &group };
+    for (0..8) |mode| {
+        var bad = good;
+        switch (mode) {
+            0 => bad.kind = .text,
+            1 => bad.target = "",
+            2 => bad.text = "duplicate",
+            3 => bad.trail = "duplicate",
+            4 => bad.ruby = &ruby,
+            5 => bad.inline_padding_group = &padding,
+            6 => bad.image = .{ .file = "Image.svg" },
+            7 => bad.kind = .line_break,
+            else => unreachable,
+        }
+        try std.testing.expect(!validInlineActionGroupOwner(bad));
+    }
+    group.spans = &.{};
+    try std.testing.expect(!validInlineActionGroupOwner(good));
+    group.spans = &plain;
+    try std.testing.expect(!validRubyGap(&[_]Span{good}));
+    const duplicate = [_]Span{.{ .kind = .link, .text = "child", .target = "Owner" }};
+    const foreign = [_]Span{.{ .kind = .external_link, .text = "child", .target = "https://example.org/" }};
+    const nested = [_]Span{good};
+    const forced = [_]Span{.{ .kind = .line_break, .text = "\n" }};
+    const raw_lf = [_]Span{.{ .text = "first\nsecond" }};
+    const image = [_]Span{.{ .image = .{ .file = "Image.svg" } }};
+    for ([_][]const Span{ &duplicate, &foreign, &nested, &forced, &raw_lf, &image }) |children| {
+        group.spans = children;
+        try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(good, 0, 0));
+    }
+    const paint = OrdinaryLinkPaintModelTesting.paint();
+    const painted = Span{ .kind = .link, .target = "Owner", .inline_action_group = &group, .link_paint = paint };
+    const bad_leaf = [_]Span{.{ .text = "child", .foreground = "#ff0000" }};
+    const bad_padding = [_]Span{.{ .inline_padding_group = &padding, .foreground = "#ff0000" }};
+    const bad_ruby = [_]Span{.{ .ruby = &ruby, .foreground = "#ff0000" }};
+    for ([_][]const Span{ &bad_leaf, &bad_padding, &bad_ruby }) |children| {
+        group.spans = children;
+        try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(painted, 0, 0));
+        var validation: ImageValidation = .{ .a = std.testing.allocator, .media = &.{} }; defer validation.deinit();
+        try std.testing.expectError(error.InvalidPresentation, validateSpanColors(&[_]Span{painted}, &validation));
+    }
+    const matched = [_]Span{.{ .inline_padding_group = &padding, .foreground = paint.normal.foreground }};
+    group.spans = &matched;
+    try validateInlineActionGroupTree(painted, 0, 0);
+    try validateInlineActionGroupTree(good, 0, 0);
+}
+
+test "inline action groups share bounded content work and reject recursive children" {
+    const Noop = struct { fn emit(_: void, _: Span) error{}!void {} };
+    const plain = [_]Span{ .{ .text = "first" }, .{ .text = "second" } };
+    var group = InlineActionGroup(Span){ .spans = &plain };
+    const owner = Span{ .kind = .link, .target = "Owner", .inline_action_group = &group };
+    var budget: RubyFallbackBudget = .{ .remaining = 3 };
+    try visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget);
+    try std.testing.expectEqual(@as(usize, 0), budget.remaining);
+    try std.testing.expectEqual(@as(usize, 0), budget.action_group_depth);
+    budget.remaining = 2;
+    try std.testing.expectError(error.InvalidPresentation,
+        visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget));
+    try std.testing.expectEqual(@as(usize, 0), budget.action_group_depth);
+    try validateInlineActionGroupTree(owner, max_content_depth - 1, 0);
+    try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, max_content_depth, 0));
+    var paddings: [max_content_depth]InlinePaddingGroup(Span) = undefined;
+    var padding_spans: [max_content_depth]Span = undefined;
+    for (0..max_content_depth) |index| {
+        const reversed = max_content_depth - 1 - index;
+        paddings[reversed] = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 },
+            .spans = if (reversed + 1 == max_content_depth) &plain else padding_spans[reversed + 1 ..][0..1] };
+        padding_spans[reversed] = .{ .inline_padding_group = &paddings[reversed] };
+    }
+    group.spans = padding_spans[1..2];
+    try validateInlineActionGroupTree(owner, 0, 0);
+    group.spans = padding_spans[0..1];
+    try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, 0, 0));
+    paddings[0].spans = padding_spans[0..1];
+    try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, 0, 0));
+    const ruby = Ruby(Span){ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &plain }} }} };
+    const ruby_span = [_]Span{.{ .ruby = &ruby }};
+    group.spans = &ruby_span;
+    try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, 0, max_ruby_depth));
 }

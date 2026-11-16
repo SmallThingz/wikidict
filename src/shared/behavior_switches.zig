@@ -12,6 +12,8 @@ pub const Registry = struct {
     arena: std.heap.ArenaAllocator,
     aliases: []const Alias,
     initial_bytes: [256]bool,
+    // Retain the namespace identity already authenticated by init.
+    namespace_sha256: [32]u8,
     pub fn init(a: std.mem.Allocator, raw: []const u8, wiki: []const u8, date: []const u8, language: []const u8, namespace_sha256: [32]u8) !Registry {
         if (raw.len > 1024 * 1024 or !std.unicode.utf8ValidateSlice(raw)) return error.InvalidBehaviorSnapshot;
         var arena = std.heap.ArenaAllocator.init(a);
@@ -67,7 +69,7 @@ pub const Registry = struct {
             if (entries.items.len >= 10000) return error.InvalidBehaviorSnapshot;
             try entries.append(alloc, .{ .text = alias, .sensitive = sensitive, .scalars = count, .toc = std.mem.eql(u8, id, "toc"), .nocontentconvert = std.mem.eql(u8, id, "nocontentconvert") });
         }
-        return .{ .arena = arena, .aliases = try entries.toOwnedSlice(alloc), .initial_bytes = initials };
+        return .{ .arena = arena, .aliases = try entries.toOwnedSlice(alloc), .initial_bytes = initials, .namespace_sha256 = namespace_sha256 };
     }
     pub fn deinit(self: *Registry) void {
         self.arena.deinit();

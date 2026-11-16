@@ -1,0 +1,522 @@
+{{also|EI|El|曰|臼|白|冃|甘|𭺫|𭺪|티|𐌇|𐩳}}
+{{character info}}
+{{character info|⽇}}
+{{commonscat}}
+
+{{-mul-}}
+{{stroke order|strokes=4}}
+{{stroke order|type=animate}}
+
+===Han character===
+{{Han char|rn=72|rad=日|as=00|sn=4|four=60100|canj=A|ids=⿴囗一}}
+
+# {{mul-kangxi radical-def}}
+# {{mul-shuowen radical-def|231}}
+
+====Usage notes====
+* Not to be confused with {{l|mul|曰}} (Kangxi radical #73), which is generally wider and shorter.
+
+====Derived characters====
+* [[Додатак:Кинески радикал/日]]
+* {{l|mul|[[𬽪]], [[𠯐]], [[𡉭]], [[𪥨]], [[𡥌]], [[𫴸]], [[𡯙]], [[𢁯]], [[抇]], [[汨]], [[𤝍]], [[阳]], [[𨑨]], [[𣏬]], [[𣬰]], [[𭴌]], [[𡯒]], [[𡯟]], [[𥎭]], [[𥘗]], [[衵]], [[𮇇]], [[𥿀]], [[𦨙]], [[蚎]], [[𧠗]], [[𧥵]], [[𧲥]], [[𧺝]], [[𧿭]], [[𡲉]], [[鈤]], [[䖑]], [[䫻]]([[𫗇]]), [[𩚣]], [[𫽰]], [[馹]]([[驲]]), [[䵒]], [[𪕈]]}} <!-- Characters not found in [[Appendix:Chinese radical/日]] -->
+* {{l|mul|[[欥]], [[炚]], [[甠]], [[圼]], [[妟]], [[𢗭]], [[杲]], [[炅]], [[𭴋]], [[𤘵]], [[𦐇]], [[𧦊]], [[𧰮]], [[𣃸]], [[𦃙]], [[𧏒]], [[𨍯]], [[𠘗]], [[𡦬]], [[𠕌]], [[𫧍]], [[𪜌]], [[間]]([[间]]), [[𧗧]]}} <!-- Characters not found in [[Appendix:Chinese radical/日]] -->
+* {{l|mul|[[㒲]], [[𠕾]], [[𠯭]], [[𡰶]], [[㞱]], [[𢎃]], [[䒤]], [[杳]], [[𣥜]], [[氜]], [[沓]], [[㸓]], [[者]], [[𤵖]], [[香]], [[音]], [[亯]], [[𫂵]], [[耆]], [[𧖮]], [[𡥨]], [[𡸱]], [[孴]], [[𢧋]], [[𡦏]], [[稥]], [[𦳜]], [[𪎗]], [[𮏥]], [[𪏰]], [[𡾡]]}} <!-- Characters not found in [[Appendix:Chinese radical/日]] -->
+
+====Descendants====
+* {{l|mul|ㄖ}} {{q|[[Zhuyin]] letter}}
+
+====References====
+{{Han ref|kx=0489.010|dkj=13733|dj=0848.140|hdz=21482.010|uh=65E5}}
+
+====Further reading====
+* {{wikidatalite|Q3594977|日}}
+
+----
+
+{{-zh-}}
+
+===Glyph origin===
+{{Han etyl}}
+{{liushu|p}} – the Sun. A dot or line was added in the centre to distinguish it from visually similar characters, e.g. {{l|zh|囗}} (early form of {{l|zh|丁}}). Compare earlier forms of the character with the astronomical and astrological symbol for the Sun ([[☉]]) and the Egyptian hieroglyph {{m|egy|𓇳}}.
+
+===Etymology 1===
+{{zh-forms|alt=囸,𡆠,𡇁,𡆸,𡇗,𡈎}}
+
+From {{inh|zh|sit-pro|*s-nəj}}. Cognate to {{cog|bo|ཉི་མ|t=sun, day}}, {{cog|my|နေ့|t=day}}, {{cog|ksw|နံၤ|t=day|tr=nĩ}}, and {{cog|ii|ꑍ|t=day, daytime}}.
+
+====Pronunciation====
+{{zh-pron
+|m=rì
+|m-s=ri2
+|dg=жы3
+|c=jat6
+|c-t=ngit5,ngit1,ngit4*
+|c-t_note=ngit5 - literary; ngit1 - “day”; ngit4* - “daytime”
+|g=nyit6
+|h=pfs=ngit;gd=ngid5
+|j=reh4
+|mb=nì/mì
+|mb_note=mì - only used in {{zh-l|*日頭}}
+|md=nĭk
+|mn=xm,qz,jj,na,yc,ly,tp,tn,hc,lk,km,sg,kl:li̍t/ha:le̍t/zz,zp,kh,tn,tc,hc,yl,sx,mg,sg:ji̍t/tc:gi̍t
+|mn_note=ji̍t - pronounced in some parts of Anxi, Nan'an and Yongchun counties as well
+|mn-t=rig8/rêg8
+|mn-t_note=rig8 - Chaozhou, Shantou, Chaoyang, Chenghai, Raoping; rêg8 - Jieyang
+|w=5nyiq,5zeq
+|w_note=5nyiq - vernacular; 5zeq - literary
+|x=nyi6/r6
+|x_note=nyi6 - vernacular; r6 - literary
+|mc=y
+|oc=y
+|ma=y
+|cat=n,a,cls
+}}
+
+====Definitions====
+{{zh-hanzi}}
+
+# {{lb|zh|star}} [[Sun]]
+# [[daytime]]; [[time]] between [[sunrise]] and [[sunset]]
+#: {{zh-x|日班|'''day''' shift}}
+#: {{zh-ant|夜|夜間|夜晚|晚上}}
+# [[day]]; [[twenty-four]] [[hour]]s
+# [[everyday]]; [[daily]]; [[day-to-day]]
+# [[day]] of the [[month]]
+#: {{zh-x|三.月 四 日|March 4}}
+#: {{zh-syn|號}}
+# [[some]] [[day]]; some [[other]] [[time]]
+# [[former]] [[time]]s; [[previous]] times; the [[past]]
+# [[time]]; [[period]]; [[age]]
+# {{zh-classifier|[[day]]s}}
+# {{zh-short|日本|[[Japan]]; [[Japanese]]; [[Nippo-]]|dot=:}}
+#: {{zh-x|中日 詞典|Chinese-'''Japanese''' dictionary}}
+# {{†}} {{zh-alt-form|二|[[two]]}}
+# {{lb|zh|obsolete}} {{zh-short|日斯巴尼亞|[[Spain]]}}
+# {{zh-div|母}} {{lb|zh|Chinese linguistics}} the [[Middle Chinese]] [[initial]] of {{ltc-l|日|id=1}}
+
+=====Synonyms=====
+{{zh-dial|太陽}}
+{{zh-dial|白天}}
+{{zh-dial|天}}
+
+====Compounds====
+* {{see derivation subpage|Chinese}}
+
+====Descendants====
+{{CJKV||にち|j2=じつ|일|nhật|なち|o2=にち}}
+
+===Etymology 2===
+{{zh-forms|alt=入,㒲,肏}}
+Essentially a substitute character for {{ltc-l|入|to enter}} that preserves the expected modern pronunciation of {{lang|zh|入}}; see the etymology there for more.
+
+====Pronunciation====
+{{zh-pron
+|m=rì
+|m-s=ri2
+|j=reh4
+|dial=n
+|ma=y
+|cat=v
+}}
+
+====Definitions====
+{{zh-hanzi}}
+
+# {{lb|zh|dialectal Mandarin|dialectal Jin|dialectal Wu|dialectal Xiang|vulgar|often in [[abuse]]s}} to [[fuck]]; to have [[sexual intercourse]] with
+#: {{zh-x|狗日|fucking}}
+#* {{zh-x|我 日 他們 十八 輩兒{r} 的 祖宗！|'''Screw''' their ancestors to the eighteenth generation!|ref='''1944''', {{w2|zh|老舍}} ({{w|Lao She}}), {{lang|zh|《惶惑》}} (''Bewilderment''), in {{w2|zh|四世同堂|pref=《|suf=》}} (''{{w|Four Generations Under One Roof}}'')}}
+#* {{zh-x|一 句 話，^于 瘸子{zi} 把 小姨 日 了。|In one sentence ― Yu the Lame '''fucked''' mum's youngest sister.|ref='''2003''', {{lang|zh|董立勃}}, {{lang|zh|风吹草低}}, in {{lang|zh|《当代》}}, issue 4}}
+#* {{zh-x|甚至 在 別人 的 慫恿 下，對 着{zhe} ^蘇 ^婕 說，我 想 日 你。|At others' instigation, (he would) even say to Su Jie's face that “I want to '''fuck''' you”.|ref='''2004''', {{lang|zh|锦璐}}, {{lang|zh|双人床}}, in {{lang|zh|《当代》}}, issue 2}}
+#* {{zh-x|^朱 ^山 也 不敢 踢 我，甚至 罵 我 說，日 你 媽，我 的 豆腐{fu} 你 也 敢 吃。|Zhu Shan would no longer dare kick me, or insult me, and say "'''fuck''' you, how dare you flirt with my woman!"|ref='''2014''', {{lang|zh|余显斌}}, {{lang|zh|我真的很牛皮}}, in {{lang|zh|《满族文学》}}, issue 6}}
+
+=====Synonyms=====
+<!-- {{zh-dial|肏}} -->
+* See {{section link-lite|肏|Synonyms}}.
+
+===Etymology 3===
+{{zh-forms}}
+
+====Pronunciation====
+{{zh-pron
+|m=mì
+|c=mik6
+|dial=n
+|cat=syllable
+|ma=y
+}}
+
+====Definitions====
+{{zh-hanzi}}
+
+# {{n-g|Only used in {{l|zh|日[[磾]]}}, a [[Han]] [[dynasty]]-era personal name borne by {{w|Jin Midi}} ({{w2|zh|金日磾}}) and {{w|Ma Midi}} ({{w2|zh|馬日磾}}).}}
+
+===Etymology 4===
+{{zh-see|時|a}}
+
+===References===
+* {{R:yue:Hanzi}}
+* {{R:twedu|A01771}}
+* {{thcwd|810}}
+
+{{zh-cat|Beginning}}
+
+----
+
+{{-ja-}}
+
+===Kanji===
+{{ja-kanji|grade=1|rs=日00}}
+
+====Readings====
+{{ja-readings
+|goon=にち
+|kanon=じつ
+|kun=ひ-, か-, び, が
+|nanori=あき, てる, とき, はる, ひる, にっ, に, いる, す, につ, あ, へ, こう, たち, く, くさ
+}}
+
+====Compounds====
+{{der-top3|Compounds}}
+{{ja-r/multi|data=
+* {{ja-r/args|日%蓮|^にち%れん}}
+* {{ja-r/args|日%本|^に%ほん}}, {{ja-r/args|日%本|^にっ%ぽん}}
+* {{ja-r/args|明日|あした}}, {{ja-r/args|明日|あす}}
+* {{ja-r/args|明日香|^あすか}}
+* {{ja-r/args|春日|^かすが}}
+* {{ja-r/args|昨日|きそ}}
+* {{ja-r/args|一日|ついたち|rom=-}}, {{ja-r/args|朔日|ついたち}}
+* {{ja-r/args|明後日|あさって}}
+* {{ja-r/args|百日紅|サルスベリ}}
+}}
+{{der-bottom}}
+
+===Etymology 1===
+{{ja-kanjitab|にち|yomi=goon}}
+{{IPAfont|/nʲitɨ/}} → {{IPAfont|/nit͡ɕi/}}
+
+From {{der|ja|ltc|sort=にち|-}} {{ltc-l|日}}.
+
+The {{m|ja|呉音|tr=goon|lit=[[Wu]] [[sound]]}} reading, so likely the initial borrowing from {{cog|ltc|-}}.
+
+====Pronunciation====
+{{ja-pron|にち|acc=1|acc_ref=DJR|acc_note=as a noun}}{{rfap|ja}}
+
+====Noun====
+{{ja-noun|にち}}
+
+# {{short for|ja|日曜日|tr=nichiyōbi|nodot=1|sort=にち}}: [[Sunday]]
+
+====Counter====
+{{ja-pos|counter|にち}}
+
+# [[ordinal]] [[day]] of a [[month]]
+#: {{ja-usex-inline|２７'''日'''|にじゅうしち-'''にち'''|the 27'''th'''|sort=にち}}
+# [[number]] of [[days]]
+#: {{ja-usex-inline|誕%生%日まであと１２'''日'''だ|たん%じょう%び まで あと じゅうに-'''にち''' だ|My birthday is in 12 '''days'''.}}
+
+=====Usage notes=====
+Sometimes shortened to {{ja-l|んち||-nchi}} or {{ja-l|ち||-chi}}.
+
+=====Derived terms=====
+{{ja-r/multi|data=
+* {{ja-r/args|一%日|いち%にち}}
+* {{ja-r/args|幾%日|いく%にち}}
+}}
+
+=====See also=====
+{{ja-number-counter:日}}
+
+====Affix====
+{{ja-pos|affix|にち}}
+
+# [[sun]]
+# [[daytime]], [[daylight]]
+# [[day]]
+# {{short for|ja|日本|tr=Nihon, Nippon|dot=:|sort=にち}} [[Japan]], [[Japanese]], [[Nippo-]]
+# {{short for|ja|日向国|tr=Hyūga-no-kuni|dot=:}} [[w:Hyūga Province|Hyūga Province]]
+
+=====Derived terms=====
+{{der-top3}}
+{{ja-r/multi|data=
+* {{ja-r/args|日%日|にち%にち|rom=-}}, {{ja-r/args|日%々|にち%にち}}
+* {{ja-r/args|日%英|^にち%-^えい}}
+* {{ja-r/args|日%月|にち%がつ}}
+* {{ja-r/args|日%銀|^にち%ぎん}}
+* {{ja-r/args|日%月|にち%げつ}}
+* {{ja-r/args|日%限|にち%げん}}
+* {{ja-r/args|日%時|にち%じ}}
+* {{ja-r/args|日%常|にち%じょう}}
+* {{ja-r/args|日%南|^にち%なん}}
+* {{ja-r/args|日%米|^にち%-^べい}}
+* {{ja-r/args|日%暮|にち%ぼ}}
+* {{ja-r/args|日%没|にち%ぼつ}}, {{ja-r/args|日%没|にち%もつ}}
+* {{ja-r/args|日%夜|にち%や}}
+* {{ja-r/args|日%用|にち%よう}}
+* {{ja-r/args|日%曜|にち%よう}}
+* {{ja-r/args|日%輪|にち%りん}}
+* {{ja-r/args|日%ロ|^にち-%^ロ}}
+* {{ja-r/args|日%露|^にち-%^ろ}}
+* {{ja-r/args|日%課|にっ%か}}
+* {{ja-r/args|日%記|にっ%き}}
+* {{ja-r/args|日%脚|にっ%きゃく}}
+* {{ja-r/args|日%給|にっ%きゅう}}
+* {{ja-r/args|日%系|^にっ%けい}}
+* {{ja-r/args|日%光|にっ%こう}}
+* {{ja-r/args|日%誌|にっ%し}}
+* {{ja-r/args|日%射|にっ%しゃ}}
+* {{ja-r/args|日%州|^にっ%しゅう}}
+* {{ja-r/args|日%照|にっ%しょう}}
+* {{ja-r/args|日%食|にっ%しょく}}
+* {{ja-r/args|日%進|にっ%しん}}
+* {{ja-r/args|日%中|にっ%ちゅう}}
+* {{ja-r/args|日%程|にっ%てい}}
+* {{ja-r/args|日%葡|^にっ%ぽ}}
+* {{ja-r/args|日%豊|^にっ%ぽう}}
+* {{ja-r/args|縁%日|えん%にち}}
+* {{ja-r/args|隔%日|かく%にち}}
+* {{ja-r/args|元%日|がん%にち}}
+* {{ja-r/args|期%日|き%にち}}
+* {{ja-r/args|吉%日|きち%にち}}
+* {{ja-r/args|抗%日|こう%にち}}
+* {{ja-r/args|今%日|こん%にち}}
+* {{ja-r/args|在%日|ざい%にち}}
+* {{ja-r/args|親%日|しん%にち}}
+* {{ja-r/args|中%日|ちゅう%にち}}
+* {{ja-r/args|駐%日|ちゅう%にち}}
+* {{ja-r/args|半%日|はん%にち}}
+* {{ja-r/args|反%日|はん%にち}}
+* {{ja-r/args|日%日|ひ%にち}}
+* {{ja-r/args|毎%日|まい%にち}}
+* {{ja-r/args|明%日|みょう%にち}}
+* {{ja-r/args|命%日|めい%にち}}
+* {{ja-r/args|来%日|らい%にち}}
+* {{ja-r/args|日%章%旗|^にっ%しょう%き}}
+* {{ja-r/args|明%後%日|みょう%ご%にち}}
+* {{ja-r/args|日%進%月%歩|にっ%しん%げっ%ぽ}}
+}}
+{{der-bottom}}
+
+===Etymology 2===
+{{ja-kanjitab|じつ|yomi=kanon}}
+{{IPAchar|/d͡ʑitʉ/}} → {{IPAchar|/d͡ʑit͡su/}} → {{IPAchar|/ʑit͡su/}}
+
+From {{der|ja|ltc|sort=じつ|-}} {{ltc-l|日}}. The {{m|ja|漢音|tr=kan'on|lit=[[Han]]  [[sound]]}} reading, so likely a later borrowing from {{cog|ltc|-}}.
+
+Compare modern {{cog|nan|日|tr=ji̍t}}.
+
+====Pronunciation====
+{{ja-pron|じつ}}{{rfap|ja}}
+
+====Affix====
+{{ja-pos|affix|じつ}}
+
+# [[sun]]
+# [[day]]
+
+=====Derived terms=====
+* {{see derivation subpage|Japanese}}
+
+===Etymology 3===
+{{ja-kanjitab|ひ|yomi=k}}
+{{IPAfont|⟨pi<sub>1</sub>⟩}} → *{{IPAfont|/pʲi/}} → {{IPAfont|/ɸi/}} → {{IPAfont|/hi/}}
+
+From {{inh|ja|ojp|sort=ひ|-}}.
+
+====Alternative forms====
+* {{sense|sun, sunlight, daytime}} {{ja-l|陽}}
+
+====Pronunciation====
+{{ja-pron|ひ|acc=0|acc_ref=DJR}}
+
+* {{audio|ja|Ja-Hi.oga|Audio}}
+
+====Noun====
+{{ja-noun|ひ}}
+
+# the [[sun]]
+#: {{syn|ja|太陽|tr1=taiyō|日輪|tr2=nichirin}}
+# [[sunlight]], [[sunshine]]
+#: {{syn|ja|日光|tr=nikkō}}
+# [[daytime]], [[daylight]]
+#: {{syn|ja|昼間|tr=hiruma}}
+# a [[day]]
+# [[time]] and [[date]]
+# a [[daily]] {{gl|something [[do]]ne [[everyday]]}}
+#: {{syn|ja|日々|tr=hibi|毎日|tr2=mainichi}}
+# the [[weather]]
+#: {{syn|ja|天気|tr=tenki}}
+# a {{gl|usually [[unfortunate]]}} [[case]], [[event]], [[situation]]
+# the [[times]] {{gl|[[age]], [[era]]{{,}} or [[time]] in the [[past]]}}
+#: {{syn|ja|頃|tr=koro|時代|tr2=jidai}}
+# an [[auspicious]] or [[inauspicious]] [[aspect]] of a [[given#Adjective|given]] day
+#: {{syn|ja|日柄|tr=higara}}
+# a {{m|ja|家紋|tr=kamon||[[family]] [[crest]]}} with a sun-[[shaped]] [[design]]
+
+=====Derived terms=====
+* {{see derivation subpage|Japanese}}
+
+===Etymology 4===
+{{ja-kanjitab|か|yomi=k}}
+
+From {{inh|ja|ojp|-}}.
+
+====Counter====
+{{ja-pos|か|counter}}
+
+# [[daytime]]s
+# [[number]] of [[day]]s
+
+=====Derived terms=====
+* {{see derivation subpage|Japanese}}
+
+===References===
+<references/>
+
+[[Category:ja:Time|sort=ひ]]
+
+----
+
+{{-ko-}}
+
+===Etymology===
+From {{der|ko|ltc|sort=일|-}} {{ltc-l|日}}.
+{{hanja-ety
+|dk={{okm-l|ᅀᅵᇙ〮|zílq|link=no}}
+|m={{okm-l|ᅀᅵᆯ〮|zíl}}
+|mh={{okm-l|날〮|nál}}
+|ml=天文#상01A
+}}
+
+===Pronunciation===
+{{ko-hanja-pron|일}}
+
+===Hanja===
+{{ko-hanja-search}}
+{{ko-hanja|날|일}}
+
+# {{hanja form of|일|[[day]]|noun}}
+# {{hanja form of|일|[[sun]]; [[daytime]]|affix}}
+# {{hanja form of|일|{{short for|ko|일요일(日曜日)|t=[[Sunday]]|nocat=y}}}}
+
+====Compounds====
+* {{see derivation subpage|Korean}}
+
+===Proper noun===
+{{ko-hanjatab}}
+{{ko-proper noun|hangeul=일}}
+
+# {{q|in news headlines}} {{short for|ko|{{ruby|[[일본|[日](일)[本](본)]]}}||[[Japan]]|tr=Ilbon}}
+
+====Usage notes====
+In news headlines, this is almost always written solely in the ''[[Hanja]]'' form, even in contemporary Korean text otherwise devoid of any ''[[Hanja]]''.
+
+===References===
+* {{R:hanjadoc|4538}}
+
+[[Category:ko:Days of the week|일]]
+
+----
+
+==Okinawan==
+
+===Kanji===
+{{ryu-kanji}}
+
+====Readings====
+{{ryu-readings
+|on=なち,にち,じち<じつぃ
+|kun=ふぃー-
+}}
+
+====Compounds====
+* {{ryu-r|生日|っんまりびー}}
+* {{ryu-r|毎%日|めー%なち}}, {{ryu-r|毎%日|めー%にち}}
+* {{ryu-r|日%記|にっ%ち}}
+* {{ryu-r|元%日|ぐゎん%じち}}
+
+----
+
+==Old Japanese==
+
+===Compounds===
+{{top2}}
+* {{l|ojp|明日|tr=asu}}
+* {{l|ojp|明日香|tr=Asuka}}
+* {{l|ojp|春日|tr=Kasuga}}
+* {{l|ojp|日本|tr=Yamato<sub>2</sub>}}
+{{bottom}}
+
+===Etymology 1===
+From {{inh|ojp|jpx-pro|sort=ひ|*pi}}.
+
+Distinct from {{m|ojp|火|tr=pi<sub>2</sub>||[[fire]]}}. See {{w|Jōdai Tokushu Kanazukai}} for details on {{noncog|ojp|-}} readings.
+
+====Noun====
+{{head-lite|ojp|nouns|tr=pi<sub>1</sub>|kana|ひ|sort=ひ|langname=Old Japanese|sc=Jpan}}
+
+# the [[sun]]
+# [[sunlight]], [[sunshine]]
+# [[daytime]], [[daylight]]
+# a [[day]]
+# a [[reference]] to the [[imperial]] [[family]] or [[lineage]], thought to be [[descend]]ed from the sun [[goddess]] [[Amaterasu]]
+
+=====Derived terms=====
+See {{section link-lite|日/derived terms|Old_Japanese_etymology_1}}.
+
+=====Descendants=====
+* {{desc|ja|[[日]], [[陽]]|tr=hi}}
+
+=====See also=====
+* {{l|ojp|茜さす|tr=akane sasu}}
+* {{l|ojp|天傳ふ|tr=amadutapu}}
+* {{l|ojp|高照らす|tr=takaterasu}}
+* {{l|ojp|高光る|tr=takapi<sub>1</sub>karu}}
+
+===Etymology 2===
+{{rfe-lite|ojp|langname=Old Japanese}}
+
+====Suffix====
+{{head-lite|ojp|suffixes|tr=-ka|kana|か|sort=か|langname=Old Japanese|sc=Jpan}}
+
+# [[daytime]]s
+# [[number]] of [[day]]s
+
+=====Derived terms=====
+See {{section link-lite|日/derived terms|Old_Japanese_etymology_2}}.
+
+=====Descendants=====
+* {{desc|ja|日|tr=-ka}}
+
+===Etymology 3===
+[[apophony|Apophonic]] form of ''ka'' above, possibly by the fusion of ancient nominal particle {{m|ojp|い|tr=i}}.
+
+====Noun====
+{{head-lite|ojp|nouns|tr=ke<sub>2</sub>|kana|け|langname=Old Japanese|sc=Jpan}}
+
+# {{lb|ojp|plural only}} [[day]]s
+#* {{RQ:Manyoshu|4|484}}, text [https://web.archive.org/web/20220626150734/http://jti.lib.virginia.edu/japanese/manyoshu/Man4Yos.html#484 here]
+#*: {{ux|ojp|一日社人母待吉長'''氣'''乎如此耳待者有不得勝|tr=pi<sub>1</sub>to<sub>1</sub>pi<sub>1</sub> ko<sub>2</sub>so<sub>2</sub> pi<sub>1</sub>to<sub>2</sub> mo mati yo<sub>2</sub>ki<sub>1</sub> nagaki<sub>1</sub> '''ke<sub>2</sub>''' wo kaku nomi<sub>2</sub> mateba arikatu}}
+
+=====Derived terms=====
+See {{section link-lite|日/derived terms|Old_Japanese_etymology_3}}.
+
+----
+
+{{-vi-}}
+
+===Han character===
+{{vi-readings|rs=日00
+|hanviet=nhật-tdcndg;tdcntd;gdhn, nhựt-gdhn
+|phienthiet=人質 nhân chất
+|nom=nhặt-tdcndg;tdcntd;gdhn;btcn;taberd, nhật-tdcndg;tdcntd;taberd, nhạt-tdcntd;gdhn, nhựt-tdcntd;taberd, nhờn-tdcndg
+}}
+
+# {{han tu form of|nhật|[[sun]]; [[day]]}}
+
+====Compounds====
+* {{see derivation subpage|Vietnamese}}
+
+===References===
+<references/>
+
+[[Category:CJKV radicals| ]]

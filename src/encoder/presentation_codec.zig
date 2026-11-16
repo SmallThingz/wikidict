@@ -35,6 +35,7 @@ pub const ruby_magic = "DPRS";
 pub const deep_tables_magic = "DPRT";
 /// Full S/T Span fields plus a data-only inline padding group.
 pub const inline_padding_groups_magic = "DPRU";
+pub const inline_action_groups_magic = "DPRV";
 const container_owner_font_flag: u32 = 0x10000;
 const container_height_flag: u32 = 0x20000;
 const container_columns_flag: u32 = 0x40000;
@@ -93,6 +94,8 @@ const Encoder = struct {
     capability_s: bool = false,
     capability_t: bool = false,
     capability_u: bool = false,
+    capability_v: bool = false,
+    in_inline_action_group: bool = false,
     in_inline_padding_group: bool = false,
     inline_padding_action: ?types.InlinePaddingGroupAction = null,
     ruby_depth: usize = 0,
@@ -230,7 +233,8 @@ const Encoder = struct {
         if (self.in_inline_padding_group and !types.validRubyBodyChild(value)) return error.InvalidPresentation;
         if (self.inline_padding_action != null and (!std.mem.eql(u8, @tagName(value.kind), "text") or value.target.len != 0)) return error.InvalidPresentation;
         if (types.spanHasInlinePaddingGroup(value) and (!self.capability_u or !types.validInlinePaddingGroupOwner(value))) return error.InvalidPresentation;
-        if (!types.spanHasRuby(value) and !types.spanHasInlinePaddingGroup(value))
+        if (types.spanHasInlineActionGroup(value) and (!self.capability_v or !types.validInlineActionGroupOwner(value))) return error.InvalidPresentation;
+        if (self.in_inline_action_group or (!types.spanHasRuby(value) and !types.spanHasInlinePaddingGroup(value) and !types.spanHasInlineActionGroup(value)))
             if (self.inline_padding_action) |action| try action.check(value);
         if (!types.validSpanInlineStyle(value) or !types.validSpanLinkPaint(value)) return error.InvalidPresentation;
         if (spanImage(value) != null and spanLinkPaint(value) != null and !self.capability_r) return error.InvalidPresentation;
@@ -346,6 +350,26 @@ const Encoder = struct {
             if (comptime @hasField(@TypeOf(value), "inline_padding_group")) if (value.inline_padding_group) |group|
                 try self.inlinePaddingGroup(group.*, types.InlinePaddingGroupAction.from(value));
         }
+        if (self.capability_v) {
+            try self.byte(@intFromBool(types.spanHasInlineActionGroup(value)));
+            if (comptime @hasField(@TypeOf(value), "inline_action_group")) if (value.inline_action_group) |group|
+                try self.inlineActionGroup(group.*, types.InlinePaddingGroupAction.from(value) orelse return error.InvalidPresentation);
+        }
+    }
+    fn inlineActionGroup(self: *Encoder, value: anytype, action: types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!types.validInlineActionGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        const previous_group = self.in_inline_padding_group;
+        const previous_action_group = self.in_inline_action_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_padding_group = true;
+        self.in_inline_action_group = true;
+        self.inline_padding_action = action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_padding_group = previous_group;
+        defer self.in_inline_action_group = previous_action_group;
+        defer self.inline_padding_action = previous_action;
+        try self.spans(value.spans);
     }
     fn inlinePaddingGroup(self: *Encoder, value: anytype, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!types.validInlinePaddingGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
@@ -1533,6 +1557,8 @@ const Reader = struct {
     capability_s: bool = false,
     capability_t: bool = false,
     capability_u: bool = false,
+    capability_v: bool = false,
+    in_inline_action_group: bool = false,
     in_inline_padding_group: bool = false,
     inline_padding_action: ?types.InlinePaddingGroupAction = null,
     ruby_depth: usize = 0,
@@ -1722,15 +1748,37 @@ const Reader = struct {
         if (self.inline_padding_action != null and (result.kind != .text or result.target.len != 0)) return error.InvalidPresentation;
         if (self.capability_s and try self.presence()) result.ruby = try self.ruby();
         if (self.capability_u and try self.presence()) result.inline_padding_group = try self.inlinePaddingGroup(types.InlinePaddingGroupAction.from(result));
+        if (self.capability_v and try self.presence()) result.inline_action_group = try self.inlineActionGroup(types.InlinePaddingGroupAction.from(result) orelse return error.InvalidPresentation);
         if (self.in_inline_padding_group and !types.validRubyBodyChild(result)) return error.InvalidPresentation;
         if (result.inline_padding_group != null and !types.validInlinePaddingGroupOwner(result)) return error.InvalidPresentation;
-        if (result.ruby == null and result.inline_padding_group == null)
+        if (result.inline_action_group != null and !types.validInlineActionGroupOwner(result)) return error.InvalidPresentation;
+        if (self.in_inline_action_group or (result.ruby == null and result.inline_padding_group == null and result.inline_action_group == null))
             if (self.inline_padding_action) |action| try action.check(result);
         if ((self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(result) else types.validRubyBodyChild(result))) or (result.ruby != null and !types.validRubyOwner(result))) return error.InvalidPresentation;
         if (result.image != null and (result.text.len != 0 or result.trail.len != 0 or
             !types.validInlineImageAction(result.kind, result.target))) return error.InvalidPresentation;
         if (result.image != null and result.link_paint != null and !self.capability_r) return error.InvalidPresentation;
         if (!types.validSpanInlineStyle(result) or !types.validSpanLinkPaint(result)) return error.InvalidPresentation;
+        return result;
+    }
+    fn inlineActionGroup(self: *Reader, action: types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.InlineActionGroup(types.Span) {
+        if (self.content_depth >= types.max_content_depth or self.remaining() < 4) return error.InvalidPresentation;
+        const previous_group = self.in_inline_padding_group;
+        const previous_action_group = self.in_inline_action_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_padding_group = true;
+        self.in_inline_action_group = true;
+        self.inline_padding_action = action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_padding_group = previous_group;
+        defer self.in_inline_action_group = previous_action_group;
+        defer self.inline_padding_action = previous_action;
+        const children = try self.spans();
+        const value: types.InlineActionGroup(types.Span) = .{ .spans = children };
+        if (!types.validInlineActionGroup(value)) return error.InvalidPresentation;
+        const result = try self.a.create(types.InlineActionGroup(types.Span));
+        result.* = value;
         return result;
     }
     fn inlinePaddingGroup(self: *Reader, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.InlinePaddingGroup(types.Span) {
@@ -1908,7 +1956,7 @@ const Reader = struct {
         return value;
     }
     fn spans(self: *Reader) error{ OutOfMemory, InvalidPresentation }![]const types.Span {
-        const len = try self.count(if (self.capability_u) 39 else if (self.capability_s) 38 else if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+        const len = try self.count(if (self.capability_v) 40 else if (self.capability_u) 39 else if (self.capability_s) 38 else if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -3603,7 +3651,8 @@ fn inlineGroupPendingFeatures(work: DeepTableWork) u8 {
 
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    const u_required = DeepTableWork.hasInlinePaddingGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const v_required = DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
     var work: DeepTableWork = .{};
     if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
@@ -3622,9 +3671,9 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
@@ -3659,7 +3708,8 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
     media_value: anytype,
     body_adjoining: ?types.BodyAdjoiningPolicy,
 ) ![]u8 {
-    const u_required = DeepTableWork.hasInlinePaddingGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const v_required = DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
     var work: DeepTableWork = .{};
     if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
@@ -3678,9 +3728,9 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
     try encoder.spans(display_title);
     try encoder.sections(sections);
     try encoder.count(0); // no preamble is emitted by the bundle compiler
@@ -3730,7 +3780,8 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const inline_groups_header = std.mem.eql(u8, payload[0..magic.len], inline_padding_groups_magic);
+    const action_groups_header = std.mem.eql(u8, payload[0..magic.len], inline_action_groups_magic);
+    const inline_groups_header = action_groups_header or std.mem.eql(u8, payload[0..magic.len], inline_padding_groups_magic);
     const deep_tables_header = std.mem.eql(u8, payload[0..magic.len], deep_tables_magic);
     const ruby_header = inline_groups_header or deep_tables_header or std.mem.eql(u8, payload[0..magic.len], ruby_magic);
     const intrinsic_header = std.mem.eql(u8, payload[0..magic.len], intrinsic_table_magic);
@@ -3744,7 +3795,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .bytes = payload, .pos = magic.len, .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .bytes = payload, .pos = magic.len, .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -3759,7 +3810,9 @@ fn decodeImpl(
     var inline_work: DeepTableWork = .{};
     if (inline_groups_header) {
         inline_work.entry(display_title, sections, preamble, references) catch return error.InvalidPresentation;
-        if (!inline_work.inline_group_found) return error.InvalidPresentation;
+        if (action_groups_header) {
+            if (!inline_work.inline_action_group_found) return error.InvalidPresentation;
+        } else if (!inline_work.inline_group_found) return error.InvalidPresentation;
     }
     const additional_inline_features: u8 = if (inline_groups_header) inlineGroupPendingFeatures(inline_work) else 0;
     if (body_adjoining_header and pending_features != (pendingBodyFeatures(display_title, sections, preamble, references, body_adjoining) | additional_inline_features)) return error.InvalidPresentation;
@@ -11044,7 +11097,7 @@ test "DPRN Rule capability recursively follows existing body caption reference a
 test "complete unknown DPR capability differs from malformed known and truncated framing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
-    for ([_][]const u8{ "DPRV", "DPRZ", "DPR0", "DPRVpayload" }) |bytes| {
+    for ([_][]const u8{ "DPRW", "DPRZ", "DPR0", "DPRWpayload" }) |bytes| {
         var metrics: DecodeMetrics = .{ .total_items = 99, .largest_string_bytes = 77 };
         try std.testing.expectError(error.UnsupportedPresentationVersion, decodeWithMetricsAlloc(a, bytes, "x", .supplemental, null, &metrics));
         try std.testing.expectEqual(@as(u64, 99), metrics.total_items);
@@ -11056,7 +11109,7 @@ test "complete unknown DPR capability differs from malformed known and truncated
         cell_blocks_magic, reference_items_magic, font_scale_magic, font_scale_basis_magic, reference_blocks_magic,
         image_border_magic, block_layout_magic, explicit_targets_magic, dynamic_catalog_magic, tooltips_magic,
         block_geometry_magic, image_maps_magic, inline_table_styles_magic, block_containers_magic, container_fonts_magic, rule_styles_magic, inline_styles_magic,
-        body_adjoining_magic, table_corners_magic, intrinsic_table_magic, ruby_magic, deep_tables_magic, inline_padding_groups_magic }) |header|
+        body_adjoining_magic, table_corners_magic, intrinsic_table_magic, ruby_magic, deep_tables_magic, inline_padding_groups_magic, inline_action_groups_magic }) |header|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, header, "x", .supplemental, null));
     const bytes = try encodeAlloc(a, types.Stored{ .entry = .{ .title = "x", .kind = .supplemental,
         .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{RuleCodecTest.block()} }} } });
@@ -11279,7 +11332,7 @@ test "DPRP null keeps exact prior headers payloads and mandatory capability reje
     try std.testing.expect((try decodeAlloc(a, bytes, "body", .citations, null)).entry.body_adjoining == null);
     for ([_][]const u8{ "DPRP", "DPRPpayload" }) |bad|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "body", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "body", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "body", .citations, null));
 }
 
 const StyledSectionCodecTest = struct {
@@ -12020,7 +12073,7 @@ test "DPRQ rejects old header corner flags missing owner census and truncated pa
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, absent, "corners", .citations, null));
     for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
         decodeAlloc(a, bytes[0..end], "corners", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "corners", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "corners", .citations, null));
 }
 
 test "Table corner tail has strict old reader masks units flags and exact legacy null bytes" {
@@ -12454,7 +12507,7 @@ test "DPRR local tag nineteen rejects old headers malformed direction missing fo
     const invented = try a.dupe(u8, old_q); @memcpy(invented[0..4], intrinsic_table_magic);
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invented, "corners", .citations, null));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, intrinsic_table_magic, "intrinsic", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "intrinsic", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "intrinsic", .supplemental, null));
 }
 
 test "DPRR combines Q and P cell owner families without adding a P feature or weakening Q census" {
@@ -13006,7 +13059,7 @@ test "DPRS Ruby recursive Stored build JSON and fallback preserve rich children 
     try std.testing.expectEqualSlices(u8, raw.out.items, old);
     const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
     try std.testing.expect(std.mem.indexOf(u8, old_json, "\"ruby\":") == null);
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "ruby", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "ruby", .supplemental, null));
 }
 
 test "DPRS Ruby discovery covers heading cell caption reference and combined R Q policies" {
@@ -13529,7 +13582,7 @@ test "DPRU preserves inline boundary font child actions full Stored JSON and leg
     var old_encoder = RubyCodecTest.encoder(a); defer old_encoder.deinit();
     try std.testing.expectError(error.InvalidPresentation, old_encoder.span(T.owner));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, "DPRU", "padding", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRV", "padding", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "padding", .supplemental, null));
 }
 
 test "DPRU group census covers complete carriers and coexists with exact16 17 20 32 Tables" {
@@ -13721,4 +13774,262 @@ test "DPRU group owner shape and inherited nested Ruby declaring paint stay stri
         .{ .bases = &bases }, .{ .gap_before = &.{T.owner}, .bases = &bases },
     }};
     try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{.{ .ruby = &gap_ruby }})));
+}
+
+const InlineActionCodecTest = struct {
+    const Group = types.InlineActionGroup(types.Span);
+    const state: types.LinkState = .{ .foreground = "#123456", .underline = false };
+    const paint: types.LinkPaint = .{ .normal = state, .hover = state, .active = state, .hover_active = state,
+        .visited = state, .visited_hover = state, .visited_active = state, .visited_hover_active = state,
+        .underline_on_focus = true, .focus_outline = .{ .width = .{ .unit = .px, .value = 2 },
+            .color = .{ .kind = .rgb, .value = "#3366cc" }, .radius = .{ .unit = .px, .value = 0 },
+            .offset = .{ .unit = .px, .value = 2 } } };
+    const trail: Group = .{ .spans = &.{.{ .text = "d" }, .{ .text = "a" }} };
+    const owner: types.Span = .{ .kind = .link, .target = "d", .inline_action_group = &trail,
+        .font_scale = 1.25, .font_scale_basis = .normal_body, .link_paint = paint };
+    const ruby: types.Ruby(types.Span) = .{ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "kanji", .bold = true }} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+            .spans = &.{.{ .text = "kan", .font_scale = 0.5, .font_scale_basis = .normal_body,
+                .font_family = .sans_serif, .inline_style = .{ .wrap = .break_word } }} }},
+    }} };
+    fn encoder(a: A) Encoder {
+        var out = InlinePaddingCodecTest.encoder(a); out.capability_v = true; return out;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var out = InlinePaddingCodecTest.reader(a, bytes); out.capability_v = true; return out;
+    }
+    fn stored(spans: []const types.Span) types.Stored {
+        return .{ .entry = .{ .title = "action", .kind = .supplemental, .display_title = spans } };
+    }
+    fn forced(a: A, value: types.Stored) ![]u8 {
+        var out = encoder(a); defer out.deinit();
+        try out.out.appendSlice(a, inline_action_groups_magic);
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections);
+        try out.spans(value.entry.preamble_spans); try out.layout(value.entry.organization);
+        try out.references(value.entry.references); try out.media(value.entry.media);
+        var work: DeepTableWork = .{};
+        try work.entry(value.entry.display_title, value.entry.sections, value.entry.preamble_spans, value.entry.references);
+        try out.byte(pendingBodyFeatures(value.entry.display_title, value.entry.sections, value.entry.preamble_spans,
+            value.entry.references, value.entry.body_adjoining) | inlineGroupPendingFeatures(work));
+        return out.out.toOwnedSlice(a);
+    }
+    // Construct hostile child wire independently, outside the inherited action
+    // context. Reader must reject it after the actual enclosing owner is read.
+    fn childWire(a: A, child: types.Span) ![]u8 {
+        const placeholder: types.Span = .{ .text = "placeholder" };
+        const group: Group = .{ .spans = &.{placeholder} };
+        var enclosing = owner; enclosing.inline_action_group = &group;
+        var prefix = encoder(a); defer prefix.deinit(); try prefix.span(enclosing);
+        var old_child = encoder(a); defer old_child.deinit(); try old_child.span(placeholder);
+        var new_child = encoder(a); defer new_child.deinit(); try new_child.span(child);
+        return std.mem.concat(a, u8, &.{prefix.out.items[0 .. prefix.out.items.len - old_child.out.items.len], new_child.out.items});
+    }
+};
+
+test "DPRV preserves separate same target occurrences complete rich owner and unchanged U bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    const rich_group: T.Group = .{ .spans = &.{.{ .text = "der " }, .{ .text = "Mai", .italic = true },
+        .{ .text = " la", .superscript = true, .font_scale = 0.8, .font_scale_basis = .normal_body }, .{ .ruby = &T.ruby }} };
+    const rich: types.Span = .{ .kind = .external_link, .target = "https://example.test/Mai", .inline_action_group = &rich_group,
+        .font_scale = 1.1, .font_scale_basis = .normal_body, .link_paint = T.paint, .tooltip = "one source action" };
+    const original = T.stored(&.{T.owner, T.owner, rich});
+    try types.validateStored(a, original, "action", .supplemental, null);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(inline_action_groups_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]);
+    const decoded = try decodeAlloc(a, bytes, "action", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqual(@as(usize, 3), decoded.entry.display_title.len);
+    try std.testing.expect(decoded.entry.display_title[0].inline_action_group.? != decoded.entry.display_title[1].inline_action_group.?);
+    try std.testing.expectEqual(@as(f32, 1.1), decoded.entry.display_title[2].font_scale.?);
+    try std.testing.expect(decoded.entry.display_title[2].inline_action_group.?.spans[1].italic);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(decoded, parsed.value);
+    const Plain = struct {
+        a: A, text: std.ArrayList(u8) = .empty, actions: usize = 0,
+        fn emit(self: *@This(), span: types.Span) !void {
+            try self.text.appendSlice(self.a, span.text); try self.text.appendSlice(self.a, span.trail);
+            if (span.kind != .text) self.actions += 1;
+        }
+    };
+    var plain: Plain = .{ .a = a }; try types.visitRubyFallback(decoded.entry.display_title, &plain, Plain.emit);
+    try std.testing.expectEqualStrings("dadader Mai lakanji（kan）", plain.text.items);
+    try std.testing.expectEqual(@as(usize, 9), plain.actions);
+    const old_u = InlinePaddingCodecTest.stored(&.{InlinePaddingCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlinePaddingCodecTest.forced(a, old_u), try encodeAlloc(a, old_u));
+    const old_s = RubyCodecTest.stored(&.{RubyCodecTest.owner});
+    try std.testing.expectEqualStrings(ruby_magic, (try encodeAlloc(a, old_s))[0..4]);
+    try std.testing.expect(std.mem.indexOf(u8, try std.json.Stringify.valueAlloc(a, old_u, .{}), "inline_action_group") == null);
+}
+
+test "DPRV group census spans all carriers and coexists with U Ruby and table capacity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    const rich = [_]types.Span{T.owner}; const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &rich }};
+    for (0..12) |sink| {
+        var original = T.stored(&.{});
+        var table_value: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "cell" }} }} }} };
+        const padding: types.InlinePaddingGroup(types.Span) = .{ .left = .{ .unit = .px, .value = 1 },
+            .right = .{ .unit = .px, .value = 0 }, .spans = &rich };
+        const ruby: types.Ruby(types.Span) = .{ .segments = &.{.{
+            .bases = &.{.{ .owner = .{ .font = .{} }, .spans = if (sink == 10) &rich else &.{.{ .text = "base" }} }},
+            .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+                .spans = if (sink == 11) &rich else &.{.{ .text = "reading" }} }},
+        }} };
+        switch (sink) {
+            0 => original.entry.display_title = &rich,
+            1 => original.entry.preamble_spans = &rich,
+            2 => original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &paragraph }},
+            3 => original.entry.references = &.{.{ .number = 1, .group_number = 1, .spans = &rich }},
+            4 => original.entry.references = &.{.{ .number = 1, .group_number = 1, .blocks = &paragraph }},
+            5 => { table_value.caption = &rich; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            6 => { table_value.rows = &.{.{ .cells = &.{.{ .blocks = &paragraph }} }}; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            7 => { table_value.caption_blocks = &paragraph; original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table_value }} }}; },
+            8 => original.entry.sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .@"inline", .spans = &rich }} }} }},
+            9 => original.entry.display_title = &.{.{ .inline_padding_group = &padding }},
+            10, 11 => original.entry.display_title = &.{.{ .ruby = &ruby }},
+            else => unreachable,
+        }
+        try types.validateStored(a, original, "action", .supplemental, null);
+        const bytes = try encodeAlloc(a, original); try std.testing.expectEqualStrings(inline_action_groups_magic, bytes[0..4]);
+        try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "action", .supplemental, null));
+    }
+    for ([_]usize{ 16, 17, 20, 32 }) |depth| for ([_]bool{ false, true }) |mixed| {
+        var original = try DeepTableCodecTest.stored(a, depth, mixed, false); original.entry.display_title = &rich;
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(inline_action_groups_magic, bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, "depth", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualStrings("DEEP", DeepTableCodecTest.leaf(DeepTableCodecTest.root(decoded)).text);
+    };
+    var too_deep = try DeepTableCodecTest.stored(a, 33, true, false); too_deep.entry.display_title = &rich;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, too_deep));
+}
+
+test "DPRV rejects malformed presence counts truncation forged headers and absent group census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    const group: T.Group = .{ .spans = &.{.{ .text = "x" }} };
+    const owner: types.Span = .{ .kind = .link, .target = "X", .inline_action_group = &group };
+    var out = T.encoder(a); defer out.deinit(); try out.span(owner);
+    try std.testing.expectEqual(@as(usize, 86), out.out.items.len);
+    try std.testing.expectEqual(@as(u8, 1), out.out.items[40]);
+    try std.testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, out.out.items[41..45], .little));
+    var good = T.reader(a, out.out.items); try std.testing.expectEqualDeep(owner, try good.span());
+    for (0..5) |mode| {
+        const bad = try a.dupe(u8, out.out.items);
+        switch (mode) {
+            0 => bad[40] = 2,
+            1 => @memset(bad[41..45], 0),
+            2 => std.mem.writeInt(u32, bad[41..45], std.math.maxInt(u32), .little),
+            3, 4 => {},
+            else => unreachable,
+        }
+        var input = T.reader(a, bad[0 .. if (mode == 3) 44 else if (mode == 4) bad.len - 1 else bad.len]);
+        try std.testing.expectError(error.InvalidPresentation, input.span());
+    }
+    const bytes = try encodeAlloc(a, T.stored(&.{owner}));
+    for ([_][]const u8{ inline_padding_groups_magic, deep_tables_magic, ruby_magic, intrinsic_table_magic }) |header| {
+        const forged = try a.dupe(u8, bytes); @memcpy(forged[0..4], header);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged, "action", .supplemental, null));
+    }
+    for ([_]types.Stored{T.stored(&.{.{ .text = "plain" }}), T.stored(&.{InlinePaddingCodecTest.owner}), T.stored(&.{RubyCodecTest.owner})}) |without_group|
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, try T.forced(a, without_group), "action", .supplemental, null));
+    var legacy = InlinePaddingCodecTest.encoder(a); defer legacy.deinit();
+    try std.testing.expectError(error.InvalidPresentation, legacy.span(owner));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, "DPRV", "action", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "action", .supplemental, null));
+}
+
+test "DPRV inherited action checks composite declaring paint and rejects every descendant action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    for (0..5) |mode| {
+        const padding: types.InlinePaddingGroup(types.Span) = .{ .left = .{ .unit = .px, .value = 1 },
+            .right = .{ .unit = .px, .value = 0 }, .spans = &.{.{ .text = "child" }} };
+        var child: types.Span = .{ .text = "child" };
+        switch (mode) {
+            0 => { child.kind = .link; child.target = "d"; },
+            1 => { child.kind = .external_link; child.target = "https://example.test/"; },
+            2 => child.foreground = "#654321",
+            3 => child = .{ .inline_padding_group = &padding, .foreground = "#654321" },
+            4 => child = .{ .ruby = &T.ruby, .foreground = "#654321" },
+            else => unreachable,
+        }
+        const group: T.Group = .{ .spans = &.{child} }; var owner = T.owner; owner.inline_action_group = &group;
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+        var input = T.reader(a, try T.childWire(a, child));
+        try std.testing.expectError(error.InvalidPresentation, input.span());
+    }
+    const inherited: types.InlinePaddingGroup(types.Span) = .{ .left = .{ .unit = .px, .value = 1 },
+        .right = .{ .unit = .px, .value = 0 }, .spans = &.{.{ .text = "child", .foreground = "#123456" }} };
+    const good: T.Group = .{ .spans = &.{.{ .inline_padding_group = &inherited, .foreground = "#123456" }, .{ .ruby = &T.ruby }} };
+    var owner = T.owner; owner.inline_action_group = &good;
+    const original = T.stored(&.{owner});
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, try encodeAlloc(a, original), "action", .supplemental, null));
+}
+
+test "DPRV shared preflight charges children once and discovers before following unchecked groups" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    const owners = [_]types.Span{T.owner, T.owner};
+    var work: DeepTableWork = .{ .remaining = 6 };
+    try work.entry(&owners, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    try std.testing.expect(work.inline_action_group_found and !work.inline_group_found);
+    var short: DeepTableWork = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&owners, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    var raw = T.encoder(a); defer raw.deinit(); try raw.spans(&owners);
+    try std.testing.expectEqual(@as(usize, 6), max_items - raw.remaining_items);
+    var cycle_group: T.Group = .{ .spans = &.{} };
+    var cycle_owner = T.owner; cycle_owner.inline_action_group = &cycle_group; cycle_group.spans = &.{cycle_owner};
+    var discovery: DeepTableWork = .{ .remaining = 1, .discover_inline_action_group = true };
+    try std.testing.expectError(error.InvalidPresentation, discovery.entry(@as([]const types.Span, &.{cycle_owner}), @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{})));
+    try std.testing.expect(discovery.inline_action_group_found);
+    try std.testing.expectEqual(@as(usize, 0), discovery.remaining);
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{cycle_owner})));
+    const ruby_group: T.Group = .{ .spans = &.{.{ .ruby = &T.ruby }} };
+    var rich_owner = T.owner; rich_owner.inline_action_group = &ruby_group;
+    const original = T.stored(&.{rich_owner});
+    var complete: DeepTableWork = .{};
+    try complete.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    var counted = T.encoder(a); defer counted.deinit(); try counted.spans(original.entry.display_title);
+    try std.testing.expectEqual(counted.remaining_items, complete.remaining);
+    const bytes = try encodeAlloc(a, original); try std.testing.expectEqual(@as(u8, 20), bytes[bytes.len - 1]);
+    const wrong = try a.dupe(u8, bytes); wrong[wrong.len - 1] ^= 4;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, wrong, "action", .supplemental, null));
+}
+
+test "DPRV owner shape and unchanged shared content depth remain strict" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineActionCodecTest;
+    for (0..8) |mode| {
+        var group = T.trail; var owner = T.owner; owner.inline_action_group = &group;
+        switch (mode) {
+            0 => { owner.kind = .text; owner.target = ""; },
+            1 => owner.target = "",
+            2 => owner.text = "duplicate",
+            3 => owner.trail = "duplicate",
+            4 => group.spans = &.{},
+            5 => owner.ruby = &T.ruby,
+            6 => owner.inline_padding_group = &InlinePaddingCodecTest.group,
+            7 => group.spans = &.{.{ .kind = .line_break }},
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
+    for ([_]usize{ 15, 16 }) |padding_depth| {
+        const child = try InlinePaddingCodecTest.nested(a, padding_depth, .{ .text = "leaf" });
+        const group: T.Group = .{ .spans = &.{child} }; var owner = T.owner; owner.inline_action_group = &group;
+        if (padding_depth == 15) {
+            const original = T.stored(&.{owner});
+            try std.testing.expectEqualDeep(original, try decodeAlloc(a, try encodeAlloc(a, original), "action", .supplemental, null));
+        } else try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
 }

@@ -1,0 +1,6 @@
+&lt;div class=&quot;noprint&quot; style=&quot;clear: right; border: solid #aaa 1px; margin: 0 0 1em 1em; font-size: 90%; background: #f9f9f9; width: 250px; padding: 4px; spacing: 0px; text-align: left; float: right;&quot;&gt;
+&lt;div style=&quot;float: left;&quot;&gt;[[Image:Commons-logo.svg|50px|none|Commons:Category]]&lt;/div&gt;
+&lt;div style=&quot;margin-left: 60px;&quot;&gt;[[commons:Main_Page|Wikimedia Commons]] has more media related to:
+&lt;div style=&quot;margin-left: 10px;&quot;&gt;'''''[[Commons:Category:{{{1|{{ucfirst:{{PAGENAME}}}}}}}|{{{1|{{ucfirst:{{PAGENAME}}}}}}}]]'''''&lt;/div&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;noinclude&gt;{{documentation}}[[Category:Interwiki templates|commonscat]]&lt;/noinclude&gt;

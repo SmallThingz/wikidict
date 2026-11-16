@@ -606,3 +606,9 @@ src/encoder/testdata/sr-ri207-padding/common.css -whitespace
 src/encoder/testdata/mg208-reference/expanded.wikitext -whitespace
 src/encoder/testdata/zh-nokango176/failure-00000001-expanded.wikitext -whitespace
 tools/testdata/sr-centered-missing-cell/page.raw.wikitext -whitespace
+# Preserve authenticated source whitespace in retained MG and SR regression fixtures.
+src/encoder/testdata/mg-karbord-etymology210/page.raw.wikitext -whitespace
+src/encoder/testdata/mg-karbord-etymology210/page.expanded.wikitext -whitespace
+src/encoder/testdata/sr-ji-affix210/page.expanded.wikitext -whitespace
+src/encoder/testdata/sr-ji-mul210/page.expanded.wikitext -whitespace
+src/encoder/testdata/sr-ji-mul210/common.css -whitespace
