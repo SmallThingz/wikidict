@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,13565 @@
+@@ -3,24 +3,13935 @@
 
 
  #include <QTest>
@@ -756,6 +756,368 @@
      Q_OBJECT
 
  private slots:
++    void ownedTableOverflowKeepsClippedPaintHitAndMutation()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int clear = QTextFormat::UserProperty + 0x57d2;
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++        doc.setDefaultFont(QFont("DejaVu Sans", 10)); doc.setTextWidth(420);
++        QTextCursor cursor(&doc);
++        // Cross the root's 2000px checkpoint interval before the owned subtree.
++        for (int i = 0; i < 180; ++i) { cursor.insertText("ordinary prefix"); cursor.insertBlock(); }
++        QTextTableFormat format; format.setMargin(0); format.setBorder(0);
++        format.setBorderCollapse(false); format.setCellPadding(0); format.setCellSpacing(0);
++        format.setWidth(200); format.setHeight(8);
++        format.setProperty(owner, QStringLiteral("wikidict.table-box/1")); format.setProperty(clear, 0);
++        auto *outer = cursor.insertTable(1, 1, format);
++        cursor = outer->cellAt(0, 0).firstCursorPosition();
++        auto childFormat = format; childFormat.setHeight(QTextLength());
++        auto *child = cursor.insertTable(1, 1, childFormat);
++        cursor = child->cellAt(0, 0).firstCursorPosition();
++        cursor.insertText("first line"); cursor.insertBlock(); cursor.insertText("second line"); cursor.insertBlock();
++        QTextCharFormat action; action.setAnchor(true); action.setAnchorHref("https://example.test/owned-overflow");
++        action.setFontItalic(true); action.setBackground(QColor("#36a75b"));
++        cursor.insertText("visible overflow action", action);
++        const QTextBlock block = cursor.block(); const auto raw = doc.toRawText();
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        // The hit/paint contract is independent of the intrinsic memoization.
++        native->setProperty("_wikidictDisableTableIntrinsicMemo", true);
++        for (bool owned : {true, false, true}) {
++            doc.setLayoutEnabled(false);
++            auto outerFormat = format; auto innerFormat = childFormat;
++            if (!owned) {
++                outerFormat.clearProperty(owner); outerFormat.clearProperty(clear);
++                innerFormat.clearProperty(owner); innerFormat.clearProperty(clear);
++            }
++            outer->setFormat(outerFormat); child->setFormat(innerFormat);
++            doc.setLayoutEnabled(true); const auto size = native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto used = native->tableBoundingRect(outer);
++            QVERIFY(used.top() > 2000);
++            const auto blockBounds = native->blockBoundingRect(block);
++            const auto line = block.layout()->lineAt(0); QVERIFY(line.isValid());
++            const QPointF point = blockBounds.topLeft() + QPointF(line.cursorToX(3), line.y() + line.height() / 2);
++            const QRectF overflow = line.naturalTextRect().translated(blockBounds.topLeft()).adjusted(-2, -2, 2, 2);
++            QVERIFY(point.y() > used.bottom());
++            const int height = qCeil(qMax(size.height(), overflow.bottom()) + 10);
++            QImage full(440, height, QImage::Format_ARGB32_Premultiplied); full.fill(Qt::white);
++            { QPainter painter(&full); native->draw(&painter, {}); }
++            if (owned) {
++                QCOMPARE(used.height(), 8.0);
++                QVERIFY(size.height() >= overflow.bottom() - 2);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/owned-overflow"));
++                const int hit = native->hitTest(point, Qt::ExactHit);
++                QVERIFY(hit >= block.position() && hit < block.position() + block.length() - 1);
++                QImage clipped(full.size(), full.format()); clipped.fill(Qt::white);
++                QAbstractTextDocumentLayout::PaintContext context; context.clip = overflow;
++                { QPainter painter(&clipped); native->draw(&painter, context); }
++                const QRect region = overflow.toAlignedRect().intersected(full.rect());
++                QCOMPARE(clipped.copy(region), full.copy(region));
++                int painted = 0;
++                for (int y = region.top(); y <= region.bottom(); ++y)
++                    for (int x = region.left(); x <= region.right(); ++x)
++                        painted += full.pixelColor(x, y) == QColor("#36a75b");
++                QVERIFY(painted > 10);
++            } else {
++                // Removing all owned formats must restore the same stock path
++                // as a fresh document, not retain an ancestry flag from above.
++                QScopedPointer<QTextDocument> fresh(doc.clone());
++                fresh->setLayoutEnabled(false);
++                auto *reference = qobject_cast<QTextDocumentLayout *>(fresh->documentLayout()); QVERIFY(reference);
++                reference->setProperty("_wikidictDisableTableIntrinsicMemo", true);
++                fresh->setLayoutEnabled(true);
++                QCOMPARE(reference->documentSize(), size);
++                QCOMPARE(native->anchorAt(point), reference->anchorAt(point));
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), reference->hitTest(point, Qt::ExactHit));
++                QImage expected(full.size(), full.format()); expected.fill(Qt::white);
++                { QPainter painter(&expected); reference->draw(&painter, {}); }
++                QCOMPARE(full, expected);
++            }
++            QCOMPARE(doc.toRawText(), raw);
++        }
++        // A live removal must invalidate old overflow, not merely paint the
++        // new used box after a full application-requested relayout.
++        const auto oldOverflow = native->blockBoundingRect(block);
++        QList<QRectF> updates;
++        auto connection = QObject::connect(native, &QAbstractTextDocumentLayout::update, &doc,
++            [&](const QRectF &rect) { updates.append(rect); });
++        auto removed = outer->format(); removed.clearProperty(owner); removed.clearProperty(clear); outer->setFormat(removed);
++        removed = child->format(); removed.clearProperty(owner); removed.clearProperty(clear); child->setFormat(removed);
++        native->documentSize(); QObject::disconnect(connection);
++        QVERIFY(!updates.isEmpty());
++        QVERIFY(std::any_of(updates.cbegin(), updates.cend(), [&](const QRectF &rect) { return rect.contains(oldOverflow); }));
++    }
++
++    void ownedTableOverflowHitsFollowCellAndSiblingPaintOrder()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int clear = QTextFormat::UserProperty + 0x57d2;
++        for (bool separateCells : {false, true}) for (bool adjoining : {false, true}) for (bool opaque : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(420);
++            doc.setDefaultFont(QFont("DejaVu Sans", 10));
++            QTextTableFormat format; format.setMargin(0); format.setBorder(0);
++            format.setBorderCollapse(false); format.setCellPadding(0); format.setCellSpacing(0); format.setWidth(300);
++            format.setProperty(owner, QStringLiteral("wikidict.table-box/1")); format.setProperty(clear, 0);
++            QTextCursor cursor(&doc); QTextTable *parent = nullptr;
++            if (adjoining) {
++                QTextFrameFormat unrelated; unrelated.setMargin(0); unrelated.setPadding(0); unrelated.setBorder(0);
++                unrelated.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++                unrelated.setProperty(QTextFormat::UserProperty + 0x57e0, QStringLiteral("wikidict.plain-container/1"));
++                unrelated.setProperty(QTextFormat::UserProperty + 0x57e1, 0);
++                unrelated.setProperty(QTextFormat::UserProperty + 0x57e9,
++                    QVariantMap{{"edges", QVariantList{0.0, 0.0, 0.0, 0.0}}, {"auto_width", true}});
++                auto *frame = cursor.insertFrame(unrelated); frame->firstCursorPosition().insertText("unrelated adjoining owner");
++                cursor.setPosition(frame->lastPosition() + 1);
++            }
++            if (separateCells) {
++                parent = cursor.insertTable(2, 1, format);
++                cursor = parent->cellAt(0, 0).firstCursorPosition();
++            }
++            format.setHeight(8);
++            auto *shortTable = cursor.insertTable(1, 1, format);
++            cursor = shortTable->cellAt(0, 0).firstCursorPosition();
++            QTextCharFormat earlier; earlier.setAnchor(true); earlier.setAnchorHref("https://example.test/earlier");
++            earlier.setFontPointSize(48); earlier.setBackground(QColor("#36a75b"));
++            cursor.insertText("MMMMMMM", earlier); const QTextBlock earlierBlock = cursor.block();
++            if (separateCells) cursor = parent->cellAt(1, 0).firstCursorPosition();
++            else cursor.setPosition(shortTable->lastPosition() + 1);
++            QTextCharFormat later; later.setAnchor(true); later.setAnchorHref("https://example.test/later");
++            later.setFontPointSize(10); later.setBackground(QColor("#cf4050"));
++            cursor.insertText("later", later); const QTextBlock laterBlock = cursor.block();
++            if (opaque) {
++                if (separateCells) {
++                    auto cell = parent->cellAt(1, 0); auto paint = cell.format().toTableCellFormat();
++                    paint.setBackground(QColor("#efc650")); cell.setFormat(paint);
++                } else {
++                    auto paint = cursor.blockFormat(); paint.setBackground(QColor("#efc650")); cursor.setBlockFormat(paint);
++                }
++            }
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->setProperty("_wikidictDisableTableIntrinsicMemo", true);
++            doc.setLayoutEnabled(true); const auto size = native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto earlierLine = earlierBlock.layout()->lineAt(0);
++            const auto laterLine = laterBlock.layout()->lineAt(0);
++            QVERIFY(earlierLine.isValid() && laterLine.isValid());
++            const QRectF earlierBounds = earlierLine.naturalTextRect().translated(native->blockBoundingRect(earlierBlock).topLeft());
++            const QRectF laterBounds = laterLine.naturalTextRect().translated(native->blockBoundingRect(laterBlock).topLeft());
++            QVERIFY(earlierBounds.intersects(laterBounds));
++            QVERIFY(laterBounds.center().y() > native->tableBoundingRect(shortTable).bottom());
++            const qreal caretX = laterLine.cursorToX(1) * .25 + laterLine.cursorToX(2) * .75;
++            const QPointF caret = native->blockBoundingRect(laterBlock).topLeft()
++                + QPointF(caretX, laterLine.y() + laterLine.height() / 2);
++            const int insertion = laterLine.xToCursor(caretX, QTextLine::CursorBetweenCharacters);
++            QVERIFY(insertion > 1);
++            qInfo() << "owned-table-caret-context" << separateCells << adjoining << opaque
++                    << "block" << laterBlock.position() << "caret" << caret << "insertion" << insertion;
++            QCOMPARE(native->hitTest(caret, Qt::FuzzyHit), laterBlock.position() + insertion);
++            QImage image(440, qCeil(qMax(size.height(), earlierBounds.bottom()) + 10), QImage::Format_ARGB32_Premultiplied);
++            image.fill(Qt::white); { QPainter painter(&image); native->draw(&painter, {}); }
++            // Both colors must actually survive in the later row's vertical
++            // interval. A transparent later gap leaves the earlier action live.
++            const QRect probe = QRectF(QPointF(earlierBounds.left(), laterBounds.top()),
++                QPointF(earlierBounds.right(), laterBounds.bottom())).toAlignedRect().intersected(image.rect());
++            bool sawEarlier = false, sawLater = false, sawCovered = false;
++            for (int y = probe.top(); y <= probe.bottom(); ++y) for (int x = probe.left(); x <= probe.right(); ++x) {
++                const QColor color = image.pixelColor(x, y);
++                const QPointF point(x + .5, y + .5);
++                if (point.y() <= laterBounds.top() + 1 || point.y() >= laterBounds.bottom() - 1) continue;
++                if (!sawLater && color == QColor("#cf4050") && laterBounds.contains(point)) {
++                    QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/later"));
++                    QVERIFY(native->hitTest(point, Qt::ExactHit) >= laterBlock.position()); sawLater = true;
++                }
++                if (!sawCovered && opaque && color == QColor("#efc650") && earlierBounds.contains(point)
++                    && point.x() > laterBounds.right() + 2) {
++                    QVERIFY(native->anchorAt(point).isEmpty()); QCOMPARE(native->hitTest(point, Qt::ExactHit), -1);
++                    QCOMPARE(native->hitTest(point, Qt::FuzzyHit), laterBlock.position() + laterBlock.text().size());
++                    sawCovered = true;
++                }
++                if (!sawEarlier && color == QColor("#36a75b") && earlierBounds.contains(point)
++                    && point.x() > laterBounds.right() + 2) {
++                    QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/earlier"));
++                    const int hit = native->hitTest(point, Qt::ExactHit);
++                    QVERIFY(hit >= earlierBlock.position() && hit < earlierBlock.position() + earlierBlock.length() - 1);
++                    sawEarlier = true;
++                }
++            }
++            QCOMPARE(sawEarlier, !opaque); QCOMPARE(sawCovered, opaque); QVERIFY(sawLater);
++        }
++    }
++
++    void tableIntrinsicMemoBoundsDeepWork()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int clear = QTextFormat::UserProperty + 0x57d2;
++        constexpr int width = QTextFormat::UserProperty + 0x57d3;
++        for (int depth : {17, 20, 32}) for (bool mixed : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            doc.setDefaultFont(QFont("DejaVu Sans", 10));
++            auto option = doc.defaultTextOption(); option.setWrapMode(QTextOption::WordWrap);
++            doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QList<QTextTable *> tables;
++            for (int level = 0; level < depth; ++level) {
++                QTextTableFormat format; format.setBorderCollapse(false);
++                format.setMargin(0); format.setBorder(1); format.setCellPadding(1); format.setCellSpacing(0);
++                format.setBorderStyle(QTextFrameFormat::BorderStyle_Solid);
++                format.setBackground(level % 2 ? QColor("#d0e0f0") : QColor("#f0e0d0"));
++                format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++                format.setProperty(clear, 0);
++                const bool fixed = mixed && level % 5 == 3;
++                const double request = fixed ? 180.0 : mixed && level % 3 == 1 ? 75.0 : 100.0;
++                format.setProperty(width, QVariantMap{{"unit", fixed ? "fixed" : "percent"}, {"value", request}});
++                if (mixed && level == 0) format.setHeight(150);
++                if (mixed && level == 1) format.setHeight(QTextLength(QTextLength::PercentageLength, 50));
++                auto *table = cursor.insertTable(1, 1, format); tables.append(table);
++                cursor = table->cellAt(0, 0).firstCursorPosition();
++            }
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref("https://example.test/native-depth");
++            link.setFontItalic(true); link.setForeground(QColor("#114477"));
++            cursor.insertText("Deep action", link);
++            cursor.insertText(" plain words with wrapping opportunities", QTextCharFormat());
++            const auto raw = doc.toRawText(); const int revision = doc.revision();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->setProperty("_wikidictCollectTableWork", true);
++            QVariantMap previous;
++            for (qreal available : {900.0, 640.0, 900.0}) {
++                doc.setLayoutEnabled(false); doc.setTextWidth(available); doc.setLayoutEnabled(true);
++                const auto size = native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QVERIFY(qIsFinite(size.width()) && qIsFinite(size.height()) && size.height() > 0);
++                const auto work = native->property("_wikidictTableWork").toMap();
++                const auto delta = [&](const char *name) { return work.value(name).toULongLong() - previous.value(name).toULongLong(); };
++                const auto evidence = QStringLiteral("depth=%1 mixed=%2 width=%3 epochs=%4 tables=%5 hits=%6 misses=%7 bypasses=%8")
++                    .arg(depth).arg(mixed).arg(available).arg(delta("epochs")).arg(delta("tables"))
++                    .arg(delta("hits")).arg(delta("misses")).arg(delta("bypasses")).toUtf8();
++                QVERIFY2(delta("epochs") > 0 && delta("epochs") <= 8, evidence.constData());
++                // This bound includes whole-document relayout passes, not a
++                // reset-per-descendant average. The former 2^17-1 already fails.
++                QVERIFY2(delta("tables") <= quint64(64 * depth * depth + 8 * depth), evidence.constData());
++                QVERIFY2(delta("misses") <= quint64(8 * depth * depth), evidence.constData());
++                QVERIFY2(delta("hits") > 0, evidence.constData());
++                QCOMPARE(delta("bypasses"), quint64(0));
++                previous = work;
++                QCOMPARE(tables.size(), depth);
++                for (int level = 0; level < depth; ++level) {
++                    QVERIFY(tables[level]->parentFrame() == (level ? tables[level - 1] : doc.rootFrame()));
++                    const auto box = native->tableBoundingRect(tables[level]);
++                    QVERIFY(qIsFinite(box.x()) && qIsFinite(box.y()) && box.width() > 0 && box.height() > 0);
++                    QCOMPARE(tables[level]->format().background().color(), level % 2 ? QColor("#d0e0f0") : QColor("#f0e0d0"));
++                    QCOMPARE(tables[level]->format().cellPadding(), 1.0);
++                }
++                const auto block = tables.last()->cellAt(0, 0).firstCursorPosition().block();
++                const auto line = block.layout()->lineAt(0); QVERIFY(line.isValid());
++                const QPointF point = native->blockBoundingRect(block).topLeft()
++                    + QPointF(line.cursorToX(2), line.y() + line.height() / 2);
++                QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/native-depth"));
++                QVERIFY(native->hitTest(point, Qt::ExactHit) >= block.position());
++                QImage image(1000, 800, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++                QPainter painter(&image); native->draw(&painter, {}); painter.end();
++                bool painted = false;
++                for (int y = 0; y < image.height() && !painted; ++y)
++                    for (int x = 0; x < image.width(); ++x)
++                        if (image.pixelColor(x, y) != QColor(Qt::white)) { painted = true; break; }
++                QVERIFY(painted); QCOMPARE(doc.toRawText(), raw); QCOMPARE(doc.revision(), revision);
++            }
++        }
++    }
++
++    void tableIntrinsicMemoMatchesUncachedMutationAndContext()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
++        constexpr int clear = QTextFormat::UserProperty + 0x57d2;
++        for (int context = 0; context < 4; ++context) {
++            QTextDocument source; source.setLayoutEnabled(false); source.setDocumentMargin(0);
++            source.setDefaultFont(QFont("DejaVu Sans", 11));
++            QTextCursor cursor(&source);
++            if (context == 1) source.setPageSize(QSizeF(420, 200));
++            if (context == 2) {
++                QTextFrameFormat frame; frame.setWidth(300); frame.setMargin(0); frame.setBorder(0);
++                auto *parent = cursor.insertFrame(frame); cursor = parent->firstCursorPosition();
++            }
++            QList<QTextTable *> tables;
++            for (int level = 0; level < 4; ++level) {
++                QTextTableFormat format; format.setBorderCollapse(false); format.setMargin(0);
++                format.setBorder(1); format.setCellPadding(2); format.setCellSpacing(1);
++                format.setProperty(owner, QStringLiteral("wikidict.table-box/1")); format.setProperty(clear, 0);
++                format.setWidth(QTextLength(QTextLength::PercentageLength, level % 2 ? 75 : 100));
++                if (context == 3 && level == 0) format.setPosition(QTextFrameFormat::FloatLeft);
++                auto *table = cursor.insertTable(level == 3 ? 2 : 1, level == 3 ? 2 : 1, format);
++                tables.append(table); cursor = table->cellAt(0, 0).firstCursorPosition();
++            }
++            tables.last()->mergeCells(0, 0, 2, 1);
++            auto header = tables.last()->format(); header.setHeaderRowCount(1); tables.last()->setFormat(header);
++            cursor = tables.last()->cellAt(0, 0).firstCursorPosition();
++            QTextCharFormat format; format.setFontItalic(true); format.setForeground(Qt::blue);
++            cursor.insertText("longwordwithordinarybreakfallback and words", format);
++            cursor = tables.last()->cellAt(0, 1).firstCursorPosition(); cursor.insertText("second cell");
++            for (int mutation = 0; mutation < 5; ++mutation) {
++                source.setLayoutEnabled(false);
++                if (mutation == 1) { cursor = tables.last()->cellAt(0, 0).firstCursorPosition(); cursor.insertText("changed "); }
++                if (mutation == 2) { source.setDefaultFont(QFont("DejaVu Sans", 15)); auto f = tables[1]->format(); f.setCellPadding(4); tables[1]->setFormat(f); }
++                if (mutation == 3) source.undo();
++                if (mutation == 4) { auto option = source.defaultTextOption(); option.setWrapMode(QTextOption::WrapAnywhere); source.setDefaultTextOption(option); }
++                for (qreal width : {420.0, 190.0, 420.0}) {
++                    // Reuse the measured document across edits, undo and resize;
++                    // compare each state with a fresh uncached document.
++                    auto *cached = &source;
++                    std::unique_ptr<QTextDocument> reference(source.clone());
++                    cached->setLayoutEnabled(false); reference->setLayoutEnabled(false);
++                    auto *a = qobject_cast<QTextDocumentLayout *>(cached->documentLayout());
++                    auto *b = qobject_cast<QTextDocumentLayout *>(reference->documentLayout()); QVERIFY(a && b);
++                    a->setProperty("_wikidictCollectTableWork", true);
++                    b->setProperty("_wikidictDisableTableIntrinsicMemo", true);
++                    if (context == 1) {
++                        cached->setPageSize(QSizeF(width, 200)); reference->setPageSize(QSizeF(width, 200));
++                        QCOMPARE(cached->pageSize().height(), 200.0); QCOMPARE(reference->pageSize().height(), 200.0);
++                    } else {
++                        cached->setTextWidth(width); reference->setTextWidth(width);
++                    }
++                    cached->setLayoutEnabled(true); reference->setLayoutEnabled(true);
++                    QCOMPARE(a->documentSize(), b->documentSize());
++                    QCOMPARE(a->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(b->wikidictParagraphBoxLayoutError(), 0);
++                    const auto compare = [&](auto &&self, QTextFrame *left, QTextFrame *right) -> void {
++                        QCOMPARE(a->frameBoundingRect(left), b->frameBoundingRect(right));
++                        QCOMPARE(left->childFrames().size(), right->childFrames().size());
++                        for (int i = 0; i < left->childFrames().size(); ++i)
++                            self(self, left->childFrames()[i], right->childFrames()[i]);
++                    };
++                    compare(compare, cached->rootFrame(), reference->rootFrame());
++                    for (auto left = cached->begin(), right = reference->begin(); left.isValid(); left = left.next(), right = right.next()) {
++                        QVERIFY(right.isValid()); QCOMPARE(a->blockBoundingRect(left), b->blockBoundingRect(right));
++                    }
++                    QImage pixelsA(500, 600, QImage::Format_ARGB32_Premultiplied), pixelsB(500, 600, QImage::Format_ARGB32_Premultiplied);
++                    pixelsA.fill(Qt::white); pixelsB.fill(Qt::white);
++                    { QPainter painter(&pixelsA); a->draw(&painter, {}); }
++                    { QPainter painter(&pixelsB); b->draw(&painter, {}); }
++                    QCOMPARE(pixelsA, pixelsB); QCOMPARE(cached->toRawText(), source.toRawText());
++                    QCOMPARE(reference->toRawText(), source.toRawText());
++                    if (context) {
++                        const auto work = a->property("_wikidictTableWork").toMap();
++                        QCOMPARE(work.value("hits").toULongLong(), quint64(0));
++                        QVERIFY(work.value("bypasses").toULongLong() > 0);
++                    }
++                }
++            }
++        }
++    }
++
++    void tableIntrinsicMemoKeepsInvalidCellRefusal()
++    {
++        for (bool disabled : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false);
++            QTextCursor cursor(&doc); QTextTableFormat format;
++            format.setProperty(QTextFormat::UserProperty + 0x57d0, QStringLiteral("wikidict.table-box/1"));
++            format.setProperty(QTextFormat::UserProperty + 0x57d2, 0);
++            auto *table = cursor.insertTable(1, 1, format);
++            auto cell = table->cellAt(0, 0); auto invalid = cell.format();
++            invalid.setProperty(QTextFormat::TableCellLeftPadding, -1.0); cell.setFormat(invalid);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->setProperty("_wikidictDisableTableIntrinsicMemo", disabled);
++            doc.setTextWidth(300); doc.setLayoutEnabled(true); native->documentSize();
++            QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        }
++    }
++
 +    void rubyColumnsKeepDisjointSourceRanges();
 +    void rubyRangeMapOwnsNestedDescriptionAndRejectsSurrogateCuts();
 +    void rubyGapDoesNotConsumeNonbreakingBaseContent();
@@ -8746,6 +9108,14 @@
 +            QVERIFY(native->tableBoundingRect(table).contains(character));
 +            const int hit = native->hitTest(character.center(), Qt::FuzzyHit);
 +            QVERIFY(hit >= first && hit <= first + 1);
++            const auto next = native->wikidictLogicalPosition(first + 1);
++            QCOMPARE(next.value(QStringLiteral("error")).toInt(), 0);
++            const QRectF firstCursor = ready.value(QStringLiteral("cursorRect")).toRectF();
++            const QRectF nextCursor = next.value(QStringLiteral("cursorRect")).toRectF();
++            QVERIFY(nextCursor.left() > firstCursor.left());
++            const QPointF rightHalf(firstCursor.left() * .25 + nextCursor.left() * .75, character.center().y());
++            QCOMPARE(native->hitTest(rightHalf, Qt::FuzzyHit), first + 1);
++            QCOMPARE(native->anchorAt(rightHalf), QStringLiteral("dict:cell"));
 +            QTextCursor actual(&doc); actual.setPosition(first);
 +            actual.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
 +            QCOMPARE(actual.currentTable(), table);
@@ -13588,7 +13958,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +14189,1269 @@
+@@ -648,5 +14559,1269 @@
      }
  }
 

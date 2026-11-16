@@ -524,6 +524,39 @@ Unsupported importer combinations refuse explicitly. Historical full-suite and
 failed-run evidence keeps its original scope; this source delivery performs no
 new build or runtime execution.
 
+## Deep tables and visible overflow
+
+Native layout is qualified at table depths 17, 20 and 32. The paired App
+controls separately verify the 32/33 admission boundary. Intrinsic cell widths
+are memoized only within one outer layout epoch for eligible owned,
+unpaginated table/text subtrees. The key includes wrap mode and containing
+width/height context. Paged, special object, non-table ancestor, fit/flex and
+active exclusion contexts retain the ordinary measurement path. Final geometry
+always runs; the cache stores only successful minimum/maximum widths.
+
+Owned fixed-height tables retain their used and decorative dimensions while
+visible child overflow participates in paint culling, document extent and hit
+traversal. Actual scrollports and rounded clipping still constrain hidden
+content. Reverse hit traversal respects transparent gaps and opaque later paint;
+FuzzyHit preserves native insertion edges, with existing image and Ruby owner
+semantics retained.
+
+Qualification is deliberately scoped. The latest native run passed five selected
+methods; thirteen passing methods from the prior run retain exact method bodies
+and their historical result. One method appears in both sets. The two App
+controls then ran against unchanged app product binaries and the newly qualified
+native libraries; only the corrected Reader test executable was rebuilt. The earlier timeout, anchor failure, const-connection compile
+failure, caret failure and document-rebuild cursor fixture failure remain recorded. This is not a fresh full native or
+Reader suite, and does not claim genuine DPRT wire or rendered-page acceptance.
+
+For reproduction, use the existing native target and isolated environment below
+with `qualification.table_depth32.current_methods` and
+`qualification.table_depth32.historical_passed_methods` from `manifest.json`.
+The deterministic depth17/20/32 controls bound structural layout work; they do
+not use elapsed time as the correctness oracle. The maintained patches contain
+all source changes; the private qualification paths are evidence references,
+not fresh-checkout build dependencies.
+
 ## Source and build layout
 
 Use one source directory and one build directory per module. Keep the sources,

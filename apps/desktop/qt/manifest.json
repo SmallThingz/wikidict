@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "9f055f6ea18c0713738693e4c8761b3f24066034d923684f3a7921e74f91c92d",
-      "bytes": 936031,
+      "sha256": "00acba8e8386199f07c103c46cb3762a92c6f1dbad142f7f2fe55e917a1a2499",
+      "bytes": 955329,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "215afb94b7c695e173c3f7e6157928007f346cc430109ef21df3afe545a908cc",
-          "bytes": 763696
+          "qualified_sha256": "6fcd6c6c32841796474a66d39817a61a9246909d33582b5a78da284b687fbb53",
+          "bytes": 780306
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -201,8 +201,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "7abd2de23c68afa254886401a1682733d50499d0036c12afa1a1c45bc949ec0a",
-      "bytes": 1174458,
+      "sha256": "ba8d9e71f0ea17109ee3cc015eecf12bc2814b4ebd852de7957de99a95132d18",
+      "bytes": 1201685,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -215,8 +215,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "ef0af8a3ced9988fa0908b01c1dc5e84cc78f4237b2a2118e4fcbc1ad0b1bebc",
-          "bytes": 1179883
+          "qualified_sha256": "795b61663f9447350ee0d42d1a881f3d9627c9efa74c08cadee6d4c1172bd45a",
+          "bytes": 1206740
         }
       ]
     },
@@ -394,8 +394,8 @@
       "reader": 176,
       "ffi": 177,
       "app": 190,
-      "title": "\u305f\u3073\u3062",
-      "language": "\u65e5\u8a9e",
+      "title": "たびぢ",
+      "language": "日語",
       "wide": [
         900,
         700
@@ -404,7 +404,7 @@
         640,
         600
       ],
-      "internal_missing_target": "\u65c5\u8def#\u65e5\u8a9e",
+      "internal_missing_target": "旅路#日語",
       "successful_destination_record": false,
       "whole_frontend": false
     },
@@ -509,7 +509,126 @@
         "bytes": 1290504,
         "sha256": "78dab6d27b20b4283fff915d35e73e30312a97b0497b1e59a35a915f2918aba2"
       }
-    ]
+    ],
+    "table_depth32": {
+      "date": "2026-11-16",
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application171.json",
+        "bytes": 284579,
+        "sha256": "9ede46ae6ba84c904f77ec08b54b69d2e1c0ddba1d95dfa84d69409a0bdf0ba6"
+      },
+      "source_components": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application168.json",
+          "bytes": 283052,
+          "sha256": "320acecc49fae7de562941ef5996b50d7bece76d7b267d4298201b1889908407"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application169.json",
+          "bytes": 283629,
+          "sha256": "72ad0a0c9fabb7d6e609f73576b469de390f698baa2b2b7856cfe6e4c680a60a"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application170.json",
+          "bytes": 283314,
+          "sha256": "57504e5e46a0afe4dd75a3ff96f92fdefc0428d07103b2bfdb272e4d891ac5ac"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application171.json",
+          "bytes": 284579,
+          "sha256": "9ede46ae6ba84c904f77ec08b54b69d2e1c0ddba1d95dfa84d69409a0bdf0ba6"
+        }
+      ],
+      "native_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold152/independent-closure01.json",
+        "bytes": 215028,
+        "sha256": "4e71970819867cb8033b18dbf3e2d8dc3cbfea2a8f1bdd8f5e4dd9e0ab1631ba"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold152/release01.json",
+        "bytes": 549,
+        "sha256": "95a484ddf3ec2fa1d22d9d2225770833a6cd32dfa97c208d0798372fd914776c"
+      },
+      "current_methods": [
+        "ownedTableOverflowHitsFollowCellAndSiblingPaintOrder",
+        "logicalCellGeometryWaitsForLayout",
+        "figureTableCaptionSkipsMediaTraversalGapsAfterExactChildHits",
+        "rubyMultipleOwnersPaintAndKeepChildOffsets",
+        "nativeTableBoxKeepsCellsAndContainingFlow"
+      ],
+      "current_methods_passed": true,
+      "historical151": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold151/independent-closure01.json",
+        "bytes": 213400,
+        "sha256": "b945d689be0c9714d7e1f449a15594839f953f2dc30458a43e557b5b6a23e61a"
+      },
+      "historical_passed_methods": [
+        "tableIntrinsicMemoBoundsDeepWork",
+        "tableIntrinsicMemoMatchesUncachedMutationAndContext",
+        "tableIntrinsicMemoKeepsInvalidCellRefusal",
+        "ownedTableOverflowKeepsClippedPaintHitAndMutation",
+        "typedCellConstraintsUseIntrinsicContentAndTablePercent",
+        "nativeTableBoxKeepsCellsAndContainingFlow",
+        "physicalTableBordersHonorHiddenConflictAcrossColspan",
+        "pairedTableViewportUsesAssignedIntervalAndContainingPercentageBasis",
+        "ownedFloatTableGridDoesNotAcquirePageMargin",
+        "floatingTablePageBreak",
+        "nativeInlineTableTopKeepsStrutListImageAndUsedLine",
+        "tableAutoMarginsShareNestedCellAndScrollportGeometry",
+        "tableCornersClipOnlyExistingOverflowAndKeepSourceActions"
+      ],
+      "historical_methods_reexecuted": false,
+      "current_and_historical_overlap": [
+        "nativeTableBoxKeepsCellsAndContainingFlow"
+      ],
+      "app_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile199/independent-closure01.json",
+        "bytes": 36985,
+        "sha256": "21283ee4ad1b71fc3960746bb783070e02477a4a510a8289cfbb46ce82929b1d"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile199/release01.json",
+        "bytes": 483,
+        "sha256": "0c4f773db3ddcb9cabd5955ad220558b71c6c340f223108db4dde24f8f9400be"
+      },
+      "current_main_methods": [
+        "deepCompiledTablesKeepNativeHierarchyPaintActionsAndReflow"
+      ],
+      "current_media_methods": [
+        "pronunciationControlsTraverseOrderedAndLegacyTableContent"
+      ],
+      "retained_main_passes195": [
+        "orderedCellAuthorityAndDepthAreValidated",
+        "compiledContentWalksFinalScopesAndCaptionsOnce",
+        "structuredReferenceBlocksPreserveFurnitureTablesActionsAndLegacyMode",
+        "nestedSemanticTablesKeepOuterGridAndEmptyPaintedHeaders",
+        "compiledContainerMetadataKeepsNestedBodiesAndOwnership"
+      ],
+      "app_product_binaries_rebuilt": false,
+      "reader_test_rebuilt": true,
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "genuine_rendered_acceptance": false,
+      "T_wire_acceptance": false,
+      "preserved_failures": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold149/independent-closure01.json",
+          "bytes": 215217,
+          "sha256": "17f11be196d65a1e6ee019bed821bb6d7348582b6029cbf19009bba9b51e0f32"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold150/independent-closure01.json",
+          "bytes": 198516,
+          "sha256": "bcbf4f03c088386074d9f3dcc8dea3382852319626e2d5104f8bd52ea284a8b0"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold151/independent-closure01.json",
+          "bytes": 213400,
+          "sha256": "b945d689be0c9714d7e1f449a15594839f953f2dc30458a43e557b5b6a23e61a"
+        }
+      ],
+      "scope": "Intrinsic metrics reuse within one owned-table layout epoch, native visible-overflow traversal and paint-order hit/caret behavior. Five current native methods and thirteen source-identical historical passing methods remain distinct; two current App tests exercise depth20/32 and depth33 refusal. No whole frontend or corpus acceptance."
+    }
   },
   "packaged_distribution_source_equivalence": false,
   "build_override": {
