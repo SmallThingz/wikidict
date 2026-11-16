@@ -3086,4 +3086,264 @@ class NativeRubyGeometryDeviceTest {
                 capRtlMapped.caretRect(capEnd, NativeInlineBoundaryAffinity.Following))
         }
     }
+
+    @Test
+    fun positionedInlineImagesKeepNativeFractionalRowsAndOriginalSourceActions() {
+        // Synthetic resolved pixels: these values do not stand in for an unearned source receipt.
+        val draws = mutableListOf<Int>()
+        val clicks = mutableListOf<Int>()
+        var legacyMeasurements = 0
+        class Image(val id: Int, val offset: Int, val w: Float, val h: Float,
+            val placement: NativeImageOccurrencePlacement?, val scale: Float = 1f) :
+            android.text.style.ReplacementSpan(), NativeFloatInlineImage, NativeNoWrapInlineImage {
+            val action: () -> Unit = { clicks += id }
+            override val nativeImageId: Int get() = id
+            override val nativeImageSourceOffset: Int get() = offset
+            override val nativeImageWidth: Float get() = w
+            override val nativeImageHeight: Float get() = h
+            override val nativeImageOccurrence: NativeImageOccurrencePlacement? get() = placement
+            override val nativeUsedMetrics: NativeUsedLineMetrics get() = NativeUsedLineMetrics(-4f * scale, -4f * scale + h)
+            override val nativeImageInkBounds: NativeFloatBounds get() = NativeFloatBounds(0f, 0f, w, h)
+            override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds =
+                nativeImageInkBounds.translated(0f, nativeUsedMetrics.top)
+            override fun drawNativeImage(canvas: Canvas, outer: RectF) {
+                draws += id
+                canvas.drawRect(outer, Paint().apply { color = if (id % 2 == 0) Color.RED else Color.BLUE })
+            }
+            override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int,
+                fm: Paint.FontMetricsInt?): Int {
+                check(placement == null) { "Positioned occurrence entered the integer replacement path" }
+                legacyMeasurements++
+                return ceil(w).toInt()
+            }
+            override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int,
+                x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+                check(placement == null)
+                drawNativeImage(canvas, RectF(x, y + nativeUsedMetrics.top, x + w, y + nativeUsedMetrics.bottom))
+            }
+        }
+        class Prepared(val raw: String, val images: List<Image>, val root: TextPaint,
+            val nowrap: Boolean = false, val alignment: android.text.Layout.Alignment = android.text.Layout.Alignment.ALIGN_NORMAL) {
+            val source: Spanned = SpannedString(SpannableString(raw).apply {
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root),
+                    NativeLineHeightPolicy.Pixels(root.textSize), strut = true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(android.text.style.AlignmentSpan.Standard(alignment), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                images.forEach { setSpan(it, it.offset, it.offset + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+                if (nowrap) setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true,
+                    sourceLineStarts = listOf(0)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+            fun build(width: Int, rtl: Boolean = false, exclusions: List<NativeFloatExclusion> = emptyList()): NativeFloatGeometry =
+                NativeFloatGeometry.build(source, root, width, emptyList(), includeFontPadding = false,
+                    textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                    carriedExclusions = exclusions, nodeFactory = { geometry -> images.map { image ->
+                        val bounds = geometry.rectsForRange(image.offset, image.offset + 1)
+                        FloatInteractionNode(image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
+                            bounds, "original image alt ${image.id}", "original tooltip", image.action,
+                            focusPaint = NativeNodeFocusPaint.Fragments(bounds.map {
+                                NativeNodeFocusPaint.Outline(RectF(it), 1f, Color.GREEN, 0f, 0f)
+                            }))
+                    } })
+        }
+        fun allImages(count: Int, width: Float, alignment: android.text.Layout.Alignment = android.text.Layout.Alignment.ALIGN_NORMAL,
+            nowrap: Boolean = false): Prepared {
+            val zero = NativeImageOccurrencePlacement(0f, 0f, 0f, 0f)
+            return Prepared("\uFFFC".repeat(count), (0 until count).map { Image(it, it, width, 5f, zero) },
+                paint(), nowrap, alignment)
+        }
+        fun nativeImageBreaks(prepared: Prepared, width: Float): List<Int> {
+            val measured = android.graphics.text.MeasuredText.Builder(prepared.raw.toCharArray()).setComputeLayout(true)
+                .setComputeHyphenation(false).apply {
+                    prepared.images.forEach { image ->
+                        val value = image.placement
+                        val advance = ((value?.paddingLeft ?: 0f).toDouble() + image.w + (value?.paddingRight ?: 0f)).toFloat()
+                        appendReplacementRun(prepared.root, 1, advance)
+                    }
+                }.build()
+            val result = android.graphics.text.LineBreaker.Builder()
+                .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
+                .computeLineBreaks(measured, android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(width) }, 0)
+            return (0 until result.lineCount).map(result::getLineBreakOffset)
+        }
+        val decimal = allImages(10, .2f)
+        val decimalRows = decimal.build(1)
+        // Native accumulation may exceed a threshold before its result is rounded to Float.
+        // The platform result, not a pixel epsilon or an assumed five-per-row cut, owns this oracle.
+        assertEquals(nativeImageBreaks(decimal, 1f), (0 until decimalRows.shapedLineCount).map {
+            decimalRows.nativeRangeOfLine(it).second
+        })
+        assertEquals(decimal.raw, decimalRows.text.toString())
+        assertEquals(10, decimalRows.characterRects(0, 10).size)
+        assertEquals(10, decimalRows.nodes.size)
+        assertEquals(10, decimalRows.positionedGroups.size)
+        decimal.images.forEach { image ->
+            assertSame(image.action, decimalRows.nodes.single { it.id == image.id }.onClick)
+            assertEquals(image.offset to image.offset + 1, decimalRows.nodes.single { it.id == image.id }.let { it.start to it.end })
+            assertEquals(.2f, decimalRows.rectsForRange(image.offset, image.offset + 1).single().width(), .000001f)
+        }
+        assertEquals(0, legacyMeasurements)
+        // Two distinct legal Float prefixes share an integer threshold; no integer
+        // scaffold can certify this actual platform cut.
+        assertEquals(2, nativeImageBreaks(allImages(3, .2f), .45f).first())
+        assertEquals(ceil(.4f).toInt(), ceil(.6f).toInt())
+        val quarters = allImages(4, .25f)
+        val exact = quarters.build(1)
+        assertEquals(1, exact.shapedLineCount)
+        assertEquals(1f, exact.nativeSingleLineAdvance(), 0f)
+        assertEquals(NativeWidthRange(1, 1), nativeTextWidthRange(quarters.source, quarters.root,
+            textDirection = TextDirectionHeuristics.LTR))
+        for (space in listOf('\u00a0', '\u202f')) {
+            val glued = Prepared("\uFFFC$space", listOf(Image(25, 0, .25f, 5f,
+                NativeImageOccurrencePlacement(0f, 0f, 0f, 0f))), paint())
+            val ordinary = nativeTextWidthRange(glued.source, glued.root, textDirection = TextDirectionHeuristics.LTR)
+            val expected = ceil(.25 + glued.root.measureText(space.toString()).toDouble()).toInt()
+            assertEquals(expected, ordinary.maximum)
+            assertEquals(expected, ordinary.minimum)
+            val emergency = nativeTextWidthRange(glued.source, glued.root, breakWordMinimum = true,
+                textDirection = TextDirectionHeuristics.LTR)
+            assertTrue(emergency.minimum >= ceil(glued.root.measureText(space.toString())).toInt())
+            assertEquals(ordinary.maximum, emergency.maximum)
+        }
+        val gapSource = SpannableString(quarters.source).apply {
+            setSpan(NativeLineGap(3f), length - 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(object : android.text.style.LineHeightSpan, NativeFloatRowMetricEffect {
+                override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int,
+                    v: Int, fm: Paint.FontMetricsInt) { error("Float rows must consume the paired immutable gap") }
+            }, length - 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val withGap = NativeFloatGeometry.build(gapSource, quarters.root, 1, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, includeFontPadding = false)
+        assertEquals(quarters.root.textSize + 3f, withGap.usedLineHeight(0), .00001f)
+        val narrow = allImages(6, .2f).build(1)
+        assertEquals(nativeImageBreaks(allImages(6, .2f), 1f),
+            (0 until narrow.shapedLineCount).map { narrow.nativeRangeOfLine(it).second })
+        assertTrue(narrow.shapedLineCount > 1)
+        val noWrap = allImages(10, .2f, nowrap = true).build(1)
+        assertEquals(1, noWrap.shapedLineCount)
+        assertEquals(2f, noWrap.nativeSingleLineAdvance(), 0f)
+        val floated = allImages(12, .25f).build(3, exclusions = listOf(
+            NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 2f, 12f))))
+        assertEquals(listOf(4, 12), (0 until floated.shapedLineCount).map { floated.nativeRangeOfLine(it).second })
+        assertEquals(1f, floated.nativeLineAvailableWidth(0), 0f)
+        assertEquals(3f, floated.nativeLineAvailableWidth(1), 0f)
+        assertEquals(2f, floated.characterRects(0, 1).single()!!.left, 0f)
+        assertEquals(0f, floated.characterRects(4, 1).single()!!.left, 0f)
+        for ((alignment, left) in listOf(android.text.Layout.Alignment.ALIGN_CENTER to 1f,
+            android.text.Layout.Alignment.ALIGN_OPPOSITE to 2f)) {
+            val aligned = allImages(4, .25f, alignment).build(3)
+            assertEquals(left, aligned.characterRects(0, 1).single()!!.left, 0f)
+            assertEquals(left + 1f, aligned.characterRects(3, 1).single()!!.right, 0f)
+        }
+        val rtl = quarters.build(3, rtl = true)
+        assertEquals(2.75f, rtl.characterRects(0, 1).single()!!.left, 0f)
+        assertEquals(2f, rtl.characterRects(3, 1).single()!!.left, 0f)
+        assertEquals(rtl.characterRects(3, 1).single()!!.left, rtl.caretRect(4).left, 0f)
+        assertEquals(1, rtl.visualOffset(0, -1))
+
+        val mixedText = "a\u0301\uFFFCאב🙂Z"
+        val imageOffset = mixedText.indexOf('\uFFFC')
+        val stationaryImage = Image(20, imageOffset, 4.25f, 5f, NativeImageOccurrencePlacement(0f, 0f, .125f, .375f))
+        val shiftedImage = Image(20, imageOffset, 4.25f, 5f, NativeImageOccurrencePlacement(-.5f, -3f, .125f, .375f))
+        val stationary = Prepared(mixedText, listOf(stationaryImage), paint()).build(240)
+        val shifted = Prepared(mixedText, listOf(shiftedImage), paint()).build(240)
+        assertEquals(mixedText, shifted.text.toString())
+        assertEquals(stationary.nativeSingleLineAdvance(), shifted.nativeSingleLineAdvance(), 0f)
+        assertEquals(stationary.nativeUsedLineMetrics(0), shifted.nativeUsedLineMetrics(0))
+        assertEquals(stationary.height, shifted.height)
+        val stationaryCharacters = stationary.characterRects(0, mixedText.length)
+        val shiftedCharacters = shifted.characterRects(0, mixedText.length)
+        for (index in mixedText.indices) if (index != imageOffset) {
+            val before = stationaryCharacters[index]; val after = shiftedCharacters[index]
+            if (before == null) assertNull(after) else sameRect(before, checkNotNull(after), 0f)
+        }
+        val beforeImage = stationary.rectsForRange(imageOffset, imageOffset + 1).single()
+        val afterImage = shifted.rectsForRange(imageOffset, imageOffset + 1).single()
+        sameRect(RectF(beforeImage).apply { offset(-.5f, -3f) }, afterImage, 0f)
+        sameRect(afterImage, shifted.nodes.single().bounds.single(), 0f)
+        assertEquals(4.25f, afterImage.width(), 0f)
+        sameRect(stationary.caretRect(imageOffset + 1), shifted.caretRect(imageOffset + 1), 0f)
+        assertFalse(shifted.nodes.single().contains(afterImage.left - .0625f, afterImage.centerY()))
+        assertEquals(20, shifted.interactionNodeAt(afterImage.centerX(), afterImage.centerY())!!.id)
+        shifted.nodes.single().onClick!!.invoke()
+        assertEquals(listOf(20), clicks)
+        assertTrue(shifted.offsetForPosition(afterImage.centerX(), afterImage.centerY()) in imageOffset..imageOffset + 1)
+        val wrapWidth = ceil(stationary.nativeSingleLineAdvance() / 2f).toInt().coerceAtLeast(1)
+        val wrapped = Prepared(mixedText, listOf(shiftedImage), paint()).build(wrapWidth)
+        assertTrue(wrapped.shapedLineCount > 1)
+        assertEquals(mixedText, wrapped.text.toString())
+        assertEquals(1, wrapped.nodes.size)
+        assertEquals(mixedText.indices.toList(), (0 until wrapped.shapedLineCount).flatMap {
+            val range = wrapped.nativeRangeOfLine(it); (range.first until range.second).toList()
+        })
+        sameRect(afterImage, Prepared(mixedText, listOf(shiftedImage), paint()).build(240)
+            .nodes.single().bounds.single(), 0f)
+
+        val overlapping = Prepared("\uFFFC\uFFFC", listOf(
+            Image(30, 0, 4f, 5f, NativeImageOccurrencePlacement(4f, 0f, 0f, 0f)),
+            Image(31, 1, 4f, 5f, NativeImageOccurrencePlacement(0f, 0f, 0f, 0f))), paint()).build(40)
+        val overlap = overlapping.nodes.first().bounds.single()
+        sameRect(overlap, overlapping.nodes.last().bounds.single(), 0f)
+        assertEquals(31, overlapping.interactionNodeAt(overlap.centerX(), overlap.centerY())!!.id)
+        val rtlOverlapping = Prepared("\uFFFC\uFFFC", listOf(
+            Image(30, 0, 4f, 5f, NativeImageOccurrencePlacement(0f, 0f, 0f, 0f)),
+            Image(31, 1, 4f, 5f, NativeImageOccurrencePlacement(4f, 0f, 0f, 0f))), paint()).build(8, rtl = true)
+        val rtlOverlap = rtlOverlapping.nodes.first().bounds.single()
+        sameRect(rtlOverlap, rtlOverlapping.nodes.last().bounds.single(), 0f)
+        assertEquals(listOf(0, 1), rtlOverlapping.positionedGroups.map { it.sourceOffset })
+        assertEquals(31, rtlOverlapping.interactionNodeAt(rtlOverlap.centerX(), rtlOverlap.centerY())!!.id)
+        assertEquals(rtlOverlap.left, rtlOverlapping.caretRect(2).left, 0f)
+        val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        try {
+            draws.clear(); overlapping.paintOrdinary(Canvas(bitmap)); assertTrue(draws.isEmpty())
+            overlapping.paint(Canvas(bitmap)); assertEquals(listOf(30, 31), draws)
+            assertEquals(Color.BLUE, bitmap.getPixel(overlap.centerX().toInt(), overlap.centerY().toInt()))
+            bitmap.eraseColor(Color.TRANSPARENT); draws.clear(); rtlOverlapping.paint(Canvas(bitmap))
+            assertEquals(listOf(30, 31), draws)
+            assertEquals(Color.BLUE, bitmap.getPixel(rtlOverlap.centerX().toInt(), rtlOverlap.centerY().toInt()))
+            val clip = RectF(overlap.left + 1f, overlap.top, overlap.right - 1f, overlap.bottom)
+            var revealed: RectF? = null
+            val placement = NativeTableBlockPlacement(RectF(0f, 0f, 40f, 40f), clip, 0f, 0f, 0f,
+                40, 40, 0, 0, 0f, 0f, 40, 40, null,
+                revealContentRect = { rect, complete -> revealed = RectF(rect); complete() })
+            val viewport = NativeTableViewportGeometry(overlapping, placement)
+            assertEquals(overlapping.text.toString(), viewport.text.toString())
+            assertEquals(overlapping.nodes.map { it.id }, viewport.nodes.map { it.id })
+            viewport.nodes.forEach { node -> sameRect(clip, node.bounds.single(), 0f) }
+            assertNull(viewport.interactionNodeAt(overlap.left + .5f, overlap.centerY()))
+            assertEquals(31, viewport.interactionNodeAt(clip.centerX(), clip.centerY())!!.id)
+            assertEquals(2, viewport.positionedGroups.size)
+            assertEquals(1, viewport.nodes.last().focusPaint!!.outlines().size)
+            assertEquals(1f, viewport.nodes.last().focusPaint!!.outlines().single().width, 0f)
+            sameRect(overlap, viewport.nodes.last().focusPaint!!.outlines().single().bounds, 0f)
+            viewport.revealNode(31) {}
+            sameRect(overlap, checkNotNull(revealed), 0f)
+            bitmap.eraseColor(Color.TRANSPARENT); draws.clear(); viewport.paint(Canvas(bitmap))
+            assertEquals(listOf(30, 31), draws)
+            assertEquals(Color.TRANSPARENT, bitmap.getPixel(overlap.left.toInt(), overlap.centerY().toInt()))
+            assertEquals(Color.BLUE, bitmap.getPixel(clip.centerX().toInt(), clip.centerY().toInt()))
+        } finally { bitmap.recycle() }
+
+        // A null-only occurrence remains on the old integer ReplacementSpan path.
+        val legacyImage = Image(40, 0, .2f, 5f, null)
+        val legacy = Prepared("\uFFFC", listOf(legacyImage), paint()).build(8)
+        assertTrue(legacyMeasurements > 0)
+        assertTrue(legacy.positionedGroups.isEmpty())
+        assertEquals(1f, legacy.nativeSingleLineAdvance(), 0f)
+        val mixed = Prepared("\uFFFC\uFFFC", listOf(legacyImage,
+            Image(41, 1, .25f, 5f, NativeImageOccurrencePlacement(0f, 0f, 0f, 0f))), paint()).build(8)
+        assertEquals(.45f, mixed.nativeSingleLineAdvance(), .000001f)
+        assertEquals(1, mixed.positionedGroups.size)
+        assertEquals(2, mixed.nodes.size)
+        assertSame(legacyImage.action, mixed.nodes.first().onClick)
+        val shiftedOnly = Prepared("\uFFFC", listOf(Image(50, 0, 4f, 5f,
+            NativeImageOccurrencePlacement(2f, -3f, .5f, 1.5f))), paint()).build(20)
+        val doubled = Prepared("\uFFFC", listOf(Image(50, 0, 8f, 10f,
+            NativeImageOccurrencePlacement(4f, -6f, 1f, 3f), scale = 2f)), paint(2f)).build(40)
+        assertEquals(shiftedOnly.nativeSingleLineAdvance() * 2f, doubled.nativeSingleLineAdvance(), 0f)
+        val first = shiftedOnly.nodes.single().bounds.single(); val second = doubled.nodes.single().bounds.single()
+        assertEquals(first.left * 2f, second.left, 0f)
+        assertEquals(first.width() * 2f, second.width(), 0f)
+        assertEquals(shiftedOnly.usedLineHeight(0) * 2f, doubled.usedLineHeight(0), .00001f)
+        assertEquals("\uFFFC", doubled.text.toString())
+    }
 }

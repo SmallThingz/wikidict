@@ -207,7 +207,8 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
                     lineHeightInherited = inherited.bodyOrigin.lineHeightInherited && lineHeight == null,
                     sizeInherited = inherited.bodyOrigin.sizeInherited && ownerFontScale == null,
                     familyInherited = inherited.bodyOrigin.familyInherited && fontFamily == null),
-                resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null })
+                resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null },
+                bodyDirection = inherited.bodyDirection)
         }
         val previous = inherited.cellText
         val metricFont = previous?.ownerFont?.snapshot
@@ -224,7 +225,8 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
                 lineHeightInherited = inherited.bodyOrigin.lineHeightInherited && lineHeight == null,
                 sizeInherited = inherited.bodyOrigin.sizeInherited && ownerFontScale == null,
                 familyInherited = inherited.bodyOrigin.familyInherited && fontFamily == null),
-            resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null })
+            resolvedLineHeight = inherited.resolvedLineHeight.takeIf { lineHeight == null },
+            bodyDirection = inherited.bodyDirection)
     }
 
     /** Call with the reader viewport, never a nested cell's or container's width. */
@@ -257,7 +259,9 @@ internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
     val cellText: NativeCellTextState? = null, val fontFamily: ContainerFontFamily? = null,
     val containerText: NativeContainerTextState? = null,
     val bodyOrigin: NativeBodyTextOrigin? = null,
-    val resolvedLineHeight: NativeLineHeightPolicy? = null) {
+    val resolvedLineHeight: NativeLineHeightPolicy? = null,
+    // BODY/reference paragraph provenance is independent of font and line-height ownership.
+    val bodyDirection: BidiResolvedDirection? = null) {
     init { require(ownerFontScale.isFinite() && ownerFontScale >= 0f) }
 }
 

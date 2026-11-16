@@ -1408,4 +1408,138 @@ class InlineImageAlignmentDeviceTest {
         }
     }
 
+
+    @Test fun positionedImageRefusalRetainsOriginalAltNeighborsAndActionsWithoutNativeReentry() {
+        // Synthetic valid data whose signed coordinate exceeds native applicability.
+        // Ready pixels make LayoutUnavailable observable independently of loading/asset failure.
+        val bitmap = redBitmap()
+        val internalActions = CopyOnWriteArrayList<EntryLink>()
+        val externalActions = CopyOnWriteArrayList<String>()
+        val failures = CopyOnWriteArrayList<String>()
+        val reason = "Positioned image exceeds native coordinates"
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val invalidNative = InlineImageOccurrenceLayout(
+            SignedContainerMargin(StyleLengthUnit.Px, -Float.MAX_VALUE), zero, zero, zero)
+        val presentZero = InlineImageOccurrenceLayout(zero, zero, zero, zero)
+        val internalImage = image(InlineImageVerticalAlign.Baseline).copy(
+            alt = "Inner alt", occurrenceLayout = invalidNative)
+        val externalImage = image(InlineImageVerticalAlign.Baseline).copy(
+            alt = "Outer alt", occurrenceLayout = presentZero)
+        val legacyImage = image(InlineImageVerticalAlign.Baseline).copy(alt = "Legacy alt")
+        val before = Span("link", "Before", "before-target", targetFragment = "before-fragment", trail = " ")
+        val internal = Span("link", "", "image-target", targetFragment = "image-fragment", image = internalImage, trail = " ")
+        val between = Span("text", "between", trail = " ")
+        val external = Span("external_link", "", "https://example.invalid/image", image = externalImage, trail = " ")
+        val legacyLabel = Span("text", "legacy", trail = " ")
+        val legacy = Span("text", "", image = legacyImage, trail = " ")
+        val after = Span("external_link", "After", "https://example.invalid/neighbor")
+        val original = listOf(before, internal, between, external, legacyLabel, legacy, after)
+        val ordinary = original.map { span ->
+            if (span.image?.occurrenceLayout == null) span else span.copy(image = checkNotNull(span.image).copy(occurrenceLayout = null))
+        }
+        val expected = "Before \ufffc between \ufffc legacy \ufffc After"
+        var selected by mutableStateOf(original)
+        var committed: List<Span>? = null
+        var sourceOwner: InlineImageViewOwner? = null
+        val observer: (String) -> Unit = { failures += it }
+        val uri = object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) { externalActions += uri }
+        }
+        val fallbackStyle = style.copy(fontSize = 12.sp)
+        var primaryFailure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    LocalLayoutDirection provides LayoutDirection.Ltr,
+                    androidx.compose.ui.platform.LocalUriHandler provides uri,
+                    LocalEntryEdition provides "en", LocalNativeFloatContextFailureObserver provides observer) {
+                    MaterialTheme(typography = Typography(bodyLarge = fallbackStyle)) {
+                        val source = selected
+                        ReadyImage(checkNotNull(source[1].image), bitmap, {}) {
+                            val owner = checkNotNull(LocalInlineImageOwner.current)
+                            SideEffect { committed = source; sourceOwner = owner }
+                            StyledText(source, Modifier.width(320.dp).background(Color.White)
+                                .testTag("positioned-image-fallback"), style = fallbackStyle,
+                                onLink = { internalActions += it }, preserveWhitespace = true)
+                        }
+                    }
+                }
+            } }
+            for ((phase, source) in listOf(original, ordinary, original).withIndex()) {
+                if (phase > 0) compose.runOnIdle { failures.clear(); selected = source }
+                compose.waitForIdle()
+                val unavailable = source === original
+                compose.runOnIdle {
+                    assertSame(source, committed)
+                    if (unavailable) {
+                        assertTrue(failures.isNotEmpty())
+                        assertTrue(failures.all { it == reason })
+                    } else assertTrue(failures.isEmpty())
+                    val owner = checkNotNull(sourceOwner)
+                    assertTrue(owner.states[inlineImageAssetKey(internalImage)] is InlineImageAssetState.Ready)
+                    // The source objects and stored occurrence metadata are never stripped for fallback.
+                    assertSame(internal, original[1]); assertSame(external, original[3]); assertSame(legacy, original[5])
+                    assertSame(internalImage, original[1].image); assertSame(externalImage, original[3].image)
+                    assertSame(invalidNative, internalImage.occurrenceLayout)
+                    assertSame(presentZero, externalImage.occurrenceLayout)
+                    assertEquals(-Float.MAX_VALUE, checkNotNull(internalImage.occurrenceLayout).x.value, 0f)
+                    assertNull(legacyImage.occurrenceLayout)
+                    fun nativeViews(view: View): List<NativeFloatTextView> = buildList {
+                        if (view is NativeFloatTextView) add(view)
+                        if (view is ViewGroup) for (index in 0 until view.childCount) addAll(nativeViews(view.getChildAt(index)))
+                    }
+                    assertTrue("Terminal fallback publishes no successful native image geometry",
+                        nativeViews(compose.activity.window.decorView).none { it.isShown && it.currentMeasuredGeometry != null })
+                }
+                compose.onAllNodesWithText("Unable to display this layout.", useUnmergedTree = true)
+                    .assertCountEquals(if (unavailable) 1 else 0)
+                val body = compose.onNodeWithText(expected, useUnmergedTree = true).assertIsDisplayed()
+                val layouts = mutableListOf<TextLayoutResult>()
+                body.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) {
+                    assertTrue(it(layouts))
+                }
+                val layout = layouts.single()
+                assertEquals(expected, layout.layoutInput.text.text)
+                assertEquals(3, layout.layoutInput.text.text.count { it == '\ufffc' })
+                assertEquals(3, layout.placeholderRects.size)
+                assertTrue(layout.placeholderRects.all { it != null })
+                val afterStart = expected.indexOf("After")
+                val links = layout.layoutInput.text.getLinkAnnotations(0, expected.length)
+                assertEquals(listOf(0 to 7, afterStart to expected.length), links.map { it.start to it.end })
+                assertEquals("before-target", (links[0].item as androidx.compose.ui.text.LinkAnnotation.Clickable).tag)
+                assertEquals("https://example.invalid/neighbor", (links[1].item as androidx.compose.ui.text.LinkAnnotation.Url).url)
+                for ((alt, affected) in listOf("Inner alt" to true, "Outer alt" to true, "Legacy alt" to false)) {
+                    val node = compose.onNodeWithContentDescription(alt, useUnmergedTree = true)
+                        .assertIsDisplayed().fetchSemanticsNode()
+                    assertEquals(Role.Image, node.config.getOrNull(SemanticsProperties.Role))
+                    assertEquals(if (unavailable && affected) "Image layout unavailable" else "",
+                        node.config.getOrNull(SemanticsProperties.StateDescription))
+                    val status = compose.onNodeWithText("Image layout unavailable. $alt", useUnmergedTree = true)
+                    if (unavailable && affected) status.assertIsDisplayed() else status.assertDoesNotExist()
+                }
+                val internalCount = internalActions.size
+                val externalCount = externalActions.size
+                compose.onNodeWithContentDescription("Inner alt", useUnmergedTree = true).assertHasClickAction()
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { assertTrue(it()) }
+                compose.onNodeWithContentDescription("Outer alt", useUnmergedTree = true).assertHasClickAction()
+                    .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) { assertTrue(it()) }
+                ui { assertPhysicalActivity(compose.activity) }
+                body.performTouchInput { click(layout.getBoundingBox(1).center) }
+                body.performTouchInput { click(layout.getBoundingBox(afterStart + 1).center) }
+                compose.runOnIdle {
+                    assertEquals(listOf(EntryLink("image-target", "image-fragment"),
+                        EntryLink("before-target", "before-fragment")), internalActions.drop(internalCount))
+                    assertEquals(listOf("https://example.invalid/image", "https://example.invalid/neighbor"),
+                        externalActions.drop(externalCount))
+                }
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            try { dispose(bitmap) } catch (cleanup: Throwable) {
+                if (primaryFailure == null) throw cleanup else if (cleanup !== primaryFailure) primaryFailure.addSuppressed(cleanup)
+            }
+        }
+    }
 }

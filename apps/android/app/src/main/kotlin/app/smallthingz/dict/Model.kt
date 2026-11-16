@@ -366,10 +366,15 @@ data class StaticPoster(val policy: StaticPosterPolicy, val label: String, val f
 }
 
 enum class InlineImageVerticalAlign { Middle, Baseline }
+/** Source-normalized relative placement; presence also preserves positioned-auto paint order. */
+data class InlineImageOccurrenceLayout(val x: ContainerMarginLength, val y: ContainerMarginLength,
+    val paddingLeft: StyleLength, val paddingRight: StyleLength)
+
 data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx: Long? = null,
     val alt: String? = null, val tooltip: String? = null, val border: Boolean = false, val map: ImageMap? = null,
     val darkModeFilter: ImageDarkModeFilter? = null, val svgLanguage: String? = null,
-    val staticPoster: StaticPoster? = null, val verticalAlign: InlineImageVerticalAlign? = null) {
+    val staticPoster: StaticPoster? = null, val verticalAlign: InlineImageVerticalAlign? = null,
+    val occurrenceLayout: InlineImageOccurrenceLayout? = null) {
     init {
         require(file.isNotEmpty() && validPresentationString(file) && file.first() != ' ' && file.last() != ' ' &&
             file.none { it.code < 32 || it.code == 127 || it.code in 0x80..0x9f || it in "[]{}<>|#_" }) { "Invalid inline image file" }
@@ -378,6 +383,9 @@ data class InlineImage(val file: String, val widthPx: Long? = null, val heightPx
         require(alt == null || validPresentationString(alt)) { "Invalid inline image alt" }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid inline image tooltip" }
         require(svgLanguage == null || validSvgLanguage(svgLanguage)) { "Invalid SVG raster language" }
+        require(occurrenceLayout == null || map == null && staticPoster == null) {
+            "Inline image occurrence layout conflicts with map or static poster"
+        }
         if (staticPoster != null) {
             require(file.endsWith(".stl", ignoreCase = true) && widthPx != null && heightPx != null &&
                 heightPx == (widthPx * 3L + 2L) / 4L) { "Invalid static poster axes or file" }
@@ -1014,6 +1022,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                 }) { "Ruby gaps require CSS whitespace text without actions" }
             require(actionOwner == null || span.kind == "text") { "Inline padding action repeats a descendant action" }
             requirePaddingActionColor(actionOwner, span.foreground)
+            if (span.image?.occurrenceLayout != null) charge(1)
             onSpan(span)
             if (span.text.isNotEmpty() || span.trail.isNotEmpty()) actualTextLeaves++
             span.ruby?.let { ruby(it, contentDepth, actionOwner) }
@@ -1098,6 +1107,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         if (contentVisitor == null) spans(listOf(value.content.span), contentDepth = contentDepth)
         else {
             charge(1)
+            if (value.content.span.image?.occurrenceLayout != null) charge(1)
             // The custom callback owns the root image occurrence, including Figure sizing.
             // Descendants still share this visitor's budget without displaying them twice.
             value.content.span.ruby?.let { ruby(it, contentDepth) }
@@ -1238,7 +1248,8 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>, v
 data class Media(val file: String, val kind: String, val caption: String)
 enum class ReferenceKind { Note, Fragment }
 data class Reference(val number: Long, val groupNumber: Long?, val group: String, val spans: List<Span>,
-    val kind: ReferenceKind = ReferenceKind.Note, val blocks: List<Block>? = null) {
+    val kind: ReferenceKind = ReferenceKind.Note, val blocks: List<Block>? = null,
+    val bodyTypography: BodyTypography? = null) {
     init {
         require(blocks == null || spans.isEmpty()) { "Ordered reference blocks cannot also contain legacy spans" }
         blocks?.let(::validatePositionedRootBlocks)
@@ -1256,8 +1267,9 @@ internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
 /** Applies to the complete semantic Section body, before References and Media. */
 enum class BodyAdjoiningPolicy { Ordinary }
 
-/** Independent declaring metrics for section body lines; no hierarchy or source text. */
-data class BodyTypography(val ownerFont: InlineFontSnapshot, val lineHeight: ContainerLineHeight? = null) {
+/** Independent body-slot metrics and paragraph direction; no hierarchy or source text. */
+data class BodyTypography(val ownerFont: InlineFontSnapshot, val lineHeight: ContainerLineHeight? = null,
+    val direction: BidiResolvedDirection? = null) {
     init {
         require(ownerFont.fontNormalized && ownerFont.fontScale != null &&
             ownerFont.fontScaleBasis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) {
@@ -1435,6 +1447,7 @@ internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> =
     entry.sections.forEach { visitor.blocks(it.blocks) }
     inReference = true
     entry.references.forEach { reference ->
+        visitor.bodyTypography(reference.bodyTypography)
         val blocks = reference.blocks
         if (blocks == null) visitor.spans(reference.spans) else visitor.blocks(blocks)
     }

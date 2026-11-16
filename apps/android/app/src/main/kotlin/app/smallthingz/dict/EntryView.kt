@@ -91,7 +91,7 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val computedCellTraits: Boolean = false, val cellBodyFamily: FontFamily? = null,
     val compiledTableDirection: TableContainingDirection? = null, val compiledTableLanguage: String? = null,
     val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
-    val computedContainerTraits: Boolean = false)
+    val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -109,6 +109,7 @@ internal val LocalCellLetterSpacingPixels = staticCompositionLocalOf<Float?> { n
 internal val LocalCssPixelTextZoom = staticCompositionLocalOf { 1f }
 internal val LocalNativeContainerTextContext = staticCompositionLocalOf<ContainerTextContext?> { null }
 internal val LocalNativePreformattedText = staticCompositionLocalOf { false }
+private val LocalReferenceBodyTypography = staticCompositionLocalOf { false }
 
 @Composable
 internal fun inheritedContainerFormat(context: ContainerTextContext? = LocalNativeContainerTextContext.current): NativeContainerTextFormat? = context?.let {
@@ -327,7 +328,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val bodyText = entry.bodyTypography?.let { typography -> nativeBodyTextContext(
             typography.ownerFont, typography.lineHeight, LocalNativeContainerTextContext.current,
             MaterialTheme.typography.bodyLarge.fontSize, compiledTableOwnerTextStyle(MaterialTheme.typography.bodyLarge),
-            LocalDensity.current) }
+            LocalDensity.current, direction = typography.direction) }
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
         val typedImages = entry.inlineImages
@@ -511,10 +512,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 val label = referenceLabel(ref)
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
-                    val blocks = ref.blocks
-                    if (blocks == null) StyledText(ref.spans, Modifier.weight(1f), onLink = readerLink)
-                    else FloatBlockSequence(blocks, readerLink, "reference-${ref.number}",
-                        modifier = Modifier.weight(1f), gapDp = 6f, trailingGap = true)
+                    ReferenceBody(ref, Modifier.weight(1f), readerLink)
 
                 }
             }
@@ -537,6 +535,33 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     }
 }
 
+
+/** Only the existing weighted reference body enters this scope; label/backlink UI stays outside. */
+@Composable
+internal fun ReferenceBody(reference: Reference, modifier: Modifier, onLink: (EntryLink) -> Unit) {
+    WithoutBodyTypography {
+        val content: @Composable () -> Unit = {
+            val blocks = reference.blocks
+            if (blocks == null && reference.bodyTypography != null && !reference.spans.hasCompiledInlineContent())
+                Spacer(modifier)
+            else if (blocks == null) StyledText(reference.spans, modifier, onLink = onLink)
+            else FloatBlockSequence(blocks, onLink, "reference-${reference.number}",
+                modifier = modifier, gapDp = 6f, trailingGap = true)
+        }
+        val typography = reference.bodyTypography
+        val emptyBody = reference.blocks?.isEmpty() ?: !reference.spans.hasCompiledInlineContent()
+        if (typography == null || emptyBody) content() else {
+            val context = nativeBodyTextContext(typography.ownerFont, typography.lineHeight,
+                LocalNativeContainerTextContext.current, MaterialTheme.typography.bodyLarge.fontSize,
+                compiledTableOwnerTextStyle(MaterialTheme.typography.bodyLarge), LocalDensity.current,
+                direction = typography.direction)
+            context.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
+            CompositionLocalProvider(LocalReferenceBodyTypography provides true,
+                LocalNativeContainerTextContext provides
+                    (context.getOrNull() ?: LocalNativeContainerTextContext.current), content = content)
+        }
+    }
+}
 
 @Composable
 private fun FoldHeading(title: String, folded: Boolean, onClick: () -> Unit) {
@@ -626,6 +651,18 @@ private fun ParagraphBoxLayout(box: ParagraphBox, outside: Boolean, hasContent: 
 
 @Composable
 private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String?, inCell: Boolean, gridPath: String) {
+    // Preserve the old bare-paragraph branch and spacing, without a line/strut grant
+    // from the new reference metadata. Real empty metrics and BR remain source lines.
+    if (LocalReferenceBodyTypography.current && LocalNativeContainerTextContext.current?.bodyOrigin != null &&
+        block.kind == "paragraph" && block.container == null && block.figure == null && block.flow == null &&
+        block.table == null && !block.spans.hasCompiledInlineContent()) {
+        WithoutBodyTypography {
+            CompositionLocalProvider(LocalReferenceBodyTypography provides false) {
+                BlockContent(block, onLink, path, inCell, gridPath)
+            }
+        }
+        return
+    }
     when {
         block.container != null -> NativeFloatBlockContext(listOf(block), onLink, path ?: gridPath,
             Modifier, inCell, gridPath, 0f, false)
@@ -781,6 +818,14 @@ internal val LocalTableDocumentViewportCssWidth = staticCompositionLocalOf<Doubl
 // Recursive owner guards use reference identity, including equal reconstructed Tables.
 private val LocalCompiledTableDirectionOwner = compositionLocalOf(referentialEqualityPolicy<Table?>()) { null }
 internal val LocalCompiledTableTextDirection = staticCompositionLocalOf<TableContainingDirection?> { null }
+
+/** A typed table owns its paragraph direction; BODY is only the inherited fallback. */
+internal fun compiledBodyParagraphDirection(table: TableContainingDirection?,
+    body: BidiResolvedDirection?): TextDirection? = table?.paragraphDirection() ?: when (body) {
+    BidiResolvedDirection.Ltr -> TextDirection.Ltr
+    BidiResolvedDirection.Rtl -> TextDirection.Rtl
+    null -> null
+}
 internal val LocalCompiledTableSourceLanguage = staticCompositionLocalOf<String?> { null }
 
 private fun TableContainingDirection.paragraphDirection(): TextDirection =
@@ -1695,7 +1740,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
             preserveWhitespace = true)
         return
     }
-    val compiledDirection = LocalCompiledTableTextDirection.current?.paragraphDirection() ?: TextDirection.Content
+    val compiledDirection = compiledBodyParagraphDirection(LocalCompiledTableTextDirection.current,
+        LocalNativeContainerTextContext.current?.bodyDirection) ?: TextDirection.Content
     val cellTextAlign = LocalCellTextAlign.current
     val lineHeightPixels = LocalTableLineHeightPixels.current
     val density = LocalDensity.current
@@ -1734,6 +1780,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val nativeLinkPaint = LocalOrdinaryLinkPaintNative.current
     val sourceInlineStyle = spans.any { it.inlineStyle != null }
     val sourceRuby = spans.hasNativeInlineGroups()
+    val sourceImageOccurrence = spans.any { it.image?.occurrenceLayout != null }
+    val terminalImageFallback = sourceImageOccurrence && LocalInlineImageOccurrenceFallback.current
     val sourceInlineFamily = spans.hasAuthoredFontFamily()
     val nativeInlineStyle = LocalAuthoredInlineNative.current
     if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null }) != null) {
@@ -1746,8 +1794,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         }
         return
     }
-    if (nativeRuby && (sourceRuby || (containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
-        (!sourceLinkPaint || nativeLinkPaint) && (!(sourceInlineStyle || sourceFontStack || sourceInlineFamily) || nativeInlineStyle))) {
+    if (!terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
+        (!sourceLinkPaint || nativeLinkPaint) && (!(sourceInlineStyle || sourceFontStack || sourceInlineFamily) || nativeInlineStyle)))) {
         val native = prepareNativeFloatText(spans, annotated, egyptianRuns,
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign),
             linkColor, availableMedia, LocalReaderSettings.current, LocalEntryEdition.current, onLink,
@@ -1796,6 +1844,7 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val currentLink = rememberUpdatedState(onLink)
     val layoutDirection = LocalLayoutDirection.current
     val compiledTableDirection = LocalCompiledTableTextDirection.current
+    val bodyDirection = LocalNativeContainerTextContext.current?.bodyDirection
     val compiledTableLanguage = LocalCompiledTableSourceLanguage.current
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedForeground = LocalFigureCaptionForeground.current
@@ -1808,8 +1857,8 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null || computedContainerTraits
     val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
         else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted) {
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
@@ -1886,7 +1935,9 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
                     }
                 }
             }
-            compiledTableDirection?.let { addStyle(ParagraphStyle(textDirection = it.paragraphDirection()), 0, length) }
+            compiledBodyParagraphDirection(compiledTableDirection, bodyDirection)?.let {
+                addStyle(ParagraphStyle(textDirection = it), 0, length)
+            }
             poemParagraphs(toAnnotatedString().text, appendedSpans).forEach { paragraph ->
                 addStyle(ParagraphStyle(
                     textIndent = TextIndent(paragraph.indent.em, paragraph.indent.em),
@@ -2081,11 +2132,18 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             val prefix = blockPrefix(block)
             listOf(NativeFloatContextSpec.Flow(index, box?.after ?: gap, leaf.path,
                 box, !paragraphHasContent(block, preserveCompiledText = preserveCompiledText) && prefix.isEmpty()) { carried, published ->
-                AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
-                    inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
-                    carriedExclusions = carried, onFlowGeometry = published,
-                    prefix = prefix, indentPixels = blockIndentDp(block) * density.density,
-                    nativeLineHeight = format?.lineHeight, ownerFont = format?.ownerFont)
+                val content: @Composable () -> Unit = {
+                    AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
+                        inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
+                        carriedExclusions = carried, onFlowGeometry = published,
+                        prefix = prefix, indentPixels = blockIndentDp(block) * density.density,
+                        nativeLineHeight = format?.lineHeight, ownerFont = format?.ownerFont)
+                }
+                // Flow is composed after the preparation provider has returned. Retain
+                // this source leaf's direction and its independent exclusion provenance.
+                val context = leaf.context
+                if (context?.bodyDirection == null) content() else
+                    CompositionLocalProvider(LocalNativeContainerTextContext provides context, content = content)
             })
         } else if (block.kind in nativeTextKinds && block.table == null && block.feature == null) {
             val displayed = if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)

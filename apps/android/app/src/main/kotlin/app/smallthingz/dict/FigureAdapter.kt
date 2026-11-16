@@ -64,7 +64,9 @@ private fun prepareAnonymousInline(event: AnonymousFlowEvent.Inline, style: Text
     return prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), scoped,
         MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink,
         imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated,
-        nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions, ownerFont = ownerFont)
+        nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions, ownerFont = ownerFont,
+        ownerDirection = event.context.direction.takeIf { event.containingScopeId != null &&
+            LocalNativeContainerTextContext.current?.bodyDirection != null })
 }
 
 /** Existing media owner, typed actions and native text preparation feed the one anonymous owner. */
@@ -81,9 +83,17 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     ownerFont: NativeDeclaringFont? = null,
 ) {
     val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack
+    val legacyDirection = if (LocalLayoutDirection.current == LayoutDirection.Ltr)
+        BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl
+    val bodyDirection = LocalNativeContainerTextContext.current?.bodyDirection
+    val tableDirection = LocalCompiledTableTextDirection.current
     val context = inherited ?: AnonymousFlowContext(
-        if (LocalLayoutDirection.current == LayoutDirection.Ltr) BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl,
-        null, inheritedAlign)
+        if (bodyDirection == null) legacyDirection else when (tableDirection) {
+            TableContainingDirection.Ltr -> BidiResolvedDirection.Ltr
+            TableContainingDirection.Rtl -> BidiResolvedDirection.Rtl
+            null -> bodyDirection
+        }, null, inheritedAlign,
+        bodyDirectionFallback = legacyDirection.takeIf { bodyDirection != null && tableDirection == null })
     val viewportCss = LocalWindowInfo.current.containerSize.width.toDouble() / LocalDensity.current.density
     val content = remember(block, context, viewportCss) {
         anonymousFlowContent(block, context).let { original -> original.copy(events = original.events.map { event ->
@@ -126,7 +136,10 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     }
     val figures = linkedMapOf<Int, PreparedFigure>()
     content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>().forEach { event ->
-        WithoutBodyTypography { figures[event.id] = prepareFigure(event, reader) }
+        WithoutBodyTypography {
+            val restored = event.context.withoutBodyDirection()
+            figures[event.id] = prepareFigure(if (restored === event.context) event else event.copy(context = restored), reader)
+        }
     }
     val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader,
         nativeLineHeight = nativeLineHeight, ownerFont = ownerFont)

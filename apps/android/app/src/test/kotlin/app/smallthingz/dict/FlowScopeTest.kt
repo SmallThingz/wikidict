@@ -257,4 +257,50 @@ class FlowScopeTest {
         assertEquals(1, selection.text.windowed(caption.length).count { it == caption })
     }
 
+    @Test fun bodyDirectionRestoresOnlyInheritedFigureContextAndKeepsExplicitScopeAuthority() {
+        val before = listOf(Span("link", "Latin", "before", trail = " "))
+        val sameDirection = listOf(Span("link", "אב", "same"))
+        val oppositeDirection = listOf(Span("link", "Latin", "opposite"))
+        val rootFigure = figure()
+        val scopedFigure = figure()
+        val parts = listOf(FlowPart.Inline(before), FlowPart.ImageFigure(rootFigure),
+            scope(listOf(FlowPart.Inline(sameDirection), FlowPart.ImageFigure(scopedFigure)), "he",
+                BidiResolvedDirection.Rtl),
+            scope(listOf(FlowPart.Inline(oppositeDirection)), "", BidiResolvedDirection.Ltr), text(" end"))
+        val owner = block(parts)
+        val legacy = AnonymousFlowContext(BidiResolvedDirection.Ltr, "en", CellTextAlign.Right)
+        val body = legacy.copy(direction = BidiResolvedDirection.Rtl, bodyDirectionFallback = legacy.direction)
+        val content = anonymousFlowContent(owner, body)
+        val original = anonymousFlowContent(owner, legacy)
+        assertSame(owner, content.owner)
+        assertEquals(original.events.map { it::class }, content.events.map { it::class })
+        val inline = content.events.filterIsInstance<AnonymousFlowEvent.Inline>()
+        assertSame(before, inline[0].spans); assertSame(sameDirection, inline[1].spans)
+        assertSame(oppositeDirection, inline[2].spans)
+        assertEquals(listOf(BidiResolvedDirection.Rtl, BidiResolvedDirection.Rtl,
+            BidiResolvedDirection.Ltr, BidiResolvedDirection.Rtl), inline.map { it.context.direction })
+        assertEquals(listOf(BidiResolvedDirection.Ltr, null, null, BidiResolvedDirection.Ltr),
+            inline.map { it.context.bodyDirectionFallback })
+        assertEquals(listOf("before", "same", "opposite"), inline.flatMap { it.spans }
+            .filter { it.kind == "link" }.map { it.target })
+        val figures = content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>()
+        assertSame(rootFigure, figures[0].figure); assertSame(scopedFigure, figures[1].figure)
+        assertEquals(legacy, figures[0].context.withoutBodyDirection())
+        // Same-valued explicit RTL is still source authority, not inherited BODY RTL.
+        assertSame(figures[1].context, figures[1].context.withoutBodyDirection())
+        assertEquals(BidiResolvedDirection.Rtl, figures[1].captionContext.withoutBodyDirection().direction)
+        assertEquals("he", figures[1].captionContext.withoutBodyDirection().language)
+        assertEquals(CellTextAlign.Right, figures[1].captionContext.textAlign)
+        assertSame(legacy, legacy.withoutBodyDirection())
+        val offsets = AnonymousFlowOffsets.build(content, inlineText = { event -> textOf(event.spans) })
+        val originalOffsets = AnonymousFlowOffsets.build(original, inlineText = { event -> textOf(event.spans) })
+        assertEquals(originalOffsets.logicalText, offsets.logicalText)
+        assertEquals(originalOffsets.nativeText, offsets.nativeText)
+        assertEquals(originalOffsets.figures.map { it.logicalOffset }, offsets.figures.map { it.logicalOffset })
+        for (offset in 0..offsets.logicalText.length)
+            assertEquals(offset, offsets.logicalOffset(offsets.nativeOffset(offset)))
+        assertEquals(BidiResolvedDirection.Ltr, legacy.direction)
+        assertEquals(BidiResolvedDirection.Rtl, body.direction)
+    }
+
 }

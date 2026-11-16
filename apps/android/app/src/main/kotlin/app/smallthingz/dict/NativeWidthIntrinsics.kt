@@ -56,6 +56,12 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
     breakWordMinimum: Boolean = false, textDirection: TextDirectionHeuristic? = null): NativeWidthRange {
     require(inset.isFinite() && inset >= 0f)
     val rubyDirection = textDirection ?: android.text.TextDirectionHeuristics.FIRSTSTRONG_LTR
+    if (nativeHasPositionedInlineImages(source)) {
+        if (textDirection == null && source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java)
+                .any { it.wrap == TextWrap.NoWrap })
+            throw UnsupportedFloatLayout("No-wrap intrinsic direction is unavailable")
+        return nativeFloatRowWidthRange(source, paint, rubyDirection, inset, breakWordMinimum)
+    }
     nativeRubyLayout(source, paint, rubyDirection)?.let { unbroken ->
         val maximum = nativeTextWidthRange(unbroken.native, paint, inset, breakWordMinimum, textDirection).maximum
         val fragmented = checkNotNull(nativeRubyLayout(source, paint, rubyDirection, NativeRubyBands(0f, allowEmergency = false)))

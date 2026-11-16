@@ -387,9 +387,10 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 val resolved = container.style.atViewport(rootViewport)
                 val absolute = resolved.box.positioning as? ContainerPositioning.Absolute
                 val scope = resolved.box.positionedScope
-                val inheritedContext = if (context.bodyOrigin != null &&
+                val inheritedContext = if ((context.bodyOrigin != null || context.bodyDirection != null) &&
                     (resolved.box.positioning != null || scope != null))
-                    nativeWithoutBodyTextContext(context, normalBodySize, density) ?: context.bodyOrigin.baseline else context
+                    nativeWithoutBodyTextContext(context, normalBodySize, density)
+                        ?: checkNotNull(context.bodyOrigin).baseline else context
                 val requestedContext = resolved.box.textContext(inheritedContext)
                 val absoluteFormat = absolute?.let {
                     nativeAbsoluteContainerTextFormat(it, inheritedStyle, density, inheritedContext.fontFamily,
@@ -474,8 +475,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     // retain every LI/detail's own block edges and marker geometry.
                     val consumed = row && group is ContainerFlowItem.Block
                     val rendered = if (consumed) original.copy(style = null) else original
-                    val excludesBody = original.kind == "heading" && context.bodyOrigin?.let {
-                        it.fontInherited || it.lineHeightInherited } == true
+                    val excludesBody = original.kind == "heading" && (context.bodyDirection != null ||
+                        context.bodyOrigin?.let { it.fontInherited || it.lineHeightInherited } == true)
                     val textContext = if (excludesBody) nativeWithoutBodyTextContext(context, normalBodySize, density) else context
                     val format = if (excludesBody) textContext?.let {
                         nativeContainerTextFormat(it, normalBodySize, inheritedStyle, density)

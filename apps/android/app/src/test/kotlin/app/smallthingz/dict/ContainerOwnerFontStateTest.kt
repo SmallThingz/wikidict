@@ -235,4 +235,54 @@ class ContainerOwnerFontStateTest {
         assertSame(source, selected.containerText!!.snapshot)
     }
 
+    @Test fun bodyDirectionSurvivesNearerFontAndHeightButNotAnExcludedSink() {
+        val baseline = nativeRootTextContext(body.copy(lineHeight = 24.sp), 20.sp, density)
+        val source = font(1.8f)
+        val selected = resolved(ContainerStyle(ownerFont = source,
+            lineHeight = ContainerLineHeight.Multiplier(1.5f)).textContext(baseline)
+            .copy(bodyOrigin = NativeBodyTextOrigin(null, baseline), bodyDirection = BidiResolvedDirection.Rtl), 108f)
+        assertNull(nativeWithoutBodyTextContext(selected, 20.sp, density))
+        val own = font(.5f).copy(bold = false, italic = false, superscript = false)
+        val near = resolved(ContainerStyle(ownerFont = own, lineHeight = ContainerLineHeight.Normal)
+            .textContext(selected), 30f)
+        assertFalse(near.bodyOrigin!!.fontInherited)
+        assertFalse(near.bodyOrigin.lineHeightInherited)
+        assertEquals(BidiResolvedDirection.Rtl, near.bodyDirection)
+        val excluded = checkNotNull(nativeWithoutBodyTextContext(near, 20.sp, density))
+        assertNull(excluded.bodyDirection)
+        assertSame(near.containerText, excluded.containerText)
+        assertSame(own, excluded.containerText!!.snapshot)
+        assertEquals(NativeLineHeightPolicy.Normal, nativeContainerTextFormat(excluded, 20.sp, body, density).lineHeight)
+
+        val alias = ContainerStyle(ownerFontScale = .75f,
+            fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif)).textContext(selected)
+        assertEquals(BidiResolvedDirection.Rtl, alias.bodyDirection)
+        val aliasExcluded = checkNotNull(nativeWithoutBodyTextContext(alias, 20.sp, density))
+        assertNull(aliasExcluded.bodyDirection); assertNull(aliasExcluded.containerText)
+        assertEquals(.75f, aliasExcluded.ownerFontScale, 0f)
+        assertEquals(alias.fontFamily, aliasExcluded.fontFamily)
+        val cellFont = own.copy(fontNormalized = false)
+        val cell = Cell(emptyList(), false, 1, 1, style = CellStyle(lineHeight = CellLineHeight(
+            CellLineHeightValue.Multiplier(1.25f), CellTextStrut(.5f, FontScaleBasis.NormalBody, cellFont))))
+        val cellContext = checkNotNull(nativeCellTextContext(cell, selected, body, 20.sp, density, 1f, null))
+        assertEquals(BidiResolvedDirection.Rtl, cellContext.bodyDirection)
+        val caption = checkNotNull(nativeWithoutBodyTextContext(cellContext, 20.sp, density))
+        assertNull(caption.bodyDirection); assertSame(cellContext.cellText, caption.cellText)
+        assertSame(cellFont, caption.cellText!!.ownerFont!!.snapshot)
+        assertEquals(NativeLineHeightPolicy.Multiplier(1.25f), caption.resolvedLineHeight)
+        assertSame(source, selected.containerText!!.snapshot)
+        assertEquals(BidiResolvedDirection.Rtl, selected.bodyDirection)
+
+        assertSame(baseline, nativeWithoutBodyTextContext(baseline, 20.sp, density))
+        assertNull(compiledBodyParagraphDirection(null, null))
+        assertEquals(androidx.compose.ui.text.style.TextDirection.Rtl,
+            compiledBodyParagraphDirection(null, BidiResolvedDirection.Rtl))
+        assertEquals(androidx.compose.ui.text.style.TextDirection.Ltr,
+            compiledBodyParagraphDirection(TableContainingDirection.Ltr, BidiResolvedDirection.Rtl))
+        assertEquals(androidx.compose.ui.text.style.TextDirection.Rtl,
+            compiledBodyParagraphDirection(TableContainingDirection.Rtl, BidiResolvedDirection.Ltr))
+        val directionOnly = baseline.copy(bodyDirection = BidiResolvedDirection.Rtl)
+        assertEquals(baseline, nativeWithoutBodyTextContext(directionOnly, 20.sp, density))
+    }
+
 }

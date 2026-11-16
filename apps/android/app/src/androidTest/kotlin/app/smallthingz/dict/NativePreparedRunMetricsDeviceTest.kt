@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Constraints
@@ -21,6 +23,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.*
 import org.junit.Rule
@@ -828,6 +831,356 @@ class NativePreparedRunMetricsDeviceTest {
                 }
             }
             assertEquals(List(figures.size * 3) { "body-caption" }, actions.map { it.target })
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun nativeBodyDirectionUsesStrongBasePoliciesBelowNearerOwners() {
+        val font = InlineFontSnapshot(fontScale = 1.5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, fontFamily = ContainerFontFamily.SansSerif)
+        val root = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+        data class Sample(val text: String, val expectedRtl: Boolean, val prepared: PreparedNativeFloatText)
+        var samples = emptyList<Sample>()
+        var retained: ContainerTextContext? = null
+        var excluded: ContainerTextContext? = null
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = root)) {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                        LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                        val density = LocalDensity.current
+                        val rtl = nativeBodyTextContext(font, ContainerLineHeight.Multiplier(1.5f),
+                            null, 20.sp, root, density, direction = BidiResolvedDirection.Rtl).getOrThrow()
+                        val ltr = rtl.copy(bodyDirection = BidiResolvedDirection.Ltr)
+                        val replaced = nativeContainerOwnerTextContext(ContainerStyle(
+                            ownerFont = font.copy(fontScale = .75f), lineHeight = ContainerLineHeight.Normal)
+                            .textContext(rtl), root, density).getOrThrow()
+                        val restored = checkNotNull(nativeWithoutBodyTextContext(replaced, 20.sp, density))
+                        data class Input(val text: String, val context: ContainerTextContext?, val expectedRtl: Boolean,
+                            val table: TableContainingDirection? = null, val owner: BidiResolvedDirection? = null,
+                            val paragraph: androidx.compose.ui.text.style.TextDirection? = null)
+                        val inputs = listOf(
+                            Input("Latin", rtl, true), Input("אבג", ltr, false),
+                            Input("Latin", null, false), Input("אבג", null, true),
+                            Input("Latin", rtl, false, table = TableContainingDirection.Ltr),
+                            Input("אבג", ltr, true, table = TableContainingDirection.Rtl),
+                            Input("Latin", rtl, false, owner = BidiResolvedDirection.Ltr),
+                            Input("אבג", ltr, true, owner = BidiResolvedDirection.Rtl),
+                            Input("Latin", rtl, false, paragraph = androidx.compose.ui.text.style.TextDirection.Ltr),
+                            Input("Latin", replaced, true), Input("Latin", restored, false))
+                        val values = mutableListOf<Sample>()
+                        inputs.forEach { input ->
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides input.context,
+                                LocalCompiledTableTextDirection provides input.table) {
+                                val source = listOf(Span("text", input.text, fontScale = .5f,
+                                    fontScaleBasis = FontScaleBasis.NormalBody))
+                                val format = input.context?.let { nativeContainerTextFormat(it, 20.sp, root, density) }
+                                val style = format?.style ?: root
+                                val annotated = styledTextAnnotation(source, null, style) { }
+                                val projected = if (input.paragraph == null) annotated else
+                                    AnnotatedString.Builder(annotated).apply {
+                                        addStyle(ParagraphStyle(textDirection = input.paragraph), 0, length)
+                                    }.toAnnotatedString()
+                                values += Sample(input.text, input.expectedRtl,
+                                    prepareNativeFloatText(source, projected, emptyList(), style,
+                                        MaterialTheme.colorScheme.primary, emptyList(),
+                                        AppSettings(allowImages = false, allowAudio = false), "", {},
+                                        nativeLineHeight = format?.lineHeight, sourceFamily = format?.sourceFamily,
+                                        ownerFont = format?.ownerFont, ownerDirection = input.owner))
+                            }
+                        }
+                        SideEffect { samples = values.toList(); retained = replaced; excluded = restored }
+                    }
+                }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals(11, samples.size)
+                assertEquals(BidiResolvedDirection.Rtl, checkNotNull(retained).bodyDirection)
+                assertNull(checkNotNull(excluded).bodyDirection)
+                assertSame(checkNotNull(retained).containerText!!.resolved, checkNotNull(excluded).containerText!!.resolved)
+                assertEquals(NativeLineHeightPolicy.Normal,
+                    nativeContainerTextFormat(checkNotNull(excluded), 20.sp, root, Density(1f, 1f)).lineHeight)
+                samples.forEach { sample ->
+                    val native = checkNotNull(sample.prepared.native)
+                    assertEquals(sample.text, sample.prepared.text.toString())
+                    assertEquals(sample.expectedRtl, native.direction.isRtl(sample.text, 0, sample.text.length))
+                    val source = native.source(240)
+                    val layout = android.text.StaticLayout.Builder.obtain(source, 0, source.length,
+                        android.text.TextPaint(native.paint), 240).setTextDirection(native.direction)
+                        .setIncludePad(false).build()
+                    assertEquals(if (sample.expectedRtl) -1 else 1, layout.getParagraphDirection(0))
+                    val geometry = checkNotNull(sample.prepared.geometry).invoke(240, emptyList(), false)
+                    assertEquals(sample.text, geometry.text.toString())
+                    assertEquals(sample.text.length, geometry.characterRects(0, sample.text.length).count { it != null })
+                    assertTrue(geometry.nodes.none { it.onClick != null })
+                }
+            }
+            // The Flow closure is composed after its preparation provider has returned.
+            val flowSource = Span("link", "Latin", target = "deferred-body-flow", targetFragment = "part",
+                fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+                fontFamily = ContainerFontFamily.SansSerif)
+            val flowBlock = Block("paragraph", 0, emptyList(),
+                flow = listOf(FlowPart.Inline(listOf(flowSource))))
+            val flowRtl = mutableStateOf(false)
+            val flowActions = mutableListOf<EntryLink>()
+            val flowFailures = mutableListOf<String>()
+            var flowActivity: android.app.Activity? = null
+            var ambientBody: ContainerTextContext? = null
+            val flowRects = mutableMapOf<Boolean, List<android.graphics.RectF?>>()
+            compose.activityRule.scenario.onActivity { activity ->
+                flowActivity = activity
+                activity.setContent {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = root)) {
+                        CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                            LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+                            LocalNativeContainerTextContext provides null,
+                            LocalNativeFloatContextFailureObserver provides { flowFailures += it }) {
+                            val body = nativeBodyTextContext(font, ContainerLineHeight.Multiplier(1.5f),
+                                null, 20.sp, root, LocalDensity.current, direction = BidiResolvedDirection.Rtl).getOrThrow()
+                            val ambient = LocalNativeContainerTextContext.current
+                            SideEffect { ambientBody = ambient }
+                            Layout(content = {
+                                NativeFloatBlockContext(listOf(flowBlock), { flowActions += it }, "body-flow",
+                                    Modifier, inCell = false, gridPath = "body-flow", gapDp = 0f,
+                                    trailingGap = false, bodyTextContext = body.takeIf { flowRtl.value })
+                            }) { children, constraints ->
+                                val child = children.single().measure(Constraints.fixedWidth(240))
+                                layout(constraints.constrainWidth(240), constraints.constrainHeight(child.height)) {
+                                    child.place(0, 0)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (owned in listOf(false, true, false, true)) {
+                compose.runOnIdle { flowRtl.value = owned }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertNull(ambientBody)
+                    assertTrue(flowFailures.toString(), flowFailures.isEmpty())
+                    val views = mutableListOf<NativeFloatTextView>()
+                    fun visit(view: android.view.View) {
+                        if (view is NativeFloatTextView && view.isShown &&
+                            view.currentMeasuredGeometry?.nodes?.any { it.label?.toString() == "Latin" } == true) views += view
+                        if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+                    }
+                    visit(checkNotNull(flowActivity).window.decorView)
+                    val view = views.single()
+                    val geometry = checkNotNull(view.currentMeasuredGeometry)
+                    assertEquals("Latin", geometry.text.toString())
+                    val rects = geometry.characterRects(0, 5)
+                    assertEquals(5, rects.count { it != null })
+                    val first = checkNotNull(rects.first())
+                    assertTrue("Deferred Flow must use the explicit body paragraph direction", if (owned)
+                        first.left > geometry.width / 2f else first.left < geometry.width / 2f)
+                    val previous = flowRects[owned]
+                    if (previous == null) flowRects[owned] = rects.map { it?.let { rect -> android.graphics.RectF(rect) } }
+                    else assertEquals(previous, rects)
+                    val node = geometry.nodes.single { it.label?.toString() == "Latin" }
+                    val provider = checkNotNull(view.accessibilityNodeProvider)
+                    assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals("deferred-body-flow", flowActions.last().target)
+                    assertEquals("part", flowActions.last().targetFragment)
+                    assertSame(flowSource, (checkNotNull(flowBlock.flow).single() as FlowPart.Inline).spans.single())
+                }
+            }
+            assertEquals(4, flowActions.size)
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun actualReferenceBodyKeepsItsSlotLabelActionsAndEmptyBodyAcrossPolicyChanges() {
+        val source = Span("link", "Alpha", target = "reference-body", targetFragment = "part",
+            foreground = "#0000ff", fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val font = InlineFontSnapshot(fontScale = 1.5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, fontFamily = ContainerFontFamily.SansSerif)
+        val typography = BodyTypography(font, ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Px, 32f)),
+            direction = BidiResolvedDirection.Rtl)
+        val plain = Reference(17, 17, "latin", listOf(source))
+        val owned = plain.copy(bodyTypography = typography)
+        val block = Block("paragraph", 0, listOf(source))
+        val ordered = Reference(18, null, "", emptyList(), kind = ReferenceKind.Fragment,
+            blocks = listOf(block), bodyTypography = typography)
+        val unusedTypography = typography.copy(ownerFont = font.copy(fontFamily = ContainerFontFamily.Stack(
+            listOf("Controlled Reference Family"), GenericFontFamily.SansSerif)))
+        val bare = plain.copy(spans = emptyList(), blocks = listOf(Block("paragraph", 0, emptyList())))
+        val emptyMetric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        val broken = plain.copy(spans = emptyList(), blocks = listOf(Block("paragraph", 0,
+            listOf(emptyMetric, Span("line_break", "")))))
+        val cases = listOf(plain, owned, ordered,
+            ordered.copy(blocks = emptyList(), bodyTypography = unusedTypography),
+            owned.copy(spans = emptyList(), bodyTypography = unusedTypography), owned, bare, bare.copy(bodyTypography = typography),
+            broken, broken.copy(bodyTypography = typography), owned)
+        val selected = mutableStateOf(0)
+        val labelGroup = mutableStateOf("latin")
+        val root = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp)
+        val actions = mutableListOf<EntryLink>()
+        var activity: android.app.Activity? = null
+        var labelBounds: androidx.compose.ui.geometry.Rect? = null
+        var bodyBounds: androidx.compose.ui.geometry.Rect? = null
+        var labelLayout: androidx.compose.ui.text.TextLayoutResult? = null
+        val originalLabels = mutableMapOf<String, Triple<androidx.compose.ui.geometry.Rect,
+            androidx.compose.ui.text.style.ResolvedTextDirection, TextStyle>>()
+        val ownedGeometry = mutableMapOf<String, Pair<Int, List<android.graphics.RectF?>>>()
+        var bareHeight: Float? = null
+        var breakHeight: Float? = null
+        var namedProbes = 0
+        var primary: Throwable? = null
+        fun views(): List<NativeFloatTextView> {
+            val result = mutableListOf<NativeFloatTextView>()
+            fun visit(view: android.view.View) {
+                if (view is NativeFloatTextView && view.isShown) result += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activity).window.decorView)
+            return result
+        }
+        try {
+            compose.activityRule.scenario.onActivity { host ->
+                activity = host
+                host.setContent {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = root)) {
+                        CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                            LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                            val probe = remember { NativeNamedFontProbe { _, _, _, _ ->
+                                namedProbes++; android.graphics.Typeface.SANS_SERIF
+                            } }
+                            val inherited = nativeBodyTextContext(font.copy(fontScale = 2f),
+                                ContainerLineHeight.Multiplier(2f), null, 20.sp, root, LocalDensity.current,
+                                direction = BidiResolvedDirection.Rtl).getOrThrow()
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides inherited,
+                                LocalNativeNamedFontProbe provides probe) {
+                                Layout(content = {
+                                    androidx.compose.foundation.layout.Row(
+                                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                                        val original = cases[selected.value]
+                                        val reference = if (original.kind == ReferenceKind.Fragment) original
+                                            else original.copy(group = labelGroup.value)
+                                        val label = referenceLabel(reference)
+                                        if (label == null) SideEffect { labelBounds = null; labelLayout = null }
+                                        else androidx.compose.material3.Text(label, style = MaterialTheme.typography.labelMedium,
+                                            modifier = Modifier.onGloballyPositioned { labelBounds = it.boundsInRoot() },
+                                            onTextLayout = { labelLayout = it })
+                                        ReferenceBody(reference, Modifier.weight(1f)
+                                            .onGloballyPositioned { bodyBounds = it.boundsInRoot() }) { actions += it }
+                                    }
+                                }) { children, constraints ->
+                                    val child = children.single().measure(Constraints.fixedWidth(300))
+                                    layout(constraints.constrainWidth(300), constraints.constrainHeight(child.height)) {
+                                        child.place(0, 0)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (group in listOf("latin", "עברית", "Latin עברית")) {
+              val phases = if (group == "latin") cases.indices.toList() else listOf(0, 1, 5)
+              for (index in phases) {
+                compose.runOnIdle { selected.value = index; labelGroup.value = group }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val body = checkNotNull(bodyBounds)
+                    if (cases[index].kind == ReferenceKind.Fragment) {
+                        assertNull(referenceLabel(cases[index])); assertNull(labelBounds); assertNull(labelLayout)
+                        assertEquals(0f, body.left, .001f)
+                    } else {
+                        val label = checkNotNull(labelBounds)
+                        val layout = checkNotNull(labelLayout)
+                        val expected = checkNotNull(referenceLabel(cases[index].copy(group = group)))
+                        assertEquals(expected, layout.layoutInput.text.text)
+                        val labelDirection = layout.getParagraphDirection(0)
+                        assertEquals(if (group == "עברית") androidx.compose.ui.text.style.ResolvedTextDirection.Rtl
+                            else androidx.compose.ui.text.style.ResolvedTextDirection.Ltr, labelDirection)
+                        val currentLabel = Triple(label, labelDirection, layout.layoutInput.style)
+                        val previous = originalLabels.putIfAbsent(expected, currentLabel)
+                        if (previous != null) assertEquals(previous, currentLabel)
+                        assertEquals(label.right + 8f, body.left, .001f)
+                    }
+                    assertEquals(300f, body.right, .001f)
+                    val owners = views().filter { view -> view.currentMeasuredGeometry?.nodes?.any {
+                        it.onClick != null && it.label?.toString() == "Alpha" } == true }
+                    if (index == 3 || index == 4) {
+                        assertEquals(0f, body.height, .001f)
+                        assertTrue(owners.isEmpty())
+                        assertEquals(0, namedProbes)
+                    } else if (index == 6 || index == 7) {
+                        assertTrue(owners.isEmpty())
+                        if (index == 6) bareHeight = body.height
+                        else assertEquals(checkNotNull(bareHeight), body.height, .001f)
+                    } else if (index == 8 || index == 9) {
+                        assertTrue(owners.isEmpty())
+                        val realLine = views().mapNotNull { it.currentMeasuredGeometry }
+                            .single { it.text.toString() == "\n" }
+                        assertTrue(realLine.height > 0)
+                        if (index == 8) breakHeight = body.height
+                        else assertTrue(body.height > checkNotNull(breakHeight))
+                    } else {
+                        val view = owners.single()
+                        val geometry = checkNotNull(view.currentMeasuredGeometry)
+                        val node = geometry.nodes.single { it.onClick != null && it.label?.toString() == "Alpha" }
+                        assertEquals("Alpha", geometry.text.subSequence(node.start, node.end).toString())
+                        val characters = geometry.characterRects(node.start, node.end).map { rect ->
+                            rect?.let { android.graphics.RectF(it) }
+                        }
+                        assertEquals(5, characters.count { it != null })
+                        val first = checkNotNull(characters.first())
+                        if (index == 0) assertTrue(first.left < geometry.width / 2f)
+                        else assertTrue(first.left > geometry.width / 2f)
+                        val observed = geometry.height to characters
+                        if (index == 1) ownedGeometry[group] = observed
+                        if (index == 5 || index == 10) assertEquals(ownedGeometry[group], observed)
+                        view.setSelection(node.start, node.end)
+                        assertEquals("Alpha", view.selectedTextForCopy())
+                        view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                            android.view.KeyEvent.KEYCODE_ESCAPE))
+                        val provider = checkNotNull(view.accessibilityNodeProvider)
+                        val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                        assertTrue(info.isClickable); assertTrue(info.isVisibleToUser)
+                        assertEquals("Alpha", info.text?.toString())
+                        assertTrue(provider.performAction(node.id,
+                            android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                        assertEquals("reference-body", actions.last().target)
+                        assertEquals("part", actions.last().targetFragment)
+                    }
+                    assertSame(source, plain.spans.single()); assertSame(block, ordered.blocks!!.single())
+                    assertSame(source, ordered.blocks!!.single().spans.single())
+                    assertEquals(ReferenceKind.Fragment, ordered.kind)
+                }
+              }
+            }
+            assertEquals(11, actions.size)
+            assertEquals(0, namedProbes)
         } catch (failure: Throwable) {
             primary = failure
             throw failure

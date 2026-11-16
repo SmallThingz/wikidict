@@ -199,12 +199,21 @@ internal fun nativeFloatImageFallbackLayout(image: InlineImage, state: InlineIma
 private data class NativeImage(
     val id: Int, val offset: Int, val span: Span, val state: InlineImageAssetState,
     val paint: TextPaint, val pixels: InlineImagePixels, val ink: NativeFloatBounds, val fallbackWidth: Float?,
+    val normalBodyPixels: Float, val imagePixelDensity: Float,
     val draw: (Canvas, RectF) -> Unit,
 )
 
 private data class NativeImageActions(val onClick: (() -> Unit)?, val onDetails: () -> Unit)
 
-private class NativeInlineImageSpan(private val image: NativeImage) : ReplacementSpan(), NativeAtomicInlineMetrics, NativeReplacementPaintBounds, NativeNoWrapInlineImage, NativeAlignedImageSelection {
+private class NativeInlineImageSpan(private val image: NativeImage) : ReplacementSpan(), NativeFloatInlineImage, NativeNoWrapInlineImage, NativeAlignedImageSelection {
+    override val nativeImageId: Int get() = image.id
+    override val nativeImageSourceOffset: Int get() = image.offset
+    override val nativeImageWidth: Float get() = image.pixels.width
+    override val nativeImageHeight: Float get() = image.pixels.height
+    override val nativeImageInkBounds: NativeFloatBounds get() = image.ink
+    override val nativeImageOccurrence: NativeImageOccurrencePlacement? get() =
+        nativeImageOccurrencePlacement(image.span.image?.occurrenceLayout, image.normalBodyPixels, image.imagePixelDensity)
+    override fun drawNativeImage(canvas: Canvas, outer: RectF) = image.draw(canvas, outer)
     override val nativeImageSelectionBounds: NativeFloatBounds? get() =
         if (image.span.image?.verticalAlign == null && image.span.linkPaint == null) null else nativeUsedMetrics.let {
             NativeFloatBounds(0f, it.top, image.pixels.width, it.bottom)
@@ -219,6 +228,8 @@ private class NativeInlineImageSpan(private val image: NativeImage) : Replacemen
         return NativeUsedLineMetrics(top, top + image.pixels.height)
     }
     override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
+        if (image.span.image?.occurrenceLayout != null)
+            throw UnsupportedFloatLayout("Positioned image requires native Float row measurement")
         val metrics = image.paint.fontMetricsInt
         val bounds = Rect(); image.paint.getTextBounds("x", 0, 1, bounds)
         val top = inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent, bounds.height().toFloat(), image.paint.baselineShift), image.pixels.height, image.span.image?.verticalAlign)
@@ -227,6 +238,8 @@ private class NativeInlineImageSpan(private val image: NativeImage) : Replacemen
         return ceil(image.pixels.width).toInt()
     }
     override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+        if (image.span.image?.occurrenceLayout != null)
+            throw UnsupportedFloatLayout("Positioned image requires native Float row paint")
         val metrics = image.paint.fontMetricsInt
         val bounds = Rect(); image.paint.getTextBounds("x", 0, 1, bounds)
         val inkTop = y + inlineImageInkTop(InlineImageFontMetrics(metrics.ascent, metrics.descent,
@@ -536,6 +549,7 @@ internal fun prepareNativeFloatText(
         return if (value.value < 0f) -magnitude else magnitude
     }
     val rubyTableTextDirection = LocalCompiledTableTextDirection.current
+    val bodyTextDirection = LocalNativeContainerTextContext.current?.bodyDirection
     val boxDarkTheme = LocalReaderDarkTheme.current
     val rubyFormats = linkedMapOf<String, NativeRubyGroupFormat>()
     ruby?.groups?.forEach { (path, group) ->
@@ -596,7 +610,7 @@ internal fun prepareNativeFloatText(
                     ?: when (ownerDirection) {
                         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
                         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection)
+                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
                     }
             }
             val padding = range.span?.inlinePaddingGroup?.let { model ->
@@ -693,7 +707,8 @@ internal fun prepareNativeFloatText(
             source.declaringPaint?.typeface, source.declaringPaint?.textSize, source.declaringPaint?.baselineShift,
             source.emptyPaint?.typeface, source.emptyPaint?.textSize, source.emptyPaint?.baselineShift)
     }
-    val usesRunMetrics = ruby != null || ownerFont != null || cellOwner != null || nativeLineHeight != null || inlineStyles.any { it.height != null || it.shift != null }
+    val usesRunMetrics = ruby != null || ownerFont != null || cellOwner != null || nativeLineHeight != null ||
+        visibleSpans.any { it.image?.occurrenceLayout != null } || inlineStyles.any { it.height != null || it.shift != null }
     val prefixPaint = if (noSourceLines) TextPaint(basePaint) else familyPaint(nativeStyleRanges(
         AnnotatedString(" "), prefixStyle ?: effective, linkColor,
         sourceFamily = inheritedFamily.takeIf { prefix.isNotEmpty() }).single())
@@ -767,7 +782,8 @@ internal fun prepareNativeFloatText(
                 (0.5f - borderWidth).coerceAtLeast(0f) else 0f
             val imageInk = NativeFloatBounds(-markerOverflow, -markerOverflow,
                 outerPixels.width + markerOverflow, outerPixels.height + markerOverflow)
-            val nativeImage = NativeImage(id, offset, span, state, paint, outerPixels, imageInk, dimensions?.width, draw)
+            val nativeImage = NativeImage(id, offset, span, state, paint, outerPixels, imageInk, dimensions?.width,
+                with(density) { normalBodySize.toPx() }, density.density, draw)
             images += nativeImage
             if (span.linkPaint != null) {
                 // Keep one action for this source occurrence across size/asset-state remeasure.
@@ -830,7 +846,7 @@ internal fun prepareNativeFloatText(
     val direction = when (ownerDirection) {
         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-        null -> nativeParagraphDirection(annotated, rtl, LocalCompiledTableTextDirection.current)
+        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
     }
     val nativeSource: ((Int) -> Spanned)? =
         if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
@@ -924,7 +940,7 @@ internal fun prepareNativeFloatText(
                     if (usesRunMetrics) native.setSpan(NativeLineMinimum(
                         NativePrimaryFontMetrics.from(basePaint), actionSize), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
-                paragraphGaps.forEach { (end, gapDp) -> if (end > 0) native.setSpan(object : LineHeightSpan {
+                paragraphGaps.forEach { (end, gapDp) -> if (end > 0) native.setSpan(object : LineHeightSpan, NativeFloatRowMetricEffect {
                     override fun chooseHeight(text: CharSequence, start: Int, finish: Int, spanstartv: Int, v: Int, fm: Paint.FontMetricsInt) {
                         if (finish >= end) { val gap = ceil(gapDp * density.density).toInt(); fm.descent += gap; fm.bottom += gap }
                     }
@@ -1157,7 +1173,7 @@ internal fun prepareNativeFloatText(
 
 
         } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { Triple(it.state, it.pixels, it.fallbackWidth) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts) { Any() }
     return PreparedNativeFloatText(annotated.text, layoutUnavailable ?: textState, revision, factory, {
         val detail = details
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {
@@ -1177,7 +1193,9 @@ internal fun prepareNativeFloatText(
     }, nativeSource?.takeIf { layoutUnavailable == null }?.let { NativePreparedText(layoutPaint, it, nativeNodes, direction,
         insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null) }, fallback = {
         // The normal float owner already holds this image state. Failure UI reuses it.
-        CompositionLocalProvider(LocalInlineImageOwner provides owner, LocalOrdinaryLinkPaintNative provides false,
+        CompositionLocalProvider(LocalInlineImageOwner provides owner,
+            LocalInlineImageOccurrenceFallback provides images.any { it.span.image?.occurrenceLayout != null },
+            LocalOrdinaryLinkPaintNative provides false,
             LocalAuthoredInlineNative provides false, LocalRubyNative provides (ruby == null && containerOwner == null)) {
             Column(Modifier.padding(start = with(density) { indentPixels.toDp() })) {
                 Row {
@@ -1193,11 +1211,11 @@ internal fun prepareNativeFloatText(
 
 /** Public native paragraph heuristic retains authored paragraph direction without inserting isolates. */
 private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean,
-    tableDirection: TableContainingDirection?): TextDirectionHeuristic {
-    val fallback = when (tableDirection) {
-        TableContainingDirection.Ltr -> TextDirectionHeuristics.LTR
-        TableContainingDirection.Rtl -> TextDirectionHeuristics.RTL
-        null -> if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
+    tableDirection: TableContainingDirection?, bodyDirection: BidiResolvedDirection? = null): TextDirectionHeuristic {
+    val fallback = when (compiledBodyParagraphDirection(tableDirection, bodyDirection)) {
+        TextDirection.Ltr -> TextDirectionHeuristics.LTR
+        TextDirection.Rtl -> TextDirectionHeuristics.RTL
+        else -> if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
     }
     val starts = listOf(0) + text.text.indices.filter { text.text[it] == '\n' && it + 1 < text.length }.map { it + 1 }
     val policies = starts.map { start ->
@@ -1216,7 +1234,7 @@ private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean
     return policies.single()
 }
 
-private class NativeHeadingControlHeight(private val minimum: Int) : LineHeightSpan {
+private class NativeHeadingControlHeight(private val minimum: Int) : LineHeightSpan, NativeFloatRowMetricEffect {
     override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int, v: Int, fm: Paint.FontMetricsInt) {
         if (start != 0) return
         val extra = (minimum - (fm.descent - fm.ascent)).coerceAtLeast(0)

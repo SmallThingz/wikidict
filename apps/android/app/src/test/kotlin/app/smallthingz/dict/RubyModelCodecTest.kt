@@ -82,10 +82,23 @@ class RubyModelCodecTest {
             val image = value.image
             byte(if (image == null) 0 else if (image.verticalAlign != null) 3 else 1)
             if (image != null) {
-                require(image.heightPx == null && image.alt == null && image.tooltip == null && !image.border &&
-                    image.map == null && image.staticPoster == null && image.svgLanguage == null && image.darkModeFilter == null)
-                string(image.file); byte(if (image.widthPx == null) 0 else 1); image.widthPx?.let(::u32)
+                require(image.map == null && image.staticPoster == null && image.svgLanguage == null && image.darkModeFilter == null)
+                string(image.file)
+                byte((if (image.widthPx != null) 1 else 0) or (if (image.heightPx != null) 2 else 0) or
+                    (if (image.alt != null) 4 else 0) or (if (image.tooltip != null) 8 else 0) or (if (image.border) 16 else 0))
+                image.widthPx?.let(::u32); image.heightPx?.let(::u32)
+                image.alt?.let { string(it) }; image.tooltip?.let { string(it) }
                 image.verticalAlign?.let { byte(it.ordinal) }
+                if (version == 'Y' && yFlags and 32 != 0) {
+                    mark("$label.image.occurrence"); byte(if (image.occurrenceLayout == null) 0 else 1)
+                    image.occurrenceLayout?.let { layout ->
+                        listOf("x" to layout.x, "y" to layout.y, "left" to layout.paddingLeft, "right" to layout.paddingRight)
+                            .forEach { (name, length) ->
+                                mark("$label.image.occurrence.$name"); byte(length.unit.ordinal); f32(length.value)
+                            }
+                    }
+                    mark("$label.image.occurrence.end")
+                } else require(image.occurrenceLayout == null)
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
@@ -151,16 +164,48 @@ class RubyModelCodecTest {
             value.overlays.forEachIndexed { index, overlay -> boxOverlay(overlay, "$label.overlay$index") }
             spans(value.spans, "$label.body")
         }
-        private fun bodyTypography(value: BodyTypography) {
-            mark("body.start"); fontSnapshot(value.ownerFont, "body.font")
-            mark("body.lineHeight"); byte(if (value.lineHeight == null) 0 else 1)
+        private fun referenceBlock(value: Block, label: String) {
+            val container = value.container
+            when {
+                value == Block("paragraph", 0, value.spans) -> {
+                    byte(0); byte(0); byte(0); spans(value.spans, "$label.spans")
+                    byte(0); string(""); string(""); byte(0); tail()
+                }
+                container != null && value == Block("container", 0, emptyList(), container = container) &&
+                    container.style == ContainerStyle() -> {
+                    prefix(13); byte(0); tail(); u32(0); u32(container.blocks.size.toLong())
+                    container.blocks.forEachIndexed { index, child -> referenceBlock(child, "$label.block$index") }
+                }
+                else -> error("Reference fixture requires a fully represented ordinary block")
+            }
+        }
+        private fun reference(value: Reference, index: Int) {
+            val label = "references.$index"
+            byte(if (value.kind == ReferenceKind.Note) 0 else 1); u32(value.number)
+            if (value.kind == ReferenceKind.Note) { u32(checkNotNull(value.groupNumber)); string("") }
+            string(value.group); spans(value.spans, "$label.spans")
+            byte(if (value.blocks == null) 0 else 1)
+            value.blocks?.let { blocks ->
+                u32(blocks.size.toLong()); blocks.forEachIndexed { at, block -> referenceBlock(block, "$label.block$at") }
+            }
+        }
+        private fun bodyTypography(value: BodyTypography, label: String = "body") {
+            mark("$label.start"); fontSnapshot(value.ownerFont, "$label.font")
+            mark("$label.lineHeight"); byte(if (value.lineHeight == null) 0 else 1)
             when (val height = value.lineHeight) {
                 null -> Unit
                 ContainerLineHeight.Normal -> byte(0)
                 is ContainerLineHeight.Multiplier -> { byte(1); f32(height.value) }
-                is ContainerLineHeight.Length -> { byte(2); boxLength(height.value, "body.length") }
+                is ContainerLineHeight.Length -> { byte(2); boxLength(height.value, "$label.length") }
             }
-            mark("body.end")
+            if (version == 'Y' && yFlags and 16 != 0) {
+                mark("$label.direction"); byte(when (value.direction) {
+                    null -> 0
+                    BidiResolvedDirection.Ltr -> 1
+                    BidiResolvedDirection.Rtl -> 2
+                })
+            } else require(value.direction == null)
+            mark("$label.end")
         }
         /** Raw Y owners exercise depth beyond constructor admission without a second codec. */
         fun boxChain(depth: Int, label: String) {
@@ -175,9 +220,9 @@ class RubyModelCodecTest {
             nested(depth, "$label.0")
         }
         /** Reuses one literal overlay record, without a million test-only offset keys. */
-        fun boxBudget(count: Int, label: String) {
+        fun boxBudget(count: Int, label: String, following: Span? = null) {
             require(version == 'Y' && yFlags and 4 != 0)
-            mark("$label.count"); u32(1)
+            mark("$label.count"); u32(if (following == null) 1 else 2)
             out.write(Wire('V').isolatedSpan(Span("text", ""))); byte(1)
             repeat(4) { length() }; repeat(4) { byte(0) }; u32(count.toLong())
             val record = Wire('Y', yFlags).apply {
@@ -185,6 +230,7 @@ class RubyModelCodecTest {
             }.out.toByteArray()
             repeat(count) { out.write(record) }
             spans(listOf(Span("text", "x")), "$label.0.box.body")
+            following?.let { span(it, "$label.1") }
         }
         private fun linkPaint(value: LinkPaint) {
             require(value.focusOutline == null)
@@ -365,7 +411,8 @@ class RubyModelCodecTest {
         }
         fun document(values: List<Span>, sink: Sink = Sink.Display, features: Int = 0,
             alignment: Boolean = false, clear: Boolean = false, containers: Int = 1,
-            headingTitle: String = "漢（かん）", bodyTypography: BodyTypography? = null): ByteArray {
+            headingTitle: String = "漢（かん）", bodyTypography: BodyTypography? = null,
+            referenceValues: List<Reference>? = null, referenceTypography: BodyTypography? = null, mediaValues: List<Media>? = null): ByteArray {
             selected = values
             out.write("DPR$version".encodeToByteArray())
             if (version == 'Y') { mark("yFeatures"); byte(yFlags) }
@@ -386,20 +433,39 @@ class RubyModelCodecTest {
             if (sink == Sink.Preamble) root("root") else spans(emptyList(), "preamble")
             u32(0); u32(0) // organization lexemes and other sections
             val reference = sink == Sink.Reference || sink == Sink.ReferenceBlocks
-            u32(if (reference) 1 else 0)
-            if (reference) {
-                byte(1); u32(1); string("ruby-ref")
-                if (sink == Sink.Reference) root("root") else spans(emptyList(), "reference")
-                byte(if (sink == Sink.ReferenceBlocks) 1 else 0)
-                if (sink == Sink.ReferenceBlocks) { u32(1); paragraph() }
+            mark("references.count")
+            if (referenceValues != null) {
+                require(!reference && referenceTypography == null)
+                u32(referenceValues.size.toLong())
+                referenceValues.forEachIndexed { index, value -> this.reference(value, index) }
+            } else {
+                u32(if (reference) 1 else 0)
+                if (reference) {
+                    byte(1); u32(1); string("ruby-ref")
+                    if (sink == Sink.Reference) root("root") else spans(emptyList(), "reference")
+                    byte(if (sink == Sink.ReferenceBlocks) 1 else 0)
+                    if (sink == Sink.ReferenceBlocks) { u32(1); paragraph() }
+                }
             }
-            u32(if (alignment) 1 else 0)
-            if (alignment) { string("Probe.svg"); byte(0); string("Original media") }
+            if (mediaValues == null) {
+                u32(if (alignment) 1 else 0)
+                if (alignment) { string("Probe.svg"); byte(0); string("Original media") }
+            } else {
+                u32(mediaValues.size.toLong())
+                mediaValues.forEach { require(it.kind == "image"); string(it.file); byte(0); string(it.caption) }
+            }
             if (version >= 'P') {
                 mark("features"); val flags = features or (if (sink == Sink.Heading) 2 else 0); byte(flags)
                 if (sink == Sink.Heading) { u32(1); u32(0); headingStyle(flags and 16 != 0) }
             }
             bodyTypography?.let { this.bodyTypography(it) }
+            val referenceOwners = referenceValues?.map { it.bodyTypography }
+                ?: if (reference) listOf(referenceTypography) else emptyList()
+            if (version == 'Y' && yFlags and 8 != 0) referenceOwners.forEachIndexed { index, typography ->
+                val label = "referenceTypography.$index"
+                mark("$label.presence"); byte(if (typography == null) 0 else 1)
+                typography?.let { this.bodyTypography(it, label) }
+            } else require(referenceOwners.all { it == null })
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -1988,6 +2054,368 @@ class RubyModelCodecTest {
             val bytes = raw.document(emptyList(), bodyTypography = body)
             if (count == maximum) assertEquals(count, read(bytes).displayTitle.single().inlineBoxGroup!!.overlays.size)
             else reject("BODY and complete overlay records share decoder budget", bytes)
+        }
+    }
+
+    @Test fun referenceTypographyAndParagraphDirectionRetainIndependentOwnersAndAllReferenceBodySlots() {
+        val font = InlineFontSnapshot(.5f, FontScaleBasis.NormalBody, fontNormalized = true,
+            bold = true, italic = true, code = true, language = "he", fontFeatures = FontFeaturePolicy.SevenOn,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val referenceOwner = BodyTypography(font, ContainerLineHeight.Multiplier(1.5f), BidiResolvedDirection.Rtl)
+        val entryOwner = BodyTypography(InlineFontSnapshot(1.25f, FontScaleBasis.NormalBody, fontNormalized = true),
+            ContainerLineHeight.Normal, BidiResolvedDirection.Ltr)
+        val child = Span("link", "source\ud83d\ude00", "Original target", trail = "!", targetFragment = "part",
+            tooltip = "Original tooltip", explanation = "Original explanation", fontScale = 24f, fontScaleBasis = FontScaleBasis.CssPx)
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val box = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            InlineBoxBorderEdges(none, none, none, none), spans = listOf(Span("external_link", "external", "https://example.test/original"))))
+        val rich = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(box))), ContainerStyle()))
+        val zeroOwner = BodyTypography(InlineFontSnapshot(0f, FontScaleBasis.CssPx, fontNormalized = true),
+            ContainerLineHeight.Length(zero), BidiResolvedDirection.Ltr)
+        val references = listOf(
+            Reference(1, 2, "notes", listOf(child), bodyTypography = referenceOwner),
+            Reference(2, null, "fragment", listOf(simple()), ReferenceKind.Fragment),
+            Reference(3, 1, "other", emptyList(), blocks = listOf(rich), bodyTypography = zeroOwner),
+            Reference(4, null, "empty", emptyList(), ReferenceKind.Fragment, emptyList(), referenceOwner.copy(direction = null)))
+        assertSame(referenceOwner, references[0].bodyTypography); assertSame(child, references[0].spans.single())
+        assertFalse(child.bold); assertFalse(child.italic); assertFalse(child.code)
+        assertEquals(24f, child.fontScale); assertEquals(FontScaleBasis.CssPx, child.fontScaleBasis)
+        val wire = Wire('Y', 30)
+        val bytes = wire.document(emptyList(), features = 4, bodyTypography = entryOwner, referenceValues = references)
+        val restored = read(bytes)
+        assertEquals(entryOwner, restored.bodyTypography); assertEquals(references, restored.references)
+        assertEquals("source\ud83d\ude00!", textOf(restored.references[0].spans))
+        assertEquals(EntryLink("Original target", "part"), restored.references[0].spans.single().entryLink())
+        assertEquals("漢（かん）", rubyFallbackText(restored.references[1].spans))
+        assertEquals(listOf(box), restored.references[2].blocks!!.single().container!!.blocks.single().spans)
+        assertTrue(restored.references[3].spans.isEmpty()); assertTrue(restored.references[3].blocks!!.isEmpty())
+        assertTrue(restored.sections.isEmpty()); assertTrue(restored.displayTitle.isEmpty()); assertTrue(restored.rasterImages.isEmpty())
+        val runs = mutableListOf<Span>()
+        restored.references.forEach { it.visitSpanRuns { spans, _ -> runs.addAll(spans) } }
+        assertEquals(listOf(child, simple(), box), runs)
+        assertEquals(wire.at.getValue("body.end"), wire.at.getValue("referenceTypography.0.presence"))
+        assertEquals(0, bytes[wire.at.getValue("referenceTypography.1.presence")].toInt())
+        assertEquals(wire.at.getValue("referenceTypography.1.presence") + 1,
+            wire.at.getValue("referenceTypography.2.presence"))
+        assertEquals(1, bytes[wire.at.getValue("body.direction")].toInt())
+        assertEquals(2, bytes[wire.at.getValue("referenceTypography.0.direction")].toInt())
+        assertEquals(0, bytes[wire.at.getValue("referenceTypography.3.direction")].toInt())
+        assertEquals(bytes.size, wire.at.getValue("referenceTypography.3.end"))
+        for (kind in ReferenceKind.entries) for (blocks in listOf(false, true)) {
+            val source = Reference(1, if (kind == ReferenceKind.Note) 1 else null, "slot",
+                if (blocks) emptyList() else listOf(child), kind,
+                if (blocks) listOf(Block("paragraph", 0, listOf(child))) else null, referenceOwner)
+            val decoded = read(Wire('Y', 24).document(emptyList(), features = 4, referenceValues = listOf(source)))
+            assertNull(decoded.bodyTypography); assertEquals(listOf(source), decoded.references)
+            assertEquals("source\ud83d\ude00!", mutableListOf<Span>().also { leaves ->
+                decoded.references.single().visitSpanRuns { spans, _ -> leaves.addAll(spans) }
+            }.let(::textOf))
+        }
+        for (height in listOf(null, ContainerLineHeight.Normal, ContainerLineHeight.Multiplier(0f),
+            ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Em, 1.75f)))) {
+            val source = Reference(1, null, "height", emptyList(), ReferenceKind.Fragment,
+                bodyTypography = zeroOwner.copy(lineHeight = height, direction = null))
+            val decoded = read(Wire('Y', 8).document(emptyList(), referenceValues = listOf(source)))
+            assertEquals(source, decoded.references.single()); assertNull(decoded.bodyTypography)
+        }
+    }
+
+    @Test fun referenceTypographyDirectionTrailerIsStrictAndNullLegacyBytesRemainExact() {
+        val font = InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true)
+        val owner = BodyTypography(font)
+        val directional = owner.copy(direction = BidiResolvedDirection.Rtl)
+        val child = Span("link", "", "V target", inlineActionGroup = InlineActionGroup(listOf(text("v"))))
+        val legacyReference = Reference(1, null, "ruby-ref", listOf(child), ReferenceKind.Fragment)
+        for (version in listOf('V', 'Y')) {
+            val flags = if (version == 'Y') 2 else 0
+            val body = owner.takeIf { version == 'Y' }
+            val old = Wire(version, flags).document(listOf(child), Sink.Reference, bodyTypography = body)
+            val explicitNull = Wire(version, flags).document(emptyList(), bodyTypography = body,
+                referenceValues = listOf(legacyReference.copy(bodyTypography = null)))
+            assertArrayEquals("$version null reference field changes no bytes", old, explicitNull)
+            assertEquals(listOf(legacyReference), read(old).references)
+            assertEquals(body, read(old).bodyTypography)
+        }
+        val source = legacyReference.copy(bodyTypography = directional)
+        val wire = Wire('Y', 26)
+        val good = wire.document(emptyList(), bodyTypography = owner, referenceValues = listOf(source))
+        assertEquals(owner, read(good).bodyTypography); assertEquals(source, read(good).references.single())
+        assertEquals(wire.at.getValue("body.lineHeight") + 1, wire.at.getValue("body.direction"))
+        assertEquals(0, good[wire.at.getValue("body.direction")].toInt())
+        for (bad in listOf(2, 255)) reject("Reference owner presence$bad", changed(good, wire.at.getValue("referenceTypography.0.presence"), bad))
+        for (label in listOf("body.direction", "referenceTypography.0.direction")) for (bad in listOf(3, 255)) {
+            assertEquals("Unknown body paragraph direction", runCatching { read(changed(good, wire.at.getValue(label), bad)) }.exceptionOrNull()?.message)
+        }
+        reject("Reference-only font must remain normalized", changed(good, wire.at.getValue("referenceTypography.0.font.flags"), 1))
+        reject("Reference-only font cannot become Context", changed(good, wire.at.getValue("referenceTypography.0.font.scale") + 4, 0))
+        reject("Reference line-height presence", changed(good, wire.at.getValue("referenceTypography.0.lineHeight"), 2))
+        for (flags in listOf(0, 2, 8, 10, 16, 18, 24, 64, 128, 255))
+            reject("Reference/direction census$flags", changed(good, wire.at.getValue("yFeatures"), flags))
+        reject("No actual reference owner", Wire('Y', 8).document(emptyList(), referenceValues = listOf(legacyReference)))
+        reject("Empty reference array cannot earn bit8", Wire('Y', 8).document(emptyList()))
+        reject("Direction cannot stand alone", Wire('Y', 16).document(emptyList()))
+        reject("All-null direction debt", Wire('Y', 26).document(emptyList(), bodyTypography = owner,
+            referenceValues = listOf(source.copy(bodyTypography = owner))))
+        val entryOnlyDirection = Wire('Y', 26)
+        val withTail = entryOnlyDirection.document(emptyList(), bodyTypography = directional,
+            referenceValues = listOf(source.copy(bodyTypography = owner)))
+        assertEquals("Trailing presentation data", runCatching {
+            read(changed(withTail, entryOnlyDirection.at.getValue("yFeatures"), 18))
+        }.exceptionOrNull()?.message)
+        val familyWire = Wire('Y', 8)
+        val familyReference = source.copy(bodyTypography = owner.copy(ownerFont = font.copy(fontFamily = ContainerFontFamily.SansSerif)))
+        val familyBytes = familyWire.document(emptyList(), features = 4, referenceValues = listOf(familyReference))
+        assertEquals(familyReference, read(familyBytes).references.single())
+        reject("Reference-only family participates in pending P census", changed(familyBytes, familyWire.at.getValue("features"), 0))
+        reject("False pending P census", changed(good, wire.at.getValue("features"), 4))
+        reject("Reference count cannot omit a typography slot", changed32(good, wire.at.getValue("references.count"), 0))
+        for (size in good.indices) reject("Truncated reference typography$size", good.copyOf(size))
+        reject("Extra reference trailer count", replace(good, wire.at.getValue("referenceTypography.0.presence"),
+            wire.at.getValue("referenceTypography.0.presence"), byteArrayOf(1, 0, 0, 0)))
+        reject("Trailing reference byte", good + byteArrayOf(0))
+    }
+
+    @Test fun referenceTypographyAddsOneSharedItemAndNoContentOrTableDepth() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val borders = InlineBoxBorderEdges(none, none, none, none)
+        val owner = BodyTypography(InlineFontSnapshot(0f, FontScaleBasis.CssPx, fontNormalized = true),
+            direction = BidiResolvedDirection.Rtl)
+        for (sink in listOf(Sink.Reference, Sink.ReferenceBlocks)) {
+            val literal = Wire('Y', 24).document(listOf(text("original")), sink, referenceTypography = owner)
+            val reference = read(literal).references.single()
+            assertEquals(owner, reference.bodyTypography)
+            val runs = mutableListOf<Span>(); reference.visitSpanRuns { spans, _ -> runs.addAll(spans) }
+            assertEquals(listOf(text("original")), runs)
+        }
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('Y', 28).apply { rootOverride = { boxChain(depth, it) } }
+            val bytes = wire.document(emptyList(), Sink.Reference, referenceTypography = owner)
+            if (depth == 16) assertEquals("leaf", rubyFallbackText(read(bytes).references.single().spans))
+            else reject("Reference typography does not waive content17", bytes)
+        }
+        for (depth in listOf(16, 32, 33)) {
+            val wire = Wire('Y', 24).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+            val bytes = wire.document(listOf(text("table")), Sink.ReferenceBlocks, referenceTypography = owner)
+            if (depth == 33) reject("Reference typography does not waive table33", bytes) else {
+                val decoded = read(bytes).references.single(); assertEquals(owner, decoded.bodyTypography)
+                val levels = mutableListOf<Int>()
+                PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, level, _ -> levels.add(level) } }.blocks(decoded.blocks!!)
+                assertEquals((1..depth).toList(), levels)
+            }
+        }
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Px, 0f)), borders)
+        val emptyReference = Reference(1, null, "empty", emptyList(), ReferenceKind.Fragment, bodyTypography = owner)
+        fun box(count: Int) = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), borders,
+            java.util.Collections.nCopies(count, overlay), listOf(text("x"))))
+        fun entry(value: Span) = Entry("Budget", listOf(value), "language", "Japanese", "ja", emptyList(), listOf(emptyReference))
+        // Preserve the existing model's wrapper accounting: only the new owner adds an item.
+        val modelMaximum = (1 shl 20) - 3
+        assertEquals(modelMaximum, entry(box(modelMaximum)).displayTitle.single().inlineBoxGroup!!.overlays.size)
+        val withOneMore = box(modelMaximum + 1)
+        invalid("Reference owner adds exactly one model item") { entry(withOneMore) }
+        // The wire already counts its reference slot, in addition to Box + child + typography.
+        val wireMaximum = (1 shl 20) - 4
+        for (count in listOf(wireMaximum, wireMaximum + 1)) {
+            val wire = Wire('Y', 28).apply { rootOverride = { boxBudget(count, it) } }
+            val bytes = wire.document(emptyList(), referenceValues = listOf(emptyReference))
+            if (count == wireMaximum) {
+                val decoded = read(bytes); assertEquals(owner, decoded.references.single().bodyTypography)
+                assertEquals(count, decoded.displayTitle.single().inlineBoxGroup!!.overlays.size)
+            } else reject("Reference slot and owner share decoder item budget", bytes)
+        }
+    }
+
+    @Test fun imageOccurrenceLayoutsRetainExactImagesActionsAndAllExistingSpanSinks() {
+        val px = StyleLengthUnit.Px
+        val em = StyleLengthUnit.Em
+        val layout = InlineImageOccurrenceLayout(SignedContainerMargin(px, -10f), SignedContainerMargin(em, -0.25f),
+            StyleLength(em, 0.4f), StyleLength(px, 3f))
+        val image = InlineImage("Probe.svg", 120, 61, "Complete image alt", "Image tooltip", border = true,
+            verticalAlign = InlineImageVerticalAlign.Baseline, occurrenceLayout = layout)
+        val source = Span("link", "", "Image target", image = image, targetFragment = "image-anchor",
+            tooltip = "Action tooltip", explanation = "Image explanation", language = "ja", fontScale = 1.35f)
+        for (sink in Sink.entries.filter { it != Sink.Heading }) {
+            val wire = Wire('Y', 32)
+            val entry = read(wire.document(listOf(source), sink, headingTitle = "",
+                mediaValues = listOf(Media("Probe.svg", "image", "Original media"))))
+            assertEquals(sink.name, source, selected(entry, sink))
+            assertEquals(listOf(image), entry.inlineImages)
+            assertEquals(listOf(RasterImageOccurrence(image)), entry.rasterImages)
+            assertEquals(listOf(Media("Probe.svg", "image", "Original media")), entry.media)
+            assertEquals(EntryLink("Image target", "image-anchor"), selected(entry, sink).entryLink())
+            assertEquals(layout, selected(entry, sink).image!!.occurrenceLayout)
+        }
+        reject("Existing authored heading domain still excludes an image-only companion", Wire('Y', 32).document(
+            listOf(source), Sink.Heading, headingTitle = "", mediaValues = listOf(Media("Probe.svg", "image", "Original media"))))
+        val zero = InlineImageOccurrenceLayout(StyleLength(px, 0f), StyleLength(em, 0f),
+            StyleLength(px, 0f), StyleLength(em, 0f))
+        val second = Span("external_link", "", "https://example.test/image", image = image.copy(occurrenceLayout = zero))
+        val owner = BodyTypography(InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true), direction = BidiResolvedDirection.Rtl)
+        val reference = Reference(1, 1, "image-reference", listOf(second), bodyTypography = owner)
+        val union = Wire('Y', 58)
+        val entry = read(union.document(listOf(source, text(" ordinary "), simple()), bodyTypography = owner,
+            referenceValues = listOf(reference), mediaValues = listOf(Media("Probe.svg", "image", "Original media"))))
+        assertEquals(listOf(source, text(" ordinary "), simple()), entry.displayTitle)
+        assertEquals(listOf(reference), entry.references)
+        assertEquals(owner, entry.bodyTypography)
+        assertEquals(listOf(image, second.image), entry.inlineImages)
+        assertNotNull(entry.references.single().spans.single().image!!.occurrenceLayout)
+        assertEquals(zero, entry.references.single().spans.single().image!!.occurrenceLayout)
+        assertSame(layout, image.occurrenceLayout)
+        assertEquals(1.35f, source.fontScale)
+        val edge = StyleLength(px, 0f)
+        val borders = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val box = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(edge, edge, edge, edge),
+            borders, emptyList(), listOf(text("box sibling"))))
+        val containerFont = owner.ownerFont.copy(fontFamily = ContainerFontFamily.SansSerif)
+        val complete = Wire('Y', 63).apply {
+            containerStyleOverride = { containerOwnerStyle(containerFont, label = it) }
+        }
+        val completeBytes = complete.document(listOf(box, source), Sink.Container, features = 4,
+            bodyTypography = owner, referenceValues = listOf(reference),
+            mediaValues = listOf(Media("Probe.svg", "image", "Original media")))
+        val completeEntry = read(completeBytes)
+        val container = completeEntry.sections.single().blocks.single().container!!
+        assertEquals(containerFont, container.style.ownerFont)
+        assertEquals(listOf(box, source), container.blocks.single().spans)
+        assertEquals(owner, completeEntry.bodyTypography)
+        assertEquals(listOf(reference), completeEntry.references)
+        assertEquals(listOf(image, second.image), completeEntry.inlineImages)
+        reject("Image union retains the exact pending font census", changed(completeBytes, complete.at.getValue("features"), 0))
+
+        val figureEntry = read(Wire('S').document(listOf(simple()), Sink.FigureCaption))
+        val originalBlock = figureEntry.sections.single().blocks.single()
+        val figureImage = image.copy(verticalAlign = null)
+        val figureSource = source.copy(image = figureImage)
+        val content = FigureContent.Image(figureSource, FigureSizingPolicy.RequestedFit)
+        val figure = originalBlock.figure!!.copy(content = content)
+        val raw = mutableListOf<Span>()
+        val specialized = mutableListOf<FigureContent>()
+        PresentationSpanVisitor { _, _ -> }.apply {
+            onSpan = { raw.add(it) }
+            visitFigureContent = { specialized.add(it) }
+        }.figure(figure, 0, 0)
+        assertEquals(1, specialized.size)
+        assertSame(content, specialized.single())
+        assertFalse(raw.any { it === figureSource })
+        val withFigure = figureEntry.copy(sections = listOf(figureEntry.sections.single().copy(
+            blocks = listOf(originalBlock.copy(figure = figure)))), media = listOf(Media("Probe.svg", "image", "Original media")))
+        assertEquals(listOf(RasterImageOccurrence(figureImage, FigureSizingPolicy.RequestedFit)), withFigure.rasterImages)
+        assertSame(figureImage, withFigure.inlineImages.single())
+    }
+
+    @Test fun imageOccurrenceTailRejectsMalformedGeometryAndCensusWithoutChangingNullBytes() {
+        val px = StyleLengthUnit.Px
+        val zero = StyleLength(px, 0f)
+        val layout = InlineImageOccurrenceLayout(zero, zero, zero, zero)
+        val image = InlineImage("Probe.svg", 120, 61, "Full alt", occurrenceLayout = layout)
+        val source = Span("text", "", image = image)
+        val media = listOf(Media("Probe.svg", "image", "Original media"))
+        val wire = Wire('Y', 32)
+        val bytes = wire.document(listOf(source), mediaValues = media)
+        assertEquals(source, read(bytes).displayTitle.single())
+        val presence = wire.at.getValue("root.0.image.occurrence")
+        val end = wire.at.getValue("root.0.image.occurrence.end")
+        assertEquals(21, end - presence)
+        assertArrayEquals(byteArrayOf(1) + ByteArray(20), bytes.copyOfRange(presence, end))
+        reject("Occurrence presence is strict", changed(bytes, presence, 2))
+        reject("Empty Y census", changed(bytes, wire.at.getValue("yFeatures"), 0))
+        reject("Unknown Y capability", changed(bytes, wire.at.getValue("yFeatures"), 64))
+        for (name in listOf("x", "y", "left", "right")) {
+            val start = wire.at.getValue("root.0.image.occurrence.$name")
+            reject("Unknown $name unit", changed(bytes, start, 2))
+            for (value in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+                reject("Nonfinite $name", changed32(bytes, start + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+            }
+        }
+        for (name in listOf("left", "right")) reject("Negative $name padding", changed32(bytes,
+            wire.at.getValue("root.0.image.occurrence.$name") + 1, (-1f).toRawBits().toLong() and 0xffff_ffffL))
+        for (size in presence until bytes.size) reject("Truncated occurrence/tail $size", bytes.copyOf(size))
+        reject("Trailing occurrence data", bytes + byteArrayOf(0))
+        val absent = source.copy(image = image.copy(occurrenceLayout = null))
+        reject("Bit32 needs an actual layout", Wire('Y', 32).document(listOf(absent), mediaValues = media))
+        val body = BodyTypography(InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, fontNormalized = true))
+        val mixed = Wire('Y', 34)
+        val mixedBytes = mixed.document(listOf(source), bodyTypography = body, mediaValues = media)
+        reject("A layout cannot appear without its capability", changed(mixedBytes, mixed.at.getValue("yFeatures"), 2))
+        val plainY = Wire('Y', 2).document(listOf(absent), bodyTypography = body, mediaValues = media)
+        val withBit = Wire('Y', 34)
+        val absentBytes = withBit.document(listOf(absent), bodyTypography = body, mediaValues = media)
+        val removedPresence = replace(absentBytes, withBit.at.getValue("root.0.image.occurrence"),
+            withBit.at.getValue("root.0.image.occurrence.end"), byteArrayOf())
+        assertArrayEquals(plainY, changed(removedPresence, withBit.at.getValue("yFeatures"), 2))
+        val aligned = absent.copy(image = absent.image!!.copy(verticalAlign = InlineImageVerticalAlign.Middle))
+        val old = Wire('V').isolatedSpan(aligned)
+        val nullable = Wire('Y', 32)
+        val nullableBytes = nullable.isolatedSpan(aligned)
+        assertArrayEquals(old, replace(nullableBytes, nullable.at.getValue("isolated.image.occurrence"),
+            nullable.at.getValue("isolated.image.occurrence.end"), byteArrayOf()))
+        assertArrayEquals(Wire('V').isolatedSpan(text("ordinary")), Wire('Y', 32).isolatedSpan(text("ordinary")))
+        assertEquals(absent, read(Wire('O').document(listOf(absent), mediaValues = media)).displayTitle.single())
+        invalid("Signed x remains finite") { InlineImageOccurrenceLayout(SignedContainerMargin(px, Float.NaN), zero, zero, zero) }
+        invalid("Signed y remains finite") { InlineImageOccurrenceLayout(zero, SignedContainerMargin(px, Float.POSITIVE_INFINITY), zero, zero) }
+        invalid("Padding remains nonnegative") { InlineImageOccurrenceLayout(zero, zero, StyleLength(px, -1f), zero) }
+        val map = ImageMap(ImageMapDescription.None, emptyList())
+        assertEquals(map, image.copy(occurrenceLayout = null, map = map).map)
+        invalid("Map cannot share occurrence geometry") { image.copy(map = map) }
+        val poster = StaticPoster(StaticPosterPolicy.ThreeDStlV1, "render", "a".repeat(40), "2026-01-01T00:00:00Z")
+        val posterImage = InlineImage("Shape.stl", 120, 90, staticPoster = poster)
+        assertSame(poster, posterImage.staticPoster)
+        invalid("Static poster cannot share occurrence geometry") { posterImage.copy(occurrenceLayout = layout) }
+    }
+
+    @Test fun imageOccurrenceAddsOneSharedItemIncludingCustomFiguresWithoutAddingDepth() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val image = InlineImage("Probe.svg", 120, occurrenceLayout = InlineImageOccurrenceLayout(zero, zero, zero, zero))
+        val source = Span("text", "", image = image)
+        val plain = source.copy(image = image.copy(occurrenceLayout = null))
+        val media = listOf(Media("Probe.svg", "image", "Original media"))
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Px, 0f)), none)
+        fun box(count: Int) = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            none, java.util.Collections.nCopies(count, overlay), listOf(text("x"))))
+        fun entry(count: Int, subject: Span) = Entry("Budget", listOf(box(count), subject), "language", "Japanese", "ja",
+            emptyList(), emptyList(), media = media)
+        val modelMaximum = (1 shl 20) - 4 // box + its leaf + image Span + occurrence layout
+        assertEquals(listOf(image), entry(modelMaximum, source).inlineImages)
+        invalid("Layout consumes the last shared model item") { entry(modelMaximum + 1, source) }
+        assertEquals(listOf(plain.image), entry(modelMaximum + 1, plain).inlineImages)
+        val decoderMaximum = modelMaximum - 1 // existing media collection charges one slot in the Reader
+        for ((count, subject, accepted) in listOf(Triple(decoderMaximum, source, true),
+            Triple(decoderMaximum + 1, source, false), Triple(decoderMaximum + 1, plain, true))) {
+            val flags = if (subject.image!!.occurrenceLayout == null) 4 else 36
+            val wire = Wire('Y', flags).apply { rootOverride = { boxBudget(count, it, subject) } }
+            val bytes = wire.document(emptyList(), mediaValues = media)
+            if (accepted) assertEquals(subject, read(bytes).displayTitle.last()) else reject("Shared decoder image item", bytes)
+        }
+        val figureEntry = read(Wire('S').document(listOf(simple()), Sink.FigureCaption))
+        val figure = figureEntry.sections.single().blocks.single().figure!!.copy(caption = emptyList(),
+            content = FigureContent.Image(source, FigureSizingPolicy.RequestedFit))
+        fun figureBudget(subject: Span): Int {
+            var callbacks = 0
+            val visitor = PresentationSpanVisitor { _, _ -> }.apply { visitFigureContent = { callbacks++ } }
+            visitor.spans(java.util.Collections.nCopies((1 shl 20) - 1, text("")))
+            visitor.figure(figure.copy(content = FigureContent.Image(subject, FigureSizingPolicy.RequestedFit)), 0, 0)
+            return callbacks
+        }
+        assertEquals(1, figureBudget(plain))
+        invalid("Custom Figure root shares occurrence item budget") { figureBudget(source) }
+        for (depth in listOf(16, 17)) {
+            val bytes = Wire('Y', 32).document(listOf(source), Sink.Container, containers = depth, mediaValues = media)
+            if (depth == 17) reject("Image does not relax content depth", bytes)
+            else assertEquals(listOf(image), read(bytes).inlineImages)
+        }
+        for (depth in listOf(32, 33)) {
+            val wire = Wire('Y', 32).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+            val bytes = wire.document(listOf(source), Sink.Body, mediaValues = media)
+            if (depth == 33) reject("Image does not relax table depth", bytes)
+            else assertEquals(listOf(image), read(bytes).inlineImages)
         }
     }
 }

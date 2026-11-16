@@ -5,7 +5,12 @@ internal data class AnonymousFlowContext(
     val direction: BidiResolvedDirection,
     val language: String?,
     val textAlign: CellTextAlign?,
+    // Restore only inherited BODY direction at excluded Figure/caption sinks.
+    val bodyDirectionFallback: BidiResolvedDirection? = null,
 )
+internal fun AnonymousFlowContext.withoutBodyDirection(): AnonymousFlowContext =
+    bodyDirectionFallback?.let { copy(direction = it, bodyDirectionFallback = null) } ?: this
+
 internal sealed interface AnonymousFlowEvent {
     data class OpenScope(val id: Int, val scope: BidiScope, val context: AnonymousFlowContext) : AnonymousFlowEvent
     data class CloseScope(val id: Int) : AnonymousFlowEvent
@@ -52,7 +57,7 @@ internal fun anonymousFlowContent(block: Block, inherited: AnonymousFlowContext)
                 require(depth < MaxContentDepth)
                 val scope = part.scope
                 val child = current.copy(direction = scope.resolvedDirection,
-                    language = scope.language ?: current.language)
+                    language = scope.language ?: current.language, bodyDirectionFallback = null)
                 val id = nextScope++
                 events += AnonymousFlowEvent.OpenScope(id, scope, child)
                 emit(scope.parts, child, depth + 1, id)

@@ -16,11 +16,12 @@ object BlobDecoder {
         require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89) { "Unsupported presentation format" }
         val ownerGeometry = magicVersion == 89
         val ownerGeometryFlags = if (ownerGeometry) r.byte().also {
-            require(it in 1..7) { "Invalid owner geometry feature flags" }
+            require(it in 1..63) { "Invalid owner geometry feature flags" }
         } else 0
         r.ownerGeometry = ownerGeometry
         r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
+        r.imageOccurrences = ownerGeometryFlags and 32 != 0
         val version = if (magicVersion in 65..86 || ownerGeometry) 57 else magicVersion
         r.fontScales = magicVersion in 65..86 || ownerGeometry
         r.fontScaleBases = magicVersion in 66..86 || ownerGeometry
@@ -128,7 +129,11 @@ object BlobDecoder {
             }
             result
         } else sections
-        val bodyTypography = if (ownerGeometryFlags and 2 != 0) r.bodyTypography() else null
+        val directions = ownerGeometryFlags and 16 != 0
+        val bodyTypography = if (ownerGeometryFlags and 2 != 0) r.bodyTypography(directions) else null
+        val styledReferences = if (ownerGeometryFlags and 8 != 0) references.map { reference ->
+            if (r.presence()) reference.copy(bodyTypography = r.bodyTypography(directions)) else reference
+        } else references
         require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
         require((features and 8 != 0) == r.hasTableFloatClearFeature) { "Table float clear feature does not match payload" }
         require((features and 16 != 0) == r.hasTextFlowFeature) { "Text flow feature does not match payload" }
@@ -148,9 +153,14 @@ object BlobDecoder {
         require(ownerGeometry || magicVersion == 86 || r.inlinePaddingGroups == r.hasInlinePaddingGroup) { "U version does not match inline padding payload" }
         require(ownerGeometry || r.inlineActionGroups == r.hasInlineActionGroup) { "V version does not match inline action payload" }
         require(r.containerOwnerFonts == r.hasContainerOwnerFont && r.inlineBoxGroups == r.hasInlineBoxGroup &&
-            (ownerGeometryFlags and 2 != 0) == (bodyTypography != null)) { "Y features do not match owner geometry payload" }
+            (ownerGeometryFlags and 2 != 0) == (bodyTypography != null) &&
+            (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
+            directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
+            r.imageOccurrences == r.hasImageOccurrence) {
+            "Y features do not match owner geometry payload"
+        }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
-        val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
+        val entry = Entry(title, display, kind, language, code, styledSections, styledReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
             bodyAdjoining = bodyAdjoining, bodyTypography = bodyTypography)
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
@@ -176,6 +186,8 @@ object BlobDecoder {
         var hasContainerOwnerFont = false
         var inlineBoxGroups = false
         var hasInlineBoxGroup = false
+        var imageOccurrences = false
+        var hasImageOccurrence = false
         var explanations = false
         var colors = false
         var anchors = false
@@ -311,7 +323,8 @@ object BlobDecoder {
                     verticalAlign = if (imageTag == 3) {
                         (InlineImageVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline image alignment"))
                             .also { hasInlineImageAlignment = true }
-                    } else null)
+                    } else null,
+                    occurrenceLayout = if (imageOccurrences && presence()) imageOccurrenceLayout() else null)
             } else null
             val targetFragment = if (targetFragments && presence()) string() else null
             val tooltip = if (tooltips && presence()) string() else null
@@ -326,6 +339,15 @@ object BlobDecoder {
             return Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
                 superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup)
+        }
+        private fun imageOccurrenceLayout(): InlineImageOccurrenceLayout {
+            require(imageOccurrences && remainingItems > 0 && buffer.remaining() >= 20) {
+                "Image occurrence layout exceeds the presentation budget or is truncated"
+            }
+            remainingItems--
+            val result = InlineImageOccurrenceLayout(containerMarginLength(), containerMarginLength(), styleLength(), styleLength())
+            hasImageOccurrence = true
+            return result
         }
         private fun inlineBoxColor(): InlineBoxColor = when (byte()) {
             0 -> InlineBoxColor.CurrentColor
@@ -362,10 +384,18 @@ object BlobDecoder {
             }
             InlineBoxGroup(padding, border, overlays, spans()).also { hasInlineBoxGroup = true }
         }
-        fun bodyTypography(): BodyTypography {
+        fun bodyTypography(directions: Boolean): BodyTypography {
             require(remainingItems > 0) { "Body typography exceeds the presentation budget" }
             remainingItems--
-            return BodyTypography(inlineFontSnapshot(), if (presence()) containerLineHeight() else null)
+            val font = inlineFontSnapshot()
+            val lineHeight = if (presence()) containerLineHeight() else null
+            val direction = if (directions) when (byte()) {
+                0 -> null
+                1 -> BidiResolvedDirection.Ltr
+                2 -> BidiResolvedDirection.Rtl
+                else -> error("Unknown body paragraph direction")
+            } else null
+            return BodyTypography(font, lineHeight, direction)
         }
         private fun inlinePaddingGroup(): InlinePaddingGroup = content {
             require(buffer.remaining() >= 14) { "Truncated inline padding group" }

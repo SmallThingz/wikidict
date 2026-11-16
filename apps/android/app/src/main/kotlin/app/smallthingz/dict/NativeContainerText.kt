@@ -217,10 +217,11 @@ internal fun nativeRootTextContext(style: TextStyle, normalBodySize: TextUnit,
 @Composable
 internal fun nativeBodyTextContext(ownerFont: InlineFontSnapshot, lineHeight: ContainerLineHeight?,
     inherited: ContainerTextContext?, normalBodySize: TextUnit, inheritedStyle: TextStyle,
-    density: Density): Result<ContainerTextContext> {
+    density: Density, direction: BidiResolvedDirection? = null): Result<ContainerTextContext> {
     val baseline = inherited ?: nativeRootTextContext(inheritedStyle, normalBodySize, density)
     val requested = ContainerStyle(ownerFont = ownerFont, lineHeight = lineHeight).textContext(baseline)
-        .copy(bodyOrigin = NativeBodyTextOrigin(inherited, baseline))
+        .copy(bodyOrigin = NativeBodyTextOrigin(inherited, baseline),
+            bodyDirection = direction ?: baseline.bodyDirection)
     return nativeContainerOwnerTextContext(requested, inheritedStyle, density)
 }
 
@@ -228,10 +229,12 @@ internal fun nativeBodyTextContext(ownerFont: InlineFontSnapshot, lineHeight: Co
  * height survives without a fabricated Cell font or a physical-pixel round trip. */
 internal fun nativeWithoutBodyTextContext(context: ContainerTextContext?, normalBodySize: TextUnit,
     density: Density): ContainerTextContext? {
-    val origin = context?.bodyOrigin ?: return context
+    val origin = context?.bodyOrigin ?: return context?.let {
+        if (it.bodyDirection == null) it else it.copy(bodyDirection = null)
+    }
     if (origin.fontInherited && origin.lineHeightInherited && origin.sizeInherited && origin.familyInherited)
         return origin.original
-    if (!origin.fontInherited && !origin.lineHeightInherited) return context.copy(bodyOrigin = null)
+    if (!origin.fontInherited && !origin.lineHeightInherited) return context.copy(bodyOrigin = null, bodyDirection = null)
     // Legacy aliases remain source declarations, but do not issue a complete font.
     val fontContext = if (!origin.fontInherited) context else ContainerStyle(
         ownerFontScale = context.ownerFontScale.takeUnless { origin.sizeInherited },
@@ -243,14 +246,14 @@ internal fun nativeWithoutBodyTextContext(context: ContainerTextContext?, normal
         ?: nativeContainerLineHeight(heightContext.lineHeight, normalBodySize, density)
     return fontContext.copy(lineHeight = heightContext.lineHeight, resolvedLineHeight = height,
         cellText = fontContext.cellText?.copy(lineHeight = height),
-        containerText = fontContext.containerText?.copy(lineHeight = height), bodyOrigin = null)
+        containerText = fontContext.containerText?.copy(lineHeight = height), bodyOrigin = null, bodyDirection = null)
 }
 
 /** No layout wrapper: excluded source sinks retain their existing composition and owner. */
 @Composable
 internal fun WithoutBodyTypography(content: @Composable () -> Unit) {
     val context = LocalNativeContainerTextContext.current
-    if (context?.bodyOrigin == null) content() else {
+    if (context?.bodyOrigin == null && context?.bodyDirection == null) content() else {
         val restored = nativeWithoutBodyTextContext(context, MaterialTheme.typography.bodyLarge.fontSize, LocalDensity.current)
         CompositionLocalProvider(LocalNativeContainerTextContext provides restored, content = content)
     }

@@ -147,6 +147,8 @@ internal fun inlineImageAccessibilityLabel(image: InlineImage, actionLabel: Stri
     }
 
 internal val LocalInlineImageOwner = staticCompositionLocalOf<InlineImageViewOwner?> { null }
+/** Terminal refusal UI retains the original image/action/alt while showing its existing unavailable state. */
+internal val LocalInlineImageOccurrenceFallback = staticCompositionLocalOf { false }
 
 /** Original asset metadata is independent of pixel availability and display density. */
 internal data class InlineImageKnownGeometry(val width: Long, val height: Long, val mime: String?) {
@@ -262,6 +264,7 @@ internal fun rememberInlineImageViewOwner(images: List<InlineImage>, media: List
 internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedString, style: TextStyle,
     media: List<Media>, settings: AppSettings, edition: String, onLink: (EntryLink) -> Unit,
     placeholderColor: Color): Map<String, InlineTextContent> {
+    val occurrenceFallback = LocalInlineImageOccurrenceFallback.current
     val density = LocalDensity.current
     val resolver = LocalFontFamilyResolver.current
     val textMeasurer = rememberTextMeasurer()
@@ -270,7 +273,7 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
     require(effective.fontSize.isSp)
     val baseSize = with(density) { effective.fontSize.toPx() }
     val owner = LocalInlineImageOwner.current ?: rememberInlineImageViewOwner(spans.mapNotNull { it.image }, media, settings, edition)
-    val images = spans.mapNotNull { it.image }.distinctBy(::inlineImageAssetKey)
+    val images = nativeInlineImageRequests(spans.mapNotNull { it.image }, occurrenceFallback)
     images.filter { it.staticPoster == null }.forEach { image -> LaunchedEffect(owner, image) { owner.ensure(image) } }
     val result = linkedMapOf<String, InlineTextContent>()
     var offset = 0
@@ -296,7 +299,8 @@ internal fun compiledInlineImageContent(spans: List<Span>, annotated: AnnotatedS
                 InlineImageFontMetrics(font.ascent, font.descent, bounds.height().toFloat(),
                     ceil(paint.ascent() * (spanStyle.baselineShift?.multiplier ?: 0f)).toInt())
             }
-            val state = if (image.staticPoster != null) InlineImageAssetState.LayoutUnavailable else
+            val state = if (image.staticPoster != null || occurrenceFallback && image.occurrenceLayout != null)
+                InlineImageAssetState.LayoutUnavailable else
                 owner.states[inlineImageAssetKey(image)] ?: if (settings.allowImages) InlineImageAssetState.Loading else InlineImageAssetState.Disabled
             val ready = state as? InlineImageAssetState.Ready
             val geometry = if (ready != null) inlineImagePixels(image, ready.originalWidth, ready.originalHeight, density.density, ready.mime)
