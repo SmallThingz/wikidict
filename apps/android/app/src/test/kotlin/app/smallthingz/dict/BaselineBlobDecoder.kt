@@ -106,7 +106,7 @@ object BaselineBlobDecoder {
         }
         private fun table(depth: Int): Table? {
             if (!presence()) return null
-            require(depth <= MaxTableDepth) { "Table nesting is too deep" }
+            require(depth <= LegacyMaxTableDepth) { "Table nesting is too deep" }
             val geometry = if (!nestedTables) null else {
                 val flags = byte()
                 require(flags and 0xf0 == 0) { "Unknown table geometry flags" }

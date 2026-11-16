@@ -452,4 +452,183 @@ class NestedTableDeviceTest {
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
 
+    @Test fun deepTwentyAndThirtyTwoTablesKeepOriginalNativeLinkThroughResizeAndOneScrollOwner() {
+        val label = "Deep link"
+        val original = Span("link", label, target = "deep-original-target", foreground = "#0000ff",
+            fontScale = 16f, fontScaleBasis = FontScaleBasis.CssPx,
+            fontFamily = ContainerFontFamily.SansSerif,
+            inlineStyle = InlineTextStyle(wrap = TextWrap.Normal))
+        fun chain(depth: Int): Table {
+            var result = Table(emptyList(), listOf(listOf(Cell(listOf(original), false, 1, 1,
+                background = "#ffffff"))), TableGeometry(border = 0, cellSpacing = 0, cellPadding = 1,
+                width = TableWidth(TableWidthUnit.Px, 240)))
+            repeat(depth - 1) {
+                result = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+                    nestedTable = result))), TableGeometry(border = 0, cellSpacing = 0, cellPadding = 1))
+            }
+            return result
+        }
+        val sources = listOf(20, 32).associateWith(::chain)
+        val depth = mutableStateOf(20)
+        val width = mutableStateOf(180)
+        val calls = mutableListOf<EntryLink>()
+        var activityRoot: android.view.View? = null
+        fun nativeOwner(): NativeFloatTextView {
+            val views = mutableListOf<NativeFloatTextView>()
+            fun visit(view: android.view.View) {
+                if (view is NativeFloatTextView && view.isShown &&
+                    view.currentMeasuredGeometry?.text?.toString() == label) views += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activityRoot))
+            return views.single()
+        }
+        val horizontal = SemanticsMatcher("one deep-table scroll owner") {
+            it.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null
+        }
+        var failure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity ->
+                activityRoot = activity.window.decorView
+                activity.setContent {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr,
+                        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, 1f)) {
+                        DictTheme("light") {
+                            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(),
+                                contentAlignment = androidx.compose.ui.Alignment.Center) {
+                                androidx.compose.foundation.layout.Box(Modifier.requiredWidth(width.value.dp)) {
+                                    CompiledTableView(sources.getValue(depth.value), null) { calls += it }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (levels in listOf(20, 32)) {
+                val source = sources.getValue(levels)
+                // The leaf grid is 240px wide and at least 40px tall. Every enclosing
+                // one-cell grid adds precisely its authored 1px padding on both sides.
+                val expectedWidth = 240 + 2 * (levels - 1)
+                val expectedHeight = 40 + 2 * (levels - 1)
+                assertEquals(expectedWidth, checkNotNull(tableRenderMetrics(source, 136, 10, 40, 1f)).width)
+                var leaf = source
+                repeat(levels - 1) { leaf = checkNotNull(leaf.rows.single().single().nestedTable) }
+                assertSame(original, leaf.rows.single().single().spans.single())
+                for (viewport in listOf(180, 360, 180)) {
+                    compose.runOnIdle { depth.value = levels; width.value = viewport }
+                    compose.waitForIdle()
+                    compose.onAllNodesWithText("unavailable", substring = true, ignoreCase = true).assertCountEquals(0)
+                    compose.onAllNodesWithText("Table is too large to display.").assertCountEquals(0)
+                    compose.onAllNodes(horizontal, useUnmergedTree = true).assertCountEquals(1)
+                    val scroll = compose.onNode(horizontal, useUnmergedTree = true)
+                    fun scrollValue() = scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+                    val overflow = (expectedWidth - viewport).coerceAtLeast(0).toFloat()
+                    assertEquals(overflow, scroll.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].maxValue(), 0f)
+                    val carried = scrollValue()
+                    if (carried != 0f) {
+                        scroll.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(-carried, 0f)) }
+                        compose.waitForIdle()
+                    }
+                    assertEquals(0f, scrollValue(), 0f)
+                    if (overflow > 0f) {
+                        scroll.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(overflow, 0f)) }
+                        compose.waitForIdle()
+                        assertEquals(overflow, scrollValue(), 0f)
+                        scroll.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(-overflow, 0f)) }
+                        compose.waitForIdle()
+                        assertEquals(0f, scrollValue(), 0f)
+                    }
+                    var path = "root"
+                    var previous: androidx.compose.ui.unit.DpRect? = null
+                    repeat(levels) { level ->
+                        val grid = compose.onNodeWithTag(if (level == 0) "compiled-table-grid" else "compiled-table-grid-$path",
+                            useUnmergedTree = true).assertExists()
+                        val info = grid.fetchSemanticsNode().config[SemanticsProperties.CollectionInfo]
+                        assertEquals(1, info.rowCount); assertEquals(1, info.columnCount)
+                        val bounds = grid.getUnclippedBoundsInRoot()
+                        assertEquals((expectedWidth - 2 * level).toFloat(), (bounds.right - bounds.left).value, 0f)
+                        assertEquals((expectedHeight - 2 * level).toFloat(), (bounds.bottom - bounds.top).value, 0f)
+                        previous?.let { parent ->
+                            assertEquals(parent.left.value + 1f, bounds.left.value, 0f)
+                            assertEquals(parent.top.value + 1f, bounds.top.value, 0f)
+                        }
+                        val cell = compose.onNodeWithTag("compiled-table-cell-$path-0", useUnmergedTree = true)
+                            .fetchSemanticsNode().config[SemanticsProperties.CollectionItemInfo]
+                        assertEquals(0, cell.rowIndex); assertEquals(0, cell.columnIndex)
+                        assertEquals(1, cell.rowSpan); assertEquals(1, cell.columnSpan)
+                        previous = bounds
+                        if (level + 1 < levels) path += "/0"
+                    }
+                    val painted = compose.onNodeWithTag("compiled-table-cell-$path-0", useUnmergedTree = true)
+                        .assertIsDisplayed().captureToImage().asAndroidBitmap()
+                    try {
+                        var blueInk = false
+                        var whiteBackground = false
+                        for (y in 0 until painted.height) for (x in 0 until painted.width) {
+                            val pixel = painted.getPixel(x, y)
+                            val red = android.graphics.Color.red(pixel)
+                            val green = android.graphics.Color.green(pixel)
+                            val blue = android.graphics.Color.blue(pixel)
+                            if (android.graphics.Color.alpha(pixel) > 0 && blue > red && red == green) blueInk = true
+                            if (pixel == android.graphics.Color.WHITE) whiteBackground = true
+                        }
+                        assertTrue("The deepest original blue link must actually paint on its white cell", blueInk && whiteBackground)
+                    } finally { painted.recycle() }
+                    compose.runOnIdle {
+                        val view = nativeOwner()
+                        val geometry = checkNotNull(view.currentMeasuredGeometry)
+                        assertEquals(label, view.logicalText.toString())
+                        // The chosen 16px one-line source fits the leaf's independent 40px
+                        // minimum after its two 1px insets; larger content must not be hidden.
+                        assertTrue(view.measuredHeight + 2 <= 40)
+                        val node = geometry.nodes.single()
+                        assertEquals(FloatInteractionKind.LINK, node.kind)
+                        assertEquals(0, node.start); assertEquals(label.length, node.end)
+                        assertEquals(label, node.label.toString())
+                        assertEquals(geometry.rectsForRange(0, label.length), node.bounds)
+                        val hit = node.bounds.first { !it.isEmpty }
+                        assertEquals(node.id, geometry.interactionNodeAt(hit.centerX(), hit.centerY())?.id)
+                        val location = IntArray(2); view.getLocationOnScreen(location)
+                        val expectedScreen = android.graphics.RectF().apply {
+                            node.bounds.forEach(::union)
+                            offset(location[0].toFloat() + view.paddingLeft, location[1].toFloat() + view.paddingTop)
+                        }.let { android.graphics.Rect().also(it::roundOut) }
+                        val visible = android.graphics.Rect()
+                        assertTrue(view.getGlobalVisibleRect(visible))
+                        assertTrue("The complete action must remain in the owned viewport", visible.contains(expectedScreen))
+                        val provider = view.accessibilityNodeProvider
+                        val ax = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                        try {
+                            assertTrue(ax.isClickable && ax.isVisibleToUser)
+                            assertEquals(label, ax.text.toString())
+                            val actualScreen = android.graphics.Rect(); ax.getBoundsInScreen(actualScreen)
+                            assertEquals(expectedScreen, actualScreen)
+                            assertTrue(ax.actionList.any { it.id == android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK })
+                        } finally { ax.recycle() }
+                        val before = calls.size
+                        view.setSelection(0, label.length)
+                        assertEquals(label, view.selectedTextForCopy())
+                        assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                        assertNull(view.selectedTextForCopy())
+                        assertEquals(before, calls.size)
+                        assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                        assertEquals(before + 1, calls.size)
+                        assertEquals(EntryLink("deep-original-target"), calls.last())
+                    }
+                }
+            }
+            compose.runOnIdle { assertEquals(6, calls.size) }
+        } catch (error: Throwable) {
+            failure = error
+            throw error
+        } finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} } }
+            catch (cleanup: Throwable) {
+                val primary = failure
+                if (primary == null) throw cleanup
+                if (cleanup !== primary) primary.addSuppressed(cleanup)
+            }
+        }
+    }
+
 }

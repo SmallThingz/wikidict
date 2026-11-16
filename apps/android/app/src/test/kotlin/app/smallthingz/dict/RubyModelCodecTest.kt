@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Literal S data-boundary controls. No producer, layout, auto-hiding or graphical fidelity claim. */
+/** Literal S/T data-boundary controls. No producer, layout, auto-hiding or graphical fidelity claim. */
 class RubyModelCodecTest {
     private fun text(value: String) = Span("text", value)
     private fun base(vararg spans: Span, context: RubyOwner = RubyOwner(InlineFontSnapshot())) =
@@ -34,6 +34,7 @@ class RubyModelCodecTest {
         private val out = ByteArrayOutputStream()
         val at = linkedMapOf<String, Int>()
         var rootOverride: ((String) -> Unit)? = null
+        var paragraphOverride: (() -> Unit)? = null
         private var selected = emptyList<Span>()
         private fun mark(name: String) { check(at.put(name, out.size()) == null) }
         private fun byte(value: Int) { out.write(value) }
@@ -87,7 +88,7 @@ class RubyModelCodecTest {
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
-            if (version == 'S') {
+            if (version == 'S' || version == 'T') {
                 mark("$label.ruby"); byte(if (value.ruby == null) 0 else 1)
                 value.ruby?.let { ruby(it, label) }
             } else require(value.ruby == null)
@@ -166,6 +167,7 @@ class RubyModelCodecTest {
             repeat(4) { byte(0) } // alignment, paragraph style, Figure, anonymous flow
         }
         private fun paragraph(body: Boolean = true, literal: List<Span> = emptyList()) {
+            if (body && paragraphOverride != null) { checkNotNull(paragraphOverride).invoke(); return }
             if (body) prefix(0, true) else {
                 byte(0); byte(0); byte(0); spans(literal, "sibling-${out.size()}"); byte(0); string(""); string("")
             }
@@ -267,6 +269,32 @@ class RubyModelCodecTest {
             }
             return out.toByteArray()
         }
+        /** Raw table edges do not consume content depth; a rich caption does. */
+        fun tableChain(depth: Int, mixed: Boolean = false, captionAt: Int = 0) {
+            require(depth > 0 && (captionAt == 0 || captionAt in 1 until depth))
+            fun emit(level: Int, block: Boolean) {
+                if (block) prefix(12)
+                byte(1); byte(0) // ordinary table, no legacy geometry
+                spans(emptyList(), "deep.$level.caption")
+                val caption = level == captionAt
+                mark("deep.$level.rows"); u32(if (caption) 0 else 1)
+                if (!caption) {
+                    u32(1); byte(0); mark("deep.$level.colspan"); u16(1); u16(1); byte(0)
+                    if (level == depth) root("root") else spans(emptyList(), "deep.$level.cell")
+                    val ordered = mixed && level % 2 == 0 && level < depth
+                    if (level < depth && !ordered) emit(level + 1, false) else byte(0)
+                    byte(if (ordered) 1 else 0)
+                    if (ordered) { u32(1); emit(level + 1, true) }
+                    byte(0) // cell style
+                }
+                byte(0) // table style
+                byte(if (caption) 1 else 0)
+                if (caption) { u32(1); emit(level + 1, true) }
+                if (block) tail()
+            }
+            emit(1, true)
+        }
+
         /** Produces invalid depth without first asking the typed constructor to accept it. */
         fun chain(depth: Int, label: String) {
             mark("$label.count"); u32(1)
@@ -646,7 +674,7 @@ class RubyModelCodecTest {
         for (size in 0 until bytes.size) reject("Truncation at $size", bytes.copyOf(size))
         reject("Trailing byte", bytes + byteArrayOf(0))
         for (version in listOf('Q', 'R')) reject("Old header cannot carry S tails", changed(bytes, 3, version.code))
-        val unknown = runCatching { read(changed(bytes, 3, 'T'.code)) }.exceptionOrNull()
+        val unknown = runCatching { read(changed(bytes, 3, 'U'.code)) }.exceptionOrNull()
         assertEquals("Unsupported presentation format", unknown!!.message)
     }
 
@@ -805,5 +833,153 @@ class RubyModelCodecTest {
             assertArrayEquals(frozen, bytes)
             assertEquals(if (version == 'P') BodyAdjoiningPolicy.Ordinary else null, entry.bodyAdjoining)
         }
+    }
+
+    private fun expectedTableChain(values: List<Span>, depth: Int, mixed: Boolean = false,
+        captionAt: Int = 0): Table {
+        var table = Table(emptyList(), listOf(listOf(Cell(values, false, 1, 1))))
+        for (level in depth - 1 downTo 1) {
+            val block = Block("table", 0, emptyList(), table = table)
+            table = when {
+                level == captionAt -> Table(emptyList(), emptyList(), captionBlocks = listOf(block))
+                mixed && level % 2 == 0 -> Table(emptyList(), listOf(listOf(
+                    Cell(emptyList(), false, 1, 1, blocks = listOf(block)))))
+                else -> Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = table))))
+            }
+        }
+        return table
+    }
+
+    @Test fun literalTDepthEnvelopeKeepsFullMixedTableReferenceCaptionAndOptionalRubyData() {
+        val action = Span("link", "Deep😀", "Deep target", trail = "s", targetFragment = "part",
+            explanation = "Deep explanation", tooltip = "Deep advisory")
+        val plain = listOf(text("before "), action, text(" after"))
+        assertArrayEquals(Wire('S').isolatedSpan(action), Wire('T').isolatedSpan(action))
+        for (depth in listOf(17, 20, 32)) {
+            val mixed = depth != 17
+            val captionAt = if (depth == 20) 8 else 0
+            val reference = depth == 32
+            for (withRuby in listOf(false, true)) {
+                val typed = owner(listOf(base(action)), listOf(annotation(text("reading"))))
+                val values = if (withRuby) listOf(plain.first(), typed, plain.last()) else plain
+                val wire = Wire('T').apply { paragraphOverride = { tableChain(depth, mixed, captionAt) } }
+                val bytes = wire.document(values, if (reference) Sink.ReferenceBlocks else Sink.Body)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 84), bytes.copyOfRange(0, 4))
+                assertEquals(0, bytes[wire.at.getValue("features")].toInt())
+                val frozen = bytes.copyOf()
+                val entry = read(bytes)
+                assertEquals("Ruby", entry.title)
+                assertTrue(entry.displayTitle.isEmpty()); assertTrue(entry.preamble.isEmpty())
+                assertTrue(entry.media.isEmpty()); assertNull(entry.bodyAdjoining)
+                val expected = expectedTableChain(values, depth, mixed, captionAt)
+                val block = if (reference) {
+                    assertTrue(entry.sections.isEmpty())
+                    val ref = entry.references.single()
+                    assertEquals(ReferenceKind.Fragment, ref.kind)
+                    assertEquals(1L, ref.number); assertNull(ref.groupNumber)
+                    assertEquals("ruby-ref", ref.group); assertTrue(ref.spans.isEmpty())
+                    checkNotNull(ref.blocks).single()
+                } else {
+                    assertTrue(entry.references.isEmpty())
+                    val section = entry.sections.single()
+                    assertEquals(2, section.level); assertEquals("Body", section.title)
+                    assertEquals("", section.anchor); assertEquals("", section.anchorFallback)
+                    section.blocks.single()
+                }
+                assertEquals(Block("table", 0, emptyList(), table = expected), block)
+                val depths = mutableListOf<Int>(); val contentDepths = mutableListOf<Int>()
+                val runs = mutableListOf<List<Span>>()
+                val visitor = PresentationSpanVisitor { spans, _ -> if (spans.isNotEmpty()) runs.add(spans) }
+                visitor.onTable = { _, tableDepth, contentDepth -> depths.add(tableDepth); contentDepths.add(contentDepth) }
+                visitor.table(checkNotNull(block.table))
+                assertEquals((1..depth).toList(), depths)
+                assertEquals((1..depth).map { if (captionAt != 0 && it > captionAt) 1 else 0 }, contentDepths)
+                assertEquals(values, runs.single())
+                val decodedAction = if (withRuby) checkNotNull(runs.single()[1].ruby)
+                    .segments.single().bases.single().spans.single() else runs.single()[1]
+                assertEquals(action, decodedAction)
+                assertEquals(EntryLink("Deep target", "part"), decodedAction.entryLink())
+                assertEquals(if (withRuby) "before Deep😀s（reading） after" else "before Deep😀s after",
+                    rubyFallbackText(runs.single()))
+                assertArrayEquals(frozen, bytes)
+            }
+        }
+        // Optional Q/R payloads remain independent of T's required deep-table census.
+        val optional = Wire('T').apply { paragraphOverride = { tableChain(17) } }
+            .document(plain, Sink.Body, alignment = true, clear = true)
+        val entry = read(optional)
+        assertEquals(expectedTableChain(plain, 17), entry.sections.single().blocks.first().table)
+        assertEquals(InlineImageVerticalAlign.Baseline, entry.inlineImages.single().verticalAlign)
+        assertEquals(FigureClear.None, entry.sections.single().blocks.last().ruleStyle!!.clear)
+    }
+
+    @Test fun tDepthCensusDoesNotRelaxLegacyContentRubyFeatureOrAggregateGuards() {
+        val plain = listOf(Span("link", "Deep", "Target", targetFragment = "part", tooltip = "tip"))
+        val typed = listOf(simple())
+        fun wire(version: Char, depth: Int, mixed: Boolean = false, captionAt: Int = 0) =
+            Wire(version).apply { paragraphOverride = { tableChain(depth, mixed, captionAt) } }
+        for (depth in listOf(1, 16)) for (values in listOf(plain, typed))
+            reject("T requires actual table depth17..32: $depth", wire('T', depth).document(values, Sink.Body))
+        reject("T cannot be selected by an ordinary display", Wire('T').document(typed))
+        reject("T33 raw nested tables", wire('T', 33).document(plain, Sink.Body))
+        reject("T33 across ordered cells and caption", wire('T', 33, true, 8).document(typed, Sink.ReferenceBlocks))
+        assertEquals(expectedTableChain(typed, 16), read(wire('S', 16).document(typed, Sink.Body))
+            .sections.single().blocks.single().table)
+        reject("S still caps table depth16", wire('S', 17).document(typed, Sink.Body))
+        reject("S still requires Ruby", wire('S', 16).document(plain, Sink.Body))
+        val deep = wire('T', 17).document(typed, Sink.Body)
+        reject("Same S payload cannot be relabelled to allow deep tables", changed(deep, 3, 'S'.code))
+        assertEquals(expectedTableChain(plain, 16), read(wire('R', 16).document(plain, Sink.Body, clear = true))
+            .sections.single().blocks.first().table)
+        reject("Literal legacy R still caps table depth16", wire('R', 17).document(plain, Sink.Body, clear = true))
+
+        val rich = owner(listOf(base(text("base"))), listOf(annotation(text("reading"), context = RubyOwner(
+            InlineFontSnapshot(fontFamily = ContainerFontFamily.SansSerif),
+            inlineStyle = InlineTextStyle(wrap = TextWrap.BreakWord)))))
+        val featureWire = wire('T', 20, true, 8)
+        val featureBytes = featureWire.document(listOf(rich), Sink.ReferenceBlocks, features = 20)
+        assertEquals(expectedTableChain(listOf(rich), 20, true, 8), read(featureBytes).references.single().blocks!!.single().table)
+        for (flags in listOf(0, 4, 16, 20 or 8, 20 or 32, 20 or 64, 20 or 128))
+            reject("T preserves exact owner-family/wrap feature census: $flags",
+                changed(featureBytes, featureWire.at.getValue("features"), flags))
+        val literal = wire('T', 17)
+        val bytes = literal.document(plain, Sink.Body)
+        reject("T unused family bit", changed(bytes, literal.at.getValue("features"), 4))
+        reject("Strict nullable Ruby presence on ordinary T span", changed(bytes, literal.at.getValue("root.0.ruby"), 2))
+        reject("Deep cell colspan still excludes zero", changed(bytes, literal.at.getValue("deep.17.colspan"), 0))
+        reject("Presentation count remains bounded", changed32(bytes, literal.at.getValue("root.count"), (1L shl 20) + 1))
+        reject("String byte limit remains bounded", changed32(bytes, literal.at.getValue("root.0.text"), 32L * 1024 * 1024 + 1))
+        for (cut in listOf(0, 3, 4, literal.at.getValue("root.0.start"), literal.at.getValue("root.0.end"), bytes.size - 1))
+            reject("Truncated T at$cut", bytes.copyOf(cut))
+        reject("Trailing T byte", bytes + byteArrayOf(0))
+
+        fun rubyDepth(depth: Int, captionAt: Int = 0): ByteArray = wire('T', 17, true, captionAt).apply {
+            rootOverride = { chain(depth, it) }
+        }.document(emptyList(), Sink.Body)
+        for ((rubyCount, captionAt) in listOf(16 to 0, 15 to 8)) {
+            val entry = read(rubyDepth(rubyCount, captionAt))
+            val runs = mutableListOf<List<Span>>()
+            entry.sections.single().blocks.single().table!!.visitSpanRuns { spans, _ -> if (spans.isNotEmpty()) runs.add(spans) }
+            var span = runs.single().single()
+            repeat(rubyCount) { span = span.ruby!!.segments.single().bases.single().spans.single() }
+            assertEquals(text("漢"), span)
+        }
+        reject("T table depth cannot relax Ruby depth16", rubyDepth(17))
+        reject("Rich-caption content depth remains cumulative with Ruby", rubyDepth(16, 8))
+        val budget = wire('T', 17).apply { rootOverride = { aggregateBudget(it) } }.document(emptyList(), Sink.Body)
+        assertTrue("Complete owner bytes distinguish aggregate exhaustion from truncation", budget.size > 15_600_000)
+        reject("T preserves aggregate owner/item budget", budget)
+
+        val accepted = expectedTableChain(plain, 32, true, 8)
+        val seen = mutableListOf<Int>()
+        PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, depth, _ -> seen.add(depth) } }.table(accepted)
+        assertEquals((1..32).toList(), seen)
+        invalid("Direct model visitor rejects33") { PresentationSpanVisitor { _, _ -> }.table(expectedTableChain(plain, 33)) }
+        val cyclicRow = mutableListOf<Cell>()
+        val cycle = Table(emptyList(), listOf(cyclicRow))
+        cyclicRow.add(Cell(emptyList(), false, 1, 1, nestedTable = cycle))
+        val cycleFailure = runCatching { PresentationSpanVisitor { _, _ -> }.table(cycle) }.exceptionOrNull()
+        assertTrue(cycleFailure is IllegalArgumentException)
+        assertEquals("Table nesting is too deep", cycleFailure!!.message)
     }
 }

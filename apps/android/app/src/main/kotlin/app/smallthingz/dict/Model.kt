@@ -385,7 +385,8 @@ internal fun spanFontPixels(span: Span, contextPixels: Float, normalBodyPixels: 
     return (base.toDouble() * scale.toDouble() * legacy).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
 }
 
-internal const val MaxTableDepth = 16
+internal const val LegacyMaxTableDepth = 16
+internal const val MaxTableDepth = 32
 internal const val MaxContentDepth = 16
 
 enum class TableWidthUnit { Px, Percent }

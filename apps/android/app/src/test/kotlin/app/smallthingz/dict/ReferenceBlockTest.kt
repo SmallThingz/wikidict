@@ -303,8 +303,8 @@ class ReferenceBlockTest {
         assertThrows(Exception::class.java) { decode(oversizedCount) }
         fun nested(depth: Int): Block = if (depth == 0) Block("paragraph", 0, listOf(Span("text", "Leaf")))
             else tableBlock(nested(depth - 1))
-        assertNotNull(decode(fixture('C', listOf(Item(1, blocks = listOf(nested(MaxTableDepth)))))))
-        assertThrows(Exception::class.java) { decode(fixture('C', listOf(Item(1, blocks = listOf(nested(MaxTableDepth + 1)))))) }
+        assertNotNull(decode(fixture('C', listOf(Item(1, blocks = listOf(nested(LegacyMaxTableDepth)))))))
+        assertThrows(Exception::class.java) { decode(fixture('C', listOf(Item(1, blocks = listOf(nested(LegacyMaxTableDepth + 1)))))) }
     }
 
     @Test fun referenceBlockWalkersRetainActionsMediaAnnotationsWhitespaceAndEmptyAuthority() {

@@ -209,4 +209,37 @@ class NestedTableTest {
         assertEquals(listOf("abbr.", "abbr. File:nested.png"), order)
         assertEquals("Appendix:abbreviation", compact.rows.single().single().spans.first().target)
     }
+
+    @Test fun deepNativeMetricsKeepEveryPaddingInsetAndTheIndependentPixelLimit() {
+        val leaf = Table(emptyList(), listOf(listOf(cell("Deep leaf"))),
+            TableGeometry(border = 0, cellSpacing = 0, cellPadding = 0,
+                width = TableWidth(TableWidthUnit.Px, 100)))
+        fun chain(depth: Int): Table {
+            var table = leaf
+            repeat(depth - 1) { table = Table(emptyList(), listOf(listOf(cell(child = table))),
+                TableGeometry(border = 0, cellSpacing = 0, cellPadding = 1)) }
+            return table
+        }
+        for (depth in listOf(20, 32)) {
+            val source = chain(depth)
+            val metrics = checkNotNull(tableRenderMetrics(source, 1, 0, 1, 1f))
+            // Each real one-cell parent adds two authored pixels around the fixed 100px leaf.
+            assertEquals(100 + 2 * (depth - 1), metrics.width)
+            var current = source
+            repeat(depth - 1) { level ->
+                val grid = tableGrid(current)
+                assertEquals(1, grid.rows); assertEquals(1, grid.columns)
+                assertSame(current.rows.single().single(), grid.cells.single().cell)
+                val remaining = checkNotNull(tableRenderMetrics(current, 1, 0, 1, 1f))
+                assertEquals(100 + 2 * (depth - level - 1), remaining.width)
+                current = checkNotNull(current.rows.single().single().nestedTable)
+            }
+            assertSame(leaf, current)
+            assertEquals("Deep leaf", textOf(current.rows.single().single().spans))
+        }
+        assertNull(tableRenderMetrics(chain(33), 1, 0, 1, 1f))
+        val oversized = chain(20).copy(geometry = TableGeometry(border = 0, cellSpacing = 0,
+            cellPadding = 1, width = TableWidth(TableWidthUnit.Px, TablePixelLimit.toLong() + 1)))
+        assertNull(tableRenderMetrics(oversized, 1, 0, 1, 1f))
+    }
 }

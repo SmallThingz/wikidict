@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRS decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRT decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,12 +13,12 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..83) { "Unsupported presentation format" }
-        val version = if (magicVersion in 65..83) 57 else magicVersion
-        r.fontScales = magicVersion in 65..83
-        r.fontScaleBases = magicVersion in 66..83
-        r.tableStyles = magicVersion in 67..83
-        r.inlineImages = magicVersion in 67..83
+        require(magicVersion in 50..57 || magicVersion in 65..84) { "Unsupported presentation format" }
+        val version = if (magicVersion in 65..84) 57 else magicVersion
+        r.fontScales = magicVersion in 65..84
+        r.fontScaleBases = magicVersion in 66..84
+        r.tableStyles = magicVersion in 67..84
+        r.inlineImages = magicVersion in 67..84
         r.imageBorders = magicVersion >= 68
         r.blockLayouts = magicVersion >= 69
         r.targetFragments = magicVersion >= 70
@@ -30,7 +30,8 @@ object BlobDecoder {
         r.containers = magicVersion >= 76
         r.containerFonts = magicVersion >= 77
         r.ruleStyles = magicVersion >= 78
-        r.rubySpans = magicVersion == 83
+        r.rubySpans = magicVersion >= 83
+        r.tableDepthLimit = if (magicVersion == 84) MaxTableDepth else LegacyMaxTableDepth
         r.ruleClears = magicVersion >= 82
         r.imageLinkPaints = magicVersion >= 82
         r.inlineStyles = magicVersion >= 79
@@ -130,7 +131,10 @@ object BlobDecoder {
         require(r.rubySpans || r.tableIntrinsicViewports == (r.hasTableIntrinsicViewport || r.hasRuleClearFeature || r.hasImageLinkPaintFeature)) {
             "R version does not match intrinsic table viewport, rule clear, or image link paint payload"
         }
-        require(r.rubySpans == r.hasRuby) { "S version does not match ruby payload" }
+        require(magicVersion == 84 || r.rubySpans == r.hasRuby) { "S version does not match ruby payload" }
+        require((magicVersion == 84) == (r.maximumTableDepth > LegacyMaxTableDepth)) {
+            "T version does not match deep table payload"
+        }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, references, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -197,6 +201,9 @@ object BlobDecoder {
             private set
         private var remainingMapStringBytes = 32L * 1024 * 1024
         private var contentDepth = 0
+        var tableDepthLimit = LegacyMaxTableDepth
+        var maximumTableDepth = 0
+            private set
         val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
@@ -870,7 +877,8 @@ object BlobDecoder {
             require(tableFlags == 1 || containerFonts && (tableFlags == 3 || tableFlags == 5) ||
                 tableFloatClears && tableFlags == 13 || tableScrollPairs && tableFlags == 7 ||
                 tableIntrinsicViewports && tableFlags == 19) { "Invalid table presence flags" }
-            require(depth <= MaxTableDepth) { "Table nesting is too deep" }
+            require(depth <= tableDepthLimit) { "Table nesting is too deep" }
+            maximumTableDepth = maxOf(maximumTableDepth, depth)
             val geometry = if (!nestedTables) null else {
                 val flags = byte()
                 require(flags and 0xf0 == 0) { "Unknown table geometry flags" }
