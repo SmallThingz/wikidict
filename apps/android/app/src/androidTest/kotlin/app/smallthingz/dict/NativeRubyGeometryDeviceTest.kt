@@ -14,7 +14,6 @@ import android.text.TextPaint
 import android.text.style.MetricAffectingSpan
 import android.text.style.SuperscriptSpan
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.filters.SdkSuppress
 import java.util.IdentityHashMap
 import java.util.Locale
 import kotlin.math.ceil
@@ -25,7 +24,6 @@ import org.junit.runner.RunWith
 /** Direct native geometry and raster controls. Entry/View routing and OS actions are
  * separate controls; this donor never creates a View or changes input/focus state. */
 @RunWith(AndroidJUnit4::class)
-@SdkSuppress(minSdkVersion = 31)
 class NativeRubyGeometryDeviceTest {
     private val bodyPixels = 24f
     private fun policy(zero: Boolean, numeric: Float? = null) = InlineTextStyle(

@@ -1,6 +1,5 @@
 package app.smallthingz.dict
 
-import android.annotation.TargetApi
 import android.graphics.Canvas
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -195,11 +194,9 @@ private data class RubyRun(val start: Int, val end: Int, val contextStart: Int, 
 private data class RubyRunPiece(val start: Int, val end: Int, val left: Float, val advance: Float)
 private data class RubyRunPlan(val run: RubyRun, val pieces: List<RubyRunPiece>)
 
-@TargetApi(31)
 private fun rubyShape(text: CharSequence, start: Int, end: Int, contextStart: Int, contextEnd: Int,
     rtl: Boolean, paint: Paint): NativeRubyGlyphRun = rubyGlyphs(TextRunShaper.shapeTextRun(text,
     start, end - start, contextStart, contextEnd - contextStart, 0f, 0f, rtl, paint))
-@TargetApi(31)
 private fun rubyGlyphs(value: PositionedGlyphs): NativeRubyGlyphRun {
     val glyphs = (0 until value.glyphCount()).map { index -> NativeRubyGlyph(value.getGlyphId(index), value.getFont(index),
         value.getGlyphX(index) - value.offsetX, value.getGlyphY(index) - value.offsetY) }
@@ -336,7 +333,6 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
     override fun setMatrix(matrix: Matrix?) = unsupported()
 }
 
-@TargetApi(31)
 private fun rubyRunPlans(source: CharSequence,
     runs: List<RubyRun>, candidateCuts: List<Int>): Pair<List<NativeRubyPhysicalCut>, List<RubyRunPlan>> {
     // These are the actual shaped line's source/context/direction tuples. Do not run
