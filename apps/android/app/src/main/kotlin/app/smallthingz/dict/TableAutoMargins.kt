@@ -2,6 +2,18 @@ package app.smallthingz.dict
 
 import kotlin.math.abs
 
+/** Only an admitted root table's actual automatic-margin owner replaces its legacy gap.
+ * Other roots retain their original gaps and the adjoining layout's refusal checks. */
+internal fun nativeTableBodyAdjoiningSpec(block: Block, policy: BodyAdjoiningPolicy?, bodyRoot: Boolean,
+    child: NativeFloatContextSpec.Child): NativeFloatContextSpec.Child {
+    if (policy != BodyAdjoiningPolicy.Ordinary || !bodyRoot || block.kind != "table" ||
+        block.depth != 0 || block.listPath.isNotEmpty() || block.number.isNotEmpty() ||
+        block.spans.isNotEmpty() || block.feature != null || block.table == null ||
+        child.autoMarginTable !== block.table || child.autoMargins == null ||
+        child.atomicInline || child.floatSide != null || child.gapBefore != 0f) return child
+    return child.copy(gapAfter = 0f)
+}
+
 /** The table producer normalizes em to the independent normal-body font once. */
 internal data class NativeTableAutoMargins(
     val fixed: FloatMargins,

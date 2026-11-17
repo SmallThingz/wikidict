@@ -202,4 +202,107 @@ class TableAutoMarginsTest {
         assertEquals(Float.MAX_VALUE, edges.top.value, 0f)
     }
 
+
+    @Test fun ordinaryRootTableMarginsReplaceOnlyItsLegacyGapAndAdjoinOnce() {
+        val authored = margins().copy(
+            top = ContainerMargin.Length(StyleLength(StyleLengthUnit.Em, .25f)),
+            bottom = ContainerMargin.Length(StyleLength(StyleLengthUnit.Px, 3.5f)))
+        val action = Span("link", "body", "target", targetFragment = "section", trail = "s")
+        val cell = Cell(listOf(action), false, 1, 1)
+        val table = Table(listOf(Span("text", "caption")), listOf(listOf(cell)), style = style(authored))
+        val block = Block("table", 0, emptyList(), table = table)
+        val pixels = resolveTableAutoMargins(authored, 2f, 20f)
+        val original = NativeFloatContextSpec.Child(71, { 60 }, 6f,
+            margins = { pixels.fixed }, widthFromContent = true,
+            preferredWidth = { 60 }, autoMarginTable = table, autoMargins = pixels)
+        val selected = nativeTableBodyAdjoiningSpec(block, BodyAdjoiningPolicy.Ordinary, true, original)
+        assertEquals(original.copy(gapAfter = 0f), selected)
+        assertSame(original.width, selected.width); assertSame(original.margins, selected.margins)
+        assertSame(original.preferredWidth, selected.preferredWidth)
+        assertSame(table, selected.autoMarginTable); assertSame(cell, selected.autoMarginTable!!.rows.single().single())
+        assertSame(action, selected.autoMarginTable!!.rows.single().single().spans.single())
+        assertEquals("section", action.targetFragment); assertEquals("s", action.trail)
+        assertEquals(FloatMargins(5f, 0f, 7f, 0f), selected.margins(100))
+        fun part(spec: NativeFloatContextSpec.Child) = NativeFloatContextPart.Child(spec.id,
+            NativeBlockWidth.FixedPx(spec.width(100).toFloat()),
+            { error("A structural query must not measure the table") }, gapAfter = spec.gapAfter,
+            margins = spec.margins(100), gapBefore = spec.gapBefore, clear = spec.clear)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatContextGeometry.adjoiningProfile(part(original))
+        }
+        val own = checkNotNull(NativeFloatContextGeometry.adjoiningProfile(part(selected)))
+        assertEquals(NativeAdjoiningMargins(5f, 7f, false), own)
+        for (height in listOf(0f, 20f)) {
+            val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+            val first = body.begin(own)
+            assertEquals(0f, first.borderTop, 0f)
+            body.end(first, height, own)
+            assertFalse(body.adjoiningTop) // Even a zero-height table is an atomic barrier.
+            val following = NativeAdjoiningMargins(11f, 0f, false)
+            assertEquals(height + 11f, body.begin(following).borderTop, 0f)
+        }
+        for (direction in TableContainingDirection.entries) {
+            val body = NativeMarginCursor(NativeMarginCollapse(true, true))
+            val previous = NativeAdjoiningMargins(0f, 9f, false)
+            body.end(body.begin(previous), 10f, previous)
+            val at = body.begin(own)
+            assertEquals(19f, at.borderTop, 0f) // max(9, 5), not an added gap or a second margin.
+            val placed = placeNativeAutoMarginTable(100f, at.borderTop, emptyList(),
+                pixels.copy(fixed = pixels.fixed.copy(top = 0f, bottom = 0f)), direction) {
+                NativeBlockMeasure(60f, 60f, 20f)
+            }
+            assertEquals(NativeFloatBounds(20f, 19f, 80f, 39f), placed.content)
+            assertEquals(39f, placed.nextY, 0f)
+            body.end(at, placed.nextY - at.borderTop, own)
+            val following = NativeAdjoiningMargins(3f, 0f, false)
+            val next = body.begin(following)
+            assertEquals(46f, next.borderTop, 0f) // max(7, 3), counted once.
+            body.end(next, 4f, following)
+            assertEquals(50f, body.finish(), 0f)
+        }
+    }
+
+    @Test fun ordinaryRootTableGapRequiresItsPreparedOwnerAndPreservesUnknownRoots() {
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1))), style = style(margins()))
+        val block = Block("table", 0, emptyList(), table = table)
+        val original = NativeFloatContextSpec.Child(72, { it }, 6f,
+            margins = { FloatMargins(0f, 0f, 0f, 0f) }, autoMarginTable = table,
+            autoMargins = resolveTableAutoMargins(table.style!!.marginValues!!, 1f, 20f), clear = FigureClear.Both)
+        fun select(source: Block = block, policy: BodyAdjoiningPolicy? = BodyAdjoiningPolicy.Ordinary,
+            root: Boolean = true, spec: NativeFloatContextSpec.Child = original) =
+            nativeTableBodyAdjoiningSpec(source, policy, root, spec)
+        assertSame(original, select(policy = null)); assertSame(original, select(root = false))
+        for (source in listOf(block.copy(kind = "list_item", depth = 1, listPath = "*"),
+            block.copy(depth = 1), block.copy(listPath = ":"), block.copy(number = "1"),
+            block.copy(spans = listOf(Span("text", "unowned prefix"))),
+            block.copy(feature = Feature("unknown", "xx", "", "", "")),
+            Block("paragraph", 0, listOf(Span("text", "ordinary"))))) {
+            assertSame(original, select(source = source))
+        }
+        val fixed = table.copy(style = TableStyle(margins = StyleEdges(
+            StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f),
+            StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f))))
+        val unsupported = listOf(original.copy(autoMarginTable = null), original.copy(autoMargins = null),
+            original.copy(autoMarginTable = table.copy()), // Equal model is not the selected source owner.
+            original.copy(autoMarginTable = fixed, autoMargins = null),
+            original.copy(atomicInline = true), original.copy(floatSide = TableFloatSide.Left, gapAfter = 0f),
+            original.copy(gapBefore = 2f))
+        for (spec in unsupported) assertSame(spec, select(spec = spec))
+        val selected = select()
+        assertEquals(original.copy(gapAfter = 0f), selected)
+        assertEquals(FigureClear.Both, selected.clear)
+        assertEquals(0f, selected.margins(100).top, 0f)
+        assertEquals(0f, selected.margins(100).bottom, 0f) // Explicit zero differs from missing owner.
+        val missingOwner = original.copy(autoMarginTable = null, autoMargins = null)
+        val retained = select(spec = missingOwner)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatContextGeometry.adjoiningProfile(NativeFloatContextPart.Child(retained.id,
+                NativeBlockWidth.Auto, { error("No measurement before authority") }, gapAfter = retained.gapAfter))
+        }
+        val unresolvedFlow = NativeFloatContextPart.Flow(73,
+            { _, _ -> error("No Figure measurement during a structural query") }, gapAfter = 6f)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatContextGeometry.adjoiningProfile(unresolvedFlow)
+        }
+    }
 }

@@ -2391,7 +2391,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         ?.let { it == TableContainingDirection.Rtl } ?: rtl,
                     marginsConsumed = floatViewport != null || cornerFocusTable || intrinsicTable != null)
             }
-            listOf(NativeFloatContextSpec.Child(index, { originalWidth ->
+            listOf(nativeTableBodyAdjoiningSpec(block, bodyAdjoining,
+                leaf.rootIndex != null && !leaf.inContainer, NativeFloatContextSpec.Child(index, { originalWidth ->
                 if (!nativeTableAdmitted || table == null || tableFeature != null || table.style?.isInline == true) originalWidth else {
                     val metrics = natural(originalWidth)?.let { tableMetricsInWidth(table, it, tableGrid(table).columns, originalWidth) }
                     val margins = if (!externalMargins) metrics?.style?.margins?.horizontal ?: 0 else 0
@@ -2460,7 +2461,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         block.kind == "list_item" && blockPrefix(block).isNotEmpty() || tableFeature != null)
                         throw UnsupportedFloatLayout("Table block viewport needs its own unshifted source box")
                     resolveTableBlockBox(policy, containingWidth.toFloat(), density.density, normalBodyPixels)
-                } }, intrinsicMarginTable = intrinsicTable))
+                } }, intrinsicMarginTable = intrinsicTable)))
         }
         if (paragraphFailure == null) rendered else listOf(NativeFloatContextSpec.Container(
             sourceId(leaf.path + "/unavailable"), contentWidth = { width, _ -> width },
