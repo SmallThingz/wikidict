@@ -24761,6 +24761,59 @@ private slots:
         QCOMPARE(window.learning_.history().size(), historyCount);
     }
 
+    void localizedCatalogueFallbackPreservesRequestedLanguage_data() {
+        QTest::addColumn<QString>("requested");
+        QTest::addColumn<bool>("savedPreference");
+        QTest::addColumn<bool>("classifiedAvailable");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("fresh-localized") << QString() << false << true << QStringLiteral("ancien anglais");
+        QTest::newRow("missing-saved-language") << QStringLiteral("French") << true << true << QStringLiteral("ancien anglais");
+        QTest::newRow("saved-classified") << QStringLiteral("anglais") << true << true << QStringLiteral("anglais");
+        QTest::newRow("saved-unclassified") << QStringLiteral("Unclassified") << true << true << QStringLiteral("Unclassified");
+        QTest::newRow("only-unclassified") << QString() << false << false << QStringLiteral("Unclassified");
+    }
+
+    void localizedCatalogueFallbackPreservesRequestedLanguage() {
+        QFETCH(QString, requested);
+        QFETCH(bool, savedPreference);
+        QFETCH(bool, classifiedAvailable);
+        QFETCH(QString, expected);
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-localized-catalogue-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString word = QStringLiteral("thorn");
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+            QByteArrayLiteral("und"), QByteArrayLiteral("Unclassified"), true));
+        if (classifiedAvailable) {
+            QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+                QByteArrayLiteral("ang"), QByteArrayLiteral("ancien anglais")));
+            QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+                QByteArrayLiteral("en"), QByteArrayLiteral("anglais")));
+        }
+        QSettings settings;
+        QVERIFY(!settings.contains(QStringLiteral("reader/language")));
+        if (savedPreference) settings.setValue(QStringLiteral("reader/language"), requested);
+        const QString root = directory.path() + QStringLiteral("/library");
+        MainWindow window(root, word); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), word);
+        const QStringList catalogue = classifiedAvailable
+            ? QStringList{QStringLiteral("Unclassified"), QStringLiteral("ancien anglais"), QStringLiteral("anglais")}
+            : QStringList{QStringLiteral("Unclassified")};
+        QStringList visibleCatalogue;
+        for (int i = 0; i < window.language_->count(); ++i) visibleCatalogue.append(window.language_->itemText(i));
+        QCOMPARE(visibleCatalogue, catalogue);
+        QCOMPARE(window.api_->language(), expected);
+        QCOMPARE(window.api_->kind(), QStringLiteral("language"));
+        QCOMPARE(window.language_->currentText(), expected);
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("language")).toString(), expected);
+        QCOMPARE(QSettings().value(QStringLiteral("reader/language")).toString(), expected);
+        const bool unclassified = expected == QStringLiteral("Unclassified");
+        QVERIFY(window.reading_->toPlainText().contains(unclassified
+            ? QStringLiteral("A river animal.") : QStringLiteral("A small animal.")));
+        QVERIFY(!window.reading_->toPlainText().contains(unclassified
+            ? QStringLiteral("A small animal.") : QStringLiteral("A river animal.")));
+    }
+
     void ordinaryLinksFallBackOnlyToExactSameEditionUnclassified() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-unclassified-links-XXXXXX"));
         QVERIFY(directory.isValid());

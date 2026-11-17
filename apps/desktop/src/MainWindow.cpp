@@ -3359,8 +3359,12 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 for (const QJsonValue &value : QJsonDocument::fromJson(loaded->api->languages()).object().value(QStringLiteral("languages")).toArray())
                     loaded->languages.append(value.toString());
             }
-            const QString selected = loaded->languages.isEmpty() ? QString() :
-                (resetVisits && !loaded->languages.contains(language) ? loaded->languages.first() : language);
+            QString selected = loaded->languages.isEmpty() ? QString() : language;
+            if (resetVisits && !loaded->languages.isEmpty() && !loaded->languages.contains(language)) {
+                const auto classified = std::find_if(loaded->languages.cbegin(), loaded->languages.cend(),
+                    [](const QString &label) { return label != QStringLiteral("Unclassified"); });
+                selected = classified == loaded->languages.cend() ? loaded->languages.first() : *classified;
+            }
             QStringList candidates{kind};
             if (resetVisits) {
                 candidates.append(QStringLiteral("language"));
