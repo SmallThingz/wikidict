@@ -3796,8 +3796,18 @@ void MainWindow::setupUi() {
                 if (api_ && !loading_ && api_->kind() == QStringLiteral("language") && section) {
                     QString owner = *section;
                     owner.replace(QChar('_'), QChar(' '));
-                    // Only exact installed owner headings in this edition select another dictionary.
-                    explicitOwner = language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0;
+                    // Prefer the exact installed label. A localized source heading
+                    // may differ in case; use it only when one installed owner matches.
+                    int ownerIndex = language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive);
+                    if (ownerIndex < 0) {
+                        for (int i = 0; i < language_->count(); ++i) {
+                            if (owner.compare(language_->itemText(i), Qt::CaseInsensitive) != 0) continue;
+                            if (ownerIndex >= 0) { ownerIndex = -1; break; }
+                            ownerIndex = i;
+                        }
+                    }
+                    explicitOwner = ownerIndex >= 0;
+                    if (explicitOwner) owner = language_->itemText(ownerIndex);
                     if (owner != api_->language() && explicitOwner) {
                         loadDataset(api_->root(), owner, api_->kind(), false, word, -1,
                             originRoot_, originEdition_, section);

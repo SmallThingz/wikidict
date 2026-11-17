@@ -24677,6 +24677,110 @@ private slots:
         QCOMPARE(window.results_->item(0)->data(Qt::UserRole).toString(), QStringLiteral("page001"));
     }
 
+    void localizedLanguageFragmentSelectsUniqueInstalledOwner_data() {
+        QTest::addColumn<QString>("fragment");
+        QTest::addColumn<QStringList>("installedOwners");
+        QTest::addColumn<QString>("expectedOwner");
+        const QString lower = QString::fromUtf8("kurmancî");
+        const QString capital = QString::fromUtf8("Kurmancî");
+        const QString source = QString::fromUtf8("zazakî");
+        QTest::newRow("genuine-shared-title") << capital << QStringList{lower} << lower;
+        QTest::newRow("unicode-case-insensitive") << QString::fromUtf8("KURMANCÎ") << QStringList{lower} << lower;
+        QTest::newRow("exact-label-precedence") << capital << QStringList{lower, capital} << capital;
+        QTest::newRow("ambiguous-case-insensitive") << QString::fromUtf8("KURMANCÎ") << QStringList{lower, capital} << source;
+        QTest::newRow("no-installed-owner") << QStringLiteral("Missing_owner") << QStringList{lower} << source;
+        QTest::newRow("current-owner-case-insensitive") << QString::fromUtf8("ZAZAKÎ") << QStringList{lower} << source;
+    }
+
+    void localizedLanguageFragmentSelectsUniqueInstalledOwner() {
+        QFETCH(QString, fragment);
+        QFETCH(QStringList, installedOwners);
+        QFETCH(QString, expectedOwner);
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-localized-language-fragments-XXXXXX"));
+        QVERIFY(directory.isValid());
+        // Controlled imported records reproduce the genuine shared title and
+        // localized owner labels; they do not substitute for its rendered body.
+        const QString word = QString::fromUtf8("şeş");
+        const QString sourceOwner = QString::fromUtf8("zazakî");
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+            QByteArrayLiteral("zza"), sourceOwner.toUtf8()));
+        for (const auto &owner : installedOwners)
+            QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), {word},
+                QByteArrayLiteral("ku"), owner.toUtf8(), true));
+        const QString root = directory.path() + QStringLiteral("/library");
+        QFile edition(root + QStringLiteral("/.desktop-edition"));
+        QVERIFY(edition.open(QIODevice::WriteOnly));
+        const QByteArray editionBytes = QByteArrayLiteral("kuwiktionary-20261001\n");
+        QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size()));
+        edition.close();
+        QCOMPARE(LibraryStorage::editionIdentity(root), QString::fromUtf8(editionBytes).trimmed());
+        QSettings().setValue(QStringLiteral("reader/language"), sourceOwner);
+        MainWindow window(root, word); window.show(); window.activateWindow();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), word);
+        QCOMPARE(window.api_->language(), sourceOwner);
+        for (const auto &owner : installedOwners)
+            QVERIFY(window.language_->findText(owner, Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0);
+        const QString originalRoot = window.originRoot_;
+        const QString originalEdition = window.originEdition_;
+        const QString originalKey = window.savedWord(window.currentEntry_).key;
+        const unsigned serial = window.loadSerial_;
+        const QString target = word + QChar('#') + fragment;
+        QJsonObject response = QJsonDocument::fromJson(window.api_->lookup(word)).object();
+        QJsonObject entry = response.value(QStringLiteral("entries")).toArray().first().toObject();
+        QJsonArray preamble = entry.value(QStringLiteral("preamble_spans")).toArray();
+        preamble.append(QJsonObject{{QStringLiteral("kind"), QStringLiteral("link")},
+            {QStringLiteral("text"), QStringLiteral("Follow localized owner")}, {QStringLiteral("target"), target}});
+        entry.insert(QStringLiteral("preamble_spans"), preamble);
+        response.insert(QStringLiteral("entries"), QJsonArray{entry});
+        QVERIFY(window.renderResponse(QJsonDocument(response).toJson(), false));
+        const QUrl expectedUrl(QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target)));
+        auto *reader = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(reader);
+        QAccessibleInterface *link = nullptr;
+        for (int i = 0; i < reader->childCount(); ++i) {
+            auto *child = reader->child(i);
+            if (child && child->role() == QAccessible::Link && child->text(QAccessible::Name) == QStringLiteral("Follow localized owner")) {
+                QVERIFY(!link); link = child;
+            }
+        }
+        QVERIFY(link && link->isValid() && link->actionInterface() && link->hyperlinkInterface());
+        QCOMPARE(QUrl(link->hyperlinkInterface()->anchorTarget()), expectedUrl);
+        QSignalSpy activated(window.reading_, &QTextBrowser::anchorClicked);
+        link->actionInterface()->doAction(QAccessibleActionInterface::pressAction());
+        QCOMPARE(activated.size(), 1); // Prove activation, not merely focus/action delivery.
+        QCOMPARE(activated.at(0).at(0).toUrl(), expectedUrl);
+        QCOMPARE(activated.at(0).at(0).toUrl().path(QUrl::FullyDecoded), target);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == expectedOwner, 30000);
+        QTRY_COMPARE(title(window), word);
+        QCOMPARE(window.language_->currentText(), expectedOwner);
+        QCOMPARE(window.currentEntry_.value(QStringLiteral("language")).toString(), expectedOwner);
+        QCOMPARE(window.originRoot_, originalRoot); QCOMPARE(window.originEdition_, originalEdition);
+        const bool changedOwner = expectedOwner != sourceOwner;
+        QVERIFY(window.reading_->toPlainText().contains(changedOwner
+            ? QStringLiteral("A river animal.") : QStringLiteral("A small animal.")));
+        QVERIFY(!window.reading_->toPlainText().contains(changedOwner
+            ? QStringLiteral("A small animal.") : QStringLiteral("A river animal.")));
+        if (changedOwner) {
+            QVERIFY(window.loadSerial_ > serial);
+            QVERIFY(window.savedWord(window.currentEntry_).key != originalKey);
+            QTRY_VERIFY(window.reading_->hasFocus());
+            QVERIFY(window.back_->isEnabled());
+            QTest::mouseClick(window.back_, Qt::LeftButton);
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == sourceOwner, 30000);
+            QTRY_COMPARE(title(window), word);
+            QCOMPARE(window.savedWord(window.currentEntry_).key, originalKey);
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
+            QVERIFY(window.forward_->isEnabled());
+            QTest::mouseClick(window.forward_, Qt::LeftButton);
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == expectedOwner, 30000);
+            QTRY_COMPARE(title(window), word);
+            QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A river animal.")));
+        } else {
+            QCOMPARE(window.loadSerial_, serial);
+            QCOMPARE(window.savedWord(window.currentEntry_).key, originalKey);
+        }
+    }
+
     void explicitLanguageFragmentSelectsInstalledOwnerAndPreservesNavigation() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-language-fragments-XXXXXX"));
         QVERIFY(directory.isValid());
