@@ -55,6 +55,15 @@ internal class DownloadClearOwner {
 private fun sqlText(value: String) = "x$value"
 
 data class DictionaryInfo(val id: String, val language: String, val code: String, val kind: String, val count: Int, val bytes: Long, val edition: String = "")
+/** An installed language label may name a fragment's owner; the action itself stays untouched. */
+internal fun installedLinkOwner(target: EntryLink, entry: Entry, dictionaries: List<DictionaryInfo>): DictionaryInfo? {
+    if (entry.edition.isEmpty() || entry.navigationKind != "language" || entry.navigationLanguage.isNullOrEmpty()) return null
+    val fragment = target.fragment.replace('_', ' ')
+    val owners = dictionaries.filter { it.edition == entry.edition && it.kind == "language" }
+    owners.firstOrNull { it.language == fragment }?.let { return it }
+    return owners.filter { it.language.equals(fragment, ignoreCase = true) }.singleOrNull()
+}
+
 data class WordHit(val dictionary: String, val title: String, val language: String, val kind: String, val offset: Long, val length: Int,
     val recordKey: String = title, val contextDictionary: String? = null, val edition: String = "") {
     val key get() = "$dictionary\u0000${contextDictionary.orEmpty()}\u0000$recordKey"
@@ -708,14 +717,11 @@ class LibraryStore private constructor(private val context: Context) {
         if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
         // A language heading names an owner only when that owner is installed in this edition.
         // Other fragments remain ordinary within-owner section destinations.
-        val fragment = target.fragment.replace('_', ' ')
-        val explicitOwner = entry.navigationKind == "language" && dictionaries.any {
-            it.edition == entry.edition && it.kind == "language" && it.language == fragment
-        }
-        val linkLanguage = if (explicitOwner) fragment else entry.navigationLanguage.orEmpty()
+        val explicitOwner = installedLinkOwner(target, entry, dictionaries)
+        val linkLanguage = explicitOwner?.language ?: entry.navigationLanguage.orEmpty()
         val current = helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
             arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(linkLanguage),sqlText(linkLanguage),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
-        if (current != null || explicitOwner || entry.kind != "language" || entry.navigationKind != "language" || entry.redirect != null)
+        if (current != null || explicitOwner != null || entry.kind != "language" || entry.navigationKind != "language" || entry.redirect != null)
             return@withContext current
         // Ownerless pages are installed separately. Only an exact ordinary target in
         // this edition may follow a current-owner miss; aliases keep their own route.
