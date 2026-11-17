@@ -211,7 +211,7 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
 }
 
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
-data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false, val reference: Reference? = null, val referenceIndex: Int? = null)
+data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false, val reference: Reference? = null, val referenceIndex: Int? = null, val referenceBatch: ReferenceBatchPlacement? = null)
 
 fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymologySections: Set<Int> = emptySet(),
     bodyAdjoining: BodyAdjoiningPolicy? = null, references: List<Reference> = emptyList(),
@@ -223,13 +223,14 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
         val headingBlock = sectionHeadingCompanion(section)
-        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock,
-            etymologySection = sectionIndex in etymologySections))
         fun appendBatches(boundary: Int) {
             while (referenceBatches != null && nextBatch < referenceBatches.size) {
                 val batch = referenceBatches[nextBatch]
                 if (batch.sectionIndex != sectionIndex || batch.beforeBlockIndex != boundary) break
-                batch.referenceIndices.forEach { index ->
+                if (batch.layout != null) {
+                    add(ReadingRow("reference-batch-$nextBatch", sectionKey = sectionKey,
+                        meaningSection = meaningSection, referenceBatch = batch))
+                } else batch.referenceIndices.forEach { index ->
                     val reference = references[index]
                     add(ReadingRow("reference-item-$index", sectionKey = sectionKey,
                         meaningSection = meaningSection, reference = reference, referenceIndex = index))
@@ -237,6 +238,21 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
                 nextBatch++
             }
         }
+        // A rich companion is actual block zero; compiled layout batches precede it.
+        // Metadata-only headings and all legacy null-layout records retain their ordering.
+        if (headingBlock != null && referenceBatches != null) {
+            var boundaryBatch = nextBatch
+            var hasLayout = false
+            while (boundaryBatch < referenceBatches.size) {
+                val batch = referenceBatches[boundaryBatch]
+                if (batch.sectionIndex != sectionIndex || batch.beforeBlockIndex != 0) break
+                if (batch.layout != null) { hasLayout = true; break }
+                boundaryBatch++
+            }
+            if (hasLayout) appendBatches(0)
+        }
+        add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock,
+            etymologySection = sectionIndex in etymologySections))
         section.blocks.forEachIndexed { blockIndex, original ->
             appendBatches(blockIndex)
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
@@ -280,12 +296,18 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
 fun visibleReadingRows(rows: List<ReadingRow>, folded: Set<String>): List<ReadingRow> {
     var hideBody = false
     var canFold = false
+    val headings = rows.filter { it.heading != null }.associateBy { it.key }
     return rows.filter { row ->
         if (row.heading != null) {
             // Typed headings keep their compiled label, including whitespace.
             canFold = row.heading.headingStyle != null || row.heading.title.isNotBlank()
             hideBody = canFold && row.key in folded
             true
+        } else if (row.referenceBatch != null || row.referenceIndex != null) {
+            // A boundary-zero batch can precede its own heading, never inheriting the previous section's fold.
+            val heading = headings[row.sectionKey]?.heading
+            val ownCanFold = heading != null && (heading.headingStyle != null || heading.title.isNotBlank())
+            !(ownCanFold && (row.sectionKey in folded || row.meaningSection && row.sectionKey + "-details" in folded))
         } else !hideBody && !(canFold && row.meaningSection && row.block?.kind != "definition" && row.sectionKey + "-details" in folded)
     }
 }
@@ -582,15 +604,20 @@ internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<Stri
 
 internal fun referenceFoldKeys(entry: Entry, referenceIndex: Int): Set<String> {
     if (entry.referenceBatches == null) return setOf("references")
-    val row = entry.readingRows.singleOrNull { it.referenceIndex == referenceIndex } ?: return emptySet()
+    val row = entry.readingRows.singleOrNull { it.referenceIndex == referenceIndex || it.referenceBatch?.referenceIndices?.contains(referenceIndex) == true } ?: return emptySet()
     return buildSet { add(row.sectionKey); if (row.meaningSection) add(row.sectionKey + "-details") }
 }
 
 internal fun referenceItemScrollIndex(entry: Entry, referenceIndex: Int, folded: Set<String>): Int? {
     if (referenceIndex !in entry.references.indices) return null
     if (entry.referenceBatches == null) return metadataReferencesStartIndex(entry, folded) + 1 + referenceIndex
-    val index = visibleEntryReadingRows(entry, folded).indexOfFirst { it.referenceIndex == referenceIndex }
-    return index.takeIf { it >= 0 }?.let { entryReadingStartIndex(entry, folded) + it }
+    val rows = visibleEntryReadingRows(entry, folded)
+    val index = rows.indexOfFirst { it.referenceIndex == referenceIndex || it.referenceBatch?.referenceIndices?.contains(referenceIndex) == true }
+    return index.takeIf { it >= 0 }?.let {
+        val start = if (rows[it].referenceBatch != null) floatBodyRuns(rows, entry.bodyAdjoining, entry.language)
+            .firstOrNull { range -> it in range }?.first ?: it else it
+        entryReadingStartIndex(entry, folded) + start
+    }
 }
 
 internal fun referenceLabel(reference: Reference): String? = when {

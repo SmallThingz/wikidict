@@ -212,6 +212,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
+        var referenceLayoutTarget by remember(entry) { mutableStateOf<Int?>(null) }
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val documentScroll = readingState?.documentScroll ?: remember { NativeDocumentScrollState() }
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -314,6 +315,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             previous?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
         }
         fun jumpToAnchor(target: String, externalRequest: EntryAnchorRequest? = null): Boolean {
+            referenceLayoutTarget = null
             clearCitationRequest(externalRequest)
             citationRevealFailed = false
             val citation = target.takeIf { it.startsWith("#") }?.substring(1)?.let(citationLocations::get)
@@ -336,6 +338,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             // Authored heading IDs share the page namespace; generated references are a fallback.
             val referenceOrdinal = destination?.referenceIndex ?: if (compiledHeading) null else
                 referenceTargetIndex(entry, target)
+            referenceLayoutTarget = referenceOrdinal
             referenceOrdinal?.let { referenceFoldKeys(entry, it).forEach { key -> folded[key] = false } }
             val referenceIndex = when {
                 referenceOrdinal != null -> referenceItemScrollIndex(entry, referenceOrdinal, folded.filterValues { it }.keys)
@@ -346,7 +349,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
             if (referenceIndex != null) {
                 if (entry.referenceBatches == null) folded["references"] = false
-                cellHeadingRequest = destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch,
+                cellHeadingRequest = if (referenceOrdinal != null && entry.referenceBatches?.any {
+                    it.layout != null && referenceOrdinal in it.referenceIndices } == true)
+                    CellHeadingRequest("compiled-reference-$referenceOrdinal", referenceIndex = referenceOrdinal)
+                else destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch,
                     referenceIndex = if (entry.referenceBatches != null) destination.referenceIndex else null) }
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
@@ -523,12 +529,18 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 FoldHeading("About this entry", folded["preamble"] == true) { folded["preamble"] = folded["preamble"] != true }
                 if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = readerLink)
             }
-            itemsIndexed(visibleRows, key = { _, row -> row.key }, contentType = { _, row -> if (row.reference != null) "reference" else if (row.heading != null) "heading" else row.block?.kind }) { rowIndex, row ->
+            itemsIndexed(visibleRows, key = { _, row -> row.key }, contentType = { _, row -> if (row.reference != null || row.referenceBatch != null) "reference" else if (row.heading != null) "heading" else row.block?.kind }) { rowIndex, row ->
                 Column(if (nativeFloatEntry) Modifier else Modifier.animateItem()) {
                 val run = floatStarts[rowIndex]
                 if (run != null) {
-                    val rows = visibleRows.slice(run).filter { it.block != null || it.heading?.let { section -> sectionHeadingVisible(section, entry.language) } == true }
-                    val blocks = rows.map { item -> item.block ?: item.headingBlock ?: Block("heading", 0,
+                    val rows = visibleRows.slice(run).filter { it.referenceBatch != null || it.block != null || it.heading?.let { section -> sectionHeadingVisible(section, entry.language) } == true }
+                    val referenceProjections = rows.mapNotNull { item -> item.referenceBatch?.let { batch ->
+                        item.key to referenceLayoutProjection(batch, entry.references, item.key,
+                            referenceLayoutTarget, rootBlockPath = item.key)
+                    } }.toMap()
+                    val referenceParagraphs = referenceProjections.values.flatMap { it.paragraphs.entries }
+                        .associate { it.key to it.value }
+                    val blocks = rows.map { item -> referenceProjections[item.key]?.blocks?.single() ?: item.block ?: item.headingBlock ?: Block("heading", 0,
                         listOf(Span("text", sectionHeadingLabel(item.heading!!, entry.language, null))), level = item.heading!!.level) }
                     val sectionRows = rows.mapIndexedNotNull { index, item -> if (item.heading == null) null else index to item }.toMap()
                     val actions = sectionRows.mapValues { (_, item) -> actionsForSection(item) }
@@ -541,9 +553,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
                             blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() } || nativeAudioDocumentScrollNeeded(blocks),
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
-                        bodyTextContext = bodyText?.getOrNull())
+                        bodyTextContext = bodyText?.getOrNull(), referenceLayoutParagraphs = referenceParagraphs)
                     }
                 } else if (rowIndex !in floatCovered) {
+                    row.referenceBatch?.let { CompiledReferenceBatchView(it, entry.references, row.key, readerLink, referenceLayoutTarget) }
                     row.reference?.let { ReferenceRow(it, readerLink, row.referenceIndex) }
                     row.heading?.let { section ->
                         if (sectionHeadingVisible(section, entry.language)) {
@@ -2225,7 +2238,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     sectionRows: Map<Int, ReadingRow> = emptyMap(), sectionActions: Map<Int, List<NativeHeadingAction>> = emptyMap(),
     sectionKeys: List<String>? = null, documentSurface: Boolean = false,
     fixedHeightReachable: Boolean = false, positionedPaintRoot: Boolean = false,
-    bodyAdjoining: BodyAdjoiningPolicy? = null, bodyTextContext: ContainerTextContext? = null) {
+    bodyAdjoining: BodyAdjoiningPolicy? = null, bodyTextContext: ContainerTextContext? = null,
+    referenceLayoutParagraphs: Map<String, ReferenceLayoutParagraph> = emptyMap()) {
     val density = LocalDensity.current
     val contentWidths = LocalTableContentWidths.current
     val inheritedAlign = LocalCellTextAlign.current
@@ -2284,6 +2298,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         val block = leaf.block
         val index = leaf.id
         val gap = leaf.gap
+        val referenceParagraph = referenceLayoutParagraphs[leaf.path]
         val section = leaf.rootIndex?.let { sectionRows[it]?.heading }
         val authoredHeading = section?.headingStyle
         if (authoredHeading != null) {
@@ -2377,7 +2392,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         LocalNativeDelegatedAbsoluteFlow provides occurrence, content = content)
             })
         } else if (block.kind in nativeBodyTextBlockKinds && block.table == null && block.feature == null) {
-            val displayed = if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
+            val displayed = referenceParagraph?.spans ?: if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
             val embedded = mediaOwners.embeddedControls(displayed.filter { it.image == null })
             // StyledText already separates these controls. Keep its text in the shared float owner.
             val spans = if (embedded.isEmpty()) displayed else displayed.map {
@@ -2386,7 +2401,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             val annotated = styledTextAnnotation(spans, if (block.kind == "term") FontWeight.Bold else null, style, onLink)
             val prefixStyle = compiledTableOwnerTextStyle(MaterialTheme.typography.labelMedium).copy(color =
                 authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: MaterialTheme.colorScheme.primary)
-            val text = NativeFloatContextSpec.Text(prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style, linkColor,
+            val text = NativeFloatContextSpec.Text(if (referenceParagraph != null)
+                prepareCompiledReferenceParagraph(leaf, referenceParagraph, media, settings, edition, onLink, spans)
+                else prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style, linkColor,
                 media, settings, edition, onLink, indentPixels = blockIndentDp(block) * density.density,
                 prefix = blockPrefix(block), prefixStyle = prefixStyle, heading = heading, headingActions = actions,
                 nativeLineHeight = format?.lineHeight, sourceFamily = format?.sourceFamily,
@@ -2394,13 +2411,15 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 rubyWeight = if (block.kind == "term") FontWeight.Bold else null,
                 staticInlineParent = leaf.staticInlineParent),
                 if (embedded.isEmpty()) box?.after ?: gap else 0f,
-                leaf.path,
+                referenceParagraph?.let { "compiled-reference-${it.referenceIndex}" } ?: leaf.path,
                 if (embedded.isEmpty()) box else box?.copy(padding = box.padding.copy(bottom = 0f)))
             if (embedded.isEmpty()) listOf(text) else {
                 val id = sourceId(leaf.path + "/media")
                 mediaControls[id] = embedded
                 val authoredAudio = embedded.any { it.audioControl != null }
-                val containingDirection = when (compiledBodyParagraphDirection(LocalCompiledTableTextDirection.current,
+                val containingDirection = referenceParagraph?.reference?.bodyTypography?.direction?.let {
+                    if (it == BidiResolvedDirection.Rtl) TableContainingDirection.Rtl else TableContainingDirection.Ltr
+                } ?: when (compiledBodyParagraphDirection(LocalCompiledTableTextDirection.current,
                     leaf.context?.bodyDirection, LocalNativeColumnTextDirection.current)) {
                     TextDirection.Ltr -> TableContainingDirection.Ltr
                     TextDirection.Rtl -> TableContainingDirection.Rtl

@@ -525,6 +525,50 @@ class RubyModelCodecTest {
                 Block("table", 0, emptyList(), table = Table(emptyList(), rows)), label("after")),
                 ContainerStyle(positioning = ContainerPositioning.RelativeAuto))), "budgetRoot")
         }
+        private fun referenceLayoutStyle(value: ContainerStyle, label: String) {
+            require(validReferenceLayoutStyle(value) && value.border == ContainerBorder.None &&
+                value.background == ContainerColor.Transparent && value.lineHeight == ContainerLineHeight.Normal &&
+                value == ContainerStyle(margins = value.margins, padding = value.padding,
+                    border = value.border, background = value.background, layout = value.layout,
+                    clear = value.clear, overflow = value.overflow, ownerFont = value.ownerFont,
+                    lineHeight = value.lineHeight))
+            mark("$label.flags")
+            u32((1 or 2 or 16 or 128 or 1024 or 2048 or 4096 or 32768 or 16777216).toLong())
+            val margins = checkNotNull(value.margins)
+            listOf(margins.top, margins.right, margins.bottom, margins.left).forEach { byte(it.unit.ordinal); f32(it.value) }
+            val padding = checkNotNull(value.padding)
+            listOf(padding.top, padding.right, padding.bottom, padding.left).forEach { byte(it.unit.ordinal); f32(it.value) }
+            byte(0); byte(0); byte(0); byte(0); byte(0); byte(0)
+            fontSnapshot(checkNotNull(value.ownerFont), "$label.owner")
+            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+        }
+        private fun referenceLayoutColor(value: ContainerColor) {
+            when (value) {
+                ContainerColor.Transparent -> byte(0)
+                is ContainerColor.Rgb -> { byte(1); string(value.value) }
+                is ContainerColor.LightDark -> { byte(2); string(value.light); string(value.dark) }
+            }
+        }
+        private fun referenceLayouts(batches: List<ReferenceBatchPlacement>) {
+            batches.forEachIndexed { index, batch ->
+                val name = "referenceLayouts.$index"
+                mark("$name.presence"); byte(if (batch.layout == null) 0 else 1)
+                batch.layout?.let { layout ->
+                    referenceLayoutStyle(layout.wrapper, "$name.wrapper")
+                    referenceLayoutStyle(layout.list, "$name.list")
+                    mark("$name.count"); u32(layout.items.size.toLong())
+                    layout.items.forEachIndexed { itemIndex, item ->
+                        val label = "$name.$itemIndex"
+                        referenceLayoutStyle(item.box, "$label.box")
+                        mark("$label.marker"); byte(0)
+                        mark("$label.foreground"); byte(2); string((item.markerForeground as FigureColor.Rgb).value)
+                        mark("$label.prefix"); byte(0)
+                        mark("$label.target"); byte(if (item.targetBackground == null) 0 else 1)
+                        item.targetBackground?.let(::referenceLayoutColor)
+                    }
+                }
+            }
+        }
         private fun fontSnapshot(value: InlineFontSnapshot, label: String) {
             mark("$label.flags")
             byte((if (value.fontScale != null) 1 else 0) or (if (value.small) 2 else 0) or
@@ -764,6 +808,7 @@ class RubyModelCodecTest {
                     }
                 }
             } else require(referenceBatches == null)
+            if (version == 'Z' && yFlags and 32768 != 0) referenceLayouts(checkNotNull(referenceBatches))
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -4545,6 +4590,100 @@ class RubyModelCodecTest {
         }.document(emptyList(), Sink.Body, referenceValues = refs, referenceBatches = placement)
         assertEquals(limit - 5, read(literal(limit - 5)).sections.single().blocks.single().table!!.rows.size)
         reject("Batch cannot restart wire budget", literal(limit - 4))
+    }
+
+    // This wire fixture uses the decoder's existing canonical all-positive margin representation.
+    // The independent in-memory layout fixture intentionally also accepts Signed* positive values.
+    private fun referenceLayoutCodecBatch(wrapperFamily: ContainerFontFamily? = null): ReferenceBatchPlacement {
+        val f = ReferenceLayoutFixture
+        val margin = StyleLength(StyleLengthUnit.Em, 1f)
+        val box = f.box.copy(margins = StyleEdges(margin, margin, margin, margin))
+        return f.batch.copy(layout = ReferenceBatchLayout(
+            box.copy(ownerFont = f.font.copy(fontFamily = wrapperFamily)), box,
+            f.layout.items.map { it.copy(box = box) }))
+    }
+
+    @Test fun referenceLayout32768DecodesOriginalIndicesFontsBacklinkAndTargetWithoutChangingNoteGraph() {
+        val f = ReferenceLayoutFixture
+        val batch = referenceLayoutCodecBatch()
+        val flags = 1 or 8 or 16 or 64 or 16384 or 32768
+        val wire = Wire('Z', flags)
+        val bytes = wire.document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            referenceValues = f.references, referenceBatches = listOf(batch))
+        val decoded = read(bytes)
+        assertEquals(f.references, decoded.references)
+        assertEquals(listOf(batch), decoded.referenceBatches)
+        assertEquals(listOf(1, 0), decoded.referenceBatches!!.single().referenceIndices)
+        assertEquals(listOf(f.markerA, f.markerB, text(" body")), decoded.sections.single().blocks.single().spans)
+        val projection = referenceLayoutProjection(decoded.referenceBatches!!.single(), decoded.references, "compiled")
+        assertEquals(listOf("4.", "3."), projection.paragraphs.values.map { it.marker })
+        assertEquals(.75f, projection.paragraphs.values.first().spans.first().fontScale)
+        assertEquals(.9f, projection.paragraphs.values.first().spans[1].fontScale)
+        assertEquals("https://example.test/20", projection.paragraphs.values.first().reference.spans.last().target)
+        // An actual negative edge retains the signed representation in the ordinary decoder.
+        val positive = StyleLength(StyleLengthUnit.Em, 1f)
+        val layout = checkNotNull(batch.layout)
+        val signed = layout.copy(wrapper = layout.wrapper.copy(margins = SignedContainerEdges(
+            SignedContainerMargin(StyleLengthUnit.Em, -1f), positive, positive, positive)))
+        val signedBatch = batch.copy(layout = signed)
+        val signedBytes = Wire('Z', flags).document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            referenceValues = f.references, referenceBatches = listOf(signedBatch))
+        assertEquals(listOf(signedBatch), read(signedBytes).referenceBatches)
+    }
+
+    @Test fun referenceLayout32768RejectsCapabilityCensusPresenceMarkerPrefixAndTruncatedOwner() {
+        val f = ReferenceLayoutFixture
+        val flags = 1 or 8 or 16 or 64 or 16384 or 32768
+        val wire = Wire('Z', flags)
+        val bytes = wire.document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            referenceValues = f.references, referenceBatches = listOf(f.batch))
+        val start = wire.at.getValue("referenceLayouts.0.presence")
+        for (end in start until bytes.size) reject("Incomplete typed layout at $end", bytes.copyOf(end))
+        reject("Unused layout capability", changed(bytes, start, 0))
+        reject("Noncanonical layout presence", changed(bytes, start, 2))
+        for (count in listOf(0L, 1L, 3L, 0xffff_ffffL))
+            reject("Exact original index census", changed32(bytes, wire.at.getValue("referenceLayouts.0.count"), count))
+        reject("Only decimal outside", changed(bytes, wire.at.getValue("referenceLayouts.0.0.marker"), 1))
+        reject("Only one ordinary space", changed(bytes, wire.at.getValue("referenceLayouts.0.0.prefix"), 1))
+        reject("Concrete marker RGB", changed(bytes, wire.at.getValue("referenceLayouts.0.0.foreground"), 0))
+        reject("Noncanonical target presence", changed(bytes, wire.at.getValue("referenceLayouts.0.0.target"), 2))
+        val noPlacement = flags and 16384.inv()
+        reject("Layout requires placement owner", changed(changed(bytes, 4, noPlacement and 255), 5, noPlacement ushr 8))
+        val noFont = flags and 1.inv()
+        reject("Layout requires owner fonts", changed(changed(bytes, 4, noFont and 255), 5, noFont ushr 8))
+    }
+
+    @Test fun nullLayoutPreservesExact16384RecordAndOriginalLegacyRows() {
+        val f = ReferenceLayoutFixture
+        val flags = 8 or 16 or 64 or 16384
+        val placements = listOf(f.batch.copy(layout = null))
+        val wire = Wire('Z', flags)
+        val bytes = wire.document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            referenceValues = f.references, referenceBatches = placements)
+        val decoded = read(bytes)
+        assertEquals(placements, decoded.referenceBatches)
+        assertEquals(listOf(20L, 10L), decoded.readingRows.mapNotNull { it.reference?.number })
+        assertTrue(decoded.readingRows.none { it.referenceBatch != null })
+        assertFalse(wire.at.containsKey("referenceLayouts.0.presence"))
+        val fullWire = Wire('Z', flags or 1 or 32768)
+        val full = fullWire.document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            referenceValues = f.references, referenceBatches = listOf(f.batch))
+        val stripped = full.copyOf(fullWire.at.getValue("referenceLayouts.0.presence"))
+        stripped[4] = flags.toByte(); stripped[5] = (flags ushr 8).toByte()
+        assertArrayEquals(bytes, stripped)
+        assertEquals(decoded, read(stripped))
+    }
+    @Test fun referenceLayoutTailOwnsGlobalWrapperOnlyFontFamilyCensus() {
+        val f = ReferenceLayoutFixture
+        val batch = referenceLayoutCodecBatch(ContainerFontFamily.SansSerif)
+        val wire = Wire('Z', 1 or 8 or 16 or 64 or 16384 or 32768)
+        val bytes = wire.document(listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            features = 4, referenceValues = f.references, referenceBatches = listOf(batch))
+        assertEquals(listOf(batch), read(bytes).referenceBatches)
+        val missing = Wire('Z', 1 or 8 or 16 or 64 or 16384 or 32768).document(
+            listOf(f.markerA, f.markerB, text(" body")), Sink.Body,
+            features = 0, referenceValues = f.references, referenceBatches = listOf(batch))
+        reject("Wrapper-only family requires global family census", missing)
     }
 
 }

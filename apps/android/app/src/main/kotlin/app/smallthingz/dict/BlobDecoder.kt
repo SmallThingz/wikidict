@@ -18,7 +18,8 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
             // All implemented Y low bits compose with the existing Z high features.
-            require(it and 29440 != 0 && it and 29695 == it) { "Invalid extended presentation feature flags" }
+            require(it and 62208 != 0 && it and 62463 == it &&
+                (it and 32768 == 0 || it and 16384 != 0 && it and 1 != 0)) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
             require(it in 1..255) { "Invalid owner geometry feature flags" }
         } else 0
@@ -148,7 +149,6 @@ object BlobDecoder {
         val navigationReferences = if (r.citationNavigation) styledReferences.map {
             it.copy(backlinks = r.citationBacklinks())
         } else styledReferences
-        require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
         require((features and 8 != 0) == r.hasTableFloatClearFeature) { "Table float clear feature does not match payload" }
         require((features and 16 != 0) == r.hasTextFlowFeature) { "Text flow feature does not match payload" }
         require((features and 32 != 0) == r.hasTableScrollFeature) { "Table scroll feature does not match payload" }
@@ -166,16 +166,7 @@ object BlobDecoder {
         }
         require(ownerGeometry || magicVersion == 86 || r.inlinePaddingGroups == r.hasInlinePaddingGroup) { "U version does not match inline padding payload" }
         require(ownerGeometry || r.inlineActionGroups == r.hasInlineActionGroup) { "V version does not match inline action payload" }
-        require(r.containerOwnerFonts == r.hasContainerOwnerFont && r.inlineBoxGroups == r.hasInlineBoxGroup &&
-            (ownerGeometryFlags and 2 != 0) == (bodyTypography != null) &&
-            (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
-            directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
-            r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
-            r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout &&
-            r.audioControls == r.hasAudioControl && r.clippedAbsolutes == r.hasClippedAbsolute) {
-            "Y/Z features do not match owner geometry payload"
-        }
-        val referenceBatches = if (ownerGeometryFlags and 16384 != 0) {
+        var referenceBatches = if (ownerGeometryFlags and 16384 != 0) {
             require(r.presence()) { "Reference batch capability requires a present owner" }
             val count = r.count(16)
             require(count > 0) { "Empty reference batch owner" }
@@ -188,6 +179,19 @@ object BlobDecoder {
                 ReferenceBatchPlacement(section, boundary.toInt(), indices)
             }
         } else null
+        if (ownerGeometryFlags and 32768 != 0) {
+            referenceBatches = r.referenceLayouts(checkNotNull(referenceBatches))
+        }
+        require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
+        require(r.containerOwnerFonts == r.hasContainerOwnerFont && r.inlineBoxGroups == r.hasInlineBoxGroup &&
+            (ownerGeometryFlags and 2 != 0) == (bodyTypography != null) &&
+            (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
+            directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
+            r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
+            r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout &&
+            r.audioControls == r.hasAudioControl && r.clippedAbsolutes == r.hasClippedAbsolute) {
+            "Y/Z features do not match owner geometry payload"
+        }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
@@ -943,6 +947,31 @@ object BlobDecoder {
                 hasPositionedContainers = true
             }
             return style
+        }
+        fun referenceLayouts(batches: List<ReferenceBatchPlacement>): List<ReferenceBatchPlacement> {
+            var present = false
+            val result = batches.map { batch ->
+                if (!presence()) batch else {
+                    present = true
+                    require(remainingItems > 0) { "Reference layout exceeds presentation budget" }
+                    remainingItems--
+                    val wrapper = containerStyle(); val list = containerStyle()
+                    val length = count(8)
+                    require(length > 0 && length == batch.referenceIndices.size) { "Reference layout item census differs" }
+                    val items = List(length) {
+                        val box = containerStyle()
+                        require(byte() == 0) { "Unsupported reference list marker" }
+                        val foreground = figureColor()
+                        require(byte() == 0) { "Unsupported backlink separator" }
+                        val background = if (presence()) containerColor() else null
+                        ReferenceItemLayout(box, ReferenceListMarker.DecimalOutside, foreground,
+                            ReferenceBacklinkPrefix.SingleSpace, background)
+                    }
+                    batch.copy(layout = ReferenceBatchLayout(wrapper, list, items))
+                }
+            }
+            require(present) { "Reference layout flag has no payload" }
+            return result
         }
         private fun container(tableDepth: Int): Container = content {
             val style = containerStyle()

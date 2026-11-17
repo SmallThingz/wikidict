@@ -1223,7 +1223,14 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     fun referenceBatches(values: List<ReferenceBatchPlacement>?) {
         if (values == null) return
         charge(values.size)
-        values.forEach { charge(it.referenceIndices.size) }
+        values.forEach { batch ->
+            charge(batch.referenceIndices.size)
+            batch.layout?.let { layout ->
+                charge(1); charge(layout.items.size)
+                // Existing ContainerStyle owner-font trailers each charge one item.
+                charge(2 + layout.items.size)
+            }
+        }
     }
     private fun citation(span: Span, backlink: Boolean = false) {
         require(!span.isQualifiedCitationBacklink || backlink) { "Qualified backlink escaped its reference prefix" }
@@ -1558,12 +1565,12 @@ data class Reference(val number: Long, val groupNumber: Long?, val group: String
 }
 /** Original section/block boundaries; indices retain authored flush order, not numeric order. */
 data class ReferenceBatchPlacement(val sectionIndex: Int, val beforeBlockIndex: Int,
-    val referenceIndices: List<Int>)
+    val referenceIndices: List<Int>, val layout: ReferenceBatchLayout? = null)
 
 internal fun validateReferenceBatchPlacements(sections: List<Section>, references: List<Reference>,
     batches: List<ReferenceBatchPlacement>?, adjoining: BodyAdjoiningPolicy?) {
     if (batches == null) return
-    require(adjoining == null && batches.isNotEmpty() && batches.size <= (1 shl 20) &&
+    require((adjoining == null || batches.all { it.layout != null }) && batches.isNotEmpty() && batches.size <= (1 shl 20) &&
         references.isNotEmpty() && references.size <= (1 shl 20)) { "Invalid explicit reference batch owner" }
     val seen = BooleanArray(references.size)
     var used = 0
@@ -1585,6 +1592,7 @@ internal fun validateReferenceBatchPlacements(sections: List<Section>, reference
             seen[index] = true
             used++
         }
+        batch.layout?.let { validateReferenceBatchLayout(it, batch.referenceIndices, references) }
         previous = batch
     }
     require(used == references.size) { "Reference batch census is incomplete" }

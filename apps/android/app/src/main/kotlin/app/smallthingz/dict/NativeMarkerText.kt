@@ -17,7 +17,7 @@ import kotlin.math.ceil
  * path as paragraphs. Their existing anchor and baseline stay independent of the flow box.
  */
 internal class NativeMarkerText(text: String, originalPaint: TextPaint,
-    appearance: NativeMissingLinkPaint? = null) {
+    appearance: NativeMissingLinkPaint? = null, markerDirection: BidiResolvedDirection? = null) {
     private val paint = TextPaint(originalPaint).apply {
         // These markers supply their actual baseline explicitly; Canvas.drawText previously
         // ignored TextPaint's paragraph-only fields too.
@@ -43,7 +43,11 @@ internal class NativeMarkerText(text: String, originalPaint: TextPaint,
                 paint.color = current.color; paint.isUnderlineText = current.underline
             }
         }, 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        val direction = TextDirectionHeuristics.FIRSTSTRONG_LTR
+        val direction = when (markerDirection) {
+            BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
+            BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
+            null -> TextDirectionHeuristics.FIRSTSTRONG_LTR
+        }
         val params = PrecomputedText.Params.Builder(paint).setTextDirection(direction)
             .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()

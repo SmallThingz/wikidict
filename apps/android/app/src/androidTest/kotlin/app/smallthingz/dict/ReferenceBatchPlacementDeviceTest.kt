@@ -99,4 +99,120 @@ class ReferenceBatchPlacementDeviceTest {
             compose.waitForIdle()
         }
     }
+    @Test fun compiledReferenceLayoutUsesOneRealNativeGroupOriginalActionsFontsAndOutsideMarkersInBothDirections() {
+        val direction = mutableStateOf(BidiResolvedDirection.Ltr)
+        val actions = mutableListOf<EntryLink>()
+        val font = InlineFontSnapshot(.9f, FontScaleBasis.NormalBody, fontNormalized = true,
+            fontFamily = ContainerFontFamily.SansSerif)
+        fun box(top: Float, bottom: Float, left: Float) = ContainerStyle(
+            margins = SignedContainerEdges(SignedContainerMargin(StyleLengthUnit.Px, top),
+                SignedContainerMargin(StyleLengthUnit.Px, 0f), SignedContainerMargin(StyleLengthUnit.Px, bottom),
+                SignedContainerMargin(StyleLengthUnit.Px, left)),
+            padding = StyleEdges(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f),
+                StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f)),
+            border = ContainerBorder.None, background = ContainerColor.Transparent,
+            ownerFont = font, lineHeight = ContainerLineHeight.Normal,
+            layout = ContainerLayout.Flow, clear = FigureClear.None, overflow = ContainerOverflow.Visible)
+        val markerA = Span("link", "[A]", targetFragment = "reference-10", role = "reference",
+            citationMarker = CitationMarker(10, 7, "return-A"))
+        val markerB = Span("link", "[B]", targetFragment = "reference-20", role = "reference",
+            citationMarker = CitationMarker(20, 8, "return-B"))
+        val item = ReferenceItemLayout(box(3f, 5f, 0f), ReferenceListMarker.DecimalOutside,
+            FigureColor.Rgb("#123456"), ReferenceBacklinkPrefix.SingleSpace)
+        try {
+            compose.activityRule.scenario.onActivity { it.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                    MaterialTheme {
+                        val refs = listOf(10L, 20L).mapIndexed { index, number ->
+                            val suffix = if (index == 0) "A" else "B"
+                            Reference(number, (index + 3).toLong(), "", listOf(Span("link", "Body $suffix", "Target $suffix")),
+                                bodyTypography = BodyTypography(font, ContainerLineHeight.Normal, direction.value),
+                                backlinks = listOf(ReferenceBacklink.withPolicies(if (index == 0) 7L else 8L,
+                                    Span("link", "return $suffix", targetFragment = "return-$suffix",
+                                        fontScale = .75f, fontScaleBasis = FontScaleBasis.NormalBody))))
+                        }
+                        val entry = Entry("Real compiled batch", emptyList(), "language", "English", "en",
+                            listOf(Section(2, "Body", listOf(Block("paragraph", depth = 0, spans = listOf(markerA, markerB,
+                                Span("text", " body remains")))))), refs,
+                            referenceBatches = listOf(ReferenceBatchPlacement(0, 1, listOf(1, 0),
+                                ReferenceBatchLayout(box(4f, 6f, 0f), box(9f, 11f, 28f), listOf(item, item)))))
+                        Box(Modifier.width(340.dp)) {
+                            EntryView(entry, false, {}, onLink = { actions += it },
+                                settings = AppSettings(allowImages = false, allowAudio = false,
+                                    collapseOtherSections = false, collapseDetails = false))
+                        }
+                    }
+                }
+            } }
+            for (next in listOf(BidiResolvedDirection.Ltr, BidiResolvedDirection.Rtl)) {
+                compose.runOnIdle { direction.value = next }
+                compose.waitForIdle()
+                compose.onNodeWithText("References", useUnmergedTree = true).assertDoesNotExist()
+                val view = nativeViews().single { it.currentMeasuredGeometry?.text?.toString()?.let { text ->
+                    "Body B" in text && "Body A" in text } == true }
+                compose.runOnIdle {
+                    val geometry = checkNotNull(view.currentMeasuredGeometry)
+                    assertTrue(geometry.height > 0)
+                    val text = geometry.text.toString()
+                    assertTrue(text.indexOf("return B Body B") < text.indexOf("return A Body A"))
+                    assertEquals(1, Regex("return B Body B").findAll(text).count())
+                    assertEquals(1, Regex("return A Body A").findAll(text).count())
+                    val markers = geometry.nodes.filter { it.kind == FloatInteractionKind.MARKER }
+                    assertEquals(listOf("4. ", "3. "), markers.map { it.label.toString() })
+                    val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        typeface = android.graphics.Typeface.SANS_SERIF; textSize = 16f * .9f
+                    }
+                    val context = geometry as NativeFloatContextGeometry
+                    val bitmap = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+                    view.draw(android.graphics.Canvas(bitmap))
+                    val expected = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+                    val expectedCanvas = android.graphics.Canvas(expected).apply {
+                        translate(view.paddingLeft.toFloat(), view.paddingTop.toFloat())
+                    }
+                    val markerPaint = android.text.TextPaint(paint).apply { color = android.graphics.Color.rgb(0x12, 0x34, 0x56) }
+                    try {
+                        markers.forEachIndexed { index, marker ->
+                            val suffix = if (index == 0) "B" else "A"
+                            val leaf = context.inputLeaves().single { "return $suffix Body $suffix" in it.geometry.text.toString() }
+                            val paragraph = leaf.geometry as NativeFloatGeometry
+                            val band = paragraph.firstLineBand()
+                            val bounds = marker.bounds.single()
+                            val baseline = leaf.y + checkNotNull(paragraph.textBaselines?.first)
+                            assertEquals(paint.measureText(marker.label.toString()), bounds.width(), .7f)
+                            if (next == BidiResolvedDirection.Rtl)
+                                assertEquals(leaf.x + band.right, bounds.left, .01f)
+                            else assertEquals(leaf.x + band.left, bounds.right, .01f)
+                            assertEquals(leaf.y + band.top, bounds.top, .01f)
+                            val markerText = NativeMarkerText(marker.label.toString(), markerPaint, markerDirection = next)
+                            markerText.paint(expectedCanvas,
+                                if (next == BidiResolvedDirection.Rtl) leaf.x + band.right else leaf.x + band.left,
+                                baseline, rightAligned = next != BidiResolvedDirection.Rtl)
+                        }
+                        var opaqueMarkerPixels = 0
+                        for (y in 0 until expected.height) for (x in 0 until expected.width) {
+                            if (expected.getPixel(x, y) == markerPaint.color) {
+                                opaqueMarkerPixels++
+                                assertEquals("Marker side/baseline pixel at $x,$y in $next", markerPaint.color, bitmap.getPixel(x, y))
+                            }
+                        }
+                        assertTrue("Actual marker ink must exercise the LI baseline", opaqueMarkerPixels > 0)
+                    } finally { bitmap.recycle(); expected.recycle() }
+                    for (suffix in listOf("B", "A")) {
+                        val node = geometry.nodes.single { it.label?.toString() == "Body $suffix" }
+                        view.setSelection(node.start, node.end)
+                        assertEquals("Body $suffix", view.selectedTextForCopy())
+                        val provider = view.accessibilityNodeProvider
+                        val ax = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                        assertTrue(ax.isClickable)
+                        assertTrue(provider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                    }
+                }
+            }
+            assertEquals(listOf(EntryLink("Target B"), EntryLink("Target A"),
+                EntryLink("Target B"), EntryLink("Target A")), actions)
+        } finally {
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitForIdle()
+        }
+    }
 }

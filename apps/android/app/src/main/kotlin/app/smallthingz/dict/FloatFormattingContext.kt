@@ -34,9 +34,9 @@ internal fun floatBodyRuns(rows: List<ReadingRow>, bodyAdjoining: BodyAdjoiningP
         rows.indexOfFirst { it.sectionKey == prefix.key && it.block != null } else -1
     val first = when (bodyAdjoining) {
         null -> if (headingPrefixStart >= 0) headingPrefixStart else
-            rows.indexOfFirst { it.heading?.headingStyle != null || it.block?.needsNativeBlockContext() == true }
+            rows.indexOfFirst { it.referenceBatch != null || it.heading?.headingStyle != null || it.block?.needsNativeBlockContext() == true }
         BodyAdjoiningPolicy.Ordinary -> rows.indexOfFirst { row ->
-            row.block != null || row.heading?.let { sectionHeadingVisible(it, language) } == true
+            row.referenceBatch != null || row.block != null || row.heading?.let { sectionHeadingVisible(it, language) } == true
         }
     }
     return if (first < 0) emptyList() else listOf(first until rows.size)

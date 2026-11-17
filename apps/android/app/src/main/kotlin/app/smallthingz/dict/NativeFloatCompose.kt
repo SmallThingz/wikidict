@@ -280,10 +280,18 @@ internal fun prepareNativeFloatText(
     ownerFont: NativeDeclaringFont? = null,
     rubyWeight: FontWeight? = null,
     referenceBacklink: ReferenceBacklink? = null,
+    referenceLayoutBacklink: ReferenceBacklink? = null, outsideReferenceMarker: Boolean = false,
     staticInlineParent: NativeStaticInlineParent? = null,
     terminalFallback: Boolean = false,
     clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = LocalNativeClippedAbsoluteCoordinateScope.current,
 ): PreparedNativeFloatText {
+    require(referenceLayoutBacklink == null || referenceBacklink == null && outsideReferenceMarker &&
+        spans.firstOrNull() === referenceLayoutBacklink.span &&
+        spans.count { it.isQualifiedCitationBacklink } == 1) { "Invalid compiled reference paragraph prefix" }
+    require(!outsideReferenceMarker || referenceLayoutBacklink != null && prefix.isNotEmpty()) {
+        "Outside reference marker requires its compiled paragraph owner"
+    }
+    val scopedBacklink = referenceBacklink ?: referenceLayoutBacklink
     val context = LocalContext.current
     val density = LocalDensity.current
     val uri = LocalUriHandler.current
@@ -344,10 +352,10 @@ internal fun prepareNativeFloatText(
         else (contexts.leaves.map { it.range } + groupActions).sortedWith(compareBy({ it.start }, { it.path }))
     }.orEmpty()
     val citationSourceRanges = ruby?.leaves?.mapIndexedNotNull { index, leaf ->
-        leaf.range.span?.takeIf { it.citationMarker != null }?.let {
+        leaf.range.span?.takeIf { it.citationMarker != null || referenceLayoutBacklink?.span === it }?.let {
             NativeCaptionLinkRange(index, it, leaf.range.start, leaf.range.end)
         }
-    } ?: nativeCaptionLinkRanges(visibleSpans).filter { referenceBacklink?.span === it.span }
+    } ?: nativeCaptionLinkRanges(visibleSpans).filter { scopedBacklink?.span === it.span }
     val citationOwners = citationSourceRanges.associate { range ->
         (range.start to range.end) to remember(NativeCitationOccurrenceIdentity(range.span, range.start, range.end)) { Any() }
     }
@@ -372,7 +380,7 @@ internal fun prepareNativeFloatText(
         span.citationMarker != null && !validCitationMarkerSpan(span) ||
             span.linkPaint != null && span.entryLink().local &&
                 !(span.citationMarker != null && validCitationMarkerSpan(span) ||
-                    referenceBacklink?.span === span && validCitationSpanLinkPaint(span))
+                    scopedBacklink?.span === span && validCitationSpanLinkPaint(span))
     } }
     val paintUnavailable = citationPaintUnavailable ?: ordinaryLinkPaintUnavailable(paintedSpans, edition)
         ?: NativeOrdinaryLinkPaintUnavailable.takeIf { paddingRanges.any {
@@ -851,14 +859,24 @@ internal fun prepareNativeFloatText(
     val prefixPaint = if (noSourceLines) TextPaint(basePaint) else familyPaint(nativeStyleRanges(
         AnnotatedString(" "), prefixStyle ?: effective, linkColor,
         sourceFamily = inheritedFamily.takeIf { prefix.isNotEmpty() }).single())
-    val layoutUnavailable = familyFailure ?: paintUnavailable ?: inlineFailure
-    val prefixWidth = if (prefix.isEmpty()) 0f else 28f * density.density
+    var referenceMarkerFailure: String? = null
+    val referenceMarker = if (outsideReferenceMarker) try { NativeMarkerText(prefix, prefixPaint,
+        markerDirection = if (rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr)
+    } catch (failure: UnsupportedFloatLayout) {
+        referenceMarkerFailure = failure.message ?: "Reference marker geometry is unavailable"; null
+    } else null
+    val layoutUnavailable = familyFailure ?: paintUnavailable ?: inlineFailure ?:
+        "Reference LI declaring font is unavailable".takeIf { referenceLayoutBacklink != null && ownerFont?.kind != NativeDeclaringFontKind.Container } ?:
+        referenceMarkerFailure
+    val prefixWidth = if (outsideReferenceMarker) referenceMarker?.advance ?: 0f
+        else if (prefix.isEmpty()) 0f else 28f * density.density
+    val prefixInset = if (outsideReferenceMarker) 0f else prefixWidth
     val actionSize = 48f * density.density
     require(!authoredHeading || headingActions.size <= NativeHeadingCustomActionIds.size)
     val paintedHeadingActions = if (authoredHeading) emptyList() else headingActions
     val actionWidth = actionSize * paintedHeadingActions.size
-    val insets = if (rtl) NativeTextInsets(right = indentPixels, extraRight = prefixWidth, extraLeft = actionWidth)
-        else NativeTextInsets(left = indentPixels, extraLeft = prefixWidth, extraRight = actionWidth)
+    val insets = if (rtl) NativeTextInsets(right = indentPixels, extraRight = prefixInset, extraLeft = actionWidth)
+        else NativeTextInsets(left = indentPixels, extraLeft = prefixInset, extraRight = actionWidth)
     fun actionBounds(geometry: NativeFloatGeometry, index: Int): RectF {
         val band = geometry.firstLineBand()
         val left = if (rtl) band.left - actionWidth + index * actionSize else band.right + index * actionSize
@@ -1308,7 +1326,7 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection, terminalFallback) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, referenceLayoutBacklink, outsideReferenceMarker, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection, terminalFallback) { Any() }
     val citationPreparation = rememberNativeCitationPreparation(revision,
         citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
         layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
@@ -1317,15 +1335,21 @@ internal fun prepareNativeFloatText(
                 if (layoutUnavailable != null) throw UnsupportedFloatLayout(layoutUnavailable)
                 val native = source(width)
                 val floats = emptyList<NativeFloatOccurrence>()
-                val marker = if (prefix.isEmpty()) null else NativeMarkerText(prefix, prefixPaint)
+                val marker = if (prefix.isEmpty()) null else if (outsideReferenceMarker) referenceMarker else NativeMarkerText(prefix, prefixPaint)
                 NativeFloatGeometry.build(native, layoutPaint, width, floats,
                     textDirection = direction,
                     requireDrainedAtBoundary = requireDrained, carriedExclusions = carried, insets = insets,
                     decoration = { canvas, geometry ->
                         val band = geometry.firstLineBand()
                         if (marker != null) {
-                            val x = if (rtl) band.right + prefixWidth else band.left - prefixWidth
-                            marker.paint(canvas, x, band.top - prefixPaint.ascent(), rightAligned = rtl)
+                            if (outsideReferenceMarker) {
+                                val anchor = referenceMarkerAnchor(band.left, band.right, prefixWidth,
+                                    checkNotNull(geometry.textBaselines?.first), rtl)
+                                marker.paint(canvas, anchor.x, anchor.baseline, anchor.rightAligned)
+                            } else {
+                                val x = if (rtl) band.right + prefixWidth else band.left - prefixWidth
+                                marker.paint(canvas, x, band.top - prefixPaint.ascent(), rightAligned = rtl)
+                            }
                         }
                         val icon = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = linkColor.toArgb(); this.style = Paint.Style.STROKE; strokeWidth = 2f * density.density }
                         paintedHeadingActions.forEachIndexed { index, action ->
@@ -1345,8 +1369,14 @@ internal fun prepareNativeFloatText(
                         val band = geometry.firstLineBand()
                         var bounds: NativeFloatBounds? = null
                         if (marker != null) {
-                            val x = if (rtl) band.right + prefixWidth else band.left - prefixWidth
-                            bounds = marker.bounds(x, band.top - prefixPaint.ascent(), rightAligned = rtl)
+                            if (outsideReferenceMarker) {
+                                val anchor = referenceMarkerAnchor(band.left, band.right, prefixWidth,
+                                    checkNotNull(geometry.textBaselines?.first), rtl)
+                                bounds = marker.bounds(anchor.x, anchor.baseline, anchor.rightAligned)
+                            } else {
+                                val x = if (rtl) band.right + prefixWidth else band.left - prefixWidth
+                                bounds = marker.bounds(x, band.top - prefixPaint.ascent(), rightAligned = rtl)
+                            }
                         }
                         // Every segment stays within d plus its real half-stroke; control
                         // hit boxes are independent and remain the full action rectangles.
