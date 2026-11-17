@@ -2,6 +2,7 @@
 
 #include "CompiledImageMap.hpp"
 #include "CompiledContent.hpp"
+#include "ReferencePolicy.hpp"
 #include "MissingFigurePaint.hpp"
 #include "LogicalFlow.hpp"
 #include <QByteArray>
@@ -3046,7 +3047,7 @@ inline bool hasInlineText(const QTextDocument *document) {
 inline QString scaledText(const QString &html, double scale, const QString &tooltip,
                           Basis basis = Basis::Context, qreal normalBodyPoints = 0,
                           bool small = false, bool superscript = false, bool subscript = false, qreal contextPoints = 0,
-                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}, const QJsonObject &compiledAction = {}) {
+                          const QJsonValue &advisory = QJsonValue(), bool metadataOnly = false, int sourceRun = -1, const QJsonObject &linkPaint = {}, qint64 linkOwner = -1, qreal linkEm = 0, bool linkUnderline = false, const QJsonValue &fontFeatures = {}, bool ordinaryLink = false, const QJsonObject &inlineSpan = {}, qreal inlineBodyPoints = 0, qreal inlineContextPoints = 0, const QString &inlineOwnerHtml = {}, const QJsonValue &fontFamily = {}, const QJsonObject &compiledRuby = {}, const QJsonObject &compiledAction = {}, const QJsonObject &compiledCitation = {}) {
     if (!compiledRuby.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty()))
         throw std::runtime_error("Ruby import metadata cannot enter an ordinary inline split");
     if (!compiledAction.isEmpty() && (!inlineSpan.isEmpty() || !linkPaint.isEmpty() || !compiledRuby.isEmpty()))
@@ -3076,6 +3077,11 @@ inline QString scaledText(const QString &html, double scale, const QString &tool
         }
     }
     QJsonObject metadata{{"scale", scale}, {"tooltip", tooltip}};
+    if (!compiledCitation.isEmpty()) {
+        ReferencePolicy::citationImport(compiledCitation);
+        if (!compiledRuby.isEmpty() || !compiledAction.isEmpty()) throw std::runtime_error("citation cannot replace another inline owner");
+        metadata.insert("compiled_citation", compiledCitation);
+    }
     if (!compiledAction.isEmpty()) {
         if (html != QStringLiteral("&#xe000;") || !metadataOnly || !inlineSpan.isEmpty()
             || !linkPaint.isEmpty() || !compiledRuby.isEmpty())
@@ -3151,6 +3157,7 @@ struct ScaleInfo {
     QJsonObject inlineSpan;
     QJsonObject compiledRuby;
     QJsonObject compiledAction;
+    QVariantMap citation;
     int generatedIsolate = 0;
     qreal inlineBodyPoints = 0;
     qreal inlineContextPoints = 0;
@@ -3194,6 +3201,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const bool hasInline = present(value.value("inline_span"));
         const bool hasRuby = value.contains("compiled_ruby");
         const bool hasAction = value.contains("compiled_action");
+        const bool hasCitation = value.contains("compiled_citation");
         const bool hasGeneratedIsolate = value.contains("generated_isolate");
         const auto fontFamily = CompiledContent::containerFontFamily(value.value("font_family"));
         const bool hasFamily = present(fontFamily);
@@ -3206,12 +3214,17 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasGeneratedIsolate && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasCitation && !hasGeneratedIsolate && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (hasCitation) {
+            if (hasRuby || hasAction || hasGeneratedIsolate || !value.value("compiled_citation").isObject())
+                throw std::runtime_error("invalid citation import owner");
+            info.citation = ReferencePolicy::citationImport(value.value("compiled_citation").toObject());
+        }
         if (hasGeneratedIsolate) {
             const auto scalar = value.value("generated_isolate");
             if (!metadataOnly || value.size() != 4 || !scalar.isDouble()
@@ -3520,6 +3533,17 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                     format.setUnderlineStyle(!format.isImageFormat() && !zeroLink
                         && ((!marker->ordinaryLink && marker->linkUnderline) || marker->linkPaint.value("normal").toObject().value("underline").toBool())
                         ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
+                }
+                if (!marker->citation.isEmpty()) {
+                    if (!format.isAnchor() || format.anchorHref().isEmpty() || format.objectType() != QTextFormat::NoObject
+                        || document->documentLayout()->property("_wikidictReferenceLayoutCapability") != QVariant(ReferencePolicy::capability))
+                        throw std::runtime_error("compiled citation lost its native source owner");
+                    format.setProperty(ReferencePolicy::citationProperty, marker->citation);
+                    const auto span = ReferencePolicy::source(marker->citation.value("source"));
+                    auto names = format.anchorNames();
+                    const auto anchor = span.value("citation_marker").toObject().value("anchor").toString();
+                    if (!names.contains(anchor)) names.append(anchor);
+                    format.setAnchorNames(names);
                 }
                 if (marker->generatedIsolate) {
                     for (const QChar character : fragment.text())

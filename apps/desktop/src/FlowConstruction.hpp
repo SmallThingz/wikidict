@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CompiledContent.hpp"
+#include "ReferencePolicy.hpp"
 #include "SemanticHtml.hpp"
 #include "SectionHeading.hpp"
 #include <QPointer>
@@ -54,6 +55,11 @@ struct RenderContext {
     ContainerLineInput baseContainerLineHeight;
     int contentDepth = 0;
     bool inReference = false;
+    int referenceStage = -1;
+    QJsonArray referenceItems;
+    QJsonObject referenceItem;
+    QJsonObject referenceTypography;
+    QJsonArray citationBacklinks;
     QHash<QString, bool> inlineTableAudioOwners;
     QHash<QString, bool> inlineTableImageOwners;
     bool languageKnown = false;
@@ -666,6 +672,12 @@ inline QString placeholder(const QJsonObject &block, const Rendered &rendered, c
         {QStringLiteral("legacy_vertical_scale"), context.legacyVerticalScale},
         {QStringLiteral("context_points"), context.pointSize},
         {QStringLiteral("flex_item"), context.flexItem}};
+    if (context.referenceStage == 2) {
+        const auto source = CompiledReferences::itemSource(context.referenceItem);
+        CompiledContent::require(block == CompiledReferences::itemProjection(source.value("reference").toObject(), source.value("item").toObject()));
+        metadata.insert("reference_item", source);
+    }
+    if (!context.referenceTypography.isEmpty()) metadata.insert("reference_typography", context.referenceTypography);
     if (CompiledContent::present(context.fontFamily)) {
         CompiledContent::containerFontFamily(context.fontFamily);
         metadata.insert(QStringLiteral("font_family"), context.fontFamily);
@@ -832,7 +844,15 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
             }
         }
         temporary.setDefaultFont(contextFont);
-        temporary.setDefaultTextOption(document->defaultTextOption());
+        auto textOption = document->defaultTextOption();
+        const auto referenceTypography = CompiledReferences::typography(item.metadata.value("reference_typography"));
+        const auto referenceDirection = referenceTypography.value("direction");
+        if (!referenceTypography.isEmpty()) {
+            CompiledContent::require(declaringOwner && CompiledContent::fontSnapshot(declaringValue)
+                == CompiledContent::fontSnapshot(referenceTypography.value("owner_font")));
+            if (CompiledContent::present(referenceDirection)) textOption.setTextDirection(referenceDirection == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
+        }
+        temporary.setDefaultTextOption(textOption);
         temporary.setDocumentMargin(0);
         QString importedHtml = item.metadata.value(QStringLiteral("html")).toString();
         const auto sourceLanguage = headingOwner
@@ -901,6 +921,13 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 for (auto &run : runs) run.first.setCharFormat(run.second);
                 QTextCursor cursor(block); auto strut = cursor.blockCharFormat();
                 strut.setFont(strut.font().resolve(contextFont)); cursor.setBlockCharFormat(strut);
+            }
+        }
+        if (CompiledContent::present(referenceDirection)) {
+            for (auto block = temporary.begin(); block.isValid(); block = block.next()) {
+                if (QTextCursor(block).currentFrame() != temporary.rootFrame()) continue;
+                QTextCursor cursor(block); auto format = cursor.blockFormat();
+                format.setLayoutDirection(textOption.textDirection()); cursor.setBlockFormat(format);
             }
         }
         if (headingOwner) {
@@ -991,6 +1018,14 @@ inline QVector<Owner> expand(QTextDocument *document, QVector<QPointer<QTextFram
                 && insertion.block().position() == insertion.selectionStart() && insertion.block().length() == 2);
             const QPointer<QTextFrame> parent(insertion.currentFrame());
             auto format = containerFrameFormat(sourceBlock, em / scale, effectiveDark, item.metadata.value(QStringLiteral("flex_item")).toBool());
+            if (CompiledContent::present(item.metadata.value("reference_item"))) {
+                const auto reference = CompiledReferences::itemSource(item.metadata.value("reference_item"));
+                CompiledContent::require(sourceBlock == CompiledReferences::itemProjection(reference.value("reference").toObject(), reference.value("item").toObject())
+                    && layout->property("_wikidictReferenceLayoutCapability") == QVariant(ReferencePolicy::capability));
+                format.setProperty(ReferencePolicy::pendingItemProperty, ReferencePolicy::source(reference));
+                format.setLayoutDirection(reference.value("reference").toObject().value("body_typography").toObject().value("direction")
+                    == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
+            }
             const bool columns = format.hasProperty(containerColumnsProperty);
             const bool positioned = format.hasProperty(containerPositioningProperty);
             QPointer<QTextTable> containingTable(insertion.currentTable());

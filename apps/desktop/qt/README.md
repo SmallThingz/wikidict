@@ -958,3 +958,44 @@ rectangle repair and exact selected test/helper/slot. Unrelated private absolute
 containers and relative floats remain excluded. Relevant callback, drawing and
 logical-position functions match the private source exactly; ordinary line
 allocation matches after excluding its unrelated absolute-owner branch.
+
+## Typed reference layout and citation controls
+
+Reference32768 retains real wrapper, list and item Container frames. The existing
+list painter shapes the original unsigned group number and its decimal suffix as
+one run, using the item owner's font and direction. The run ends at the principal
+content edge on its first actual line baseline. Backlinks and body text keep their
+own fonts, actions and source positions; an active item background changes paint
+without changing the source or frame geometry.
+
+Citation64 preserves each authored marker range. Its nowrap policy prevents both
+ordinary and emergency cuts inside that range while leaving neighboring break
+opportunities intact. Existing authenticated isolation and source mapping remain
+in use. Target paint and focus outline are selected by the current source,
+occurrence identity and composition epoch. Cached traversal reserves both ordinary
+and target outline ink, so a target switch needs no source-format mutation.
+
+The private source193 correction activates that traversal for a citation in an
+otherwise ordinary root paragraph, before checkpoint culling, and clears it when
+the last citation policy is removed. The original failed external-ink raster crop
+and pixel-equivalence assertions remain intact. The same control checks removal
+and restoration while preserving the used root box and source text. The original
+source192 run's eight passes and one failure remain separate evidence.
+
+The recorded native qualification has three current methods and six earlier
+passes carried through exact source and unchanged-domain proof. One corrected
+App control passes currently, while twelve unchanged controls and the reviewed
+wide, selected-target and narrow frames retain their actual earlier evidence.
+The original failed run remains recorded. These are controlled fixtures, with
+their actual pixel dimensions recorded. The used root
+box and source text remain stable; document size includes reserved outline ink.
+Null-layout legacy body typography remains refused because the synthetic prefix
+and reference body have independent typography. Genuine producer/Reader/FFI
+reference data, rendered genuine records, full suites and full frontend
+acceptance remain unearned.
+
+The maintained 32-target recipe reconstructs forward and backward. It receives
+only the five reference/citation native leaves; relevant functions and all nine
+selected control bodies match private193. Source positions remain document UTF-16
+ranges, independent of source-file line numbers. Unrelated private absolute,
+relative-float, image-occurrence and static-label changes remain excluded. This source composition does not include a new canonical binary build.

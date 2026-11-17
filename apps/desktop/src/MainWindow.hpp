@@ -49,6 +49,7 @@ private:
     int pendingAudioFocusOrdinal_ = -1;
     QJsonObject pendingAudioFocusSource_;
     QString pendingAudioFocusPart_;
+    QString referenceTarget_;
     void updateInlineImageNotice();
     bool clearReadingProjection();
     bool editDocumentFormats(QTextBrowser *browser, const std::function<void()> &mutation);
@@ -73,6 +74,7 @@ private:
         int audioFocusOrdinal = -1;
         QJsonObject audioFocusSource;
         QString audioFocusPart;
+        QString referenceTarget;
     };
 
     void setupUi();
@@ -117,7 +119,7 @@ private:
     QString blockHtml(const QJsonObject &block, const QString &cellBackground = {}, int tableDepth = 1, const QString &location = {}, const QString &inheritedAlignment = {}, FlowConstruction::RenderContext context = {}) const;
     QString blockContentsHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const QString &alignment, const FlowConstruction::RenderContext &context, const QString *bodyOverride = nullptr) const;
     QString flowBlockHtml(const QJsonObject &block, const QString &cellBackground, int tableDepth, const QString &location, const FlowConstruction::RenderContext &context) const;
-    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false, bool typedScopeOwnsIsolation = false, const QJsonObject &linkPaint = {}, bool computedCellTraits = false, const QJsonValue &contextFamily = {}) const;
+    QString spansHtml(const QJsonArray &spans, qreal leftMargin = 0, const QString &prefix = {}, const QString &cellBackground = {}, qreal contextPointSize = 0, const QColor &inheritedInk = {}, int sourceRun = -1, bool zeroFontContext = false, bool typedScopeOwnsIsolation = false, const QJsonObject &linkPaint = {}, bool computedCellTraits = false, const QJsonValue &contextFamily = {}, const QJsonArray &citationBacklinks = {}) const;
     QString tableHtml(const QJsonObject &table, int depth, int tableDepth = 1, const QString &inheritedBackground = {}, const QString &location = {}, const QString &inheritedAlignment = {}, const QString &listMarker = {}, FlowConstruction::RenderContext context = {}) const;
     SavedWord savedWord(const QJsonObject &entry) const;
     QString clueFor(const QJsonObject &entry) const;

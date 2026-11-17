@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14666 @@
+@@ -3,24 +3,14669 @@
 
 
  #include <QTest>
@@ -1620,6 +1620,9 @@
 +    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
 +    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
 +    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
++    void referenceDecimalMarkerUsesOwnerRunAndPrincipalBaseline();
++    void citationNoWrapKeepsSourceClustersAndNeighborBreaks();
++    void citationTargetOutlineSharesPaintTraversalAndEpoch();
 +    void projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics();
 +    void projectedRubyUsesResolvedBaseMetricsOnly();
 +    void projectedRubyRejectsMalformedMetrics();
@@ -14689,7 +14692,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15290,1731 @@
+@@ -648,5 +15293,2013 @@
      }
  }
 
@@ -16417,6 +16420,288 @@
 +    QCOMPARE(countColor(inheritedPixels, annotationOnly, Qt::magenta), 0);
 +    QVERIFY(inheritedRuby->current());
 +    document.setPlainText(QStringLiteral("new")); QVERIFY(!inheritedRuby->current()); QVERIFY(!ruby->current());
++}
++
++namespace {
++QJsonObject referenceControlPaint(const QString &ink, const QString &outlineColor, double width, double offset)
++{
++    QJsonObject paint;
++    for (const auto &name : {"normal", "hover", "active", "visited", "visited_hover", "visited_active", "hover_active", "visited_hover_active"})
++        paint.insert(QLatin1String(name), QJsonObject{{"foreground", ink}, {"underline", false}});
++    paint.insert("underline_on_focus", false);
++    paint.insert("focus_outline", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", width}}},
++        {"radius", QJsonObject{{"unit", "px"}, {"value", 0.0}}}, {"offset", QJsonObject{{"unit", "px"}, {"value", offset}}},
++        {"color", QJsonObject{{"kind", "rgb"}, {"value", outlineColor}}}});
++    return paint;
++}
++QTextCharFormat referenceControlCitation(const QString &text, qint64 owner, bool nowrap, bool painted)
++{
++    const auto normal = referenceControlPaint("#000000", "#0000ff", 1, 0);
++    const auto target = referenceControlPaint("#000000", "#ff0000", 4, 12);
++    QJsonObject marker{{"reference", 1}, {"occurrence", 1}, {"anchor", "cite-1"}, {"nowrap", nowrap}, {"isolation", "ltr"}};
++    if (painted) marker.insert("target_style", QJsonObject{{"paint", target}, {"background", QJsonObject{{"kind", "rgb"}, {"value", "#ddeeff"}}}});
++    QJsonObject span{{"kind", "link"}, {"text", text}, {"target", ""}, {"trail", ""}, {"target_fragment", "reference-1"},
++        {"role", "reference"}, {"citation_marker", marker}};
++    if (painted) span.insert("link_paint", normal);
++    const auto raw = QJsonDocument(span).toJson(QJsonDocument::Compact);
++    QTextCharFormat format; format.setAnchor(true); format.setAnchorHref("dict:#reference-1"); format.setAnchorNames({"cite-1"});
++    format.setProperty(QCompiledReference::CitationProperty, QVariantMap{{"capability", QString::fromLatin1(QCompiledReference::Capability)},
++        {"source", raw}, {"owner", QVariant::fromValue(owner)}, {"nowrap", nowrap}, {"em", 20.0},
++        {"target_outline", painted ? QVariantMap{{"width", 4.0}, {"radius", 0.0}, {"offset", 12.0}, {"color", QColor(Qt::red)}} : QVariantMap{}}});
++    if (painted) {
++        const int policy = QTextFormat::UserProperty + 0x57b4;
++        format.setProperty(policy, QStringLiteral("wikidict.ordinary-link-state/1"));
++        format.setProperty(policy + 1, QVariant::fromValue(owner)); format.setProperty(policy + 2, false);
++        format.setProperty(policy + 3, false); format.setProperty(policy + 5, normal.toVariantMap());
++        format.setProperty(policy + 6, QVariantMap{{"width", 1.0}, {"radius", 0.0}, {"offset", 0.0}, {"color", QColor(Qt::blue)}});
++    }
++    return format;
++}
++QRect referenceControlInk(const QImage &image, const QColor &color)
++{
++    QRect bounds;
++    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
++        if (image.pixelColor(x, y) == color) bounds |= QRect(x, y, 1, 1);
++    return bounds;
++}
++}
++
++void tst_QTextDocumentLayout::referenceDecimalMarkerUsesOwnerRunAndPrincipalBaseline()
++{
++    for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool projected : {false, true})
++    for (quint32 number : {quint32(7), std::numeric_limits<quint32>::max()}) for (qreal points : {11.5, 20.0}) {
++        QImage pixels(900, 260, QImage::Format_ARGB32_Premultiplied); pixels.fill(Qt::white);
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(180); doc.setTextWidth(900);
++        doc.documentLayout()->setPaintDevice(&pixels);
++        QFont ownerFont("Liberation Sans"); ownerFont.setPointSizeF(points); doc.setDefaultFont(ownerFont);
++        QTextOption option = doc.defaultTextOption(); option.setTextDirection(direction); doc.setDefaultTextOption(option);
++        const QJsonObject font{{"font_scale", 1.0}, {"font_scale_basis", "normal_body"}, {"font_normalized", true}};
++        const QJsonObject zero{{"unit", "px"}, {"value", 0.0}};
++        const QJsonObject edges{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
++        const QJsonObject box{{"owner_font", font}, {"margins", edges}, {"padding", edges}, {"border", QJsonObject{{"none", QJsonObject{}}}},
++            {"background", QJsonObject{{"transparent", QJsonObject{}}}}};
++        const QJsonObject body{{"owner_font", font}, {"direction", direction == Qt::RightToLeft ? "rtl" : "ltr"}};
++        const QJsonObject link{{"kind", "link"}, {"text", "back"}, {"target", ""}, {"trail", ""}, {"target_fragment", "cite-1"}};
++        const QJsonArray spans{QJsonObject{{"kind", "text"}, {"text", "Body"}, {"target", ""}, {"trail", ""}, {"font_scale", 1.7}, {"font_scale_basis", "normal_body"}}};
++        const QJsonObject reference{{"kind", "note"}, {"number", 1}, {"group_number", double(number)}, {"body_typography", body},
++            {"spans", spans}, {"backlinks", QJsonArray{QJsonObject{{"occurrence", 1}, {"span", link}}}}};
++        const QJsonObject item{{"box", box}, {"marker", "decimal_outside"}, {"backlink_prefix", "single_space"},
++            {"marker_foreground", QJsonObject{{"kind", "rgb"}, {"value", "#ff0000"}}}, {"target_background", QJsonObject{{"rgb", "#ddeeff"}}}};
++        const QByteArray source = QJsonDocument(QJsonObject{{"reference", reference}, {"item", item}}).toJson(QJsonDocument::Compact);
++        QTextFrameFormat frameFormat; frameFormat.setMargin(0);
++        frameFormat.setBorder(0); frameFormat.setPadding(0);
++        frameFormat.setProperty(QTextFormat::UserProperty + 0x57e0, "wikidict.plain-container/1");
++        frameFormat.setProperty(QTextFormat::UserProperty + 0x57e1, 0);
++        auto prefix = font; prefix.remove("font_normalized"); prefix.insert("inline_style", QJsonObject{{"font_normalized", true}});
++        prefix.insert("kind", "text"); prefix.insert("text", " "); prefix.insert("target", ""); prefix.insert("trail", "");
++        QJsonArray projection{link, prefix}; for (const auto &span : spans) projection.append(span);
++        frameFormat.setProperty(QTextFormat::UserProperty + 0x57e2, QJsonDocument(QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
++            {"container", QJsonObject{{"style", box}, {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", projection}}}}}}}).toJson(QJsonDocument::Compact));
++        QTextCursor cursor(&doc); auto *frame = cursor.insertFrame(frameFormat);
++        QTextBlockFormat paragraph; paragraph.setLayoutDirection(direction);
++        paragraph.setProperty(QTextFormat::UserProperty + 0x57e4, QVariantMap{{"kind", "normal"}, {"value", 0.0},
++            {"owner_px", ownerFont.pointSizeF() * QFontMetricsF(ownerFont).fontDpi() / 72}, {"font", ownerFont}});
++        cursor.setBlockFormat(paragraph); QTextCharFormat owner; owner.setFont(ownerFont); owner.setForeground(Qt::blue); cursor.setBlockCharFormat(owner);
++        const int first = cursor.position();
++        auto backlinkFormat = owner; backlinkFormat.setAnchor(true); backlinkFormat.setAnchorHref("dict:#cite-1");
++        cursor.insertText("back", backlinkFormat); cursor.insertText(" ", owner);
++        auto local = owner; local.setFontPointSize(points * 1.7); cursor.insertText("Body", local); const int last = cursor.position();
++        QTextListFormat list; list.setStyle(QTextListFormat::ListDecimal); list.setIndent(0); list.setStart(1); cursor.createList(list);
++        auto bound = cursor.blockFormat(); bound.setProperty(QCompiledReference::ListProperty, QVariantMap{
++            {"capability", QString::fromLatin1(QCompiledReference::Capability)}, {"source", source}, {"number", number},
++            {"owner", QVariant::fromValue(static_cast<QObject *>(frame))}}); cursor.setBlockFormat(bound);
++        for (auto b = doc.begin(); b.isValid(); b = b.next()) if (b.text().isEmpty()) b.setVisible(false);
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        const QVariantMap flow{{"first", first}, {"last", last}, {"direction", int(direction)},
++            {"joins", QVariantList{}}, {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", first}, {"last", last}}}}};
++        const auto registerFlow = [&] { return !projected || native->wikidictSetLogicalFlows({flow}); };
++        QVERIFY(registerFlow());
++        const auto raw = doc.toRawText(); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        const auto block = doc.findBlock(first); const auto geometry = native->wikidictLogicalPosition(first);
++        const auto blockRect = native->blockBoundingRect(block);
++        const qreal baseline = projected ? geometry.value("lineBaseline").toDouble()
++            : blockRect.top() + block.layout()->lineAt(0).y() + block.layout()->lineAt(0).ascent();
++        const qreal edge = projected ? geometry.value(direction == Qt::RightToLeft ? "contentRight" : "contentLeft").toDouble()
++            : (direction == Qt::RightToLeft ? blockRect.right() : blockRect.left());
++        { QPainter painter(&pixels); native->draw(&painter, {}); }
++        const QRect actual = referenceControlInk(pixels, Qt::red); QVERIFY(!actual.isEmpty());
++        QImage expected(pixels.size(), pixels.format()); expected.fill(Qt::white);
++        const QString text = QString::number(number) + ". "; QTextLayout marker(text, ownerFont, &expected);
++        QTextOption markerOption(Qt::AlignLeft | Qt::AlignAbsolute); markerOption.setTextDirection(direction);
++        markerOption.setWrapMode(QTextOption::NoWrap); markerOption.setFlags(QTextOption::IncludeTrailingSpaces); marker.setTextOption(markerOption);
++        marker.beginLayout(); auto line = marker.createLine(); line.setNumColumns(text.size()); marker.endLayout();
++        { QPainter painter(&expected); painter.setPen(Qt::red); marker.draw(&painter, {edge - line.cursorToX(text.size()), baseline - line.ascent()}); }
++        QCOMPARE(actual, referenceControlInk(expected, Qt::red));
++        QVERIFY(direction == Qt::RightToLeft ? actual.left() >= edge - 1 : actual.right() < edge);
++        const auto ownerBox = native->frameBoundingRect(frame);
++        const QRectF outside = direction == Qt::RightToLeft
++            ? QRectF(actual.right() - 2, actual.top(), 3, actual.height())
++            : QRectF(actual.left(), actual.top(), 3, actual.height());
++        QVERIFY(direction == Qt::RightToLeft ? outside.left() >= ownerBox.right() : outside.right() <= ownerBox.left());
++        QImage clipped(pixels.size(), pixels.format()); clipped.fill(Qt::white);
++        { QPainter painter(&clipped); QAbstractTextDocumentLayout::PaintContext context; context.clip = outside;
++          painter.setClipRect(outside); native->draw(&painter, context); }
++        QVERIFY(!referenceControlInk(clipped, Qt::red).isEmpty());
++        for (int y = 0; y < clipped.height(); ++y) for (int x = 0; x < clipped.width(); ++x)
++            if (outside.contains(QPointF(x + .5, y + .5))) QCOMPARE(clipped.pixelColor(x, y), pixels.pixelColor(x, y));
++        QCOMPARE(doc.toRawText(), raw); QCOMPARE(cursor.block().text(), QString("back Body"));
++        doc.setProperty("wikidict.reference.epoch", QVariant::fromValue(qulonglong(8)));
++        const QVariantMap target{{"kind", "item"}, {"number", quint32(1)}, {"source", source}, {"epoch", QVariant::fromValue(qulonglong(8))}};
++        doc.setProperty("wikidict.reference.target", target); pixels.fill(Qt::white);
++        { QPainter painter(&pixels); native->draw(&painter, {}); }
++        QVERIFY(!referenceControlInk(pixels, QColor("#ddeeff")).isEmpty()); QCOMPARE(native->blockBoundingRect(block), blockRect); QCOMPARE(doc.toRawText(), raw);
++        doc.setProperty("wikidict.reference.epoch", QVariant::fromValue(qulonglong(9))); pixels.fill(Qt::white);
++        { QPainter painter(&pixels); native->draw(&painter, {}); }
++        QVERIFY(referenceControlInk(pixels, QColor("#ddeeff")).isEmpty());
++        doc.setLayoutEnabled(false); auto foreign = bound; auto policy = bound.property(QCompiledReference::ListProperty).toMap();
++        policy["owner"] = QVariant::fromValue(static_cast<QObject *>(doc.rootFrame())); foreign.setProperty(QCompiledReference::ListProperty, policy);
++        cursor.setBlockFormat(foreign); QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        doc.setLayoutEnabled(false); cursor.setBlockFormat(bound); QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        doc.setLayoutEnabled(false); auto mismatched = bound; auto changedReference = reference;
++        changedReference.insert("spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Foreign body"}}});
++        auto changedPolicy = bound.property(QCompiledReference::ListProperty).toMap();
++        changedPolicy["source"] = QJsonDocument(QJsonObject{{"reference", changedReference}, {"item", item}}).toJson(QJsonDocument::Compact);
++        mismatched.setProperty(QCompiledReference::ListProperty, changedPolicy); cursor.setBlockFormat(mismatched);
++        QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        doc.setLayoutEnabled(false); cursor.setBlockFormat(bound); QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(doc.toRawText(), raw);
++    }
++}
++
++void tst_QTextDocumentLayout::citationNoWrapKeepsSourceClustersAndNeighborBreaks()
++{
++    const QString text = QStringLiteral("[alpha-beta gamma e\u0301]");
++    for (auto wrap : {QTextOption::WordWrap, QTextOption::WrapAnywhere, QTextOption::WrapAtWordBoundaryOrAnywhere})
++    for (bool projected : {false, true}) {
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(90);
++        QFont font("Liberation Sans"); font.setPointSizeF(16); doc.setDefaultFont(font);
++        auto option = doc.defaultTextOption(); option.setWrapMode(wrap); doc.setDefaultTextOption(option);
++        QTextCursor cursor(&doc); cursor.insertText("before before "); const int first = cursor.position();
++        const auto format = referenceControlCitation(text, (qint64(1) << 32) + 81, true, false);
++        cursor.insertText(text, format); const int last = cursor.position(); cursor.insertText(" after after after", QTextCharFormat());
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        const QVariantMap flow{{"first", 0}, {"last", cursor.position()}, {"direction", int(Qt::LeftToRight)},
++            {"joins", QVariantList{}}, {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", 0}, {"last", cursor.position()}}}}};
++        const auto registerFlow = [&] { return !projected || native->wikidictSetLogicalFlows({flow}); };
++        QVERIFY(registerFlow());
++        const auto source = doc.toRawText(); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        const auto baseline = [&](int position) {
++            if (projected) return native->wikidictLogicalPosition(position).value("lineBaseline").toDouble();
++            const auto line = doc.begin().layout()->lineForTextPosition(position); return line.y() + line.ascent();
++        };
++        for (int p = first; p < last; ++p) QCOMPARE(baseline(p), baseline(first));
++        QVERIFY(baseline(first) > baseline(0)); QVERIFY(baseline(cursor.position() - 1) > baseline(last - 1));
++        QTextLayout stock(text, font); QTextOption unwrapped; unwrapped.setWrapMode(QTextOption::NoWrap); stock.setTextOption(unwrapped);
++        stock.beginLayout(); auto line = stock.createLine(); line.setNumColumns(text.size()); stock.endLayout();
++        QVERIFY(line.horizontalAdvance() > doc.textWidth());
++        QVERIFY(doc.idealWidth() + .1 >= line.horizontalAdvance());
++        if (!projected) QVERIFY(doc.begin().layout()->engine()->minWidth.toReal() + .1 >= line.horizontalAdvance());
++        QTextCursor selected(&doc); selected.setPosition(first); selected.setPosition(last, QTextCursor::KeepAnchor); QCOMPARE(selected.selectedText(), text);
++        for (int p = first; p < last; ++p) {
++            const auto geometry = native->wikidictLogicalPosition(p);
++            const QRectF cell = geometry.value(projected ? "characterRect" : "inlineCharacterRect").toRectF();
++            if (!cell.isEmpty()) { const int hit = native->hitTest(cell.center(), Qt::ExactHit); QVERIFY(hit >= first && hit < last); }
++        }
++        QCOMPARE(doc.toRawText(), source);
++        doc.setLayoutEnabled(false); auto forged = format; auto policy = format.property(QCompiledReference::CitationProperty).toMap();
++        policy["nowrap"] = false; forged.setProperty(QCompiledReference::CitationProperty, policy); selected.setCharFormat(forged);
++        QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        doc.setLayoutEnabled(false); selected.setCharFormat(format); QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        doc.setLayoutEnabled(false); auto foreign = format; foreign.setAnchorHref("dict:#foreign"); selected.setCharFormat(foreign);
++        QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        doc.setLayoutEnabled(false); selected.setCharFormat(format); QVERIFY(registerFlow()); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(doc.toRawText(), source);
++    }
++}
++
++void tst_QTextDocumentLayout::citationTargetOutlineSharesPaintTraversalAndEpoch()
++{
++    for (bool projected : {false, true}) for (bool nested : {false, true}) {
++        QImage image(500, 200, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(40); doc.setTextWidth(420);
++        doc.documentLayout()->setPaintDevice(&image);
++        QFont font("Liberation Sans"); font.setPointSizeF(18); doc.setDefaultFont(font);
++        const qint64 owner = (qint64(1) << 32) + 82;
++        const auto format = referenceControlCitation("[citation]", owner, true, true);
++        QTextCursor cursor(&doc);
++        if (nested) {
++            QTextFrameFormat frame; frame.setMargin(0); frame.setBorder(0); frame.setPadding(0);
++            frame.setProperty(QTextFormat::UserProperty + 0x57e0, "wikidict.plain-container/1");
++            frame.setProperty(QTextFormat::UserProperty + 0x57e1, 0);
++            cursor.insertFrame(frame); cursor.insertFrame(frame);
++        }
++        const int first = cursor.position(); cursor.insertText("[citation]", format); const int last = cursor.position();
++        for (auto block = doc.begin(); block.isValid(); block = block.next()) if (block.text().isEmpty()) block.setVisible(false);
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++        if (projected) QVERIFY(native->wikidictSetLogicalFlows({QVariantMap{{"first", first}, {"last", last}, {"direction", int(Qt::LeftToRight)},
++            {"joins", QVariantList{}}, {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", first}, {"last", last}}}}}}));
++        doc.setProperty("wikidict.figure.linkFocusOwner", QVariant::fromValue(owner));
++        doc.setProperty("wikidict.reference.epoch", QVariant::fromValue(qulonglong(17)));
++        const auto sourceBytes = format.property(QCompiledReference::CitationProperty).toMap().value("source");
++        QVariantMap target{{"kind", "citation"}, {"owner", QVariant::fromValue(owner)}, {"source", sourceBytes}, {"epoch", QVariant::fromValue(qulonglong(17))}};
++        const auto source = doc.toRawText(); doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        const auto block = doc.findBlock(first);
++        const auto bounds = native->blockBoundingRect(block); const int revision = doc.revision();
++        const auto documentSize = native->documentSize();
++        const auto ownerBounds = native->frameBoundingRect(cursor.currentFrame());
++        { QPainter painter(&image); native->draw(&painter, {}); } QVERIFY(!referenceControlInk(image, Qt::blue).isEmpty()); QVERIFY(referenceControlInk(image, Qt::red).isEmpty());
++        doc.setProperty("wikidict.reference.target", target); image.fill(Qt::white);
++        { QPainter painter(&image); native->draw(&painter, {}); }
++        const auto red = referenceControlInk(image, Qt::red); QVERIFY(!red.isEmpty()); QVERIFY(referenceControlInk(image, Qt::blue).isEmpty());
++        QVERIFY(red.top() < bounds.top() - 5);
++        const QRectF stripe(red.left(), red.top(), red.width(), 3);
++        QImage clipped(image.size(), image.format()); clipped.fill(Qt::white);
++        { QPainter painter(&clipped); QAbstractTextDocumentLayout::PaintContext context; context.clip = stripe; painter.setClipRect(stripe); native->draw(&painter, context); }
++        QVERIFY(!referenceControlInk(clipped, Qt::red).isEmpty());
++        for (int y = 0; y < clipped.height(); ++y) for (int x = 0; x < clipped.width(); ++x)
++            if (stripe.contains(QPointF(x + .5, y + .5))) QCOMPARE(clipped.pixelColor(x, y), image.pixelColor(x, y));
++        for (int variant = 0; variant != 3; ++variant) {
++            auto invalid = target;
++            if (variant == 0) invalid["owner"] = QVariant::fromValue(owner + 1);
++            if (variant == 1) invalid["source"] = QByteArray("{}");
++            if (variant == 2) invalid["epoch"] = QVariant::fromValue(qulonglong(16));
++            doc.setProperty("wikidict.reference.target", invalid); image.fill(Qt::white);
++            { QPainter painter(&image); native->draw(&painter, {}); }
++            QVERIFY(referenceControlInk(image, Qt::red).isEmpty()); QVERIFY(!referenceControlInk(image, Qt::blue).isEmpty());
++        }
++        QCOMPARE(doc.toRawText(), source); QCOMPARE(doc.revision(), revision); QCOMPARE(native->blockBoundingRect(block), bounds);
++        QCOMPARE(native->documentSize(), documentSize); QCOMPARE(native->frameBoundingRect(cursor.currentFrame()), ownerBounds);
++        doc.setProperty("wikidict.reference.target", target); doc.setProperty("wikidict.reference.epoch", QVariant::fromValue(qulonglong(18))); image.fill(Qt::white);
++        { QPainter painter(&image); native->draw(&painter, {}); } QVERIFY(referenceControlInk(image, Qt::red).isEmpty());
++    }
++
++    // Removing the last citation must discard its reserved target ink, even
++    // while the stale document target remains. A stock root has no other ink
++    // traversal owner to mask that transition. Restore without changing text.
++    QTextDocument removal; removal.setDocumentMargin(0); removal.setTextWidth(420);
++    QFont font("Liberation Sans"); font.setPointSizeF(18); removal.setDefaultFont(font);
++    const qint64 owner = (qint64(1) << 32) + 83;
++    const auto owned = referenceControlCitation("[citation]", owner, true, true);
++    auto ordinary = owned; ordinary.clearProperty(QCompiledReference::CitationProperty);
++    QTextCursor cursor(&removal); cursor.insertText("[citation]", ordinary);
++    cursor.setPosition(0); cursor.setPosition(10, QTextCursor::KeepAnchor);
++    auto *native = qobject_cast<QTextDocumentLayout *>(removal.documentLayout()); QVERIFY(native);
++    const auto ordinarySize = native->documentSize();
++    const auto ordinaryRoot = native->frameBoundingRect(removal.rootFrame());
++    const auto raw = removal.toRawText();
++    const auto policy = owned.property(QCompiledReference::CitationProperty).toMap();
++    removal.setProperty("wikidict.figure.linkFocusOwner", QVariant::fromValue(owner));
++    removal.setProperty("wikidict.reference.epoch", QVariant::fromValue(qulonglong(31)));
++    removal.setProperty("wikidict.reference.target", QVariantMap{{"kind", "citation"},
++        {"owner", QVariant::fromValue(owner)}, {"source", policy.value("source")},
++        {"epoch", QVariant::fromValue(qulonglong(31))}});
++    cursor.setCharFormat(owned);
++    const auto ownedSize = native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++    QVERIFY(ownedSize.height() > ordinarySize.height() + 5);
++    QCOMPARE(native->frameBoundingRect(removal.rootFrame()), ordinaryRoot);
++    cursor.setCharFormat(ordinary);
++    QCOMPARE(native->documentSize(), ordinarySize); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++    QCOMPARE(native->frameBoundingRect(removal.rootFrame()), ordinaryRoot);
++    QCOMPARE(removal.toRawText(), raw);
++    cursor.setCharFormat(owned);
++    QCOMPARE(native->documentSize(), ownedSize); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++    QCOMPARE(native->frameBoundingRect(removal.rootFrame()), ordinaryRoot);
++    QCOMPARE(removal.toRawText(), raw);
 +}
 +
  QTEST_MAIN(tst_QTextDocumentLayout)

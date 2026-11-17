@@ -4,6 +4,8 @@
 #include "SemanticHtml.hpp"
 #include "SemanticFigure.hpp"
 #include "CompiledContent.hpp"
+#include "CompiledReferences.hpp"
+#include "ReferenceRendering.hpp"
 #include "LogicalFlow.hpp"
 #include "ParagraphProjection.hpp"
 #include "LibraryDialog.hpp"
@@ -123,7 +125,13 @@ QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, const QPale
             const bool zero = format.boolProperty(zeroFontProperty);
             const bool ordinary = format.stringProperty(policyProperty) == ordinaryPolicy;
             const bool fixed = ordinary || format.stringProperty(policyProperty) == fixedPolicy;
-            const auto paint = QJsonObject::fromVariantMap(format.property(fixedPolicyProperty).toMap());
+            auto paint = QJsonObject::fromVariantMap(format.property(fixedPolicyProperty).toMap());
+            QJsonObject citationTarget;
+            if (ReferencePolicy::targetedCitation(document, format)) {
+                const auto span = ReferencePolicy::source(format.property(ReferencePolicy::citationProperty).toMap().value("source"));
+                citationTarget = span.value("citation_marker").toObject().value("target_style").toObject();
+                if (!citationTarget.isEmpty()) paint = citationTarget.value("paint").toObject();
+            }
             const bool visited = state.visitedTargets.contains(fixed ? fixedTargetKey(state, format.anchorHref()) : targetKey(state, format.anchorHref()));
             const QString stateName = ordinary && owner == state.hovered && owner == state.pressed
                 ? (visited ? QStringLiteral("visited_hover_active") : QStringLiteral("hover_active")) : visited
@@ -135,6 +143,10 @@ QList<QTextEdit::ExtraSelection> selections(QTextDocument *document, const QPale
             QTextCharFormat overlay;
             overlay.setProperty(overlayProperty, true);
             overlay.setForeground(ink);
+            if (CompiledContent::present(citationTarget.value("background"))) {
+                const auto color = citationTarget.value("background").toObject();
+                overlay.setBackground(color.value("kind") == QStringLiteral("transparent") ? QColor(Qt::transparent) : QColor(color.value("value").toString()));
+            }
             const bool underline = !zero && ((!ordinary && format.boolProperty(underlineProperty)) || (fixed
                 ? selected.value("underline").toBool() || (owner == state.focused && paint.value("underline_on_focus").toBool())
                 : interaction != Interaction::Rest));
@@ -4645,6 +4657,7 @@ bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
     readingUncommitted_ = true;
     currentEntry_ = entries.first().toObject();
+    referenceTarget_.clear();
     // A new or failed display must never retain the previous entry's media or
     // bookmark action state. Successful composition binds the new entry below.
     pendingAudioFocusOrdinal_ = -1; pendingAudioFocusSource_ = {}; pendingAudioFocusPart_.clear();
@@ -5049,6 +5062,8 @@ bool MainWindow::refreshReading() {
     document->setLayoutEnabled(false);
     CompiledContent::require(unchangedInitial());
     CompiledInlineAction::validateEntry(currentEntry_);
+    ReferenceRendering::begin(document, readingComposition_);
+    CompiledContent::require(unchangedInitial());
     nextAudioOccurrence_ = 0;
     const QString html = entryHtml(currentEntry_, true);
     const bool bodyOrdinary = currentEntry_.value(QStringLiteral("body_adjoining")) == QJsonValue(QStringLiteral("ordinary"));
@@ -5192,6 +5207,7 @@ bool MainWindow::refreshReading() {
     });
     CompiledContent::require(current() && !document->isLayoutEnabled());
     CompiledInlineBox::finalize(boxExpansion);
+    ReferenceRendering::finalize(document, containers, current);
     CompiledContent::require(current() && !document->isLayoutEnabled());
     // The real first metadata block ends the one shared semantic-body flow.
     // No wrapper frame may change the containing interval of existing floats.
@@ -5258,7 +5274,8 @@ bool MainWindow::refreshReading() {
         }
         // Flow expansion can consume an empty placeholder's anchor. Its actual
         // typed source owner remains authoritative; prefix spans own no Flow
-        // paragraphs or nonempty frames. References begin after bodyEnd.
+        // paragraphs or nonempty frames. Explicit reference batches are inside
+        // this interval; only the legacy synthetic footer begins after bodyEnd.
         for (const auto &owner : owners) if (owner.first.position() < bodyEnd) consider(owner.first.position());
         for (auto *frame : document->rootFrame()->childFrames())
             if (frame->firstPosition() <= frame->lastPosition() && frame->firstPosition() - 1 < bodyEnd) consider(frame->firstPosition());
@@ -5425,6 +5442,8 @@ bool MainWindow::refreshReading() {
         currentEntry_.value(QStringLiteral("sections")).toArray(), collapsedSections_);
     updateSectionFoldControl();
     auto *missingReader = static_cast<ReadingBrowser *>(browser.data());
+    ReferenceRendering::target(document, referenceTarget_);
+    CompiledContent::require(current());
     missingReader->missingState.context = api_ ? api_->root() + QChar('|') + api_->language() + QChar('|') + api_->kind() : QString();
     missingReader->missingState.fixedContext = api_ ? QString::fromUtf8(QJsonDocument(QJsonArray{
         QFileInfo(api_->root()).canonicalFilePath(), LibraryStorage::editionIdentity(api_->root()), api_->language(), api_->kind()}).toJson(QJsonDocument::Compact)) : QString();
@@ -5491,7 +5510,28 @@ bool MainWindow::resetFolding() {
 }
 
 bool MainWindow::jumpToFragment(const QString &fragment) {
+    const QPointer<MainWindow> guard(this);
+    const auto selectReferenceTarget = [&] {
+        if (!guard) return false;
+        const QPointer<QTextDocument> document(guard->reading_->document());
+        const quint64 composition = guard->readingComposition_;
+        ReferenceRendering::target(document, fragment);
+        return guard && document && guard->reading_->document() == document && guard->readingComposition_ == composition;
+    };
+    referenceTarget_ = fragment;
+    if (reading_->document()->property(ReferencePolicy::epochProperty).isValid()) {
+        if (!selectReferenceTarget()) return false;
+        static_cast<ReadingBrowser *>(reading_)->requestMissingPaint(); reading_->viewport()->update();
+    }
     if (fragment.isEmpty()) return true;
+    const auto referencePlan = CompiledReferences::validate(currentEntry_);
+    if (referencePlan.citationSections.contains(fragment) || referencePlan.referenceSections.contains(fragment)) {
+        const int section = referencePlan.citationSections.contains(fragment)
+            ? referencePlan.citationSections.value(fragment) : referencePlan.referenceSections.value(fragment);
+        if (section >= 0 && collapsedSections_.contains(section) && !jumpToSection(section)) return false;
+        if (!selectReferenceTarget()) return false;
+        reading_->scrollToAnchor(fragment); return true;
+    }
     const auto headings = headingDestinations(currentEntry_);
     const HeadingDestination *destination = nullptr;
     QString spaced = fragment;
@@ -5566,6 +5606,7 @@ void MainWindow::saveVisit() {
     visits_[visitIndex_].cursorAnchor = cursor.anchor();
     visits_[visitIndex_].readerFocused = reading_->hasFocus();
     auto &visit = visits_[visitIndex_];
+    visit.referenceTarget = referenceTarget_;
     visit.audioFocusOrdinal = -1; visit.audioFocusSource = {}; visit.audioFocusPart.clear();
     if (readingAudio_ && readingAudio_->current()) {
         auto *focused = QApplication::focusWidget();
@@ -5581,6 +5622,7 @@ void MainWindow::saveVisit() {
 
 bool MainWindow::restoreVisitReading(const Visit &visit) {
     collapsedSections_ = visit.collapsed;
+    referenceTarget_ = visit.referenceTarget;
     if (!refreshReading()) return false;
     // Store offsets, never a cursor tied to the document replaced by setHtml.
     pendingAudioFocusOrdinal_ = visit.audioFocusOrdinal;
@@ -5687,7 +5729,7 @@ void MainWindow::openSavedWord(const SavedWord &word) {
     if (api_->kind() == requested.kind && (requested.kind != QStringLiteral("language") || api_->language() == requested.language)) activateUserWord(requested.title);
     else loadDataset(api_->root(), requested.language, requested.kind, false, requested.title, -1, originRoot_, originEdition_);
 }
-QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext, bool typedScopeOwnsIsolation, const QJsonObject &linkPaint, bool computedCellTraits, const QJsonValue &contextFamily) const {
+QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const QString &prefix, const QString &cellBackground, qreal contextPointSize, const QColor &inheritedInk, int sourceRun, bool zeroFontContext, bool typedScopeOwnsIsolation, const QJsonObject &linkPaint, bool computedCellTraits, const QJsonValue &contextFamily, const QJsonArray &citationBacklinks) const {
     const qreal basePoints = contextPointSize > 0 ? contextPointSize : readingPointSize_;
     CompiledContent::containerFontFamily(contextFamily);
     const bool familyOwner = SemanticHtml::hasInlineFamily(spans);
@@ -5791,11 +5833,14 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (absoluteFont && (!numericScale.isDouble() || !std::isfinite(numericScale.toDouble()) || numericScale.toDouble() < 0))
                 throw DictApiError("normal-body font-scale basis requires a numeric scale");
             const QString kind = span.value(QStringLiteral("kind")).toString();
+            const auto citationMarker = CompiledReferences::marker(span);
+            const bool citationLink = !citationMarker.isEmpty() || citationBacklinks.contains(span);
+            if (citationLink) CompiledReferences::citationLink(span);
             const auto ownPaint = span.value(QStringLiteral("link_paint"));
             const bool ordinaryLink = SemanticHtml::present(ownPaint);
             if (ordinaryLink && (!ownPaint.isObject() || !linkPaint.isEmpty()
                 || (kind != QStringLiteral("link") && kind != QStringLiteral("external_link"))
-                || !span.value(QStringLiteral("target")).isString() || span.value(QStringLiteral("target")).toString().isEmpty()))
+                || !span.value(QStringLiteral("target")).isString() || (span.value(QStringLiteral("target")).toString().isEmpty() && !citationLink)))
                 throw DictApiError("invalid ordinary link paint owner");
             const QJsonObject selectedPaint = ordinaryLink ? ownPaint.toObject() : linkPaint;
             const bool imageLinkPaint = ordinaryLink && SemanticHtml::present(span.value(QStringLiteral("image")));
@@ -5812,22 +5857,24 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             const bool fixedLink = (ordinaryLink || !selectedPaint.isEmpty()) && (kind == QStringLiteral("link") || kind == QStringLiteral("external_link"))
                 && (imageLinkPaint || !SemanticHtml::present(span.value(QStringLiteral("image"))));
             qint64 linkOwner = -1; qreal linkEm = 0;
-            if (fixedLink) {
-                if (span.value("target").toString().isEmpty() || nextLinkPaintOwner_ == std::numeric_limits<quint32>::max())
+            if (fixedLink || !citationMarker.isEmpty()) {
+                if ((span.value("target").toString().isEmpty() && !citationLink) || nextLinkPaintOwner_ == std::numeric_limits<quint32>::max())
                     throw DictApiError("invalid compiled caption link owner");
                 linkEm = documentBodyEm(reading_->document(), readingPointSize_) / documentVerticalScale(reading_->document());
                 if (ordinaryLink) MissingFigurePaint::validateOrdinary(selectedPaint, linkEm);
-                else MissingFigurePaint::validate(selectedPaint, linkEm);
+                else if (!selectedPaint.isEmpty()) MissingFigurePaint::validate(selectedPaint, linkEm);
                 if (ordinaryLink && (selectedPaint.isEmpty()
                     || reading_->document()->documentLayout()->property("_wikidictOrdinaryLinkStateCapability").toString() != MissingFigurePaint::ordinaryPolicy
                     || (span.contains("underline") && !span.value("underline").isBool())
                     || span.value("underline").toBool() != selectedPaint.value("normal").toObject().value("underline").toBool()))
                     throw DictApiError("ordinary link static decoration conflicts with its state policy");
                 const auto staticInk = span.value("foreground");
-                if (SemanticHtml::present(staticInk) && staticInk != selectedPaint.value("normal").toObject().value("foreground"))
+                if (fixedLink && SemanticHtml::present(staticInk) && staticInk != selectedPaint.value("normal").toObject().value("foreground"))
                     throw DictApiError("caption link static foreground conflicts with its state policy");
                 linkOwner = (qint64(1) << 32) + nextLinkPaintOwner_++;
             }
+            const QJsonObject citationImport = citationMarker.isEmpty() ? QJsonObject{} : QJsonObject{
+                {"span", span}, {"owner", double(linkOwner)}, {"em", double(linkEm)}};
             const QJsonValue targetFragment = span.value(QStringLiteral("target_fragment"));
             const bool separateFragment = SemanticHtml::present(targetFragment);
             if (separateFragment && (kind != QStringLiteral("link") || !targetFragment.isString()))
@@ -5860,10 +5907,10 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
                 text = SemanticHtml::scaledText(text, zeroScale ? 0 : numericScale.toDouble(), explanation,
                     cssPx ? SemanticHtml::Basis::CssPx : normalBody ? SemanticHtml::Basis::NormalBody : SemanticHtml::Basis::Context, readingPointSize_,
                     span.value(QStringLiteral("small")).toBool(), span.value(QStringLiteral("superscript")).toBool(),
-                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily);
-            else if (hasAdvisory || sourceRun >= 0 || fixedLink || hasFontFeatures || hasInlineStyle || hasFamily)
+                    span.value(QStringLiteral("subscript")).toBool(), basePoints, advisory, false, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily, {}, {}, citationImport);
+            else if (hasAdvisory || sourceRun >= 0 || fixedLink || !citationMarker.isEmpty() || hasFontFeatures || hasInlineStyle || hasFamily)
                 text = SemanticHtml::scaledText(text, 1, explanation, SemanticHtml::Basis::Context,
-                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily);
+                    0, false, false, false, 0, advisory, true, sourceRun, fixedLink ? selectedPaint : QJsonObject{}, linkOwner, linkEm, span.value("underline").toBool(), fontFeatures, ordinaryLink, hasInlineStyle ? span : QJsonObject{}, readingPointSize_, basePoints, inlineOwnerHtml, effectiveFamily, {}, {}, citationImport);
             if (!explanation.isEmpty() && !hasAdvisory)
                 text = QStringLiteral("<span title=\"%1\">%2</span>")
                     .arg(explanation.toHtmlEscaped(), text);
@@ -5963,7 +6010,8 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             const QString language = span.value(QStringLiteral("language")).toString();
             // A real Scope supplies isolation for its inline descendants.
             // Keep legacy direction handling outside that proven ownership.
-            const QString direction = typedScopeOwnsIsolation ? QString()
+            const QString direction = !citationMarker.isEmpty() && CompiledContent::present(citationMarker.value("isolation"))
+                ? citationMarker.value("isolation").toString() : typedScopeOwnsIsolation ? QString()
                 : span.value(QStringLiteral("direction")).toString();
             // QTextDocument does not isolate inline HTML direction attributes.
             // Keep the complete styled link/text and its trail in one bidi isolate.
@@ -6393,9 +6441,20 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         FlowConstruction::Rendered rendered;
         const auto children = owned.value(QStringLiteral("blocks")).toArray();
         auto childContext = context; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
-        for (qsizetype index = 0; index < children.size(); ++index)
+        for (qsizetype index = 0; index < children.size(); ++index) {
+            auto child = childContext;
+            if (context.referenceStage == 0) child.referenceStage = 1;
+            else if (context.referenceStage == 1) {
+                child.referenceStage = 2; child.referenceItem = context.referenceItems.at(index).toObject();
+            } else if (context.referenceStage == 2) {
+                child.referenceStage = 3;
+                const auto reference = context.referenceItem.value("reference").toObject();
+                child.referenceTypography = reference.value("body_typography").toObject();
+                child.citationBacklinks = QJsonArray{reference.value("backlinks").toArray().first().toObject().value("span")};
+            }
             rendered.html += blockHtml(CompiledContent::object(children.at(index)), cellBackground, tableDepth,
-                location + QStringLiteral("/container/%1").arg(index), context.alignment, childContext);
+                location + QStringLiteral("/container/%1").arg(index), context.alignment, child);
+        }
         return QStringLiteral("<p style='margin:0'>%1</p>").arg(FlowConstruction::placeholder(block, rendered, context));
     }
     const bool explicitProjection = CompiledContent::present(block.value(QStringLiteral("flow")))
@@ -6449,7 +6508,7 @@ QString MainWindow::flowBlockHtml(const QJsonObject &block, const QString &cellB
         parts = QJsonArray{QJsonObject{{"kind", "figure"}, {"spans", QJsonArray{}}, {"figure", figureValue}}};
     } else parts = QJsonArray{QJsonObject{{"kind", "inline"}, {"spans", blockSpans}}};
     auto inlineRenderer = [&](const QJsonArray &spans, int run, const FlowConstruction::RenderContext &local) {
-        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext, local.typedScopeOwnsIsolation, local.captionLinkPaint, (local.computedCellTraits || !local.containerOwnerFont.isEmpty()), local.fontFamily);
+        return spansHtml(spans, 0, {}, cellBackground, local.pointSize, local.inheritedInk, run, local.zeroFontContext, local.typedScopeOwnsIsolation, local.captionLinkPaint, (local.computedCellTraits || !local.containerOwnerFont.isEmpty()), local.fontFamily, local.citationBacklinks);
     };
     auto figureRenderer = [&](const QJsonObject &sourceFigure, int run,
                               const FlowConstruction::RenderContext &local, CompiledContent::Depth nestedDepth) {
@@ -6697,6 +6756,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
 
 QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const {
     CompiledContent::requireSupportedFinalYGeometry(entry);
+    const auto referencePlan = CompiledReferences::validate(entry);
     const auto bodyTypography = CompiledContent::bodyTypography(entry.value(QStringLiteral("body_typography")));
     const bool hasBodyTypography = !bodyTypography.isEmpty();
     const auto adjoining = entry.value(QStringLiteral("body_adjoining"));
@@ -6805,7 +6865,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
     const QJsonArray references = entry.value(QStringLiteral("references")).toArray();
     auto referenceContext = rootContext; referenceContext.inReference = true;
     int metadataReferencesSection = -1;
-    if (!references.isEmpty()) {
+    if (!referencePlan.explicitPlacement && !references.isEmpty()) {
         for (qsizetype i = 0; i < sections.size(); ++i) {
             const QJsonObject section = sections[i].toObject();
             const int level = section.value(QStringLiteral("level")).toInt();
@@ -6842,6 +6902,74 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
                 }
             }
     };
+    const auto renderReference = [&](qsizetype referenceIndex) -> QString {
+        QString html;
+            const QJsonObject ref = references[referenceIndex].toObject();
+            const QJsonValue contents = referenceBlocks(ref);
+            if (contents.isUndefined() || contents.isNull())
+                collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
+            const QString referenceKind = ref.value(QStringLiteral("kind")).toString(QStringLiteral("note"));
+            QString prefix;
+            if (referenceKind == QStringLiteral("note")) {
+                const QString group = ref.value(QStringLiteral("group")).toString();
+                const qint64 groupNumber = ref.value(QStringLiteral("group_number")).toInteger();
+                const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
+                    : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
+                prefix = QStringLiteral("<a name='reference-%1'></a>%2 ")
+                    .arg(ref.value(QStringLiteral("number")).toInteger()).arg(label.toHtmlEscaped());
+            } else if (referenceKind != QStringLiteral("fragment")) {
+                throw DictApiError("invalid compiled reference kind");
+            }
+            QJsonArray backlinks;
+            for (const auto &raw : ref.value("backlinks").toArray())
+                backlinks.append(CompiledReferences::backlink(raw).value("span"));
+            if (!backlinks.isEmpty()) prefix += spansHtml(backlinks, 0, {}, {}, 0, {}, -1, false, false, {}, false, {}, backlinks);
+            if (!contents.isUndefined() && !contents.isNull()) {
+                // Blocks own their boundaries. Never put a table inside a paragraph.
+                html += QStringLiteral("<div>%1").arg(prefix);
+                const QJsonArray blocks = contents.toArray();
+                for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
+                    const QJsonObject block = blocks[blockIndex].toObject();
+                    if (block.value(QStringLiteral("table")).isObject())
+                        collectTableMedia(collectTableMedia, block.value(QStringLiteral("table")).toObject(), 1);
+                    else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
+                             block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule")) {
+                        if (block.value(QStringLiteral("figure")).isObject())
+                            collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
+                        collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
+                    }
+                    html += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, referenceContext);
+                }
+                html += QStringLiteral("</div>");
+                return html;
+            }
+            const QJsonArray spans = ref.value(QStringLiteral("spans")).toArray();
+            if (hasPoemSpans(spans))
+                html += QStringLiteral("<div>%1</div>").arg(spansHtml(spans, 0, prefix));
+            else
+                html += QStringLiteral("<p>%1%2</p>").arg(prefix, spansHtml(spans));
+        return html;
+    };
+    const auto renderReferencesAt = [&](int sectionIndex, qsizetype beforeBlock) -> QString {
+        QString html;
+        for (const auto &batch : referencePlan.batches) {
+            if (batch.section != sectionIndex || batch.before != beforeBlock) continue;
+            if (!batch.layout.isEmpty()) {
+                CompiledContent::require(reading_->document()->documentLayout()->property("_wikidictReferenceLayoutCapability")
+                    == QVariant(ReferencePolicy::capability));
+                auto context = referenceContext; context.referenceStage = 0;
+                context.legacyVerticalScale = documentVerticalScale(reading_->document());
+                const auto items = batch.layout.value("items").toArray();
+                for (qsizetype i = 0; i < batch.indices.size(); ++i)
+                    context.referenceItems.append(QJsonObject{{"reference", references.at(CompiledReferences::integer(batch.indices.at(i)))}, {"item", items.at(i)}});
+                html += blockHtml(CompiledReferences::project(batch, references), {}, 1,
+                    QStringLiteral("reference-batch-%1-%2").arg(sectionIndex).arg(beforeBlock), {}, context);
+                continue;
+            }
+            for (const auto &index : batch.indices) html += renderReference(CompiledReferences::integer(index));
+        }
+        return html;
+    };
     if (bodyOrdinary || hasBodyTypography) out += QStringLiteral("<a name='wikidict-private-entry-body-begin/1'></a>");
     int index = -1;
     for (const QJsonValue &sectionValue : sections) {
@@ -6865,6 +6993,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             level == 2 && title == entry.value(QStringLiteral("language")).toString();
         const QJsonArray richHeading = sectionHeadingSpans(section);
         const bool renderRichHeading = !richHeading.isEmpty();
+        if (renderRichHeading && !collapsedSections_.contains(index)) out += renderReferencesAt(index, 0);
         if (SemanticHtml::present(section.value(QStringLiteral("heading_style")))) {
             const auto heading = SectionHeading::validate(section);
             const auto projected = SectionHeading::projection(section);
@@ -6911,6 +7040,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
             if (blockIndex == 0 && renderRichHeading) continue;
+            out += renderReferencesAt(index, blockIndex);
             const QJsonObject block = blocks[blockIndex].toObject();
             const QString kind = block.value(QStringLiteral("kind")).toString();
             if (kind != QStringLiteral("blank") && kind != QStringLiteral("rule")) {
@@ -6927,6 +7057,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
             out += blockHtml(block, {}, 1, QStringLiteral("block-%1-%2").arg(index).arg(blockIndex), {},
                 kind == QStringLiteral("heading") ? rootContext : bodyContext);
         }
+        out += renderReferencesAt(index, blocks.size());
     }
     bool bodyEndEmitted = false;
     const auto metadataStart = [&](const QString &tag) -> QString {
@@ -6934,52 +7065,12 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         bodyEndEmitted = true;
         return QChar('<') + tag + QStringLiteral(" data-wikidict-entry-body-end='wikidict.entry-body-end/1'>");
     };
-    if (!references.isEmpty()) {
+    if (!referencePlan.explicitPlacement && !references.isEmpty()) {
         if (metadataReferencesSection >= 0)
             out += QStringLiteral("<a name='section-%1'></a>").arg(metadataReferencesSection);
         out += metadataStart(QStringLiteral("h2")) + QStringLiteral("References</h2>");
-        for (qsizetype referenceIndex = 0; referenceIndex < references.size(); ++referenceIndex) {
-            const QJsonObject ref = references[referenceIndex].toObject();
-            const QJsonValue contents = referenceBlocks(ref);
-            if (contents.isUndefined() || contents.isNull())
-                collectEmbeddedMedia(ref.value(QStringLiteral("spans")).toArray());
-            const QString referenceKind = ref.value(QStringLiteral("kind")).toString(QStringLiteral("note"));
-            QString prefix;
-            if (referenceKind == QStringLiteral("note")) {
-                const QString group = ref.value(QStringLiteral("group")).toString();
-                const qint64 groupNumber = ref.value(QStringLiteral("group_number")).toInteger();
-                const QString label = group.isEmpty() ? QStringLiteral("[%1]").arg(groupNumber)
-                    : QStringLiteral("[%1 %2]").arg(group, QString::number(groupNumber));
-                prefix = QStringLiteral("<a name='reference-%1'></a>%2 ")
-                    .arg(ref.value(QStringLiteral("number")).toInteger()).arg(label.toHtmlEscaped());
-            } else if (referenceKind != QStringLiteral("fragment")) {
-                throw DictApiError("invalid compiled reference kind");
-            }
-            if (!contents.isUndefined() && !contents.isNull()) {
-                // Blocks own their boundaries. Never put a table inside a paragraph.
-                out += QStringLiteral("<div>%1").arg(prefix);
-                const QJsonArray blocks = contents.toArray();
-                for (qsizetype blockIndex = 0; blockIndex < blocks.size(); ++blockIndex) {
-                    const QJsonObject block = blocks[blockIndex].toObject();
-                    if (block.value(QStringLiteral("table")).isObject())
-                        collectTableMedia(collectTableMedia, block.value(QStringLiteral("table")).toObject(), 1);
-                    else if (block.value(QStringLiteral("kind")).toString() != QStringLiteral("blank") &&
-                             block.value(QStringLiteral("kind")).toString() != QStringLiteral("rule")) {
-                        if (block.value(QStringLiteral("figure")).isObject())
-                            collectEmbeddedMedia(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())});
-                        collectEmbeddedMedia(block.value(QStringLiteral("spans")).toArray());
-                    }
-                    out += blockHtml(block, {}, 1, referenceBlockLocation(ref, referenceIndex, blockIndex), {}, referenceContext);
-                }
-                out += QStringLiteral("</div>");
-                continue;
-            }
-            const QJsonArray spans = ref.value(QStringLiteral("spans")).toArray();
-            if (hasPoemSpans(spans))
-                out += QStringLiteral("<div>%1</div>").arg(spansHtml(spans, 0, prefix));
-            else
-                out += QStringLiteral("<p>%1%2</p>").arg(prefix, spansHtml(spans));
-        }
+        for (qsizetype referenceIndex = 0; referenceIndex < references.size(); ++referenceIndex)
+            out += renderReference(referenceIndex);
     }
     const QJsonArray media = entry.value(QStringLiteral("media")).toArray();
     if (!media.isEmpty()) {

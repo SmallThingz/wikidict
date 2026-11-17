@@ -14,6 +14,7 @@
 #include "InlineAudioControls.hpp"
 #include <QSlider>
 #include "CompiledContent.hpp"
+#include "ReferenceRendering.hpp"
 #include "LogicalFlow.hpp"
 #include "FlowConstruction.hpp"
 #include "FigureSizing.hpp"
@@ -12350,6 +12351,378 @@ private slots:
             QCOMPARE(browser->document()->toPlainText().count(text), 1);
             QCOMPARE(window.currentEntry_, directedEntry);
         }
+    }
+
+    void explicitReferenceBatchesKeepSourceOrderAndLegacyFooter() {
+        MainWindow window(fixture_);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paragraph = [&](const QString &value) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{text(value)}}}; };
+        const QJsonArray references{
+            QJsonObject{{"number", 19}, {"group_number", 2}, {"group", "A"}, {"spans", QJsonArray{text("First stored reference")}}},
+            QJsonObject{{"number", 7}, {"group_number", 1}, {"group", "B"}, {"spans", QJsonArray{
+                QJsonObject{{"kind", "link"}, {"text", "Second stored reference"}, {"target", "Source title"}}}}}};
+        QJsonObject entry{{"title", "Controlled reference positions"}, {"kind", "language"}, {"language", "English"},
+            {"sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 3}, {"blocks", QJsonArray{
+                paragraph("Before references"), paragraph("Between batches"), paragraph("After references")}}},
+                QJsonObject{{"title", "References"}, {"level", 3}, {"blocks", QJsonArray{}}}}},
+            {"references", references}};
+        const auto legacy = entry;
+        const QString oldHtml = window.entryHtml(legacy);
+        auto explicitNull = legacy; explicitNull.insert("reference_batches", QJsonValue::Null);
+        QCOMPARE(window.entryHtml(explicitNull), oldHtml);
+        const QJsonArray batches{
+            QJsonObject{{"section_index", 0}, {"before_block_index", 1}, {"reference_indices", QJsonArray{1}}},
+            QJsonObject{{"section_index", 0}, {"before_block_index", 2}, {"reference_indices", QJsonArray{0}}}};
+        entry.insert("reference_batches", batches);
+        const auto source = entry;
+        const QString html = window.entryHtml(entry);
+        // Ordinary paragraph contents are encoded in Flow placeholders in this import HTML.
+        // Locate their original source objects; literal text and heading-only anchors are absent.
+        const auto sourceBlocks = entry.value("sections").toArray().first().toObject().value("blocks").toArray();
+        QVector<qsizetype> blockPositions(3, -1);
+        QVector<int> blockCounts(3, 0);
+        auto placeholders = QRegularExpression(QStringLiteral("<img src='([^']+)'>")).globalMatch(html);
+        while (placeholders.hasNext()) {
+            const auto match = placeholders.next();
+            const QString name = match.captured(1);
+            if (QUrl(name).scheme() != FlowConstruction::scheme) continue;
+            const auto metadata = FlowConstruction::decode(name);
+            for (int index = 0; index < sourceBlocks.size(); ++index) {
+                if (metadata.value("block") != sourceBlocks.at(index)) continue;
+                blockPositions[index] = match.capturedStart(0); ++blockCounts[index];
+            }
+        }
+        for (int index = 0; index < blockPositions.size(); ++index) {
+            QCOMPARE(blockCounts[index], 1); QVERIFY(blockPositions[index] >= 0);
+        }
+        const qsizetype secondAnchor = html.indexOf("<a name='reference-7'></a>");
+        const qsizetype firstAnchor = html.indexOf("<a name='reference-19'></a>");
+        QVERIFY(secondAnchor >= 0); QVERIFY(firstAnchor >= 0);
+        QVERIFY(blockPositions[0] < secondAnchor);
+        QVERIFY(secondAnchor < blockPositions[1]);
+        QVERIFY(blockPositions[1] < firstAnchor);
+        QVERIFY(firstAnchor < blockPositions[2]);
+        QCOMPARE(html.count("name='reference-7'"), 1);
+        QCOMPARE(html.count("name='reference-19'"), 1);
+        QVERIFY(!html.contains("<h2>References</h2>"));
+        QVERIFY(html.contains("[B 1]") && html.contains("[A 2]"));
+        QVERIFY(composeReadingEntry(window, entry));
+        auto *document = window.reading_->document();
+        const QString visible = document->toPlainText();
+        const int second = visible.indexOf("Second stored reference"), between = visible.indexOf("Between batches");
+        const int first = visible.indexOf("First stored reference"), after = visible.indexOf("After references");
+        QVERIFY(second >= 0 && second < between && between < first && first < after);
+        QCOMPARE(visible.count("Second stored reference"), 1); QCOMPARE(visible.count("First stored reference"), 1);
+        QCOMPARE(document->find("Second stored reference").charFormat().anchorHref(), QStringLiteral("dict:Source%20title"));
+        QCOMPARE(entry, source); QCOMPARE(entry.value("references"), references);
+        for (int failure = 0; failure < 7; ++failure) {
+            auto bad = entry; auto badBatches = batches; auto batch = badBatches.first().toObject();
+            if (failure == 0) batch.insert("reference_indices", QJsonArray{0});
+            if (failure == 1) batch.insert("reference_indices", QJsonArray{2});
+            if (failure == 2) batch.insert("before_block_index", 4);
+            if (failure == 3) batch.insert("section_index", -1);
+            if (failure == 4) batch.insert("before_block_index", 3);
+            badBatches.replace(0, batch);
+            if (failure == 5) badBatches.removeLast();
+            bad.insert("reference_batches", badBatches);
+            if (failure == 6) bad.insert("body_adjoining", "ordinary");
+            QVERIFY_EXCEPTION_THROWN(window.entryHtml(bad), std::exception);
+        }
+        QCOMPARE(window.entryHtml(legacy), oldHtml);
+        auto headingEntry = entry;
+        const QJsonObject heading{{"kind", "heading"}, {"level", 3}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "text"}, {"text", "Rich heading"}, {"bold", true}}}}};
+        headingEntry.insert("sections", QJsonArray{QJsonObject{{"title", "Rich heading"}, {"level", 3},
+            {"blocks", QJsonArray{heading, paragraph("After heading")}}}});
+        headingEntry.insert("references", QJsonArray{references.first()});
+        headingEntry.insert("reference_batches", QJsonArray{QJsonObject{{"section_index", 0}, {"before_block_index", 0},
+            {"reference_indices", QJsonArray{0}}}});
+        const auto headingHtml = window.entryHtml(headingEntry);
+        QVERIFY(headingHtml.indexOf("First stored reference") < headingHtml.indexOf("Rich heading"));
+        QVERIFY(composeReadingEntry(window, headingEntry));
+        const auto headingText = window.reading_->document()->toPlainText();
+        QVERIFY(headingText.indexOf("First stored reference") < headingText.indexOf("Rich heading"));
+        headingEntry.insert("sections", QJsonArray{QJsonObject{{"title", "Metadata heading"}, {"level", 3},
+            {"blocks", QJsonArray{paragraph("After heading")}}}});
+        const auto metadataHtml = window.entryHtml(headingEntry);
+        QVERIFY(metadataHtml.indexOf("Metadata heading") < metadataHtml.indexOf("First stored reference"));
+    }
+
+    void referenceBatchLayoutRequiresOriginalFontsIndicesAndBacklinkCensus() {
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](double top, double right, double bottom, double left) {
+            return QJsonObject{{"top", px(top)}, {"right", px(right)}, {"bottom", px(bottom)}, {"left", px(left)}};
+        };
+        const QJsonObject font{{"font_scale", 0.75}, {"font_scale_basis", "normal_body"}, {"font_normalized", true},
+            {"bold", true}, {"font_family", "sans_serif"}, {"language", "de"}};
+        const QJsonObject line{{"multiplier", 1.4}};
+        const QJsonObject style{{"margins", edges(3, 2, 5, 7)}, {"padding", edges(1, 4, 2, 6)},
+            {"border", QJsonObject{{"none", QJsonObject{}}}}, {"background", QJsonObject{{"transparent", QJsonObject{}}}},
+            {"owner_font", font}, {"line_height", line}};
+        const QJsonObject citation{{"kind", "link"}, {"role", "reference"}, {"text", "[9]"}, {"target", ""},
+            {"target_fragment", "reference-27"}, {"citation_marker", QJsonObject{{"reference", 27},
+                {"occurrence", 3}, {"anchor", "citation-return-27-3"}, {"nowrap", true}, {"isolation", "ltr"}}}};
+        const QJsonObject back{{"occurrence", 3}, {"span", QJsonObject{{"kind", "link"}, {"text", "Return"},
+            {"target", ""}, {"target_fragment", "citation-return-27-3"}, {"font_scale", 0.6}, {"font_scale_basis", "normal_body"}}}};
+        const QJsonObject note{{"number", 27}, {"group_number", 9}, {"group", "source"},
+            {"body_typography", QJsonObject{{"owner_font", font}, {"line_height", line}, {"direction", "rtl"}}},
+            {"backlinks", QJsonArray{back}}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Actual note body"}}}}};
+        const QJsonObject item{{"box", style}, {"marker", "decimal_outside"},
+            {"marker_foreground", QJsonObject{{"kind", "rgb"}, {"value", "#123456"}}},
+            {"backlink_prefix", "single_space"}, {"target_background", QJsonObject{{"rgb", "#ddeeff"}}}};
+        const QJsonObject layout{{"wrapper", style}, {"list", style}, {"items", QJsonArray{item}}};
+        const QJsonObject batch{{"section_index", 0}, {"before_block_index", 1}, {"reference_indices", QJsonArray{0}}, {"layout", layout}};
+        const QJsonObject entry{{"sections", QJsonArray{QJsonObject{{"title", "Source"}, {"level", 3},
+            {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{citation}}}}}}}},
+            {"references", QJsonArray{note}}, {"reference_batches", QJsonArray{batch}}};
+        const auto plan = CompiledReferences::validate(entry);
+        QCOMPARE(plan.batches.size(), 1); QCOMPARE(plan.citationSections.value("citation-return-27-3", -2), 0);
+        const auto projection = CompiledReferences::project(plan.batches.first(), entry.value("references").toArray());
+        const auto wrapper = projection.value("container").toObject(); QCOMPARE(wrapper.value("style"), style);
+        const auto list = wrapper.value("blocks").toArray().first().toObject().value("container").toObject();
+        QCOMPARE(list.value("style"), style);
+        const auto li = list.value("blocks").toArray().first().toObject().value("container").toObject();
+        QCOMPARE(li.value("style"), style);
+        const auto spans = li.value("blocks").toArray().first().toObject().value("spans").toArray();
+        QCOMPARE(spans.size(), 3); QCOMPARE(spans.first(), back.value("span"));
+        QCOMPARE(spans.at(1).toObject().value("text"), QJsonValue(" "));
+        QCOMPARE(spans.at(1).toObject().value("font_scale"), font.value("font_scale"));
+        QCOMPARE(spans.last(), note.value("spans").toArray().first());
+        for (int failure = 0; failure < 8; ++failure) {
+            auto bad = entry; auto changedNote = note; auto changedItem = item; auto changedLayout = layout; auto changedBatch = batch;
+            if (failure == 0) { auto owner = note.value("body_typography").toObject(); owner.insert("direction", QJsonValue::Null); changedNote.insert("body_typography", owner); }
+            if (failure == 1) { auto owner = note.value("body_typography").toObject(); owner.insert("line_height", QJsonObject{{"multiplier", 1.5}}); changedNote.insert("body_typography", owner); }
+            if (failure == 2) changedNote.insert("spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", " leading"}}});
+            if (failure == 3) changedNote.insert("backlinks", QJsonArray{});
+            if (failure == 4) changedNote.insert("group_number", 0);
+            if (failure == 5) { auto box = style; box.remove("margins"); changedItem.insert("box", box); }
+            if (failure == 6) changedItem.insert("backlink_prefix", "legacy_gap");
+            if (failure == 7) { auto wrong = back; wrong.insert("occurrence", 4); changedNote.insert("backlinks", QJsonArray{wrong}); }
+            changedLayout.insert("items", QJsonArray{changedItem}); changedBatch.insert("layout", changedLayout);
+            bad.insert("reference_batches", QJsonArray{changedBatch}); bad.insert("references", QJsonArray{changedNote});
+            QVERIFY_EXCEPTION_THROWN(CompiledReferences::validate(bad), std::exception);
+        }
+        QCOMPARE(CompiledReferences::project(CompiledReferences::validate(entry).batches.first(), QJsonArray{note}), projection);
+    }
+    void typedReferenceLayoutKeepsRealFramesFontsTargetsAndNavigation() {
+        MainWindow window(fixture_); window.resize(960, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.readingPaneAction_->trigger();
+        const auto saveFrame = [&](const QString &name) {
+            const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (directory.isEmpty()) return true;
+            if (!QDir().mkpath(directory)) return false;
+            QCoreApplication::processEvents();
+            const auto frame = window.grab();
+            qInfo() << "REFERENCE_LAYOUT_FRAME" << name << "window" << window.size()
+                    << "viewport" << window.reading_->viewport()->size() << "pixels" << frame.size()
+                    << "dpr" << frame.devicePixelRatio();
+            return !frame.isNull() && frame.save(QDir(directory).filePath(name));
+        };
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto edges = [&](double top, double right, double bottom, double left) {
+            return QJsonObject{{"top", px(top)}, {"right", px(right)}, {"bottom", px(bottom)}, {"left", px(left)}};
+        };
+        const auto text = [](const QString &value) { return QJsonObject{{"kind", "text"}, {"text", value}}; };
+        const auto paragraph = [&](const QJsonArray &spans) {
+            auto result = CompiledReferences::paragraph(spans);
+            result.insert("style", QJsonObject{{"margins", edges(6, 0, 8, 0)}}); return result;
+        };
+        const auto figureColor = [](const QString &value) { return QJsonObject{{"kind", "rgb"}, {"value", value}}; };
+        const auto rgb = [](const QString &value) { return QJsonObject{{"rgb", value}}; };
+        const qreal dpi = QFontMetricsF(QFont()).fontDpi();
+        window.readingPointSize_ = 20 * 72 / dpi;
+        for (const QString &direction : {QStringLiteral("ltr"), QStringLiteral("rtl")})
+        for (const double ownerScale : {.75, 0.0}) {
+            const QJsonObject font{{"font_scale", ownerScale}, {"font_scale_basis", "normal_body"},
+                {"font_normalized", true}, {"bold", true}, {"font_family", "sans_serif"}, {"language", "de"}};
+            const QJsonObject line{{"multiplier", 1.4}};
+            const auto style = [&](const QJsonObject &margins, const QJsonObject &padding) {
+                return QJsonObject{{"margins", margins}, {"padding", padding},
+                    {"border", QJsonObject{{"none", QJsonObject{}}}}, {"background", rgb("#ffffff")},
+                    {"owner_font", font}, {"line_height", line}};
+            };
+            const auto wrapper = style(edges(11, 5, 13, 17), edges(2, 3, 4, 5));
+            const auto list = style(edges(7, 0, 9, 0), edges(3, 4, 5, 36));
+            const auto box = style(edges(5, 0, 6, 0), edges(3, 6, 5, 8));
+            const QJsonObject citation{{"kind", "link"}, {"role", "reference"}, {"text", "[9]"}, {"target", ""},
+                {"target_fragment", "reference-27"}, {"citation_marker", QJsonObject{{"reference", 27},
+                    {"occurrence", 3}, {"anchor", "citation-return-27-3"}, {"nowrap", true}, {"isolation", "ltr"}}}};
+            const QJsonObject backSpan{{"kind", "link"}, {"text", "Return"}, {"target", ""},
+                {"target_fragment", "citation-return-27-3"}, {"font_scale", .6}, {"font_scale_basis", "normal_body"}};
+            auto bodySpan = text("Actual reference body with ordinary content that wraps at the narrower reading width.");
+            bodySpan.insert("font_scale", 1.1); bodySpan.insert("font_scale_basis", "normal_body");
+            const quint32 groupNumber = direction == QStringLiteral("rtl") ? std::numeric_limits<quint32>::max() : 9;
+            const QJsonObject reference{{"number", 27}, {"group_number", double(groupNumber)}, {"group", "original group"},
+                {"body_typography", QJsonObject{{"owner_font", font}, {"line_height", line}, {"direction", direction}}},
+                {"backlinks", QJsonArray{QJsonObject{{"occurrence", 3}, {"span", backSpan}}}}, {"spans", QJsonArray{bodySpan}}};
+            const QJsonObject item{{"box", box}, {"marker", "decimal_outside"}, {"marker_foreground", figureColor("#123456")},
+                {"backlink_prefix", "single_space"}, {"target_background", rgb("#ddeeff")}};
+            const QJsonObject batch{{"section_index", 1}, {"before_block_index", 1}, {"reference_indices", QJsonArray{0}},
+                {"layout", QJsonObject{{"wrapper", wrapper}, {"list", list}, {"items", QJsonArray{item}}}}};
+            const QJsonObject entry{{"title", "Controlled reference geometry"}, {"kind", "language"}, {"language", "English"},
+                {"body_adjoining", "ordinary"}, {"preamble_spans", QJsonArray{text("Prefix outside ordinary body")}},
+                {"sections", QJsonArray{
+                    QJsonObject{{"title", "Citation"}, {"level", 3}, {"blocks", QJsonArray{paragraph(QJsonArray{text("Before citation "), citation})}}},
+                    QJsonObject{{"title", "Source position"}, {"level", 3}, {"blocks", QJsonArray{
+                        paragraph(QJsonArray{text("Before reference group")}), paragraph(QJsonArray{text("After reference group")})}}}}},
+                {"references", QJsonArray{reference}}, {"reference_batches", QJsonArray{batch}}};
+            window.referenceTarget_.clear(); QVERIFY(composeReadingEntry(window, entry));
+            auto *document = window.reading_->document(); auto *native = document->documentLayout();
+            QCOMPARE(native->property("_wikidictReferenceLayoutCapability").toString(), ReferencePolicy::capability);
+            native->documentSize(); QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            const auto source = document->toRawText(); const auto revision = document->revision();
+            const auto note = document->find("Actual reference body"); const auto backlink = document->find("Return");
+            const auto mark = document->find("[9]");
+            QVERIFY(!note.isNull() && !backlink.isNull() && !mark.isNull());
+            auto *li = note.currentFrame(); auto *ol = li->parentFrame(); auto *div = ol->parentFrame();
+            QVERIFY(li && ol && div && div->parentFrame() == document->rootFrame());
+            const auto sourceStyle = [](QTextFrame *frame) {
+                return ReferencePolicy::source(frame->frameFormat().property(FlowConstruction::containerSourceProperty))
+                    .value("container").toObject().value("style");
+            };
+            QCOMPARE(sourceStyle(li), QJsonValue(box)); QCOMPARE(sourceStyle(ol), QJsonValue(list)); QCOMPARE(sourceStyle(div), QJsonValue(wrapper));
+            const auto principal = note.block(); const auto markerPolicy = principal.blockFormat().property(ReferencePolicy::itemProperty).toMap();
+            QCOMPARE(markerPolicy.value("number").metaType().id(), QMetaType::UInt);
+            QCOMPARE(markerPolicy.value("number").toUInt(), groupNumber);
+            QCOMPARE(markerPolicy.value("owner").value<QObject *>(), static_cast<QObject *>(li));
+            QCOMPARE(ReferencePolicy::source(markerPolicy.value("source")), (QJsonObject{{"reference", reference}, {"item", item}}));
+            QCOMPARE(principal.textList()->count(), 1); QCOMPARE(principal.textList()->format().indent(), 0);
+            QCOMPARE(principal.blockFormat().layoutDirection(), direction == QStringLiteral("rtl") ? Qt::RightToLeft : Qt::LeftToRight);
+            const auto typography = principal.blockFormat().property(FlowConstruction::containerTypographyProperty).toMap();
+            QCOMPARE(qvariant_cast<QFont>(typography.value("font")), principal.charFormat().font());
+            QVERIFY(qAbs(typography.value("owner_px").toDouble() - ownerScale * 20) < .001);
+            QVERIFY(qAbs(backlink.charFormat().fontPointSize() - .6 * window.readingPointSize_) < .001);
+            QVERIFY(qAbs(note.charFormat().fontPointSize() - 1.1 * window.readingPointSize_) < .001);
+            QCOMPARE(backlink.charFormat().anchorHref(), QStringLiteral("dict:#citation-return-27-3"));
+            QCOMPARE(mark.charFormat().anchorHref(), QStringLiteral("dict:#reference-27"));
+            QCOMPARE(ReferencePolicy::source(mark.charFormat().property(ReferencePolicy::citationProperty).toMap().value("source")), citation);
+            const auto mapped = LogicalFlow::position(document, note.selectionStart());
+            QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+            QVERIFY(mapped.values.value("lineHeight").toReal() > 0);
+            QVERIFY(native->frameBoundingRect(li).height() >= mapped.values.value("lineHeight").toReal());
+            QVERIFY(native->frameBoundingRect(div).height() >= native->frameBoundingRect(ol).height());
+            QVERIFY(native->blockBoundingRect(document->find("After reference group").block()).top() >= native->frameBoundingRect(div).bottom() - .1);
+            const auto bodyPolicy = document->rootFrame()->frameFormat().property(QTextFormat::UserProperty + 0x5806).toMap();
+            QCOMPARE(bodyPolicy.value("adjoining"), QVariant(QStringLiteral("ordinary")));
+            QVERIFY(bodyPolicy.value("begin").toInt() <= div->firstPosition());
+            QVERIFY(div->lastPosition() < bodyPolicy.value("end").toInt());
+            QVERIFY(document->find("Prefix outside ordinary body").selectionEnd() <= bodyPolicy.value("begin").toInt());
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            const auto semantic = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+            QVERIFY(semantic.contains("Return Actual reference body")); QCOMPARE(semantic.count("Actual reference body"), 1);
+            QVERIFY(semantic.indexOf("Before reference group") < semantic.indexOf("Return Actual reference body"));
+            QVERIFY(semantic.indexOf("Return Actual reference body") < semantic.indexOf("After reference group"));
+            if (direction == QStringLiteral("ltr") && ownerScale == .75)
+                QVERIFY(saveFrame(QStringLiteral("reference-layout-wide-960.png")));
+            const auto oldFrameFormat = li->frameFormat(); const auto oldMarkerFormat = mark.charFormat();
+            QVERIFY(window.jumpToFragment("reference-27"));
+            auto selected = document->property(ReferencePolicy::targetProperty).toMap();
+            QCOMPARE(selected.value("number").toUInt(), quint32(27)); QCOMPARE(selected.value("kind").toString(), QStringLiteral("item"));
+            QCOMPARE(li->frameFormat(), oldFrameFormat); QCOMPARE(document->toRawText(), source); QCOMPARE(document->revision(), revision);
+            if (direction == QStringLiteral("ltr") && ownerScale == .75)
+                QVERIFY(saveFrame(QStringLiteral("reference-layout-target-960.png")));
+            QVERIFY(window.jumpToFragment("citation-return-27-3"));
+            QVERIFY(ReferencePolicy::targetedCitation(document, mark.charFormat()));
+            QCOMPARE(mark.charFormat(), oldMarkerFormat); QCOMPARE(document->toRawText(), source); QCOMPARE(document->revision(), revision);
+            const auto oldTarget = document->property(ReferencePolicy::targetProperty);
+            QVERIFY(composeReadingEntry(window, entry));
+            QVERIFY(document->property(ReferencePolicy::targetProperty).toMap().value("epoch") != oldTarget.toMap().value("epoch"));
+            const auto currentMark = document->find("[9]"); QVERIFY(!currentMark.isNull());
+            const auto currentTarget = document->property(ReferencePolicy::targetProperty);
+            document->setProperty(ReferencePolicy::targetProperty, oldTarget);
+            QVERIFY(!ReferencePolicy::targetedCitation(document, currentMark.charFormat()));
+            document->setProperty(ReferencePolicy::targetProperty, currentTarget);
+            QVERIFY(ReferencePolicy::targetedCitation(document, currentMark.charFormat()));
+            window.collapsedSections_.insert(1); QVERIFY(composeReadingEntry(window, entry, false));
+            QVERIFY(document->find("Actual reference body").isNull());
+            QVERIFY(window.jumpToFragment("reference-27")); QVERIFY(!window.collapsedSections_.contains(1));
+            QVERIFY(!document->find("Actual reference body").isNull());
+            QCOMPARE(document->property(ReferencePolicy::targetProperty).toMap().value("number").toUInt(), quint32(27));
+            for (int width : {640, 960}) {
+                window.resize(width, 700); QCoreApplication::processEvents(); native->documentSize();
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto body = document->find("Actual reference body"); QVERIFY(!body.isNull());
+                QVERIFY(native->frameBoundingRect(body.currentFrame()).height() > 0);
+                QCOMPARE(window.currentEntry_, entry);
+                if (width == 640 && direction == QStringLiteral("ltr") && ownerScale == .75)
+                    QVERIFY(saveFrame(QStringLiteral("reference-layout-narrow-640.png")));
+            }
+            QVERIFY(window.jumpToFragment(QString())); QVERIFY(!document->property(ReferencePolicy::targetProperty).isValid());
+        }
+    }
+
+    void compiledCitationsKeepTypedBacklinksTargetPaintAndSource() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto px = [](double value) { return QJsonObject{{"unit", "px"}, {"value", value}}; };
+        const auto paint = [&](const QString &ink, double width) {
+            QJsonObject result;
+            for (const char *name : {"normal", "hover", "active", "hover_active", "visited", "visited_hover", "visited_active", "visited_hover_active"})
+                result.insert(QLatin1String(name), QJsonObject{{"foreground", ink}, {"underline", false}});
+            result.insert("underline_on_focus", true);
+            result.insert("focus_outline", QJsonObject{{"width", px(width)}, {"radius", px(0)}, {"offset", px(2)},
+                {"color", QJsonObject{{"kind", "rgb"}, {"value", ink}}}});
+            return result;
+        };
+        const auto normal = paint("#123456", 1), targeted = paint("#a12345", 4);
+        const QJsonObject marker{{"kind", "link"}, {"role", "reference"}, {"text", "[1 2]"}, {"target", ""},
+            {"target_fragment", "reference-7"}, {"link_paint", normal}, {"foreground", "#123456"},
+            {"citation_marker", QJsonObject{{"reference", 7}, {"occurrence", 2}, {"anchor", "citation-7-2"},
+                {"nowrap", true}, {"isolation", "ltr"}, {"target_style", QJsonObject{{"paint", targeted},
+                    {"background", QJsonObject{{"kind", "rgb"}, {"value", "#ddeeff"}}}}}}}};
+        const QJsonObject back{{"kind", "link"}, {"text", "Return"}, {"target", ""}, {"target_fragment", "citation-7-2"},
+            {"font_scale", .6}, {"font_scale_basis", "normal_body"}, {"link_paint", normal}, {"foreground", "#123456"}};
+        const QJsonObject note{{"number", 7}, {"group_number", 1}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Legacy note"}}}},
+            {"backlinks", QJsonArray{QJsonObject{{"occurrence", 2}, {"span", back}}}}};
+        const QJsonObject entry{{"title", "Controlled citation state"}, {"kind", "language"}, {"language", "English"},
+            {"sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 3}, {"blocks", QJsonArray{
+                CompiledReferences::paragraph(QJsonArray{marker})}}}}}, {"references", QJsonArray{note}}};
+        QVERIFY(composeReadingEntry(window, entry)); auto *document = window.reading_->document();
+        const auto citation = document->find("[1 2]"), backlink = document->find("Return");
+        QVERIFY(!citation.isNull() && !backlink.isNull());
+        const auto raw = document->toRawText(); const auto revision = document->revision();
+        const auto format = citation.charFormat();
+        QCOMPARE(ReferencePolicy::source(format.property(ReferencePolicy::citationProperty).toMap().value("source")), marker);
+        QVERIFY(format.property(ReferencePolicy::citationProperty).toMap().value("nowrap").toBool());
+        QCOMPARE(backlink.charFormat().anchorHref(), QStringLiteral("dict:#citation-7-2"));
+        QVERIFY(qAbs(backlink.charFormat().fontPointSize() - .6 * window.readingPointSize_) < .001);
+        // No new separator is synthesized for the legacy typed-prefix path.
+        QVERIFY(document->toPlainText().contains("[1] ReturnLegacy note"));
+        const auto inkAt = [&](const QList<QTextEdit::ExtraSelection> &selections, const QTextCursor &cursor) {
+            for (const auto &selection : selections)
+                if (selection.cursor.selectionStart() <= cursor.selectionStart() && selection.cursor.selectionEnd() >= cursor.selectionEnd())
+                    return selection.format;
+            return QTextCharFormat{};
+        };
+        MissingFigurePaint::State state;
+        QCOMPARE(inkAt(MissingFigurePaint::selections(document, window.palette(), state), citation).foreground().color(), QColor("#123456"));
+        QVERIFY(window.jumpToFragment("citation-7-2"));
+        QVERIFY(ReferencePolicy::targetedCitation(document, citation.charFormat()));
+        const auto selected = inkAt(MissingFigurePaint::selections(document, window.palette(), state), citation);
+        QCOMPARE(selected.foreground().color(), QColor("#a12345")); QCOMPARE(selected.background().color(), QColor("#ddeeff"));
+        QCOMPARE(citation.charFormat(), format); QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+        QCOMPARE(inkAt(MissingFigurePaint::selections(document, window.palette(), state), backlink).foreground().color(), QColor("#123456"));
+        QVERIFY(window.jumpToFragment("reference-7"));
+        QVERIFY(!ReferencePolicy::targetedCitation(document, citation.charFormat()));
+        QCOMPARE(inkAt(MissingFigurePaint::selections(document, window.palette(), state), citation).foreground().color(), QColor("#123456"));
+        auto unqualified = back;
+        QVERIFY_EXCEPTION_THROWN(window.spansHtml(QJsonArray{unqualified}), DictApiError);
+        for (const QChar forbidden : {QChar('\t'), QChar('\n'), QChar(0x7f), QChar(0x2028), QChar(0x2029), QChar(0xfffc)}) {
+            auto wrong = marker; wrong.insert("text", QStringLiteral("[1") + forbidden + QStringLiteral("2]"));
+            QVERIFY_EXCEPTION_THROWN(CompiledReferences::marker(wrong), std::exception);
+        }
+        for (const QString &key : {QStringLiteral("reference"), QStringLiteral("occurrence")}) {
+            auto wrong = marker; auto policy = marker.value("citation_marker").toObject();
+            policy.insert(key, double(std::numeric_limits<quint32>::max())); wrong.insert("citation_marker", policy);
+            QVERIFY_EXCEPTION_THROWN(CompiledReferences::marker(wrong), std::exception);
+        }
+        auto typedLegacy = entry; auto typedNote = note;
+        typedNote.insert("body_typography", QJsonObject{{"owner_font", QJsonObject{{"font_scale", 1},
+            {"font_scale_basis", "normal_body"}, {"font_normalized", true}}}, {"direction", "ltr"}});
+        typedLegacy.insert("references", QJsonArray{typedNote});
+        QVERIFY_EXCEPTION_THROWN(CompiledReferences::validate(typedLegacy), std::exception);
+        QCOMPARE(window.currentEntry_, entry);
     }
 
     void readingAudioControlsBindAfterCommitAndKeepOccurrenceSource() {
