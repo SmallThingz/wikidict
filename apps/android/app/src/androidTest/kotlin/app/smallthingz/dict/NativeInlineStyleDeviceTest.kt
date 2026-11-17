@@ -271,8 +271,34 @@ class NativeInlineStyleDeviceTest {
             run.paddedNatural.bottom, 0f)
         val combining = logical.indexOf('\u0301')
         val supplementary = logical.indexOf('\uD83D')
-        assertEquals(-1, root.getTextRunCursor(logical, 0, logical.length, false, combining, Paint.CURSOR_AT))
-        assertEquals(-1, root.getTextRunCursor(logical, 0, logical.length, false, supplementary + 1, Paint.CURSOR_AT))
+        assertNotEquals(combining, root.getTextRunCursor(logical, 0, logical.length, false,
+            combining, Paint.CURSOR_AT_OR_AFTER))
+        assertNotEquals(supplementary + 1, root.getTextRunCursor(logical, 0, logical.length, false,
+            supplementary + 1, Paint.CURSOR_AT_OR_AFTER))
+        for (offset in listOf(0, 2, combining - 1, combining + 1, supplementary, supplementary + 2, logical.length)) {
+            assertEquals(offset, root.getTextRunCursor(logical, 0, logical.length, false,
+                offset, Paint.CURSOR_AT_OR_AFTER))
+        }
+        fun refusesPaintCut(text: String, cut: Int, rtl: Boolean) {
+            val split = SpannableString(text).also {
+                range(it, android.text.style.ForegroundColorSpan(Color.RED), 0, cut)
+            }
+            val splitOwner = NativeFloatRowRuns(split, root,
+                if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR)
+            refused("Float row paint boundary is inside a native cluster") {
+                splitOwner.visualRuns(splitOwner.paragraphs.single(), 0, text.length)
+            }
+        }
+        refusesPaintCut(logical, combining, false)
+        refusesPaintCut(logical, supplementary + 1, false)
+        val markedArabic = "\u0628\u064E\u062A"
+        assertNotEquals(1, root.getTextRunCursor(markedArabic, 0, markedArabic.length, true,
+            1, Paint.CURSOR_AT_OR_AFTER))
+        for (offset in listOf(0, 2, markedArabic.length)) {
+            assertEquals(offset, root.getTextRunCursor(markedArabic, 0, markedArabic.length, true,
+                offset, Paint.CURSOR_AT_OR_AFTER))
+        }
+        refusesPaintCut(markedArabic, 1, true)
         for (offset in 0..logical.length) {
             assertEquals(root.getRunAdvance(logical, 0, logical.length, 0, logical.length, false, offset),
                 run.advanceTo(offset), 0f)
@@ -357,6 +383,10 @@ class NativeInlineStyleDeviceTest {
         for (part in arabicRuns) {
             assertTrue(part.rtl)
             assertEquals(part.start, part.contextStart); assertEquals(part.end, part.contextEnd)
+            for (edge in listOf(part.contextStart, part.contextEnd)) {
+                assertEquals(edge, root.getTextRunCursor(arabic, part.contextStart, part.contextEnd, true,
+                    edge, Paint.CURSOR_AT_OR_AFTER))
+            }
             val native = android.graphics.text.TextRunShaper.shapeTextRun(arabic, part.start, part.end - part.start,
                 part.start, part.end - part.start, 0f, 0f, true, root)
             assertEquals(native.advance, part.advance, 0f)

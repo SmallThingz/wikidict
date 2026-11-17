@@ -102,7 +102,7 @@ internal class NativeFloatGlyphRun internal constructor(
         // a native grapheme. Its color is clipped at the native advance, not reshaped.
         if (image == null) for (cut in slices.flatMap { listOf(it.start, it.end) }.distinct()) {
             if (metric.paint.getTextRunCursor(owner.source, contextStart, contextEnd, rtl,
-                    cut, Paint.CURSOR_AT) != cut)
+                    cut, Paint.CURSOR_AT_OR_AFTER) != cut)
                 throw UnsupportedFloatLayout("Float row paint boundary is inside a native cluster")
         }
         slices.forEach { owner.livePaint(it.start, it.end, metric) }
