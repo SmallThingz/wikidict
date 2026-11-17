@@ -1,0 +1,58 @@
+Binêre [[Taybet:Gadgets]] ji bo belgekirina amûrên li jêr.
+
+* LegacyScripts[default|dependencies=site,mediawiki.util,mediawiki.cookie,ext.gadget.LegacyScriptsNewNode,ext.gadget.StorageUtils|type=general]|legacy.js
+
+==Rû==
+* LiveClock[dependencies=mediawiki.util]|LiveClock.js
+* charinsert-styles[hidden|type=styles]|charinsert-styles.css
+* LanguagesAndScripts[default]|LanguagesAndScripts.css
+* jeder[dependencies=ext.gadget.VisibilityToggles|default]|jeder.css|jeder.js
+* CodeLinks[default|dependencies=site,mediawiki.util]|CodeLinks.js
+* Tabset[default]|Tabset.js|Tabset.css
+* kuTewandin[default]|kuTewandin.js
+* wikt.showids[package|namespaces=0,2,4,108|actions=view|dependencies=mediawiki.util]|wikt.showids.js|wikt.showids.css
+* EtytreeZoom[default|dependencies=mediawiki.util]|EtytreeZoom.js
+* PagePreviews[default|dependencies=site,mediawiki.api,mediawiki.util,mediawiki.Title|skins=vector,vector-2022,monobook,timeless,modern,cologneblue]|PagePreviews.js
+* AutoRedirect[default|dependencies=user,mediawiki.util|actions=view|namespaces=0]|AutoRedirect.js
+* TreeDescs[default|namespaces=0,108|peers=TreeDescs-pagestyles]|TreeDescs.js
+
+==AmûrênGuhartinê==
+* wikEd|wikEd.js
+* charinsert[default|peers=charinsert-styles]|charinsert.js
+* translation_editor[default|dependencies=mediawiki.notification|type=general]|silent_fail_storage.js|editor.js|translation_editor.js|translation_editor.css
+* QQ[dependencies=mediawiki.util,oojs-ui-core,oojs-ui-widgets|type=general]|QQ.js|QQ.css
+* WiktAccFormCreation[dependencies=mediawiki.util]|WiktAccFormCreation.js
+* AjaxEdit[dependencies=mediawiki.util,mediawiki.user,mediawiki.api]|AjaxEdit.js
+* EditHere[dependencies=mediawiki.api,oojs-ui-core,oojs-ui-widgets]|EditHere.js
+* clearer-edit-summary[default|actions=view]|clearer-edit-summary.js
+* DeluxeHistory[dependencies=user,mediawiki.util]|DeluxeHistory.js|DeluxeHistory.css
+* JumpToError[dependencies=mediawiki.notification]|JumpToError.js
+* aWa[rights=autoconfirmed|dependencies=mediawiki.util,mediawiki.api,mediawiki.user,user.options,mediawiki.Title|type=general]|aWa.js|aWa.css
+* purgetab[dependencies=mediawiki.api,mediawiki.util]|purgetab.js
+* start[default|package|namespaces=0,2,4,108|dependencies=mediawiki.util,ext.gadget.wikt.core]|start.js
+* wikt.dsb[default|package|namespaces=0,2,4,108|actions=view|dependencies=mediawiki.util,ext.gadget.wikt.core]|wikt.dsb.js|wikt.dsb.css
+* linkify-toolbar[default|actions=edit,submit|dependencies=ext.gadget.linkify,jquery.textSelection,ext.wikiEditor]|linkify-toolbar.js
+
+==Kategorî==
+* HotCat|HotCat.js
+* Cat-a-lot[rights=autoconfirmed]|Cat-a-lot.css|Cat-a-lot.js
+
+==AmûrênVeşartî==
+* LegacyScriptsNewNode[hidden|targets=desktop,mobile]|LegacyScriptsNewNode.js
+* StorageUtils[hidden|dependencies=mediawiki.cookie,mediawiki.storage]|StorageUtils.js
+* charinsert-core[hidden|dependencies=jquery.textSelection,user,mediawiki.storage]|charinsert-core.js
+* VisibilityToggles[hidden|targets=desktop,mobile|dependencies=user,mediawiki.cookie,mediawiki.storage]|VisibilityToggles.js
+* defaultVisibilityToggles[hidden|default|targets=desktop,mobile|dependencies=ext.gadget.VisibilityToggles]|defaultVisibilityToggles.js
+* Site[hidden|default]|Site.css
+* catfix[hidden|default|dependencies=mediawiki.Title,mediawiki.util|categories=Pages using catfix]|catfix.js
+* Palette[hidden|default]|Palette.css
+* test[rights=autoconfirmed]|test.js
+* citoid-helper[hidden|dependencies=mediawiki.util]|citoid-helper.js
+* wikt.core[hidden|package|dependencies=mediawiki.util,mediawiki.storage]|wikt.core.js|wikt.core/sections.js|wikt.core/prefs.js|wikt.core/data-sections.json|wikt.core.css
+* wikt.edit[hidden|package|dependencies=mediawiki.util,mediawiki.api,ext.gadget.wikt.core]|wikt.edit.js|wikt.edit/util.js|wikt.edit/wikitext.js|wikt.edit/langs.js|wikt.edit/labels.js|wikt.edit/posparams.js|wikt.edit/data-main.json|wikt.edit/ziman-core.json|wikt.edit.css
+* wikt.cite[hidden|package|dependencies=mediawiki.api,oojs-ui-core,oojs-ui-widgets,oojs-ui-windows,ext.gadget.citoid-helper,ext.gadget.wikt.edit]|wikt.cite.js|wikt.cite/etimon.js|wikt.cite.css
+* wikt.dsb-panels[hidden|package|dependencies=mediawiki.util,mediawiki.api,ext.gadget.wikt.core,ext.gadget.wikt.edit,ext.gadget.wikt.cite,ext.gadget.wikt.add-examples,oojs-ui-core,oojs-ui-widgets,oojs-ui-windows]|wikt.dsb-panels.js|wikt.dsb-panels.css
+* wikt.start-wizard[hidden|package|dependencies=mediawiki.util,mediawiki.api,ext.gadget.wikt.core,ext.gadget.wikt.edit,ext.gadget.wikt.cite,ext.gadget.StorageUtils,ext.gadget.citoid-helper,oojs-ui-core,oojs-ui-widgets,oojs-ui-windows]|wikt.start-wizard.js|wikt.start-wizard.css
+* wikt.add-examples[hidden|package|dependencies=oojs,oojs-ui,ext.gadget.citoid-helper,ext.gadget.StorageUtils,ext.gadget.wikt.core,ext.gadget.wikt.edit,ext.gadget.wikt.cite]|wikt.add-examples.js|wikt.add-examples.css
+* linkify[hidden|dependencies=mediawiki.api]|linkify.js
+* TreeDescs-pagestyles[hidden|type=styles]|TreeDescs-pagestyles.css

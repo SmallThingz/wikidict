@@ -1,0 +1,59 @@
+/*
+ * Page: [[MediaWiki:Gadget-TreeDescs-pagestyles.css]]
+ *
+ * Imported from en.wiktionary's [[:en:MediaWiki:Gadget-TreeDescs-pagestyles.css]] (CC BY-SA 4.0).
+ */
+/* code forked from [[w:Template:Tree list/styles.css]] */
+
+.treeview ul {
+	padding: 0;
+	margin: 0;
+}
+
+.treeview li li {
+	margin: 0;
+	list-style-type: none;
+	list-style-image: none;
+	background: url("https://upload.wikimedia.org/wikipedia/commons/f/f2/Treeview-grey-line.png") no-repeat 0 -2979.5px;
+	/* @noflip */
+	padding: 0 0 0 21px;
+	text-indent: 0.3em;
+}
+
+.treeview li li:last-child {
+	background-position: 0 -5969.5px
+}
+
+/* first line here deals with new situation after RemexHTML switch,
+ * where emptyline cause the first child to become the 2nd child. Such a mess
+ */
+.treeview li.emptyline > ul > .mw-empty-elt:first-child + .emptyline,
+.treeview li.emptyline > ul > li:first-child {
+	background-position: 0 9px
+}
+
+/* additional code for Wiktionary */
+
+.treeview li dd {
+	margin: 0;
+}
+
+.treeview li dl {
+	margin: 0;
+	padding-left: 21px;
+}
+
+.treeview li dl:not(:last-child) {
+	background: url("https://upload.wikimedia.org/wikipedia/commons/f/f2/Treeview-grey-line.png") no-repeat 0 -2px;
+	/* @noflip */
+	padding-left: 21px;
+	text-indent: 0.3em;
+}
+
+.treeview .desc-arr {
+	color: var(--wikt-palette-grey-9, grey);
+}
+
+.treeview li li .desc-arr {
+	vertical-align: top;
+}

@@ -6,6 +6,7 @@ const namespace_registry = @import("namespace_registry");
 const xml_decode = @import("xml_decode");
 const max_source_bytes = 1024 * 1024;
 const imports = @import("source_stylesheet_imports.zig");
+const default_gadgets = @import("source_default_gadgets.zig");
 
 pub const Provenance = struct {
     wiki: []const u8,
@@ -28,8 +29,36 @@ pub const Provenance = struct {
     decoded_source_bytes: usize,
     decoded_source_sha256: [64]u8,
     stylesheet_imports: ?imports.Proof = null,
+    default_gadgets: ?DefaultGadgetsProof = null,
 
     pub fn jsonStringify(self: Provenance, jw: anytype) !void {
+        if (self.default_gadgets) |proof| {
+        try jw.write(.{
+            .schema = "wikidict.source-table-styles.v3",
+            .default_gadgets = proof,
+            .provenance_scope = "exact indexed Common.css and declarative default gadget CSS in the same dump; unknown gadget applicability stays conditional",
+            .wiki = self.wiki,
+            .dump_date = self.dump_date,
+            .namespace_sha256 = self.namespace_sha256[0..],
+            .title = self.title,
+            .page_id = self.page_id,
+            .revision_id = self.revision_id,
+            .revision_timestamp = self.revision_timestamp,
+            .content_model = self.content_model,
+            .page_index_kind = self.page_index_kind,
+            .page_index_bytes = self.page_index_bytes,
+            .index_offset = self.index_offset,
+            .ordinal = self.ordinal,
+            .source = self.source,
+            .source_needs_decode = self.source_needs_decode,
+            .index_row_sha256 = self.index_row_sha256[0..],
+            .encoded_source_bytes = self.encoded_source_bytes,
+            .encoded_source_sha256 = self.encoded_source_sha256[0..],
+            .decoded_source_bytes = self.decoded_source_bytes,
+            .decoded_source_sha256 = self.decoded_source_sha256[0..],
+        });
+            return;
+        }
         if (self.stylesheet_imports != null) {
         try jw.write(.{
             .schema = "wikidict.source-table-styles.v2",
@@ -82,6 +111,117 @@ pub const Provenance = struct {
         });
     }
 };
+
+pub const IndexedGadgetSource = struct {
+    title: []const u8,
+    page_id: u64,
+    revision_id: u64,
+    revision_timestamp: []const u8,
+    content_model: []const u8,
+    index_offset: usize,
+    ordinal: usize,
+    source: dump_source.PageSource,
+    source_needs_decode: bool,
+    index_row_sha256: [64]u8,
+    encoded_source_bytes: usize,
+    encoded_source_sha256: [64]u8,
+    decoded_source_bytes: usize,
+    decoded_source_sha256: [64]u8,
+};
+pub const GadgetStyleSource = struct {
+    module: []const u8,
+    definition_line: usize,
+    unknown_applicability: bool,
+    indexed: IndexedGadgetSource,
+};
+pub const DefaultGadgetsProof = struct {
+    definition: IndexedGadgetSource,
+    sheets: []const GadgetStyleSource,
+    selection: []const u8 = "retained anonymous defaults; declarative styles and peers only; no JavaScript or preference override",
+    order: []const u8 = "ResourceLoader module-name order, source page order within module, before indexed Common.css",
+    temporal_scope: []const u8 = "same retained dump/index revision domain; not current HTTP deployment",
+};
+const IndexedGadget = struct { css: []const u8, proof: IndexedGadgetSource };
+const DefaultGadgetInputs = struct { proof: DefaultGadgetsProof, sources: []const encoder.table_style_profile.Source };
+
+fn readIndexedGadget(
+    a: std.mem.Allocator,
+    source: *dump_source.SourceReader,
+    page_index: []const u8,
+    title_index: dump_source.PageTitleIndex,
+    title: []const u8,
+    model: []const u8,
+) !?IndexedGadget {
+    const found = (try title_index.lookup(page_index, title)) orelse return null;
+    const offset = dump_source.pageRowRefOffset(found);
+    if (offset >= page_index.len or (offset != 0 and page_index[offset - 1] != '\n')) return error.InvalidPageIndex;
+    const end = std.mem.indexOfScalarPos(u8, page_index, offset, '\n') orelse page_index.len;
+    const line = page_index[offset..end];
+    if (line.len > 16 * 1024) return error.InvalidTableStylesSource;
+    const row = try dump_source.parsePageIndexLine(title_index.kind, line);
+    if (row.ns != 8 or !row.has_source or row.redirect != null or
+        !std.mem.eql(u8, row.content_model, model) or !std.mem.eql(u8, row.title, title) or
+        row.page_id == 0 or row.revision_id == 0 or dump_source.sourceLen(row.source) > max_source_bytes)
+        return error.InvalidTableStylesSource;
+    const encoded = try source.readAlloc(a, row.source);
+    if (encoded.len != dump_source.sourceLen(row.source)) return error.InvalidTableStylesSource;
+    const decoded = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, encoded) else encoded;
+    if (decoded.len > max_source_bytes or !std.unicode.utf8ValidateSlice(decoded)) return error.InvalidTableStylesSource;
+    return .{ .css = decoded, .proof = .{
+        .title = row.title, .page_id = row.page_id, .revision_id = row.revision_id,
+        .revision_timestamp = row.revision_timestamp, .content_model = row.content_model,
+        .index_offset = offset, .ordinal = dump_source.pageRowRefOrdinal(found), .source = row.source,
+        .source_needs_decode = row.source_needs_decode, .index_row_sha256 = sha256(line),
+        .encoded_source_bytes = encoded.len, .encoded_source_sha256 = sha256(encoded),
+        .decoded_source_bytes = decoded.len, .decoded_source_sha256 = sha256(decoded),
+    } };
+}
+fn defaultGadgetInputs(
+    a: std.mem.Allocator,
+    namespace_name: []const u8,
+    source: *dump_source.SourceReader,
+    page_index: []const u8,
+    title_index: dump_source.PageTitleIndex,
+) !?DefaultGadgetInputs {
+    const title = try std.fmt.allocPrint(a, "{s}:Gadgets-definition", .{namespace_name});
+    const definition = (try readIndexedGadget(a, source, page_index, title_index, title, "wikitext")) orelse {
+        // A negative title-index lookup alone cannot certify absence. Match
+        // Common.css's source-row guard without its Common-specific aliases.
+        var rows = std.mem.splitScalar(u8, page_index, '\n');
+        while (rows.next()) |line| {
+            if (line.len == 0 or line[0] == '#') continue;
+            const missing_row = try dump_source.parsePageIndexLine(title_index.kind, line);
+            if (std.mem.eql(u8, missing_row.title, title)) return error.InvalidTableStylesSource;
+        }
+        return null;
+    };
+    const modules = try default_gadgets.selectAlloc(a, definition.css, .{});
+    var sources: std.ArrayList(encoder.table_style_profile.Source) = .empty;
+    var proofs: std.ArrayList(GadgetStyleSource) = .empty;
+    var total: usize = 0;
+    for (modules) |module| for (module.pages) |page| {
+        if (sources.items.len == 1024) return error.InvalidTableStylesSource;
+        const page_title = try std.fmt.allocPrint(a, "{s}:Gadget-{s}", .{namespace_name, page});
+        if (page_title.len > 4096) return error.InvalidTableStylesSource;
+        const sheet = (try readIndexedGadget(a, source, page_index, title_index, page_title, "css")) orelse
+            return error.MissingDefaultGadgetStylesheet;
+        total = std.math.add(usize, total, sheet.css.len) catch return error.StyleProfileLimit;
+        if (total > max_source_bytes) return error.StyleProfileLimit;
+        // No response URL or resource bytes are invented. The indexed CSS is
+        // semantic input; URL-valued artwork still needs its ordinary proof.
+        try sources.append(a, .{ .css = sheet.css, .base_url = "", .unknown_applicability = module.unknown_applicability });
+        try proofs.append(a, .{ .module = module.name, .definition_line = module.definition_line,
+            .unknown_applicability = module.unknown_applicability, .indexed = sheet.proof });
+    };
+    return .{ .proof = .{ .definition = definition.proof, .sheets = try proofs.toOwnedSlice(a) }, .sources = try sources.toOwnedSlice(a) };
+}
+fn retainGadgetProof(a: std.mem.Allocator, proof: DefaultGadgetsProof) !DefaultGadgetsProof {
+    const sheets = try a.dupe(GadgetStyleSource, proof.sheets);
+    for (sheets) |*sheet| sheet.module = try a.dupe(u8, sheet.module);
+    // All indexed title/timestamp strings borrow the ordinary page-index map,
+    // just like Common.css provenance. Module names borrow the copied arena.
+    return .{ .definition = proof.definition, .sheets = sheets };
+}
 
 pub const Authority = struct {
     profile: encoder.table_style_profile.Profile,
@@ -209,8 +349,23 @@ pub fn observeWithImportsForTarget(
         .wiki = namespaces.wiki, .dump_date = namespaces.dump_date, .namespace_sha256 = &namespace_hash,
         .page_id = row.page_id, .revision_id = row.revision_id,
     }, bytes, target) else null;
+    // An explicit captured/import snapshot keeps its existing closure and
+    // order. Do not duplicate indexed gadgets into that independently issued
+    // environment. The ordinary snapshot-free route uses the retained defaults.
+    const gadget_inputs = if (snapshot == null) try defaultGadgetInputs(sa, spec.name, source, page_index, title_index) else null;
+    var profile = if (joined) |value| value.profile else profile: {
+        if (gadget_inputs) |inputs| {
+            const sources = try sa.alloc(encoder.table_style_profile.Source, inputs.sources.len + 1);
+            @memcpy(sources[0..inputs.sources.len], inputs.sources);
+            sources[inputs.sources.len] = .{ .css = css, .base_url = "" };
+            break :profile try encoder.table_style_profile.parseSourcesForTargetAlloc(a, sources, target);
+        }
+        break :profile try encoder.table_style_profile.parseForTargetAlloc(a, css, target);
+    };
+    errdefer profile.deinit();
+    const gadget_proof = if (gadget_inputs) |inputs| try retainGadgetProof(profile.arena.allocator(), inputs.proof) else null;
     return .{ .authority = .{
-        .profile = if (joined) |value| value.profile else try encoder.table_style_profile.parseForTargetAlloc(a, css, target),
+        .profile = profile,
         .provenance = .{
             .wiki = namespaces.wiki,
             .dump_date = namespaces.dump_date,
@@ -232,6 +387,7 @@ pub fn observeWithImportsForTarget(
             .decoded_source_bytes = css.len,
             .decoded_source_sha256 = sha256(css),
             .stylesheet_imports = if (joined) |value| value.proof else null,
+            .default_gadgets = gadget_proof,
         },
     } };
 }
@@ -332,4 +488,127 @@ test "normal indexed stylesheet loader carries explicit target while legacy call
     }
     var mismatched = title_index; mismatched.page_index_size += 1;
     try std.testing.expectError(error.PageTitleIndexMismatch, observeWithImportsForTarget(a, &namespaces, &source, page_index, mismatched, null, .screen));
+}
+
+const DefaultGadgetTesting = struct {
+    const Page = struct { title: []const u8, model: []const u8, body: []const u8, id: u64, revision: u64, redirect: []const u8 = "" };
+    fn observe(a: std.mem.Allocator, pages: []const Page) !Observation {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const io = std.testing.io;
+        var payload: std.ArrayList(u8) = .empty;
+        var index: std.ArrayList(u8) = .empty;
+        for (pages) |page| {
+            const row = try std.fmt.allocPrint(a, "{d}\t{d}\t{s}\t{s}\t{d}\t{d}\t2026-09-01T00:00:00Z\tFixture\t{s}\t8\t1\t0\n",
+                .{payload.items.len, page.body.len, page.title, page.redirect, page.id, page.revision, page.model});
+            try index.appendSlice(a, row);
+            try payload.appendSlice(a, page.body);
+        }
+        // Test framing is raw XML with exact decoded retained CSS bodies. The
+        // actual multistream source coordinates remain in the provenance receipt.
+        try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = payload.items });
+        try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index.items });
+        const dump_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pages.xml", .{tmp.sub_path});
+        const index_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-index.tsv", .{tmp.sub_path});
+        const title_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-title-index.bin", .{tmp.sub_path});
+        try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+        const titles = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(64 * 1024));
+        const title_index = try dump_source.PageTitleIndex.init(titles);
+        var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, dump_path, .raw_xml, null); defer reader.deinit();
+        var namespaces = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer namespaces.deinit();
+        return observeWithImportsForTarget(a, &namespaces, &reader, index.items, title_index, null, .screen);
+    }
+};
+
+test "ordinary indexed default gadget loader retains complete selected KU CSS in server module order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const common = @embedFile("testdata/ku-default-gadgets/Common.css");
+    const definitions = @embedFile("testdata/ku-default-gadgets/Gadgets-definition.wikitext");
+    const languages = @embedFile("testdata/ku-default-gadgets/Gadget-LanguagesAndScripts.css");
+    const palette = @embedFile("testdata/ku-default-gadgets/Gadget-Palette.css");
+    const site = @embedFile("testdata/ku-default-gadgets/Gadget-Site.css");
+    const tree = @embedFile("testdata/ku-default-gadgets/Gadget-TreeDescs-pagestyles.css");
+    const charinsert = @embedFile("testdata/ku-default-gadgets/Gadget-charinsert-styles.css");
+    const result = try DefaultGadgetTesting.observe(a, &.{
+        .{ .title = "MediaWiki:Common.css", .model = "css", .body = common, .id = 42886, .revision = 6067088 },
+        .{ .title = "MediaWiki:Gadgets-definition", .model = "wikitext", .body = definitions, .id = 118586, .revision = 6616497 },
+        .{ .title = "MediaWiki:Gadget-LanguagesAndScripts.css", .model = "css", .body = languages, .id = 617854, .revision = 6119164 },
+        .{ .title = "MediaWiki:Gadget-Palette.css", .model = "css", .body = palette, .id = 1326302, .revision = 6114669 },
+        .{ .title = "MediaWiki:Gadget-Site.css", .model = "css", .body = site, .id = 1324818, .revision = 6614169 },
+        .{ .title = "MediaWiki:Gadget-TreeDescs-pagestyles.css", .model = "css", .body = tree, .id = 1359241, .revision = 6531725 },
+        .{ .title = "MediaWiki:Gadget-charinsert-styles.css", .model = "css", .body = charinsert, .id = 517122, .revision = 3045758 },
+    });
+    var authority = result.authority orelse return error.TestUnexpectedResult; defer authority.deinit();
+    const proof = authority.provenance.default_gadgets orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 118586), proof.definition.page_id);
+    try std.testing.expectEqual(@as(u64, 6616497), proof.definition.revision_id);
+    try std.testing.expectEqualStrings(&sha256(definitions), &proof.definition.decoded_source_sha256);
+    const expected = [_][]const u8{languages, palette, site, tree, charinsert, common};
+    try std.testing.expectEqual(expected.len, authority.profile.retained_sources.len);
+    try std.testing.expectEqual(@as(usize, 5), proof.sheets.len);
+    for (authority.profile.retained_sources, expected, 0..) |retained, bytes, i| {
+        try std.testing.expectEqualStrings(bytes, retained.css);
+        try std.testing.expectEqualStrings("", retained.base_url);
+        try std.testing.expectEqual(i == 3, retained.unknown_applicability);
+        if (i < proof.sheets.len) {
+            try std.testing.expectEqualStrings(&sha256(bytes), &proof.sheets[i].indexed.decoded_source_sha256);
+            try std.testing.expectEqual(i == 3, proof.sheets[i].unknown_applicability);
+        }
+    }
+    try std.testing.expectEqual(@as(u64, 1324818), proof.sheets[2].indexed.page_id);
+    try std.testing.expectEqual(@as(u64, 6614169), proof.sheets[2].indexed.revision_id);
+    try std.testing.expect(std.mem.indexOf(u8, site, "break-inside: avoid") != null);
+    try std.testing.expect(authority.provenance.stylesheet_imports == null);
+}
+
+test "ordinary default gadget CSS precedes Common and missing redirected or wrong model styles refuse" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var pages = [_]DefaultGadgetTesting.Page{
+        .{ .title = "MediaWiki:Common.css", .model = "css", .body = ".probe{text-align:right}", .id = 1, .revision = 10 },
+        .{ .title = "MediaWiki:Gadgets-definition", .model = "wikitext", .body = "* Site[hidden|default]|Site.css", .id = 2, .revision = 20 },
+        .{ .title = "MediaWiki:Gadget-Site.css", .model = "css", .body = ".probe{text-align:left}", .id = 3, .revision = 30 },
+    };
+    const observed = try DefaultGadgetTesting.observe(a, &pages);
+    var authority = observed.authority.?; defer authority.deinit();
+    const alignment = try authority.profile.resolveAlignment(a, "div", "probe", "", null, "");
+    try std.testing.expect(!alignment.unresolved and alignment.value.? == .right);
+    try std.testing.expectError(error.MissingDefaultGadgetStylesheet, DefaultGadgetTesting.observe(a, pages[0..2]));
+    pages[2].model = "wikitext";
+    try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
+    pages[2].model = "css"; pages[2].redirect = "MediaWiki:Other.css";
+    try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
+    pages[1].body = "* Site|Site.css";
+    const disabled_result = try DefaultGadgetTesting.observe(a, pages[0..2]);
+    var disabled = disabled_result.authority.?; defer disabled.deinit();
+    try std.testing.expectEqual(@as(usize, 0), disabled.provenance.default_gadgets.?.sheets.len);
+    try std.testing.expectEqual(@as(usize, 1), disabled.profile.retained_sources.len);
+}
+
+test "ordinary gadget loader refuses a title index that omits a retained definition" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const css = ".probe{text-align:right}";
+    const definition = "* Site[default]|Site.css";
+    const common_row = try std.fmt.allocPrint(a, "0\t{d}\tMediaWiki:Common.css\t\t1\t10\t2026-09-01T00:00:00Z\tFixture\tcss\t8\t1\t0\n", .{css.len});
+    const definition_row = try std.fmt.allocPrint(a, "{d}\t{d}\tMediaWiki:Gadgets-definition\t\t2\t20\t2026-09-01T00:00:00Z\tFixture\twikitext\t8\t1\t0\n", .{css.len, definition.len});
+    const full_index = try std.mem.concat(a, u8, &.{common_row, definition_row});
+    try tmp.dir.writeFile(io, .{ .sub_path = "pages.xml", .data = css ++ definition });
+    // Deliberately omit the second source row when constructing this otherwise
+    // valid table, then bind its declared byte size to the complete source index.
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = common_row });
+    const dump_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/pages.xml", .{tmp.sub_path});
+    const index_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-index.tsv", .{tmp.sub_path});
+    const title_path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/page-title-index.bin", .{tmp.sub_path});
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    const title_bytes = try std.Io.Dir.cwd().readFileAlloc(io, title_path, a, .limited(4096));
+    std.mem.writeInt(u64, title_bytes[40..48], @intCast(full_index.len), .little);
+    const title_index = try dump_source.PageTitleIndex.init(title_bytes);
+    try std.testing.expect(try title_index.lookup(full_index, "MediaWiki:Common.css") != null);
+    try std.testing.expect(try title_index.lookup(full_index, "MediaWiki:Gadgets-definition") == null);
+    var reader = try dump_source.SourceReader.open(io, a, std.heap.page_allocator, dump_path, .raw_xml, null); defer reader.deinit();
+    var namespaces = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer namespaces.deinit();
+    try std.testing.expectError(error.InvalidTableStylesSource,
+        observeWithImportsForTarget(a, &namespaces, &reader, full_index, title_index, null, .screen));
 }

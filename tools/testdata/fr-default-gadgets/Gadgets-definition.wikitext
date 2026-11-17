@@ -1,0 +1,111 @@
+<noinclude>
+----
+Voir aussi&nbsp;:
+* [[Special:Gadgets]] pour avoir les liens vers le code de chacun de ces gadgets ;
+* [[Wiktionnaire:Gadgets]] pour des informations techniques sur les gadgets dans le Wiktionnaire ;
+* [[Aide:Gadgets]] pour comment utiliser les gadgets dans le Wiktionnaire ;
+* [[mw:Extension:Gadgets]] pour la documentation sur la page actuelle.
+----
+[[en:MediaWiki:Gadgets-definition]]
+[[sv:MediaWiki:Gadgets-definition]]
+</noinclude>
+
+== Affichage ==
+* SommaireDeveloppable [default] | SommaireDeveloppable.js
+* HiddenQuote [dependencies=mediawiki.cookie] | HiddenQuote.js
+* cacheBoites [] | cacheBoites.js
+* FlecheHaut [] | FlecheHaut.js
+* AncreTitres [dependencies = mediawiki.util, user] | AncreTitres.js
+* X-SAMPA [] | APIversXSAMPA.js | X-SAMPAseul.js | X-SAMPA.css
+* Navigation_popups [] | popups.js
+* OngletPurge [dependencies = mediawiki.util, mediawiki.api] | OngletPurge.js
+* FilterTranslations [dependencies = mediawiki.util, user | actions = view | namespaces = 0] | FilterTranslations.js
+* wikt.highlight-missing-sections [package | dependencies = mediawiki.api | actions = view] | wikt.highlight-missing-sections.js | wikt.core/languages.js | wikt.core/languages.json | wikt.highlight-missing-sections.css
+* wikt.remove-pronunciation-links [] | wikt.remove-pronunciation-links.js | wikt.remove-pronunciation-links.css
+* wikt.transliterator-widget [package | dependencies = oojs-ui-core, oojs-ui-widgets | actions = view] | wikt.transliterator-widget.js | wikt.core/languages.js | wikt.core/languages.json
+* ShowMessageNames [dependencies = mediawiki.util] | ShowMessageNames.js
+* wikt.page-preview [default | package | dependencies = mediawiki.api, mediawiki.util, mediawiki.Title] | wikt.page-preview.js | wikt.core/languages.js | wikt.core/languages.json
+* wikt.add-nearest-words [dependencies = mediawiki.api | package | actions = view | namespaces = 0, 110] | wikt.add-nearest-words.js | wikt.core/languages.js | wikt.core/languages.json
+* wikt.unlinked-thesaurus [package | dependencies = mediawiki.api | actions = view, edit | namespaces = 0] | wikt.unlinked-thesaurus.js | wikt.core/languages.js | wikt.core/languages.json
+
+== Recherche ==
+* anagrimes [default] | anagrimes.js | anagrimes.css
+* ChercheDansSousCategories [default | dependencies = mediawiki.util] | ChercheDansSousCategories.js | ChercheDansSousCategories.css
+* SousPages [dependencies = mediawiki.util] | SousPages.js
+* ReferencesEn [dependencies = mediawiki.util] | ReferencesEn.js
+* wikt.search-selected-text [] | wikt.search-selected-text.js | wikt.search-selected-text.css
+* wikt.dicotheque-link [dependencies = mediawiki.util | actions = view | namespaces = 0 ] | wikt.dicotheque-link.js
+
+== Modification ==
+* specialchars [package | actions = edit] | specialchars.js | wikt.core.edit.js | wikt.core/page.js
+* wikt.auto-complete [package | actions = edit] | wikt.auto-complete.js | wikt.core/languages.js | wikt.core/languages.json | wikt.core.edit.js | wikt.core/sections.js | wikt.core/sections.json | wikt.core/word-types.json | wikt.core/lexicons.js | wikt.core/lexicons.json | wikt.auto-complete.css
+* Formatage [package | actions = edit] | Formatage.js | Formatage/sections.js | Formatage/typography.js | wikt.core.edit.js | wikt.core/sections.js | wikt.core/sections.json | wikt.core/word-types.json | Formatage.css
+* clearer-edit-summary [default | actions = view] | clearer-edit-summary.js
+* WikEd [] | WikEd.js
+* bkl-check [] | bkl-check.js
+* OngletGoogle [dependencies = mediawiki.util] | OngletGoogle.js
+* HotCat [actions = view] | HotCat.js
+* Accessibility [] | Accessibility.js | Accessibility.css
+* searchbox [] | searchbox.js
+* Barre_de_luxe [package | dependencies = ext.gadget.mediawiki.toolbar, user.options, user, oojs-ui-core, oojs-ui-widgets, oojs-ui-toolbars | actions = edit] | Barre_de_luxe.js | wikt.core.edit.js
+* ResumeDeluxe [dependencies = user | actions = edit] | ResumeDeluxe.js | ResumeDeluxe.css
+* wikt.edit-voir-template [dependencies = mediawiki.api | actions = view] | wikt.edit-voir-template.js
+* wikt.add-examples [dependencies = oojs, oojs-ui | default | package | namespaces = 0 | actions = view] | wikt.add-examples.js | wikt.core/languages.js | wikt.core/languages.json | wikt.core.edit.js | wikt.core.cookies.js | wikt.add-examples.css
+* wikt.translation-editor [package | default | dependencies = mediawiki.api | actions = view | namespaces = 0] | wikt.translation-editor.js | wikt.translation-editor/header-form.js | wikt.translation-editor/form.js | wikt.translation-editor/dialog.js | wikt.translation-editor/autocomplete.js | wikt.core/languages.js | wikt.core/languages.json | wikt.translation-editor/lang-properties.json | wikt.translation-editor.css
+
+== Création ==
+* CreerFlexionFr [dependencies = mediawiki.util] | CommonWikt.js | CreerFlexionFr.js
+* CreerTrad [package | dependencies = mediawiki.util | actions = view, edit | namespaces = 0] | CreerTrad.js | wikt.core/text.js | wikt.core/languages.js | wikt.core/languages.json | CreerTrad.css
+* wikt.create-new-entry [package | default | namespaces = 0 | actions = edit | dependencies = vue, pinia, @wikimedia/codex | codexIcons = cdxIconAdd, cdxIconAlert, cdxIconArrowDown, cdxIconArrowNext, cdxIconArrowPrevious, cdxIconArrowUp, cdxIconArticle, cdxIconBold, cdxIconCancel, cdxIconCheck, cdxIconClose, cdxIconCode, cdxIconCollapse, cdxIconConfigure, cdxIconDownload, cdxIconEdit, cdxIconEllipsis, cdxIconError, cdxIconExpand, cdxIconHelp, cdxIconHelpNotice, cdxIconImageLayoutFrame, cdxIconInfo, cdxIconItalic, cdxIconLabFlask, cdxIconLanguage, cdxIconLink, cdxIconLinkExternal, cdxIconLogoWikibooks, cdxIconLogoWikidata, cdxIconLogoWikimediaCommons, cdxIconLogoWikinews, cdxIconLogoWikipedia, cdxIconLogoWikiquote, cdxIconLogoWikisource, cdxIconLogoWikispecies, cdxIconLogoWikiversity, cdxIconLogoWikivoyage, cdxIconLogoWiktionary, cdxIconNoWikitext, cdxIconPrevious, cdxIconPuzzle, cdxIconQuotes, cdxIconReference, cdxIconReferences, cdxIconSearch, cdxIconSettings, cdxIconSpeechBubble, cdxIconStar, cdxIconSubscript, cdxIconSuperscript, cdxIconTrash, cdxIconUnStar, cdxIconWikitext] | wikt.create-new-entry/main.js | wikt.create-new-entry/App.vue | wikt.create-new-entry/components/CategoriesSelector.vue | wikt.create-new-entry/components/CollapsedPreview.vue | wikt.create-new-entry/components/DefinitionForm.vue | wikt.create-new-entry/components/EditTools.vue | wikt.create-new-entry/components/EntryForm.vue | wikt.create-new-entry/components/EtymologyForm.vue | wikt.create-new-entry/components/ExampleForm.vue | wikt.create-new-entry/components/ExternalWikiLinks.vue | wikt.create-new-entry/components/IllustrationForm.vue | wikt.create-new-entry/components/InputWithToolbar.vue | wikt.create-new-entry/components/LanguageSelector.vue | wikt.create-new-entry/components/LexiconForm.vue | wikt.create-new-entry/components/PageLookup.vue | wikt.create-new-entry/components/PronunciationForm.vue | wikt.create-new-entry/components/RadioList.vue | wikt.create-new-entry/components/ReferencesForm.vue | wikt.create-new-entry/components/RelatedWordsList.vue | wikt.create-new-entry/components/RelatedWordsLists.vue | wikt.create-new-entry/components/TemplateList.vue | wikt.create-new-entry/components/TemplateSelectionDialog.vue | wikt.create-new-entry/components/UserPreferences.vue | wikt.create-new-entry/components/WikiLink.vue | wikt.create-new-entry/components/WordPropertiesSelector.vue | wikt.create-new-entry/definition-templates.json | wikt.create-new-entry/editor.js | wikt.create-new-entry/languages.js | wikt.create-new-entry/pages.js | wikt.create-new-entry/requests.js | wikt.create-new-entry/sections-additional.json | wikt.create-new-entry/store.js | wikt.create-new-entry/strings.js | wikt.create-new-entry/templates.js | wikt.create-new-entry/types.js | wikt.create-new-entry/utils.js | wikt.create-new-entry/wikis.json | wikt.create-new-entry/wikitext.js | wikt.core/edit.js | wikt.core/languages.js | wikt.core/languages.json | wikt.core/lexicons.js | wikt.core/lexicons.json | wikt.core/page.js | wikt.core/sections.js | wikt.core/sections.json | wikt.core/user.js | wikt.core/word-types.json
+* CreerNouveauMot [package | dependencies = oojs-ui-core, oojs-ui-widgets, oojs-ui-toolbars, oojs-ui-windows | namespaces = 0 | actions = edit] | CreerNouveauMot.js | CreerNouveauMot/data-model.js | CreerNouveauMot/ui.js | CreerNouveauMot/languages.js | wikt.core/languages.js | wikt.core/languages.json | wikt.core/page.js | wikt.core.edit.js | wikt.core.cookies.js | CreerNouveauMot.css
+
+== Historique ==
+* DeluxeHistory [dependencies = user, mediawiki.util] | DeluxeHistory.js | DeluxeHistory.css
+* MasquageRevisionsMultiples [rights = deleterevision] | MasquageRevisionsMultiples.js
+* RevertDiff [] | RevertDiff.js
+* Smart_patrol [rights = patrol] | Smart_patrol.js
+
+== SpécialWiktionnaire ==
+* Wiktionnaire [default | dependencies = ext.gadget.mediawiki.toolbar] | NavFrame.js | CadreOnglet.js | searchEngines.js | RedirectCommons.js | Common-edit.js
+* StyleWiktionnaire [default | type = styles] | NavFrame.css | CadreOnglet.css | StyleScripts.css | StyleArticles.css | Accueil2.css | Common-edit.css | Flexions.css
+* AncienStyleWiktionnaire [type = styles] | NavFrame.css | CadreOnglet.css | StyleScripts.css | StyleArticles/Ancien.css | Accueil2.css | Common-edit.css | Flexions.css
+* LiensAncresDansCategories [default] | LiensAncresDansCategories.js
+* mediawiki.toolbar [hidden] | mediawiki.toolbar.js
+* wikt.manage-page-deletions [actions = view | namespaces = 4 ] | wikt.manage-page-deletions.js
+
+== Patrouille ==
+* RTRC [rights = patrol] | RTRC.js
+* DiffEdit [actions = view] | DiffEdit.js
+
+== Cartographie ==
+* WhereWikimediansLive [dependencies = ext.kartographer.box, oojs-ui, mediawiki.api] | WhereWikimediansLive.js
+
+== Dev ==
+* wikt.manage-bot-requests [actions = view | namespaces = 4, 108] | wikt.manage-bot-requests.js
+* DebugMode [dependencies = mediawiki.util] | DebugMode.js
+* wikt.gadget-def-links [actions = view | namespaces = 8] | wikt.gadget-def-links.js
+
+== Expérimental ==
+* RenommageCategorie [] | RenommageCategorie.js
+* IntersectionCategorie [] | IntersectionCategorie.js
+* TabbedLanguages2 [] | TabbedLanguages2.css | TabbedLanguages2.js
+* TargetedTranslations [] | TargetedTranslations.css | TargetedTranslations.js
+* Wiktoolbar [] | Wiktoolbar.js
+* Wiktoolbar-caracteres [] | Wiktoolbar-caracteres.js
+* WiktSidebarTranslation [skins = monobook, vector, timeless] | WiktSidebarTranslation.js
+* FastRevert [] | FastRevert.js
+* interProjets [dependencies = mediawiki.util, mediawiki.cookie] | interProjets.js | interProjets.css
+* HideCategories [] | HideCategories.js
+* GoogleTrans [] | GoogleTrans.js
+* doublewiki [] | doublewiki.js
+* LiveRC [] | LiveRC.js
+* externalsearch [] | externalsearch.js
+
+== VersionsDev ==
+* CreerTrad-dev [dependencies = mediawiki.util] | CommonWikt.js | CreerTrad-dev.js
+* Barre_de_luxe-dev [dependencies = ext.gadget.mediawiki.toolbar, user.options, user] | CommonWikt.js | Barre_de_luxe-dev.js
+* specialchars-dev [dependencies = mediawiki.util] | CommonWikt.js | specialchars-dev.js
+* wikt.auto-complete-dev [] | CommonWikt.js | wikt.auto-complete-dev.js | wikt.auto-complete-dev.css
+* wikt.create-inflection-dev [] | CommonWikt.js | wikt.create-inflection-dev.js
+* wikt.add-examples-dev [package | dependencies = oojs, oojs-ui] | wikt.add-examples-dev.js | wikt.core.languages.js | wikt.core.languages.json | wikt.core.edit.js | wikt.core.cookies.js | wikt.add-examples-dev.css
+* test [package | dependencies = vue] | test.js | test/App.vue

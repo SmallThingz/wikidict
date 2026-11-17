@@ -1603,6 +1603,7 @@ pub fn pageSourceFocusCurrent(proof: *const PageSourceFocusProof) bool {
 
 fn pageSourceFocusSourceEqual(left: SourceRange, right: SourceRange) bool {
     return left.byte_start == right.byte_start and left.bytes == right.bytes and
+        left.unknown_applicability == right.unknown_applicability and
         std.mem.eql(u8, left.base_url, right.base_url) and std.mem.eql(u8, &left.css_sha256, &right.css_sha256);
 }
 fn pageSourceFocusObservedOrigin(styles: *const Profile, candidate: ContainerRule, observed_styles: *const Profile) ?usize {
@@ -13119,11 +13120,18 @@ const SelectorList = struct {
     }
 };
 
-pub const Source = struct { css: []const u8, base_url: []const u8, byte_start: usize = 0 };
+pub const Source = struct { css: []const u8, base_url: []const u8, byte_start: usize = 0, unknown_applicability: bool = false };
 pub const SourceRange = struct {
     base_url: []const u8, byte_start: usize, bytes: usize, css_sha256: [64]u8,
     rule_begin: usize, rule_end: usize,
+    unknown_applicability: bool = false,
     pub fn jsonStringify(self: SourceRange, jw: anytype) !void {
+        if (self.unknown_applicability) {
+            try jw.write(.{ .base_url = self.base_url, .byte_start = self.byte_start, .bytes = self.bytes,
+                .css_sha256 = self.css_sha256[0..], .rule_begin = self.rule_begin, .rule_end = self.rule_end,
+                .unknown_applicability = true });
+            return;
+        }
         try jw.write(.{ .base_url = self.base_url, .byte_start = self.byte_start, .bytes = self.bytes,
             .css_sha256 = self.css_sha256[0..], .rule_begin = self.rule_begin, .rule_end = self.rule_end });
     }
@@ -13155,21 +13163,22 @@ pub fn parseSourcesForTargetAlloc(a: std.mem.Allocator, sources: []const Source,
     const retained_sources = try pa.alloc(Source, sources.len);
     for (sources, retained_sources) |source, *retained| retained.* = .{
         .css = try pa.dupe(u8, source.css), .base_url = try pa.dupe(u8, source.base_url), .byte_start = source.byte_start,
+        .unknown_applicability = source.unknown_applicability,
     };
     var builder: Builder = .{ .a = pa, .reading_target = target };
-    for (sources) |source| try builder.parse(source.css, false, 0, true);
+    for (sources) |source| try builder.parse(source.css, source.unknown_applicability, 0, true);
     var ranges: std.ArrayList(SourceRange) = .empty;
     for (sources, 0..) |source, source_index| {
         builder.container_source = source.css;
         builder.container_source_index = source_index;
         builder.container_source_byte_start = source.byte_start;
         const first = builder.number + 1;
-        try builder.parse(source.css, false, 0, false);
+        try builder.parse(source.css, source.unknown_applicability, 0, false);
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(source.css, &digest, .{});
         try ranges.append(builder.a, .{ .base_url = try builder.a.dupe(u8, source.base_url),
             .byte_start = source.byte_start, .bytes = source.css.len, .css_sha256 = std.fmt.bytesToHex(digest, .lower),
-            .rule_begin = first, .rule_end = builder.number + 1 });
+            .rule_begin = first, .rule_end = builder.number + 1, .unknown_applicability = source.unknown_applicability });
     }
     return .{ .arena = arena, .reading_target = target, .sources = ranges.items, .retained_sources = retained_sources, .rules = builder.rules.items, .classes = builder.classes.items, .ancestor_classes = builder.ancestor_classes.items, .admitted_rule_numbers = builder.numbers.items, .has_unsupported_rules = builder.unsupported, .globally_unresolved = builder.globally_unresolved, .text_rules = builder.text_rules.items, .observed_figure_rules = builder.observed_figure_rules.items, .block_rules = builder.block_rules.items, .container_rules = builder.container_rules.items, .figure_rules = builder.figure_rules.items, .missing_link_custom_rules = builder.missing_link_custom_rules.items, .display_rules = builder.display_rules.items, .display_classes = builder.display_classes.items };
 }
@@ -15318,7 +15327,7 @@ pub fn attachCustomProperties(profile: *Profile, sources: []const Source, contex
     for (sources) |source| {
         total = std.math.add(usize, total, source.css.len) catch return error.StyleProfileLimit;
         if (total > max_css_bytes) return error.StyleProfileLimit;
-        try builder.parse(source.css, false, 0);
+        try builder.parse(source.css, source.unknown_applicability, 0);
     }
     const result = try a.create(CustomProfile);
     result.* = .{ .rules = builder.rules.items, .classes = builder.selector_builder.display_classes.items, .is_opaque = builder.is_opaque };
@@ -33772,4 +33781,58 @@ test "complete inline sibling proof refutes after brackets beyond rich descendan
         for (styles.observed_figure_rules) |rule|
             try std.testing.expect(observedStyleRuleMatch(rule, large, null, 5, .after, .{}) != .no);
     }
+}
+
+test "indexed gadget applicability survives source retention and page joins without an unconditional grant" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const sources = [_]Source{
+        .{ .css = ".gadget{text-align:left}:root{--gadget-ink:#123456}", .base_url = "", .unknown_applicability = true },
+        .{ .css = ".ordinary{text-align:right}", .base_url = "" },
+    };
+    var profile = try parseSourcesForTargetAlloc(a, &sources, .screen); defer profile.deinit();
+    try std.testing.expect(profile.sources[0].unknown_applicability and profile.retained_sources[0].unknown_applicability);
+    try std.testing.expect(!profile.sources[1].unknown_applicability and !profile.retained_sources[1].unknown_applicability);
+    const uncertain = try profile.resolveAlignment(a, "div", "gadget", "", null, "");
+    try std.testing.expect(uncertain.unresolved and uncertain.value == null);
+    const ordinary = try profile.resolveAlignment(a, "div", "ordinary", "", null, "");
+    try std.testing.expect(!ordinary.unresolved and ordinary.value.? == .right);
+    var joined = try joinPageSourcesAlloc(a, &profile, &.{}, &.{}); defer joined.deinit();
+    try std.testing.expect(joined.retained_sources[0].unknown_applicability);
+    try std.testing.expect((try joined.resolveAlignment(a, "div", "gadget", "", null, "")).unresolved);
+    try attachCustomProperties(&joined, joined.retained_sources, .{
+        .dark = false, .ancestors = &.{.{ .tag = "html", .root = true }},
+    });
+    try std.testing.expect(joined.custom_properties.?.root_environment.get("--gadget-ink") == .unknown);
+    const serialized = try std.json.Stringify.valueAlloc(a, profile.sources, .{}); defer a.free(serialized);
+    try std.testing.expect(std.mem.indexOf(u8, serialized, "\"unknown_applicability\":true") != null);
+}
+
+test "conditional source applicability binds inventory snapshots and observed focus source identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const css = ":focus{outline:0}.probe{text-align:left}";
+    var ordinary = try parseSourcesForTargetAlloc(a, &.{.{ .css = css, .base_url = "" }}, .screen); defer ordinary.deinit();
+    var conditional = try parseSourcesForTargetAlloc(a, &.{.{ .css = css, .base_url = "", .unknown_applicability = true }}, .screen); defer conditional.deinit();
+    try std.testing.expectEqualStrings(&ordinary.sources[0].css_sha256, &conditional.sources[0].css_sha256);
+    try std.testing.expect(pageSourceFocusSourceEqual(ordinary.sources[0], ordinary.sources[0]));
+    try std.testing.expect(!pageSourceFocusSourceEqual(ordinary.sources[0], conditional.sources[0]));
+    try std.testing.expect(!pageSourceFocusSourceEqual(conditional.sources[0], ordinary.sources[0]));
+    var snapshot = try ObservedStyleInventorySnapshot.init(a, &ordinary); defer snapshot.deinit();
+    try std.testing.expect(snapshot.current());
+    @constCast(ordinary.retained_sources)[0].unknown_applicability = true;
+    try std.testing.expect(!snapshot.current());
+    @constCast(ordinary.retained_sources)[0].unknown_applicability = false;
+    try std.testing.expect(snapshot.current());
+    @constCast(ordinary.sources)[0].unknown_applicability = true;
+    try std.testing.expect(!snapshot.current());
+    @constCast(ordinary.sources)[0].unknown_applicability = false;
+    try std.testing.expect(snapshot.current());
+    // Deep snapshots preserve the initially conditional state as well; this
+    // is an identity guard, not a grant to mutate source applicability.
+    var conditional_snapshot = try ObservedStyleInventorySnapshot.init(a, &conditional); defer conditional_snapshot.deinit();
+    @constCast(conditional.retained_sources)[0].unknown_applicability = false;
+    try std.testing.expect(!conditional_snapshot.current());
+    @constCast(conditional.retained_sources)[0].unknown_applicability = true;
+    try std.testing.expect(conditional_snapshot.current());
 }
