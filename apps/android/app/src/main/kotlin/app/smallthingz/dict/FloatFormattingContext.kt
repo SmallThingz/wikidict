@@ -20,6 +20,15 @@ internal fun Block.hasBodyFloat(): Boolean {
 /** Keep stable lazy slots; an explicit body owner starts before the first visible semantic row. */
 internal fun floatBodyRuns(rows: List<ReadingRow>, bodyAdjoining: BodyAdjoiningPolicy? = null,
     language: String? = null): List<IntRange> {
+    if (rows.any { it.reference != null }) return buildList {
+        var start = 0
+        for (end in 0..rows.size) if (end == rows.size || rows[end].reference != null) {
+            if (end > start) floatBodyRuns(rows.subList(start, end), bodyAdjoining, language).forEach {
+                add((start + it.first)..(start + it.last))
+            }
+            start = end + 1
+        }
+    }
     val prefix = rows.firstOrNull()?.takeIf { it.heading?.isAuthoredBodyPrefix() == true }
     val headingPrefixStart = if (prefix != null && rows.any { it.heading?.headingStyle != null })
         rows.indexOfFirst { it.sectionKey == prefix.key && it.block != null } else -1

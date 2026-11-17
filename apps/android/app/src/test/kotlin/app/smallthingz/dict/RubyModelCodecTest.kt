@@ -684,7 +684,8 @@ class RubyModelCodecTest {
         fun document(values: List<Span>, sink: Sink = Sink.Display, features: Int = 0,
             alignment: Boolean = false, clear: Boolean = false, containers: Int = 1,
             headingTitle: String = "漢（かん）", bodyTypography: BodyTypography? = null,
-            referenceValues: List<Reference>? = null, referenceTypography: BodyTypography? = null, mediaValues: List<Media>? = null): ByteArray {
+            referenceValues: List<Reference>? = null, referenceTypography: BodyTypography? = null, mediaValues: List<Media>? = null,
+            referenceBatches: List<ReferenceBatchPlacement>? = null): ByteArray {
             selected = values
             out.write("DPR$version".encodeToByteArray())
             if (version == 'Z') { mark("yFeatures"); u16(yFlags) }
@@ -748,6 +749,21 @@ class RubyModelCodecTest {
                     mark("$name.occurrence"); u32(value.occurrence); span(value.span, "$name.span")
                 }
             } else require(backlinkLists.all { it.isEmpty() })
+            if (version == 'Z' && yFlags and 16384 != 0) {
+                mark("referenceBatches.presence"); byte(if (referenceBatches == null) 0 else 1)
+                referenceBatches?.let { batches ->
+                    mark("referenceBatches.count"); u32(batches.size.toLong())
+                    batches.forEachIndexed { index, batch ->
+                        val name = "referenceBatches.$index"
+                        mark("$name.section"); u32(batch.sectionIndex.toLong())
+                        mark("$name.boundary"); u32(batch.beforeBlockIndex.toLong())
+                        mark("$name.count"); u32(batch.referenceIndices.size.toLong())
+                        batch.referenceIndices.forEachIndexed { position, value ->
+                            mark("$name.index$position"); u32(value.toLong())
+                        }
+                    }
+                }
+            } else require(referenceBatches == null)
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -4438,4 +4454,97 @@ class RubyModelCodecTest {
             }
         }
     }
+    @Test fun referenceBatches16384KeepOriginalNotesActionsAndLegacyBytesAtDeclaredBoundaries() {
+        val marker = Span("link", "[A]", targetFragment = "reference-10", role = "reference",
+            citationMarker = CitationMarker(10, 7, "return-A"))
+        val bodyOwner = BodyTypography(InlineFontSnapshot(1.25f, FontScaleBasis.NormalBody, fontNormalized = true))
+        val noteOwner = BodyTypography(InlineFontSnapshot(.8f, FontScaleBasis.NormalBody, fontNormalized = true), ContainerLineHeight.Normal)
+        val action = Span("external_link", "source", "https://example.test/kept", trail = "!", tooltip = "original tooltip")
+        val refs = listOf(
+            Reference(10, 1, "A", listOf(action), bodyTypography = noteOwner,
+                backlinks = listOf(ReferenceBacklink.withPolicies(7, Span("link", "return", targetFragment = "return-A")))),
+            Reference(20, 1, "B", emptyList(), blocks = listOf(Block("paragraph", 0, listOf(text("rich B"), action)))))
+        val placements = listOf(ReferenceBatchPlacement(0, 0, listOf(1)), ReferenceBatchPlacement(0, 1, listOf(0)))
+        val low = 2 or 8 or 64
+        val wire = Wire('Z', low or 16384)
+        val bytes = wire.document(listOf(marker, text(" body")), Sink.Body, bodyTypography = bodyOwner,
+            referenceValues = refs, referenceBatches = placements)
+        val decoded = read(bytes)
+        assertEquals(refs, decoded.references)
+        assertEquals(placements, decoded.referenceBatches)
+        assertEquals(bodyOwner, decoded.bodyTypography)
+        assertEquals(listOf(marker, text(" body")), decoded.sections.single().blocks.single().spans)
+        assertEquals(listOf(20L, 10L), decoded.readingRows.mapNotNull { it.reference?.number })
+        assertEquals(listOf(10L, 20L), decoded.references.map { it.number })
+        assertEquals(EntryLink("https://example.test/kept"), decoded.references[0].spans.single().entryLink())
+        assertEquals("source!", textOf(decoded.references[0].spans))
+        assertEquals(listOf(7L), decoded.references[0].backlinks.map { it.occurrence })
+        val legacy = Wire('Y', low).document(listOf(marker, text(" body")), Sink.Body,
+            bodyTypography = bodyOwner, referenceValues = refs)
+        val prefix = bytes.copyOfRange(0, wire.at.getValue("referenceBatches.presence"))
+        val recovered = changed(prefix.copyOfRange(0, 5) + prefix.copyOfRange(6, prefix.size), 3, 'Y'.code)
+        assertArrayEquals(legacy, recovered)
+        assertEquals(read(legacy), decoded.copy(referenceBatches = null))
+        assertNull(read(legacy).referenceBatches)
+    }
+
+    @Test fun referenceBatches16384RejectIncompleteCensusInvalidBoundariesAndUntruthfulFraming() {
+        val refs = listOf(Reference(10, 1, "A", listOf(text("A"))), Reference(20, 1, "B", listOf(text("B"))))
+        val placements = listOf(ReferenceBatchPlacement(0, 0, listOf(1)), ReferenceBatchPlacement(0, 1, listOf(0)))
+        val wire = Wire('Z', 16384)
+        val bytes = wire.document(listOf(text("body")), Sink.Body, referenceValues = refs, referenceBatches = placements)
+        val entry = read(bytes)
+        val sameBoundary = placements.map { it.copy(beforeBlockIndex = 1) }
+        assertEquals(listOf(20L, 10L), entry.copy(referenceBatches = sameBoundary).readingRows.mapNotNull { it.reference?.number })
+        for (bad in listOf(emptyList(), placements.take(1), placements.reversed(),
+            listOf(placements[0].copy(referenceIndices = emptyList()), placements[1]),
+            listOf(placements[0].copy(sectionIndex = -1), placements[1]),
+            listOf(placements[0].copy(sectionIndex = 1), placements[1]),
+            listOf(placements[0].copy(beforeBlockIndex = 2), placements[1]),
+            listOf(placements[0].copy(referenceIndices = listOf(2)), placements[1]),
+            listOf(placements[0], placements[1].copy(referenceIndices = listOf(1))))) {
+            invalid("Invalid explicit placement $bad") { entry.copy(referenceBatches = bad) }
+        }
+        invalid("Explicit placement cannot grant Ordinary") { entry.copy(bodyAdjoining = BodyAdjoiningPolicy.Ordinary) }
+        invalid("Empty references cannot own placement") { entry.copy(references = emptyList()) }
+        invalid("Fragments cannot enter a note batch") { entry.copy(references = listOf(refs[0], Reference(20, null, "B", listOf(text("fragment")), ReferenceKind.Fragment))) }
+        val start = wire.at.getValue("referenceBatches.presence")
+        for (value in listOf(0, 2, 255)) reject("Canonical presence1 only", changed(bytes, start, value))
+        for (value in listOf(0L, 0xffff_ffffL)) {
+            reject("Nonempty bounded batch count", changed32(bytes, wire.at.getValue("referenceBatches.count"), value))
+            reject("Nonempty bounded item count", changed32(bytes, wire.at.getValue("referenceBatches.0.count"), value))
+        }
+        reject("Section must exist", changed32(bytes, wire.at.getValue("referenceBatches.0.section"), 1))
+        reject("Boundary is before a block or terminal", changed32(bytes, wire.at.getValue("referenceBatches.0.boundary"), 2))
+        reject("Unsigned boundary cannot wrap", changed32(bytes, wire.at.getValue("referenceBatches.0.boundary"), 0xffff_ffffL))
+        reject("Index must exist", changed32(bytes, wire.at.getValue("referenceBatches.0.index0"), 2))
+        reject("No duplicated or omitted note", changed32(bytes, wire.at.getValue("referenceBatches.1.index0"), 1))
+        reject("Explicit Ordinary unsupported", changed(bytes, wire.at.getValue("features"), 1))
+        for (end in start..bytes.lastIndex) reject("Truncated batch tail $end", bytes.copyOf(end))
+        reject("Trailing bytes", bytes + byteArrayOf(0))
+        reject("No unadvertised tail", changed(bytes, 5, 0))
+        reject("Unknown high feature", changed(bytes, 5, 192))
+        reject("Old header cannot consume new tail", changed(bytes, 3, 'Y'.code))
+        reject("Feature needs a real owner", Wire('Z', 16384).document(listOf(text("body")), Sink.Body, referenceValues = refs))
+    }
+
+    @Test fun referenceBatches16384ChargeTheSharedItemBudgetAfterExistingBodyAndNotes() {
+        val limit = 1 shl 20
+        val refs = listOf(Reference(1, 1, "", emptyList()))
+        val placement = listOf(ReferenceBatchPlacement(0, 1, listOf(0)))
+        fun root(rows: Int) = Block("table", 0, emptyList(), table = Table(emptyList(),
+            java.util.Collections.nCopies(rows, emptyList<Cell>())))
+        fun model(rows: Int) = Entry("Budget", emptyList(), "language", "English", "en",
+            listOf(Section(2, "Body", listOf(root(rows)))), refs, referenceBatches = placement)
+        // Existing Block plus batch and index; no retroactive model charge for the legacy reference slot.
+        assertEquals(limit - 3, model(limit - 3).sections.single().blocks.single().table!!.rows.size)
+        invalid("Batch cannot restart model budget") { model(limit - 2) }
+        // The decoder additionally counts Section and the original reference slot.
+        fun literal(rows: Int) = Wire('Z', 16384).apply {
+            paragraphOverride = { positionedBlock(root(rows), "referenceBudget") }
+        }.document(emptyList(), Sink.Body, referenceValues = refs, referenceBatches = placement)
+        assertEquals(limit - 5, read(literal(limit - 5)).sections.single().blocks.single().table!!.rows.size)
+        reject("Batch cannot restart wire budget", literal(limit - 4))
+    }
+
 }

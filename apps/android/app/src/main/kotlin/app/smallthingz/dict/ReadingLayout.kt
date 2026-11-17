@@ -211,19 +211,34 @@ internal fun sectionHeadingCompanion(section: Section): Block? {
 }
 
 /** Presentation-only rows. No source parsing: explicit semantic breaks are layout boundaries. */
-data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false)
+data class ReadingRow(val key: String, val heading: Section? = null, val block: Block? = null, val compact: Boolean = false, val sectionKey: String = "", val meaningSection: Boolean = false, val headingBlock: Block? = null, val etymologySection: Boolean = false, val reference: Reference? = null, val referenceIndex: Int? = null)
 
 fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymologySections: Set<Int> = emptySet(),
-    bodyAdjoining: BodyAdjoiningPolicy? = null): List<ReadingRow> = buildList {
+    bodyAdjoining: BodyAdjoiningPolicy? = null, references: List<Reference> = emptyList(),
+    referenceBatches: List<ReferenceBatchPlacement>? = null): List<ReadingRow> = buildList {
     val owners = MediaOwners(media)
     val authoredBody = bodyAdjoining != null || sections.any { it.headingStyle != null }
+    var nextBatch = 0
     sections.forEachIndexed { sectionIndex, section ->
         val sectionKey = "heading-$sectionIndex"
         val meaningSection = section.blocks.any { it.kind == "definition" }
         val headingBlock = sectionHeadingCompanion(section)
         add(ReadingRow(sectionKey, heading = section, meaningSection = meaningSection, headingBlock = headingBlock,
             etymologySection = sectionIndex in etymologySections))
+        fun appendBatches(boundary: Int) {
+            while (referenceBatches != null && nextBatch < referenceBatches.size) {
+                val batch = referenceBatches[nextBatch]
+                if (batch.sectionIndex != sectionIndex || batch.beforeBlockIndex != boundary) break
+                batch.referenceIndices.forEach { index ->
+                    val reference = references[index]
+                    add(ReadingRow("reference-item-$index", sectionKey = sectionKey,
+                        meaningSection = meaningSection, reference = reference, referenceIndex = index))
+                }
+                nextBatch++
+            }
+        }
         section.blocks.forEachIndexed { blockIndex, original ->
+            appendBatches(blockIndex)
             if (blockIndex == 0 && headingBlock != null) return@forEachIndexed
             val key = "block-$sectionIndex-$blockIndex"
             if (bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
@@ -257,6 +272,7 @@ fun readingRows(sections: List<Section>, media: List<Media> = emptyList(), etymo
                 if (line.isNotEmpty()) add(ReadingRow("$key-$part", block = block.copy(spans = line), compact = true, sectionKey = sectionKey, meaningSection = meaningSection))
             }
         }
+        appendBatches(section.blocks.size)
     }
 }
 
@@ -504,8 +520,9 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
     }
     entry.references.forEachIndexed { index, reference ->
         reference.blocks?.let { blocks ->
-            val key = "reference-${reference.number}"
-            includeContent(key, blocks.mapIndexed { blockIndex, block -> block to "$key/block-$blockIndex" }, index)
+            val contentKey = "reference-${reference.number}"
+            val rowKey = entry.readingRows.singleOrNull { it.referenceIndex == index }?.key ?: contentKey
+            includeContent(rowKey, blocks.mapIndexed { blockIndex, block -> block to "$contentKey/block-$blockIndex" }, index)
         }
     }
     val fragment = target.substring(1)
@@ -537,7 +554,7 @@ internal fun entryReadingStartIndex(entry: Entry, folded: Set<String>): Int =
 
 /** An empty leaf duplicating the generated references group has no separate body. */
 internal fun metadataReferenceHeadingKey(entry: Entry): String? {
-    if (entry.references.isEmpty()) return null
+    if (entry.referenceBatches != null || entry.references.isEmpty()) return null
     val index = entry.sections.indices.singleOrNull { index ->
         val section = entry.sections[index]
         section.title == "References" && section.blocks.isEmpty() &&
@@ -554,10 +571,26 @@ internal fun visibleEntryReadingRows(entry: Entry, folded: Set<String>): List<Re
 internal fun metadataReferencesStartIndex(entry: Entry, folded: Set<String>): Int =
     entryReadingStartIndex(entry, folded) + visibleEntryReadingRows(entry, folded).size
 
-internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? {
-    val referenceIndex = entry.references.indexOfFirst { it.kind == ReferenceKind.Note && target == "#reference-${it.number}" }
-    if (referenceIndex < 0) return null
-    return metadataReferencesStartIndex(entry, folded) + 1 + referenceIndex
+internal fun referenceTargetIndex(entry: Entry, target: String): Int? {
+    fun matches(index: Int) = entry.references[index].let { it.kind == ReferenceKind.Note && target == "#reference-${it.number}" }
+    return if (entry.referenceBatches == null) entry.references.indices.firstOrNull(::matches)
+        else entry.references.indices.singleOrNull(::matches)
+}
+
+internal fun referenceScrollIndex(entry: Entry, target: String, folded: Set<String>): Int? =
+    referenceTargetIndex(entry, target)?.let { referenceItemScrollIndex(entry, it, folded) }
+
+internal fun referenceFoldKeys(entry: Entry, referenceIndex: Int): Set<String> {
+    if (entry.referenceBatches == null) return setOf("references")
+    val row = entry.readingRows.singleOrNull { it.referenceIndex == referenceIndex } ?: return emptySet()
+    return buildSet { add(row.sectionKey); if (row.meaningSection) add(row.sectionKey + "-details") }
+}
+
+internal fun referenceItemScrollIndex(entry: Entry, referenceIndex: Int, folded: Set<String>): Int? {
+    if (referenceIndex !in entry.references.indices) return null
+    if (entry.referenceBatches == null) return metadataReferencesStartIndex(entry, folded) + 1 + referenceIndex
+    val index = visibleEntryReadingRows(entry, folded).indexOfFirst { it.referenceIndex == referenceIndex }
+    return index.takeIf { it >= 0 }?.let { entryReadingStartIndex(entry, folded) + it }
 }
 
 internal fun referenceLabel(reference: Reference): String? = when {

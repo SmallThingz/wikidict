@@ -67,7 +67,7 @@ internal fun citationDestinations(entry: Entry): Map<String, CitationDestination
 internal fun citationFoldKeys(entry: Entry, destination: CitationDestination): Set<String> = when (destination.slot) {
     CitationSourceSlot.Title -> emptySet()
     CitationSourceSlot.Preamble -> setOf("preamble")
-    CitationSourceSlot.Reference -> setOf("references")
+    CitationSourceSlot.Reference -> destination.referenceIndex?.let { referenceFoldKeys(entry, it) }.orEmpty()
     CitationSourceSlot.Section -> {
         val row = entry.readingRows.singleOrNull { it.key == destination.rowKey }
             ?: throw IllegalArgumentException("Citation source row is absent")
@@ -81,7 +81,7 @@ internal fun citationScrollIndex(entry: Entry, destination: CitationDestination,
         CitationSourceSlot.Title -> 0
         CitationSourceSlot.Preamble -> 1 + if ("abbreviations" in folded) 0 else entry.textDetails.size
         CitationSourceSlot.Reference -> destination.referenceIndex?.let {
-            metadataReferencesStartIndex(entry, folded) + 1 + it
+            referenceItemScrollIndex(entry, it, folded)
         }
         CitationSourceSlot.Section -> {
             val rows = visibleEntryReadingRows(entry, folded)

@@ -1220,6 +1220,11 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     private var remaining = 1 shl 20
     private var actualTextLeaves = 0
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
+    fun referenceBatches(values: List<ReferenceBatchPlacement>?) {
+        if (values == null) return
+        charge(values.size)
+        values.forEach { charge(it.referenceIndices.size) }
+    }
     private fun citation(span: Span, backlink: Boolean = false) {
         require(!span.isQualifiedCitationBacklink || backlink) { "Qualified backlink escaped its reference prefix" }
         if (span.citationMarker != null) {
@@ -1551,6 +1556,40 @@ data class Reference(val number: Long, val groupNumber: Long?, val group: String
         }
     }
 }
+/** Original section/block boundaries; indices retain authored flush order, not numeric order. */
+data class ReferenceBatchPlacement(val sectionIndex: Int, val beforeBlockIndex: Int,
+    val referenceIndices: List<Int>)
+
+internal fun validateReferenceBatchPlacements(sections: List<Section>, references: List<Reference>,
+    batches: List<ReferenceBatchPlacement>?, adjoining: BodyAdjoiningPolicy?) {
+    if (batches == null) return
+    require(adjoining == null && batches.isNotEmpty() && batches.size <= (1 shl 20) &&
+        references.isNotEmpty() && references.size <= (1 shl 20)) { "Invalid explicit reference batch owner" }
+    val seen = BooleanArray(references.size)
+    var used = 0
+    var previous: ReferenceBatchPlacement? = null
+    for (batch in batches) {
+        require(batch.sectionIndex in sections.indices &&
+            batch.beforeBlockIndex in 0..sections[batch.sectionIndex].blocks.size &&
+            batch.referenceIndices.isNotEmpty() && batch.referenceIndices.size <= references.size - used) {
+            "Invalid reference batch boundary or size"
+        }
+        previous?.let { prior -> require(batch.sectionIndex > prior.sectionIndex ||
+            batch.sectionIndex == prior.sectionIndex && batch.beforeBlockIndex >= prior.beforeBlockIndex) {
+            "Reference batch boundaries are out of order"
+        } }
+        for (index in batch.referenceIndices) {
+            require(index in references.indices && references[index].kind == ReferenceKind.Note && !seen[index]) {
+                "Reference batch requires each note exactly once"
+            }
+            seen[index] = true
+            used++
+        }
+        previous = batch
+    }
+    require(used == references.size) { "Reference batch census is incomplete" }
+}
+
 internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
     val content = blocks
     if (backlinks.isEmpty()) {
@@ -1597,6 +1636,7 @@ data class Entry(
     val organization: PresentationOrganization? = null,
     val bodyAdjoining: BodyAdjoiningPolicy? = null,
     val bodyTypography: BodyTypography? = null,
+    val referenceBatches: List<ReferenceBatchPlacement>? = null,
 ) {
     internal val rasterImages: List<RasterImageOccurrence> = rasterImageOccurrences(this)
     internal val inlineImages: List<InlineImage> = rasterImages.map { it.image }
@@ -1619,7 +1659,8 @@ data class Entry(
     }
     val key: String = origin?.key ?: "$kind\u0000${language.orEmpty()}\u0000$title"
     // Constructed with the decoded entry on the import dispatcher.
-    val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections, bodyAdjoining = bodyAdjoining)
+    val readingRows: List<ReadingRow> = readingRows(sections, media, etymologySections, bodyAdjoining = bodyAdjoining,
+        references = references, referenceBatches = referenceBatches)
     internal val legacyImageCaptions: Map<String, Set<String>> = legacyEmbeddedImageCaptions(this)
     internal val legacyImageFiles: Set<String> = legacyImageCaptions.keys
     internal val separateImageCaptionFiles: Set<String> = media.filter { distinctTypedImageCaption(this, it) }.map { it.file }.toSet()
@@ -1709,6 +1750,7 @@ private fun Block.cluePreview(): String {
 /** Every serialized span sink participates in asset validation, even an empty
  * occurrence. Ruby descendants are validated even when graphical projection hides them. */
 internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> = buildList {
+    validateReferenceBatchPlacements(entry.sections, entry.references, entry.referenceBatches, entry.bodyAdjoining)
     val visitor = PresentationSpanVisitor { _, _ -> }
     visitor.validateAbsoluteContainers = true
     val citations = CitationNavigationValidation()
@@ -1764,6 +1806,7 @@ internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> =
         if (blocks == null) visitor.spans(reference.spans) else visitor.blocks(blocks)
     }
     citations.finish()
+    visitor.referenceBatches(entry.referenceBatches)
 }
 
 internal fun WordHit.isInstalled(installed: (String) -> Boolean): Boolean =

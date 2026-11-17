@@ -141,7 +141,10 @@ internal fun inheritedCellTextStyle(style: TextStyle): TextStyle {
     return ownerStyle.copy(letterSpacing = with(density) { pixels.toSp() })
 }
 internal class CellHeadingRequest(val path: String, val anchorMatch: HeadingAnchorSelection? = null,
-    val externalRequest: EntryAnchorRequest? = null)
+    val externalRequest: EntryAnchorRequest? = null, val referenceIndex: Int? = null)
+
+internal fun referenceHeadingRequest(request: CellHeadingRequest?, referenceIndex: Int?): CellHeadingRequest? =
+    request?.takeIf { referenceIndex == null || it.referenceIndex == referenceIndex }
 internal val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingRequest?> { null }
 internal val LocalCellHeadingReached = staticCompositionLocalOf<(CellHeadingRequest) -> Unit> { {} }
 internal val LocalSourceHeadingReveal = staticCompositionLocalOf<suspend (CellHeadingRequest, Float?) -> Unit> { { _, _ -> } }
@@ -331,16 +334,20 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             clearHeadingRequest(externalRequest)
             sourceRevealFailed = false
             // Authored heading IDs share the page namespace; generated references are a fallback.
+            val referenceOrdinal = destination?.referenceIndex ?: if (compiledHeading) null else
+                referenceTargetIndex(entry, target)
+            referenceOrdinal?.let { referenceFoldKeys(entry, it).forEach { key -> folded[key] = false } }
             val referenceIndex = when {
-                destination?.referenceIndex != null -> metadataReferencesStartIndex(entry, folded.filterValues { it }.keys) + 1 + destination.referenceIndex
+                referenceOrdinal != null -> referenceItemScrollIndex(entry, referenceOrdinal, folded.filterValues { it }.keys)
                 headingRow?.key == metadataReferenceHeadingKey(entry) && headingRow != null ->
                     metadataReferencesStartIndex(entry, folded.filterValues { it }.keys)
                 compiledHeading -> null
                 else -> referenceScrollIndex(entry, target, folded.filterValues { it }.keys)
             }
             if (referenceIndex != null) {
-                folded["references"] = false
-                cellHeadingRequest = destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch) }
+                if (entry.referenceBatches == null) folded["references"] = false
+                cellHeadingRequest = destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch,
+                    referenceIndex = if (entry.referenceBatches != null) destination.referenceIndex else null) }
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
             } else if (headingRow != null) {
@@ -516,7 +523,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 FoldHeading("About this entry", folded["preamble"] == true) { folded["preamble"] = folded["preamble"] != true }
                 if (folded["preamble"] != true) StyledText(compactSpans(entry.preamble), Modifier.padding(bottom = 4.dp), onLink = readerLink)
             }
-            itemsIndexed(visibleRows, key = { _, row -> row.key }, contentType = { _, row -> if (row.heading != null) "heading" else row.block?.kind }) { rowIndex, row ->
+            itemsIndexed(visibleRows, key = { _, row -> row.key }, contentType = { _, row -> if (row.reference != null) "reference" else if (row.heading != null) "heading" else row.block?.kind }) { rowIndex, row ->
                 Column(if (nativeFloatEntry) Modifier else Modifier.animateItem()) {
                 val run = floatStarts[rowIndex]
                 if (run != null) {
@@ -537,6 +544,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         bodyTextContext = bodyText?.getOrNull())
                     }
                 } else if (rowIndex !in floatCovered) {
+                    row.reference?.let { ReferenceRow(it, readerLink, row.referenceIndex) }
                     row.heading?.let { section ->
                         if (sectionHeadingVisible(section, entry.language)) {
                             val richHeading = row.headingBlock
@@ -578,15 +586,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 }
                 }
             }
-            if (entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
-            items(if (folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
-                val label = referenceLabel(ref)
-                Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
-                    ref.backlinks.forEach { ReferenceBacklinkView(it, readerLink) }
-                    ReferenceBody(ref, Modifier.weight(1f), readerLink)
-
-                }
+            if (entry.referenceBatches == null && entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
+            items(if (entry.referenceBatches != null || folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
+                ReferenceRow(ref, readerLink)
             }
             if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
             (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
@@ -608,6 +610,22 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     }
 }
 
+
+/** The same original item owns its label, backlinks, body semantics and selection in either location. */
+@Composable
+internal fun ReferenceRow(reference: Reference, onLink: (EntryLink) -> Unit, referenceIndex: Int? = null) {
+    val label = referenceLabel(reference)
+    // Native paths retain displayed note numbers; the original index scopes an explicit body's reveal.
+    CompositionLocalProvider(LocalCellHeadingRequest provides
+        referenceHeadingRequest(LocalCellHeadingRequest.current, referenceIndex)) {
+    Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (label != null) Text(label, style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary)
+        reference.backlinks.forEach { ReferenceBacklinkView(it, onLink) }
+        ReferenceBody(reference, Modifier.weight(1f), onLink)
+    }
+    }
+}
 
 /** Only the existing weighted reference body enters this scope; label/backlink UI stays outside. */
 @Composable

@@ -18,7 +18,7 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
             // All implemented Y low bits compose with the existing Z high features.
-            require(it and 13056 != 0 && it and 13311 == it) { "Invalid extended presentation feature flags" }
+            require(it and 29440 != 0 && it and 29695 == it) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
             require(it in 1..255) { "Invalid owner geometry feature flags" }
         } else 0
@@ -175,11 +175,24 @@ object BlobDecoder {
             r.audioControls == r.hasAudioControl && r.clippedAbsolutes == r.hasClippedAbsolute) {
             "Y/Z features do not match owner geometry payload"
         }
+        val referenceBatches = if (ownerGeometryFlags and 16384 != 0) {
+            require(r.presence()) { "Reference batch capability requires a present owner" }
+            val count = r.count(16)
+            require(count > 0) { "Empty reference batch owner" }
+            List(count) {
+                val section = r.index(styledSections.size)
+                val boundary = r.u32()
+                require(boundary <= styledSections[section].blocks.size.toLong()) { "Invalid reference block boundary" }
+                val indices = r.indices(navigationReferences.size)
+                require(indices.isNotEmpty()) { "Empty reference batch" }
+                ReferenceBatchPlacement(section, boundary.toInt(), indices)
+            }
+        } else null
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
-            bodyAdjoining = bodyAdjoining, bodyTypography = bodyTypography)
+            bodyAdjoining = bodyAdjoining, bodyTypography = bodyTypography, referenceBatches = referenceBatches)
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
         // Historical media-only entries do not acquire a typed-image catalog limit.
         require(magicVersion >= 71 || entry.inlineImages.isEmpty() || media.size <= (if (magicVersion >= 69) 256 else 128)) {
