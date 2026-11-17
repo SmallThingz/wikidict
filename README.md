@@ -244,6 +244,39 @@ written to spool files. Wikimedia dump order is not the final per-language title
 order required by WIKBLB08, so the builder needs one reorder pass before it can
 write canonical blobs. The spool is transient and is removed after finalization.
 
+### Diagnosing presentation failures
+
+`--presentation-audit-pages=1024` asks the corpus controller to audit at most
+1,024 indexed rows from a failed shard's start after an authenticated presentation
+failure. The diagnostic pass uses the same inputs, worker settings and original
+deadline. It preserves the original failure and leaves the edition failed and
+unpublished. `--continue-failed-shards` additionally requires this explicit audit
+bound; any failed shard still prevents merge and publication.
+
+The native `dict-blob-build --audit-presentation-errors` mode can also audit a
+retained failed shard directly, without first replaying its production build.
+Use a fresh output path, the same dump, expander, Figure/Book inputs, timestamp
+and worker limits, plus `--start-page N --limit-pages 1024`. Keep the original
+failed command and failure receipt separately. Do not pass `--index-byte-offset`
+(even zero), `--shard-pages`, or the original `--failure-receipt`/`--invocation-id`.
+`--shared-inputs` belongs to `--indexed-page-outputs`, which is incompatible with
+audit mode. `--audit-expanded-bytes` optionally retains up to 2,097,152 expanded
+bytes per failure, within the audit's aggregate payload cap.
+
+Audit rolls back each page's partial scratch records before processing the next
+page. Only its supported presentation/input errors continue; allocation, I/O
+and other fatal errors still abort. Audit never finalizes dictionary output or
+publishes coverage. Check `audit-summary.json` for a complete selected range and
+consistent counters; an interrupted summary is incomplete. Even a complete,
+all-passing range is diagnostic evidence, not whole-corpus acceptance. Failed
+pages make the native audit exit nonzero; the controller retains the original
+production failure regardless of the diagnostic result.
+
+Report audit time separately from production time. The page bound limits the
+selected range, not startup I/O: full input hashing and final identity checks
+still run. A diagnostic pass's cache state and discarded output also differ from
+a production build, so its elapsed time is not a production-speed measurement.
+
 ### Reusing build work
 
 An interrupted corpus build retains verified extraction assets and native Lua
