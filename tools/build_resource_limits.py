@@ -33,6 +33,8 @@ WATCHDOG_DEADLINE_MONOTONIC = 'WIKIDICT_BUILD_DEADLINE_MONOTONIC'
 WATCHDOG_WALL_SECONDS = 2 * 60 * 60
 MAX_WATCHDOG_WALL_SECONDS = 7 * 24 * 60 * 60
 WATCHDOG_POLL_SECONDS = 0.2
+# Full PSS walks are slower than ownership/task checks; this is a sampling policy, not a hard cap.
+WATCHDOG_PSS_SECONDS = 1.0
 # Same allowance as the independent guardian; never extends build admission.
 WATCHDOG_GUARDIAN_CLEANUP_SECONDS = 30.0
 _verified_watchdog_pid = None
@@ -326,7 +328,7 @@ def _live_mm_siblings(pid):
     return False
 
 
-def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=frozenset()):
+def _owned_census(child_pid, child_start, known, supervisor_pid, preexisting=frozenset()):
     table = _process_table()
     root = table.get(child_pid)
     if root is not None and root['start'] != child_start:
@@ -349,6 +351,12 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
         changed = len(owned) != before
     for pid in owned:
         known[pid] = table[pid]['start']
+    return table, owned
+
+
+def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=frozenset(), *, _census=None):
+    table, owned = (_owned_census(child_pid, child_start, known, supervisor_pid, preexisting)
+                    if _census is None else _census)
     pss = rss = tasks = 0
     live = {}
     for pid in owned:
@@ -394,13 +402,14 @@ def _owned_sample(child_pid, child_start, known, supervisor_pid, preexisting=fro
                     tasks += threads
                     live[pid] = dict(info, pss_bytes=pss_kib * 1024,
                                      measured_tasks=threads,
-                                     accounting='released_mm_rss_fallback')
+                                     accounting='released_mm_approximate_rss_fallback')
                     continue
-                # ENOENT during exit/exec may persist beyond one sample. RSS
-                # is an upper bound for PSS, so charge it until smaps returns.
+                # ENOENT during exit/exec may persist beyond one sample. Keep
+                # the existing approximate proc-stat RSS fallback until smaps
+                # returns; asynchronous RSS accounting is not a guaranteed bound.
                 pss_kib = (fresh['rss'] + 1023) // 1024
                 threads = fresh['threads']
-                accounting = 'rss_fallback'
+                accounting = 'approximate_rss_fallback'
         except (OSError, ValueError, StopIteration) as error:
             raise ContainmentUnavailable(f'Cannot measure owned process {pid}: {error}') from error
         pss += pss_kib * 1024
@@ -483,6 +492,76 @@ def _monitor_usage(pid, start):
     except (OSError, ValueError, IndexError, StopIteration) as error:
         raise ContainmentUnavailable(f'Cannot measure build monitor {pid}: {error}') from error
 
+
+def _monitor_identity(pid, start):
+    """Cheap current identity/tasks; RSS is informational, never a PSS bound."""
+    try:
+        raw = Path('/proc', str(pid), 'stat').read_text()
+        fields = raw[raw.rfind(')') + 2:].split()
+        if int(fields[19]) != start or fields[0] in ('Z', 'X'):
+            raise ContainmentUnavailable(f'Build monitor {pid} exited or changed identity')
+        threads = int(fields[17])
+        if threads < 1:
+            raise ValueError('Missing monitor task count')
+        return dict(tasks=threads, rss_bytes=int(fields[21]) * os.sysconf('SC_PAGE_SIZE'))
+    except (OSError, ValueError, IndexError) as error:
+        raise ContainmentUnavailable(f'Cannot inspect build monitor {pid}: {error}') from error
+
+
+class _WatchdogAccounting:
+    """Keep fast custody checks separate from explicitly slower PSS sampling."""
+    def __init__(self, child_pid, child_start, known, supervisor_pid, supervisor_start,
+                 guardian_pid, guardian_start, preexisting):
+        self.child_pid, self.child_start = child_pid, child_start
+        self.known, self.preexisting = known, preexisting
+        self.supervisor_pid, self.supervisor_start = supervisor_pid, supervisor_start
+        self.guardian_pid, self.guardian_start = guardian_pid, guardian_start
+        self.memory = None
+        self.memory_identities = frozenset()
+        self.sample_started = self.sample_finished = None
+        self.samples = 0
+        self.trigger = None
+        self.tasks = self.rss_bytes = 0
+
+    def poll(self):
+        census = _owned_census(self.child_pid, self.child_start, self.known,
+                               self.supervisor_pid, self.preexisting)
+        table, owned = census
+        live = {pid: table[pid] for pid in owned
+                if not (table[pid]['state'] == 'Z' and table[pid]['threads'] <= 1)}
+        if any(info['threads'] < 1 for info in live.values()):
+            raise ContainmentUnavailable('Invalid owned task count')
+        identities = frozenset((pid, info['start']) for pid, info in live.items())
+        supervisor = _monitor_identity(self.supervisor_pid, self.supervisor_start)
+        guardian = _monitor_identity(self.guardian_pid, self.guardian_start)
+        self.tasks = sum(info['threads'] for info in live.values()) + supervisor['tasks'] + guardian['tasks']
+        self.rss_bytes = sum(info['rss'] for info in live.values()) + supervisor['rss_bytes'] + guardian['rss_bytes']
+        now = time.monotonic()
+        initial = self.memory is None
+        added = bool(identities - self.memory_identities)
+        due = initial or added or now - self.sample_started >= WATCHDOG_PSS_SECONDS
+        if due:
+            self.trigger = 'initial' if initial else 'new_owned_identity' if added else 'interval'
+            sample = _owned_sample(self.child_pid, self.child_start, self.known,
+                                   self.supervisor_pid, self.preexisting, _census=census)
+            supervisor_usage = _monitor_usage(self.supervisor_pid, self.supervisor_start)
+            guardian_usage = _monitor_usage(self.guardian_pid, self.guardian_start)
+            self.memory = sample, supervisor_usage, guardian_usage
+            self.sample_started, self.sample_finished = now, time.monotonic()
+            self.memory_identities = identities
+            self.samples += 1
+            # PSS collection can observe more tasks than the preceding census.
+            self.tasks = max(self.tasks, sample['tasks'] + supervisor_usage['tasks'] + guardian_usage['tasks'])
+        return self.memory
+
+    def age(self):
+        return 0.0 if self.sample_finished is None else max(0.0, time.monotonic() - self.sample_finished)
+
+    def delay(self):
+        if self.sample_started is None:
+            return 0.0
+        return min(WATCHDOG_POLL_SECONDS,
+                   max(0.0, self.sample_started + WATCHDOG_PSS_SECONDS - time.monotonic()))
 
 
 class _DiskFloorReached(ContainmentUnavailable):
@@ -821,6 +900,12 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
               'requested_max_open_files': max_open_files, 'max_open_files': effective_open_files,
               'disk_floor_bytes': disk_floor_bytes, 'disk_space': disk_roots,
               'disk_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
+              'ownership_sample_interval_seconds': WATCHDOG_POLL_SECONDS,
+              'pss_sample_interval_seconds': WATCHDOG_PSS_SECONDS,
+              'pss_sample_age_seconds': None, 'pss_samples': 0,
+              'last_pss_sample_elapsed_seconds': None, 'last_pss_sample_trigger': None,
+              'memory_sampling_policy': 'periodic PSS plus immediate new-owned-identity sample; no hard cap or unchanged detection latency',
+              'memory_swap_accounting': 'existing resident PSS arithmetic; swap exclusion unchanged',
               'disk_limit': 'sampled free-space reserve; expansion and concurrent writes are not bounded',
               'wall_seconds': wall_seconds, 'deadline_monotonic': started + wall_seconds, 'peak_pss_bytes': 0,
               'peak_rss_bytes': 0, 'peak_tasks': 0, 'termination_reason': 'starting',
@@ -960,15 +1045,15 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
         report['child_nice'] = first['nice']
         known[child.pid] = child_start
         last_report = 0.0
+        accounting = _WatchdogAccounting(child.pid, child_start, known, os.getpid(), supervisor_start,
+                                         guardian.pid, guardian_info['start'], preexisting)
         while True:
-            sample = _owned_sample(child.pid, child_start, known, os.getpid(), preexisting)
             if guardian.poll() is not None:
                 reason = 'guardian_lost'
                 report['error'] = f'Independent guardian exited {guardian.returncode}'
                 break
-            supervisor_usage = _monitor_usage(os.getpid(), supervisor_start)
             try:
-                guardian_usage = _monitor_usage(guardian.pid, guardian_info['start'])
+                sample, supervisor_usage, guardian_usage = accounting.poll()
             except ContainmentUnavailable:
                 if guardian.poll() is not None:
                     reason = 'guardian_lost'
@@ -1008,6 +1093,15 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
             report['peak_rss_bytes'] = max(report['peak_rss_bytes'], aggregate_rss)
             report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
             report['elapsed_seconds'] = elapsed
+            # Between PSS walks only task/RSS telemetry is refreshed. Approximate
+            # RSS is never substituted for the selected PSS memory-limit test.
+            aggregate_tasks = accounting.tasks
+            report['peak_tasks'] = max(report['peak_tasks'], aggregate_tasks)
+            report['peak_rss_bytes'] = max(report['peak_rss_bytes'], accounting.rss_bytes)
+            report['pss_sample_age_seconds'] = accounting.age()
+            report['pss_samples'] = accounting.samples
+            report['last_pss_sample_elapsed_seconds'] = accounting.sample_finished - started
+            report['last_pss_sample_trigger'] = accounting.trigger
             _check_watchdog_observation(report, host_observation)
             if aggregate_pss > memory_limit_bytes:
                 reason = 'sampled_pss_limit'
@@ -1028,7 +1122,7 @@ def supervise_watchdog(*, argv=None, report_path=None, wall_seconds=WATCHDOG_WAL
                 last_report = elapsed
             if reason:
                 break
-            time.sleep(WATCHDOG_POLL_SECONDS)
+            time.sleep(accounting.delay())
     except (OSError, ValueError, subprocess.SubprocessError, KeyboardInterrupt,
             ContainmentUnavailable) as error:
         reason = ('disk_free_floor' if isinstance(error, _DiskFloorReached) else

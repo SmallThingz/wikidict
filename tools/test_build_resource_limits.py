@@ -40,11 +40,16 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(limits._watchdog_cpu_set(8, set(range(12))), list(range(8)))
 
     def test_cli_ignores_host_free_ram_but_requires_containment(self):
+        read_text = Path.read_text
+        def reject_host_memory(path, *args, **kwargs):
+            if path == Path('/proc/self/mountinfo'):
+                return read_text(path, *args, **kwargs)
+            raise AssertionError(f'Unexpected read (including host memory): {path}')
         with tempfile.TemporaryDirectory() as tmp:
             with patch.object(builder, 'PROJECT', Path(tmp)), \
                  patch.object(sys, 'argv', ['build_wiktionaries.py']), \
                  patch.object(limits, 'inside_envelope', return_value=False), \
-                 patch.object(Path, 'read_text', side_effect=AssertionError('host free RAM was read')) as memory, \
+                 patch.object(Path, 'read_text', autospec=True, side_effect=reject_host_memory) as memory, \
                  patch.object(builder, 'safe_worker_budget', side_effect=AssertionError('budget was read')) as budget, \
                  patch.object(limits, 'supervise',
                               side_effect=limits.ContainmentUnavailable('A delegated cgroup is required')) as launch, \
@@ -52,7 +57,7 @@ class ResourceLimitsTest(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'delegated cgroup'):
                     builder.cli()
             main.assert_not_called()
-            memory.assert_not_called()
+            memory.assert_called_once_with(Path('/proc/self/mountinfo'))
             budget.assert_not_called()
             launch.assert_called_once_with()
 
@@ -1178,8 +1183,8 @@ class WatchdogPeakObservationTest(unittest.TestCase):
         running = {100: dict(state='S', ppid=1, session=100, threads=3,
                              start=10, vsize=8192, rss=8192)}
         cases = [('thread_smaps_rollup', (5, 3), running, 5120),
-                 ('rss_fallback', None, running, 8192),
-                 ('released_mm_rss_fallback', None,
+                 ('approximate_rss_fallback', None, running, 8192),
+                 ('released_mm_approximate_rss_fallback', None,
                   {100: dict(running[100], vsize=0, rss=0)}, 8192)]
         for expected, alternate, fresh, charged in cases:
             with self.subTest(accounting=expected), \
@@ -1197,6 +1202,158 @@ class WatchdogPeakObservationTest(unittest.TestCase):
                              (100, 10, charged, expected))
             self.assertEqual(row['tasks'], 3)
 
+
+
+
+class WatchdogPssCadenceTest(unittest.TestCase):
+    def accounting(self):
+        self.now = 0.0
+        self.pss_per_owned = 1024
+        self.table = {100: dict(state='S', ppid=90, session=100, threads=1, start=10, rss=4096, vsize=8192)}
+        self.known = {}
+        return limits._WatchdogAccounting(100, 10, self.known, 90, 9, 91, 8, frozenset({(91, 8)}))
+
+    @contextlib.contextmanager
+    def observations(self):
+        def memory(*args, **kwargs):
+            table, owned = kwargs['_census']
+            self.assertIs(table, self.table)
+            live = {pid: dict(table[pid], pss_bytes=self.pss_per_owned, measured_tasks=table[pid]['threads'], accounting='smaps_rollup')
+                    for pid in owned if table[pid]['state'] != 'Z'}
+            return dict(pss_bytes=len(live) * self.pss_per_owned, rss_bytes=sum(x['rss'] for x in live.values()),
+                        tasks=sum(x['measured_tasks'] for x in live.values()), live=live)
+        usage = dict(tasks=1, rss_bytes=2048)
+        with patch.object(limits.time, 'monotonic', side_effect=lambda: self.now), \
+             patch.object(limits, '_process_table', side_effect=lambda: self.table) as table, \
+             patch.object(limits, '_monitor_identity', return_value=usage) as identities, \
+             patch.object(limits, '_owned_sample', side_effect=memory) as samples, \
+             patch.object(limits, '_monitor_usage', return_value=dict(usage, pss_bytes=1024)) as monitors:
+            yield table, identities, samples, monitors
+
+    def test_same_identity_polls_keep_tasks_fresh_and_bound_pss_work(self):
+        accounting = self.accounting()
+        with self.observations() as (tables, identities, samples, monitors):
+            initial = accounting.poll()
+            self.assertEqual(accounting.samples, 1)
+            self.assertEqual(accounting.trigger, 'initial')
+            for now in (0.2, 0.4, 0.6, 0.8):
+                self.now = now
+                self.table[100]['threads'] += 1
+                self.assertIs(accounting.poll(), initial)
+                self.assertEqual(accounting.tasks, self.table[100]['threads'] + 2)
+                self.assertAlmostEqual(accounting.age(), now)
+            self.now = 1.0
+            self.assertIsNot(accounting.poll(), initial)
+            self.assertEqual((tables.call_count, identities.call_count), (6, 12))
+            self.assertEqual((samples.call_count, monitors.call_count), (2, 4))
+            self.assertEqual((accounting.samples, accounting.trigger), (2, 'interval'))
+            self.assertEqual(accounting.age(), 0.0)
+            self.assertLessEqual(accounting.delay(), limits.WATCHDOG_POLL_SECONDS)
+        self.assertEqual(limits.WATCHDOG_POLL_SECONDS, 0.2)
+        self.assertEqual(limits.WATCHDOG_PSS_SECONDS, 1.0)
+
+    def test_new_owned_birth_forces_pss_without_waiting_interval(self):
+        accounting = self.accounting()
+        with self.observations() as (_, _, samples, monitors):
+            accounting.poll()
+            self.now = 0.2
+            # A child in a new session remains owned by its exact parent link.
+            self.table[101] = dict(state='S', ppid=100, session=101, threads=3, start=11, rss=8192, vsize=16384)
+            accounting.poll()
+            self.assertEqual((accounting.samples, accounting.trigger), (2, 'new_owned_identity'))
+            self.assertEqual(accounting.tasks, 6)
+            self.assertEqual(self.known, {100: 10, 101: 11})
+            self.now = 0.4
+            # A foreign reused PID outside the root/session is never borrowed.
+            self.table[101] = dict(self.table[101], ppid=1, session=101, start=12)
+            accounting.poll()
+            self.assertEqual(accounting.tasks, 3)
+            self.assertEqual(samples.call_count, 2)
+            self.assertEqual(monitors.call_count, 4)
+            self.now = 0.6
+            self.table[101] = dict(self.table[101], ppid=100, start=13)
+            accounting.poll()
+            self.assertEqual(accounting.trigger, 'new_owned_identity')
+            self.assertEqual(samples.call_count, 3)
+
+    def test_reused_root_and_monitor_birth_never_borrow_cached_accounting(self):
+        accounting = self.accounting()
+        with self.observations() as (_, _, samples, _):
+            accounting.poll()
+            self.now = 0.2
+            self.table[100]['start'] = 99
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'PID was reused'):
+                accounting.poll()
+            self.assertEqual(samples.call_count, 1)
+        fields = ['0'] * 22
+        fields[0], fields[17], fields[19], fields[21] = 'S', '1', '99', '1'
+        with patch.object(Path, 'read_text', return_value='90 (monitor) ' + ' '.join(fields)):
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'changed identity'):
+                limits._monitor_identity(90, 9)
+        accounting = self.accounting()
+        with self.observations() as (_, identities, samples, _):
+            accounting.poll()
+            self.now = 0.2
+            identities.side_effect = limits.ContainmentUnavailable('guardian changed identity')
+            with self.assertRaisesRegex(limits.ContainmentUnavailable, 'guardian changed identity'):
+                accounting.poll()
+            self.assertEqual(samples.call_count, 1)
+
+    def test_pss_guard_keeps_numeric_cap_and_reports_age_without_rss_substitution(self):
+        import ast
+        import inspect
+        function = ast.parse(inspect.getsource(limits.supervise_watchdog)).body[0]
+        selected = [node for node in ast.walk(function) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == 'aggregate_pss > memory_limit_bytes']
+        self.assertEqual(len(selected), 1)
+        guard = compile(ast.Module(body=selected, type_ignores=[]), '<actual-memory-task-wall-guard>', 'exec')
+        for pss, tasks, elapsed, expected in ((64, 4, 0, None), (65, 4, 0, 'sampled_pss_limit'),
+                                             (64, 5, 0, 'task_limit'), (64, 4, 10, 'wall_limit')):
+            ns = dict(aggregate_pss=pss, memory_limit_bytes=64, aggregate_tasks=tasks,
+                      max_tasks=4, elapsed=elapsed, wall_seconds=10, reason=None,
+                      approximate_rss=10**20)
+            exec(guard, ns)
+            self.assertEqual(ns['reason'], expected)
+        accounting = self.accounting()
+        with self.observations():
+            memory = accounting.poll()
+            self.now = 0.8
+            self.pss_per_owned = 8192
+            self.table[100]['rss'] = 10**20
+            self.table[100]['threads'] = 9
+            self.assertIs(accounting.poll(), memory)
+            self.assertEqual(accounting.tasks, 11)
+            self.assertEqual(memory[0]['pss_bytes'], 1024)
+            self.assertAlmostEqual(accounting.age(), 0.8)
+            self.assertGreater(accounting.rss_bytes, 10**19)
+            ns = dict(aggregate_pss=sum(value['pss_bytes'] for value in memory), memory_limit_bytes=4096,
+                      aggregate_tasks=accounting.tasks, max_tasks=100, elapsed=0.8, wall_seconds=10, reason=None)
+            exec(guard, ns)
+            self.assertIsNone(ns['reason'])  # The policy explicitly permits this sample age.
+            self.now = 1.0
+            memory = accounting.poll()
+            ns.update(aggregate_pss=sum(value['pss_bytes'] for value in memory), elapsed=1.0)
+            exec(guard, ns)
+            self.assertEqual(ns['reason'], 'sampled_pss_limit')
+            self.assertEqual(accounting.age(), 0.0)
+
+    def test_exit_and_cleanup_still_force_fresh_owned_accounting(self):
+        import ast
+        import inspect
+        from types import SimpleNamespace
+        function = ast.parse(inspect.getsource(limits.supervise_watchdog)).body[0]
+        selected = [node for node in ast.walk(function) if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == 'status is not None']
+        self.assertEqual(len(selected), 1)
+        code = compile(ast.Module(body=selected, type_ignores=[]), '<actual-child-exit-accounting>', 'exec')
+        for live, expected in (({}, 'child_exit'), ({101: dict(start=11)}, 'controller_exited_with_descendants')):
+            with patch.object(limits, '_owned_sample', return_value=dict(live=live)) as sample:
+                ns = dict(status=0, child=SimpleNamespace(pid=100), child_start=10, known={100: 10},
+                          os=limits.os, preexisting=frozenset(), reason=None, _owned_sample=limits._owned_sample)
+                exec(code, ns)
+                self.assertEqual(ns['reason'], expected)
+                self.assertEqual(sample.call_count, 1)
+                self.assertNotIn('_census', sample.call_args.kwargs)
 
 if __name__ == '__main__':
     unittest.main()
