@@ -62,7 +62,8 @@ internal fun validContainerAbsoluteStaticBody(value: Container): Boolean {
         block.spans.size > (1 shl 20) || block.feature != null || block.table != null ||
         block.listPath.isNotEmpty() || block.number.isNotEmpty() || block.anchor.isNotEmpty() ||
         block.anchorFallback.isNotEmpty() || block.style != null || block.figure != null || block.flow != null ||
-        block.container != null || block.ruleStyle != null || block.textAlign != null) return false
+        block.container != null || block.ruleStyle != null) return false
+    if (block.textAlign != null && block.textAlign != value.style.textAlign) return false
     var realText = false
     for (span in block.spans) {
         if (span.kind !in setOf("text", "link", "external_link") || span.image != null || span.ruby != null ||

@@ -1152,4 +1152,176 @@ class ContainerRelativeAutoDeviceTest {
             }
         }
     }
+
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 31)
+    @Test fun duplicateStaticParagraphAlignmentPreservesTheChildsWrappedNativeLinesAndOriginalAction() {
+        val source = Span("link", "Kept alpha beta gamma delta epsilon theta kappa lambda sigma omega K",
+            target = "static-alignment", targetFragment = "original", fontScale = 18f,
+            fontScaleBasis = FontScaleBasis.CssPx, fontFamily = ContainerFontFamily.SansSerif)
+        data class Case(val alignment: CellTextAlign, val duplicate: Boolean)
+        val cases = listOf(Case(CellTextAlign.Center, false), Case(CellTextAlign.Center, true),
+            Case(CellTextAlign.Right, false), Case(CellTextAlign.Right, true))
+        fun font(size: Float, bold: Boolean = false) = InlineFontSnapshot(fontScale = size,
+            fontScaleBasis = FontScaleBasis.CssPx, fontNormalized = true, bold = bold,
+            fontFamily = ContainerFontFamily.SansSerif)
+        val paragraphs = cases.map { Block("paragraph", 0, listOf(source),
+            textAlign = if (it.duplicate) it.alignment else null) }
+        val entries = cases.mapIndexed { index, value ->
+            val child = group(listOf(paragraphs[index]), ContainerStyle(width = ContainerWidth.FitContent,
+                ownerFont = font(18f), lineHeight = ContainerLineHeight.Length(px(20f)),
+                textAlign = value.alignment, textWrap = TextWrap.Normal,
+                absoluteStatic = ContainerAbsoluteStaticPosition(ContainerStaticDirection.Ltr)))
+            val parent = group(listOf(child), ContainerStyle(positioning = ContainerPositioning.RelativeAuto,
+                ownerFont = font(24f, bold = true), lineHeight = ContainerLineHeight.Length(px(60f)),
+                textAlign = CellTextAlign.Left, textWrap = TextWrap.Normal))
+            Entry("Static alignment", emptyList(), "supplemental", null, "",
+                listOf(Section(2, "", listOf(parent))), emptyList())
+        }
+        val phase = mutableStateOf(0)
+        val reading = EntryReadingState()
+        val followed = mutableListOf<EntryLink>()
+        val failures = mutableListOf<String>()
+        var activity: android.app.Activity? = null
+        var primary: Throwable? = null
+        data class Snapshot(val width: Int, val rows: List<Int>, val characters: List<android.graphics.RectF>,
+            val carets: List<android.graphics.RectF>, val action: List<android.graphics.RectF>, val normalHeight: Float)
+        val snapshots = mutableListOf<Snapshot>()
+        fun owner(): NativeFloatTextView {
+            val result = mutableListOf<NativeFloatTextView>()
+            fun visit(view: View) {
+                if (view is NativeFloatTextView && view.isShown && view.logicalText.toString() == source.text) result += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activity).window.decorView)
+            return result.single()
+        }
+        fun point(rect: android.graphics.RectF, geometry: NativeSurfaceGeometry) = android.graphics.RectF(rect).apply {
+            offset(geometry.surface.left.toFloat(), geometry.surface.top.toFloat())
+        }
+        try {
+            compose.activityRule.scenario.onActivity { host ->
+                activity = host
+                host.setContent {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalCssPixelTextZoom provides 1f,
+                        androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Rtl,
+                        LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                        DictTheme("light") {
+                            MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = androidx.compose.ui.text.TextStyle(
+                                fontSize = 20.sp, lineHeight = 24.sp, letterSpacing = 0.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Normal,
+                                textDirection = androidx.compose.ui.text.style.TextDirection.Ltr))) {
+                                Box(Modifier.width(280.dp).height(300.dp).background(Color.White)) {
+                                    EntryView(entries[phase.value], false, {}, onLink = { followed += it },
+                                        readingState = reading, settings = AppSettings(allowImages = false, allowAudio = false,
+                                            collapseOtherSections = false, collapseDetails = false))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (index in cases.indices) {
+                compose.runOnIdle { phase.value = index; failures.clear() }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertTrue(failures.toString(), failures.isEmpty())
+                    val view = owner()
+                    val geometry = checkNotNull(view.currentMeasuredGeometry) as NativeSurfaceGeometry
+                    val content = geometry.content
+                    assertEquals(source.text, geometry.text.toString())
+                    assertEquals(0f, content.extents.usedHeight, .001f)
+                    assertNull(content.textBaselines?.first); assertNull(content.textBaselines?.last)
+                    val action = geometry.nodes.single { it.kind == FloatInteractionKind.LINK }
+                    assertEquals(0, action.start); assertEquals(source.text.length, action.end)
+                    assertEquals(source.text, action.label?.toString())
+                    val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        textSize = 18f
+                        typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+                    }
+                    // The actual containing interval is an input, never a synthesized source width.
+                    val containing = content.width.toFloat()
+                    assertTrue(containing > 0f)
+                    assertTrue(paint.measureText(source.text) > containing)
+                    assertTrue(source.text.split(' ').maxOf(paint::measureText) < containing)
+                    val measured = android.graphics.text.MeasuredText.Builder(source.text.toCharArray())
+                        .appendStyleRun(paint, source.text.length, false).build()
+                    val constraints = android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(containing) }
+                    val breaker = android.graphics.text.LineBreaker.Builder()
+                        .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                        .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+                    val selected = breaker.computeLineBreaks(measured, constraints, 0)
+                    val ends = List(selected.lineCount) { selected.getLineBreakOffset(it) }
+                    assertTrue("The real source must wrap and leave a short last row", ends.size > 1)
+                    val characters = geometry.characterRects(0, source.text.length).map {
+                        point(checkNotNull(it), geometry)
+                    }
+                    val carets = (0..source.text.length).map { point(checkNotNull(geometry.caretRect(it)), geometry) }
+                    var start = 0
+                    ends.forEachIndexed { line, end ->
+                        var visibleEnd = end
+                        if (line != ends.lastIndex) while (visibleEnd > start && source.text[visibleEnd - 1] == ' ') visibleEnd--
+                        assertTrue(visibleEnd > start)
+                        val advance = paint.measureText(source.text, start, visibleEnd)
+                        val shift = when (cases[index].alignment) {
+                            CellTextAlign.Center -> (containing - advance) / 2f
+                            CellTextAlign.Right -> containing - advance
+                            CellTextAlign.Left -> error("This control compares Center and Right against a Left parent")
+                        }
+                        assertEquals("Child line alignment must not replace the parent's static anchor", shift, carets[start].left, .02f)
+                        assertEquals(shift, characters[start].left, .02f)
+                        assertEquals(shift + advance, characters[visibleEnd - 1].right, .02f)
+                        assertEquals(0f, carets[start].left - shift, .02f)
+                        for (offset in start until end) assertEquals(listOf(start to end), geometry.visualLineRanges(offset))
+                        if (line == ends.lastIndex) {
+                            assertTrue("A short final line discriminates actual Center/Right alignment", containing - advance > 12f)
+                            assertTrue(shift > 0f)
+                        }
+                        start = end
+                    }
+                    assertEquals(source.text.length, start)
+                    val parent = entries[index].sections.single().blocks.single().container!!
+                    val child = parent.blocks.single().container!!
+                    assertEquals(CellTextAlign.Left, parent.style.textAlign)
+                    assertEquals(cases[index].alignment, child.style.textAlign)
+                    assertSame(paragraphs[index], child.blocks.single())
+                    assertSame(source, child.blocks.single().spans.single())
+                    assertEquals(if (cases[index].duplicate) cases[index].alignment else null, child.blocks.single().textAlign)
+                    view.setSelection(0, source.text.length)
+                    assertEquals(source.text, view.selectedTextForCopy())
+                    view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE))
+                    val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(action.id))
+                    try {
+                        assertEquals(source.text, info.text?.toString())
+                        assertTrue(info.isClickable); assertTrue(info.isVisibleToUser)
+                    } finally { info.recycle() }
+                    if (cases[index].duplicate) {
+                        assertTrue(view.accessibilityNodeProvider.performAction(action.id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                        assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                        view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                    } else assertTrue(view.accessibilityNodeProvider.performAction(action.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(List(index + 1) { EntryLink("static-alignment", "original") }, followed)
+                    snapshots += Snapshot(content.width, ends, characters, carets,
+                        action.bounds.map { point(it, geometry) }, content.extents.usedHeight)
+                }
+            }
+            compose.runOnIdle {
+                assertEquals(snapshots[0], snapshots[1]); assertEquals(snapshots[2], snapshots[3])
+                assertEquals(snapshots[0].width, snapshots[2].width)
+                assertEquals(snapshots[0].rows, snapshots[2].rows)
+                assertEquals(snapshots[0].carets.map { it.top }, snapshots[2].carets.map { it.top })
+                val lastStart = snapshots[0].rows[snapshots[0].rows.lastIndex - 1]
+                assertTrue(snapshots[2].carets[lastStart].left > snapshots[0].carets[lastStart].left)
+            }
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
 }

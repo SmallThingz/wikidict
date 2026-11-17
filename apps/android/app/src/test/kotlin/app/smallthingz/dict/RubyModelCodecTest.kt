@@ -322,7 +322,7 @@ class RubyModelCodecTest {
                     is ContainerLineHeight.Length -> { byte(2); positionedLength(height.value, "$label.lineHeight.length") }
                 }
             }
-            value.textAlign?.let { byte(it.ordinal) }
+            value.textAlign?.let { mark("$label.textAlign"); byte(it.ordinal) }
             value.overflow?.let { byte(it.ordinal) }
             value.ownerFontScale?.let(::f32)
             value.height?.let { positionedLength(it, "$label.height") }
@@ -366,9 +366,10 @@ class RubyModelCodecTest {
                     prefix(12); positionedTable(table, "$label.table"); tail()
                 }
                 else -> {
-                    require(value == Block("paragraph", 0, value.spans))
+                    require(value == Block("paragraph", 0, value.spans, textAlign = value.textAlign))
                     byte(0); byte(0); byte(0); spans(value.spans, "$label.spans")
-                    byte(0); string(""); string(""); byte(0); tail()
+                    byte(0); string(""); string(""); byte(0)
+                    tail(alignment = value.textAlign, alignmentLabel = "$label.alignment")
                 }
             }
         }
@@ -532,9 +533,11 @@ class RubyModelCodecTest {
             if (body) root("root") else spans(emptyList(), "prefix-${out.size()}")
             byte(0); string(""); string("")
         }
-        private fun tail(heading: Boolean = false) {
+        private fun tail(heading: Boolean = false, alignment: CellTextAlign? = null, alignmentLabel: String? = null) {
             string(if (heading) "ruby-heading" else ""); string(if (heading) "old-ruby-heading" else "")
-            repeat(4) { byte(0) } // alignment, paragraph style, Figure, anonymous flow
+            alignmentLabel?.let { mark("$it.presence") }; byte(if (alignment == null) 0 else 1)
+            alignment?.let { alignmentLabel?.let { name -> mark("$name.value") }; byte(it.ordinal) }
+            repeat(3) { byte(0) } // paragraph style, Figure, anonymous flow
         }
         private fun paragraph(body: Boolean = true, literal: List<Span> = emptyList()) {
             if (body && paragraphOverride != null) { checkNotNull(paragraphOverride).invoke(); return }
@@ -3468,6 +3471,56 @@ class RubyModelCodecTest {
         assertEquals(TableGrid(emptyList(), rows, 0), tableGrid(exact))
         assertEquals(listOf(source), exact.caption); assertEquals(style, exact.style)
         reject("Minimum shares exact item M plus one refusal", literal(rows + 1))
+    }
+
+    @Test fun staticParagraphAlignmentRepeatsOnlyItsOwnChildContainerThroughModelAndWire() {
+        val source = Span("link", "Kept", "Target", targetFragment = "French", tooltip = "tip", explanation = "meaning")
+        fun box(blocks: List<Block>, style: ContainerStyle) = Block("container", 0, emptyList(), container = Container(blocks, style))
+        fun entry(root: Block) = Entry("Static", emptyList(), "language", "French", "fr", listOf(Section(2, "Body", listOf(root))), emptyList())
+        for (alignment in listOf(CellTextAlign.Center, CellTextAlign.Right)) {
+            val other = if (alignment == CellTextAlign.Center) CellTextAlign.Right else CellTextAlign.Center
+            val paragraph = Block("paragraph", 0, listOf(source), textAlign = alignment)
+            val childStyle = ContainerStyle(width = ContainerWidth.FitContent, textAlign = alignment,
+                absoluteStatic = ContainerAbsoluteStaticPosition())
+            val child = box(listOf(paragraph), childStyle)
+            val parentStyle = ContainerStyle(positioning = ContainerPositioning.RelativeAuto, textAlign = other)
+            val root = box(listOf(child), parentStyle)
+            assertTrue(validContainerAbsoluteStaticBody(checkNotNull(child.container)))
+            assertTrue(validSoleStaticInlineContainer(checkNotNull(root.container)))
+            assertSame(source, child.container!!.blocks.single().spans.single())
+            assertSame(root, entry(root).sections.single().blocks.single())
+            val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(root, "aligned") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            val decoded = read(bytes).sections.single().blocks.single()
+            assertEquals(root, decoded)
+            val actualChild = decoded.container!!.blocks.single().container!!
+            assertEquals(alignment, actualChild.style.textAlign)
+            assertEquals(alignment, actualChild.blocks.single().textAlign)
+            assertEquals(listOf(source), actualChild.blocks.single().spans)
+            invalid("Child alignment cannot disagree with paragraph") { Container(listOf(paragraph), childStyle.copy(textAlign = other)) }
+            invalid("Child alignment cannot be supplied by parent") { Container(listOf(paragraph), childStyle.copy(textAlign = null)) }
+            invalid("Alignment does not relax paragraph depth") { Container(listOf(paragraph.copy(depth = 1)), childStyle) }
+            invalid("Matching paragraph does not relax immediate custody") { entry(child) }
+            val nullParagraph = paragraph.copy(textAlign = null)
+            for (ownAlignment in listOf(alignment, null)) {
+                val inheritedChild = box(listOf(nullParagraph), childStyle.copy(textAlign = ownAlignment))
+                val inheritedRoot = box(listOf(inheritedChild), parentStyle)
+                val inheritedWire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(inheritedRoot) } }
+                assertEquals(inheritedRoot, read(inheritedWire.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+            }
+            reject("Literal paragraph mismatch", changed(bytes, wire.at.getValue("aligned.child0.child0.alignment.value"), other.ordinal))
+            reject("Literal child mismatch", changed(bytes, wire.at.getValue("aligned.child0.style.textAlign"), other.ordinal))
+            // Parent repeats the paragraph value, but deleting the child's own proof still must fail.
+            val provedParent = root.copy(container = root.container!!.copy(style = parentStyle.copy(textAlign = alignment)))
+            val parentWire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(provedParent, "parentProof") } }
+            val parentBytes = parentWire.document(emptyList(), Sink.Body)
+            val childKey = "parentProof.child0.style"
+            val flags = 4L or 8192L // FitContent plus child text alignment; static remains in its separate extension.
+            val withoutFlag = changed32(parentBytes, parentWire.at.getValue("$childKey.flags"), flags and 8192L.inv())
+            val offset = parentWire.at.getValue("$childKey.textAlign")
+            reject("Literal parent cannot lend child alignment", replace(withoutFlag, offset, offset + 1, byteArrayOf()))
+            assertEquals(provedParent, read(parentBytes).sections.single().blocks.single())
+        }
     }
 
 }
