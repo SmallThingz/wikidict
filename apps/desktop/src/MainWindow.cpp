@@ -86,6 +86,8 @@
 #include "CompiledInlineAction.hpp"
 #include "CompiledInlineBox.hpp"
 #include <QMimeData>
+#include <QBuffer>
+#include <QTextDocumentWriter>
 #include <QClipboard>
 #include <QPlainTextEdit>
 #include <QTextFragment>
@@ -868,13 +870,83 @@ public:
         return ranges;
     }
     QMimeData *createMimeDataFromSelection() const override {
-        if (!rubyProjection) return QTextBrowser::createMimeDataFromSelection();
-        auto *data = new QMimeData;
-        QStringList text;
-        for (const auto &range : semanticSelectionRanges()) text.append(semanticText(range.first, range.second));
-        data->setText(text.join(QChar('\n')));
-        // HTML from document storage cannot encode the raw logical gap selection.
-        return data;
+        // Work only on a detached export. The displayed document, source ranges,
+        // bidi shaping and accessibility offsets remain exactly as composed.
+        auto data = std::make_unique<QMimeData>();
+        const QPointer<QTextDocument> source(document());
+        const int revision = source->revision();
+        const auto map = rubyProjection;
+        const auto current = [&] {
+            return source && document() == source && source->revision() == revision
+                && rubyProjection == map && rubyProjectionCurrent();
+        };
+        try {
+            if (!current()) return data.release();
+            const auto generated = SemanticHtml::generatedIsolatePositions(source);
+            if (map) {
+                // Existing Ruby copy deliberately exports plain logical text only.
+                // Raw gaps can have no one-to-one document interval; do not infer
+                // ownership from a nearby control or invent rich HTML for them.
+                // Valid collapsed gaps store only empty text or U+0020. A tagged
+                // isolate must therefore map bijectively; refuse any violation.
+                QSet<int> omitted;
+                for (int position : generated) {
+                    const int first = map->toLogical(position, RubyMap::Bias::After);
+                    const int last = map->toLogical(position + 1, RubyMap::Bias::Before);
+                    if (first < 0 || last != first + 1
+                        || map->toDocument(first, RubyMap::Bias::After) != position
+                        || map->toDocument(last, RubyMap::Bias::Before) != position + 1)
+                        throw std::runtime_error("generated isolate has no exact logical source mapping");
+                    if (map->text(first, last) != QString(source->characterAt(position)))
+                        throw std::runtime_error("generated isolate lost its logical source");
+                    omitted.insert(first);
+                }
+                QStringList text;
+                for (const auto &range : semanticSelectionRanges()) {
+                    const auto selected = semanticText(range.first, range.second);
+                    QString clean;
+                    for (int i = 0; i < selected.size(); ++i)
+                        if (!omitted.contains(range.first + i)) clean += selected.at(i);
+                    text.append(clean);
+                }
+                if (!current()) return data.release();
+                data->setText(text.join(QChar('\n')));
+                return data.release();
+            }
+            if (generated.isEmpty()) return QTextBrowser::createMimeDataFromSelection();
+            // Qt constructs the selected table/cell fragment in native order,
+            // including spanning cells. Never reconstruct it from plain text.
+            const QTextDocumentFragment selected(textCursor());
+            QTextDocument exported;
+            exported.setLayoutEnabled(false);
+            exported.setDefaultFont(source->defaultFont());
+            QTextCursor insert(&exported); insert.insertFragment(selected);
+            const auto removed = SemanticHtml::generatedIsolatePositions(&exported);
+            for (auto it = removed.crbegin(); it != removed.crend(); ++it) {
+                QTextCursor erase(&exported); erase.setPosition(*it);
+                erase.setPosition(*it + 1, QTextCursor::KeepAnchor); erase.removeSelectedText();
+            }
+            const QTextDocumentFragment clean(&exported);
+            data->setText(clean.toPlainText());
+#ifndef QT_NO_TEXTHTMLPARSER
+            data->setHtml(clean.toHtml());
+#endif
+#if QT_CONFIG(textmarkdownwriter)
+            data->setData("text/markdown", clean.toMarkdown().toUtf8());
+#endif
+#ifndef QT_NO_TEXTODFWRITER
+            QBuffer buffer;
+            QTextDocumentWriter writer(&buffer, "ODF");
+            if (!writer.write(clean)) throw std::runtime_error("cannot export selected document");
+            buffer.close(); data->setData("application/vnd.oasis.opendocument.text", buffer.data());
+#endif
+            if (!current()) return new QMimeData;
+            return data.release();
+        } catch (...) {
+            // Copy is a Qt virtual/event path. Invalid ownership cannot escape
+            // as an exception or fall back to exporting contaminated source.
+            return new QMimeData;
+        }
     }
     QList<std::pair<int, int>> selectedDocumentRanges() const {
         const auto cursor = textCursor();
@@ -5716,7 +5788,9 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (direction == QStringLiteral("auto")) isolate = 0x2068; // FSI
             else if (direction == QStringLiteral("rtl")) isolate = 0x2067; // RLI
             else if (direction == QStringLiteral("ltr")) isolate = 0x2066; // LRI
-            if (isolate && !emptyInline) text = QString(QChar(isolate)) + text + QChar(0x2069); // PDI
+            if (isolate && !emptyInline)
+                text = SemanticHtml::generatedIsolateHtml(isolate) + text
+                    + SemanticHtml::generatedIsolateHtml(0x2069); // PDI
             if (!classes.isEmpty() || !language.isEmpty() || !direction.isEmpty()) {
                 QString attrs;
                 if (!classes.isEmpty()) attrs += QStringLiteral(" class=\"%1\"").arg(classes.toHtmlEscaped());

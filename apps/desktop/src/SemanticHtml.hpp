@@ -60,6 +60,35 @@ inline const QString markerOpen = QStringLiteral("<span data-wikidict-font-scale
 inline const QString scalePrefix = QStringLiteral("wikidict-font-scale:scaled:");
 inline const QString escapedPrefix = QStringLiteral("wikidict-font-scale:escaped:");
 inline const QString reservedPrefix = QStringLiteral("wikidict-font-scale:");
+// Only the renderer may attach this scalar provenance. Authored identical
+// Unicode controls remain ordinary text and must never be filtered by value.
+inline constexpr int generatedIsolateProperty = QTextFormat::UserProperty + 0x5860;
+inline bool isGeneratedIsolateScalar(int scalar) { return scalar >= 0x2066 && scalar <= 0x2069; }
+inline QString generatedIsolateHtml(ushort scalar) {
+    if (!isGeneratedIsolateScalar(scalar)) throw std::runtime_error("invalid generated isolate");
+    const QJsonObject metadata{{"scale", 1}, {"tooltip", ""}, {"metadata_only", true}, {"generated_isolate", int(scalar)}};
+    const auto encoded = QJsonDocument(metadata).toJson(QJsonDocument::Compact)
+        .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+    return markerOpen + QString::fromLatin1(encoded) + QStringLiteral("\">")
+        + QChar(scalar) + QStringLiteral("</span>");
+}
+inline QList<int> generatedIsolatePositions(const QTextDocument *document) {
+    QList<int> positions;
+    for (auto block = document->begin(); block.isValid(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().hasProperty(generatedIsolateProperty)) continue;
+            const auto tag = fragment.charFormat().property(generatedIsolateProperty);
+            if (tag.metaType().id() != QMetaType::Int || !isGeneratedIsolateScalar(tag.toInt()))
+                throw std::runtime_error("invalid generated isolate provenance");
+            for (int i = 0; i < fragment.length(); ++i) {
+                if (document->characterAt(fragment.position() + i).unicode() != tag.toInt())
+                    throw std::runtime_error("generated isolate provenance no longer matches source");
+                positions.append(fragment.position() + i);
+            }
+        }
+    return positions;
+}
 inline constexpr int sourceRunProperty = QTextFormat::UserProperty + 0x57c0;
 inline constexpr int sourceBoundaryProperty = QTextFormat::UserProperty + 0x57c2;
 inline const QString paragraphRunOpen = QStringLiteral("<p data-wikidict-source-run=\"");
@@ -3031,6 +3060,7 @@ struct ScaleInfo {
     QJsonObject inlineSpan;
     QJsonObject compiledRuby;
     QJsonObject compiledAction;
+    int generatedIsolate = 0;
     qreal inlineBodyPoints = 0;
     qreal inlineContextPoints = 0;
     QString inlineOwnerHtml;
@@ -3073,6 +3103,7 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
         const bool hasInline = present(value.value("inline_span"));
         const bool hasRuby = value.contains("compiled_ruby");
         const bool hasAction = value.contains("compiled_action");
+        const bool hasGeneratedIsolate = value.contains("generated_isolate");
         const auto fontFamily = CompiledContent::containerFontFamily(value.value("font_family"));
         const bool hasFamily = present(fontFamily);
         const auto fontFeatures = fontFeaturePolicy(value.value("font_features"));
@@ -3084,12 +3115,20 @@ inline QString prepare(const QString &html, QHash<QString, ScaleInfo> &markers) 
             || (present(advisory) && !advisory.isString())
             || (hasSourceRun && (!sourceRun.isDouble() || !std::isfinite(run)
                 || run < 0 || run > std::numeric_limits<int>::max() || std::floor(run) != run))
-            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
+            || (metadataOnly && (scale != 1 || absolute || (!present(advisory) && !hasSourceRun && !hasLinkPaint && !hasInline && !hasRuby && !hasAction && !hasGeneratedIsolate && !hasFamily && fontFeatures == FontFeaturePolicy::Legacy)
                 || value.contains(QStringLiteral("context_points")) || value.contains(QStringLiteral("legacy_flags"))))
             || (!basisValue.isUndefined() && (!basisValue.isString()
                 || (basisValue.toString() != QStringLiteral("context") && !absolute))))
             throw std::runtime_error("invalid renderer font-scale metadata");
         ScaleInfo info{scale, value.value(QStringLiteral("tooltip")).toString()};
+        if (hasGeneratedIsolate) {
+            const auto scalar = value.value("generated_isolate");
+            if (!metadataOnly || value.size() != 4 || !scalar.isDouble()
+                || scalar.toDouble() != scalar.toInt() || !isGeneratedIsolateScalar(scalar.toInt())
+                || !info.tooltip.isEmpty())
+                throw std::runtime_error("invalid generated isolate metadata");
+            info.generatedIsolate = scalar.toInt();
+        }
         if (hasAction) {
             if (!metadataOnly || !value.value("compiled_action").isObject()
                 || value.value("compiled_action").toObject().isEmpty() || hasInline || hasLinkPaint || hasRuby)
@@ -3390,6 +3429,12 @@ inline void normalize(QTextDocument *document, const QHash<QString, ScaleInfo> &
                     format.setUnderlineStyle(!format.isImageFormat() && !zeroLink
                         && ((!marker->ordinaryLink && marker->linkUnderline) || marker->linkPaint.value("normal").toObject().value("underline").toBool())
                         ? QTextCharFormat::SingleUnderline : QTextCharFormat::NoUnderline);
+                }
+                if (marker->generatedIsolate) {
+                    for (const QChar character : fragment.text())
+                        if (character.unicode() != marker->generatedIsolate)
+                            throw std::runtime_error("generated isolate changed during HTML import");
+                    format.setProperty(generatedIsolateProperty, marker->generatedIsolate);
                 }
                 if (marker->sourceRun >= 0) format.setProperty(sourceRunProperty, marker->sourceRun);
                 if (!marker->compiledRuby.isEmpty()) {

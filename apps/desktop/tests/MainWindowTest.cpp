@@ -2784,6 +2784,160 @@ private slots:
             [&](const QJsonArray &blocks) { return composeReadingBlocks(window, blocks); });
     }
 
+    void generatedDirectionCopyPreservesAuthoredControlsAndRichSelection()
+    {
+        MainWindow window{QString()}; window.resize(900, 650); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        auto *browser = window.reading_; auto *document = browser->document();
+        const auto leaf = [](const QString &text, const QString &direction) {
+            return QJsonObject{{"kind", "link"}, {"text", text}, {"trail", "!"},
+                {"target", "Target"}, {"direction", direction}, {"bold", true},
+                {"foreground", "#315a78"}};
+        };
+        // Identical authored isolates occur inside the source text, including
+        // both matching and nonmatching pairs. They must survive every export.
+        const QString authored = QStringLiteral("A") + QChar(0x2066) + QStringLiteral("L") + QChar(0x2069)
+            + QChar(0x2067) + QStringLiteral("R") + QChar(0x2069)
+            + QChar(0x2068) + QStringLiteral("F") + QChar(0x2069) + QStringLiteral("Z");
+        const QString expected = authored + QChar('!');
+        const QStringList directions{"ltr", "rtl", "auto"};
+        for (int variant = 0; variant < directions.size(); ++variant) {
+            SemanticHtml::setHtml(document, window.spansHtml(QJsonArray{leaf(authored, directions[variant])}));
+            const QString raw = document->toRawText();
+            const int revision = document->revision();
+            const QChar opening(ushort(0x2066 + variant));
+            QCOMPARE(raw, QString(opening) + expected + QChar(0x2069));
+            const auto originalTail = document->find(QStringLiteral("Z"));
+            QVERIFY(!originalTail.isNull());
+            const QBrush originalForeground = originalTail.charFormat().foreground();
+            QCOMPARE(originalForeground.color(), QColor("#315a78"));
+            QCOMPARE(originalTail.charFormat().anchorHref(), QStringLiteral("dict:Target"));
+            QVERIFY(originalTail.charFormat().fontWeight() >= QFont::Bold);
+            const auto owned = SemanticHtml::generatedIsolatePositions(document);
+            QCOMPARE(owned, QList<int>({0, int(raw.size()) - 1}));
+            const auto copy = [&](int first, int last) {
+                QTextCursor cursor(document); cursor.setPosition(first);
+                cursor.setPosition(last, QTextCursor::KeepAnchor); browser->setTextCursor(cursor);
+                browser->copy();
+            };
+            copy(0, raw.size());
+            const auto *mime = QApplication::clipboard()->mimeData();
+            QVERIFY(mime->hasHtml()); QCOMPARE(mime->text(), expected);
+            QTextDocument pasted; pasted.setHtml(mime->html());
+            QCOMPARE(pasted.toPlainText(), expected);
+            bool retainedLink = false;
+            for (auto block = pasted.begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (!fragment.isValid() || !fragment.text().contains('Z')) continue;
+                    QCOMPARE(fragment.charFormat().anchorHref(), QStringLiteral("dict:Target"));
+                    QVERIFY(fragment.charFormat().fontWeight() >= QFont::Bold);
+                    QCOMPARE(fragment.charFormat().foreground(), originalForeground);
+                    QCOMPARE(fragment.charFormat().foreground().color(), QColor("#315a78"));
+                    retainedLink = true;
+                }
+            QVERIFY(retainedLink);
+            // Each cut retains the exact selected authored units; do not strip
+            // the first/last control heuristically or require a selected pair.
+            copy(0, 4); QCOMPARE(QApplication::clipboard()->text(), expected.left(3));
+            copy(2, raw.size()); QCOMPARE(QApplication::clipboard()->text(), expected.mid(1));
+            copy(2, 5); QCOMPARE(QApplication::clipboard()->text(), expected.mid(1, 3));
+            copy(0, 1); QCOMPARE(QApplication::clipboard()->text(), QString());
+            copy(raw.size() - 1, raw.size()); QCOMPARE(QApplication::clipboard()->text(), QString());
+            QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+            QCOMPARE(SemanticHtml::generatedIsolatePositions(document), owned);
+            // A stale generated-only format is never interpreted as permission
+            // to remove arbitrary replacement source or export it unfiltered.
+            QTextCursor replacement(document); replacement.setPosition(0);
+            replacement.setPosition(1, QTextCursor::KeepAnchor);
+            const auto provenance = replacement.charFormat();
+            replacement.insertText("X", provenance);
+            copy(0, document->characterCount() - 1);
+            QVERIFY(QApplication::clipboard()->mimeData()->formats().isEmpty());
+            SemanticHtml::setHtml(document, window.spansHtml(QJsonArray{leaf(authored, directions[variant])}));
+            copy(0, document->characterCount() - 1);
+            QCOMPARE(QApplication::clipboard()->text(), expected);
+        }
+        // No direction means no generated property, even with authored controls.
+        SemanticHtml::setHtml(document, window.spansHtml(QJsonArray{leaf(authored, {})}));
+        QVERIFY(SemanticHtml::generatedIsolatePositions(document).isEmpty());
+        QTextCursor all(document); all.select(QTextCursor::Document); browser->setTextCursor(all); browser->copy();
+        QCOMPARE(QApplication::clipboard()->text(), expected);
+    }
+
+    void generatedDirectionCopyKeepsComplexCellsAndRubyLogicalText()
+    {
+        MainWindow window{QString()}; window.resize(900, 650); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        auto *browser = window.reading_; auto *document = browser->document();
+        const auto leaf = [](QString text, QString direction = {}) {
+            return QJsonObject{{"kind", "text"}, {"text", text}, {"trail", ""}, {"direction", direction}};
+        };
+        const QString authored = QStringLiteral("x") + QChar(0x2067) + QStringLiteral("y") + QChar(0x2069);
+        const auto tableHtml = [&](bool generated) {
+            return QStringLiteral("<table border='1'><tr><td>")
+                + window.spansHtml(QJsonArray{leaf(authored, generated ? "ltr" : "")})
+                + QStringLiteral("</td><td>") + window.spansHtml(QJsonArray{leaf("second", generated ? "rtl" : "")})
+                + QStringLiteral("</td></tr></table>");
+        };
+        SemanticHtml::setHtml(document, tableHtml(true));
+        QTextDocument reference; SemanticHtml::setHtml(&reference, tableHtml(false));
+        const auto selectCells = [](QTextDocument *doc) {
+            auto *table = qobject_cast<QTextTable *>(doc->rootFrame()->childFrames().value(0));
+            if (!table) return QTextCursor();
+            QTextCursor selected(doc); selected.setPosition(table->cellAt(0, 0).firstPosition());
+            selected.setPosition(table->cellAt(0, 1).lastPosition(), QTextCursor::KeepAnchor);
+            return selected;
+        };
+        const auto selected = selectCells(document), ordinary = selectCells(&reference);
+        QVERIFY(selected.hasComplexSelection()); QVERIFY(ordinary.hasComplexSelection());
+        const QString expected = QTextDocumentFragment(ordinary).toPlainText();
+        const QString raw = document->toRawText(); const int revision = document->revision();
+        browser->setTextCursor(selected); browser->copy();
+        QCOMPARE(QApplication::clipboard()->text(), expected);
+        QTextDocument pasted; pasted.setHtml(QApplication::clipboard()->mimeData()->html());
+        QCOMPARE(pasted.toPlainText(), expected);
+        auto *table = qobject_cast<QTextTable *>(pasted.rootFrame()->childFrames().value(0));
+        QVERIFY(table); QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 2);
+        QCOMPARE(document->toRawText(), raw); QCOMPARE(document->revision(), revision);
+
+        const auto owner = [](double scale) {
+            return QJsonObject{{"font", QJsonObject{{"font_scale", scale}, {"font_scale_basis", "normal_body"},
+                {"font_normalized", false}, {"bold", false}, {"italic", false}, {"small", false},
+                {"superscript", false}, {"subscript", false}, {"code", false}}}, {"direction", "ltr"},
+                {"inline_style", QJsonValue()}, {"foreground", QJsonValue()}, {"background", QJsonValue()}};
+        };
+        auto ruby = leaf({}); auto reading = leaf("r");
+        reading.insert("font_scale", .5); reading.insert("font_scale_basis", "normal_body");
+        ruby.insert("ruby", QJsonObject{{"segments", QJsonArray{QJsonObject{{"gap_before", QJsonArray{}},
+            {"bases", QJsonArray{QJsonObject{{"owner", owner(1)}, {"gap_before", QJsonArray{}}, {"spans", QJsonArray{leaf("B")}}}}},
+            {"annotations", QJsonArray{QJsonObject{{"owner", owner(.5)}, {"base_start", 0}, {"base_count", 1}, {"level", 0},
+                {"gap_before", QJsonArray{}}, {"spans", QJsonArray{reading}}, {"fallback_before", QJsonArray{}},
+                {"fallback_after", QJsonArray{}}, {"explicit_fallback", false}}}}}}}});
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"},
+            {"spans", QJsonArray{leaf(authored, "ltr"), leaf(" "), ruby, leaf(" end")}}}}));
+        auto *accessible = QAccessible::queryAccessibleInterface(browser);
+        QVERIFY(accessible && accessible->textInterface()); auto *ax = accessible->textInterface();
+        const QString logical = ax->text(0, -1);
+        const QString isolated = QString(QChar(0x2066)) + authored + QChar(0x2069);
+        const int first = logical.indexOf(isolated); QVERIFY(first >= 0);
+        QVERIFY(logical.contains("Br"));
+        const auto copyLogical = [&](int start, int end) {
+            ax->setSelection(0, start, end);
+            QTest::keyClick(browser, Qt::Key_C, Qt::ControlModifier);
+        };
+        copyLogical(first, first + isolated.size());
+        QCOMPARE(QApplication::clipboard()->text(), authored);
+        QVERIFY(!QApplication::clipboard()->mimeData()->hasHtml());
+        copyLogical(first, first + 3); QCOMPARE(QApplication::clipboard()->text(), authored.left(2));
+        copyLogical(first + 2, first + isolated.size()); QCOMPARE(QApplication::clipboard()->text(), authored.mid(1));
+        copyLogical(0, ax->characterCount());
+        QString cleaned = logical; cleaned.remove(first + isolated.size() - 1, 1); cleaned.remove(first, 1);
+        QCOMPARE(QApplication::clipboard()->text(), cleaned);
+        QCOMPARE(ax->text(0, -1), logical);
+        QVERIFY(!QApplication::clipboard()->mimeData()->hasHtml());
+    }
+
     void rubyInlinePaddingGroupsKeepSourceFontsActionsAndText()
     {
         MainWindow window{QString()}; window.resize(900, 650); window.show();
@@ -14868,10 +15022,22 @@ private slots:
                 {"language", language}, {"parts", parts}}}};
         };
         const QJsonArray legacy{span("legacy")};
-        const QString exact = QStringLiteral("<span dir=\"rtl\">") + QChar(0x2067)
-            + QStringLiteral("legacy") + QChar(0x2069) + QStringLiteral("</span>");
-        QCOMPARE(window.spansHtml(legacy), exact);
-        QCOMPARE(window.spansHtml(legacy, 0, {}, {}, 0, {}, -1, false, false), exact);
+        // Renderer provenance changes serialization, not the original stored
+        // isolation or semantic ownership. Match both the exact wrapper and an
+        // independent imported-text/generated-range oracle; never strip controls.
+        const QString exact = QStringLiteral("<span dir=\"rtl\">") + SemanticHtml::generatedIsolateHtml(0x2067)
+            + QStringLiteral("legacy") + SemanticHtml::generatedIsolateHtml(0x2069) + QStringLiteral("</span>");
+        for (const QString &html : {window.spansHtml(legacy),
+                window.spansHtml(legacy, 0, {}, {}, 0, {}, -1, false, false)}) {
+            QCOMPARE(html, exact);
+            QTextDocument imported; SemanticHtml::setHtml(&imported, html);
+            QCOMPARE(imported.toRawText(), QString(QChar(0x2067)) + QStringLiteral("legacy") + QChar(0x2069));
+            QCOMPARE(SemanticHtml::generatedIsolatePositions(&imported), QList<int>({0, 7}));
+            const auto sourceText = imported.find(QStringLiteral("legacy"));
+            QVERIFY(!sourceText.isNull()); QCOMPARE(sourceText.selectionStart(), 1); QCOMPARE(sourceText.selectionEnd(), 7);
+            QVERIFY(!sourceText.charFormat().hasProperty(SemanticHtml::generatedIsolateProperty));
+            QVERIFY(!sourceText.charFormat().isAnchor());
+        }
         const QString authored = QString(QChar(0x2066)) + QStringLiteral("authored") + QChar(0x2069);
         QJsonObject link = span("map fallback", "ltr"); link.insert("kind", "link"); link.insert("target", "dog");
         const QJsonArray split{span("first"), span("second", "ltr"), span(authored), link};
@@ -14907,6 +15073,7 @@ private slots:
         QTextDocument document; SemanticHtml::setHtml(&document, owned);
         const QString raw = document.toRawText();
         QCOMPARE(raw, QStringLiteral("firstsecond") + authored + QStringLiteral("map fallback"));
+        QVERIFY(SemanticHtml::generatedIsolatePositions(&document).isEmpty());
         const auto found = document.find(QStringLiteral("authored")); QVERIFY(!found.isNull());
         QCOMPARE(found.selectionStart(), QStringLiteral("firstsecond").size() + 1);
         QCOMPARE(found.charFormat().intProperty(SemanticHtml::sourceRunProperty), 17);
