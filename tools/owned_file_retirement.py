@@ -3,6 +3,9 @@
 The caller must hold the selected owners' exclusive custody locks throughout
 preparation, deletion and closure, and establish nonuse and recovery authority.
 This module does not grant a release, acquire resource leases, or run a scan.
+Zig indexed cache entries are excluded: deleting an output alone can leave a
+valid compiler success index pointing at a missing file. Use toolchain-aware
+index invalidation and normal rebuilding instead of this file-only API.
 Historical receipt files and carrier invocations must remain immutable.
 
 POSIX has no unlink-if-inode operation. The final identity check and unlink
@@ -48,6 +51,18 @@ def _components(path):
     _require(all(p and p not in (".", "..") and "\0" not in p for p in parts),
              "empty or traversing path component")
     return parts
+
+
+def _reject_zig_indexed_entry(path):
+    # Generated outputs and success manifests share this toolchain-defined
+    # namespace. Reject it even when the owned root starts inside the entry.
+    # No sibling enumeration or guess from the output extension is needed.
+    parts = _components(path)
+    for kind, name in zip(parts, parts[1:]):
+        digest = name.removesuffix(".txt")
+        if (kind in ("o", "h") and len(digest) == 32
+                and all(c in "0123456789abcdefABCDEF" for c in digest)):
+            raise RetirementError("indexed Zig cache entry requires index-coherent retirement")
 
 
 def _open_directory(parts, base_fd=None):
@@ -134,6 +149,8 @@ class ExactFileRetirement:
         self.selected = [dict(row, stamp=list(row["stamp"])) for row in selected]
         self.protected = [dict(row, stamp=list(row["stamp"])) for row in protected]
         _require(bool(self.selected), "empty selection")
+        for row in self.selected:
+            _reject_zig_indexed_entry(row["path"])
         rows = self.selected + self.protected
         _require(len({row["path"] for row in rows}) == len(rows), "duplicate path")
         _require(isinstance(complete_alias_groups, bool), "explicit alias policy required")

@@ -620,5 +620,58 @@ class CompleteAliasTests(RetirementFixture):
         self.assert_originals()
 
 
+class ZigCachePolicyTests(RetirementFixture):
+    def cache_fixture(self):
+        cache = self.root / ".zig-cache"
+        output = cache / "o" / ("a" * 32) / "dict-llvm-build-core.o"
+        index = cache / "h" / ("b" * 32)
+        output.parent.mkdir(parents=True)
+        index.parent.mkdir()
+        output.write_bytes(b"owned generated object")
+        index.write_bytes(b"retained successful compiler index")
+        return output, index
+
+    def test_indexed_output_refused_before_any_selected_unlink(self):
+        output, index = self.cache_fixture()
+        output_row, index_row = self.row(output), self.row(index)
+        with self.assertRaisesRegex(RetirementError, "indexed Zig cache"):
+            ExactFileRetirement(self.root, [self.row(self.first), output_row])
+        self.assertEqual(self.row(output), output_row)
+        self.assertEqual(self.row(index), index_row)
+        self.assert_originals()
+
+    def test_owned_root_inside_entry_does_not_bypass_policy(self):
+        output, index = self.cache_fixture()
+        with self.assertRaisesRegex(RetirementError, "indexed Zig cache"):
+            ExactFileRetirement(output.parent, [self.row(output)])
+        self.assertTrue(output.is_file())
+        self.assertTrue(index.is_file())
+
+    def test_success_index_is_not_retired_by_file_only_api(self):
+        output, index = self.cache_fixture()
+        for path in (index, index.with_suffix(".txt")):
+            with self.subTest(path=path):
+                if path != index:
+                    path.write_bytes(index.read_bytes())
+                row = self.row(path)
+                with self.assertRaisesRegex(RetirementError, "indexed Zig cache"):
+                    ExactFileRetirement(self.root, [row])
+                self.assertEqual(self.row(path), row)
+        self.assertTrue(output.is_file())
+
+    def test_independent_external_copy_retirement_preserves_cache(self):
+        output, index = self.cache_fixture()
+        external = self.parent / "explicit-output.o"
+        external.write_bytes(output.read_bytes())
+        self.assertNotEqual(external.stat().st_ino, output.stat().st_ino)
+        keepers = [self.row(output), self.row(index)]
+        with ExactFileRetirement(self.root, [self.row(external)], keepers) as operation:
+            operation.unlink(lambda: None)
+        self.assertFalse(external.exists())
+        for row in keepers:
+            self.assertEqual(self.row(Path(row["path"])), row)
+        self.assert_originals()
+
+
 if __name__ == "__main__":
     unittest.main()
