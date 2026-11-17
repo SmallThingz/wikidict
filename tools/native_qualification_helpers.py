@@ -83,6 +83,51 @@ def classify(stdout, stderr, *, standalone):
             'nonpassing_tests': [{'status': status, 'name': name} for status, name in statuses if status != 'ok']}
 
 
+def direct_qualification_fields(selected_cases, *, final_execution_count=0):
+    """Derive direct-worker plan and selector coverage from one ordered case list."""
+    if not isinstance(selected_cases, list) or not selected_cases:
+        raise ValueError('selected cases must be a nonempty list')
+    cases = []
+    seen = set()
+    for case in selected_cases:
+        if (not isinstance(case, dict) or set(case) != {'root', 'name', 'kind'}
+                or not isinstance(case['root'], str) or not case['root']
+                or not isinstance(case['name'], str) or not case['name']
+                or case['kind'] not in ('audit', 'driver')):
+            raise ValueError('invalid selected case')
+        key = (case['root'], case['name'])
+        if key in seen:
+            raise ValueError('duplicate selected case')
+        seen.add(key)
+        cases.append(dict(case))
+    if type(final_execution_count) is not int or not 0 <= final_execution_count <= len(cases):
+        raise ValueError('invalid final execution count')
+    order = [dict(root=c['root'], selector=c['name'],
+                  kind='discovery' if c['kind'] == 'driver' else 'audit') for c in cases]
+    roots = list(dict.fromkeys(c['root'] for c in cases))
+    audits = [dict(c) for c in order if c['kind'] == 'audit']
+    drivers = [dict(c) for c in order if c['kind'] == 'discovery']
+    first = order[:-final_execution_count] if final_execution_count else order
+    second = order[-final_execution_count:] if final_execution_count else []
+    counts = dict(expected_compiled_inventory_occurrences=len(cases),
+                  expected_execution_occurrences=len(cases),
+                  expected_execution_body_count=len(audits),
+                  expected_discovery_occurrence_count=len(drivers),
+                  expected_audit_body_count=len(audits))
+    partitions = {root: [dict(c) for c in audits if c['root'] == root] for root in roots}
+    selector = dict(counts, qualification_roots=roots,
+                    qualification_selection=audits, discovery_driver_occurrences=drivers,
+                    execution_order=[dict(c) for c in order],
+                    required_execution_selection=[dict(c) for c in order],
+                    first_execution_selection=[dict(c) for c in first],
+                    second_execution_selection=[dict(c) for c in second],
+                    scope_partitions=partitions)
+    plan = dict(counts, expected_root_count=len(roots), final_execution_count=final_execution_count,
+                execution_cases=cases, scope_partitions={r: [dict(c) for c in cs]
+                                                        for r, cs in partitions.items()})
+    return dict(plan=plan, selector=selector)
+
+
 def normalize_direct_control_result(control, selected_cases):
     """Derive progress without changing raw absence, source or custody evidence."""
     if not isinstance(control, dict) or control.get('schema') != 'existing-direct-root-controls-result.v1':

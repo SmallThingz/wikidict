@@ -4536,6 +4536,41 @@ class FocusedFailureContinuationTests(unittest.TestCase):
         self.assertTrue(all(not row['full_suite_credit'] for row in result['focused_tests']))
 
 
+class DirectSelectionFieldsTests(unittest.TestCase):
+    def test_all_coverage_fields_follow_one_order_and_final_partition(self):
+        cases = [dict(root='encoder_compile', name='root.test.discovery', kind='driver'),
+                 dict(root='encoder_compile', name='profile.test.bytes', kind='audit'),
+                 dict(root='blob_query_tests', name='model.test.version', kind='audit')]
+        before = copy.deepcopy(cases)
+        for final in (0, 1, 3):
+            fields = helpers.direct_qualification_fields(cases, final_execution_count=final)
+            plan, selector = fields['plan'], fields['selector']
+            self.assertEqual(plan['execution_cases'], cases)
+            self.assertEqual(selector['first_execution_selection'] + selector['second_execution_selection'],
+                             selector['execution_order'])
+            self.assertEqual(len(selector['second_execution_selection']), plan['final_execution_count'])
+            self.assertEqual(selector['required_execution_selection'], selector['execution_order'])
+            self.assertEqual(sum(map(len, selector['scope_partitions'].values())), 2)
+            self.assertEqual(len(selector['qualification_selection']), 2)
+            self.assertEqual(plan['expected_execution_occurrences'], 3)
+            self.assertEqual(plan['expected_root_count'], 2)
+            self.assertEqual(plan['expected_execution_body_count'], 2)
+            self.assertEqual(plan['expected_discovery_occurrence_count'], 1)
+        self.assertEqual(cases, before)
+        fields['selector']['execution_order'][0]['selector'] = 'changed'
+        self.assertEqual(cases, before)
+
+    def test_rejects_duplicate_malformed_and_ambiguous_partition_without_mutation(self):
+        case = dict(root='encoder_compile', name='profile.test.bytes', kind='audit')
+        for cases, final in [([case, case], 0), ([dict(case, kind='unknown')], 0),
+                             ([dict(case, unexpected=True)], 0), ([], 0),
+                             ([case], True), ([case], -1), ([case], 2)]:
+            before = copy.deepcopy(cases)
+            with self.assertRaises(ValueError):
+                helpers.direct_qualification_fields(cases, final_execution_count=final)
+            self.assertEqual(cases, before)
+
+
 class DirectControlProgressTests(unittest.TestCase):
     def fixture(self):
         cases = [dict(root='encoder_compile', name='root.test.' + name, kind='audit')
