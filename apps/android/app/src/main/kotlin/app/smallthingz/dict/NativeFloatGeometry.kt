@@ -1073,8 +1073,16 @@ private fun position(layout: StaticLayout, width: Int, occurrences: List<NativeF
 internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArray, ends: IntArray,
     naturalMetrics: List<NativeUsedLineMetrics>, occurrences: List<NativeFloatOccurrence>,
     carriedExclusions: List<NativeFloatExclusion>, insets: NativeTextInsets,
-    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)? = null): NativeFloatFlow {
+    usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?, sourceLinePresent: ((Int) -> Boolean)? = null,
+    exactAvailableWidth: Float? = null, requiredLineWidths: FloatArray? = null): NativeFloatFlow {
     require(starts.size == ends.size && naturalMetrics.size == starts.size)
+    val availableWidth = exactAvailableWidth ?: width.toFloat()
+    if (exactAvailableWidth != null && (!availableWidth.isFinite() || availableWidth < 0f ||
+            availableWidth > TablePixelLimit || kotlin.math.floor(availableWidth).toInt() != width))
+        throw UnsupportedFloatLayout("Exact Float row width exceeds native geometry")
+    if (requiredLineWidths != null && (requiredLineWidths.size != starts.size ||
+            requiredLineWidths.any { !it.isFinite() || it < 0f || it > TablePixelLimit }))
+        throw UnsupportedFloatLayout("Required native row widths exceed native geometry")
     fun lineAt(offset: Int): Int {
         val found = starts.binarySearch(offset)
         return (if (found >= 0) found else -found - 2).coerceIn(0, starts.lastIndex)
@@ -1124,7 +1132,7 @@ internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArr
             while (true) {
                 val overlap = exclusions.filter { it.outer.top < floatY + outerHeight && it.outer.bottom > floatY }
                 val occupiedLeft = overlap.filter { it.side == TableFloatSide.Left }.maxOfOrNull { it.outer.right } ?: 0f
-                val occupiedRight = overlap.filter { it.side == TableFloatSide.Right }.minOfOrNull { it.outer.left } ?: width.toFloat()
+                val occupiedRight = overlap.filter { it.side == TableFloatSide.Right }.minOfOrNull { it.outer.left } ?: availableWidth
                 if (outerWidth <= occupiedRight - occupiedLeft || overlap.isEmpty()) {
                     x = if (occurrence.side == TableFloatSide.Left) occupiedLeft else occupiedRight - outerWidth
                     break
@@ -1145,11 +1153,18 @@ internal fun nativePositionFloatRows(source: Spanned, width: Int, starts: IntArr
                 (if (lineHeight == 0f) it.outer.top <= y else it.outer.top < y + lineHeight) && it.outer.bottom > y
             }
             val l = nativeLineIndent(max(insets.left, overlap.filter { it.side == TableFloatSide.Left }.maxOfOrNull { it.outer.right } ?: 0f) + insets.extraLeft)
-            val r = nativeLineIndent(max(insets.right, width - (overlap.filter { it.side == TableFloatSide.Right }.minOfOrNull { it.outer.left } ?: width.toFloat())) + insets.extraRight)
+            val r = nativeLineIndent(max(insets.right, availableWidth - (overlap.filter { it.side == TableFloatSide.Right }.minOfOrNull { it.outer.left } ?: availableWidth)) + insets.extraRight)
             // Native line breaking clamps the signed remaining width to zero, while drawing keeps
             // the real indents. Permanent authored gutters can overflow; temporary floats still
             // move a line below their margin boxes when they leave no available line width.
-            if (overlap.isEmpty() || l + r < width) {
+            val hasWidth = if (exactAvailableWidth == null) l + r < width
+                else l.toDouble() + r < availableWidth.toDouble()
+            // Only an authenticated indivisible row supplies this requirement. Ordinary
+            // wrapping rows must rebreak against the new lane instead of moving wholesale.
+            val fitsRequired = requiredLineWidths?.get(line)?.let {
+                it.toDouble() <= availableWidth.toDouble() - l - r
+            } ?: true
+            if (overlap.isEmpty() || (hasWidth && fitsRequired)) {
                 left[line] = l
                 right[line] = r
                 constrainedByFloat[line] = overlap.isNotEmpty()

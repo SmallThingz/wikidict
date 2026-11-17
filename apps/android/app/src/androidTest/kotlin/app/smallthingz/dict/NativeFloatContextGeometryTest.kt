@@ -1394,4 +1394,208 @@ class NativeFloatContextGeometryTest {
         verify(scene(17f, 19f, 7f, nearer = false))
     }
 
+    @Test
+    fun soleStaticInlineUsesParentFirstFragmentThenFitsRemainingWidthWithoutFlow() {
+        val containing = 100.5f
+        var calls = 0
+        val action: () -> Unit = { calls++ }
+        fun paint(size: Float) = TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = size
+            typeface = android.graphics.Typeface.MONOSPACE
+            color = android.graphics.Color.BLUE
+            isSubpixelText = true
+        }
+        data class Fixture(val prepared: NativePreparedText, val source: SpannableString,
+            val child: TextPaint, val parent: TextPaint, val childHeight: Float, val parentHeight: Float,
+            val rtl: Boolean, val alignment: Layout.Alignment, val noWrap: Boolean)
+        fun fixture(text: String = "MMMM MMMM MMMM ", rtl: Boolean = false,
+            alignment: Layout.Alignment = Layout.Alignment.ALIGN_CENTER,
+            parentHeight: Float = 60f, childHeight: Float = 20f, size: Float = 18f,
+            noWrap: Boolean = false, normalChild: Boolean = false): Fixture {
+            val child = paint(size)
+            val parent = paint(24f)
+            val source = SpannableString(text).apply {
+                setSpan(object : android.text.style.MetricAffectingSpan(), NativeInlineSafePaintSpan {
+                    override fun updateMeasureState(target: TextPaint) { target.set(child) }
+                    override fun updateDrawState(target: TextPaint) { target.set(child) }
+                }, 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(child),
+                    if (normalChild) NativeLineHeightPolicy.Normal else NativeLineHeightPolicy.Pixels(childHeight),
+                    strut = true), 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (noWrap) setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap,
+                    inheritedOwner = true, sourceLineStarts = listOf(0)), 0, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                else setSpan(NativeAuthoredTextWrap(TextWrap.Normal), 0, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val prepared = NativePreparedText(child, { source }, { geometry ->
+                listOf(FloatInteractionNode(0, FloatInteractionKind.LINK, 0, text.length,
+                    geometry.rectsForRange(0, text.length), text, null, action))
+            }, if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                staticInline = NativeStaticInlineText(parent, NativeLineHeightPolicy.Pixels(parentHeight),
+                    if (rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr, alignment))
+            return Fixture(prepared, source, child, parent, childHeight, parentHeight, rtl, alignment, noWrap)
+        }
+        fun real(value: Fixture, width: Float, exclusions: List<NativeFloatExclusion> = emptyList()) =
+            NativeFloatGeometry.build(value.source, value.child, kotlin.math.floor(width).toInt(), emptyList(),
+                textDirection = value.prepared.direction, carriedExclusions = exclusions,
+                exactAvailableWidth = width, nodeFactory = value.prepared.nodes)
+        fun textPart(value: Fixture) = NativeFloatContextPart.Text(value.source,
+            { width, carried -> real(value, width.toFloat(), carried) },
+            buildAtWidth = { width, carried -> real(value, width, carried) })
+        fun horizontal(width: Float) = NativeContainerHorizontal(width, width, width, 0f, 0f, 0f, width)
+        fun box(id: Int, parts: List<NativeFloatContextPart>, at: NativeAbsoluteStaticPosition? = null,
+            value: Fixture? = null, relative: Boolean = false) = NativeFloatContextPart.Container(id,
+            kotlin.math.floor(containing).toInt(), { _, _ -> error("Only prepared source may be measured") },
+            preparedParts = parts, horizontal = horizontal(containing),
+            absoluteContainingBlock = if (relative) NativeAbsoluteContainingBlock(0f, 0f) else null,
+            absoluteStatic = at, staticInlineText = value?.prepared)
+        fun scene(value: Fixture, carried: List<NativeFloatExclusion> = emptyList(),
+            wrongParent: Boolean = false, intermediary: Boolean = false, sibling: Boolean = false): NativeFloatContextGeometry {
+            val absolute = box(2, listOf(textPart(value)), NativeAbsoluteStaticPosition(if (wrongParent) 9 else 1), value)
+            val body = if (intermediary) listOf(box(3, listOf(absolute)))
+                else if (sibling) listOf(absolute, textPart(value)) else listOf(absolute)
+            return NativeFloatContextGeometry.build(kotlin.math.floor(containing).toInt(),
+                listOf(box(1, body, relative = true)), containAtEnd = false, carriedExclusions = carried,
+                allowProtrudingFloats = true, adjoining = true)
+        }
+        // Independent platform fit oracle: native bidi style runs, real Float width,
+        // and an explicit first-row line breaker, without our static-position helper.
+        fun measured(value: Fixture): android.graphics.text.MeasuredText {
+            val chars = value.source.toString().toCharArray()
+            val bidi = android.icu.text.Bidi().apply { setPara(chars, (if (value.rtl) 1 else 0).toByte(), null) }
+            val builder = android.graphics.text.MeasuredText.Builder(chars).setComputeLayout(true).setComputeHyphenation(false)
+            var first = 0
+            while (first < chars.size) {
+                val level = bidi.getLevelAt(first)
+                var last = first + 1
+                while (last < chars.size && bidi.getLevelAt(last) == level) last++
+                builder.appendStyleRun(value.child, last - first, level.toInt() and 1 != 0)
+                first = last
+            }
+            return builder.build()
+        }
+        fun expected(value: Fixture, laneLeft: Float = 0f, laneRight: Float = containing, firstTop: Float = 0f): RectF {
+            val measure = measured(value)
+            val text = value.source.toString()
+            val end = if (value.noWrap) text.length else {
+                val breaker = android.graphics.text.LineBreaker.Builder()
+                    .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                    .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
+                breaker.computeLineBreaks(measure, android.graphics.text.LineBreaker.ParagraphConstraints().apply {
+                    setWidth(laneRight - laneLeft)
+                }, 0).getLineBreakOffset(0)
+            }
+            var visibleEnd = end
+            while (end < text.length && visibleEnd > 0 && text[visibleEnd - 1] == ' ') visibleEnd--
+            val visible = measure.getWidth(0, visibleEnd)
+            val left = when (value.alignment) {
+                Layout.Alignment.ALIGN_CENTER -> laneLeft + (laneRight - laneLeft - visible) / 2f
+                Layout.Alignment.ALIGN_NORMAL -> if (value.rtl) laneRight - visible else laneLeft
+                else -> if (value.rtl) laneLeft else laneRight - visible
+            }
+            val anchor = if (value.rtl) left + visible else left
+            val maximum = measure.getWidth(0, text.length)
+            var minimum = 0f
+            var wordStart = 0
+            for (endWord in 0..text.length) if (endWord == text.length || text[endWord] == ' ') {
+                minimum = maxOf(minimum, measure.getWidth(wordStart, endWord)); wordStart = endWord + 1
+            }
+            if (value.noWrap) minimum = maximum
+            val available = if (value.rtl) anchor else containing - anchor
+            val width = minOf(maxOf(minimum, available), maximum)
+            val parentMetrics = value.parent.fontMetrics
+            val childMetrics = value.child.fontMetrics
+            val parentTop = (parentMetrics.ascent + parentMetrics.descent - value.parentHeight) / 2f
+            val childTop = (childMetrics.ascent + childMetrics.descent - value.childHeight) / 2f
+            val baseline = firstTop - minOf(parentTop, childTop)
+            val top = baseline + childMetrics.ascent
+            val x = if (value.rtl) anchor - width else anchor
+            return RectF(x, top, x + width, top + real(value, width).textBottom)
+        }
+        fun verify(value: Fixture, carried: List<NativeFloatExclusion> = emptyList(),
+            laneLeft: Float = 0f, laneRight: Float = containing, firstTop: Float = 0f): NativeFloatContextGeometry {
+            val geometry = scene(value, carried)
+            val expected = expected(value, laneLeft, laneRight, firstTop)
+            val actual = checkNotNull(geometry.ordinaryBounds[2])
+            assertEquals(expected.left, actual.left, .0001f)
+            assertEquals(expected.top, actual.top, .0001f)
+            assertEquals(expected.right, actual.right, .0001f)
+            assertEquals(expected.bottom, actual.bottom, .0001f)
+            assertEquals(0f, geometry.usedHeight, 0f)
+            assertEquals(0f, geometry.textBottom, 0f)
+            assertEquals(0, geometry.height)
+            assertEquals(value.source.toString(), geometry.text.toString())
+            assertEquals(1, geometry.nodes.size)
+            assertEquals(0 to value.source.length, geometry.nodes.single().let { it.start to it.end })
+            assertSame(action, geometry.nodes.single().onClick)
+            assertTrue(geometry.ownExclusions.isEmpty())
+            assertTrue(geometry.children.isEmpty())
+            assertTrue(geometry.flowChildren.isEmpty())
+            assertNull(geometry.textBaselines)
+            assertEquals(listOf(0), geometry.partOffsets)
+            assertEquals(RectF(0f, 0f, containing, 0f), geometry.ordinaryBounds[1])
+            val child = real(value, actual.width())
+            val leaf = geometry.inputLeaves().single()
+            assertEquals(0, leaf.sourceIndex)
+            assertEquals(actual.left, leaf.x, 0f)
+            assertEquals(actual.top, leaf.y, 0f)
+            assertEquals(child.rectsForRange(0, value.source.length).map { RectF(it).apply { offset(actual.left, actual.top) } },
+                geometry.rectsForRange(0, value.source.length))
+            assertEquals(child.characterRects(0, value.source.length).map { it?.let { r -> RectF(r).apply { offset(actual.left, actual.top) } } },
+                geometry.characterRects(0, value.source.length))
+            for (offset in 0..value.source.length) assertEquals(RectF(child.caretRect(offset)).apply {
+                offset(actual.left, actual.top)
+            }, geometry.caretRect(offset))
+            if (actual.width() > 0f) assertTrue(geometry.scrollableBounds.right >= actual.right)
+            checkNotNull(geometry.nodes.single().onClick).invoke()
+            return geometry
+        }
+        for (rtl in listOf(false, true)) for (align in listOf(Layout.Alignment.ALIGN_CENTER,
+            Layout.Alignment.ALIGN_NORMAL, Layout.Alignment.ALIGN_OPPOSITE)) {
+            verify(fixture(rtl = rtl, alignment = align))
+            verify(fixture("MMMM \u05d0\u05d1\u05d2\u05d3 MMMM ", rtl = rtl, alignment = align))
+        }
+        val first = verify(fixture())
+        fun raster(draw: (android.graphics.Canvas) -> Unit): IntArray {
+            val bitmap = android.graphics.Bitmap.createBitmap(300, 300, android.graphics.Bitmap.Config.ARGB_8888)
+            try {
+                draw(android.graphics.Canvas(bitmap))
+                return IntArray(300 * 300).also { bitmap.getPixels(it, 0, 300, 0, 0, 300, 300) }
+            } finally { bitmap.recycle() }
+        }
+        val firstBox = checkNotNull(first.ordinaryBounds[2])
+        val once = raster { canvas ->
+            canvas.translate(firstBox.left, firstBox.top)
+            real(fixture(), firstBox.width()).paint(canvas)
+        }
+        assertTrue("A fractional-alpha witness must distinguish duplicate replay",
+            once.any { android.graphics.Color.alpha(it) in 1..254 })
+        assertArrayEquals(once, raster(first::paint))
+        val taller = verify(fixture(parentHeight = 90f))
+        assertEquals(15f, checkNotNull(taller.ordinaryBounds[2]).top - checkNotNull(first.ordinaryBounds[2]).top, .0001f)
+        val dominantChild = verify(fixture(parentHeight = 20f, childHeight = 80f))
+        assertTrue(checkNotNull(dominantChild.ordinaryBounds[2]).top > checkNotNull(first.ordinaryBounds[2]).top)
+        val left = listOf(NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 20.25f, 200f)))
+        verify(fixture(), left, laneLeft = 21f)
+        val right = listOf(NativeFloatExclusion(TableFloatSide.Right, NativeFloatBounds(80.25f, 0f, containing, 200f)))
+        verify(fixture(rtl = true), right, laneRight = 79.5f)
+        val full = listOf(NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, containing, 17.25f)))
+        verify(fixture(), full, firstTop = 17.25f)
+        verify(fixture(noWrap = true), full, firstTop = 17.25f)
+        verify(fixture("   "))
+        verify(fixture("MMMM", size = 0f, childHeight = 0f))
+        fun refused(block: () -> Unit) {
+            try { block(); org.junit.Assert.fail("Unsupported source custody or line metrics must refuse") }
+            catch (_: UnsupportedFloatLayout) { }
+        }
+        refused { scene(fixture(), wrongParent = true) }
+        refused { scene(fixture(), intermediary = true) }
+        refused { scene(fixture(), sibling = true) }
+        refused { scene(fixture("MM\nMM")) }
+        refused { scene(fixture(normalChild = true)) }
+        verify(fixture())
+        assertTrue(calls > 20)
+    }
+
 }

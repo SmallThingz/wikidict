@@ -42,7 +42,7 @@ internal fun nativeDelegatedAbsoluteTable(table: Table): Boolean = table.caption
         val block = cell.blocks?.singleOrNull()
         val container = block?.container
         fun hasAbsolute(value: Container): Boolean = value.blocks.any { child ->
-            child.container?.let { it.style.absolutePosition != null || hasAbsolute(it) } == true
+            child.container?.let { it.style.absolutePosition != null || it.style.absoluteStatic != null || hasAbsolute(it) } == true
         }
         cell.spans.isEmpty() && cell.nestedTable == null && block?.kind == "container" && block.style == null &&
             container != null && container.style.positioning == ContainerPositioning.RelativeAuto &&

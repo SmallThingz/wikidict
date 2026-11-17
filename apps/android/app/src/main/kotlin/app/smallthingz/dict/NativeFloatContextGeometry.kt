@@ -9,10 +9,11 @@ internal data class NativeAbsoluteTextPlacement(val left: Float, val top: Float)
 /** Ordinary absolute boxes identify their actual nearest RelativeAuto source owner. */
 internal data class NativeAbsolutePosition(val containingBlockId: Int, val left: Float, val top: Float)
 internal data class NativeAbsoluteContainingBlock(val paddingLeft: Float, val paddingTop: Float)
-internal data class NativeAbsoluteOrigin(val id: Int, val left: Float, val top: Float)
+internal data class NativeAbsoluteOrigin(val id: Int, val left: Float, val top: Float,
+    val staticInlineChildId: Int? = null, val contentWidth: Float? = null)
 
 internal fun List<NativeFloatContextPart>.hasNativeAbsolutePosition(): Boolean = any { part ->
-    part is NativeFloatContextPart.Container && (part.absolutePosition != null ||
+    part is NativeFloatContextPart.Container && (part.absolutePosition != null || part.absoluteStatic != null ||
         part.preparedParts?.hasNativeAbsolutePosition() == true)
 }
 
@@ -23,7 +24,10 @@ private fun nativeAbsoluteChildOrigin(part: NativeFloatContextPart.Container,
         if (listOf(own.paddingLeft, own.paddingTop).any { !it.isFinite() || it < 0f || it > TablePixelLimit })
             throw UnsupportedFloatLayout("Relative containing block padding exceeds native geometry")
         // The nested geometry's origin is the content edge; CSS absolute offsets use padding edges.
-        return NativeAbsoluteOrigin(part.id, -own.paddingLeft, -own.paddingTop)
+        val sole = part.preparedParts?.singleOrNull() as? NativeFloatContextPart.Container
+        val staticChild = sole?.takeIf { it.absoluteStatic?.containingBlockId == part.id }
+        return NativeAbsoluteOrigin(part.id, -own.paddingLeft, -own.paddingTop, staticChild?.id,
+            if (staticChild == null) null else part.horizontal?.content ?: part.contentWidth.toFloat())
     }
     return inherited?.let { NativeAbsoluteOrigin(it.id, it.left - x, it.top - y) }
 }
@@ -63,6 +67,8 @@ internal sealed interface NativeFloatContextPart {
         val positionedScope: Boolean = false,
         val absolutePosition: NativeAbsolutePosition? = null,
         val absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
+        val absoluteStatic: NativeAbsoluteStaticPosition? = null,
+        val staticInlineText: NativePreparedText? = null,
     ) : NativeFloatContextPart {
         init { require(fixedContentHeight == null || fixedContentHeight.isFinite() && fixedContentHeight >= 0f) }
         fun contentHeight(natural: Float): Float = maxOf(0f, fixedContentHeight ?: natural, minimum.content)
@@ -542,7 +548,7 @@ internal class NativeFloatContextGeometry private constructor(
                     throw UnsupportedFloatLayout("Legacy component gaps are not authored adjoining margins")
                 if (part.floatSide != null) null else NativeAdjoiningMargins(part.margins.top, part.margins.bottom, false)
             }
-            is NativeFloatContextPart.Container -> if (part.absolute != null || part.absolutePosition != null) null else {
+            is NativeFloatContextPart.Container -> if (part.absolute != null || part.absolutePosition != null || part.absoluteStatic != null) null else {
                 val inner = part.preparedParts?.let { children -> NativeAdjoiningMargins.sequence(
                     children.mapNotNull { adjoiningProfile(it, preparation) }) }
                     ?: preparation?.innerMargins(part) ?: part.innerMargins
@@ -605,13 +611,48 @@ internal class NativeFloatContextGeometry private constructor(
                 }
                 if (logicalPart) logicalPartSeen = true
                 if (part !is NativeFloatContextPart.Container || part.preparedParts == null) partOffsets += text.length
+                if (part is NativeFloatContextPart.Container && part.absoluteStatic != null) {
+                    val at = part.absoluteStatic
+                    val origin = absoluteOrigin
+                    val source = part.staticInlineText
+                    val containingWidth = origin?.contentWidth
+                    if (!adjoining || prepared == null || origin == null || origin.id != at.containingBlockId ||
+                        origin.staticInlineChildId != part.id || parts.size != 1 || containingWidth == null || source == null ||
+                        part.absolute != null || part.absolutePosition != null || part.absoluteContainingBlock != null || part.positionedScope ||
+                        part.preparedParts?.singleOrNull() !is NativeFloatContextPart.Text ||
+                        part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.columns != null ||
+                        part.fixedContentHeight != null || part.minimum.content != 0f || part.minimum.computedPositive ||
+                        part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
+                        listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left,
+                            origin.left, origin.top).any { it != 0f })
+                        throw UnsupportedFloatLayout("Static inline box requires its sole immediate zero-edge relative parent")
+                    // Exclusions are already localized by the real parent placement. Only this
+                    // private hypothetical inline receives them; the absolute child never does.
+                    val placement = nativeAbsoluteStaticLayout(source, containingWidth, exclusions)
+                    val boxWidth = placement.width
+                    val x = placement.left
+                    val top = placement.top
+                    val sized = part.copy(contentWidth = kotlin.math.floor(boxWidth).toInt(),
+                        horizontal = NativeContainerHorizontal(boxWidth, boxWidth, boxWidth, 0f, 0f, 0f, boxWidth))
+                    val geometry = prepared.measurePreparedContainer(sized, emptyList(), NativeMarginCollapse(false, false),
+                        exactTextWidth = boxWidth)
+                    val boxHeight = geometry.textBottom
+                    if (geometry.ownExclusions.isNotEmpty() || geometry.children.isNotEmpty() || geometry.flowChildren.isNotEmpty() ||
+                        listOf(x, top, x + boxWidth, top + boxHeight).any { !it.isFinite() || kotlin.math.abs(it) > TablePixelLimit })
+                        throw UnsupportedFloatLayout("Static inline box placement exceeds its ordinary native text domain")
+                    partOffsets += geometry.partOffsets.map { it + text.length }
+                    paragraphs += Paragraph(-1, text.length, x, top, geometry, boxHeight, ordinary = true, outOfFlow = true)
+                    ordinaryBounds[part.id] = RectF(x, top, x + boxWidth, top + boxHeight)
+                    text.append(geometry.text)
+                    return@forEachIndexed
+                }
                 if (part is NativeFloatContextPart.Container && part.absolutePosition != null) {
                     val at = part.absolutePosition
                     val origin = absoluteOrigin
                     val boxWidth = part.horizontal?.content ?: part.contentWidth.toFloat()
                     val boxHeight = part.fixedContentHeight
                     if (!adjoining || prepared == null || origin == null || origin.id != at.containingBlockId ||
-                        part.absolute != null || part.absoluteContainingBlock != null || part.positionedScope ||
+                        part.absolute != null || part.absoluteStatic != null || part.absoluteContainingBlock != null || part.positionedScope ||
                         part.preparedParts == null || part.preparedParts.any { it !is NativeFloatContextPart.Text } ||
                         part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.columns != null ||
                         boxHeight == null || part.minimum.content != 0f || part.minimum.computedPositive ||

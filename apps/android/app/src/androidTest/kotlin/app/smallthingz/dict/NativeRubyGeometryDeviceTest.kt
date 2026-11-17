@@ -3816,4 +3816,173 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(2, forcedWide.shapedLineCount)
         assertEquals(forcedRows, (0 until forcedWide.shapedLineCount).map(forcedWide::nativeRubyLineRanges))
     }
+
+    @Test fun exactFloatRowsCarryRealExclusionsAndMoveOnlyIndivisibleRows() {
+        val resolved = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+            textSize = 18f
+            typeface = Typeface.SANS_SERIF
+            textLocale = Locale.US
+            color = Color.BLUE
+        }
+        val selected = mutableListOf<Span>()
+        class Prepared(val original: Span, val nowrap: Boolean, val usedHeight: Float = 24f) {
+            val action: () -> Unit = { selected += original }
+            val runPaint = SourcePaint(resolved)
+            val source: Spanned = SpannedString(SpannableString(original.text).apply {
+                setSpan(runPaint, 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val primary = NativePrimaryFontMetrics.from(resolved)
+                setSpan(NativeRunLineMetrics(primary, NativeLineHeightPolicy.Pixels(usedHeight), strut = true),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(NativeRunLineMetrics(primary, NativeLineHeightPolicy.Pixels(usedHeight)),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(NativeAuthoredTextWrap(if (nowrap) TextWrap.NoWrap else TextWrap.Normal,
+                    inheritedOwner = nowrap, sourceLineStarts = if (nowrap) listOf(0) else null),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+            fun build(width: Float, carry: List<NativeFloatExclusion>, rtl: Boolean,
+                alignment: android.text.Layout.Alignment): NativeFloatGeometry = NativeFloatGeometry.build(
+                source, resolved, kotlin.math.floor(width).toInt(), emptyList(), alignment = alignment,
+                textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                carriedExclusions = carry, exactAvailableWidth = width,
+                nodeFactory = { geometry -> listOf(FloatInteractionNode(701, FloatInteractionKind.LINK,
+                    0, original.text.length, geometry.rectsForRange(0, original.text.length), original.text,
+                    null, action)) })
+        }
+        fun prepared(text: String, nowrap: Boolean = false, height: Float = 24f): Prepared = Prepared(
+            Span("link", text, "carry-source", fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx,
+                language = "en", inlineStyle = InlineTextStyle(fontNormalized = true,
+                    lineHeight = InlineLineHeight.Computed(InlineComputedLength(height, FontScaleBasis.CssPx)),
+                    wrap = if (nowrap) null else TextWrap.Normal)), nowrap, height)
+        fun measured(text: String, rtl: Boolean) = android.graphics.text.MeasuredText.Builder(text.toCharArray())
+            .setComputeLayout(true).setComputeHyphenation(false)
+            .appendStyleRun(resolved, text.length, rtl).build()
+        fun fit(text: String, width: Float, indent: Int, rtl: Boolean): android.graphics.text.LineBreaker.Result =
+            android.graphics.text.LineBreaker.Builder()
+                .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE)
+                .setIndents(intArrayOf(indent)).build().computeLineBreaks(measured(text, rtl),
+                    android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(width) }, 0)
+        fun ownSource(fixture: Prepared, geometry: NativeFloatGeometry) {
+            assertEquals(fixture.original.text, geometry.text.toString())
+            assertSame(fixture.runPaint, geometry.nativeRubyShapingSource.getSpans(0, geometry.text.length,
+                SourcePaint::class.java).single())
+            val ranges = (0 until geometry.shapedLineCount).map(geometry::nativeRangeOfLine)
+            assertEquals(0, ranges.first().first)
+            assertEquals(fixture.original.text.length, ranges.last().second)
+            ranges.zipWithNext().forEach { (before, after) -> assertEquals(before.second, after.first) }
+            val node = geometry.nodes.single()
+            assertEquals(0, node.start); assertEquals(fixture.original.text.length, node.end)
+            assertSame(fixture.action, node.onClick)
+            if (fixture.usedHeight > 0f) {
+                val first = node.bounds.first { it.width() > 0f && it.height() > 0f }
+                assertSame(node, geometry.interactionNodeAt(first.centerX(), first.centerY()))
+                checkNotNull(node.onClick).invoke()
+                assertSame(fixture.original, selected.last())
+            }
+        }
+        val c = 180.5f
+        val carryBottom = 1000f
+        for (rtl in listOf(false, true)) {
+            val fixture = prepared(if (rtl) "אב גד הו זח טי כל מנ סע פצ קר שת" else "ab cd ef gh ij kl mn op qr st uv wx")
+            for (alignment in listOf(android.text.Layout.Alignment.ALIGN_CENTER,
+                    if (rtl) android.text.Layout.Alignment.ALIGN_NORMAL else android.text.Layout.Alignment.ALIGN_OPPOSITE)) {
+                for ((hasLeft, hasRight) in listOf(true to false, false to true, true to true)) {
+                    val carry = buildList {
+                        if (hasLeft) add(NativeFloatExclusion(TableFloatSide.Left,
+                            NativeFloatBounds(0f, 0f, 37.25f, carryBottom)))
+                        if (hasRight) add(NativeFloatExclusion(TableFloatSide.Right,
+                            NativeFloatBounds(c - 29.25f, 0f, c, carryBottom)))
+                    }
+                    // Indents are the existing native ceil policy; C itself remains 180.5.
+                    val left = if (hasLeft) 38 else 0
+                    val right = if (hasRight) 30 else 0
+                    val expected = fit(fixture.original.text, c, left + right, rtl)
+                    assertTrue(expected.lineCount > 1)
+                    val actual = fixture.build(c, carry, rtl, alignment)
+                    ownSource(fixture, actual)
+                    assertEquals(carry, actual.exclusions)
+                    assertEquals(expected.lineCount, actual.shapedLineCount)
+                    assertTrue(actual.textBottom < carryBottom)
+                    for (line in 0 until actual.shapedLineCount) {
+                        assertEquals(expected.getLineBreakOffset(line), actual.nativeRangeOfLine(line).second)
+                        assertEquals(c - left - right, actual.nativeLineAvailableWidth(line), 0f)
+                        assertEquals(expected.getLineWidth(line), actual.nativeInlineVisibleAdvance(line), .001f)
+                        val visible = checkNotNull(actual.nativeInlineVisibleBounds(line))
+                        val origin = if (alignment == android.text.Layout.Alignment.ALIGN_CENTER)
+                            left + (c - left - right - expected.getLineWidth(line)) / 2f
+                        else c - right - expected.getLineWidth(line)
+                        assertEquals(origin, visible.left, .001f)
+                        assertEquals(origin + expected.getLineWidth(line), visible.right, .001f)
+                        assertEquals(line * 24f, actual.nativeRubyLineTop(line), 0f)
+                        assertEquals(24f, actual.nativeUsedLineMetrics(line).height, 0f)
+                    }
+                    val firstVisible = checkNotNull(actual.nativeInlineVisibleBounds(0))
+                    assertEquals(if (rtl) firstVisible.right else firstVisible.left,
+                        checkNotNull(actual.nativeRubyLineCaret(0, 0)).left, .001f)
+                    assertTrue(checkNotNull(raster(actual)[Color.BLUE]).count > 0)
+                }
+            }
+        }
+        // An indivisible real NoWrap row first waits for the large left float, then
+        // fits alongside the still-active right float: it must not clear every float.
+        val nowrap = prepared("MMMMMMMM", nowrap = true)
+        val width = ceil(measured(nowrap.original.text, false).getWidth(0, nowrap.original.text.length)) + 80.5f
+        val advance = measured(nowrap.original.text, false).getWidth(0, nowrap.original.text.length)
+        val leftEdge = width - advance / 2f
+        val partial = listOf(
+            NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, leftEdge, 17.25f)),
+            NativeFloatExclusion(TableFloatSide.Right, NativeFloatBounds(width - 20.25f, 0f, width, 43.75f)))
+        assertTrue(width - ceil(leftEdge) - 21f > 0f)
+        assertTrue(width - ceil(leftEdge) - 21f < advance)
+        assertTrue(width - 21f > advance)
+        for (rtl in listOf(false, true)) for (alignment in listOf(android.text.Layout.Alignment.ALIGN_CENTER,
+                if (rtl) android.text.Layout.Alignment.ALIGN_NORMAL else android.text.Layout.Alignment.ALIGN_OPPOSITE)) {
+            val reference = nowrap.build(width, emptyList(), rtl, alignment)
+            val actual = nowrap.build(width, partial, rtl, alignment)
+            ownSource(nowrap, actual)
+            assertEquals(1, actual.shapedLineCount)
+            assertEquals(0 to nowrap.original.text.length, actual.nativeRangeOfLine(0))
+            assertEquals(17.25f, actual.nativeRubyLineTop(0), 0f)
+            assertEquals(reference.nativeRubyLineBaseline(0) + 17.25f, actual.nativeRubyLineBaseline(0), 0f)
+            assertEquals(reference.nativeUsedLineMetrics(0), actual.nativeUsedLineMetrics(0))
+            assertEquals(width - 21f, actual.nativeLineAvailableWidth(0), 0f)
+            assertEquals(advance, actual.nativeLineAdvance(0), .001f)
+            val bounds = checkNotNull(actual.nativeInlineVisibleBounds(0))
+            val x = if (alignment == android.text.Layout.Alignment.ALIGN_CENTER)
+                (width - 21f - advance) / 2f else width - 21f - advance
+            assertEquals(x, bounds.left, .001f)
+            val recovery = nowrap.build(width, emptyList(), rtl, alignment)
+            ownSource(nowrap, recovery)
+            sameRect(checkNotNull(reference.nativeRubyLineAdvanceBounds(0)),
+                checkNotNull(recovery.nativeRubyLineAdvanceBounds(0)), 0f)
+        }
+        // A real full-width exclusion moves the hypothetical line even when its
+        // authored used height is zero; glyph/primary metrics are not used as a fake height.
+        for (height in listOf(0f, 24f)) {
+            val fixture = prepared("M", height = height)
+            val reference = fixture.build(c, emptyList(), false, android.text.Layout.Alignment.ALIGN_CENTER)
+            val blocking = listOf(NativeFloatExclusion(TableFloatSide.Left,
+                NativeFloatBounds(0f, 0f, c, 31.25f)))
+            val actual = fixture.build(c, blocking, false, android.text.Layout.Alignment.ALIGN_CENTER)
+            ownSource(fixture, actual)
+            assertEquals(31.25f, actual.nativeRubyLineTop(0), 0f)
+            assertEquals(reference.nativeRubyLineBaseline(0) + 31.25f, actual.nativeRubyLineBaseline(0), 0f)
+            assertEquals(height, actual.nativeUsedLineMetrics(0).height, 0f)
+            assertEquals(reference.nativeUsedLineMetrics(0), actual.nativeUsedLineMetrics(0))
+            assertEquals(reference.nativeRangeOfLine(0), actual.nativeRangeOfLine(0))
+        }
+        // Preserve the existing explicit Normal overflow limitation. Carry must not
+        // manufacture an emergency endpoint or silently treat this source as NoWrap.
+        val normalWord = prepared("MMMMMMMMMMMM")
+        val narrow = 20.5f
+        assertTrue(fit(normalWord.original.text, narrow, 0, false).getLineBreakOffset(0) < normalWord.original.text.length)
+        val refusal = assertThrows(UnsupportedFloatLayout::class.java) {
+            normalWord.build(narrow, listOf(NativeFloatExclusion(TableFloatSide.Right,
+                NativeFloatBounds(15f, 0f, narrow, 12f))), false, android.text.Layout.Alignment.ALIGN_NORMAL)
+        }
+        assertEquals("Authored normal Float image overflow needs an unavailable exact native correction", refusal.message)
+        val recovered = normalWord.build(512.5f, emptyList(), false, android.text.Layout.Alignment.ALIGN_NORMAL)
+        ownSource(normalWord, recovered)
+        assertEquals(1, recovered.shapedLineCount)
+    }
 }

@@ -47,6 +47,58 @@ class InlineTableWidthDesignTest {
         assertNull(inlineTableColumnWidths(three(), intArrayOf(20000, 20000, 26), intArrayOf(20000, 20000, 40), 0, 0, 300))
         assertNull(tablePixelLayout(three(), 1, 10, intArrayOf(10, 10, 10), columnWidths = listOf(30, 40)))
     }
+    @Test fun tableMinimumIsIndependentOfAutoPreferredCaptionAndCellFloors() {
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(Span("link", "body", target = "Target")), false, 1, 1))))
+        val grid = tableGrid(table)
+        fun width(minimum: Int, maximum: Int, available: Int, floor: Float,
+            preferred: Int? = null, caption: Int = 0): Int = checkNotNull(inlineTableColumnWidths(grid,
+                intArrayOf(minimum), intArrayOf(maximum), 0, 0, available,
+                authoredWidth = preferred, captionMinimumWidth = caption, minimumWidth = floor)).sum()
+        val floor = tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Percent, 70f), 2f, 40f, 400)
+        assertEquals(280f, floor, 0f)
+        assertEquals(400, width(80, 500, 400, floor))
+        assertEquals(280, width(40, 100, 400, floor))
+        assertEquals(280, width(80, 500, 400, floor, preferred = 100))
+        assertEquals(350, width(80, 500, 400, floor, preferred = 350))
+        assertEquals(450, width(450, 500, 400, floor, preferred = 100))
+        assertEquals(450, width(80, 500, 400, floor, preferred = 100, caption = 450))
+        assertEquals(600, width(40, 100, 400,
+            tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Percent, 150f), 1f, 20f, 400)))
+        assertEquals(141, width(0, 100, 200, 140.25f))
+        assertEquals(140, width(40, 100, 200,
+            tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Percent, 70f), 1f, 20f, 200)))
+        val absent = inlineTableColumnWidths(grid, intArrayOf(80), intArrayOf(500), 0, 0, 400)
+        assertEquals(absent, inlineTableColumnWidths(grid, intArrayOf(80), intArrayOf(500), 0, 0, 400, minimumWidth = 0f))
+        assertEquals("Target", table.rows.single().single().spans.single().target)
+        for (bad in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, TablePixelLimit + 1f))
+            assertNull(inlineTableColumnWidths(grid, intArrayOf(1), intArrayOf(2), 0, 0, 100, minimumWidth = bad))
+    }
+
+    @Test fun tableMinimumEnlargesOneBorderBoxBeforeColumnPercentagesAndNestedContribution() {
+        fun cell(cols: Int = 1, rows: Int = 1) = Cell(listOf(Span("text", "body")), false, cols, rows)
+        val table = Table(emptyList(), listOf(listOf(cell(), cell())))
+        val grid = tableGrid(table)
+        val preferences = listOf(TableCellWidthPreference(percent = 50.0), TableCellWidthPreference(percent = 50.0))
+        val columns = checkNotNull(inlineTableColumnWidths(grid, intArrayOf(20, 30), intArrayOf(80, 100),
+            0, 10, 50, authoredWidth = 40, cellPreferences = preferences, minimumWidth = 120.25f))
+        assertEquals(listOf(55, 56), columns)
+        assertEquals(121, columns.sum() + 10)
+        // The known child's entire measured border box is one ordinary intrinsic contribution.
+        val outer = tableGrid(Table(emptyList(), listOf(listOf(cell(), cell()))))
+        assertEquals(listOf(121, 20), inlineTableColumnWidths(outer, intArrayOf(121, 20), intArrayOf(121, 20),
+            0, 0, 100, minimumWidth = 70f))
+        val spanning = tableGrid(Table(emptyList(), listOf(listOf(cell(cols = 2)),
+            listOf(cell(rows = 2), cell()), listOf(cell()))))
+        val widths = checkNotNull(inlineTableColumnWidths(spanning,
+            intArrayOf(70, 20, 30, 30), intArrayOf(100, 60, 80, 80), 2, 10, 80,
+            minimumWidth = 200.25f, captionMinimumWidth = 190))
+        assertEquals(201, widths.sum() + 10)
+        val layout = checkNotNull(tablePixelLayout(spanning, 1, 1, intArrayOf(10, 40, 10, 10),
+            cellSpacing = 2, borderWidth = 2, minimumWidth = 201, columnWidths = widths))
+        assertTrue(layout.cellBottom(1, 2) - layout.cellTop(1) >= 40)
+        assertEquals(layout.cellWidth(2), widths.sum() + 2)
+    }
+
 }
 
 class InlineTableDomainDesignTest {

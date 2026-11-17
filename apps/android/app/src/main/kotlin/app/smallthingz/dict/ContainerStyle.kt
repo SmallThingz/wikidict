@@ -30,6 +30,54 @@ sealed interface ContainerPositioning {
 data class ContainerAbsolutePosition(val left: ContainerMarginLength, val top: ContainerMarginLength) {
     init { require(left.value.isFinite() && top.value.isFinite()) { "Invalid absolute Container offset" } }
 }
+
+/** Source all-auto static position, resolved from the actual containing paragraph. */
+enum class ContainerStaticDirection { Inherit, Ltr, Rtl }
+data class ContainerAbsoluteStaticPosition(val direction: ContainerStaticDirection = ContainerStaticDirection.Inherit)
+
+private fun ContainerStyle.staticNeutralStyle(): Boolean =
+    positionedScope == null && floatSide == null && clear == null && columns == null && layout == null &&
+        alignItems == null && flexItem == null && maxWidth == null && minHeight == null &&
+        screenMaxWidth == null && overflow == null &&
+        (padding == null || listOf(padding.top, padding.right, padding.bottom, padding.left).all { it.value == 0f }) &&
+        (margins == null || listOf(margins.top, margins.right, margins.bottom, margins.left).all { it.value == 0f }) &&
+        (marginValues == null || listOf(marginValues.top, marginValues.right, marginValues.bottom, marginValues.left)
+            .all { it is ContainerMargin.Length && it.value.value == 0f }) &&
+        (border == null || border == ContainerBorder.None) &&
+        (background == null || background == ContainerColor.Transparent) &&
+        (boxSizing == null || boxSizing == ContainerBoxSizing.ContentBox)
+
+internal fun validContainerStaticParentStyle(value: ContainerStyle): Boolean =
+    value.positioning == ContainerPositioning.RelativeAuto && value.absolutePosition == null && value.absoluteStatic == null &&
+        value.height == null && (value.width == null || value.width == ContainerWidth.Auto) && value.staticNeutralStyle()
+
+private fun containerStaticText(value: String): Boolean = validPresentationString(value) &&
+    value.none { it.code < 0x20 || it.code == 0x7f }
+
+/** Local body shape only; the complete entry walk authenticates immediate parent custody. */
+internal fun validContainerAbsoluteStaticBody(value: Container): Boolean {
+    if (value.style.absoluteStatic == null) return false
+    val block = value.blocks.singleOrNull() ?: return false
+    if (block.kind != "paragraph" || block.depth != 0 || block.level != 0 || block.spans.isEmpty() ||
+        block.spans.size > (1 shl 20) || block.feature != null || block.table != null ||
+        block.listPath.isNotEmpty() || block.number.isNotEmpty() || block.anchor.isNotEmpty() ||
+        block.anchorFallback.isNotEmpty() || block.style != null || block.figure != null || block.flow != null ||
+        block.container != null || block.ruleStyle != null || block.textAlign != null) return false
+    var realText = false
+    for (span in block.spans) {
+        if (span.kind !in setOf("text", "link", "external_link") || span.image != null || span.ruby != null ||
+            span.inlinePaddingGroup != null || span.inlineActionGroup != null || span.inlineBoxGroup != null ||
+            span.citationMarker != null || !containerStaticText(span.text) || !containerStaticText(span.trail)) return false
+        realText = realText || span.text.isNotEmpty() || span.trail.isNotEmpty()
+    }
+    return realText
+}
+
+internal fun validSoleStaticInlineContainer(parent: Container): Boolean =
+    validContainerStaticParentStyle(parent.style) && parent.blocks.singleOrNull()?.container?.let {
+        validContainerAbsoluteStaticBody(it)
+    } == true
+
 enum class PositionedOverflowX { Scroll, Hidden }
 enum class PositionedOverflowY { Auto }
 data class PositionedViewportState(val minWidthPx: Long, val overflowX: PositionedOverflowX,
@@ -155,7 +203,8 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     val positioning: ContainerPositioning? = null, val minHeight: StyleLength? = null,
     val marginValues: ContainerMargins? = null, val fontFamily: ContainerFontFamily? = null,
     val positionedScope: PositionedScope? = null, val ownerFont: InlineFontSnapshot? = null,
-    val absolutePosition: ContainerAbsolutePosition? = null, val textWrap: TextWrap? = null) {
+    val absolutePosition: ContainerAbsolutePosition? = null, val textWrap: TextWrap? = null,
+    val absoluteStatic: ContainerAbsoluteStaticPosition? = null) {
     init {
         ownerFont?.let { font ->
             require(font.fontNormalized && font.fontScale != null &&
@@ -173,6 +222,10 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
         }
         require(textWrap == null || textWrap == TextWrap.Normal || textWrap == TextWrap.NoWrap) {
             "Unsupported Container text wrap"
+        }
+        if (absoluteStatic != null) {
+            require(absolutePosition == null && positioning == null && width == ContainerWidth.FitContent &&
+                height == null && staticNeutralStyle()) { "Unsupported static inline Container box" }
         }
         if (absolutePosition != null) {
             val definiteWidth = (width as? ContainerWidth.Length)?.value
@@ -295,7 +348,7 @@ internal data class ContainerViewportStyle(val box: ContainerStyle, val margins:
     val ownsFormattingContext: Boolean get() = box.floatSide != null ||
         box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto || box.columns != null
 }
-internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || textWrap != null ||
+internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || absoluteStatic != null || textWrap != null ||
     ownerFont != null && positioning == ContainerPositioning.RelativeAuto
 
 data class Container(val blocks: List<Block>, val style: ContainerStyle = ContainerStyle()) {
@@ -333,6 +386,7 @@ internal fun legacyContainerMarginsSupported(value: Container, depth: Int = 1): 
 
 private fun supportedContainerShape(value: Container, depth: Int): Boolean {
     if (depth > MaxContentDepth || value.blocks.size > (1 shl 20)) return false
+    if (value.style.absoluteStatic != null && !validContainerAbsoluteStaticBody(value)) return false
     return value.blocks.all { block -> block.kind != "heading" &&
         (block.container == null ||
             (block.container.style.positioning !is ContainerPositioning.Absolute || value.style.positionedScope != null) &&

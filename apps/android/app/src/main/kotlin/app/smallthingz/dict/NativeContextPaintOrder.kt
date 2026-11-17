@@ -57,7 +57,7 @@ internal data class NativePaintBox(val id: Int, val rank: Int, val leaves: Set<I
 /** The separate Figure caption renderer has no prepared Container/fragment owner yet. */
 internal fun Block.hasColumnsOrPositionedContainer(): Boolean = when {
     container != null -> container.style.columns != null || container.style.positioning != null ||
-        container.style.absolutePosition != null ||
+        container.style.absolutePosition != null || container.style.absoluteStatic != null ||
         container.blocks.any(Block::hasColumnsOrPositionedContainer)
     table != null -> table.hasColumnsOrPositionedContainer()
     figure != null -> figure.captionBlocks?.any(Block::hasColumnsOrPositionedContainer) == true

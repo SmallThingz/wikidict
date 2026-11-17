@@ -847,12 +847,13 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
     val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null,
     val display: TableDisplay? = null, val verticalAlign: InlineBoxVerticalAlign? = null,
     val lineHeight: ComputedLineHeight? = null, val marginValues: ContainerMargins? = null,
-    val containingDirection: TableContainingDirection? = null, val cornerRadii: TableCornerRadii? = null) {
+    val containingDirection: TableContainingDirection? = null, val cornerRadii: TableCornerRadii? = null,
+    val minWidth: StyleWidth? = null) {
     val isInline: Boolean get() = display == TableDisplay.InlineBlock || display == TableDisplay.InlineTable
     init {
         require(background != null || border != null || collapse != null || margins != null || floatSide != null ||
             width != null || padding != null || clear != null || display != null || verticalAlign != null ||
-            lineHeight != null || marginValues != null || cornerRadii != null) { "Empty table style" }
+            lineHeight != null || marginValues != null || cornerRadii != null || minWidth != null) { "Empty table style" }
         require(margins == null || marginValues == null) { "Conflicting table margin representations" }
         val numericCornerDirection = cornerRadii != null && margins != null && marginValues == null
         require((marginValues != null) == (containingDirection != null) ||
@@ -935,6 +936,7 @@ data class TableScrollFocusPaint(val mode: TableScrollFocusMode, val color: Figu
 internal fun tableSeparateCornerViewportShape(maxViewportWidthPx: Long, boxStyle: TableStyle,
     maxWidth: StyleWidth, gridStyle: TableStyle, language: String): Boolean =
     maxViewportWidthPx in 0L..0xffff_ffffL && language.isNotEmpty() && validPresentationString(language) &&
+        boxStyle.minWidth == null && gridStyle.minWidth == null &&
         boxStyle.cornerRadii != null && boxStyle.margins != null &&
         boxStyle.width == StyleWidth(StyleWidthUnit.Percent, 100f) &&
         maxWidth == StyleWidth(StyleWidthUnit.Percent, 100f) && boxStyle.marginValues == null &&
@@ -956,6 +958,7 @@ data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableS
     internal val isSeparateCornerGrid: Boolean get() = tableSeparateCornerViewportShape(
         maxViewportWidthPx, boxStyle, maxWidth, gridStyle, language)
     init {
+        require(boxStyle.minWidth == null && gridStyle.minWidth == null) { "Table viewport styles cannot carry minimum width" }
         require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
         require(maxViewportWidthPx in 0L..0xffff_ffffL) { "Invalid table viewport threshold" }
         if (intrinsicContainingDirection != null) {
@@ -997,6 +1000,7 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
     val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null) {
     init {
+        require(style?.minWidth == null || blockViewport == null && floatViewport == null) { "Responsive tables cannot carry minimum width" }
         require(style?.cornerRadii == null || style.collapse == TableCollapse.Separate) {
             "Ordinary table corners require explicit separate borders"
         }
@@ -1113,10 +1117,16 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     /** Complete Entry validation only; standalone subtrees can precede their eventual ancestor. */
     var validateAbsoluteContainers = false
     private var relativeContainerAvailable = false
+    private var staticInlineParent = false
     private inline fun <T> withoutRelativeContainer(read: () -> T): T {
         val previous = relativeContainerAvailable
+        val previousStatic = staticInlineParent
         relativeContainerAvailable = false
-        return try { read() } finally { relativeContainerAvailable = previous }
+        staticInlineParent = false
+        return try { read() } finally {
+            relativeContainerAvailable = previous
+            staticInlineParent = previousStatic
+        }
     }
     /** Raw semantic validation includes hidden readings and fallback runs; display callbacks stay whole. */
     var onSpan: (Span) -> Unit = {}
@@ -1232,15 +1242,25 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             value.container != null -> {
                 if (value.container.style.ownerFont != null) charge(1)
                 val previous = relativeContainerAvailable
+                val previousStatic = staticInlineParent
                 val style = value.container.style
-                if (validateAbsoluteContainers && style.absolutePosition != null) {
-                    require(previous) { "Absolute Container requires a represented relative ancestor" }
+                if (validateAbsoluteContainers && style.absoluteStatic != null) {
+                    require(previousStatic && validContainerAbsoluteStaticBody(value.container)) {
+                        "Static inline Container requires its sole immediate relative parent"
+                    }
+                }
+                if (validateAbsoluteContainers && (style.absolutePosition != null || style.absoluteStatic != null)) {
+                    require(style.absolutePosition == null || previous) { "Absolute Container requires a represented relative ancestor" }
                     relativeContainerAvailable = false
                 } else if (style.positioning == ContainerPositioning.RelativeAuto) relativeContainerAvailable = true
+                staticInlineParent = value.container.blocks.size == 1 && validContainerStaticParentStyle(style)
                 try {
                     onContainer(value.container)
                     blocks(value.container.blocks, tableDepth, descend(contentDepth))
-                } finally { relativeContainerAvailable = previous }
+                } finally {
+                    relativeContainerAvailable = previous
+                    staticInlineParent = previousStatic
+                }
             }
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
             value.figure != null -> figure(value.figure, tableDepth, contentDepth)
@@ -1363,7 +1383,7 @@ data class SectionHeadingStyle(val box: ContainerStyle, val font: InlineFontSnap
             box.floatSide == null && box.flexItem == null && box.alignItems == null && box.columns == null &&
             box.positioning == null && box.screenMaxWidth == null && box.height == null &&
             box.minHeight == null && box.marginValues == null && box.ownerFont == null &&
-            box.absolutePosition == null && box.textWrap == null) { "Unsupported heading box" }
+            box.absolutePosition == null && box.absoluteStatic == null && box.textWrap == null) { "Unsupported heading box" }
         require(font.fontScale != null && font.fontScaleBasis == FontScaleBasis.NormalBody &&
             font.fontScale == box.ownerFontScale && font.language.isNotEmpty() &&
             font.language.toByteArray(Charsets.UTF_8).size <= 1024 && font.role == "normal" &&

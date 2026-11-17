@@ -361,4 +361,67 @@ class ContainerOwnerFontStateTest {
         assertNull(source.inlineStyle)
     }
 
+
+    @Test fun staticInlineParentRetainsItsOwnResolvedFontAndPolicyBeforeChildOverrides() {
+        val parentSnapshot = font(1.5f)
+        val parent = resolved(ContainerStyle(ownerFont = parentSnapshot,
+            lineHeight = ContainerLineHeight.Multiplier(1.5f)).textContext(ContainerTextContext()), 72f)
+        val parentFormat = nativeContainerTextFormat(parent, 20.sp, body, density)
+        val childSnapshot = font(.5f).copy(bold = false, italic = false, superscript = false,
+            fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
+        val child = resolved(ContainerStyle(ownerFont = childSnapshot,
+            lineHeight = ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Px, 9f)))
+            .textContext(parent), 24f)
+        val childFormat = nativeContainerTextFormat(child, 20.sp, body, density)
+        val inherited = nativeStaticInlineParent(parentFormat, ContainerAbsoluteStaticPosition(),
+            TableContainingDirection.Rtl, BidiResolvedDirection.Ltr,
+            androidx.compose.ui.text.style.TextAlign.Start)
+        assertSame(parentFormat, inherited.format)
+        assertSame(parent.containerText!!.resolved, inherited.format.ownerFont)
+        assertSame(parentSnapshot, inherited.format.ownerFont!!.snapshot)
+        assertEquals(NativeLineHeightPolicy.Multiplier(1.5f), inherited.format.lineHeight)
+        assertEquals(72f, inherited.format.ownerFont!!.fontPixels!!, 0f)
+        assertEquals(ContainerFontFamily.SansSerif, inherited.format.sourceFamily)
+        assertEquals(BidiResolvedDirection.Rtl, inherited.direction)
+        assertEquals(android.text.Layout.Alignment.ALIGN_NORMAL, inherited.alignment)
+        assertEquals(NativeLineHeightPolicy.Pixels(18f), childFormat.lineHeight)
+        assertEquals(24f, childFormat.ownerFont!!.fontPixels!!, 0f)
+        assertFalse(childFormat.ownerFont!!.snapshot.bold)
+        assertFalse(childFormat.ownerFont!!.snapshot.italic)
+        assertSame(childSnapshot, childFormat.ownerFont!!.snapshot)
+        assertEquals(android.text.Layout.Alignment.ALIGN_OPPOSITE,
+            nativeStaticInlineParent(parentFormat, ContainerAbsoluteStaticPosition(), TableContainingDirection.Rtl,
+                null, androidx.compose.ui.text.style.TextAlign.Left).alignment)
+    }
+
+    @Test fun staticInlineInheritRequiresParentDirectionAndPreservesPositionedBodyExclusion() {
+        val original = ContainerTextContext()
+        val bodyOwner = resolved(ContainerStyle(ownerFont = font(),
+            lineHeight = ContainerLineHeight.Multiplier(2f)).textContext(original), 60f).copy(
+            bodyOrigin = NativeBodyTextOrigin(original, original), bodyDirection = BidiResolvedDirection.Rtl)
+        val excluded = checkNotNull(nativeWithoutBodyTextContext(bodyOwner, 20.sp, density))
+        assertSame(original, excluded)
+        assertNull(excluded.bodyDirection)
+        val format = nativeContainerTextFormat(excluded, 20.sp, body.copy(
+            textDirection = androidx.compose.ui.text.style.TextDirection.Content), density)
+        val failure = assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeStaticInlineParent(format, ContainerAbsoluteStaticPosition(), null, excluded.bodyDirection,
+                androidx.compose.ui.text.style.TextAlign.Start)
+        }
+        assertEquals("Static inline parent paragraph direction is unresolved", failure.message)
+        val explicit = nativeStaticInlineParent(format,
+            ContainerAbsoluteStaticPosition(ContainerStaticDirection.Rtl), TableContainingDirection.Ltr,
+            BidiResolvedDirection.Ltr, androidx.compose.ui.text.style.TextAlign.End)
+        assertEquals(BidiResolvedDirection.Rtl, explicit.direction)
+        assertEquals(android.text.Layout.Alignment.ALIGN_OPPOSITE, explicit.alignment)
+        val styled = nativeStaticInlineParent(format.copy(style = format.style.copy(
+            textDirection = androidx.compose.ui.text.style.TextDirection.Ltr)), ContainerAbsoluteStaticPosition(),
+            null, null, androidx.compose.ui.text.style.TextAlign.Right)
+        assertEquals(BidiResolvedDirection.Ltr, styled.direction)
+        assertEquals(android.text.Layout.Alignment.ALIGN_OPPOSITE, styled.alignment)
+        val bodyDirection = nativeStaticInlineParent(format, ContainerAbsoluteStaticPosition(),
+            null, BidiResolvedDirection.Rtl, androidx.compose.ui.text.style.TextAlign.Center)
+        assertEquals(BidiResolvedDirection.Rtl, bodyDirection.direction)
+        assertEquals(android.text.Layout.Alignment.ALIGN_CENTER, bodyDirection.alignment)
+    }
 }

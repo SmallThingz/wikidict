@@ -46,7 +46,7 @@ internal fun nativeDocumentImageRevision(states: Map<String, InlineImageAssetSta
 internal fun nativeDocumentScrollNeeded(entry: Entry): Boolean {
     var needed = false
     val visitor = PresentationSpanVisitor { _, _ -> }.apply {
-        onContainer = { if (it.style.absolutePosition != null) needed = true }
+        onContainer = { if (it.style.absolutePosition != null || it.style.absoluteStatic != null) needed = true }
     }
     entry.sections.forEach { visitor.blocks(it.blocks) }
     return needed

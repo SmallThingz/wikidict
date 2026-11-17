@@ -72,7 +72,26 @@ internal fun tableHasComputedCellStyle(table: Table): Boolean = table.style?.bor
 } }
 /** Enrolled native Figure cells supply real intrinsic widths even with padding-only styles. */
 internal fun tableUsesContentWidths(table: Table, inherited: Boolean = false): Boolean =
-    inherited || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table) || nativeDelegatedAbsoluteTable(table)
+    inherited || table.style?.minWidth != null || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table) || nativeDelegatedAbsoluteTable(table)
+
+/** A hard table floor keeps its original-body units and real containing-width authority. */
+internal fun tableMinimumWidthPixels(value: StyleWidth, density: Float, normalBodyPixels: Float,
+    containingWidth: Int? = null): Float {
+    if (!density.isFinite() || density <= 0f || !normalBodyPixels.isFinite() || normalBodyPixels < 0f)
+        throw UnsupportedFloatLayout("Table minimum width has an invalid geometry basis")
+    val pixels = when (value.unit) {
+        StyleWidthUnit.Px -> value.value.toDouble() * density
+        StyleWidthUnit.Em -> value.value.toDouble() * normalBodyPixels
+        StyleWidthUnit.Percent -> {
+            val containing = containingWidth?.takeIf { it in 0..TablePixelLimit }
+                ?: throw UnsupportedFloatLayout("Table percentage minimum requires its actual containing width")
+            value.value.toDouble() * containing / 100.0
+        }
+    }
+    if (!pixels.isFinite() || pixels !in 0.0..TablePixelLimit.toDouble())
+        throw UnsupportedFloatLayout("Table minimum width exceeds native geometry")
+    return pixels.toFloat()
+}
 
 /** Table-box fields retain their geometry; font-size caps and decoration projection do not apply. */
 internal fun tableBoxLengthPixels(value: StyleLength, density: Float, bodyFontPixels: Float): Int {

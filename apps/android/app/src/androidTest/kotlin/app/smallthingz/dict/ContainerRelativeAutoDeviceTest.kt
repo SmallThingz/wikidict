@@ -802,4 +802,354 @@ class ContainerRelativeAutoDeviceTest {
             }
         }
     }
+
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 31)
+    @Test fun soleStaticInlineChildUsesParentHypotheticalLineWithoutAddingAFlowLine() {
+        // All dimensions/fonts below are synthetic. The source-like first body is only Kept.
+        val kept = Span("link", "Kept", target = "static-kept", foreground = "#0033cc",
+            fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx, fontFamily = ContainerFontFamily.SansSerif)
+        val words = kept.copy(text = "Kept alpha beta gamma delta epsilon theta kappa lambda sigma omega")
+        val directionalWords = words.copy(text = words.text + " ")
+        data class Case(val span: Span = kept, val parentPixels: Float = 24f,
+            val parentHeight: Float = 60f, val childHeight: Float = 20f,
+            val alignment: CellTextAlign = CellTextAlign.Center,
+            val direction: ContainerStaticDirection = ContainerStaticDirection.Ltr,
+            val parentRtl: Boolean = false, val explicitParentDirection: Boolean = true,
+            val nowrap: Boolean = false, val width: Int = 300, val zoom: Float = 1f,
+            val bodyDirection: Boolean = false, val uiRtl: Boolean = true)
+        val cases = listOf(Case(), Case(alignment = CellTextAlign.Right), Case(parentHeight = 90f),
+            Case(childHeight = 36f), Case(parentPixels = 36f),
+            Case(directionalWords, direction = ContainerStaticDirection.Inherit, parentRtl = true, uiRtl = false),
+            Case(directionalWords, direction = ContainerStaticDirection.Inherit),
+            Case(directionalWords, direction = ContainerStaticDirection.Rtl),
+            Case(width = 230, zoom = 1.25f), Case(),
+            Case(words, parentHeight = 2000f, alignment = CellTextAlign.Left, nowrap = true, uiRtl = false),
+            Case(direction = ContainerStaticDirection.Inherit, explicitParentDirection = false, bodyDirection = true, uiRtl = false),
+            Case(direction = ContainerStaticDirection.Rtl, explicitParentDirection = false, bodyDirection = true, uiRtl = false), Case())
+        fun entry(value: Case): Entry {
+            fun font(pixels: Float, bold: Boolean = false) = InlineFontSnapshot(fontScale = pixels,
+                fontScaleBasis = FontScaleBasis.CssPx, fontNormalized = true, bold = bold,
+                fontFamily = ContainerFontFamily.SansSerif)
+            val child = group(listOf(Block("paragraph", 0, listOf(value.span))), ContainerStyle(
+                width = ContainerWidth.FitContent, ownerFont = font(18f),
+                lineHeight = ContainerLineHeight.Length(px(value.childHeight)), textAlign = CellTextAlign.Left,
+                textWrap = if (value.nowrap) TextWrap.NoWrap else TextWrap.Normal,
+                absoluteStatic = ContainerAbsoluteStaticPosition(value.direction)))
+            val parent = group(listOf(child), ContainerStyle(positioning = ContainerPositioning.RelativeAuto,
+                ownerFont = font(value.parentPixels, bold = true), lineHeight = ContainerLineHeight.Length(px(value.parentHeight)),
+                textAlign = value.alignment, textWrap = if (value.nowrap) TextWrap.NoWrap else TextWrap.Normal))
+            return Entry("Static", emptyList(), "supplemental", null, "",
+                listOf(Section(2, "", listOf(parent))), emptyList(), bodyTypography = if (!value.bodyDirection) null else
+                    BodyTypography(font(20f), ContainerLineHeight.Length(px(24f)), BidiResolvedDirection.Rtl))
+        }
+        val entries = cases.map(::entry)
+        val empty = entries.first().copy(sections = listOf(Section(2, "", emptyList())))
+        val phase = mutableStateOf(0)
+        val removed = mutableStateOf(false)
+        val reading = EntryReadingState()
+        val actions = mutableListOf<EntryLink>()
+        val failures = mutableListOf<String>()
+        var activity: android.app.Activity? = null
+        var parentPixels = 0f
+        var childPixels = 0f
+        var rootWindow = androidx.compose.ui.geometry.Rect.Zero
+        var primary: Throwable? = null
+        data class Observed(val first: android.graphics.RectF, val normalHeight: Float, val width: Int)
+        val seen = mutableMapOf<Int, Observed>()
+        fun currentViews(): List<NativeFloatTextView> {
+            val result = mutableListOf<NativeFloatTextView>()
+            fun visit(view: View) {
+                if (view is NativeFloatTextView && view.isShown) result += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activity).window.decorView)
+            return result
+        }
+        fun owner(value: Case): NativeFloatTextView = currentViews().single { view ->
+            view.logicalText.toString() == value.span.text && view.currentMeasuredGeometry?.nodes?.count {
+                it.kind == FloatInteractionKind.LINK && it.label?.toString() == value.span.text } == 1
+        }
+        fun sourceCaret(view: NativeFloatTextView, sourceOffset: Int): android.graphics.RectF {
+            val geometry = checkNotNull(view.currentMeasuredGeometry) as NativeSurfaceGeometry
+            return android.graphics.RectF(checkNotNull(geometry.caretRect(sourceOffset))).apply {
+                offset(geometry.surface.left.toFloat(), geometry.surface.top.toFloat())
+            }
+        }
+        fun childPaint() = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = childPixels; typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+        }
+        fun halfLeadingTop(paint: android.text.TextPaint, height: Float): Float {
+            val fm = paint.fontMetrics
+            return fm.ascent - (height - (fm.descent - fm.ascent)) / 2f
+        }
+        fun horizontalRange() = compose.onNodeWithTag("entry-document-scroll").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange]
+        fun assertKeptPaint() {
+            lateinit var rectangle: android.graphics.RectF
+            compose.runOnIdle {
+                val view = owner(cases[0])
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.kind == FloatInteractionKind.LINK }
+                rectangle = android.graphics.RectF(node.bounds.single())
+                assertEquals(node.id, geometry.interactionNodeAt(rectangle.centerX(), rectangle.centerY())?.id)
+                val location = IntArray(2).also(view::getLocationInWindow)
+                rectangle.offset(location[0] + view.paddingLeft - rootWindow.left,
+                    location[1] + view.paddingTop - rootWindow.top)
+            }
+            val bitmap = compose.onNodeWithTag("static-inline-scene").captureToImage().asAndroidBitmap()
+            try {
+                val left = kotlin.math.floor(rectangle.left).toInt().coerceIn(0, bitmap.width)
+                val right = kotlin.math.ceil(rectangle.right).toInt().coerceIn(left, bitmap.width)
+                val top = kotlin.math.floor(rectangle.top).toInt().coerceIn(0, bitmap.height)
+                val bottom = kotlin.math.ceil(rectangle.bottom).toInt().coerceIn(top, bitmap.height)
+                var ink = 0
+                for (y in top until bottom) for (x in left until right)
+                    if (bitmap.getPixel(x, y) == 0xff0033cc.toInt()) ink++
+                assertTrue("The real absolute child paints in its published source region", ink > 2)
+            } finally { bitmap.recycle() }
+        }
+        fun assertSource(value: Case, index: Int) {
+            val view = owner(value)
+            val geometry = checkNotNull(view.currentMeasuredGeometry) as NativeSurfaceGeometry
+            val content = geometry.content
+            assertEquals(value.span.text, geometry.text.toString())
+            assertEquals(0f, content.extents.usedHeight, .001f)
+            assertNull(content.textBaselines?.first); assertNull(content.textBaselines?.last)
+            val node = geometry.nodes.single { it.kind == FloatInteractionKind.LINK }
+            assertEquals(0, node.start); assertEquals(value.span.text.length, node.end)
+            assertEquals(value.span.text, node.label?.toString())
+            val parentPaint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = parentPixels; typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+            }
+            val child = childPaint()
+            val baseline = -minOf(halfLeadingTop(parentPaint, value.parentHeight), halfLeadingTop(child, value.childHeight))
+            val expectedTop = baseline + child.fontMetrics.ascent
+            val childBaseline = -halfLeadingTop(child, value.childHeight)
+            // Keep the independent selection-band oracle in native Float font metrics.
+            val shaped = android.graphics.text.TextRunShaper.shapeTextRun(value.span.text, 0, value.span.text.length,
+                0, value.span.text.length, 0f, 0f, false, child)
+            assertTrue(shaped.glyphCount() > 0)
+            val naturalTop = minOf(child.fontMetrics.ascent, shaped.ascent,
+                (0 until shaped.glyphCount()).minOf { glyph ->
+                    val metrics = android.graphics.Paint.FontMetrics()
+                    shaped.getFont(glyph).getMetrics(child, metrics)
+                    metrics.top
+                })
+            val first = sourceCaret(view, 0)
+            assertEquals("Static top uses the declaring ascent, without child half-leading", expectedTop,
+                first.top - childBaseline - naturalTop, .02f)
+            val rtl = when (value.direction) {
+                ContainerStaticDirection.Inherit -> value.parentRtl
+                ContainerStaticDirection.Ltr -> false
+                ContainerStaticDirection.Rtl -> true
+            }
+            val maximum = child.measureText(value.span.text)
+            val hypothetical = android.text.StaticLayout.Builder.obtain(value.span.text, 0, value.span.text.length,
+                child, content.width.coerceAtLeast(1)).setIncludePad(true)
+                .setTextDirection(if (rtl) android.text.TextDirectionHeuristics.RTL else android.text.TextDirectionHeuristics.LTR)
+                .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+            val firstAdvance = if (value.nowrap) maximum else hypothetical.getLineMax(0)
+            val visualLeft = when (value.alignment) {
+                CellTextAlign.Left -> 0f
+                CellTextAlign.Center -> (content.width - firstAdvance) / 2f
+                CellTextAlign.Right -> content.width - firstAdvance
+            }
+            val anchor = if (rtl) visualLeft + firstAdvance else visualLeft
+            val available = (if (rtl) anchor else content.width - anchor).coerceAtLeast(0f)
+            val minimum = if (value.nowrap) maximum else value.span.text.split(' ').maxOf(child::measureText)
+            val usedWidth = minOf(maximum, maxOf(minimum, available))
+            val expectedLeft = if (rtl) anchor - usedWidth else anchor
+            assertEquals("Actual source edge uses parent progression and Float remaining width", expectedLeft, first.left, .02f)
+            val ends = if (value.nowrap) listOf(value.span.text.length) else {
+                val measured = android.graphics.text.MeasuredText.Builder(value.span.text.toCharArray())
+                    .appendStyleRun(child, value.span.text.length, false).build()
+                val constraints = android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(usedWidth) }
+                val breaker = android.graphics.text.LineBreaker.Builder()
+                    .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                    .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+                val result = breaker.computeLineBreaks(measured, constraints, 0)
+                List(result.lineCount) { result.getLineBreakOffset(it) }
+            }
+            var start = 0
+            ends.forEach { end ->
+                for (offset in start until end) assertEquals(listOf(start to end), geometry.visualLineRanges(offset))
+                start = end
+            }
+            assertEquals(value.span.text.length, start)
+            assertEquals(value.span.text.length, geometry.characterRects(0, start).count { it != null })
+            if (value.span === directionalWords) {
+                assertTrue("Direction contrast must wrap the Latin-only source", ends.size > 1)
+                val lastStart = ends[ends.lastIndex - 1]
+                val latin = checkNotNull(geometry.characterRects(lastStart, 1).single())
+                val space = checkNotNull(geometry.characterRects(start - 1, 1).single())
+                assertTrue(space.width() > 0f)
+                if (rtl) {
+                    assertEquals("RTL paragraph puts its retained final SP before the Latin run", latin.left, space.right, .02f)
+                    assertTrue(space.left < latin.left)
+                } else {
+                    val lastLatin = checkNotNull(geometry.characterRects(start - 2, 1).single())
+                    assertEquals("LTR paragraph keeps its final SP after the Latin run", lastLatin.right, space.left, .02f)
+                    assertTrue(space.left > latin.left)
+                }
+            }
+            view.setSelection(0, start); assertEquals(value.span.text, view.selectedTextForCopy())
+            view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE))
+            val source = entries[index].sections.single().blocks.single().container!!.blocks.single().container!!
+            assertSame(value.span, source.blocks.single().spans.single())
+            assertNull(source.style.height); assertEquals(ContainerWidth.FitContent, source.style.width)
+            val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id))
+            try { assertEquals(value.span.text, info.text?.toString()); assertTrue(info.isClickable) }
+            finally { info.recycle() }
+            seen[index] = Observed(first, content.extents.usedHeight, content.width)
+        }
+        try {
+            compose.activityRule.scenario.onActivity { host ->
+                activity = host
+                host.setContent {
+                    val value = cases[phase.value]
+                    CompositionLocalProvider(LocalDensity provides Density(1f, value.zoom), LocalCssPixelTextZoom provides 1f,
+                        androidx.compose.ui.platform.LocalLayoutDirection provides if (value.uiRtl)
+                            androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr,
+                        LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                        val density = LocalDensity.current
+                        androidx.compose.runtime.SideEffect {
+                            parentPixels = with(density) { value.parentPixels.sp.toPx() }
+                            childPixels = with(density) { 18.sp.toPx() }
+                        }
+                        DictTheme("light") {
+                            MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = androidx.compose.ui.text.TextStyle(
+                                fontSize = 20.sp, lineHeight = 24.sp, letterSpacing = 0.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                                fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Normal,
+                                textDirection = if (!value.explicitParentDirection) androidx.compose.ui.text.style.TextDirection.Content
+                                    else if (value.parentRtl) androidx.compose.ui.text.style.TextDirection.Rtl
+                                    else androidx.compose.ui.text.style.TextDirection.Ltr))) {
+                                Box(Modifier.width(value.width.dp).height(300.dp).background(Color.White)
+                                    .testTag("static-inline-scene").onGloballyPositioned { rootWindow = it.boundsInWindow() }) {
+                                    EntryView(if (removed.value) empty else entries[phase.value], false, {},
+                                        onLink = { actions += it }, readingState = reading, settings = AppSettings(
+                                            allowImages = false, allowAudio = false, collapseOtherSections = false, collapseDetails = false))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (index in 0..10) {
+                compose.runOnIdle { phase.value = index; failures.clear() }
+                compose.waitForIdle()
+                compose.runOnIdle { assertTrue(failures.toString(), failures.isEmpty()); assertSource(cases[index], index) }
+                if (index == 0) assertKeptPaint()
+                if (index < 10) assertEquals(0f, horizontalRange().maxValue(), 1f)
+            }
+            compose.runOnIdle {
+                assertEquals(seen[0], seen[9])
+                assertEquals(15f, checkNotNull(seen[2]).first.top - checkNotNull(seen[0]).first.top, .02f)
+                assertEquals(8f, checkNotNull(seen[3]).first.top - checkNotNull(seen[0]).first.top, .02f)
+                assertNotEquals(checkNotNull(seen[5]).first.left, checkNotNull(seen[6]).first.left)
+                val view = owner(cases[10])
+                val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.LINK }
+                val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id))
+                try { assertFalse(info.isVisibleToUser) } finally { info.recycle() }
+            }
+            val vertical = compose.onNodeWithTag("entry-scroll")
+            val viewport = vertical.fetchSemanticsNode().boundsInWindow
+            var distance = 0f
+            var held: NativeFloatTextView? = null
+            compose.runOnIdle {
+                val view = owner(cases[10]); held = view
+                val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.LINK }
+                val location = IntArray(2).also(view::getLocationInWindow)
+                distance = node.bounds.first().centerY() + location[1] + view.paddingTop - viewport.center.y
+                assertTrue(distance > 500f)
+            }
+            vertical.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(0f, distance)) }
+            compose.waitForIdle()
+            assertTrue(horizontalRange().maxValue() > 0f)
+            val pan = horizontalRange().maxValue()
+            compose.onNodeWithTag("entry-document-scroll").performSemanticsAction(SemanticsActions.ScrollBy) {
+                assertTrue(it(pan, 0f))
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val view = owner(cases[10]); assertSame(held, view)
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.kind == FloatInteractionKind.LINK }
+                assertEquals(checkNotNull(seen[10]).width, (geometry as NativeSurfaceGeometry).content.width)
+                assertEquals(0f, geometry.content.extents.usedHeight, .001f)
+                val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id))
+                try { assertTrue(info.isVisibleToUser); assertEquals(words.text, info.text?.toString()) } finally { info.recycle() }
+                val last = checkNotNull(geometry.characterRects(words.text.length - 1, 1).single())
+                val location = IntArray(2).also(view::getLocationInWindow)
+                assertTrue(last.centerX() + location[0] + view.paddingLeft in rootWindow.left..rootWindow.right)
+                assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(listOf(EntryLink("static-kept")), actions)
+                removed.value = true
+            }
+            compose.waitForIdle()
+            compose.onAllNodesWithTag("entry-document-scroll").assertCountEquals(0)
+            compose.runOnIdle {
+                assertTrue(currentViews().none { it.logicalText.toString() == words.text })
+                assertFalse(reading.scroll.canScrollBackward); assertFalse(reading.scroll.canScrollForward)
+                phase.value = 11; removed.value = false; failures.clear()
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(failures.contains("Static inline parent paragraph direction is unresolved"))
+                assertSame(kept, entries[11].sections.single().blocks.single().container!!.blocks.single().container!!.blocks.single().spans.single())
+            }
+            var nativeFallback = false
+            compose.runOnIdle {
+                val matches = currentViews().flatMap { view -> view.currentMeasuredGeometry?.nodes.orEmpty()
+                    .filter { it.onClick != null && it.label?.toString() == kept.text }.map { view to it } }
+                assertTrue("Fallback keeps one original action", matches.size <= 1)
+                matches.singleOrNull()?.let { (view, node) ->
+                    nativeFallback = true
+                    assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                }
+            }
+            if (!nativeFallback) {
+                val retained = compose.onNodeWithText(kept.text, useUnmergedTree = true)
+                val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                retained.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                val at = layouts.single().getBoundingBox(1).center
+                retained.performTouchInput { click(at) }
+            }
+            compose.runOnIdle {
+                assertEquals(listOf(EntryLink("static-kept"), EntryLink("static-kept")), actions)
+                phase.value = 12; failures.clear()
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { assertTrue(failures.toString(), failures.isEmpty()); assertSource(cases[12], 12) }
+            compose.runOnIdle { phase.value = 13; failures.clear() }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(failures.toString(), failures.isEmpty()); assertSource(cases[13], 13)
+                assertEquals(seen[0], seen[13])
+                val view = owner(cases[13])
+                val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.kind == FloatInteractionKind.LINK }
+                assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_FOCUS, null))
+                val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id))
+                try { assertTrue(info.isFocused); assertTrue(info.isVisibleToUser) } finally { info.recycle() }
+                assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertEquals(List(3) { EntryLink("static-kept") }, actions)
+            }
+            assertEquals(0f, horizontalRange().maxValue(), 1f)
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
 }

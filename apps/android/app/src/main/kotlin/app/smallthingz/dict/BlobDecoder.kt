@@ -14,16 +14,18 @@ object BlobDecoder {
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
         require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89 || magicVersion == 90) { "Unsupported presentation format" }
-        val positionedContainers = magicVersion == 90
-        val ownerGeometry = magicVersion == 89 || positionedContainers
-        val ownerGeometryFlags = if (positionedContainers) r.u16().also {
+        val extendedFeatures = magicVersion == 90
+        val ownerGeometry = magicVersion == 89 || extendedFeatures
+        val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
             // Only implemented Y low bits compose with Z; clipped-absolute remains unavailable.
-            require(it and 256 != 0 && it and 383 == it) { "Invalid positioned Container feature flags" }
+            require(it and 768 != 0 && it and 895 == it) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
             require(it in 1..127) { "Invalid owner geometry feature flags" }
         } else 0
+        val positionedContainers = ownerGeometryFlags and 256 != 0
         r.ownerGeometry = ownerGeometry
         r.positionedContainers = positionedContainers
+        r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
         r.imageOccurrences = ownerGeometryFlags and 32 != 0
@@ -165,7 +167,8 @@ object BlobDecoder {
             (ownerGeometryFlags and 2 != 0) == (bodyTypography != null) &&
             (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
             directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
-            r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers) {
+            r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
+            r.tableMinimumWidths == r.hasTableMinimumWidth) {
             "Y/Z features do not match owner geometry payload"
         }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
@@ -196,6 +199,8 @@ object BlobDecoder {
         var ownerGeometry = false
         var positionedContainers = false
         var hasPositionedContainers = false
+        var tableMinimumWidths = false
+        var hasTableMinimumWidth = false
         var containerOwnerFonts = false
         var hasContainerOwnerFont = false
         var inlineBoxGroups = false
@@ -851,7 +856,7 @@ object BlobDecoder {
                 if (flags and 8388608 != 0) positionedScope() else null,
                 if (flags and 16777216 != 0) containerOwnerFont() else null)
             val style = if (positionedContainers) {
-                val extension = byte().also { require(it and 3 == it) { "Unknown positioned Container extension" } }
+                val extension = byte().also { require(it and 7 == it) { "Unknown positioned Container extension" } }
                 val position = if (extension and 1 != 0)
                     ContainerAbsolutePosition(containerMarginLength(), containerMarginLength()) else null
                 val wrap = if (extension and 2 != 0) when (byte()) {
@@ -859,7 +864,9 @@ object BlobDecoder {
                     1 -> TextWrap.NoWrap
                     else -> error("Unknown Container text wrap")
                 } else null
-                base.copy(absolutePosition = position, textWrap = wrap)
+                val static = if (extension and 4 != 0) ContainerAbsoluteStaticPosition(
+                    ContainerStaticDirection.entries.getOrNull(byte()) ?: error("Unknown static Container direction")) else null
+                base.copy(absolutePosition = position, textWrap = wrap, absoluteStatic = static)
             } else base
             if (style.requiresPositionedContainers()) {
                 require(positionedContainers) { "Positioned Container fields require Z" }
@@ -956,7 +963,7 @@ object BlobDecoder {
             if (!tableStyles || !presence()) return null
             val flags = byte()
             val extension = if (tableFlows) byte() else 0
-            require(extension in 0..(if (tableCorners) 63 else if (containerFonts) 31 else 7) && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
+            require(extension in 0..(if (tableMinimumWidths) 127 else if (tableCorners) 63 else if (containerFonts) 31 else 7) && flags in 0..(if (imageMaps) 255 else if (blockLayouts) 31 else 15) &&
                 (flags != 0 || extension != 0)) { "Invalid table style flags" }
             val marginFlags = extension and 0x18
             val numericCornerDirection = tableCorners && extension and 0x20 != 0 && flags and 8 != 0 && marginFlags == 0x10
@@ -998,8 +1005,11 @@ object BlobDecoder {
             val corners = if (extension and 0x20 != 0) {
                 TableCornerRadii(styleLength(), styleLength(), styleLength(), styleLength()).also { hasTableCorners = true }
             } else null
+            val minWidth = if (extension and 64 != 0) StyleWidth(
+                StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown table minimum width unit"), buffer.float)
+                .also { hasTableMinimumWidth = true } else null
             return TableStyle(background, border, collapse, margins, floatSide, width, padding, clear, display, align,
-                lineHeight, marginValues, containingDirection, corners)
+                lineHeight, marginValues, containingDirection, corners, minWidth)
         }
         private fun tableBlockViewport(paired: Boolean, intrinsic: Boolean): TableBlockViewport {
             require(containerFonts && (!paired || tableScrollPairs)) { "Table paired viewport requires P" }

@@ -76,8 +76,8 @@ internal class NativeFloatRowPlan private constructor(
             val availableWidth = exactAvailableWidth ?: width.toFloat()
             if (exactAvailableWidth != null && (!availableWidth.isFinite() || availableWidth < 0f ||
                     availableWidth > TablePixelLimit || floor(availableWidth).toInt() != width ||
-                    occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() || insets != NativeTextInsets()))
-                throw UnsupportedFloatLayout("Exact Float text width requires an unexcluded zero-inset paragraph")
+                    occurrences.isNotEmpty() || insets != NativeTextInsets()))
+                throw UnsupportedFloatLayout("Exact Float text width requires a zero-inset paragraph without source floats")
             require(lineSpacingExtra.isFinite() && lineSpacingExtra >= 0f)
             require(lineSpacingMultiplier.isFinite() && lineSpacingMultiplier > 0f)
             require(occurrences.map { it.sourceId }.distinct().size == occurrences.size)
@@ -88,7 +88,7 @@ internal class NativeFloatRowPlan private constructor(
             validateNativeInlineStyle(source, paint)
             val wrap = NativeTextWrapPlan.create(source, paint)
             wrap?.noWrap?.requireLinePresence()
-            if (wrap?.noWrap != null && carriedExclusions.isNotEmpty())
+            if (wrap?.noWrap != null && carriedExclusions.isNotEmpty() && exactAvailableWidth == null)
                 throw UnsupportedFloatLayout("No-wrap source cannot inherit float exclusions")
             val runs = NativeFloatRowRuns(source, paint, direction)
             var left = intArrayOf(0)
@@ -118,7 +118,10 @@ internal class NativeFloatRowPlan private constructor(
                 }
                 val flow = nativePositionFloatRows(source, width, rows.map { it.start }.toIntArray(),
                     rows.map { it.end }.toIntArray(), natural, occurrences, carriedExclusions, insets,
-                    usedLineMetrics, wrap?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } })
+                    usedLineMetrics, wrap?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } },
+                    exactAvailableWidth = exactAvailableWidth,
+                    requiredLineWidths = if (exactAvailableWidth != null && wrap?.noWrap != null)
+                        FloatArray(rows.size) { rows[it].visibleAdvance } else null)
                 if (left.contentEquals(flow.left) && right.contentEquals(flow.right)) {
                     rows.forEachIndexed { index, row ->
                         if (flow.constrainedByFloat[index] && row.visibleAdvance > availableWidth - flow.left[index] - flow.right[index])
@@ -236,8 +239,11 @@ private fun nativeFloatRowEmergencyEnds(runs: NativeFloatRowRuns): Set<Int> = bu
     }
 }
 
-internal fun nativeFloatRowWidthRange(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
-    inset: Float, breakWordMinimum: Boolean): NativeWidthRange {
+internal data class NativeFloatRowIntrinsicWidths(val minimum: Float, val maximum: Float)
+
+/** Preserve native advances until a caller actually publishes an integer measurement. */
+internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
+    breakWordMinimum: Boolean): NativeFloatRowIntrinsicWidths {
     validateNativeFloatRowStructure(source)
     val runs = NativeFloatRowRuns(source, paint, direction)
     val wrap = NativeTextWrapPlan.create(source, paint)
@@ -280,9 +286,15 @@ internal fun nativeFloatRowWidthRange(source: Spanned, paint: TextPaint, directi
         }
         minimum = maxOf(authoredMinimum, emergencyMinimum)
     }
+    return NativeFloatRowIntrinsicWidths(minimum, maxOf(minimum, maximum))
+}
+
+internal fun nativeFloatRowWidthRange(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
+    inset: Float, breakWordMinimum: Boolean): NativeWidthRange {
+    val widths = nativeFloatRowIntrinsicWidths(source, paint, direction, breakWordMinimum)
     fun pixels(value: Float): Int {
         val total = value.toDouble() + inset
         return if (!total.isFinite() || total > TablePixelLimit) androidx.compose.ui.unit.Constraints.Infinity else ceil(total).toInt()
     }
-    return NativeWidthRange(pixels(minimum), pixels(maxOf(minimum, maximum)))
+    return NativeWidthRange(pixels(widths.minimum), pixels(widths.maximum))
 }

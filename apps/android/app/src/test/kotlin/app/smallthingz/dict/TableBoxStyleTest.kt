@@ -121,4 +121,77 @@ class TableBoxStyleTest {
             FloatMargins(100f, 0f, 0f, 0f), NativeBlockWidth.FixedPx(300f)) { NativeBlockMeasure(300f, 300f, 10f) }
         assertEquals(100f, alreadyBelow.content.top, 0f)
     }
+    @Test fun tableMinimumUsesOriginalUnitsRealContainingWidthAndExactDecoration() {
+        assertEquals(75.375f, tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Px, 50.25f), 1.5f, 100f), 0f)
+        assertEquals(50f, tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Em, 2.5f), 1.5f, 20f), 0f)
+        assertEquals(100f, tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Em, 2.5f), 1.5f, 40f), 0f)
+        assertEquals(280f, tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Percent, 70f), 9f, 400f, 400), 0f)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Percent, 70f), 1f, 20f)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            tableMinimumWidthPixels(StyleWidth(StyleWidthUnit.Px, Float.MAX_VALUE), 2f, 20f)
+        }
+        val legacy = table(TableStyle(clear = FigureClear.None))
+        val zero = legacy.copy(style = legacy.style!!.copy(minWidth = StyleWidth(StyleWidthUnit.Px, 0f)))
+        assertFalse(tableUsesContentWidths(legacy))
+        assertTrue(tableUsesContentWidths(zero))
+        assertSame(legacy.rows, zero.rows)
+        val exact = zero.copy(style = zero.style!!.copy(border = StyleBorder.Solid(px(400f), "#123456")))
+        val decorated = checkNotNull(metrics(exact))
+        assertEquals(1.0, decorated.style!!.decorationScale, 0.0)
+        assertEquals(400f, decorated.style!!.outerEdges.left.width, 0f)
+        val fixed = table(TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f),
+            minWidth = StyleWidth(StyleWidthUnit.Em, 8.0125f)))
+        assertEquals(161, metrics(fixed, font = 20f)!!.width)
+        assertEquals(321, metrics(fixed, font = 40f)!!.width)
+        val percent = fixed.copy(style = fixed.style!!.copy(minWidth = StyleWidth(StyleWidthUnit.Percent, 70f)))
+        val natural = checkNotNull(metrics(percent))
+        assertEquals(100, natural.width)
+        assertEquals(280, tableMetricsInWidth(percent, natural, 1, 400)!!.width)
+        assertEquals(140, tableMetricsInWidth(percent, natural, 1, 200)!!.width)
+        assertNull(tableMetricsInWidth(percent, natural, 1, null))
+        assertEquals(100f, percent.style!!.width!!.value, 0f)
+        assertEquals(70f, percent.style!!.minWidth!!.value, 0f)
+        assertEquals("Target", percent.rows.single().single().spans.single().target)
+        val legacyPixels = percent.copy(style = percent.style!!.copy(width = null),
+            geometry = TableGeometry(width = TableWidth(TableWidthUnit.Px, 240)))
+        val legacyNatural = checkNotNull(metrics(legacyPixels))
+        assertEquals(240, legacyNatural.width)
+        assertEquals(280, tableMetricsInWidth(legacyPixels, legacyNatural, 1, 400)!!.width)
+        assertEquals(240, tableMetricsInWidth(legacyPixels, legacyNatural, 1, 200)!!.width)
+        assertNull(metrics(fixed.copy(style = fixed.style!!.copy(minWidth = StyleWidth(StyleWidthUnit.Em, Float.MAX_VALUE)))))
+    }
+
+    @Test fun authoredEmptyTableMinimumReservesOnlyItsBorderBoxAndOldNullPathStaysClosed() {
+        val empty = Table(emptyList(), emptyList(), style = TableStyle(
+            minWidth = StyleWidth(StyleWidthUnit.Percent, 70f),
+            border = StyleBorder.None, padding = StyleEdges(px(2f), px(4f), px(6f), px(8f))))
+        val natural = checkNotNull(metrics(empty))
+        val grid = tableGrid(empty)
+        assertEquals(0, grid.columns)
+        assertTrue(grid.cells.isEmpty())
+        assertEquals(12, natural.width)
+        assertNull(inlineTableMetrics(natural, grid, intArrayOf(), intArrayOf(), 80))
+        val zero = checkNotNull(inlineTableMetrics(natural, grid, intArrayOf(), intArrayOf(), 80, minimumWidth = 0f))
+        assertEquals(12, zero.width)
+        val resolved = tableMinimumWidthPixels(checkNotNull(empty.style!!.minWidth), 1f, 20f, 80)
+        val ordinary = checkNotNull(tableMetricsInWidth(empty, natural, 0, 80))
+        val exact = checkNotNull(inlineTableMetrics(natural, grid, intArrayOf(), intArrayOf(), 80,
+            minimumWidth = resolved + .25f))
+        assertEquals(56, ordinary.width)
+        assertEquals(57, exact.width)
+        val pixels = checkNotNull(tablePixelLayout(grid, exact.columnWidth, 10, intArrayOf(),
+            exact.cellSpacing, exact.borderWidth, exact.width, exact.extraColumns,
+            exact.style!!.tablePadding, exact.columnWidths, exact.outerBorder))
+        assertEquals(57, pixels.width)
+        assertEquals(8, pixels.height)
+        assertTrue(empty.rows.isEmpty())
+        assertTrue(empty.caption.isEmpty())
+        assertNull(inlineTableMetrics(natural, grid, intArrayOf(), intArrayOf(), 80,
+            minimumWidth = Float.POSITIVE_INFINITY))
+        assertEquals(57, inlineTableMetrics(natural, grid, intArrayOf(), intArrayOf(), 80,
+            minimumWidth = 56.25f)!!.width)
+    }
+
 }

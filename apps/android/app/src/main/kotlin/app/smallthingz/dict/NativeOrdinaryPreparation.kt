@@ -141,7 +141,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
         val exclusions = incoming.toMutableList()
         val cursor = NativeMarginCursor(NativeMarginCollapse(true, true))
         for (part in parts) {
-            if (part is NativeFloatContextPart.Container && (part.absolute != null || part.absolutePosition != null)) continue
+            if (part is NativeFloatContextPart.Container && (part.absolute != null || part.absolutePosition != null || part.absoluteStatic != null)) continue
             val margins = profile(part)
             if (margins == null) {
                 val normalY = tableClearanceY(cursor.floatTop, nativeClearForPart(part), exclusions)

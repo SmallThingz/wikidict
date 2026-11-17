@@ -122,6 +122,7 @@ internal sealed interface NativeFloatContextSpec {
         val scrollport: NativeScrollportSpec? = null,
         val absolutePosition: NativeAbsolutePosition? = null,
         val absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
+        val absoluteStatic: NativeAbsoluteStaticPosition? = null,
         val content: @Composable () -> Unit,
     ) : NativeFloatContextSpec
     /** width is the existing renderer's actual viewport allocation at the ORIGINAL parent width. */
@@ -139,7 +140,8 @@ internal sealed interface NativeFloatContextSpec {
         val fixedMarginTable: NativeFixedMarginTableInput? = null,
         val pairedMarginTable: NativeFixedMarginTableInput? = null,
         val pairedBlockBox: ((Int, Float, ContainerWidths) -> NativeTableBlockBox)? = null,
-        val intrinsicMarginTable: NativeFixedMarginTableInput? = null) : NativeFloatContextSpec
+        val intrinsicMarginTable: NativeFixedMarginTableInput? = null,
+        val minimumWidth: (Int) -> Float? = { null }) : NativeFloatContextSpec
 }
 
 /** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
@@ -192,18 +194,18 @@ internal fun NativeFloatContextLayout(
     fun paintTree(items: List<NativeFloatContextSpec>): List<NativePaintOrderNode> = items.map { part ->
         val group = part as? NativeFloatContextSpec.Container
         NativePaintOrderNode(sourcePaintIndices.getValue(part), group?.relativeAuto == true ||
-            group?.absolute != null || group?.absolutePosition != null,
+            group?.absolute != null || group?.absolutePosition != null || group?.absoluteStatic != null,
             paintTree(group?.preparedParts.orEmpty()), absolute = group?.absolute != null,
             absoluteContainingBlock = group?.absoluteContainingBlock != null,
-            absolutePositionContainingBlock = group?.absolutePosition?.let { at ->
-                containingBlockSources[at.containingBlockId]
+            absolutePositionContainingBlock = (group?.absolutePosition?.containingBlockId ?: group?.absoluteStatic?.containingBlockId)?.let { id ->
+                containingBlockSources[id]
                     ?: throw UnsupportedFloatLayout("Absolute paint owner has no represented containing block")
             })
     }
     val paintSequence = nativeContextPaintSequence(paintTree(parts), absoluteScope)
     val ordinaryPaintRanks = java.util.IdentityHashMap<NativeFloatContextSpec, Int>()
     paintSequence.forEachIndexed { rank, index -> ordinaryPaintRanks[paintParts[index]] = rank }
-    val positioned = paintParts.filterIsInstance<NativeFloatContextSpec.Container>().any { it.relativeAuto || it.absolute != null || it.absolutePosition != null }
+    val positioned = paintParts.filterIsInstance<NativeFloatContextSpec.Container>().any { it.relativeAuto || it.absolute != null || it.absolutePosition != null || it.absoluteStatic != null }
     val positionedParent = LocalNativePositionedPaintParent.current
     val captionBreakWord = LocalCaptionBreakWord.current
     val decorated = paintParts.filterIsInstance<NativeFloatContextSpec.Container>().filter { it.decoration != null }
@@ -410,7 +412,7 @@ internal fun NativeFloatContextLayout(
                     var used = 0L
                     var floatLine = 0L
                     for (part in items) {
-                        if (part is NativeFloatContextSpec.Container && (part.absolute != null || part.absolutePosition != null)) continue
+                        if (part is NativeFloatContextSpec.Container && (part.absolute != null || part.absolutePosition != null || part.absoluteStatic != null)) continue
                         val index = leaves.indexOfFirst { it === part }
                         val content = when (part) {
                             is NativeFloatContextSpec.Text -> if (part.prepared.emptyInlineOwner) 0 else {
@@ -582,17 +584,18 @@ internal fun NativeFloatContextLayout(
                                 val nested = part.preparedParts
                                 val measurable = if (nested == null) childMeasurables.getValue(index) else null
                                 val scopeParts = part.scrollport?.takeIf { it.positioned != null }?.parts
-                                val minimum = if (scopeParts != null) intrinsicWidthOf(measurables, false, scopeParts, structural = true)
+                                val minimum = if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, false, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.minIntrinsicWidth(Constraints.Infinity)
                                     else intrinsicWidthOf(measurables, false, nested, part.row != null)
-                                val maximum = if (scopeParts != null) intrinsicWidthOf(measurables, true, scopeParts, structural = true)
+                                val maximum = if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, true, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.maxIntrinsicWidth(Constraints.Infinity)
                                     else intrinsicWidthOf(measurables, true, nested, part.row != null)
                                 if (minimum > TablePixelLimit || maximum < minimum || maximum > TablePixelLimit)
                                     throw UnsupportedFloatLayout("Container intrinsic width exceeds the native range")
                                 val intrinsic = ContainerWidths(minimum.toFloat(), maximum.toFloat())
                                 val forced = allocations?.get(itemIndex)
-                                val allocated = forced?.let { floor(it.width).toInt() } ?: part.contentWidth(containingWidth, intrinsic)
+                                val allocated = if (part.absoluteStatic != null) floor(available).toInt()
+                                    else forced?.let { floor(it.width).toInt() } ?: part.contentWidth(containingWidth, intrinsic)
                                 if (allocated !in 0..TablePixelLimit)
                                     throw UnsupportedFloatLayout("Container content width exceeds the native range")
                                 fun measureContainer(available: Int, carried: List<NativeFloatExclusion>, collapse: NativeMarginCollapse?): NativeFloatContextGeometry {
@@ -621,7 +624,9 @@ internal fun NativeFloatContextLayout(
                                 }
                                 val effectiveFloat = if (forced == null) part.floatSide else null
                                 val isolated = part.isolatesFloats || part.row != null || forced != null
-                                val horizontal = forced?.let {
+                                val horizontal = if (part.absoluteStatic != null)
+                                    NativeContainerHorizontal(available, available, available, 0f, 0f, 0f, available)
+                                else forced?.let {
                                     val border = it.width + padding.left + padding.right
                                     val outer = border + it.left + it.right
                                     NativeContainerHorizontal(outer, it.width, border, it.left,
@@ -638,9 +643,21 @@ internal fun NativeFloatContextLayout(
                                         effectiveFloat != null || isolated, part.row, horizontal?.content ?: allocated.toFloat()) },
                                     horizontal, part.row, part.flex?.crossMargins ?: NativeFlexCrossMargins(),
                                     part.fixedContentHeight, part.columns, part.minimum, part.headingAllocation,
-                                    part.absolute, part.scrollport?.positioned != null, part.absolutePosition, part.absoluteContainingBlock)
+                                    part.absolute, part.scrollport?.positioned != null, part.absolutePosition, part.absoluteContainingBlock,
+                                    part.absoluteStatic, if (part.absoluteStatic == null) null else
+                                        (nested?.singleOrNull() as? NativeFloatContextSpec.Text)?.prepared?.native)
                             }
                             is NativeFloatContextSpec.Child -> {
+                                val minimumFloor = part.minimumWidth(containingWidth)?.let { value ->
+                                    if (!value.isFinite() || value < 0f || value > TablePixelLimit)
+                                        throw UnsupportedFloatLayout("Authored child minimum exceeds the native range")
+                                    ceil(value).toInt()
+                                }
+                                if (minimumFloor != null && (part.blockViewport != null || part.fixedMarginTable != null ||
+                                        part.pairedMarginTable != null || part.intrinsicMarginTable != null || part.blockBox != null))
+                                    throw UnsupportedFloatLayout("Responsive table minima require an extended sizing policy")
+                                if (minimumFloor != null && !part.widthFromContent && !part.atomicInline)
+                                    throw UnsupportedFloatLayout("Table minimum requires its intrinsic content owner")
                                 val paired = part.pairedMarginTable
                                 val intrinsicOwner = part.intrinsicMarginTable
                                 if (paired != null || intrinsicOwner != null) {
@@ -755,13 +772,16 @@ internal fun NativeFloatContextLayout(
                                 val blockBox = numericBlockBox ?: part.blockBox?.invoke(containingWidth)
                                 widths.getValue(index).update(containingWidth)
                                 val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = containingWidth)) else null
+                                if (minimumFloor != null && atomic != null && atomic.width < minimumFloor)
+                                    throw UnsupportedFloatLayout("Inline table minimum exceeds its represented atomic allocation")
                                 var intrinsicMinimum: Int? = null
                                 val allocated = blockBox?.let { ceil(it.borderWidth).toInt() } ?: atomic?.width ?: if (part.widthFromContent) {
                                     val measurable = childMeasurables.getValue(index)
-                                    val minimum = measurable.minIntrinsicWidth(Constraints.Infinity)
+                                    val naturalMinimum = measurable.minIntrinsicWidth(Constraints.Infinity)
                                     val maximum = measurable.maxIntrinsicWidth(Constraints.Infinity)
-                                    if (minimum > TablePixelLimit || maximum < minimum)
+                                    if (naturalMinimum > TablePixelLimit || maximum < naturalMinimum)
                                         throw UnsupportedFloatLayout("Rich child intrinsic width exceeds the native range")
+                                    val minimum = maxOf(naturalMinimum, minimumFloor ?: 0)
                                     intrinsicMinimum = minimum
                                     val margins = fixedMargins ?: part.margins(containingWidth)
                                     val available = (containingWidth - ceil(margins.left + margins.right).toInt()).coerceAtLeast(0)
@@ -839,7 +859,7 @@ internal fun NativeFloatContextLayout(
                             leaves.indices.associateWith { paintRanks.getValue(leaves[it]) },
                             leaves.filterIsInstance<NativeFloatContextSpec.Child>().associate { it.id to paintRanks.getValue(it) },
                             paintParts.filterIsInstance<NativeFloatContextSpec.Container>()
-                                .filter { it.relativeAuto || it.absolute != null || it.absolutePosition != null || it.decoration != null }.map { group ->
+                                .filter { it.relativeAuto || it.absolute != null || it.absolutePosition != null || it.absoluteStatic != null || it.decoration != null }.map { group ->
                                     NativePaintBox(group.id, paintRanks.getValue(group),
                                         flatten(group.preparedParts.orEmpty()).map { leaf ->
                                             leaves.indexOfFirst { it === leaf }.also { check(it >= 0) }
@@ -861,7 +881,7 @@ internal fun NativeFloatContextLayout(
                         catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Context overflow exceeds the native Compose measurement range") }
                         preparedSurface = physical
                         if (documentSurface) {
-                            if (paintParts.any { it is NativeFloatContextSpec.Container && it.absolutePosition != null } ||
+                            if (paintParts.any { it is NativeFloatContextSpec.Container && (it.absolutePosition != null || it.absoluteStatic != null) } ||
                                 delegatedTables.values.any { it.ordinaryAbsolute }) {
                                 val scrollable = delegatedOverflow.fold(geometry.scrollableBounds) { bounds, overflow ->
                                     enclosingBounds(bounds, overflow.scrollable) ?: bounds

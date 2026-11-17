@@ -297,7 +297,7 @@ class RubyModelCodecTest {
             require(value == ContainerStyle(width = value.width, lineHeight = value.lineHeight,
                 textAlign = value.textAlign, overflow = value.overflow, ownerFontScale = value.ownerFontScale,
                 height = value.height, positioning = value.positioning, fontFamily = value.fontFamily,
-                ownerFont = value.ownerFont, absolutePosition = value.absolutePosition, textWrap = value.textWrap))
+                ownerFont = value.ownerFont, absolutePosition = value.absolutePosition, textWrap = value.textWrap, absoluteStatic = value.absoluteStatic))
             mark("$label.flags")
             val flags = (if (value.width != null) 4 else 0) or (if (value.lineHeight != null) 4096 else 0) or
                 (if (value.textAlign != null) 8192 else 0) or (if (value.overflow != null) 32768 else 0) or
@@ -331,7 +331,7 @@ class RubyModelCodecTest {
             value.ownerFont?.let { fontSnapshot(it, "$label.owner") }
             if (version == 'Z' && yFlags and 256 != 0) {
                 mark("$label.extension")
-                byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0))
+                byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0) or (if (value.absoluteStatic != null) 4 else 0))
                 value.absolutePosition?.let {
                     positionedLength(it.left, "$label.left"); positionedLength(it.top, "$label.top")
                 }
@@ -339,8 +339,13 @@ class RubyModelCodecTest {
                     mark("$label.wrap")
                     byte(when (it) { TextWrap.Normal -> 0; TextWrap.NoWrap -> 1; else -> error("Unsupported fixture wrap") })
                 }
-            } else require(value.absolutePosition == null && value.textWrap == null)
+                value.absoluteStatic?.let { mark("$label.static"); byte(it.direction.ordinal) }
+            } else require(value.absolutePosition == null && value.textWrap == null && value.absoluteStatic == null)
             mark("$label.end")
+        }
+        fun isolatedPositionedStyle(value: ContainerStyle): ByteArray {
+            positionedStyle(value, "isolatedStyle")
+            return out.toByteArray()
         }
         private fun positionedLength(value: ContainerMarginLength, label: String) {
             mark("$label.unit"); byte(value.unit.ordinal); mark("$label.value"); f32(value.value)
@@ -367,8 +372,67 @@ class RubyModelCodecTest {
                 }
             }
         }
+        private fun minimumTableStyle(value: TableStyle?, label: String) {
+            mark("$label.presence"); byte(if (value == null) 0 else 1)
+            if (value == null) return
+            val flags = (if (value.background != null) 1 else 0) or (if (value.border != null) 2 else 0) or
+                (if (value.collapse != null) 4 else 0) or (if (value.margins != null) 8 else 0) or
+                (if (value.floatSide != null) 16 else 0) or (if (value.width != null) 32 else 0) or
+                (if (value.padding != null) 64 else 0) or (if (value.clear != null) 128 else 0)
+            val extension = (if (value.display != null) 1 else 0) or (if (value.verticalAlign != null) 2 else 0) or
+                (if (value.lineHeight != null) 4 else 0) or (if (value.marginValues != null) 8 else 0) or (if (value.containingDirection != null) 16 else 0) or
+                (if (value.cornerRadii != null) 32 else 0) or (if (value.minWidth != null) 64 else 0)
+            require(value.minWidth == null || version == 'Z' && yFlags and 512 != 0)
+            mark("$label.flags"); byte(flags); mark("$label.extension"); byte(extension)
+            value.background?.let { string(it) }
+            value.border?.let { border -> when (border) {
+                StyleBorder.None -> byte(0)
+                is StyleBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); string(border.color) }
+                else -> error("Unsupported fixture border")
+            } }
+            value.collapse?.let { byte(it.ordinal) }
+            fun edges(edges: StyleEdges, name: String) {
+                listOf(edges.top, edges.right, edges.bottom, edges.left).forEachIndexed { index, length -> positionedLength(length, "$label.$name.$index") }
+            }
+            value.margins?.let { edges(it, "margins") }
+            value.floatSide?.let { byte(it.ordinal) }
+            value.width?.let { mark("$label.width"); byte(it.unit.ordinal); f32(it.value) }
+            value.padding?.let { edges(it, "padding") }
+            value.clear?.let { byte(it.ordinal) }
+            value.display?.let { byte(it.ordinal) }
+            value.verticalAlign?.let { byte(it.ordinal) }
+            value.lineHeight?.let { f32(it.value); byte(it.fontScaleBasis.ordinal) }
+            value.marginValues?.let { margins ->
+                listOf(margins.top, margins.right, margins.bottom, margins.left).forEachIndexed { index, margin -> when (margin) {
+                    ContainerMargin.Auto -> byte(0)
+                    is ContainerMargin.Length -> { byte(1); positionedLength(margin.value, "$label.marginValue.$index") }
+                } }
+            }
+            value.containingDirection?.let { byte(it.ordinal) }
+            value.cornerRadii?.let { corners ->
+                listOf(corners.topLeft, corners.topRight, corners.bottomRight, corners.bottomLeft).forEachIndexed { index, radius ->
+                    positionedLength(radius, "$label.corner.$index")
+                }
+            }
+            mark("$label.oldEnd")
+            value.minWidth?.let { mark("$label.minimum.unit"); byte(it.unit.ordinal); mark("$label.minimum.value"); f32(it.value) }
+            mark("$label.end")
+        }
+        fun isolatedMinimumTableStyle(value: TableStyle?): ByteArray {
+            minimumTableStyle(value, "isolatedTable")
+            return out.toByteArray()
+        }
+        /** Raw responsive style slots, so malformed policy occurrences reach the real decoder. */
+        fun responsiveMinimum(outer: TableStyle?, box: TableStyle, grid: TableStyle) {
+            prefix(12); byte(3); byte(0); spans(emptyList(), "responsive.caption"); u32(0)
+            minimumTableStyle(outer, "responsive.outer"); byte(0)
+            u32(100); minimumTableStyle(box, "responsive.box"); byte(ContainerBoxSizing.ContentBox.ordinal)
+            byte(StyleWidthUnit.Percent.ordinal); f32(100f)
+            minimumTableStyle(grid, "responsive.grid"); byte(TableContainingDirection.Ltr.ordinal); string("ja")
+            tail()
+        }
         private fun positionedTable(value: Table, label: String) {
-            require(value.geometry == null && value.style == null && value.blockViewport == null && value.floatViewport == null)
+            require(value.geometry == null && value.blockViewport == null && value.floatViewport == null)
             byte(1); byte(0); spans(value.caption, "$label.caption"); u32(value.rows.size.toLong())
             value.rows.forEachIndexed { rowIndex, row ->
                 u32(row.size.toLong())
@@ -384,7 +448,7 @@ class RubyModelCodecTest {
                     byte(0)
                 }
             }
-            byte(0); byte(if (value.captionBlocks == null) 0 else 1)
+            minimumTableStyle(value.style, "$label.style"); byte(if (value.captionBlocks == null) 0 else 1)
             value.captionBlocks?.let { blocks -> u32(blocks.size.toLong())
                 blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.captionBlock$index") } }
         }
@@ -2738,7 +2802,7 @@ class RubyModelCodecTest {
         }
         reject("Z owner bit debt", bytes.copyOf().also { it[4] = 0 })
         reject("Reserved old style bit23", changed32(bytes, wire.at.getValue("$key.flags"), 0x800000))
-        reject("Unknown extension mask", changed(bytes, wire.at.getValue("$key.extension"), 4))
+        reject("Unknown extension mask", changed(bytes, wire.at.getValue("$key.extension"), 8))
         reject("Unknown position unit", changed(bytes, wire.at.getValue("$key.left.unit"), 2))
         reject("No ordinal alias for nowrap", changed(bytes, wire.at.getValue("$key.wrap"), 2))
         reject("Literal percentage width", changed(bytes, wire.at.getValue("$key.width.unit"), StyleWidthUnit.Percent.ordinal))
@@ -3037,4 +3101,373 @@ class RubyModelCodecTest {
         val old = Reference(9, 1, "", emptyList())
         assertEquals(2, Entry("Legacy", listOf(plain), "language", "Japanese", "ja", emptyList(), listOf(old, old)).references.size)
     }
+    @Test fun staticInlineZRetainsSoleSourceBodyIndependentOwnersAndExactDirectionAcrossSinks() {
+        // Synthetic carrier boundary, not proof of hypothetical native placement or producer acceptance.
+        val px = StyleLengthUnit.Px
+        val parentFont = InlineFontSnapshot(18f, FontScaleBasis.CssPx, fontNormalized = true, bold = true, language = "fr")
+        val childFont = parentFont.copy(fontScale = 27f, bold = false, italic = true)
+        val kept = Span("link", "Kept", "Target", trail = " ", targetFragment = "French", direction = "rtl",
+            tooltip = "Tip", explanation = "Meaning", fontScale = 1.35f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val external = Span("external_link", "outside", "https://example.test/static", direction = "ltr")
+        val source = listOf(text("("), kept, external.copy(trail = ")"))
+        val paragraph = Block("paragraph", 0, source)
+        fun box(blocks: List<Block>, style: ContainerStyle) = Block("container", 0, emptyList(), container = Container(blocks, style))
+        val parentStyle = ContainerStyle(positioning = ContainerPositioning.RelativeAuto, width = ContainerWidth.Auto,
+            ownerFont = parentFont, lineHeight = ContainerLineHeight.Length(StyleLength(px, 31f)), textAlign = CellTextAlign.Right,
+            textWrap = TextWrap.NoWrap)
+        for (direction in ContainerStaticDirection.entries) {
+            val childStyle = ContainerStyle(width = ContainerWidth.FitContent, ownerFont = childFont,
+                lineHeight = ContainerLineHeight.Length(StyleLength(px, 22f)), textAlign = CellTextAlign.Center,
+                textWrap = TextWrap.Normal, absoluteStatic = ContainerAbsoluteStaticPosition(direction))
+            val child = box(listOf(paragraph), childStyle)
+            val root = box(listOf(child), parentStyle)
+            assertTrue(validSoleStaticInlineContainer(checkNotNull(root.container)))
+            assertSame(source, child.container!!.blocks.single().spans)
+            assertSame(parentFont, root.container!!.style.ownerFont)
+            assertSame(childFont, child.container!!.style.ownerFont)
+            assertSame(kept, child.container!!.blocks.single().spans[1])
+            assertEquals("rtl", kept.direction)
+            for (sink in listOf(Sink.Body, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                    Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+                val wire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(root, "static") } }
+                val bytes = wire.document(emptyList(), sink)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 90, 1, 1), bytes.copyOf(6))
+                assertEquals(direction.ordinal, bytes[wire.at.getValue("static.child0.style.static")].toInt())
+                val decoded = read(bytes)
+                val containers = mutableListOf<Container>()
+                val spans = mutableListOf<Span>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply { onContainer = containers::add }
+                decoded.sections.forEach { visitor.blocks(it.blocks) }
+                decoded.references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
+                assertEquals(listOf(root.container, child.container), containers)
+                PresentationSpanVisitor { _, _ -> }.apply { onSpan = spans::add }.blocks(containers.first().blocks)
+                assertEquals(source, spans)
+                assertEquals("(Kept outside)", textOf(spans))
+                assertEquals(listOf("Target", "https://example.test/static"), spans.filter { it.kind != "text" }.map { it.target })
+                assertEquals(parentStyle.lineHeight, containers[0].style.lineHeight)
+                assertEquals(childStyle.lineHeight, containers[1].style.lineHeight)
+                assertNull(containers[1].style.height)
+                assertNull(containers[1].style.absolutePosition)
+            }
+        }
+        val plainChild = box(listOf(Block("paragraph", 0, listOf(text(" ")))), ContainerStyle(
+            width = ContainerWidth.FitContent, absoluteStatic = ContainerAbsoluteStaticPosition()))
+        val plainRoot = box(listOf(plainChild), ContainerStyle(positioning = ContainerPositioning.RelativeAuto))
+        val noFont = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(plainRoot) } }
+        assertEquals(plainRoot, read(noFont.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+        assertNull(plainChild.container!!.style.ownerFont)
+        assertEquals(ContainerStaticDirection.Inherit, plainChild.container!!.style.absoluteStatic!!.direction)
+
+        // Independent byte literals: adding static support must not append a tag to old fixed or Y styles.
+        val fixed = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 1f)), height = StyleLength(px, 2f),
+            absolutePosition = ContainerAbsolutePosition(SignedContainerMargin(px, -3f), StyleLength(px, 4f)), textWrap = TextWrap.NoWrap)
+        assertArrayEquals(byteArrayOf(4, 0, 2, 0, 1, 0, 0, 0, -128, 63, 0, 0, 0, 0, 64,
+            3, 0, 0, 0, 64, -64, 0, 0, 0, -128, 64, 1), Wire('Z', 256).isolatedPositionedStyle(fixed))
+        assertArrayEquals(byteArrayOf(4, 0, 0, 0, 0), Wire('Y', 1).isolatedPositionedStyle(ContainerStyle(width = ContainerWidth.Auto)))
+        assertArrayEquals(byteArrayOf(4, 0, 0, 0, 2, 4, 0), Wire('Z', 256).isolatedPositionedStyle(plainChild.container!!.style))
+    }
+
+    @Test fun staticInlineZRejectsBorrowedCustodyUnsupportedBodiesAndForgedExtensionTags() {
+        val px = StyleLengthUnit.Px
+        val zero = StyleLength(px, 0f)
+        val childStyle = ContainerStyle(width = ContainerWidth.FitContent, absoluteStatic = ContainerAbsoluteStaticPosition())
+        val leaf = Block("paragraph", 0, listOf(Span("link", "source", "Kept")))
+        fun box(blocks: List<Block>, style: ContainerStyle = ContainerStyle()) = Block("container", 0, emptyList(), container = Container(blocks, style))
+        val child = box(listOf(leaf), childStyle)
+        val parentStyle = ContainerStyle(positioning = ContainerPositioning.RelativeAuto)
+        fun relative(vararg blocks: Block) = box(blocks.toList(), parentStyle)
+        fun table(block: Block) = Block("table", 0, emptyList(), table = Table(emptyList(), listOf(listOf(
+            Cell(spans = emptyList(), header = false, colspan = 1, rowspan = 1, blocks = listOf(block))))))
+        fun entry(root: Block) = Entry("Static", emptyList(), "language", "French", "fr", listOf(Section(2, "Body", listOf(root))), emptyList())
+        fun literal(root: Block): Pair<Wire, ByteArray> {
+            val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(root, "static") } }
+            return wire to wire.document(emptyList(), Sink.Body)
+        }
+        val valid = relative(child)
+        assertSame(valid, entry(valid).sections.single().blocks.single())
+        for ((label, root) in listOf("orphan" to child, "ordinary parent" to box(listOf(child)),
+                "intermediate parent" to relative(box(listOf(child))), "leading sibling" to relative(leaf, child),
+                "trailing sibling" to relative(child, leaf), "table cannot lend anchor" to relative(table(child)),
+                "earlier relative sibling" to box(listOf(relative(leaf), child)))) {
+            invalid(label) { entry(root) }; reject(label, literal(root).second)
+        }
+        val nearer = relative(box(listOf(relative(child))))
+        assertEquals(nearer, read(literal(nearer).second).sections.single().blocks.single())
+        val cell = table(relative(child))
+        assertEquals(cell, read(literal(cell).second).sections.single().blocks.single())
+        invalid("Independent section cannot borrow parent") { entry(valid).copy(sections = listOf(Section(2, "First", listOf(valid)), Section(2, "Other", listOf(child)))) }
+        val reference = Reference(1, null, "ref", emptyList(), ReferenceKind.Fragment, listOf(child))
+        invalid("Independent reference cannot borrow parent") { entry(valid).copy(references = listOf(reference)) }
+        val referenceWire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(valid) } }
+        reject("Literal independent reference", referenceWire.document(emptyList(), Sink.Body, referenceValues = listOf(reference)))
+        for (sink in listOf(Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure, Sink.TableRichCaption)) {
+            val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(child) } }
+            reject("Independent replaced owner at $sink", wire.document(emptyList(), sink))
+        }
+        for (style in listOf(parentStyle.copy(width = ContainerWidth.FitContent), parentStyle.copy(height = zero),
+                parentStyle.copy(overflow = ContainerOverflow.Visible), parentStyle.copy(clear = FigureClear.None))) {
+            invalid("Unsupported immediate parent $style") { entry(box(listOf(child), style)) }
+        }
+        val margin = ContainerMargins(ContainerMargin.Length(zero), ContainerMargin.Length(zero), ContainerMargin.Length(zero), ContainerMargin.Length(zero))
+        val neutral = childStyle.copy(padding = StyleEdges(zero, zero, zero, zero), margins = StyleEdges(zero, zero, zero, zero),
+            border = ContainerBorder.None, background = ContainerColor.Transparent, boxSizing = ContainerBoxSizing.ContentBox)
+        assertTrue(validContainerAbsoluteStaticBody(Container(listOf(leaf), neutral)))
+        assertTrue(validContainerAbsoluteStaticBody(Container(listOf(leaf), neutral.copy(margins = null, marginValues = margin))))
+        for ((label, make) in listOf<Pair<String, () -> ContainerStyle>>(
+                "auto width" to { childStyle.copy(width = ContainerWidth.Auto) }, "missing width" to { childStyle.copy(width = null) },
+                "explicit height" to { childStyle.copy(height = zero) }, "relative" to { childStyle.copy(positioning = ContainerPositioning.RelativeAuto) },
+                "fixed" to { childStyle.copy(absolutePosition = ContainerAbsolutePosition(zero, zero)) },
+                "visible overflow" to { childStyle.copy(overflow = ContainerOverflow.Visible) }, "clear none" to { childStyle.copy(clear = FigureClear.None) },
+                "flow layout" to { childStyle.copy(layout = ContainerLayout.Flow) }, "max none" to { childStyle.copy(maxWidth = ContainerMaxWidth.None) },
+                "padding" to { childStyle.copy(padding = StyleEdges(zero, zero, zero, StyleLength(px, 1f))) },
+                "auto margin" to { childStyle.copy(marginValues = margin.copy(left = ContainerMargin.Auto)) },
+                "border box" to { childStyle.copy(boxSizing = ContainerBoxSizing.BorderBox) })) invalid(label, make)
+        for (spans in listOf(emptyList(), listOf(text("")), listOf(Span("line_break", "")), listOf(simple()),
+                listOf(Span("text", "", image = InlineImage("Image.png", 1))),
+                listOf(Span("text", "", inlinePaddingGroup = InlinePaddingGroup(zero, StyleLength(px, 1f), listOf(text("x"))))))) {
+            invalid("Unsupported static body $spans") { Container(listOf(Block("paragraph", 0, spans)), childStyle) }
+        }
+        invalid("Extra body paragraph") { Container(listOf(leaf, leaf), childStyle) }
+        invalid("Paragraph alignment is not container alignment") { Container(listOf(leaf.copy(textAlign = CellTextAlign.Center)), childStyle) }
+        val (wire, bytes) = literal(valid)
+        val styleKey = "static.child0.style"
+        val textKey = "static.child0.child0.spans.0.text.bytes"
+        for (control in (0..31) + 127) {
+            invalid("Control in text $control") { Container(listOf(Block("paragraph", 0, listOf(text(control.toChar().toString())))), childStyle) }
+            invalid("Control in trail $control") { Container(listOf(Block("paragraph", 0, listOf(Span("text", "x", trail = control.toChar().toString())))), childStyle) }
+            reject("Literal control $control", changed(bytes, wire.at.getValue(textKey), control))
+        }
+        for (tag in listOf(3, 255)) reject("Unknown direction $tag", changed(bytes, wire.at.getValue("$styleKey.static"), tag))
+        for (mask in listOf(8, 128, 255)) reject("Unknown static extension $mask", changed(bytes, wire.at.getValue("$styleKey.extension"), mask))
+        reject("Static is not auto width", changed(bytes, wire.at.getValue("$styleKey.width"), 0))
+        val fixedPayload = ByteArray(10) // Two real zero px lengths before the unchanged static selector.
+        val simultaneous = replace(bytes, wire.at.getValue("$styleKey.static"), wire.at.getValue("$styleKey.static"), fixedPayload)
+        reject("Literal simultaneous fixed and static", changed(simultaneous, wire.at.getValue("$styleKey.extension"), 5))
+        reject("Exact P census remains", changed(bytes, wire.at.getValue("features"), 64))
+        reject("Z still needs bit256", changed(bytes, 5, 0))
+        reject("Pending clip128 remains unsupported", changed(bytes, 4, 128))
+        for (end in bytes.indices) reject("Truncated static $end", bytes.copyOf(end))
+        reject("Trailing static data", bytes + byteArrayOf(0))
+        val debt = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(relative(leaf)) } }
+        reject("No actual static/fixed/wrap payload", debt.document(emptyList(), Sink.Body))
+        assertEquals(valid, read(bytes).sections.single().blocks.single())
+    }
+
+    @Test fun staticInlineZSharesContentAndExactItemLimitsWithoutCountingHypotheticalCopies() {
+        val childStyle = ContainerStyle(width = ContainerWidth.FitContent, absoluteStatic = ContainerAbsoluteStaticPosition())
+        val parentStyle = ContainerStyle(positioning = ContainerPositioning.RelativeAuto)
+        for (depth in listOf(2, 16, 17)) {
+            val wire = Wire('Z', 256).apply { containerStyleOverride = { label ->
+                val index = label.removePrefix("container").toInt()
+                positionedStyle(when (index) { depth - 1 -> childStyle; depth - 2 -> parentStyle; else -> ContainerStyle() }, label)
+            } }
+            val bytes = wire.document(listOf(Span("link", "source", "Kept")), Sink.Container, containers = depth)
+            if (depth == 17) reject("Static cannot reset content17", bytes) else {
+                val containers = mutableListOf<Container>()
+                PresentationSpanVisitor { _, _ -> }.apply { onContainer = containers::add }.blocks(read(bytes).sections.single().blocks)
+                assertEquals(depth, containers.size)
+                assertTrue(validSoleStaticInlineContainer(containers[depth - 2]))
+                assertEquals("Kept", containers.last().blocks.single().spans.single().target)
+            }
+        }
+        val owner = InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true)
+        val source = listOf(text("before "), Span("link", "source", "Kept"), text(" after"))
+        val child = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, source)), childStyle.copy(ownerFont = owner)))
+        val parent = Block("container", 0, emptyList(), container = Container(listOf(child), parentStyle.copy(ownerFont = owner)))
+        // Section1 + five blocks + two declaring owners + three spans = eleven items; every empty Table row adds one.
+        val rows = (1 shl 20) - 11
+        fun literal(count: Int): ByteArray {
+            val table = Block("table", 0, emptyList(), table = Table(emptyList(), java.util.Collections.nCopies(count, emptyList<Cell>())))
+            val root = Block("container", 0, emptyList(), container = Container(listOf(table, parent), ContainerStyle()))
+            val wire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(root, "budget") } }
+            return wire.document(emptyList(), Sink.Body)
+        }
+        val decoded = read(literal(rows))
+        val children = checkNotNull(decoded.sections.single().blocks.single().container).blocks
+        val table = checkNotNull(children[0].table)
+        assertEquals(rows, table.rows.size); assertTrue(table.rows.all { it.isEmpty() })
+        assertEquals(TableGrid(emptyList(), rows, 0), tableGrid(table))
+        assertEquals(parent, children[1])
+        val retained = children[1].container!!.blocks.single().container!!.blocks.single().spans
+        assertEquals(source, retained); assertEquals("Kept", retained[1].target)
+        reject("Static shares exact aggregate item limit", literal(rows + 1))
+    }
+
+    @Test fun tableMinimum512RetainsIndependentPreferredWidthsCompleteSourcesAndEveryTableSink() {
+        val px = StyleLengthUnit.Px
+        val caption = Span("link", "caption", "Caption target", targetFragment = "caption")
+        val kept = Span("link", "kept", "Cell target", tooltip = "tip", explanation = "meaning")
+        val external = Span("external_link", "nested", "https://example.test/nested")
+        val nested = Table(emptyList(), listOf(listOf(Cell(listOf(external), false, 1, 1))),
+            style = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Em, 1.5f)))
+        val rows = listOf(listOf(Cell(listOf(kept), false, 1, 2), Cell(emptyList(), true, 1, 1, nestedTable = nested)),
+            listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(Block("paragraph", 0, listOf(text("self")))))))
+        val padding = StyleEdges(StyleLength(px, 1f), StyleLength(px, 2f), StyleLength(px, 3f), StyleLength(px, 4f))
+        for (minimum in listOf(StyleWidth(StyleWidthUnit.Px, 0f), StyleWidth(StyleWidthUnit.Px, 12.25f),
+                StyleWidth(StyleWidthUnit.Em, 2f), StyleWidth(StyleWidthUnit.Percent, 70f), StyleWidth(StyleWidthUnit.Percent, 150f))) {
+            val style = TableStyle(border = StyleBorder.Solid(StyleLength(px, 1f), "#123456"), collapse = TableCollapse.Separate,
+                width = StyleWidth(StyleWidthUnit.Px, 100f), padding = padding, minWidth = minimum)
+            val table = Table(listOf(caption), rows, style = style)
+            val block = Block("table", 0, emptyList(), table = table)
+            assertSame(minimum, style.minWidth); assertSame(minimum, style.copy(floatSide = TableFloatSide.Right).minWidth)
+            assertEquals(100f, style.width!!.value, 0f)
+            assertNotEquals(style, style.copy(minWidth = null))
+            for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                    Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+                val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(block, "minimum") } }
+                val bytes = wire.document(emptyList(), sink)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 90, 0, 2), bytes.copyOf(6))
+                val decoded = read(bytes)
+                val found = mutableListOf<Table>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply { onTable = { value, _, _ -> if (value.style?.minWidth != null) found.add(value) } }
+                decoded.sections.forEach { visitor.blocks(it.blocks) }
+                decoded.references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
+                assertEquals(listOf(table, nested), found)
+                assertEquals(listOf(caption), found.first().caption)
+                assertEquals(2, found.first().rows[0][0].rowspan)
+                assertEquals(kept, found.first().rows[0][0].spans.single())
+                if (sink == Sink.Body) assertEquals(Entry("Ruby", emptyList(), "language", "Japanese", "ja",
+                    listOf(Section(2, "Body", listOf(block))), emptyList(), organization = PresentationOrganization(emptyList(), emptyList())), decoded)
+            }
+            val auto = style.copy(width = null)
+            val above = style.copy(width = StyleWidth(StyleWidthUnit.Px, 400f))
+            for (sourceStyle in listOf(auto, above)) {
+                val expected = table.copy(style = sourceStyle)
+                val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(block.copy(table = expected)) } }
+                assertEquals(expected, read(wire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+            }
+        }
+        val onlyMinimum = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Percent, 70f))
+        val empty = Table(emptyList(), emptyList(), style = onlyMinimum)
+        val emptyWire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = empty)) } }
+        assertEquals(empty, read(emptyWire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+        val inline = Table(emptyList(), listOf(listOf(Cell(listOf(kept), false, 1, 1))),
+            style = onlyMinimum.copy(display = TableDisplay.InlineTable))
+        val inlineWire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = inline)) } }
+        assertEquals(inline, read(inlineWire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+        val absolute = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(kept))),
+            ContainerStyle(width = ContainerWidth.FitContent, absoluteStatic = ContainerAbsoluteStaticPosition(ContainerStaticDirection.Rtl))))
+        val parent = Block("container", 0, emptyList(), container = Container(listOf(absolute), ContainerStyle(positioning = ContainerPositioning.RelativeAuto)))
+        val mixed = Block("container", 0, emptyList(), container = Container(listOf(parent, Block("table", 0, emptyList(), table = empty)), ContainerStyle()))
+        val mixedWire = Wire('Z', 768).apply { paragraphOverride = { positionedBlock(mixed) } }
+        val mixedBytes = mixedWire.document(emptyList(), Sink.Body)
+        assertArrayEquals(byteArrayOf(68, 80, 82, 90, 0, 3), mixedBytes.copyOf(6))
+        assertEquals(mixed, read(mixedBytes).sections.single().blocks.single())
+        reject("Mixed minimum debt", changed(mixedBytes, 5, 1))
+        reject("Mixed positioned debt", changed(mixedBytes, 5, 2))
+    }
+
+    @Test fun tableMinimum512RejectsResponsiveOccurrencesMalformedWidthsAndCapabilityDebtWithoutChangingNullBytes() {
+        val minimum = StyleWidth(StyleWidthUnit.Percent, 70f)
+        val style = TableStyle(minWidth = minimum)
+        val source = Span("link", "source", "Kept")
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(source), false, 1, 1))), style = style)
+        val block = Block("table", 0, emptyList(), table = table)
+        val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(block, "minimum") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val key = "minimum.table.style"
+        assertEquals(0, bytes[wire.at.getValue("$key.flags")].toInt())
+        assertEquals(64, bytes[wire.at.getValue("$key.extension")].toInt())
+        for (flags in listOf(0, 1, 127, 128, 256, 512 or 128, 1024, 65535)) {
+            val bad = bytes.copyOf().also { it[4] = flags.toByte(); it[5] = (flags ushr 8).toByte() }
+            reject("Minimum header $flags", bad)
+        }
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            invalid("Direct minimum $value") { TableStyle(minWidth = StyleWidth(StyleWidthUnit.Percent, value)) }
+            reject("Literal minimum $value", changed32(bytes, wire.at.getValue("$key.minimum.value"), value.toRawBits().toLong()))
+        }
+        for (unit in listOf(3, 255)) reject("Unknown minimum unit $unit", changed(bytes, wire.at.getValue("$key.minimum.unit"), unit))
+        reject("Reserved second table bit", changed(bytes, wire.at.getValue("$key.extension"), 192))
+        reject("Unannounced payload after null style", changed(bytes, wire.at.getValue("$key.presence"), 0))
+        reject("Minimum does not earn P corner/flow features", changed(bytes, wire.at.getValue("features"), 32))
+        for (end in bytes.indices) reject("Truncated minimum $end", bytes.copyOf(end))
+        reject("Trailing minimum data", bytes + byteArrayOf(0))
+        val noMinimum = table.copy(style = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f)))
+        val debt = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(block.copy(table = noMinimum)) } }
+        reject("512 requires an actual minimum", debt.document(emptyList(), Sink.Body))
+        val noPosition = Wire('Z', 768).apply { paragraphOverride = { positionedBlock(block) } }
+        reject("256 independently requires positioned payload", noPosition.document(emptyList(), Sink.Body))
+        val oldStyle = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f))
+        val expectedOld = byteArrayOf(1, 32, 0, 0, 0, 0, -56, 66)
+        for (writer in listOf(Wire('Y', 1), Wire('Z', 256), Wire('Z', 512), Wire('Z', 768)))
+            assertArrayEquals(expectedOld, writer.isolatedMinimumTableStyle(oldStyle))
+        assertArrayEquals(byteArrayOf(0), Wire('Z', 512).isolatedMinimumTableStyle(null))
+        assertArrayEquals(byteArrayOf(1, 0, 64, 2, 0, 0, -116, 66), Wire('Z', 512).isolatedMinimumTableStyle(style))
+        // New scalar follows every old field, including the Q corner payload and containing direction.
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val corners = TableCornerRadii(zero, zero, zero, zero)
+        val oldCorner = TableStyle(border = StyleBorder.None, collapse = TableCollapse.Separate, margins = edges,
+            containingDirection = TableContainingDirection.Rtl, cornerRadii = corners)
+        val oldBytes = Wire('Z', 256).isolatedMinimumTableStyle(oldCorner)
+        val newBytes = Wire('Z', 512).isolatedMinimumTableStyle(oldCorner.copy(minWidth = minimum))
+        assertArrayEquals(changed(oldBytes, 2, oldBytes[2].toInt() or 64), newBytes.copyOf(oldBytes.size))
+        assertArrayEquals(byteArrayOf(2, 0, 0, -116, 66), newBytes.copyOfRange(oldBytes.size, newBytes.size))
+        val auto = ContainerMargins(ContainerMargin.Length(zero), ContainerMargin.Auto, ContainerMargin.Length(zero), ContainerMargin.Auto)
+        val box = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f), marginValues = auto, containingDirection = TableContainingDirection.Ltr)
+        val grid = TableStyle(collapse = TableCollapse.Collapse)
+        val viewport = TableBlockViewport(100, box, ContainerBoxSizing.ContentBox, StyleWidth(StyleWidthUnit.Percent, 100f),
+            grid, TableContainingDirection.Ltr, "ja")
+        invalid("Minimum on responsive ordinary style") { table.copy(blockViewport = viewport) }
+        invalid("Minimum on viewport box") { viewport.copy(boxStyle = box.copy(minWidth = minimum)) }
+        invalid("Minimum on anonymous grid") { viewport.copy(gridStyle = grid.copy(minWidth = minimum)) }
+        val floating = TableFloatViewport(639, TableContainingDirection.Ltr, TableContainingDirection.Ltr, "ja")
+        invalid("Minimum on responsive float style") { table.copy(style = style.copy(floatSide = TableFloatSide.Right, margins = edges), floatViewport = floating) }
+        fun responsive(flags: Int, outer: TableStyle?, boxStyle: TableStyle, gridStyle: TableStyle): ByteArray {
+            val w = Wire('Z', flags).apply {
+                containerStyleOverride = { positionedStyle(ContainerStyle(textWrap = TextWrap.Normal), it) }
+                paragraphOverride = { responsiveMinimum(outer, boxStyle, gridStyle) }
+            }
+            return w.document(emptyList(), Sink.Container)
+        }
+        assertEquals(viewport, read(responsive(256, null, box, grid)).sections.single().blocks.single().container!!.blocks.single().table!!.blockViewport)
+        reject("Literal outer responsive minimum", responsive(768, style, box, grid))
+        reject("Literal hidden box minimum", responsive(768, null, box.copy(minWidth = minimum), grid))
+        reject("Literal hidden grid minimum", responsive(768, null, box, grid.copy(minWidth = minimum)))
+        assertEquals(table, read(bytes).sections.single().blocks.single().table)
+    }
+
+    @Test fun tableMinimum512UsesOriginalContentTableAndExactItemBudgets() {
+        val source = Span("link", "minimum", "Kept")
+        val style = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Px, 0f))
+        val leaf = Table(listOf(source), emptyList(), style = style)
+        for (depth in listOf(32, 33)) {
+            var table = leaf
+            repeat(depth - 1) { index ->
+                val cell = if (index % 2 == 0) Cell(emptyList(), false, 1, 1, nestedTable = table)
+                    else Cell(emptyList(), false, 1, 1, blocks = listOf(Block("table", 0, emptyList(), table = table)))
+                table = Table(emptyList(), listOf(listOf(cell)))
+            }
+            val root = Block("table", 0, emptyList(), table = table)
+            val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(root) } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            if (depth == 33) reject("Minimum cannot reset table33", bytes) else {
+                val depths = mutableListOf<Int>()
+                PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, level, _ -> depths.add(level) } }
+                    .blocks(read(bytes).sections.single().blocks)
+                assertEquals((1..32).toList(), depths)
+            }
+        }
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = leaf)) } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 17) reject("Minimum cannot reset content17", bytes)
+            else assertEquals(listOf(source), read(bytes).sections.single().blocks.let { blocks ->
+                val spans = mutableListOf<Span>(); PresentationSpanVisitor { values, _ -> spans.addAll(values) }.blocks(blocks); spans
+            })
+        }
+        // Section1 + table block1 + caption Span1; the scalar is not another item or an owner.
+        val rows = (1 shl 20) - 3
+        fun literal(count: Int): ByteArray {
+            val table = leaf.copy(rows = java.util.Collections.nCopies(count, emptyList<Cell>()))
+            val wire = Wire('Z', 512).apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = table)) } }
+            return wire.document(emptyList(), Sink.Body)
+        }
+        val exact = checkNotNull(read(literal(rows)).sections.single().blocks.single().table)
+        assertEquals(rows, exact.rows.size); assertTrue(exact.rows.all { it.isEmpty() })
+        assertEquals(TableGrid(emptyList(), rows, 0), tableGrid(exact))
+        assertEquals(listOf(source), exact.caption); assertEquals(style, exact.style)
+        reject("Minimum shares exact item M plus one refusal", literal(rows + 1))
+    }
+
 }

@@ -280,6 +280,7 @@ internal fun prepareNativeFloatText(
     ownerFont: NativeDeclaringFont? = null,
     rubyWeight: FontWeight? = null,
     referenceBacklink: ReferenceBacklink? = null,
+    staticInlineParent: NativeStaticInlineParent? = null,
 ): PreparedNativeFloatText {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -584,6 +585,26 @@ internal fun prepareNativeFloatText(
                 declaring.snapshot.fontFamily, inlineFontSnapshotSpan(declaring.snapshot).legacyFontFamily()))).single())
     }
     val layoutPaint = backlinkOwnerPaint ?: containerOwnerPaint ?: cellOwnerPaint ?: basePaint
+    val staticParentPaint = staticInlineParent?.let { parent ->
+        val format = parent.format
+        val declaring = format.ownerFont
+        if (declaring != null && (declaring.style == null || declaring.fontPixels == null ||
+                declaring.snapshot.language.isNotEmpty() && nativeTableOwnerLanguageTag(declaring.snapshot.language) == null)) {
+            familyFailure = "Static inline parent declaring font is unavailable."
+            null
+        } else familyPaint(nativeStyleRanges(AnnotatedString(" "), declaring?.style ?: format.style, linkColor,
+            sourceFamily = format.sourceFamily,
+            familyRanges = declaring?.let { listOf(NativeSourceFamilyRange(0, 1,
+                it.snapshot.fontFamily, inlineFontSnapshotSpan(it.snapshot).legacyFontFamily())) }.orEmpty()).single()).apply {
+                if (declaring != null) {
+                    textSize = checkNotNull(declaring.fontPixels)
+                    baselineShift = 0
+                }
+            }
+    }
+    val staticInline = staticInlineParent?.let { parent -> staticParentPaint?.let { paint ->
+        NativeStaticInlineText(paint, parent.format.lineHeight, parent.direction, parent.alignment)
+    } }
     val cellMetricRevision = cellOwner?.let {
         listOf(cellState, cellOwnerPaint?.typeface, cellOwnerPaint?.textSize)
     }
@@ -672,7 +693,7 @@ internal fun prepareNativeFloatText(
                 "ltr" -> TextDirectionHeuristics.LTR
                 "rtl" -> TextDirectionHeuristics.RTL
                 else -> group.parentGroupPath?.let { rubyFormats[it]?.direction }
-                    ?: when (ownerDirection) {
+                    ?: when (staticInlineParent?.direction ?: ownerDirection) {
                         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
                         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
                         null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
@@ -917,7 +938,7 @@ internal fun prepareNativeFloatText(
         prepared.values.any { !it.available } -> "Egyptian glyph layout unavailable"
         else -> null
     }
-    val direction = when (ownerDirection) {
+    val direction = when (staticInlineParent?.direction ?: ownerDirection) {
         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
         null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
@@ -1203,7 +1224,7 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize) { Any() }
     val citationPreparation = rememberNativeCitationPreparation(revision,
         citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
         layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
@@ -1287,7 +1308,7 @@ internal fun prepareNativeFloatText(
         }
     }, nativeSource?.takeIf { layoutUnavailable == null }?.let { NativePreparedText(layoutPaint, it, nativeNodes, direction,
         insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null,
-        citationPreparation = citationPreparation) }, fallback = {
+        citationPreparation = citationPreparation, staticInline = staticInline) }, fallback = {
         // The normal float owner already holds this image state. Failure UI reuses it.
         CompositionLocalProvider(LocalInlineImageOwner provides owner,
             LocalInlineImageOccurrenceFallback provides images.any { it.span.image?.occurrenceLayout != null },
@@ -1375,4 +1396,5 @@ internal data class NativePreparedText(
     val horizontalInsets: Float = 0f,
     val breakWordMinimum: Boolean = false,
     val citationPreparation: NativeCitationPreparationStatus? = null,
+    val staticInline: NativeStaticInlineText? = null,
 )
