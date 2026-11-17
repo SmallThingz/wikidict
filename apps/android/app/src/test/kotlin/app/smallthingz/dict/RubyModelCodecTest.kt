@@ -144,8 +144,31 @@ class RubyModelCodecTest {
                     }
                 }
             } else require(value.citationMarker == null)
+            if (version == 'Z' && yFlags and 8192 != 0) audioTail(value.audioControl, "$label.audio")
+            else require(value.audioControl == null)
             mark("$label.end")
         }
+        private fun audioTail(value: AudioControl?, label: String) {
+            mark(label); byte(if (value == null) 0 else 1)
+            if (value == null) return
+            mark("$label.fields"); byte((if (value.width != null) 1 else 0) or
+                (if (value.height != null) 2 else 0) or (if (value.focus != null) 4 else 0))
+            value.width?.let { mark("$label.width.unit"); byte(it.unit.ordinal); mark("$label.width.value"); f32(it.value) }
+            value.height?.let { mark("$label.height.unit"); byte(it.unit.ordinal); mark("$label.height.value"); f32(it.value) }
+            value.focus?.let { focus ->
+                mark("$label.focus.mode"); byte(focus.mode.ordinal)
+                mark("$label.focus.presence"); byte(if (focus.color == null) 0 else 1)
+                if (focus.color != null) {
+                    mark("$label.focus.color")
+                    when (val color = checkNotNull(focus.color)) {
+                        FigureColor.NativeTheme -> byte(0)
+                        FigureColor.Transparent -> byte(1)
+                        is FigureColor.Rgb -> { byte(2); string(color.value, "$label.focus.rgb") }
+                    }
+                }
+            }
+        }
+        fun isolatedAudioTail(value: Span): ByteArray { audioTail(value.audioControl, "isolated.audio"); return out.toByteArray() }
         private fun boxLength(value: StyleLength, label: String) {
             mark(label); byte(value.unit.ordinal); f32(value.value)
         }
@@ -469,6 +492,9 @@ class RubyModelCodecTest {
             value.captionBlocks?.let { blocks -> u32(blocks.size.toLong())
                 blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.captionBlock$index") } }
         }
+        fun audioPrefixTable(value: Table) {
+            prefix(12, true); positionedTable(value, "audioPrefix.table"); tail(); columnLayoutTail()
+        }
         fun positionedBudget(count: Int) {
             val zero = StyleLength(StyleLengthUnit.Px, 0f)
             val absolute = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 0f)), height = zero,
@@ -681,7 +707,7 @@ class RubyModelCodecTest {
                 if (alignment) { string("Probe.svg"); byte(0); string("Original media") }
             } else {
                 u32(mediaValues.size.toLong())
-                mediaValues.forEach { require(it.kind == "image"); string(it.file); byte(0); string(it.caption) }
+                mediaValues.forEach { require(it.kind in listOf("image", "audio")); string(it.file); byte(if (it.kind == "audio") 1 else 0); string(it.caption) }
             }
             if (version >= 'P') {
                 mark("features"); val flags = features or (if (sink == Sink.Heading) 2 else 0); byte(flags)
@@ -3769,4 +3795,230 @@ class RubyModelCodecTest {
         reject("Break policy has no extra scalar item at M plus one", literal(rows + 1))
     }
 
+
+    @Test fun audioControl8192PreservesExactOccurrenceOwnersAndEveryExistingSpanSink() {
+        val file = "Clip é.ogg"
+        val token = "wikidict-media-file-436c697020c3a92e6f6767"
+        val media = listOf(Media(file, "audio", "Original catalog caption"))
+        val owner = Span("link", "Play", "File:$file", language = "eu", classes = "wikidict-media $token",
+            role = "pronunciation", tooltip = "Original tip", explanation = "Original explanation",
+            foreground = "#123456", fontScale = 1.25f, fontScaleBasis = FontScaleBasis.NormalBody,
+            audioControl = AudioControl(StyleWidth(StyleWidthUnit.Px, 250f), StyleLength(StyleLengthUnit.Px, 30f),
+                AudioControlFocusPaint(AudioControlFocusMode.UaAuto, FigureColor.Rgb("#ff0000"))))
+        for (sink in Sink.entries) {
+            val wire = Wire('Z', 8192)
+            val entry = read(wire.document(listOf(owner), sink, headingTitle = "Play", mediaValues = media))
+            assertEquals(sink.name, owner, selected(entry, sink))
+            assertEquals(media, entry.media)
+            assertEquals(EntryLink("File:$file"), selected(entry, sink).entryLink())
+            assertEquals("Play", selected(entry, sink).text)
+            assertEquals("", selected(entry, sink).trail)
+            assertTrue(entry.inlineImages.isEmpty())
+        }
+        val prefixTable = Table(listOf(text("Visible caption")), emptyList())
+        val mixedBlock = Block("table", 0, listOf(owner), table = prefixTable)
+        val raw = mutableListOf<Span>(); val displayed = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> displayed.addAll(spans) }.apply { onSpan = { raw.add(it) } }
+            .blocks(listOf(mixedBlock))
+        assertSame(owner, raw.first())
+        assertEquals(listOf(owner) + prefixTable.caption, raw)
+        assertEquals(prefixTable.caption, displayed)
+        val prefixWire = Wire('Z', 8192).apply { paragraphOverride = { audioPrefixTable(prefixTable) } }
+        val decodedPrefix = read(prefixWire.document(listOf(owner), Sink.Body, mediaValues = media))
+            .sections.single().blocks.single()
+        assertEquals(mixedBlock, decodedPrefix)
+        assertEquals(EntryLink("File:$file"), decodedPrefix.spans.single().entryLink())
+        val automatic = owner.copy(text = "", audioControl = AudioControl())
+        val none = owner.copy(text = "Second", audioControl = AudioControl(StyleWidth(StyleWidthUnit.Percent, 50f),
+            StyleLength(StyleLengthUnit.Em, 1.5f), AudioControlFocusPaint(AudioControlFocusMode.AuthoredNone)))
+        val transparent = owner.copy(audioControl = AudioControl(focus = AudioControlFocusPaint(
+            AudioControlFocusMode.UaAuto, FigureColor.Transparent)))
+        val defaultFocus = owner.copy(audioControl = AudioControl(width = StyleWidth(StyleWidthUnit.Em, 2f),
+            focus = AudioControlFocusPaint(AudioControlFocusMode.UaAuto)))
+        val values = listOf(owner, automatic, none, transparent, defaultFocus, owner)
+        val wire = Wire('Z', 8192)
+        val entry = read(wire.document(values, mediaValues = media))
+        assertEquals(values, entry.displayTitle)
+        assertEquals(6, entry.displayTitle.count { it.audioControl != null })
+        assertEquals("", entry.displayTitle[1].text)
+        assertEquals(AudioControl(), entry.displayTitle[1].audioControl)
+        assertNotSame(entry.displayTitle.first(), entry.displayTitle.last())
+        assertSame(owner.audioControl, owner.copy(tooltip = "Changed tip only").audioControl)
+        assertArrayEquals(byteArrayOf(1, 0), Wire('Z', 8192).isolatedAudioTail(automatic))
+        assertArrayEquals(byteArrayOf(1, 4, 0, 0), Wire('Z', 8192).isolatedAudioTail(none.copy(audioControl = AudioControl(
+            focus = AudioControlFocusPaint(AudioControlFocusMode.AuthoredNone)))))
+        val direct = Entry("Audio", values, "language", "Basque", "eu", emptyList(), emptyList(), media = media)
+        assertSame(owner, direct.displayTitle.first()); assertSame(owner, direct.displayTitle.last())
+        assertSame(media.single(), direct.media.single())
+        val marker = Span("link", "[1]", targetFragment = "reference-9", role = "reference",
+            citationMarker = CitationMarker(9, 7, "audio-return"))
+        val backlink = ReferenceBacklink.withPolicies(7, Span("link", "return", targetFragment = "audio-return"))
+        val note = Reference(9, 1, "", emptyList(), backlinks = listOf(backlink))
+        val mixed = Wire('Z', 8192 or 64)
+        val mixedBytes = mixed.document(listOf(marker, owner), referenceValues = listOf(note), mediaValues = media)
+        val decodedMixed = read(mixedBytes)
+        assertEquals(listOf(marker, owner), decodedMixed.displayTitle)
+        assertEquals(listOf(note), decodedMixed.references)
+        assertEquals(mixed.at.getValue("root.0.end") - 1, mixed.at.getValue("root.0.audio"))
+        assertEquals(mixed.at.getValue("root.1.citation") + 1, mixed.at.getValue("root.1.audio"))
+        assertEquals(0, mixedBytes[mixed.at.getValue("backlinks.0.0.span.audio")].toInt())
+    }
+
+    @Test fun audioControl8192RejectsForgedOwnershipCatalogAndNoncanonicalWireWithoutChangingLegacyBytes() {
+        val file = "Tone.ogg"
+        val token = "wikidict-media-file-546f6e652e6f6767"
+        val catalog = listOf(Media(file, "audio", "Tone"))
+        val control = AudioControl(StyleWidth(StyleWidthUnit.Px, 250f), StyleLength(StyleLengthUnit.Em, 1.5f),
+            AudioControlFocusPaint(AudioControlFocusMode.UaAuto, FigureColor.Rgb("#ff0000")))
+        val owner = Span("link", "Play", "File:$file", classes = "wikidict-media $token", audioControl = control)
+        val vtOwner = owner.copy(classes = "wikidict-media\u000b$token")
+        assertEquals(vtOwner, read(Wire('Z', 8192).document(listOf(vtOwner), mediaValues = catalog)).displayTitle.single())
+        assertFalse(validRubyChild(vtOwner))
+        invalid("AUDIO cannot escape the Ruby child domain through VT") { this.owner(listOf(base(vtOwner))) }
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val one = StyleLength(StyleLengthUnit.Px, 1f)
+        invalid("AUDIO cannot escape the padding child domain through VT") { InlinePaddingGroup(one, zero, listOf(vtOwner)) }
+        invalid("AUDIO cannot escape the action child domain through VT") { InlineActionGroup(listOf(vtOwner)) }
+        invalid("AUDIO cannot escape the box child domain through VT") {
+            val none = InlineBoxBorderEdge.None
+            InlineBoxGroup(StyleEdges(zero, zero, zero, zero), InlineBoxBorderEdges(none, none, none, none), spans = listOf(vtOwner))
+        }
+        val plainGroup = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(one, zero, listOf(text("child"))))
+        val nestedWire = Wire('Z', 8192)
+        val nestedBytes = nestedWire.document(listOf(plainGroup), mediaValues = catalog)
+        reject("Literal nested AUDIO VT owner", replace(nestedBytes, nestedWire.at.getValue("root.0.padding.body.0.start"),
+            nestedWire.at.getValue("root.0.padding.body.0.end"), Wire('Z', 8192).isolatedSpan(vtOwner)))
+        val legacy = owner.copy(audioControl = null)
+        val old = Wire('V').isolatedSpan(legacy)
+        assertArrayEquals(old, Wire('Z', 4096).isolatedSpan(legacy))
+        assertArrayEquals(old + byteArrayOf(0), Wire('Z', 8192).isolatedSpan(legacy))
+        assertEquals(legacy, read(Wire('O').document(listOf(legacy), mediaValues = catalog)).displayTitle.single())
+        val wire = Wire('Z', 8192); val bytes = wire.document(listOf(owner), mediaValues = catalog)
+        val audio = wire.at.getValue("root.0.audio")
+        val payload = bytes.copyOfRange(audio, wire.at.getValue("root.0.end"))
+        val wrongOwners = listOf(
+            legacy.copy(kind = "text", target = ""), legacy.copy(kind = "external_link", target = "https://example.test/Tone.ogg"),
+            legacy.copy(target = "File:Other.ogg"), legacy.copy(target = "File:Tone_ogg"), legacy.copy(target = "Tone.ogg"),
+            legacy.copy(classes = token), legacy.copy(classes = "wikidict-media"), legacy.copy(classes = "wikidict-media $token $token"),
+            legacy.copy(classes = "wikidict-media $token wikidict-media-file-00"),
+            legacy.copy(classes = "wikidict-media wikidict-media-file-546F6E652E6F6767"),
+            legacy.copy(trail = "suffix"), legacy.copy(targetFragment = "fragment"),
+            legacy.copy(text = "", image = InlineImage("Image.png")),
+            legacy.copy(fontScale = Float.NaN), legacy.copy(foreground = "bad"))
+        for ((index, invalidOwner) in wrongOwners.withIndex()) {
+            invalid("Audio owner $index") { invalidOwner.copy(audioControl = control) }
+            // The plain legacy constructor does not confer AUDIO authority; splice only the actual policy tail.
+            val plain = Wire('Z', 8192).isolatedSpan(invalidOwner)
+            reject("Forged audio owner $index", replace(bytes, wire.at.getValue("root.0.start"),
+                wire.at.getValue("root.0.end"), plain.dropLast(1).toByteArray() + payload))
+        }
+        val group = Span("link", "", "File:$file", classes = "", inlineActionGroup = InlineActionGroup(listOf(text("child"))))
+        invalid("AUDIO cannot borrow an inline action owner") { group.copy(classes = owner.classes, audioControl = control) }
+        invalid("AUDIO cannot borrow a Ruby owner") { simple().copy(audioControl = control) }
+        invalid("AUDIO ordinary strings remain valid UTF-16") { owner.copy(language = "\ud800") }
+        val state = LinkState("#0000ff", false)
+        val paint = LinkPaint(state, state, state, state, state, state, state, state, false)
+        invalid("AUDIO does not carry ordinary link paint") { owner.copy(linkPaint = paint) }
+        invalid("Empty AUDIO does not relax ordinary inline style") { owner.copy(text = "", inlineStyle = InlineTextStyle(wrap = TextWrap.BreakWord)) }
+        for (media in listOf(emptyList(), listOf(Media(file, "image", "Wrong kind")), catalog + catalog,
+            catalog + Media(file, "image", "Ambiguous"), listOf(Media("tone.ogg", "audio", "Wrong case")))) {
+            invalid("Unique exact audio catalog") { Entry("Audio", listOf(owner), "language", null, "eu", emptyList(), emptyList(), media = media) }
+            reject("Literal unique audio catalog", Wire('Z', 8192).document(listOf(owner), mediaValues = media))
+            val prefix = Block("table", 0, listOf(owner), table = Table(emptyList(), emptyList()))
+            invalid("Ignored prefix still requires exact audio catalog") {
+                Entry("Audio", emptyList(), "language", null, "eu", listOf(Section(2, "Body", listOf(prefix))), emptyList(), media = media)
+            }
+            reject("Literal ignored prefix still requires exact audio catalog", Wire('Z', 8192).apply {
+                paragraphOverride = { audioPrefixTable(checkNotNull(prefix.table)) }
+            }.document(listOf(owner), Sink.Body, mediaValues = media))
+        }
+        for (bad in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            invalid("Audio width $bad") { AudioControl(width = StyleWidth(StyleWidthUnit.Px, bad)) }
+            invalid("Audio height $bad") { AudioControl(height = StyleLength(StyleLengthUnit.Px, bad)) }
+            reject("Literal audio width $bad", changed32(bytes, wire.at.getValue("root.0.audio.width.value"), bad.toRawBits().toLong()))
+            reject("Literal audio height $bad", changed32(bytes, wire.at.getValue("root.0.audio.height.value"), bad.toRawBits().toLong()))
+        }
+        for (color in listOf(FigureColor.Transparent, FigureColor.Rgb("#ff0000"), FigureColor.NativeTheme))
+            invalid("Authored none has no color") { AudioControlFocusPaint(AudioControlFocusMode.AuthoredNone, color) }
+        invalid("UA color cannot borrow table native-theme authority") { AudioControlFocusPaint(AudioControlFocusMode.UaAuto, FigureColor.NativeTheme) }
+        for (value in listOf(2, 255)) reject("Noncanonical audio presence", changed(bytes, audio, value))
+        for (value in listOf(8, 255)) reject("Unknown audio fields", changed(bytes, wire.at.getValue("root.0.audio.fields"), value))
+        for (value in listOf(3, 255)) reject("Unknown audio width unit", changed(bytes, wire.at.getValue("root.0.audio.width.unit"), value))
+        for (value in listOf(2, 255)) {
+            reject("Unknown audio height unit", changed(bytes, wire.at.getValue("root.0.audio.height.unit"), value))
+            reject("Unknown audio focus mode", changed(bytes, wire.at.getValue("root.0.audio.focus.mode"), value))
+            reject("Noncanonical audio color presence", changed(bytes, wire.at.getValue("root.0.audio.focus.presence"), value))
+        }
+        reject("Native theme is not audio source color", changed(bytes, wire.at.getValue("root.0.audio.focus.color"), 0))
+        reject("Unknown audio color", changed(bytes, wire.at.getValue("root.0.audio.focus.color"), 3))
+        reject("None cannot retain RGB", changed(bytes, wire.at.getValue("root.0.audio.focus.mode"), 0))
+        val rgb = wire.at.getValue("root.0.audio.focus.rgb.bytes")
+        reject("Noncanonical RGB", changed(bytes, rgb + 1, 'F'.code))
+        for (end in audio until wire.at.getValue("root.0.end")) reject("Truncated audio field $end", bytes.copyOf(end))
+        reject("Trailing byte", bytes + byteArrayOf(0))
+        reject("Missing AUDIO census", Wire('Z', 8192).document(listOf(legacy), mediaValues = catalog))
+        for (flags in listOf(0, 127, 4096, 8192 or 128, 8192 or 1024, 8192 or 2048, 65535))
+            reject("Unknown or unearned audio header $flags", bytes.copyOf().also { it[4] = flags.toByte(); it[5] = (flags ushr 8).toByte() })
+        for (header in listOf('V', 'Y', 'W', 'X')) reject("Audio cannot use old header $header", changed(bytes, 3, header.code))
+    }
+
+    @Test fun audioControl8192ChargesEachPolicyOnceWithoutResettingSharedDepthOrItemLimits() {
+        val file = "Tone.ogg"
+        val owner = Span("link", "Play", "File:$file", classes = "wikidict-media wikidict-media-file-546f6e652e6f6767",
+            audioControl = AudioControl())
+        val catalog = listOf(Media(file, "audio", "Tone"))
+        for (focus in listOf(false, true)) {
+            val source = if (focus) owner.copy(audioControl = AudioControl(focus = AudioControlFocusPaint(AudioControlFocusMode.UaAuto))) else owner
+            val perSpan = if (focus) 3 else 2
+            val modelRows = (1 shl 20) - perSpan
+            fun table(count: Int) = Table(listOf(source), java.util.Collections.nCopies(count, emptyList<Cell>()))
+            var encountered: Span? = null
+            PresentationSpanVisitor { _, _ -> }.apply { onSpan = { encountered = it } }.table(table(modelRows))
+            assertSame(source, encountered)
+            invalid("AUDIO shares model M+1") { PresentationSpanVisitor { _, _ -> }.table(table(modelRows + 1)) }
+            // Decoder additionally counts Section, Table Block and one Media catalog record.
+            val decoderRows = (1 shl 20) - perSpan - 3
+            fun literal(rows: Int): ByteArray = Wire('Z', 8192).apply {
+                paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = table(rows)), "audioBudget") }
+            }.document(emptyList(), Sink.Body, mediaValues = catalog)
+            val decoded = read(literal(decoderRows)).sections.single().blocks.single().table!!
+            assertEquals(decoderRows, decoded.rows.size)
+            assertEquals(listOf(source), decoded.caption)
+            assertTrue(decoded.rows.all { it.isEmpty() })
+            reject("AUDIO shares decoder M+1", literal(decoderRows + 1))
+            // The legacy non-inline Table prefix has no display callback, but its serialized policy counts once.
+            fun prefix(count: Int) = Block("table", 0, listOf(source), table = Table(emptyList(),
+                java.util.Collections.nCopies(count, emptyList<Cell>())))
+            var prefixOwner: Span? = null
+            PresentationSpanVisitor { spans, _ -> assertTrue(spans.isEmpty()) }.apply { onSpan = { prefixOwner = it } }
+                .blocks(listOf(prefix((1 shl 20) - perSpan - 1)))
+            assertSame(source, prefixOwner)
+            invalid("Ignored AUDIO prefix shares model M+1") {
+                PresentationSpanVisitor { _, _ -> }.blocks(listOf(prefix((1 shl 20) - perSpan)))
+            }
+            fun prefixLiteral(rows: Int): ByteArray = Wire('Z', 8192).apply {
+                paragraphOverride = { audioPrefixTable(checkNotNull(prefix(rows).table)) }
+            }.document(listOf(source), Sink.Body, mediaValues = catalog)
+            val decodedPrefix = read(prefixLiteral(decoderRows)).sections.single().blocks.single()
+            assertEquals(listOf(source), decodedPrefix.spans)
+            assertEquals(decoderRows, checkNotNull(decodedPrefix.table).rows.size)
+            reject("Ignored AUDIO prefix shares decoder M+1", prefixLiteral(decoderRows + 1))
+        }
+        for (depth in listOf(16, 17)) {
+            val bytes = Wire('Z', 8192).document(listOf(owner), Sink.Container, containers = depth, mediaValues = catalog)
+            if (depth == 17) reject("Audio does not reset content depth", bytes)
+            else assertNotNull(read(bytes).sections.single().blocks.single().container)
+        }
+        for (depth in listOf(32, 33)) {
+            val wire = Wire('Z', 8192).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+            val bytes = wire.document(listOf(owner), Sink.Body, mediaValues = catalog)
+            if (depth == 33) reject("Audio does not reset table depth", bytes)
+            else {
+                val found = mutableListOf<Span>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply { onSpan = { if (it.audioControl != null) found.add(it) } }
+                read(bytes).sections.forEach { visitor.blocks(it.blocks) }
+                assertEquals(listOf(owner), found)
+            }
+        }
+    }
 }

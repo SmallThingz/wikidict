@@ -144,7 +144,9 @@ internal sealed interface NativeFloatContextSpec {
         val pairedMarginTable: NativeFixedMarginTableInput? = null,
         val pairedBlockBox: ((Int, Float, ContainerWidths) -> NativeTableBlockBox)? = null,
         val intrinsicMarginTable: NativeFixedMarginTableInput? = null,
-        val minimumWidth: (Int) -> Float? = { null }) : NativeFloatContextSpec
+        val minimumWidth: (Int) -> Float? = { null },
+        val documentScrollable: Boolean = false,
+        val ordinaryDirection: TableContainingDirection? = null) : NativeFloatContextSpec
 }
 
 /** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
@@ -655,6 +657,11 @@ internal fun NativeFloatContextLayout(
                                     part.columnClearEvent)
                             }
                             is NativeFloatContextSpec.Child -> {
+                                if (part.documentScrollable && (part.ordinaryDirection == null || part.logicalObject ||
+                                        part.floatSide != null || part.atomicInline || part.overflowViewport || part.scrollport != null ||
+                                        part.autoMarginTable != null || part.fixedMarginTable != null || part.pairedMarginTable != null ||
+                                        part.intrinsicMarginTable != null || part.blockViewport != null || part.blockBox != null))
+                                    throw UnsupportedFloatLayout("Audio control allocation has no represented ordinary source box")
                                 val minimumFloor = part.minimumWidth(containingWidth)?.let { value ->
                                     if (!value.isFinite() || value < 0f || value > TablePixelLimit)
                                         throw UnsupportedFloatLayout("Authored child minimum exceeds the native range")
@@ -796,7 +803,9 @@ internal fun NativeFloatContextLayout(
                                     // Only a top-level scrolling table has a viewport distinct from its
                                     // real overwide grid. Nested grids stay on their outer table's surface.
                                     if (part.overflowViewport) minOf(available, used) else used
-                                } else part.width(containingWidth).coerceAtLeast(0)
+                                } else part.width(containingWidth).let { if (part.documentScrollable) it else it.coerceAtLeast(0) }
+                                if (part.documentScrollable && allocated !in 0..TablePixelLimit)
+                                    throw UnsupportedFloatLayout("Audio control allocation exceeds native geometry")
                                 if (autoTable != null || fixedTable != null) {
                                     val minimum = blockBox?.let { allocated } ?: intrinsicMinimum
                                         ?: throw UnsupportedFloatLayout("Table intrinsic minimum is unavailable")
@@ -832,7 +841,7 @@ internal fun NativeFloatContextLayout(
                                     val placeable = atomic ?: measurePart(index, Constraints(minWidth = childWidth, maxWidth = childWidth))
                                     NativeBlockMeasure(placeable.width.toFloat(), placeable.width.toFloat(), placeable.height.toFloat())
                                 }, part.gapAfter, part.floatSide, part.margins(containingWidth), part.requiresUnobstructedText,
-                                    part.gapBefore, part.clear, part.logicalObject)
+                                    part.gapBefore, part.clear, part.logicalObject, ordinaryDirection = part.ordinaryDirection)
                                 }
                             }
                         } } }
@@ -888,7 +897,8 @@ internal fun NativeFloatContextLayout(
                         catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Context overflow exceeds the native Compose measurement range") }
                         preparedSurface = physical
                         if (documentSurface) {
-                            if (paintParts.any { it is NativeFloatContextSpec.Container && (it.absolutePosition != null || it.absoluteStatic != null) } ||
+                            if (paintParts.any { it is NativeFloatContextSpec.Container && (it.absolutePosition != null || it.absoluteStatic != null) ||
+                                    it is NativeFloatContextSpec.Child && it.documentScrollable } ||
                                 delegatedTables.values.any { it.ordinaryAbsolute }) {
                                 val scrollable = delegatedOverflow.fold(geometry.scrollableBounds) { bounds, overflow ->
                                     enclosingBounds(bounds, overflow.scrollable) ?: bounds
@@ -1054,7 +1064,7 @@ internal fun NativeFloatContextLayout(
                             geometry.children.forEach { placed ->
                                 val index = leaves.indexOfFirst { it is NativeFloatContextSpec.Child && it.id == placed.id }
                                 val childOwner = leaves[index] as NativeFloatContextSpec.Child
-                                if (childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null || childOwner.intrinsicMarginTable != null) {
+                                if (childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null || childOwner.intrinsicMarginTable != null || childOwner.ordinaryDirection != null) {
                                     val x = floor(placed.bounds.left).toInt()
                                     val y = floor(placed.bounds.top).toInt()
                                     measured.getValue(index).placeWithLayer(x, y + documentOrigin,

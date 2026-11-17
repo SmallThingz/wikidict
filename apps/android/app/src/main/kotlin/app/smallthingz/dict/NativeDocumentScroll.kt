@@ -42,13 +42,24 @@ internal fun nativeDocumentImageRevision(states: Map<String, InlineImageAssetSta
     pixels: List<InlineImagePixels?>): Pair<Map<String, InlineImageAssetState>, List<InlineImagePixels?>> =
     states.toMap() to pixels.toList()
 
-/** New ordinary absolute source needs an owner before its first measured range is known. */
+/** Represented source overflow needs an owner before its first measured range is known. */
 internal fun nativeDocumentScrollNeeded(entry: Entry): Boolean {
     var needed = false
     val visitor = PresentationSpanVisitor { _, _ -> }.apply {
+        onSpan = { if (it.audioControl != null) needed = true }
         onContainer = { if (it.style.absolutePosition != null || it.style.absoluteStatic != null) needed = true }
     }
     entry.sections.forEach { visitor.blocks(it.blocks) }
+    return needed
+}
+
+/** The actual root chunk needs a document surface as well as the entry's scroll owner. */
+internal fun nativeAudioDocumentScrollNeeded(blocks: List<Block>): Boolean {
+    var needed = false
+    val visitor = PresentationSpanVisitor { _, _ -> }.apply {
+        onSpan = { if (it.audioControl != null) needed = true }
+    }
+    visitor.blocks(blocks)
     return needed
 }
 

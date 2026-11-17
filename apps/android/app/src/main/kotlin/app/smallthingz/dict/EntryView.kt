@@ -524,7 +524,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         inCell = false, gridPath = "root", gapDp = 6f, trailingGap = true,
                         containAtEnd = true, blockPaths = rows.map { it.key }, gapsDp = rows.map { if (it.compact) 2f else 6f },
                         sectionRows = sectionRows, sectionActions = actions, sectionKeys = rows.map { it.sectionKey },
-                        documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary || blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() },
+                        documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
+                            blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() } || nativeAudioDocumentScrollNeeded(blocks),
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
                         bodyTextContext = bodyText?.getOrNull())
                     }
@@ -1930,13 +1931,17 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         remember(source, preserveOwner) { if (preserveOwner) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
     val owners = LocalEntryMediaOwners.current
-    val embedded = owners.embedded(spans.filter { it.image == null })
+    val embedded = owners.embeddedControls(spans.filter { it.image == null })
     if (embedded.isNotEmpty()) {
         Column(modifier) {
             // Captions are compiled spans; the media record contains only a plain summary.
             val text = remember(spans) { spans.map { if (it.hasClassToken("wikidict-media")) it.withoutClassToken("wikidict-media") else it } }
             StyledText(text, weight = weight, style = renderedStyle, onLink = onLink, preserveWhitespace = preserveWhitespace)
-            embedded.forEach { MediaView(it, LocalReaderSettings.current, showFileName = false, edition=LocalEntryEdition.current, showCaption = false) }
+            embedded.forEach { control -> key(control.sourceIndex, control.media.file) {
+                MediaView(control.media, LocalReaderSettings.current, showFileName = false,
+                    edition = LocalEntryEdition.current, showCaption = false, audioControl = control.audioControl,
+                    audioDirection = control.sourceDirection)
+            } }
         }
         return
     }
@@ -2223,8 +2228,11 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     val absoluteCell = nativeDelegatedAbsoluteCell(LocalNativeDelegatedCell.current, blocks)
     val sourceIds = remember { linkedMapOf<String, Int>() }
     fun sourceId(key: String): Int = sourceIds.getOrPut(key) { sourceIds.size }
-    val mediaControls = mutableMapOf<Int, List<Media>>()
-    val mediaLeaves = mutableMapOf<Int, NativeContainerLeaf>()
+    val mediaControls = mutableMapOf<Int, List<EmbeddedMediaControl>>()
+    val mediaInsets = mutableMapOf<Int, Pair<Float, Float>>()
+    val audioLayoutInputs = remember { linkedMapOf<Triple<Int, Int, String>, NativeLayoutInput<Float>>() }
+    val retainedAudioInputs = hashSetOf<Triple<Int, Int, String>>()
+    val mediaAudioInputs = mutableMapOf<Int, Map<Int, NativeLayoutInput<Float>>>()
     val originalChildren = mutableMapOf<Int, NativeContainerLeaf>()
     val leafBoxes = mutableMapOf<Int, ParagraphBox?>()
     val gaps = blocks.indices.map { index ->
@@ -2298,7 +2306,6 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         } else format?.style ?: baseStyle
         val style = (if (format?.ownerFont != null) typography else inheritedCellTextStyle(typography))
             .copy(textAlign = block.textAlign?.composeAlign() ?: leaf.align?.composeAlign() ?: inheritedAlign ?: androidx.compose.ui.text.style.TextAlign.Unspecified)
-        val nativeTextKinds = setOf("paragraph", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading")
         val rendered = if (block.ruleStyle != null) {
             try {
                 listOf(NativeFloatContextSpec.Rule(index,
@@ -2331,9 +2338,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         LocalNativeContainerTextWrap provides leaf.ownerWrap,
                         LocalNativeDelegatedAbsoluteFlow provides occurrence, content = content)
             })
-        } else if (block.kind in nativeTextKinds && block.table == null && block.feature == null) {
+        } else if (block.kind in nativeBodyTextBlockKinds && block.table == null && block.feature == null) {
             val displayed = if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
-            val embedded = mediaOwners.embedded(displayed.filter { it.image == null })
+            val embedded = mediaOwners.embeddedControls(displayed.filter { it.image == null })
             // StyledText already separates these controls. Keep its text in the shared float owner.
             val spans = if (embedded.isEmpty()) displayed else displayed.map {
                 if (it.hasClassToken("wikidict-media")) it.withoutClassToken("wikidict-media") else it
@@ -2353,10 +2360,35 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 if (embedded.isEmpty()) box else box?.copy(padding = box.padding.copy(bottom = 0f)))
             if (embedded.isEmpty()) listOf(text) else {
                 val id = sourceId(leaf.path + "/media")
-                mediaLeaves[id] = leaf
                 mediaControls[id] = embedded
-                listOf(text, NativeFloatContextSpec.Child(id, { it },
-                    (box?.padding?.bottom ?: 0f) + (box?.after ?: gap), logicalObject = false))
+                val authoredAudio = embedded.any { it.audioControl != null }
+                val containingDirection = when (compiledBodyParagraphDirection(LocalCompiledTableTextDirection.current,
+                    leaf.context?.bodyDirection, LocalNativeColumnTextDirection.current)) {
+                    TextDirection.Ltr -> TableContainingDirection.Ltr
+                    TextDirection.Rtl -> TableContainingDirection.Rtl
+                    else -> if (rtl) TableContainingDirection.Rtl else TableContainingDirection.Ltr
+                }
+                val containingRtl = if (authoredAudio) containingDirection == TableContainingDirection.Rtl else rtl
+                val indent = (blockIndentDp(block) + if (blockPrefix(block).isEmpty()) 0f else 28f) * density.density
+                val left = (box?.contentLeft ?: 0f) + if (containingRtl) 0f else indent
+                val right = (box?.contentRight ?: 0f) + if (containingRtl) indent else 0f
+                mediaInsets[id] = left to right
+                val controlInputs = embedded.filter { it.audioControl != null }.associate { occurrence ->
+                    val sourceIndex = checkNotNull(occurrence.sourceIndex)
+                    val inputKey = Triple(id, sourceIndex, occurrence.media.file)
+                    retainedAudioInputs.add(inputKey)
+                    sourceIndex to audioLayoutInputs.getOrPut(inputKey) { NativeLayoutInput(0f) }
+                }
+                mediaAudioInputs[id] = controlInputs
+                listOf(text, NativeFloatContextSpec.Child(id, { original ->
+                    if (authoredAudio) {
+                        val basis = (original.toDouble() - left - right).coerceAtLeast(0.0).toFloat()
+                        controlInputs.values.forEach { it.update(basis) }
+                        embeddedMediaSlotWidth(embedded, original, left, right, density.density, normalBodyPixels, documentSurface)
+                    } else original
+                }, (box?.padding?.bottom ?: 0f) + (box?.after ?: gap), logicalObject = false,
+                    documentScrollable = authoredAudio,
+                    ordinaryDirection = containingDirection.takeIf { authoredAudio }))
             }
         } else {
             originalChildren[index] = leaf
@@ -2505,6 +2537,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             BlockView(leaf.block, onLink, leaf.path, inCell, leaf.gridPath)
         }
     }
+    audioLayoutInputs.keys.retainAll(retainedAudioInputs)
     NativeFloatContextLayout(parts, modifier, linkColor, containAtEnd, revealIndex, request,
         { if (request != null) reached(request) }, adjoining = parts.any {
             it is NativeFloatContextSpec.Container || it is NativeFloatContextSpec.Rule
@@ -2517,13 +2550,17 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             listOfNotNull(bodyAdjoining)) { id, originalWidth ->
         val controls = mediaControls[id]
         if (controls == null) originalChild(id, originalWidth) else {
-            val leaf = mediaLeaves.getValue(id)
-            val box = leafBoxes[leaf.id]
-            val indent = (blockIndentDp(leaf.block) + if (blockPrefix(leaf.block).isEmpty()) 0f else 28f) * density.density
-            val left = (box?.contentLeft ?: 0f) + if (rtl) 0f else indent
-            val right = (box?.contentRight ?: 0f) + if (rtl) indent else 0f
-            Column(Modifier.fillMaxWidth().absolutePadding(left = with(density) { left.toDp() }, right = with(density) { right.toDp() })) {
-                controls.forEach { MediaView(it, settings, showFileName = false, edition = edition, showCaption = false) }
+            val (left, right) = mediaInsets.getValue(id)
+            Column(Modifier.fillMaxWidth().absolutePadding(
+                left = with(density) { left.toDp() }, right = with(density) { right.toDp() })) {
+                controls.forEach { control -> key(control.sourceIndex, control.media.file) {
+                    val input = control.sourceIndex?.let { mediaAudioInputs.getValue(id).getValue(it) }
+                    val containingWidth: (() -> Float)? = input?.let { actual -> { actual.value } }
+                    MediaView(control.media, settings, showFileName = false, edition = edition,
+                        showCaption = false, audioControl = control.audioControl,
+                        audioDirection = control.sourceDirection, audioContainingWidthPixels = containingWidth,
+                        audioContainingWidthModifier = input?.modifier ?: Modifier, audioOverflowOwned = documentSurface)
+                } }
             }
         }
     }

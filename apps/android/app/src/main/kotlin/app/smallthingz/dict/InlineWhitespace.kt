@@ -33,7 +33,7 @@ internal fun ordinaryInlineDisplaySpans(block: Block): List<Span> {
         val trail = display(span.trail)
         // An entirely collapsed whitespace-only span must not leave an invisible
         // direction-isolate/link annotation. Surviving spans retain every flag/target.
-        if (span.image != null || span.linkPaint != null || span.hasAuthoredInlineMetrics() || text.isNotEmpty() || trail.isNotEmpty() || (span.text.isEmpty() && span.trail.isEmpty())) {
+        if (span.image != null || span.audioControl != null || span.linkPaint != null || span.hasAuthoredInlineMetrics() || text.isNotEmpty() || trail.isNotEmpty() || (span.text.isEmpty() && span.trail.isEmpty())) {
             result.add(if (text == span.text && trail == span.trail) span else span.copy(text = text, trail = trail))
         }
     }

@@ -18,7 +18,7 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
             // Only implemented Y low bits compose with Z; clipped-absolute remains unavailable.
-            require(it and 4864 != 0 && it and 4991 == it) { "Invalid extended presentation feature flags" }
+            require(it and 13056 != 0 && it and 13183 == it) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
             require(it in 1..127) { "Invalid owner geometry feature flags" }
         } else 0
@@ -27,6 +27,7 @@ object BlobDecoder {
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
+        r.audioControls = ownerGeometryFlags and 8192 != 0
         r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
         r.imageOccurrences = ownerGeometryFlags and 32 != 0
@@ -169,7 +170,8 @@ object BlobDecoder {
             (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
             directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
             r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
-            r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout) {
+            r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout &&
+            r.audioControls == r.hasAudioControl) {
             "Y/Z features do not match owner geometry payload"
         }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
@@ -204,6 +206,8 @@ object BlobDecoder {
         var hasTableMinimumWidth = false
         var columnLayouts = false
         var hasColumnLayout = false
+        var audioControls = false
+        var hasAudioControl = false
         var containerOwnerFonts = false
         var hasContainerOwnerFont = false
         var inlineBoxGroups = false
@@ -290,7 +294,7 @@ object BlobDecoder {
             return List(size) { index(Int.MAX_VALUE) }
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
-        fun spans(): List<Span> = List(count(if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
+        fun spans(): List<Span> = List(count((if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27) + if (audioControls) 1 else 0)) { span() }
         private fun span(citationBacklink: Boolean = false): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
@@ -355,14 +359,32 @@ object BlobDecoder {
             val inlineActionGroup = if (inlineActionGroups && presence()) inlineActionGroup() else null
             val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup() else null
             val citationMarker = if (citationNavigation && presence()) citationMarker() else null
+            val audioControl = if (audioControls && presence()) audioControl() else null
             if (image != null && linkPaint != null) {
                 require(imageLinkPaints) { "Image link paint requires R" }
                 hasImageLinkPaintFeature = true
             }
             val source = Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint.takeUnless { citationBacklink }, inlineStyle=inlineStyle.takeUnless { citationBacklink }, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup, citationMarker=citationMarker)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint.takeUnless { citationBacklink }, inlineStyle=inlineStyle.takeUnless { citationBacklink }, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup, citationMarker=citationMarker, audioControl=audioControl)
             return if (citationBacklink) CitationBacklinkSpanWitness.withPolicies(source, linkPaint, inlineStyle) else source
+        }
+        private fun audioControl(): AudioControl {
+            require(remainingItems > 0 && buffer.remaining() >= 1) { "Audio control is truncated or exceeds the item budget" }
+            remainingItems--
+            val fields = byte()
+            require(fields and 7 == fields) { "Unknown audio control fields" }
+            val width = if (fields and 1 != 0) StyleWidth(StyleWidthUnit.entries.getOrNull(byte())
+                ?: error("Unknown audio width unit"), buffer.float) else null
+            val height = if (fields and 2 != 0) styleLength() else null
+            val focus = if (fields and 4 != 0) {
+                require(remainingItems > 0 && buffer.remaining() >= 2) { "Audio focus is truncated or exceeds the item budget" }
+                remainingItems--
+                AudioControlFocusPaint(AudioControlFocusMode.entries.getOrNull(byte())
+                    ?: error("Unknown audio focus mode"), if (presence()) figureColor() else null)
+            } else null
+            hasAudioControl = true
+            return AudioControl(width, height, focus)
         }
         private fun citationMarker(): CitationMarker {
             require(remainingItems > 0) { "Citation marker exceeds the presentation budget" }
@@ -377,7 +399,7 @@ object BlobDecoder {
             hasCitationNavigation = true
             return CitationMarker(reference, occurrence, anchor, policy and 1 != 0, isolation, targeted)
         }
-        fun citationBacklinks(): List<ReferenceBacklink> = List(count(7)) {
+        fun citationBacklinks(): List<ReferenceBacklink> = List(count(7 + if (audioControls) 1 else 0)) {
             val occurrence = u32()
             require(remainingItems > 0) { "Citation backlink span exceeds the presentation budget" }
             remainingItems--

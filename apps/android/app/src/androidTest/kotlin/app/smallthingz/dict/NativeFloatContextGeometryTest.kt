@@ -1598,4 +1598,91 @@ class NativeFloatContextGeometryTest {
         assertTrue(calls > 20)
     }
 
+
+    @Test fun explicitMediaBoxesRetainOriginalTextWidthAndDirectionalDocumentOverflow() {
+        val actions = mutableListOf<String>()
+        val beforeAction: () -> Unit = { actions += "before" }
+        val afterAction: () -> Unit = { actions += "after" }
+        for (direction in TableContainingDirection.entries) {
+            val rtl = direction == TableContainingDirection.Rtl
+            fun control(width: Float, gapBefore: Float = 0f) = NativeFloatContextPart.Child(90,
+                NativeBlockWidth.FixedPx(width), { request ->
+                    assertEquals(180f, request.containingWidth, 0f)
+                    assertEquals(width, checkNotNull(request.requestedWidth), 0f)
+                    NativeBlockMeasure(width, width, 30f)
+                }, gapAfter = 7f, gapBefore = gapBefore, logicalObject = false, ordinaryDirection = direction)
+            fun build(width: Float) = NativeFloatContextGeometry.build(180, listOf(
+                paragraph("Before source", rtl, action = beforeAction), control(width),
+                paragraph("After source", rtl, action = afterAction)))
+            val normal = build(180f)
+            val wide = build(250f)
+            assertEquals("Before source\nAfter source", wide.text.toString())
+            assertEquals(normal.text.toString(), wide.text.toString())
+            assertEquals(180, wide.width)
+            assertEquals(normal.height, wide.height)
+            assertEquals(normal.characterRects(0, normal.text.length), wide.characterRects(0, wide.text.length))
+            assertEquals(normal.nodes.map { it.start to it.end }, wide.nodes.map { it.start to it.end })
+            val media = wide.children.single()
+            assertFalse(media.logicalObject)
+            assertEquals(if (rtl) -70f else 0f, media.bounds.left, 0f)
+            assertEquals(if (rtl) 180f else 250f, media.bounds.right, 0f)
+            assertEquals(250f, media.bounds.width(), 0f)
+            assertEquals(30f, media.bounds.height(), 0f)
+            assertEquals(70, nativeDocumentHorizontalExtent(180, wide.scrollableBounds, rtl).range)
+            assertEquals(0, nativeDocumentHorizontalExtent(180, normal.scrollableBounds, rtl).range)
+            assertTrue(checkNotNull(wide.extents.ink).left <= media.bounds.left)
+            assertTrue(checkNotNull(wide.extents.ink).right >= media.bounds.right)
+            wide.characterRects(0, wide.text.length).filterNotNull().forEach {
+                assertFalse("App-owned control space is not a source character", RectF.intersects(it, media.bounds))
+            }
+            assertEquals(listOf("Before source", "After source"), wide.nodes.map { it.label })
+            wide.nodes.forEach { it.onClick?.invoke() }
+            assertEquals(listOf("before", "after"), actions.takeLast(2))
+            val restored = build(180f)
+            assertEquals(normal.characterRects(0, normal.text.length), restored.characterRects(0, restored.text.length))
+            assertEquals(0, nativeDocumentHorizontalExtent(180, restored.scrollableBounds, rtl).range)
+
+            fun resized(containing: Int): NativeFloatContextGeometry {
+                val observed = mutableListOf<Float>()
+                val parts = listOf(NativeBlockWidth.FixedPx(250f), NativeBlockWidth.Percent(100f)).mapIndexed { index, rule ->
+                    NativeFloatContextPart.Child(100 + index, rule, { request ->
+                        observed += request.containingWidth
+                        assertEquals(containing.toFloat(), request.containingWidth, 0f)
+                        val requested = checkNotNull(request.requestedWidth)
+                        assertEquals(if (index == 0) 250f else containing.toFloat(), requested, 0f)
+                        NativeBlockMeasure(requested, requested, 30f)
+                    }, logicalObject = false, ordinaryDirection = direction)
+                }
+                return NativeFloatContextGeometry.build(containing, parts).also {
+                    assertEquals(listOf(containing.toFloat(), containing.toFloat()), observed)
+                }
+            }
+            val initial = resized(180)
+            val enlarged = resized(190)
+            assertEquals(250f, initial.children[0].bounds.width(), 0f)
+            assertEquals(250f, enlarged.children[0].bounds.width(), 0f)
+            assertEquals(180f, initial.children[1].bounds.width(), 0f)
+            assertEquals(190f, enlarged.children[1].bounds.width(), 0f)
+            assertEquals(if (rtl) -60f else 0f, enlarged.children[0].bounds.left, 0f)
+            assertEquals(70, nativeDocumentHorizontalExtent(180, initial.scrollableBounds, rtl).range)
+            assertEquals(60, nativeDocumentHorizontalExtent(190, enlarged.scrollableBounds, rtl).range)
+            assertEquals(initial.height, enlarged.height)
+            assertEquals("", enlarged.text.toString())
+            assertTrue(enlarged.nodes.isEmpty())
+
+            val blocker = if (rtl) NativeFloatExclusion(TableFloatSide.Right,
+                NativeFloatBounds(120.25f, 0f, 180f, 35.25f)) else NativeFloatExclusion(TableFloatSide.Left,
+                NativeFloatBounds(0f, 0f, 42.25f, 35.25f))
+            val fitting = NativeFloatContextGeometry.build(180, listOf(control(40f, .5f)),
+                carriedExclusions = listOf(blocker))
+            assertEquals(if (rtl) 80.25f else 42.25f, fitting.children.single().bounds.left, 0f)
+            assertEquals(.5f, fitting.children.single().bounds.top, 0f)
+            val below = NativeFloatContextGeometry.build(180, listOf(control(250f, .5f)),
+                carriedExclusions = listOf(blocker))
+            assertEquals(35.25f, below.children.single().bounds.top, 0f)
+            assertEquals(if (rtl) -70f else 0f, below.children.single().bounds.left, 0f)
+            assertEquals("", below.text.toString())
+            assertTrue(below.nodes.isEmpty())
+        }
+    }
 }

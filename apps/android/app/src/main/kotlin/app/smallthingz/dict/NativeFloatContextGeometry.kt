@@ -101,6 +101,7 @@ internal sealed interface NativeFloatContextPart {
         val fixedMarginBox: NativeTableMarginBox? = null,
         val fixedMarginDirection: TableContainingDirection? = null,
         val pairedViewportDirection: TableContainingDirection? = null,
+        val ordinaryDirection: TableContainingDirection? = null,
     ) : NativeFloatContextPart
 }
 
@@ -1075,7 +1076,23 @@ internal class NativeFloatContextGeometry private constructor(
                             throw UnsupportedFloatLayout("This text block needs native exclusion-band shaping")
                         val side = part.floatSide
                         val clearedY = tableClearanceY(y, part.clear, exclusions)
-                        if (part.pairedViewportDirection != null) {
+                        if (part.ordinaryDirection != null && (side != null || part.logicalObject ||
+                                part.pairedViewportDirection != null || part.autoMarginBox != null || part.autoMargins != null ||
+                                part.containingDirection != null || part.fixedMarginBox != null || part.fixedMarginDirection != null))
+                            throw UnsupportedFloatLayout("Ordinary media placement cannot replace another child owner")
+                        if (part.ordinaryDirection != null) {
+                            val fixed = if (adjoining) part.margins.copy(top = 0f, bottom = 0f) else part.margins
+                            val placed = placeNativeFixedMarginTable(width.toFloat(), y, exclusions, fixed,
+                                part.ordinaryDirection, part.widthRule, if (adjoining) FigureClear.None else part.clear, part.measure)
+                            children += PlacedFloatContextChild(part.id, text.length,
+                                RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), false)
+                            y = placed.outer.bottom + if (adjoining) 0f else part.gapAfter
+                            if (adjoining) {
+                                borderTop = placed.content.top
+                                marginPlacement = checkNotNull(marginPlacement).copy(borderTop = borderTop)
+                                marginPlacements[partIndex] = checkNotNull(marginPlacement)
+                            }
+                        } else if (part.pairedViewportDirection != null) {
                             if (side != null || part.widthRule != NativeBlockWidth.Auto || part.autoMarginBox != null ||
                                     part.autoMargins != null || part.containingDirection != null || part.fixedMarginBox != null ||
                                     part.fixedMarginDirection != null)

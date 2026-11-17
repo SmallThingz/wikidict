@@ -275,4 +275,64 @@ class NativeScrollportTest {
             nativeDocumentAllocation(TablePixelLimit, 12, 1, false)
         }
     }
+
+    @Test fun audioSourceDocumentEnrollmentAndOverflowLeaseKeepContainingWidth() {
+        val audio = Span("link", "Original audio label", "File:a.ogg",
+            classes = "wikidict-media wikidict-media-file-612e6f6767", audioControl = AudioControl())
+        fun entry(span: Span): Entry {
+            var block = Block("paragraph", 0, listOf(span))
+            repeat(3) { block = Block("container", 0, emptyList(),
+                container = Container(listOf(block), ContainerStyle())) }
+            return Entry("audio extent", emptyList(), "language", "Thai", "th",
+                listOf(Section(2, "Body", listOf(block))), emptyList(), media = listOf(Media("a.ogg", "audio", "")))
+        }
+        val source = entry(audio)
+        assertTrue(nativeDocumentScrollNeeded(source))
+        assertFalse(nativeDocumentScrollNeeded(entry(audio.copy(audioControl = null))))
+        assertTrue(nativeAudioDocumentScrollNeeded(source.sections.single().blocks))
+        assertTrue(nativeAudioDocumentScrollNeeded(listOf(Block("paragraph", 0, listOf(audio)))))
+        assertFalse(nativeAudioDocumentScrollNeeded(entry(audio.copy(audioControl = null)).sections.single().blocks))
+        assertFalse(nativeAudioDocumentScrollNeeded(listOf(Block("paragraph", 0, listOf(Span("text", "Other chunk"))))))
+        assertFalse(nativeAudioDocumentScrollNeeded(emptyList()))
+        assertSame(audio, source.sections.single().blocks.single().container!!.blocks.single()
+            .container!!.blocks.single().container!!.blocks.single().spans.single())
+        for (direction in TableContainingDirection.entries) {
+            val rtl = direction == TableContainingDirection.Rtl
+            val registry = NativeDocumentOverflowRegistry(204, 180, 200, 12, rtl, setOf("source item"))
+            val publisher = registry.publisher("source item")
+            val owner = Any()
+            publisher.attach(owner)
+            for ((rule, expected) in listOf(NativeBlockWidth.FixedPx(250f) to 250f,
+                NativeBlockWidth.Percent(150f) to 270f)) {
+                var calls = 0
+                val placed = placeNativeFixedMarginTable(180f, 0f, emptyList(), zero, direction, rule) { request ->
+                    calls++
+                    assertEquals(180f, request.containingWidth, 0f)
+                    val requested = checkNotNull(request.requestedWidth)
+                    assertEquals(expected, requested, 0f)
+                    NativeBlockMeasure(requested, requested, 30f)
+                }
+                assertEquals(1, calls)
+                assertEquals(if (rtl) 180f - expected else 0f, placed.content.left, 0f)
+                assertEquals(if (rtl) 180f else expected, placed.content.right, 0f)
+                publisher.publish(owner, 180, placed.content)
+                assertEquals((expected - 180f).toInt(), registry.range)
+                val allocation = nativeDocumentAllocation(204, 12, registry.range, rtl)
+                assertEquals("The document surface never becomes the next percentage basis", 180,
+                    allocation.width - allocation.leftPadding - allocation.rightPadding)
+                publisher.publish(owner, 181, NativeFloatBounds(0f, 0f, 900f, 30f))
+                assertEquals((expected - 180f).toInt(), registry.range)
+            }
+            publisher.remove(owner)
+            assertEquals(0, registry.range)
+            publisher.publish(owner, 180, NativeFloatBounds(if (rtl) -70f else 0f, 0f,
+                if (rtl) 180f else 250f, 30f))
+            assertEquals(70, registry.range)
+            publisher.publish(owner, 180, NativeFloatBounds(0f, 0f, 180f, 30f))
+            assertEquals(0, registry.range)
+            publisher.detach(owner)
+        }
+        assertEquals("Original audio label", audio.text)
+        assertEquals("File:a.ogg", audio.target)
+    }
 }

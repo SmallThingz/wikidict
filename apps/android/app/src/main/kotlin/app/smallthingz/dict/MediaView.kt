@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.indication
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -13,13 +14,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
+import kotlin.math.roundToInt
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONObject
@@ -233,18 +242,51 @@ class MediaCache internal constructor(context:Context,
         } catch (failure: Exception) { temp.delete(); throw failure }
     }
 }
+internal data class AudioPlaybackProgress(val positionMillis: Int, val durationMillis: Int, val pendingSeekMillis: Int?)
+
 object MediaPlayback {
     private var player by mutableStateOf<MediaPlayer?>(null)
     private var generation=0L
+    private var playingOccurrence by mutableStateOf<Any?>(null)
+    private var preparedPlayer: MediaPlayer? = null
+    private var preparedDuration = 0
+    private var seekingTo: Int? = null
+    private var queuedSeek: Int? = null
+    private var playbackError: ((String) -> Unit)? = null
     var playing by mutableStateOf<String?>(null);private set
     fun stop(expected:MediaPlayer?=null) {
         if(expected!=null&&player!==expected)return
-        generation++;player?.release();player=null;playing=null
+        generation++;player?.release();player=null;playing=null;playingOccurrence=null
+        preparedPlayer=null;preparedDuration=0;seekingTo=null;queuedSeek=null;playbackError=null
     }
     fun begin():Long { SpeechPlayback.stop();stop();return generation }
     fun cancel(request:Long) { if(generation==request)stop() }
     fun isCurrent(owner:MediaPlayer)=player===owner
-    suspend fun play(key:String,file:MediaFile,request:Long,onError:(String)->Unit={}):MediaPlayer {
+    fun isPlaying(key:String,occurrence:Any?=null)=playing==key&&(occurrence==null||playingOccurrence===occurrence)
+    private fun fail(owner: MediaPlayer) {
+        if (player !== owner) return
+        playbackError?.invoke("Pronunciation could not be played.")
+        stop(owner)
+    }
+    internal fun progress(key: String, occurrence: Any): AudioPlaybackProgress? {
+        val current = player ?: return null
+        if (!isPlaying(key, occurrence) || preparedPlayer !== current || preparedDuration <= 0) return null
+        return try { AudioPlaybackProgress(current.currentPosition.coerceIn(0, preparedDuration), preparedDuration,
+            queuedSeek ?: seekingTo) } catch (_: Exception) { fail(current); null }
+    }
+    internal fun seek(key: String, occurrence: Any, positionMillis: Int): Boolean {
+        val current = player ?: return false
+        if (!isPlaying(key, occurrence) || preparedPlayer !== current || preparedDuration <= 0) return false
+        val target = positionMillis.coerceIn(0, preparedDuration)
+        if (seekingTo != null) { queuedSeek = target; return true }
+        return seekCurrent(current, target)
+    }
+    private fun seekCurrent(current: MediaPlayer, target: Int): Boolean = try {
+        seekingTo = target
+        current.seekTo(target.toLong(), MediaPlayer.SEEK_CLOSEST)
+        true
+    } catch (_: Exception) { fail(current); false }
+    suspend fun play(key:String,file:MediaFile,request:Long,occurrence:Any?=null,onError:(String)->Unit={}):MediaPlayer {
         var pending:MediaPlayer?=null
         try {
             if(request!=generation)throw CancellationException("Audio request superseded")
@@ -255,19 +297,238 @@ object MediaPlayback {
             currentCoroutineContext().ensureActive()
             if(request!=generation)throw CancellationException("Audio request superseded")
             val next=checkNotNull(pending)
-            next.setOnPreparedListener{if(player===it)try{it.start()}catch(e:Exception){onError("Pronunciation could not be played.");stop(it)}}
+            next.setOnPreparedListener{if(player===it)try{
+                if(occurrence!=null){preparedPlayer=it;preparedDuration=it.duration.coerceAtLeast(0)}
+                it.start()
+            }catch(e:Exception){onError("Pronunciation could not be played.");stop(it)}}
             next.setOnCompletionListener{if(player===it)stop(it)}
             next.setOnErrorListener{failed,_,_->if(player===failed){onError("Pronunciation could not be played.");stop(failed)};true}
-            pending=null;player=next;playing=key
+            if(occurrence!=null)next.setOnSeekCompleteListener{current->
+                if(player===current&&preparedPlayer===current){
+                    val queued=queuedSeek;queuedSeek=null
+                    if(queued!=null&&queued!=seekingTo)seekCurrent(current,queued)else seekingTo=null
+                }
+            }
+            pending=null;player=next;playing=key;playingOccurrence=occurrence;playbackError=onError
             try{next.prepareAsync()}catch(e:Exception){stop(next);throw e}
             return next
         } finally { withContext(NonCancellable+Dispatchers.IO){pending?.release()} }
     }
 }
+
+// Replaying the real effective focus identity lets a replacement stock indication
+// observe an already-focused control. The stock state-layer precedence is retained.
+internal class PlaybackFocusInteractions : androidx.compose.foundation.interaction.InteractionSource {
+    private val states = mutableListOf<androidx.compose.foundation.interaction.Interaction>()
+    private val active = kotlinx.coroutines.flow.MutableStateFlow<androidx.compose.foundation.interaction.FocusInteraction.Focus?>(null)
+    override val interactions: kotlinx.coroutines.flow.Flow<androidx.compose.foundation.interaction.Interaction> = kotlinx.coroutines.flow.flow {
+        var previous: androidx.compose.foundation.interaction.FocusInteraction.Focus? = null
+        active.collect { next ->
+            previous?.let { emit(androidx.compose.foundation.interaction.FocusInteraction.Unfocus(it)) }
+            next?.let { emit(it) }
+            previous = next
+        }
+    }
+    fun accept(interaction: androidx.compose.foundation.interaction.Interaction) {
+        when (interaction) {
+            is androidx.compose.foundation.interaction.FocusInteraction.Focus,
+            is androidx.compose.foundation.interaction.HoverInteraction.Enter,
+            is androidx.compose.foundation.interaction.DragInteraction.Start -> states.add(interaction)
+            is androidx.compose.foundation.interaction.FocusInteraction.Unfocus -> states.remove(interaction.focus)
+            is androidx.compose.foundation.interaction.HoverInteraction.Exit -> states.remove(interaction.enter)
+            is androidx.compose.foundation.interaction.DragInteraction.Stop -> states.remove(interaction.start)
+            is androidx.compose.foundation.interaction.DragInteraction.Cancel -> states.remove(interaction.start)
+            else -> return
+        }
+        active.value = states.lastOrNull() as? androidx.compose.foundation.interaction.FocusInteraction.Focus
+    }
+    fun clear() { states.clear(); active.value = null }
+}
+
 @Composable
-fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true) {
+private fun AudioControlLayout(control: AudioControl, containingWidthPixels: (() -> Float)?, inputModifier: Modifier, overflowOwned: Boolean, density: Float,
+    bodyPixels: Float, onUnavailable: (String?) -> Unit, content: @Composable () -> Unit) {
+    val report by rememberUpdatedState(onUnavailable)
+    val originalContainingWidth by rememberUpdatedState(containingWidthPixels)
+    val policy = remember(control.width, control.height, density, bodyPixels, overflowOwned) {
+        object : androidx.compose.ui.layout.MeasurePolicy {
+            private fun resolvedWidth(containing: Float) = audioControlWidthPixels(control, containing, density, bodyPixels)
+                ?.let { kotlin.math.ceil(it).toInt() }
+            private fun resolvedHeight() = audioControlHeightPixels(control, density, bodyPixels)
+                ?.let { kotlin.math.ceil(it).toInt() }
+            override fun androidx.compose.ui.layout.MeasureScope.measure(measurables: List<androidx.compose.ui.layout.Measurable>,
+                constraints: androidx.compose.ui.unit.Constraints): androidx.compose.ui.layout.MeasureResult {
+                val childConstraints = try {
+                    val containing = originalContainingWidth?.invoke() ?: if (constraints.hasBoundedWidth) constraints.maxWidth.toFloat() else Float.NaN
+                    val exactWidth = audioControlWidthPixels(control, containing, density, bodyPixels)
+                    val width = exactWidth?.let { kotlin.math.ceil(it).toInt() }
+                    val height = resolvedHeight()
+                    if (!overflowOwned && ((exactWidth != null && containing.isFinite() && exactWidth > containing) ||
+                        (width != null && constraints.hasBoundedWidth && width > constraints.maxWidth) ||
+                        (height != null && constraints.hasBoundedHeight && height > constraints.maxHeight)))
+                        throw UnsupportedFloatLayout("Audio controls exceed their owned layout bounds")
+                    val fixed = try { androidx.compose.ui.unit.Constraints(
+                        minWidth = width ?: 0, maxWidth = width ?: constraints.maxWidth,
+                        minHeight = height ?: 0, maxHeight = height ?: constraints.maxHeight)
+                    } catch (_: IllegalArgumentException) {
+                        throw UnsupportedFloatLayout("Audio control dimensions exceed Compose allocation")
+                    }
+                    report(null)
+                    fixed
+                } catch (failure: UnsupportedFloatLayout) {
+                    report(failure.message ?: "Audio control layout is unavailable")
+                    constraints.copy(minWidth = 0, minHeight = 0)
+                }
+                val child = measurables.single().measure(childConstraints)
+                return layout(constraints.constrainWidth(child.width), constraints.constrainHeight(child.height)) {
+                    child.placeRelative(0, 0)
+                }
+            }
+            private fun intrinsicWidth(child: androidx.compose.ui.layout.IntrinsicMeasurable, height: Int, maximum: Boolean): Int {
+                // Intrinsic queries carry no fresh containing-width lease. Never reuse
+                // the previous measured C for a percentage contribution.
+                val width = resolvedWidth(Float.NaN)
+                if (width != null) return width
+                val measuredHeight = resolvedHeight() ?: height
+                return if (maximum) child.maxIntrinsicWidth(measuredHeight) else child.minIntrinsicWidth(measuredHeight)
+            }
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>, height: Int) =
+                intrinsicWidth(measurables.single(), height, false)
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>, height: Int) =
+                intrinsicWidth(measurables.single(), height, true)
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>, width: Int): Int =
+                resolvedHeight() ?: measurables.single().minIntrinsicHeight(resolvedWidth(Float.NaN) ?: width)
+            override fun androidx.compose.ui.layout.IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<androidx.compose.ui.layout.IntrinsicMeasurable>, width: Int): Int =
+                resolvedHeight() ?: measurables.single().maxIntrinsicHeight(resolvedWidth(Float.NaN) ?: width)
+        }
+    }
+    androidx.compose.ui.layout.Layout(content = content, modifier = inputModifier, measurePolicy = policy)
+}
+
+@Composable
+private fun rememberPlaybackFocusInteractions(interactions: androidx.compose.foundation.interaction.MutableInteractionSource): PlaybackFocusInteractions {
+    val focus = remember(interactions) { PlaybackFocusInteractions() }
+    LaunchedEffect(interactions, focus) {
+        try { interactions.interactions.collect(focus::accept) }
+        finally { focus.clear() }
+    }
+    return focus
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaybackFocusLayer(focus: AudioControlFocusPaint?, interactions: PlaybackFocusInteractions,
+    inherited: RippleConfiguration?, automaticWhenNull: Boolean = false, content: @Composable (Modifier) -> Unit) {
+    val paint = (focus?.mode == AudioControlFocusMode.UaAuto || (focus == null && automaticWhenNull && inherited != null)) &&
+        focus?.color != FigureColor.Transparent
+    val color = when (val source = focus?.color) {
+        null -> inherited?.color ?: Color.Unspecified
+        FigureColor.Transparent -> Color.Transparent
+        is FigureColor.Rgb -> Color(checkNotNull(canonicalColorArgb(source.value)).toInt())
+        else -> error("Unsupported audio focus color")
+    }
+    val alpha = inherited?.rippleAlpha ?: RippleDefaults.RippleAlpha
+    // Replace only the indication subscription. The stock thumb/hover and button
+    // nodes stay in place when the focused policy changes.
+    val events = interactions.interactions
+    val replay = remember(interactions, color, alpha, paint) {
+        object : androidx.compose.foundation.interaction.InteractionSource {
+            override val interactions = events
+        }
+    }
+    CompositionLocalProvider(LocalRippleConfiguration provides RippleConfiguration(color, alpha)) {
+        content(if (paint) Modifier.indication(replay, ripple()) else Modifier)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaPlaybackButton(focus: AudioControlFocusPaint?, modifier: Modifier, enabled: Boolean,
+    onClick: () -> Unit, content: @Composable () -> Unit) {
+    val interactions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focusInteractions = rememberPlaybackFocusInteractions(interactions)
+    val inherited = LocalRippleConfiguration.current
+    val alpha = inherited?.rippleAlpha ?: RippleDefaults.RippleAlpha
+    val ordinary = inherited?.let {
+        RippleConfiguration(it.color, androidx.compose.material.ripple.RippleAlpha(
+            draggedAlpha = alpha.draggedAlpha, focusedAlpha = 0f,
+            hoveredAlpha = alpha.hoveredAlpha, pressedAlpha = alpha.pressedAlpha))
+    }
+    CompositionLocalProvider(LocalRippleConfiguration provides ordinary) {
+        IconButton(onClick = onClick, modifier = modifier, enabled = enabled, interactionSource = interactions) {
+            // Use the real stock inner allocation and shape clip, not a second target.
+            PlaybackFocusLayer(focus, focusInteractions, inherited, automaticWhenNull = true) { indication ->
+                Box(Modifier.fillMaxSize().then(indication), contentAlignment = Alignment.Center) { content() }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AudioPlaybackControls(control: AudioControl, direction: String, containingWidthPixels: (() -> Float)?, containingWidthModifier: Modifier, overflowOwned: Boolean, enabled: Boolean, busy: Boolean,
+    progress: AudioPlaybackProgress?, onClick: () -> Unit, onSeek: (Int) -> Unit,
+    buttonContent: @Composable () -> Unit) {
+    val density = LocalDensity.current
+    val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
+    val interactions = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val focusInteractions = rememberPlaybackFocusInteractions(interactions)
+    val inherited = LocalRippleConfiguration.current
+    val inheritedDirection = LocalLayoutDirection.current
+    val effectiveFocus = control.focus ?: AudioControlFocusPaint(AudioControlFocusMode.UaAuto)
+    var scrub by remember { mutableStateOf<Float?>(null) }
+    val seekEnabled = enabled && !busy && progress != null
+    LaunchedEffect(seekEnabled) { if (!seekEnabled) scrub = null }
+    var unavailable by remember { mutableStateOf<String?>(null) }
+    val directionValue = when (direction) {
+        "ltr" -> androidx.compose.ui.unit.LayoutDirection.Ltr
+        "rtl" -> androidx.compose.ui.unit.LayoutDirection.Rtl
+        else -> inheritedDirection
+    }
+    val directionUnavailable = direction !in listOf("", "ltr", "rtl")
+    val minimum = if (control.height == null || unavailable != null || directionUnavailable) LocalMinimumInteractiveComponentSize.current else 0.dp
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides minimum,
+        LocalLayoutDirection provides directionValue) {
+        Column {
+            val reason = if (directionUnavailable) "Audio control direction is unresolved" else unavailable
+            reason?.let { ReaderLayoutUnavailable(it) }
+            AudioControlLayout(if (directionUnavailable) control.copy(width = null, height = null) else control,
+                containingWidthPixels, containingWidthModifier, overflowOwned, density.density, bodyPixels, { unavailable = it }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MediaPlaybackButton(effectiveFocus,
+                    if (busy) Modifier.semantics { contentDescription = "Loading pronunciation" } else Modifier,
+                    enabled && !busy, onClick, buttonContent)
+                val position = scrub ?: (progress?.pendingSeekMillis ?: progress?.positionMillis ?: 0).toFloat()
+                val duration = progress?.durationMillis ?: 0
+                Slider(value = position, onValueChange = { if (seekEnabled) scrub = it },
+                    onValueChangeFinished = { if (seekEnabled) scrub?.let { onSeek(it.roundToInt()) }; scrub = null },
+                    enabled = seekEnabled, valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                    interactionSource = interactions,
+                    modifier = Modifier.weight(1f).semantics {
+                        contentDescription = "Pronunciation position"
+                        stateDescription = if (progress == null) "Not playing" else
+                            "${(position / 1000).toInt()} of ${duration / 1000} seconds"
+                    },
+                    thumb = {
+                        // This new media control selects the toolkit's automatic ripple
+                        // on the stock thumb; the thumb remains part of Slider's one target.
+                        PlaybackFocusLayer(effectiveFocus, focusInteractions, inherited) { indication ->
+                            SliderDefaults.Thumb(interactions, modifier = indication, enabled = seekEnabled)
+                        }
+                    })
+            }
+            }
+        }
+    }
+}
+
+@Composable
+fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition:String="",showCaption:Boolean=true,cache:MediaCache=LocalInlineImageCache.current ?: MediaCache.get(LocalContext.current),showImage:Boolean=true,audioControl:AudioControl?=null,audioDirection:String="",audioContainingWidthPixels:(()->Float)?=null,audioContainingWidthModifier:Modifier=Modifier,audioOverflowOwned:Boolean=false) {
+    require(audioControl==null||media.kind=="audio")
     val scope=rememberCoroutineScope();val uri=LocalUriHandler.current
     val key=remember(media.kind,media.file,edition){mediaKey(media,edition)}
+    val rememberedPlaybackOccurrence=remember(key){Any()}
+    val playbackOccurrence=rememberedPlaybackOccurrence.takeIf{audioControl!=null}
     var resource by remember(key){mutableStateOf<MediaFile?>(null)}
     var error by remember(key){mutableStateOf<String?>(null)}
     var retry by remember(key){mutableIntStateOf(0)}
@@ -300,14 +561,20 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
     val shownSource=if(sharedOwner==null)resource?.source else sharedReady?.source
     val shownCredit=if(sharedOwner==null)resource?.credit else sharedReady?.credit
     val showImageRetry=media.kind=="image"&&showImage&&shownError!=null
-    Column(Modifier.fillMaxWidth().animateContentSize()) {
-        if(media.kind=="image"&&showImage&&allowed&&(shownError==null||shownBitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
-            shownBitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
-            if(shownBitmap==null && shownBusy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
+    val playbackActive=MediaPlayback.isPlaying(key,playbackOccurrence)
+    val progressState=if(audioControl!=null)remember(key,playbackOccurrence){mutableStateOf<AudioPlaybackProgress?>(null)}else null
+    if(progressState!=null)LaunchedEffect(key,playbackOccurrence,playbackActive){
+        progressState.value=null
+        if(playbackActive){
+            val occurrence=checkNotNull(playbackOccurrence)
+            while(MediaPlayback.isPlaying(key,occurrence)){
+                progressState.value=MediaPlayback.progress(key,occurrence)
+                delay(200)
+            }
         }
-        Row(verticalAlignment=Alignment.CenterVertically) {
-            if(media.kind!="image" || (showImage&&!allowed&&!showImageRetry)) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick={
-                if(media.kind=="audio") { if(MediaPlayback.playing==key)MediaPlayback.stop() else {
+    }
+    val onMediaClick:()->Unit={
+                if(media.kind=="audio") { if(MediaPlayback.isPlaying(key,playbackOccurrence))MediaPlayback.stop() else {
                     val request=MediaPlayback.begin()
                     audioJob?.cancel()
                     val nextJob=scope.launch(start=CoroutineStart.LAZY){
@@ -316,7 +583,7 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                         busy=true;error=null;try{cache.withFile(media,settings.mediaCacheMb,edition){loaded->
                         if(audioJob!==ownedJob)throw CancellationException("Audio request superseded")
                         resource=loaded
-                        val owner=MediaPlayback.play(key,loaded,request){error=it}
+                        val owner=MediaPlayback.play(key,loaded,request,playbackOccurrence){error=it}
                         try{busy=false;snapshotFlow{MediaPlayback.isCurrent(owner)}.first{!it}}
                         finally{MediaPlayback.stop(owner)}
                     }}catch(e:CancellationException){throw e}catch(e:Exception){if(audioJob===ownedJob)error="Pronunciation could not be played."}finally{MediaPlayback.cancel(request);if(audioJob===ownedJob){audioJob=null;busy=false}}}
@@ -324,7 +591,34 @@ fun MediaView(media:Media,settings:AppSettings,showFileName:Boolean=true,edition
                 } }
                 else if(sharedOwner!=null){if(shownError!=null||shownSource==null)sharedOwner.retry(media.file)else uri.openUri(shownSource)}
                 else if(error!=null || resource==null) retry++ else resource?.source?.let{uri.openUri(it)}
-            }) { if(shownBusy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.playing==key)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(shownError!=null) "Retry image" else "Image source"} else if(MediaPlayback.playing==key) "Stop pronunciation" else "Play pronunciation") }
+            }
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        if(media.kind=="image"&&showImage&&allowed&&(shownError==null||shownBitmap!=null)) Box(Modifier.fillMaxWidth().padding(top=12.dp).height(220.dp),contentAlignment=Alignment.Center) {
+            shownBitmap?.let { Image(it.asImageBitmap(),media.caption.ifBlank{media.file},Modifier.fillMaxSize()) }
+            if(shownBitmap==null && shownBusy) CircularProgressIndicator(Modifier.size(24.dp),strokeWidth=2.dp)
+        }
+        if(audioControl!=null){
+            AudioPlaybackControls(audioControl,audioDirection,audioContainingWidthPixels,audioContainingWidthModifier,audioOverflowOwned,allowed,shownBusy,
+                progressState?.value?.takeIf{playbackActive},onMediaClick,{position->
+                    val occurrence=checkNotNull(playbackOccurrence)
+                    if(MediaPlayback.seek(key,occurrence,position))progressState?.value=MediaPlayback.progress(key,occurrence)
+                }) {
+                if(shownBusy)CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp)
+                else Icon(if(playbackActive)Icons.Outlined.Stop else Icons.Outlined.PlayArrow,
+                    if(playbackActive)"Stop pronunciation" else "Play pronunciation")
+            }
+            Row(verticalAlignment=Alignment.CenterVertically){
+                Column(Modifier.weight(1f)){
+                    val caption=media.caption.takeUnless{it==media.file}.orEmpty()
+                    if(showCaption&&(caption.isNotBlank()||showFileName))Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)
+                    shownError?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.error)}
+                    shownCredit?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                }
+                shownSource?.let{source->IconButton(onClick={uri.openUri(source)}){Icon(Icons.Outlined.OpenInNew,"Source and licence",Modifier.size(17.dp))}}
+            }
+        }else Row(verticalAlignment=Alignment.CenterVertically) {
+            if(media.kind!="image" || (showImage&&!allowed&&!showImageRetry)) IconButton(modifier=if(shownBusy)Modifier.semantics{contentDescription=if(media.kind=="image")"Loading image" else "Loading pronunciation"}else Modifier,enabled=allowed&&!shownBusy,onClick=onMediaClick
+            ) { if(shownBusy) CircularProgressIndicator(Modifier.size(18.dp),strokeWidth=2.dp) else Icon(if(media.kind=="image")Icons.Outlined.Image else if(MediaPlayback.isPlaying(key,playbackOccurrence))Icons.Outlined.Stop else Icons.Outlined.PlayArrow,if(media.kind=="image"){if(shownError!=null) "Retry image" else "Image source"} else if(MediaPlayback.isPlaying(key,playbackOccurrence)) "Stop pronunciation" else "Play pronunciation") }
             Column(Modifier.weight(1f)) {
                 val caption=media.caption.takeUnless{it==media.file}.orEmpty()
                 if(showCaption && (caption.isNotBlank() || showFileName)) Text(caption.ifBlank{media.file.substringBeforeLast('.').replace('_',' ')},style=MaterialTheme.typography.bodyMedium)

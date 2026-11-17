@@ -5,7 +5,17 @@ private val compiledClassWhitespace = Regex("\\s+")
 internal fun Span.hasClassToken(token: String): Boolean =
     classes.split(compiledClassWhitespace).any { it == token }
 internal fun Span.withoutClassToken(token: String): Span =
-    copy(classes = classes.split(compiledClassWhitespace).filter { it.isNotEmpty() && it != token }.joinToString(" "))
+    copy(classes = classes.split(compiledClassWhitespace).filter { it.isNotEmpty() && it != token }.joinToString(" "),
+        audioControl = if (token == "wikidict-media") null else audioControl)
+
+/** A typed source AUDIO owns one control occurrence, independently of its cached asset. */
+internal data class EmbeddedMediaControl(val media: Media, val sourceIndex: Int?, val audioControl: AudioControl?,
+    val sourceDirection: String = "") {
+    init {
+        require((sourceIndex != null) == (audioControl != null))
+        require(audioControl != null || sourceDirection.isEmpty())
+    }
+}
 
 /** Ownership and lexical navigation are independent compiled fields. */
 internal class MediaOwners(media: List<Media>) {
@@ -39,6 +49,41 @@ internal class MediaOwners(media: List<Media>) {
 
     fun embedded(spans: List<Span>): List<Media> =
         spans.mapNotNull { file(it)?.let(files::get) }.distinctBy { it.file }
+
+    /** Legacy caption fragments still share a file control. Explicit AUDIO owners never do. */
+    fun embeddedControls(spans: List<Span>): List<EmbeddedMediaControl> {
+        val legacyFiles = hashSetOf<String>()
+        return buildList {
+            spans.forEachIndexed { index, span ->
+                val media = media(span)
+                val control = span.audioControl
+                if (control != null) {
+                    require(media?.kind == "audio") { "Audio control owner has no compiled audio asset" }
+                    add(EmbeddedMediaControl(checkNotNull(media), index, control, span.direction))
+                } else if (media != null && legacyFiles.add(media.file)) {
+                    add(EmbeddedMediaControl(media, null, null))
+                }
+            }
+        }
+    }
+}
+
+/** Resolve every stacked control against original content C; allocation never becomes a new percentage basis. */
+internal fun embeddedMediaSlotWidth(controls: List<EmbeddedMediaControl>, containingWidth: Int,
+    left: Float, right: Float, density: Float, normalBodyPixels: Float, overflowOwned: Boolean = false): Int {
+    if (containingWidth !in 0..TablePixelLimit || !left.isFinite() || !right.isFinite() || left < 0f || right < 0f)
+        throw UnsupportedFloatLayout("Invalid audio containing allocation")
+    val contentWidth = (containingWidth.toDouble() - left - right).coerceAtLeast(0.0).toFloat()
+    val largest = controls.mapNotNull { occurrence -> occurrence.audioControl?.let {
+        audioControlWidthPixels(it, contentWidth, density, normalBodyPixels)
+    } }.maxOrNull() ?: return containingWidth
+    // The native edge is Float; do not turn a rounded fitting edge back into a Double overflow.
+    val allocation = maxOf(containingWidth.toFloat(), (left.toDouble() + largest + right).toFloat())
+    if (!allocation.isFinite() || allocation > TablePixelLimit)
+        throw UnsupportedFloatLayout("Audio allocation exceeds the native measurement range")
+    if (!overflowOwned && allocation > containingWidth)
+        throw UnsupportedFloatLayout("Audio overflow requires a represented document owner")
+    return kotlin.math.ceil(allocation.toDouble()).toInt()
 }
 
 internal fun legacyEmbeddedImageCaptions(entry: Entry): Map<String, Set<String>> {
@@ -272,7 +317,7 @@ internal fun List<Span>.hasAuthoredFontFamily(): Boolean = any { span ->
 
 internal fun List<Span>.hasCompiledInlineContent(): Boolean = any {
     it.kind == "line_break" || it.text.isNotEmpty() || it.trail.isNotEmpty() ||
-        it.image != null || it.hasAuthoredInlineMetrics() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null
+        it.image != null || it.audioControl != null || it.hasAuthoredInlineMetrics() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null
 }
 
 internal enum class LegacySpanFontFamily { Code, Egyptian }
@@ -296,7 +341,7 @@ internal fun inlineFontSnapshotSpan(snapshot: InlineFontSnapshot): Span = Span("
 
 internal fun inlineMetricOwnerSpan(span: Span): Span = span.copy(kind = "text", text = " ", target = "", trail = "",
     direction = "", image = null, ruby = null, inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, targetFragment = null, linkPaint = null, underline = false, strike = false,
-    citationMarker = null, citationBacklinkWitness = null,
+    citationMarker = null, citationBacklinkWitness = null, audioControl = null,
     inlineStyle = if (span.inlineStyle?.fontNormalized == true) InlineTextStyle(fontNormalized = true) else null)
 
 internal fun tableHasAuthoredInlineStyles(table: Table): Boolean {
@@ -307,7 +352,7 @@ internal fun tableHasAuthoredInlineStyles(table: Table): Boolean {
 
 private fun Span.hasPaintedInlineContent(): Boolean = image != null || linkPaint != null || (background != null &&
     ((kind != "line_break" && text.any { it != '\n' }) || trail.any { it != '\n' }))
-private fun Span.hasRetainedInlineContent(): Boolean = hasPaintedInlineContent() || hasAuthoredInlineMetrics() ||
+private fun Span.hasRetainedInlineContent(): Boolean = audioControl != null || hasPaintedInlineContent() || hasAuthoredInlineMetrics() ||
     isUnsupportedAuthoredWhitespaceOwner() || (inlineStyle != null &&
         (text + trail).any { it != ' ' && it != '\t' && it != '\r' && it != '\n' })
 

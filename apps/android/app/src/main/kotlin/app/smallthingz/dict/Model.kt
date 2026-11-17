@@ -36,15 +36,17 @@ data class Span(
     val inlineBoxGroup: InlineBoxGroup? = null,
     val citationMarker: CitationMarker? = null,
     private val citationBacklinkWitness: CitationBacklinkSpanWitness? = null,
+    val audioControl: AudioControl? = null,
 ) {
     internal val isQualifiedCitationBacklink: Boolean get() = citationBacklinkWitness != null
     init {
+        require(audioControl == null || validAudioControlOwner(this)) { "Invalid audio control owner" }
         require(citationMarker == null || validCitationMarkerSpan(this)) { "Invalid citation marker owner" }
         require(citationBacklinkWitness == null || citationMarker == null && validCitationLinkShape(this)) {
             "Invalid qualified citation backlink copy"
         }
         val citationLocal = citationMarker != null || citationBacklinkWitness != null
-        require(!citationLocal || validCitationSpanFields(this)) { "Invalid citation source fields" }
+        require(!citationLocal || validScopedSpanFields(this)) { "Invalid citation source fields" }
         require(ruby == null || kind == "text" && text.isEmpty() && target.isEmpty() && trail.isEmpty() &&
             targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null) { "Ruby requires a sole ordinary text owner" }
         require(ruby == null || validRubyChild(this)) { "Invalid ruby owner" }
@@ -165,13 +167,50 @@ internal fun validCitationMarkerSpan(span: Span): Boolean {
         (marker.targetStyle == null || span.linkPaint != null)
 }
 
-private fun validCitationSpanFields(span: Span): Boolean =
+private fun validScopedSpanFields(span: Span): Boolean =
     span.role in setOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference") &&
     listOf(span.text, span.target, span.trail, span.language, span.classes, span.direction,
         span.explanation).all(::validPresentationString) &&
         (span.foreground == null || Regex("#[0-9a-f]{6}").matches(span.foreground)) &&
         (span.background == null || Regex("#[0-9a-f]{6}").matches(span.background)) &&
         (span.fontScale == null || span.fontScale.isFinite() && span.fontScale >= 0f)
+
+/** A proven source AUDIO occurrence; null dimensions and focus retain native automatic policy. */
+enum class AudioControlFocusMode { AuthoredNone, UaAuto }
+data class AudioControlFocusPaint(val mode: AudioControlFocusMode, val color: FigureColor? = null) {
+    init {
+        require(color == null || mode == AudioControlFocusMode.UaAuto &&
+            (color == FigureColor.Transparent || color is FigureColor.Rgb)) {
+            "Audio focus color requires automatic RGB or transparent paint"
+        }
+    }
+}
+data class AudioControl(val width: StyleWidth? = null, val height: StyleLength? = null,
+    val focus: AudioControlFocusPaint? = null) {
+    init {
+        require(width == null || width.value.isFinite() && width.value > 0f) { "Invalid audio control width" }
+        require(height == null || height.value.isFinite() && height.value > 0f) { "Invalid audio control height" }
+    }
+}
+
+private fun validAudioControlOwner(span: Span): Boolean {
+    if (span.kind != "link" || !span.target.startsWith("File:") || span.target.length == 5 ||
+        span.trail.isNotEmpty() || span.targetFragment != null || span.image != null || span.ruby != null ||
+        span.inlinePaddingGroup != null || span.inlineActionGroup != null || span.inlineBoxGroup != null ||
+        span.citationMarker != null || span.isQualifiedCitationBacklink || span.linkPaint != null ||
+        !validScopedSpanFields(span)) return false
+    val classes = span.classes.split(' ', '\t', '\r', '\n', '\u000b', '\u000c')
+    if ("wikidict-media" !in classes) return false
+    val owner = classes.filter { it.startsWith("wikidict-media-file-") }.singleOrNull() ?: return false
+    val expected = buildString {
+        append("wikidict-media-file-")
+        for (byte in span.target.removePrefix("File:").toByteArray(Charsets.UTF_8)) {
+            val value = byte.toInt() and 255
+            append("0123456789abcdef"[value ushr 4]); append("0123456789abcdef"[value and 15])
+        }
+    }
+    return owner == expected
+}
 
 /** Attached to the existing whole-entry budget walk, including custom Figure content callbacks. */
 private class CitationNavigationValidation {
@@ -350,7 +389,7 @@ data class RubyAnnotation(val baseStart: Long, val baseCount: Long, val level: L
 }
 
 /** Gap runs use the ordinary Ruby child domain before their whitespace-only check. */
-internal fun validRubyChild(span: Span): Boolean = span.image == null && when (span.kind) {
+internal fun validRubyChild(span: Span): Boolean = span.image == null && span.audioControl == null && when (span.kind) {
     "text" -> span.target.isEmpty()
     "link", "external_link" -> span.target.isNotEmpty()
     else -> false
@@ -1172,6 +1211,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             require(actionOwner == null || span.kind == "text") { "Inline padding action repeats a descendant action" }
             requirePaddingActionColor(actionOwner, span.foreground)
             if (span.image?.occurrenceLayout != null) charge(1)
+            span.audioControl?.let { charge(1); if (it.focus != null) charge(1) }
             onSpan(span)
             if (span.text.isNotEmpty() || span.trail.isNotEmpty()) actualTextLeaves++
             span.ruby?.let { ruby(it, contentDepth, actionOwner) }
@@ -1238,6 +1278,10 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
         onBlock(value)
+        // Legacy rendering ignores these prefix runs. New AUDIO custody still validates
+        // their serialized owners and budgets without invoking display callbacks.
+        if ((value.table != null || value.kind == "rule") && value.spans.any { it.audioControl != null })
+            spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
         when {
             value.container != null -> {
                 if (value.container.style.ownerFont != null) charge(1)
@@ -1601,13 +1645,21 @@ internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> =
     val citations = CitationNavigationValidation()
     visitor.onCitationMarker = citations::marker
     visitor.onBlock = { citations.reserve(it.anchor, it.anchorFallback) }
-    visitor.onSpan = { span -> span.image?.let { add(RasterImageOccurrence(it)) } }
     visitor.visitFigureContent = { content ->
         if (content is FigureContent.Image) add(RasterImageOccurrence(checkNotNull(content.span.image), content.sizing))
     }
     var owners: MediaOwners? = null
     var byFile: Map<String, List<Media>>? = null
     var inReference = false
+    visitor.onSpan = { span ->
+        span.image?.let { add(RasterImageOccurrence(it)) }
+        if (span.audioControl != null) {
+            val currentFiles = byFile ?: entry.media.groupBy { it.file }.also { byFile = it }
+            require(currentFiles[span.target.removePrefix("File:")]?.singleOrNull()?.kind == "audio") {
+                "Audio control requires one exact audio catalog asset"
+            }
+        }
+    }
     visitor.onTable = { table, tableDepth, contentDepth ->
         if (table.style?.isInline == true) {
             require(tableDepth == 1 && contentDepth == 0 && !inReference) { "Inline table requires an ordinary section context" }

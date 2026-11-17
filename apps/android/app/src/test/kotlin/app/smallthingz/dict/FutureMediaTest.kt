@@ -1,5 +1,8 @@
 package app.smallthingz.dict
 
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
+
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -110,5 +113,140 @@ class FutureMediaTest {
         assertEquals(" ", FigureContent.Missing(Span("link", "Label", " "), length, length).span.target)
         assertThrows(RuntimeException::class.java) { FigureContent.Missing(Span("text", "Label"), length, length, MissingLinkPaint.VectorNewLinkV1) }
         assertThrows(RuntimeException::class.java) { FigureContent.Missing(first.copy(foreground = "#123456"), length, length, MissingLinkPaint.VectorNewLinkV1) }
+    }
+
+    // Appended to FutureMediaTest; requires kotlinx.coroutines.launch and kotlinx.coroutines.flow.collect.
+    @Test fun playbackFocusReplayPreservesOriginalIdentityAndStockStatePrecedence(): Unit = kotlinx.coroutines.runBlocking {
+        val source = PlaybackFocusInteractions()
+        val early = mutableListOf<androidx.compose.foundation.interaction.Interaction>()
+        val late = mutableListOf<androidx.compose.foundation.interaction.Interaction>()
+        val afterClear = mutableListOf<androidx.compose.foundation.interaction.Interaction>()
+        val expected = mutableListOf<androidx.compose.foundation.interaction.Interaction>()
+        val jobs = mutableListOf<kotlinx.coroutines.Job>()
+        fun observe(target: MutableList<androidx.compose.foundation.interaction.Interaction>) {
+            jobs += launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                source.interactions.collect { target += it }
+            }
+        }
+        fun assertEvents(actual: List<androidx.compose.foundation.interaction.Interaction>) {
+            assertEquals(expected.size, actual.size)
+            expected.zip(actual).forEach { (wanted, observed) ->
+                when (wanted) {
+                    is androidx.compose.foundation.interaction.FocusInteraction.Focus -> assertSame(wanted, observed)
+                    is androidx.compose.foundation.interaction.FocusInteraction.Unfocus -> {
+                        assertTrue(observed is androidx.compose.foundation.interaction.FocusInteraction.Unfocus)
+                        assertSame(wanted.focus, (observed as androidx.compose.foundation.interaction.FocusInteraction.Unfocus).focus)
+                    }
+                    else -> error("Only focus transitions belong in this oracle")
+                }
+            }
+        }
+        suspend fun settle() {
+            kotlinx.coroutines.yield()
+            assertEvents(early)
+            assertEvents(late)
+        }
+        try {
+            observe(early)
+            assertTrue(early.isEmpty())
+            val first = androidx.compose.foundation.interaction.FocusInteraction.Focus()
+            source.accept(first)
+            expected += first
+            kotlinx.coroutines.yield()
+            assertEvents(early)
+            // A new indication subscribes while focus is already held: replay the
+            // actual Focus object, not a fabricated replacement or a second input event.
+            observe(late)
+            assertEvents(late)
+
+            val press = androidx.compose.foundation.interaction.PressInteraction.Press(androidx.compose.ui.geometry.Offset(2f, 3f))
+            source.accept(press)
+            source.accept(androidx.compose.foundation.interaction.PressInteraction.Release(press))
+            source.accept(androidx.compose.foundation.interaction.PressInteraction.Cancel(press))
+            source.accept(androidx.compose.foundation.interaction.FocusInteraction.Unfocus(
+                androidx.compose.foundation.interaction.FocusInteraction.Focus()))
+            settle()
+
+            val hover = androidx.compose.foundation.interaction.HoverInteraction.Enter()
+            val drag = androidx.compose.foundation.interaction.DragInteraction.Start()
+            source.accept(hover)
+            expected += androidx.compose.foundation.interaction.FocusInteraction.Unfocus(first)
+            settle()
+            source.accept(drag)
+            settle()
+            // Ending an older hover cannot revive focus while a later drag still owns the state layer.
+            source.accept(androidx.compose.foundation.interaction.HoverInteraction.Exit(hover))
+            settle()
+            source.accept(androidx.compose.foundation.interaction.DragInteraction.Stop(drag))
+            expected += first
+            settle()
+            val cancelledDrag = androidx.compose.foundation.interaction.DragInteraction.Start()
+            source.accept(cancelledDrag)
+            expected += androidx.compose.foundation.interaction.FocusInteraction.Unfocus(first)
+            settle()
+            source.accept(androidx.compose.foundation.interaction.DragInteraction.Cancel(cancelledDrag))
+            expected += first
+            settle()
+
+            val second = androidx.compose.foundation.interaction.FocusInteraction.Focus()
+            source.accept(second)
+            expected += androidx.compose.foundation.interaction.FocusInteraction.Unfocus(first)
+            expected += second
+            settle()
+            // Removing the older Focus preserves the currently effective original Focus.
+            source.accept(androidx.compose.foundation.interaction.FocusInteraction.Unfocus(first))
+            settle()
+            source.accept(androidx.compose.foundation.interaction.FocusInteraction.Unfocus(second))
+            expected += androidx.compose.foundation.interaction.FocusInteraction.Unfocus(second)
+            settle()
+
+            val third = androidx.compose.foundation.interaction.FocusInteraction.Focus()
+            source.accept(third)
+            expected += third
+            settle()
+            // This is the same clear called by the owning collector's disposal finally.
+            source.clear()
+            expected += androidx.compose.foundation.interaction.FocusInteraction.Unfocus(third)
+            settle()
+            observe(afterClear)
+            assertTrue(afterClear.isEmpty())
+            source.accept(androidx.compose.foundation.interaction.FocusInteraction.Unfocus(third))
+            source.accept(androidx.compose.foundation.interaction.HoverInteraction.Exit(hover))
+            source.accept(androidx.compose.foundation.interaction.DragInteraction.Stop(drag))
+            settle()
+            assertTrue(afterClear.isEmpty())
+        } finally {
+            source.clear()
+            jobs.forEach { it.cancel() }
+            jobs.forEach { it.join() }
+        }
+    }
+
+    @Test fun audioControlDimensionsUseOriginalContainingAndBodyBasesWithoutClamping() {
+        val pixels = AudioControl(width = StyleWidth(StyleWidthUnit.Px, 250f),
+            height = StyleLength(StyleLengthUnit.Px, 30f))
+        assertEquals(500f, checkNotNull(audioControlWidthPixels(pixels, 180f, 2f, 40f)), 0f)
+        assertEquals(60f, checkNotNull(audioControlHeightPixels(pixels, 2f, 40f)), 0f)
+        val percent = pixels.copy(width = StyleWidth(StyleWidthUnit.Percent, 125f))
+        assertEquals(225f, checkNotNull(audioControlWidthPixels(percent, 180f, 2f, 40f)), 0f)
+        assertEquals(300f, checkNotNull(audioControlWidthPixels(percent, 240f, 2f, 40f)), 0f)
+        assertEquals(0f, checkNotNull(audioControlWidthPixels(percent, 0f, 2f, 40f)), 0f)
+        val em = AudioControl(width = StyleWidth(StyleWidthUnit.Em, 1.5f),
+            height = StyleLength(StyleLengthUnit.Em, .75f))
+        assertEquals(30f, checkNotNull(audioControlWidthPixels(em, 400f, 2f, 20f)), 0f)
+        assertEquals(60f, checkNotNull(audioControlWidthPixels(em, 400f, 2f, 40f)), 0f)
+        assertEquals(30f, checkNotNull(audioControlHeightPixels(em, 2f, 40f)), 0f)
+        assertEquals(0f, checkNotNull(audioControlHeightPixels(em, 2f, 0f)), 0f)
+        assertNull(audioControlWidthPixels(AudioControl(), Float.NaN, 2f, 40f))
+        assertNull(audioControlHeightPixels(AudioControl(), 2f, 40f))
+        assertThrows(UnsupportedFloatLayout::class.java) { audioControlWidthPixels(percent, Float.NaN, 1f, 20f) }
+        assertThrows(UnsupportedFloatLayout::class.java) { audioControlWidthPixels(pixels, 180f, Float.MAX_VALUE, 20f) }
+        assertThrows(UnsupportedFloatLayout::class.java) { audioControlHeightPixels(em, 1f, Float.MAX_VALUE) }
+        val tooWide = pixels.copy(width = StyleWidth(StyleWidthUnit.Px, TablePixelLimit + .25f))
+        assertThrows(UnsupportedFloatLayout::class.java) { audioControlWidthPixels(tooWide, 400f, 1f, 20f) }
+        val boundary = pixels.copy(width = StyleWidth(StyleWidthUnit.Px, TablePixelLimit.toFloat()))
+        assertEquals(TablePixelLimit.toFloat(), checkNotNull(audioControlWidthPixels(boundary, 400f, 1f, 20f)), 0f)
+        assertEquals(250f, pixels.width!!.value, 0f)
+        assertEquals(30f, pixels.height!!.value, 0f)
     }
 }

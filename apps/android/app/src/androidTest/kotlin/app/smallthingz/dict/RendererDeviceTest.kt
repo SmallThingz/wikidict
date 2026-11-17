@@ -1,5 +1,7 @@
 package app.smallthingz.dict
 
+import androidx.compose.material.icons.outlined.PlayArrow
+
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
@@ -6538,6 +6540,319 @@ class RendererDeviceTest {
                 assertEquals("fractional", context.text.toString())
             }
             assertEquals(2, calls)
+        }
+    }
+
+    @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test fun authoredAudioControlsKeepFocusSeekAndSameFileOccurrencesIndependent(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val directory = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            java.io.File(context.cacheDir, "audio-control-" + java.util.UUID.randomUUID()).apply { mkdirs() }
+        }
+        // Synthetic owned silence, not a retained pronunciation or source-media receipt.
+        val samples = ByteArray(120 * 8000) { 128.toByte() }
+        val header = java.nio.ByteBuffer.allocate(44).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".toByteArray()).putInt(36 + samples.size).put("WAVEfmt ".toByteArray())
+            .putInt(16).putShort(1).putShort(1).putInt(8000).putInt(8000).putShort(1).putShort(8)
+            .put("data".toByteArray()).putInt(samples.size).array()
+        val sourceUrl = "https://fixture.invalid/audio-source"
+        val metadata = """{"query":{"pages":[{"imageinfo":[{"url":"https://fixture.invalid/audio","descriptionurl":"$sourceUrl"}]}]}}""".toByteArray()
+        val opens = java.util.concurrent.atomic.AtomicInteger()
+        val cache = MediaCache(context, metadata = { metadata }, directory = directory,
+            openMedia = { opens.incrementAndGet(); java.io.ByteArrayInputStream(header + samples) })
+        var thumbColor = 0
+        var focusAlpha = 0f
+        var automaticFocusColor = 0
+        val media = Media("Owned-audio.wav", "audio", "Owned audio fixture")
+        val red = AudioControlFocusPaint(AudioControlFocusMode.UaAuto, FigureColor.Rgb("#ff0000"))
+        val green = AudioControlFocusPaint(AudioControlFocusMode.UaAuto, FigureColor.Rgb("#00ff00"))
+        val none = AudioControlFocusPaint(AudioControlFocusMode.AuthoredNone)
+        val control = mutableStateOf(AudioControl(StyleWidth(StyleWidthUnit.Px, 250f),
+            StyleLength(StyleLengthUnit.Px, 30f), red))
+        val other = control.value.copy(focus = none)
+        val reference = mutableStateOf(true)
+        val referenceColor = mutableStateOf(androidx.compose.ui.graphics.Color.Red)
+        val hostWidth = mutableStateOf(320f)
+        val originalWidth = NativeLayoutInput(320f)
+        val direction = mutableStateOf("ltr")
+        val overflowOwned = mutableStateOf(true)
+        val showFirst = mutableStateOf(true)
+        val settings = mutableStateOf(AppSettings(allowAudio = true, mediaCacheMb = 1))
+        val selectedMedia = mutableStateOf(media)
+        val selectedCache = mutableStateOf(cache)
+        val brokenCache = MediaCache(context, metadata = { metadata }, directory = directory,
+            openMedia = { java.io.ByteArrayInputStream(byteArrayOf(1)) })
+        val opened = mutableListOf<String>()
+        val neutral = FocusRequester()
+        val keyboard = object : androidx.compose.ui.input.InputModeManager {
+            override val inputMode = androidx.compose.ui.input.InputMode.Keyboard
+            override fun requestInputMode(inputMode: androidx.compose.ui.input.InputMode) = inputMode == this.inputMode
+        }
+        val playerState = MediaPlayback::class.java.getDeclaredField("player\$delegate").apply { isAccessible = true }
+        fun player() = (playerState.get(MediaPlayback) as androidx.compose.runtime.State<*>).value as? android.media.MediaPlayer
+        fun node(owner: String, label: String) = compose.onNode(hasContentDescription(label) and hasAnyAncestor(hasTestTag(owner)))
+        fun play(owner: String) = node(owner, "Play pronunciation")
+        fun stop(owner: String) = node(owner, "Stop pronunciation")
+        fun seek(owner: String) = node(owner, "Pronunciation position")
+        fun source(owner: String) = node(owner, "Source and licence")
+        fun focus(node: SemanticsNodeInteraction) {
+            node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) { assertTrue(it()) }
+            node.assertIsFocused()
+            compose.mainClock.advanceTimeBy(100)
+            compose.waitForIdle()
+        }
+        fun shot(node: SemanticsNodeInteraction): IntArray {
+            val bitmap = node.captureToImage().asAndroidBitmap()
+            return try { IntArray(bitmap.width * bitmap.height).also { bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height) } }
+            finally { bitmap.recycle() }
+        }
+        fun tintedThumb(color: Int): Int {
+            fun channel(shift: Int) = kotlin.math.round(((color ushr shift) and 255) * focusAlpha +
+                ((thumbColor ushr shift) and 255) * (1f - focusAlpha)).toInt().coerceIn(0, 255)
+            return android.graphics.Color.rgb(channel(16), channel(8), channel(0))
+        }
+        fun pixelsNear(pixels: IntArray, color: Int) = pixels.count { pixel ->
+            listOf(0, 8, 16).all { shift -> kotlin.math.abs(((pixel ushr shift) and 255) - ((color ushr shift) and 255)) <= 2 }
+        }
+        fun layoutBox(node: SemanticsNodeInteraction): android.graphics.RectF {
+            val n = node.fetchSemanticsNode()
+            return android.graphics.RectF(n.positionInRoot.x, n.positionInRoot.y,
+                n.positionInRoot.x + n.size.width, n.positionInRoot.y + n.size.height)
+        }
+        fun assertSize(width: Float, rtl: Boolean = false) {
+            val button = layoutBox(play("audio-a"))
+            val slider = layoutBox(seek("audio-a"))
+            assertEquals(30f, button.height(), .01f)
+            assertEquals(30f, slider.height(), .01f)
+            assertEquals(width, maxOf(button.right, slider.right) - minOf(button.left, slider.left), .01f)
+            if (rtl) assertTrue(button.left >= slider.right) else assertTrue(slider.left >= button.right)
+        }
+        fun waitPlaying(owner: String) {
+            compose.waitUntil(15000) {
+                val nodes = compose.onAllNodes(hasContentDescription("Stop pronunciation") and hasAnyAncestor(hasTestTag(owner)))
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false)
+                var ready = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { ready = player()?.isPlaying == true }
+                nodes.size == 1 && ready
+            }
+            compose.waitUntil(5000) { seek(owner).fetchSemanticsNode().config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Disabled) == null }
+        }
+        fun range(owner: String) = seek(owner).fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo]
+        fun waitPosition(target: Int) {
+            compose.waitUntil(5000) {
+                var position = -1
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { position = player()?.currentPosition ?: -1 }
+                position in target - 200..target + 200
+            }
+        }
+        fun settlePausedRange(owner: String) {
+            compose.waitUntil(5000) {
+                var actual = -1
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { actual = player()?.currentPosition ?: -1 }
+                actual >= 0 && kotlin.math.abs(range(owner).current - actual) <= 1f
+            }
+        }
+        var primaryFailure: Throwable? = null
+        try {
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                // Only the owned fixture chooses the existing keyboard branch; no platform input-mode mutation.
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    androidx.compose.ui.platform.LocalInputModeManager provides keyboard,
+                    androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+                    androidx.compose.ui.platform.LocalUriHandler provides object : androidx.compose.ui.platform.UriHandler {
+                        override fun openUri(uri: String) { opened += uri }
+                    }) {
+                    DictTheme("light") {
+                        val color = androidx.compose.material3.SliderDefaults.colors().thumbColor.toArgb()
+                        val alpha = androidx.compose.material3.RippleDefaults.RippleAlpha.focusedAlpha
+                        SideEffect { thumbColor = color; focusAlpha = alpha }
+                        androidx.compose.material3.Surface(color = androidx.compose.ui.graphics.Color.White) {
+                            val automatic = androidx.compose.material3.LocalContentColor.current.toArgb()
+                            SideEffect { automaticFocusColor = automatic }
+                            Column(Modifier.width(hostWidth.value.dp)) {
+                                Box(Modifier.size(1.dp).focusRequester(neutral).focusable())
+                                if (reference.value) {
+                                    CompositionLocalProvider(androidx.compose.material3.LocalMinimumInteractiveComponentSize provides 0.dp,
+                                        androidx.compose.material3.LocalRippleConfiguration provides androidx.compose.material3.RippleConfiguration(referenceColor.value)) {
+                                        androidx.compose.foundation.layout.Row(Modifier.width(250.dp).height(30.dp)) {
+                                            androidx.compose.material3.IconButton(onClick = {}, modifier = Modifier.testTag("audio-stock")) {
+                                                androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.Outlined.PlayArrow, "Stock playback reference")
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    if (showFirst.value) androidx.compose.runtime.key("first") {
+                                        Box(Modifier.testTag("audio-a")) {
+                                            MediaView(selectedMedia.value, settings.value, cache = selectedCache.value, audioControl = control.value,
+                                                audioDirection = direction.value, audioContainingWidthPixels = { originalWidth.value }, audioContainingWidthModifier = originalWidth.modifier, audioOverflowOwned = overflowOwned.value)
+                                        }
+                                    }
+                                    androidx.compose.runtime.key("second") {
+                                        Box(Modifier.testTag("audio-b")) { MediaView(selectedMedia.value, settings.value, cache = selectedCache.value, audioControl = other, audioDirection = "ltr", audioOverflowOwned = true) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } }
+            compose.runOnIdle { neutral.requestFocus() }
+            val stock = compose.onNodeWithTag("audio-stock")
+            val idle = shot(stock)
+            focus(stock); val redStock = shot(stock)
+            compose.runOnIdle { referenceColor.value = androidx.compose.ui.graphics.Color.Green }
+            compose.waitForIdle(); val greenStock = shot(stock)
+            compose.runOnIdle { referenceColor.value = androidx.compose.ui.graphics.Color.Unspecified }
+            compose.waitForIdle(); val defaultStock = shot(stock)
+            stock.performMouseInput { enter(center) }
+            compose.mainClock.advanceTimeBy(100); compose.waitForIdle()
+            val hoverStock = shot(stock)
+            stock.performMouseInput { exit() }
+            compose.runOnIdle { reference.value = false }
+            compose.waitForIdle()
+            assertSize(250f)
+            seek("audio-a").assertIsNotEnabled(); seek("audio-b").assertIsNotEnabled()
+            focus(play("audio-a")); assertArrayEquals(redStock, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = green) }
+            play("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(greenStock, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = none) }
+            play("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(idle, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = null) }
+            play("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(defaultStock, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = red.copy(color = FigureColor.Transparent)) }
+            play("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(idle, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = red) }
+            play("audio-a").performMouseInput { enter(center) }
+            compose.mainClock.advanceTimeBy(100); compose.waitForIdle()
+            assertArrayEquals(hoverStock, shot(play("audio-a")))
+            compose.runOnIdle { control.value = control.value.copy(focus = green) }
+            play("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(hoverStock, shot(play("audio-a")))
+            play("audio-a").performMouseInput { exit() }
+            compose.mainClock.advanceTimeBy(100); compose.waitForIdle()
+            assertArrayEquals(greenStock, shot(play("audio-a")))
+            // Fixed and percentage geometry uses original C even when the outer allocation does not change.
+            compose.runOnIdle { control.value = control.value.copy(width = StyleWidth(StyleWidthUnit.Px, TablePixelLimit + 1f)) }
+            compose.onNodeWithText("Unable to display this layout.").assertExists()
+            play("audio-a").assertIsEnabled(); seek("audio-a").assertIsNotEnabled()
+            compose.runOnIdle { control.value = control.value.copy(width = StyleWidth(StyleWidthUnit.Percent, 50f)); originalWidth.update(180f) }
+            compose.waitForIdle(); assertSize(90f)
+            compose.onAllNodesWithText("Unable to display this layout.").assertCountEquals(0)
+            compose.runOnIdle { originalWidth.update(200f) }
+            compose.waitForIdle(); assertSize(100f)
+            compose.runOnIdle { control.value = control.value.copy(width = StyleWidth(StyleWidthUnit.Px, 250f)); hostWidth.value = 180f; direction.value = "rtl" }
+            compose.waitForIdle(); assertSize(250f, rtl = true)
+            // This direct fixture owns only child allocation, not a document-scroll receipt.
+            // Removing that explicit grant must show retained-layout refusal, not silent clipping.
+            compose.runOnIdle { overflowOwned.value = false }
+            compose.onNodeWithText("Unable to display this layout.").assertExists()
+            play("audio-a").assertIsEnabled()
+            compose.runOnIdle { overflowOwned.value = true }
+            compose.waitForIdle(); assertSize(250f, rtl = true)
+            compose.onAllNodesWithText("Unable to display this layout.").assertCountEquals(0)
+            compose.runOnIdle { hostWidth.value = 320f; originalWidth.update(320f); direction.value = "ltr"; control.value = control.value.copy(focus = none) }
+            compose.waitForIdle(); focus(play("audio-a"))
+            play("audio-a").performKeyInput { keyDown(androidx.compose.ui.input.key.Key.Enter) }
+            compose.runOnIdle { assertNull(MediaPlayback.playing) }
+            compose.waitUntil(3000) { !shot(play("audio-a")).contentEquals(idle) }
+            play("audio-a").performKeyInput { keyUp(androidx.compose.ui.input.key.Key.Enter) }
+            waitPlaying("audio-a")
+            play("audio-b").assertExists(); seek("audio-b").assertIsNotEnabled()
+            var firstPlayer: android.media.MediaPlayer? = null
+            compose.runOnIdle { firstPlayer = player(); assertNotNull(firstPlayer) }
+            assertEquals(120000f, range("audio-a").range.endInclusive, 1f)
+            compose.waitUntil(5000) { range("audio-a").current > 0f }
+            // Stabilize the independent seek/key oracle using the actual owned player,
+            // not a frozen Compose clock (which cannot stop native playback time).
+            var pausedPosition = 0
+            compose.runOnIdle { checkNotNull(player()).pause(); pausedPosition = checkNotNull(player()).currentPosition }
+            compose.waitUntil(5000) { kotlin.math.abs(range("audio-a").current - pausedPosition) <= 1f }
+            seek("audio-a").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { assertTrue(it(30000f)) }
+            waitPosition(30000)
+            compose.runOnIdle { control.value = control.value.copy(focus = red) }
+            focus(seek("audio-a"))
+            assertTrue("Actual stock thumb focus must use authored red", pixelsNear(shot(seek("audio-a")), tintedThumb(android.graphics.Color.RED)) > 0)
+            compose.runOnIdle { control.value = control.value.copy(focus = green) }
+            seek("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertTrue("Policy replacement keeps the real slider focused and colors its thumb", pixelsNear(shot(seek("audio-a")), tintedThumb(android.graphics.Color.GREEN)) > 0)
+            compose.runOnIdle { control.value = control.value.copy(focus = none) }
+            seek("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertEquals(0, pixelsNear(shot(seek("audio-a")), tintedThumb(android.graphics.Color.GREEN)))
+            compose.runOnIdle { control.value = control.value.copy(focus = null) }
+            seek("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertTrue("An explicit control with null focus keeps selected native-auto indication",
+                pixelsNear(shot(seek("audio-a")), tintedThumb(automaticFocusColor)) > 0)
+            settlePausedRange("audio-a")
+            val before = range("audio-a").current
+            seek("audio-a").performKeyInput { keyDown(androidx.compose.ui.input.key.Key.DirectionRight) }
+            assertEquals(before + 1200f, range("audio-a").current, 2f)
+            seek("audio-a").performKeyInput { keyUp(androidx.compose.ui.input.key.Key.DirectionRight) }
+            waitPosition((before + 1200f).toInt())
+            focus(source("audio-a")); val sourcePaint = shot(source("audio-a"))
+            compose.runOnIdle { control.value = control.value.copy(focus = red); direction.value = "rtl" }
+            source("audio-a").assertIsFocused(); compose.waitForIdle()
+            assertArrayEquals(sourcePaint, shot(source("audio-a")))
+            source("audio-a").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            assertEquals(listOf(sourceUrl), opened)
+            seek("audio-a").performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.SetProgress) { assertTrue(it(60000f)) }
+            waitPosition(60000); focus(seek("audio-a"))
+            settlePausedRange("audio-a")
+            val rtlBefore = range("audio-a").current
+            seek("audio-a").performKeyInput { keyDown(androidx.compose.ui.input.key.Key.DirectionRight) }
+            assertEquals(rtlBefore - 1200f, range("audio-a").current, 2f)
+            seek("audio-a").performKeyInput { keyUp(androidx.compose.ui.input.key.Key.DirectionRight) }
+            waitPosition((rtlBefore - 1200f).toInt())
+            compose.runOnIdle { assertSame(firstPlayer, player()); checkNotNull(player()).start() }
+            focus(play("audio-b")); play("audio-b").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            waitPlaying("audio-b")
+            play("audio-a").assertExists(); seek("audio-a").assertIsNotEnabled()
+            var secondPlayer: android.media.MediaPlayer? = null
+            compose.runOnIdle { secondPlayer = player(); assertNotSame(firstPlayer, secondPlayer); showFirst.value = false }
+            compose.waitForIdle(); stop("audio-b").assertExists()
+            compose.runOnIdle { assertSame(secondPlayer, player()); assertEquals(1, opens.get()) }
+            compose.runOnIdle { settings.value = settings.value.copy(allowAudio = false) }
+            compose.waitUntil(5000) { MediaPlayback.playing == null }
+            play("audio-b").assertIsNotEnabled(); seek("audio-b").assertIsNotEnabled()
+            source("audio-b").assertIsEnabled(); focus(source("audio-b"))
+            source("audio-b").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            assertEquals(listOf(sourceUrl, sourceUrl), opened)
+            compose.runOnIdle { settings.value = settings.value.copy(allowAudio = true) }
+            focus(play("audio-b")); play("audio-b").performKeyInput { pressKey(androidx.compose.ui.input.key.Key.Enter) }
+            waitPlaying("audio-b")
+            compose.runOnIdle { selectedCache.value = brokenCache; selectedMedia.value = media.copy(file = "Broken-audio.wav") }
+            compose.waitForIdle(); play("audio-b").performClick()
+            compose.waitUntil(15000) { compose.onAllNodesWithText("Pronunciation could not be played.")
+                .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty() }
+            seek("audio-b").assertIsNotEnabled()
+            compose.runOnIdle { assertNull(MediaPlayback.playing); selectedCache.value = cache; selectedMedia.value = media }
+            compose.waitForIdle(); play("audio-b").performClick(); waitPlaying("audio-b")
+            compose.activityRule.scenario.onActivity { it.setContent {} }
+            compose.waitUntil(5000) { MediaPlayback.playing == null }
+            assertEquals("Owned-audio.wav", media.file)
+            assertEquals(other, AudioControl(StyleWidth(StyleWidthUnit.Px, 250f), StyleLength(StyleLengthUnit.Px, 30f), none))
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            val alreadyFailed = primaryFailure != null
+            fun retainCleanup(failure: Throwable) {
+                val original = primaryFailure
+                if (original == null) primaryFailure = failure
+                else if (original !== failure) original.addSuppressed(failure)
+            }
+            try { compose.activityRule.scenario.onActivity { it.setContent {} } } catch (failure: Throwable) { retainCleanup(failure) }
+            try { compose.runOnIdle { MediaPlayback.stop() } } catch (failure: Throwable) { retainCleanup(failure) }
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                    check(directory.deleteRecursively() || !directory.exists()) { "Owned audio fixture cleanup failed" }
+                }
+            } catch (failure: Throwable) { retainCleanup(failure) }
+            if (!alreadyFailed) primaryFailure?.let { throw it }
         }
     }
 }

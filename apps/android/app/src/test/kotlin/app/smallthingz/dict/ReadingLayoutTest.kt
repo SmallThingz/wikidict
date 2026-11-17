@@ -1268,4 +1268,110 @@ class ReadingLayoutTest {
         assertSame(referenceMarker, entry.references.single().spans.single())
     }
 
+
+    @Test fun audioControlOccurrencesKeepIndependentPolicyAndLegacyFileGrouping() {
+        val media = Media("Tone.ogg", "audio", "Tone")
+        val owners = MediaOwners(listOf(media))
+        val classes = "note wikidict-media wikidict-media-file-546f6e652e6f6767"
+        val legacy = Span("link", "legacy", "File:Tone.ogg", classes = classes)
+        val automatic = legacy.copy(text = "first", direction = "rtl", audioControl = AudioControl(focus = AudioControlFocusPaint(AudioControlFocusMode.UaAuto,
+            FigureColor.Rgb("#3366cc"))))
+        val suppressed = legacy.copy(text = "second", audioControl = AudioControl(focus = AudioControlFocusPaint(AudioControlFocusMode.AuthoredNone)))
+        val unstyled = legacy.copy(text = "unstyled", audioControl = AudioControl())
+        val spans = listOf(legacy, legacy.copy(text = "caption fragment"), automatic, suppressed, automatic, unstyled)
+        val controls = owners.embeddedControls(spans)
+        assertEquals(5, controls.size)
+        assertEquals(listOf(null, 2, 3, 4, 5), controls.map { it.sourceIndex })
+        assertEquals(listOf(null, automatic.audioControl, suppressed.audioControl, automatic.audioControl, unstyled.audioControl),
+            controls.map { it.audioControl })
+        assertTrue(controls.all { it.media === media })
+        assertEquals(listOf("", "rtl", "", "rtl", ""), controls.map { it.sourceDirection })
+        assertEquals(listOf(media), owners.embedded(spans))
+        assertEquals(listOf(EmbeddedMediaControl(media, null, null)), owners.embeddedControls(spans.take(2)))
+        assertSame(automatic, spans[2])
+        assertSame(automatic, spans[4])
+        assertEquals("File:Tone.ogg", automatic.target)
+    }
+
+    @Test fun audioControlProjectionPreservesLexicalDataAndZeroTextControlWithoutMetricOwnership() {
+        val owner = Span("link", "", "File:Tone.ogg", classes =
+            "note wikidict-media wikidict-media-file-546f6e652e6f6767", bold = true,
+            explanation = "source explanation", audioControl = AudioControl(focus = AudioControlFocusPaint(AudioControlFocusMode.UaAuto)))
+        val media = Media("Tone.ogg", "audio", "Tone")
+        assertEquals(listOf(owner), compactSpans(listOf(owner)))
+        assertTrue(listOf(owner).hasCompiledInlineContent())
+        assertTrue(paragraphHasContent(Block("paragraph", 0, listOf(owner))))
+        assertEquals(listOf(EmbeddedMediaControl(media, 0, owner.audioControl)),
+            MediaOwners(listOf(media)).embeddedControls(listOf(owner)))
+        val projected = owner.withoutClassToken("wikidict-media")
+        assertEquals(owner.copy(classes = "note wikidict-media-file-546f6e652e6f6767", audioControl = null), projected)
+        assertEquals(owner.audioControl, owner.withoutClassToken("note").audioControl)
+        assertEquals("File:Tone.ogg", projected.target)
+        assertTrue(projected.bold)
+        assertEquals("source explanation", projected.explanation)
+        assertEquals("", textOf(listOf(projected)))
+        val metric = inlineMetricOwnerSpan(owner)
+        assertEquals("text", metric.kind)
+        assertNull(metric.audioControl)
+        assertTrue(metric.bold)
+        assertEquals("", metric.target)
+        assertEquals(AudioControlFocusMode.UaAuto, owner.audioControl?.focus?.mode)
+        val collapsed = ordinaryInlineDisplaySpans(Block("paragraph", 0,
+            listOf(Span("text", " "), owner.copy(text = " "))))
+        assertEquals(2, collapsed.size)
+        assertEquals("", collapsed[1].text)
+        assertEquals(owner.audioControl, collapsed[1].audioControl)
+        assertEquals(listOf(collapsed[1]), compactSpans(collapsed))
+        assertEquals(listOf(EmbeddedMediaControl(media, 0, owner.audioControl)),
+            MediaOwners(listOf(media)).embeddedControls(compactSpans(collapsed)))
+    }
+
+
+    @Test fun audioControlSlotAllocationUsesOriginalContainingBasisAndStackedMaximum() {
+        val media = Media("Tone.ogg", "audio", "Tone")
+        val owner = Span("link", "Audio", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val body = Block("paragraph", 0, listOf(owner))
+        val entry = Entry("word", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Notes", listOf(body))), emptyList(), media = listOf(media))
+        val rows = entry.readingRows
+        val bodyIndex = rows.indexOfFirst { it.block === body }
+        assertTrue(bodyIndex >= 0)
+        assertEquals(listOf(bodyIndex until rows.size), floatBodyRuns(rows))
+        assertTrue(body.hasNativeAudioControlBody())
+        val legacy = body.copy(spans = listOf(owner.copy(audioControl = null)))
+        assertFalse(legacy.hasNativeAudioControlBody())
+        assertFalse(legacy.needsNativeBlockContext())
+        val ignoredTablePrefix = Block("table", 0, listOf(owner), table = Table(emptyList(), emptyList()))
+        assertFalse(ignoredTablePrefix.hasNativeAudioControlBody())
+        assertFalse(ignoredTablePrefix.needsNativeBlockContext())
+        fun control(width: StyleWidth?, index: Int) = EmbeddedMediaControl(media, index, AudioControl(width = width))
+        val fixed = control(StyleWidth(StyleWidthUnit.Px, 250f), 0)
+        val percent = control(StyleWidth(StyleWidthUnit.Percent, 100f), 1)
+        val controls = listOf(fixed, percent)
+        assertEquals(270, embeddedMediaSlotWidth(controls, 180, 16f, 4f, 1f, 20f, overflowOwned = true))
+        assertEquals(270, embeddedMediaSlotWidth(controls, 190, 16f, 4f, 1f, 20f, overflowOwned = true))
+        assertEquals(160f, audioControlWidthPixels(checkNotNull(percent.audioControl), 160f, 1f, 20f)!!, 0f)
+        assertEquals(170f, audioControlWidthPixels(checkNotNull(percent.audioControl), 170f, 1f, 20f)!!, 0f)
+        assertEquals(180, embeddedMediaSlotWidth(listOf(percent), 180, 16f, 4f, 1f, 20f))
+        assertEquals(180, embeddedMediaSlotWidth(listOf(percent), 180, .1f, .1f, 1f, 20f))
+        assertEquals(180, embeddedMediaSlotWidth(listOf(percent), 180, .1f, .1f, 1f, 20f, overflowOwned = true))
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            embeddedMediaSlotWidth(controls, 180, 16f, 4f, 1f, 20f)
+        }
+        val fractional = control(StyleWidth(StyleWidthUnit.Percent, 150.25f), 2)
+        assertEquals(270, embeddedMediaSlotWidth(listOf(fractional), 180, .25f, .75f, 1f, 20f, overflowOwned = true))
+        assertEquals(268.9475f, audioControlWidthPixels(checkNotNull(fractional.audioControl), 179f, 1f, 20f)!!, .0001f)
+        val em = control(StyleWidth(StyleWidthUnit.Em, 10f), 3)
+        assertEquals(320, embeddedMediaSlotWidth(listOf(em), 180, 16f, 4f, 1f, 30f, overflowOwned = true))
+        assertEquals(180, embeddedMediaSlotWidth(listOf(EmbeddedMediaControl(media, null, null)), 180, 16f, 4f, 2f, 60f))
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            embeddedMediaSlotWidth(listOf(fixed), 180, Float.NaN, 4f, 1f, 20f)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            embeddedMediaSlotWidth(listOf(control(StyleWidth(StyleWidthUnit.Px, Float.MAX_VALUE), 4)),
+                180, 16f, 4f, 2f, 20f)
+        }
+    }
+
 }
