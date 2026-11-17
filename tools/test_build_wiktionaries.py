@@ -12720,6 +12720,38 @@ class InitialSealedWriterOnlyTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, interface + ' ABI'):
                     b.initial_sealed_blob_successor(f.original, f.roles)
 
+    def test_writer_target_inside_exact_matching_consumer_graph_keeps_target_guards(self):
+        for targets,accepted in ((['prepare-captured-writer','cli','ffi'],True),
+                                 (['prepare-captured-writer','ffi','cli'],False),
+                                 (['prepare-captured-writer','cli','ffi','test'],False)):
+            with self.subTest(targets=targets),tempfile.TemporaryDirectory()as tmp:
+                f=self.fixture(Path(tmp));state=f.target_rows['dict-blob-build'];command=state['result']['commands'][0]
+                argv=command['argv'];stop=next(i for i,value in enumerate(argv[2:],2)if value.startswith('-'))
+                command['argv']=argv[:2]+targets+argv[stop:]
+                state['stderr'].write_text('Build Summary: 5/5 steps succeeded\nprepare-captured-writer success\n+- install dict-blob-build success\ncli success\nffi success\n')
+                self.republish(f);before=copy.deepcopy((f.original,f.current))
+                if accepted:b.initial_sealed_blob_successor(f.original,f.roles)
+                else:
+                    with self.assertRaisesRegex(ValueError,'not requested exactly once'):b.initial_sealed_blob_successor(f.original,f.roles)
+                self.assertEqual((f.original,f.current),before)
+
+    def test_independently_closed_verify_only_keeps_role_and_wire_checks(self):
+        for mode in ('allowed','other-role','wrong-wire'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory()as tmp:
+                f=self.fixture(Path(tmp));row=copy.deepcopy(f.new_blob_rows['dict-blob-verify']);emitted=b.prepared_metadata(row['actual_emission_result']);closed=b.prepared_metadata(row['qualification_closure']);recipe=b.prepared_metadata(row['compilation_recipe']);command=emitted['commands'][0]
+                argv=command['argv'];stop=next(i for i,x in enumerate(argv[2:],2)if x.startswith('-'));command['argv']=argv[:2]+['prepare-blob-verify']+argv[stop:]
+                stderr=f.root/'verify-only.stderr';stderr.write_text('Build Summary: 2/2 steps succeeded\nprepare-blob-verify success\n+- install dict-blob-verify success\n');command['stderr']=_initial_sealed_reference(stderr)
+                emitted['artifacts']={'verify':emitted['artifacts']['verify']};recipe['commands']=[dict(argv=command['argv'],cwd=command['cwd'])]
+                if mode=='wrong-wire':
+                    source=b.prepared_metadata(row['source']);relative='src/encoder/presentation_codec.zig';payload=f.root/'verify-wire.zig';payload.write_text('wrong wire');payload.chmod(0o444);identity=dict(_initial_sealed_reference(payload),mode=0o444);source['files'][relative]=identity;row['source_payload_files']=dict(row['source_payload_files'],**{relative:identity});row['source']=_initial_sealed_write(f.root/'verify-wire-source.json',source);row['producer_source']=row['source']['sha256'];recipe['source_manifest']=row['source'];command['argv']=[('-Dcaptured-source-fingerprint='+row['producer_source'])if x.startswith('-Dcaptured-source-fingerprint=')else x for x in command['argv']];recipe['commands'][0]['argv']=command['argv']
+                row['compilation_recipe']=_initial_sealed_write(f.root/'verify-only-recipe.json',recipe);emitted['source_authority']=row['compilation_recipe'];row['actual_emission_result']=_initial_sealed_write(f.root/'verify-only-result.json',emitted)
+                closed.update(source_manifest=row['source'],result=row['actual_emission_result'],commands=copy.deepcopy(emitted['commands']),prepared_artifacts=copy.deepcopy(emitted['artifacts']),owner_configuration=_initial_sealed_write(f.root/'verify-only-owner.json',dict(bindings=dict(INPUT_REF=row['compilation_recipe']))));closed.pop('production_roles',None);row['qualification_closure']=_initial_sealed_write(f.root/'verify-only-closure.json',closed)
+                if mode=='other-role':row['artifact']=copy.deepcopy(f.current['dict-blob-build']['artifact'])
+                f.current['dict-blob-verify']=row
+                if mode=='allowed':b.initial_sealed_blob_successor(f.original,f.roles)
+                else:
+                    with self.assertRaisesRegex(ValueError,'another role'if mode=='other-role'else'presentation-wire ABI'):b.initial_sealed_blob_successor(f.original,f.roles)
+
     def test_writer_only_target_cannot_authenticate_merge_verify_or_driver(self):
         for name in ('dict-blob-merge','dict-blob-verify','dict-bundle-build'):
             with self.subTest(role=name), tempfile.TemporaryDirectory() as tmp:
@@ -14598,7 +14630,11 @@ class CompositeProducerSourceTests(unittest.TestCase):
 
     def test_composite_combined_blob_cli_accepts_only_the_exact_normal_target_pair(self):
         cases = [(['prepare-blob-tools'], True), (['prepare-captured-writer'], True),
-                 (['prepare-blob-tools', 'cli'], True), (['cli', 'ffi'], True), (['cli'], False),
+                 (['prepare-blob-tools', 'cli'], True), (['cli', 'ffi'], True),
+                 (['prepare-captured-writer', 'cli', 'ffi'], True), (['prepare-blob-verify'], True),
+                 (['prepare-blob-verify','cli'], False), (['prepare-blob-verify','prepare-blob-verify'], False),
+                 (['prepare-captured-writer', 'ffi', 'cli'], False),
+                 (['prepare-captured-writer', 'cli', 'ffi', 'test'], False), (['cli'], False),
                  (['ffi', 'cli'], False), (['cli', 'ffi', 'ffi'], False),
                  (['cli', 'ffi', 'foreign'], False),
                  (['cli', 'prepare-blob-tools'], False),

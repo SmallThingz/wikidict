@@ -3746,7 +3746,7 @@ def validate_composite_source_inventory(plan, base, selected, auth_payload):
             or not Path(base_path).is_absolute() or Path(base_path).as_posix() != base_path):
         raise ValueError('Composite source base differs from actual build cwd')
     stop = next((i for i,x in enumerate(argv[2:],2) if x.startswith('-')),len(argv))
-    if argv[2:stop] not in (['prepare-blob-tools'],['prepare-captured-writer'],['prepare-blob-tools','cli'],['cli','ffi']):
+    if argv[2:stop] not in (['prepare-blob-tools'],['prepare-captured-writer'],['prepare-blob-tools','cli'],['cli','ffi'],['prepare-captured-writer','cli','ffi'],['prepare-blob-verify']):
         raise ValueError('Composite build selected another production target')
     if argv.count('--build-file') != 1 or argv.index('--build-file')+1 >= len(argv) or argv[argv.index('--build-file')+1] != payloads['build.zig']['path']:
         raise ValueError('Composite actual build file differs from its payload')
@@ -3884,8 +3884,10 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     for value in argv[2:]:
         if value.startswith('-'): break
         targets.append(value)
+    writer_consumer_graph = (target == 'prepare-captured-writer'
+                             and targets == ['prepare-captured-writer', 'cli', 'ffi'])
     if (not targets or len(targets) != len(set(targets)) or target not in targets
-            or (not full_graph and targets != [target])):
+            or (not full_graph and targets != [target] and not writer_consumer_graph)):
         raise ValueError('Initial sealed target was not requested exactly once')
     failed = command.get('returncode') != 0
     if (type(command.get('returncode')) is not int
@@ -3900,6 +3902,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     prefix = Path(argv[argv.index('--prefix') + 1])
     role = Path(row['artifact']['path']).name
     allowed_roles = {'prepare-blob-tools': BLOB_TOOL_NAMES, 'prepare-captured-writer': ('dict-blob-build',),
+                     'prepare-blob-verify': ('dict-blob-verify',),
                      'prepare-bundle-driver': ('dict-bundle-build',)}
     if role not in allowed_roles.get(target, ()):
         raise ValueError('Initial sealed target has another role')
@@ -4027,8 +4030,10 @@ def initial_sealed_blob_successor(original, native_roles):
         commands = recipe.get('commands', [])
         writer_only = (name == 'dict-blob-build' and len(commands) == 1
                        and 'prepare-captured-writer' in commands[0].get('argv', []))
-        target = 'prepare-captured-writer' if writer_only else 'prepare-blob-tools'
-        _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not writer_only)
+        verify_only = (name == 'dict-blob-verify' and len(commands) == 1
+                       and 'prepare-blob-verify' in commands[0].get('argv', []))
+        target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-tools'
+        _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only))
         references.extend([after['previous_role_binding'],*target_references])
         source = prepared_metadata(after['source']); inventory = source.get('files',source)
         for relative in after['source_paths']:
