@@ -12583,6 +12583,19 @@ class InitialSealedWriterOnlyTests(unittest.TestCase):
     def fixture(self, root):
         f = SuccessfulPreparedArtifactTests().fixture(root)
         f.new_blob_rows = copy.deepcopy(f.current)
+        # Preserve the full target's receipts before the Writer-only fixture
+        # replaces its shared stderr file and in-memory command.
+        full_result = b.prepared_metadata(f.current['dict-blob-build']['actual_emission_result'])
+        full_closed = b.prepared_metadata(f.current['dict-blob-build']['qualification_closure'])
+        full_stderr = root / 'companion-full.stderr'
+        full_stderr.write_bytes(Path(full_result['commands'][0]['stderr']['path']).read_bytes())
+        full_result['commands'][0]['stderr'] = _initial_sealed_reference(full_stderr)
+        full_result_ref = _initial_sealed_write(root / 'companion-full-result.json', full_result)
+        full_closed.update(result=full_result_ref, commands=copy.deepcopy(full_result['commands']))
+        full_closed_ref = _initial_sealed_write(root / 'companion-full-closure.json', full_closed)
+        for name in ('dict-blob-merge', 'dict-blob-verify'):
+            f.new_blob_rows[name].update(actual_emission_result=full_result_ref,
+                                        qualification_closure=full_closed_ref)
         for name in ('dict-blob-merge','dict-blob-verify'):
             f.current[name] = copy.deepcopy(f.original[name])
         state = f.target_rows['dict-blob-build']
@@ -12629,6 +12642,41 @@ class InitialSealedWriterOnlyTests(unittest.TestCase):
                          lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
                 with self.assertRaises(ValueError):call()
 
+    def test_writer_only_accepts_independently_closed_current_companions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            for name in ('dict-blob-merge', 'dict-blob-verify'):
+                f.current[name] = copy.deepcopy(f.new_blob_rows[name])
+            before = copy.deepcopy((f.original, f.current))
+            writer = f.current['dict-blob-build']
+            companion = f.current['dict-blob-verify']
+            self.assertNotEqual(writer['actual_emission_result'], companion['actual_emission_result'])
+            self.assertNotEqual(writer['qualification_closure'], companion['qualification_closure'])
+            b.initial_sealed_blob_successor(f.original, f.roles)
+            self.assertEqual((f.original, f.current), before)
+
+    def test_independent_companions_still_require_each_wire_abi(self):
+        for relative, interface in (('src/encoder/blob_format.zig', 'blob-envelope'),
+                                    ('src/encoder/presentation_codec.zig', 'presentation-wire'),
+                                    ('src/lua/bundle_protocol.zig', 'expansion-wire')):
+            with self.subTest(interface=interface), tempfile.TemporaryDirectory() as tmp:
+                f = self.fixture(Path(tmp))
+                for name in ('dict-blob-merge', 'dict-blob-verify'):
+                    f.current[name] = copy.deepcopy(f.new_blob_rows[name])
+                row = f.current['dict-blob-build']
+                source = b.prepared_metadata(row['source'])
+                payload = f.root / 'independent-incompatible-interface.zig'
+                payload.write_text('changed ' + relative); payload.chmod(0o444)
+                identity = dict(_initial_sealed_reference(payload), mode=0o444)
+                source['files'][relative] = identity
+                row['source_payload_files'] = copy.deepcopy(row['source_payload_files'])
+                row['source_payload_files'][relative] = identity
+                row['source'] = _initial_sealed_write(f.root / 'independent-interface-source.json', source)
+                row['producer_source'] = row['source']['sha256']
+                self.republish(f)
+                with self.assertRaisesRegex(ValueError, interface + ' ABI'):
+                    b.initial_sealed_blob_successor(f.original, f.roles)
+
     def test_writer_only_target_cannot_authenticate_merge_verify_or_driver(self):
         for name in ('dict-blob-merge','dict-blob-verify','dict-bundle-build'):
             with self.subTest(role=name), tempfile.TemporaryDirectory() as tmp:
@@ -12643,9 +12691,10 @@ class InitialSealedWriterOnlyTests(unittest.TestCase):
                 f = self.fixture(Path(tmp)); row = f.current['dict-blob-build']; state = f.target_rows['dict-blob-build']
                 if mode.startswith('retained-'):
                     name = 'dict-blob-' + mode.removeprefix('retained-')
-                    # A changed role cannot be treated as an exact original;
-                    # its different complete emission must still be rejected.
+                    # A changed role needs its own actual target closure;
+                    # it cannot borrow the Writer-only receipt.
                     f.current[name] = copy.deepcopy(f.new_blob_rows[name])
+                    f.current[name]['qualification_closure'] = copy.deepcopy(row['qualification_closure'])
                 elif mode == 'payload':
                     row['source_payload_files'] = copy.deepcopy(row['source_payload_files'])
                     next(iter(row['source_payload_files'].values()))['sha256'] = '0'*64

@@ -4010,7 +4010,6 @@ def initial_sealed_blob_successor(original, native_roles):
     allowed = {'artifact','source','producer_source','compiled_source_authority','source_payload_files',
         'source_payload_git','source_root','compilation_recipe','actual_emission_result','qualification_closure',
         'qualification_scope','previous_role_binding'}
-    shared = None
     references = []
     for name in BLOB_TOOL_NAMES:
         before, after = original[name], current[name]
@@ -4022,10 +4021,8 @@ def initial_sealed_blob_successor(original, native_roles):
                 {k:v for k,v in after.items() if k not in allowed}
                 or prepared_metadata(after['previous_role_binding']) != original):
             raise ValueError('Initial sealed blob successor changed native dependencies or role policy')
-        authority = tuple(after[key] for key in ('source','compilation_recipe','actual_emission_result','qualification_closure'))
-        if shared is not None and authority != shared:
-            raise ValueError('Initial sealed blob tools have different emission origins')
-        shared = authority
+        # Each role retains its own closed emission; compatibility is checked
+        # through the exact interface identities below.
         recipe = prepared_metadata(after['compilation_recipe'])
         commands = recipe.get('commands', [])
         writer_only = (name == 'dict-blob-build' and len(commands) == 1
