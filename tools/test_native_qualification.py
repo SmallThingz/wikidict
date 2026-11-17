@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import native_qualification as qualification
+import native_qualification_helpers as helpers
 
 
 def worker_role_ast():
@@ -4533,6 +4534,79 @@ class FocusedFailureContinuationTests(unittest.TestCase):
         self.assertNotIn('fake_full_boundary_reached', result)
         self.assertFalse(result['filtered_tools_preparation']['selected_passed'])
         self.assertTrue(all(not row['full_suite_credit'] for row in result['focused_tests']))
+
+
+class DirectControlProgressTests(unittest.TestCase):
+    def fixture(self):
+        cases = [dict(root='encoder_compile', name='root.test.' + name, kind='audit')
+                 for name in ('first', 'second', 'third')]
+        raw = dict(schema='existing-direct-root-controls-result.v1', tests_run=0,
+                   compiled_inventory={}, test_results=[], stages=[dict(name='compile-encoder_compile', returncode=1)],
+                   source_before=True, source_after=True)
+        return cases, raw
+
+    def test_compile_failure_preserves_absent_null_and_setup_evidence(self):
+        for state in ('absent', 'null', 'setup'):
+            with self.subTest(state=state):
+                cases, raw = self.fixture()
+                if state == 'null':
+                    raw.update(first_test_started_unix=None, elapsed_to_first_test_seconds=None)
+                if state == 'setup':
+                    raw['stages'] = []
+                before = copy.deepcopy(raw)
+                result = helpers.normalize_direct_control_result(raw, cases)
+                self.assertEqual(raw, before)
+                self.assertEqual(result['phase'], 'setup_only' if state == 'setup' else 'compile_only')
+                self.assertEqual(result['selected_counts'], dict(passed=0, failed=0, skipped=0, leaked=0, crashed=0, unrun=3))
+                self.assertEqual(result['controls_unrun'], cases)
+                self.assertEqual(result['compiled_root_count'], 0)
+                self.assertIsNone(result['elapsed_to_first_test_seconds'])
+                self.assertEqual(set(result['first_test_field_states'].values()), {'null' if state == 'null' else 'absent'})
+
+    def started(self):
+        cases, raw = self.fixture()
+        raw.update(tests_run=2, first_test_started_unix=100.5, elapsed_to_first_test_seconds=0.5,
+                   compiled_inventory={'encoder_compile': dict(inventory=dict(compiled_test_count=3, tests=[c['name'] for c in cases]))},
+                   test_results=[dict(cases[0], returncode=0, status='passed'), dict(cases[1], returncode=1, status='failed')])
+        return cases, raw
+
+    def test_mixed_partial_execution_retains_unrun_and_raw_evidence(self):
+        cases, raw = self.started()
+        before = copy.deepcopy(raw)
+        result = helpers.normalize_direct_control_result(raw, cases)
+        self.assertEqual(raw, before)
+        self.assertEqual(result['phase'], 'tests_started')
+        self.assertEqual(result['selected_counts'], dict(passed=1, failed=1, skipped=0, leaked=0, crashed=0, unrun=1))
+        self.assertEqual(result['controls_unrun'], [cases[2]])
+        self.assertEqual(result['compiled_inventory_occurrences'], 3)
+        self.assertEqual(result['first_test_started_unix'], 100.5)
+
+    def test_started_attempt_without_returned_result_is_not_compile_only(self):
+        cases, raw = self.fixture()
+        raw.update(first_test_started_unix=100.5, elapsed_to_first_test_seconds=0.5)
+        result = helpers.normalize_direct_control_result(raw, cases)
+        self.assertEqual(result['phase'], 'tests_started')
+        self.assertEqual(result['tests_run'], 0)
+        self.assertEqual(result['selected_counts']['unrun'], 3)
+
+    def test_inconsistent_counts_identity_verdict_inventory_and_timing_refuse(self):
+        changes = [lambda r: r.update(tests_run=1),
+                   lambda r: r['test_results'][0].update(name='foreign'),
+                   lambda r: r['test_results'].append(copy.deepcopy(r['test_results'][0])),
+                   lambda r: r['test_results'][0].update(status='failed'),
+                   lambda r: r.update(first_test_started_unix=None),
+                   lambda r: r.pop('elapsed_to_first_test_seconds'),
+                   lambda r: r.update(elapsed_to_first_test_seconds=-1),
+                   lambda r: r.update(first_test_started_unix=True),
+                   lambda r: r['compiled_inventory']['encoder_compile']['inventory'].update(compiled_test_count=4)]
+        for change in changes:
+            with self.subTest(change=change):
+                cases, raw = self.started()
+                change(raw)
+                before = copy.deepcopy(raw)
+                with self.assertRaises(ValueError):
+                    helpers.normalize_direct_control_result(raw, cases)
+                self.assertEqual(raw, before)
 
 
 if __name__ == '__main__':

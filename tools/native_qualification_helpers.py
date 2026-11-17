@@ -1,6 +1,7 @@
 """Callable support for authenticated native qualification commands."""
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -80,6 +81,72 @@ def classify(stdout, stderr, *, standalone):
         passed = passed and groups == [[4, 0, 0, 0, 0]] and len(names) == 4
     return {'passed': passed, 'groups': groups, 'status_count': len(statuses), 'required_tests': required,
             'nonpassing_tests': [{'status': status, 'name': name} for status, name in statuses if status != 'ok']}
+
+
+def normalize_direct_control_result(control, selected_cases):
+    """Derive progress without changing raw absence, source or custody evidence."""
+    if not isinstance(control, dict) or control.get('schema') != 'existing-direct-root-controls-result.v1':
+        raise ValueError('Unsupported direct control result')
+    expected = {}
+    for case in selected_cases:
+        if not isinstance(case, dict) or any(not isinstance(case.get(k), str) or not case[k] for k in ('root', 'name')):
+            raise ValueError('Invalid selected control identity')
+        identity = (case['root'], case['name'])
+        if identity in expected:
+            raise ValueError('Duplicate selected control identity')
+        expected[identity] = case
+    results, inventory, stages = (control.get(k) for k in ('test_results', 'compiled_inventory', 'stages'))
+    if (not expected or not isinstance(results, list) or not isinstance(inventory, dict)
+            or not isinstance(stages, list) or type(control.get('tests_run')) is not int
+            or control['tests_run'] != len(results)):
+        raise ValueError('Invalid direct control progress')
+    counts = dict.fromkeys(('passed', 'failed', 'skipped', 'leaked', 'crashed'), 0)
+    seen = set()
+    for result in results:
+        if not isinstance(result, dict) or any(not isinstance(result.get(k), str) for k in ('root', 'name')):
+            raise ValueError('Invalid observed control')
+        identity = (result.get('root'), result.get('name'))
+        if identity not in expected or identity in seen or any(result.get(k) != v for k, v in expected[identity].items()):
+            raise ValueError('Observed control identity differs')
+        rc = result.get('returncode')
+        if type(rc) is not int:
+            raise ValueError('Invalid observed return code')
+        status = {0: 'passed', 2: 'skipped', 3: 'leaked'}.get(rc, 'crashed' if rc < 0 else 'failed')
+        if result.get('status') != status or identity[0] not in inventory:
+            raise ValueError('Observed control verdict differs')
+        seen.add(identity)
+        counts[status] += 1
+    compiled = 0
+    for root, group in inventory.items():
+        raw = group.get('inventory') if isinstance(group, dict) else None
+        names = raw.get('tests') if isinstance(raw, dict) else None
+        if (root not in {identity[0] for identity in expected} or not isinstance(names, list)
+                or not all(isinstance(name, str) for name in names) or len(set(names)) != len(names)
+                or type(raw.get('compiled_test_count')) is not int or raw['compiled_test_count'] != len(names)
+                or set(names) != {identity[1] for identity in expected if identity[0] == root}):
+            raise ValueError('Invalid compiled control inventory')
+        compiled += len(names)
+    keys = ('first_test_started_unix', 'elapsed_to_first_test_seconds')
+    states = {k: 'absent' if k not in control else 'null' if control[k] is None else 'value' for k in keys}
+    if len(set(states.values())) != 1:
+        raise ValueError('Inconsistent first-test field presence')
+    started = states[keys[0]] == 'value'
+    if started:
+        if (any(type(control[k]) not in (int, float) or (type(control[k]) is float and not math.isfinite(control[k])) for k in keys)
+                or control[keys[0]] <= 0 or control[keys[1]] < 0):
+            raise ValueError('Invalid first-test timing')
+    if results and not started:
+        raise ValueError('Executed controls lack first-test timing')
+    if not all(isinstance(row, dict) and isinstance(row.get('name'), str) for row in stages):
+        raise ValueError('Invalid control stages')
+    unrun = [dict(case) for identity, case in expected.items() if identity not in seen]
+    counts['unrun'] = len(unrun)
+    return dict(schema='native-qualification-progress.v1',
+                phase='tests_started' if started else 'compile_only' if any(row['name'].startswith('compile-') for row in stages) else 'setup_only',
+                tests_run=len(results), compiled_root_count=len(inventory),
+                compiled_inventory_occurrences=compiled, selected_counts=counts, controls_unrun=unrun,
+                first_test_field_states=states,
+                first_test_started_unix=control.get(keys[0]), elapsed_to_first_test_seconds=control.get(keys[1]))
 
 
 def execute(out, name, argv, cwd):
