@@ -12,7 +12,7 @@ from owned_file_retirement import (ExactFileRetirement, RetirementError,
                                    verify_source_proof)
 
 
-class RetirementTests(unittest.TestCase):
+class RetirementFixture(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=Path.cwd() / ".tmp")
         self.addCleanup(self.temp.cleanup)
@@ -41,6 +41,8 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.second.read_bytes(), b"second original")
         self.assertEqual(self.keeper.read_bytes(), b"retained recovery")
 
+
+class RetirementTests(RetirementFixture):
     def test_exact_names_only_and_no_sibling_enumeration(self):
         siblings = []
         for n in range(128):
@@ -438,6 +440,184 @@ class RetirementTests(unittest.TestCase):
         with self.assertRaises(RetirementError):
             verify_retired_files(self.root, selected, protected, parents, guard)
         self.assertEqual(self.first.read_bytes(), b"new owner")
+
+
+class CompleteAliasTests(RetirementFixture):
+    def pair(self):
+        other = self.root / "other"
+        other.mkdir()
+        alias = other / "alias.json"
+        os.link(self.first, alias)
+        return alias, [self.row(self.first), self.row(alias)]
+
+    def aliases(self, rows):
+        return ExactFileRetirement(self.root, rows, [self.row(self.keeper)],
+                                   complete_alias_groups=True)
+
+    def test_complete_cross_parent_pair_counts_inode_once_without_enumeration(self):
+        alias, rows = self.pair()
+        allocated = rows[0]["stamp"][8]
+        with mock.patch("os.listdir", side_effect=AssertionError("no listing")), \
+             mock.patch("os.scandir", side_effect=AssertionError("no scan")):
+            with self.aliases(rows) as operation:
+                removed = operation.unlink(lambda: None)
+                parents = operation.parent_bindings
+                self.assertEqual(len(operation.synced_parents), 2)
+                self.assertEqual(operation.remaining_selection(), [])
+            result = verify_retired_files(self.root, removed, [self.row(self.keeper)],
+                                          parents, lambda: None)
+        self.assertEqual(result["selected_absent"], 2)
+        self.assertEqual([r["retired_inode_allocated_bytes"] for r in removed], [0, allocated])
+        self.assertEqual([r["pre_unlink_stamp"][7] for r in removed], [2, 1])
+        self.assertEqual([r["post_unlink_stamp"][7] for r in removed], [1, 0])
+        self.assertFalse(self.first.exists() or alias.exists())
+        self.assertEqual(self.second.read_bytes(), b"second original")
+
+    def test_partial_group_can_resume_without_double_counting_or_rewriting_history(self):
+        alias, rows = self.pair()
+        original_stamps = [list(r["stamp"]) for r in rows]
+        calls = 0
+
+        def fail_after_one():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("stop after first alias")
+
+        with self.aliases(rows) as operation:
+            with self.assertRaisesRegex(RuntimeError, "stop after first alias"):
+                operation.unlink(fail_after_one)
+            first_removed = list(operation.removed)
+            remaining = operation.remaining_selection()
+            self.assertEqual(operation.synced_parents, [str(self.parent)])
+        self.assertEqual([r["stamp"] for r in rows], original_stamps)
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(remaining[0]["path"], str(alias))
+        self.assertEqual(remaining[0]["stamp"], file_stamp(alias.stat()))
+        self.assertEqual(remaining[0]["stamp"][7], 1)
+        with self.aliases(remaining) as successor:
+            final_removed = successor.unlink(lambda: None)
+        self.assertEqual(sum(r["retired_inode_allocated_bytes"]
+                             for r in first_removed + final_removed), original_stamps[0][8])
+
+    def test_incomplete_alias_group_is_rejected(self):
+        alias, rows = self.pair()
+        with self.assertRaisesRegex(RetirementError, "incomplete alias group"):
+            with self.aliases(rows[:1]):
+                self.fail("missing second selected name")
+        self.assertEqual(alias.read_bytes(), b"first original")
+        self.assert_originals()
+
+    def test_unlisted_external_alias_is_rejected(self):
+        alias, unused = self.pair()
+        outside = self.root / "current-alias"
+        os.link(self.first, outside)
+        with self.assertRaisesRegex(RetirementError, "incomplete alias group"):
+            with self.aliases([self.row(self.first), self.row(alias)]):
+                self.fail("third link is outside selection")
+        self.assertEqual(outside.read_bytes(), b"first original")
+        self.assert_originals()
+
+    def test_group_hash_or_identity_disagreement_is_rejected(self):
+        alias, rows = self.pair()
+        for field in ("sha256", "stamp"):
+            bad = [dict(r, stamp=list(r["stamp"])) for r in rows]
+            if field == "sha256":
+                bad[1][field] = "0" * 64
+            else:
+                bad[1][field][6] += 1
+            with self.subTest(field=field), self.assertRaises(RetirementError):
+                with self.aliases(bad):
+                    self.fail("inconsistent group")
+        self.assertEqual(alias.read_bytes(), b"first original")
+        self.assert_originals()
+
+    def test_alias_added_after_prepare_prevents_any_unlink(self):
+        alias, rows = self.pair()
+        with self.aliases(rows) as operation:
+            os.link(self.first, self.root / "new-current-alias")
+            with self.assertRaises(RetirementError):
+                operation.unlink(lambda: None)
+            self.assertEqual(operation.removed, [])
+        self.assertEqual(alias.read_bytes(), b"first original")
+        self.assert_originals()
+
+    def test_remaining_alias_content_change_blocks_continuation_and_export(self):
+        alias, rows = self.pair()
+        calls = 0
+
+        def mutate():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                alias.write_bytes(b"changed contents")
+
+        with self.aliases(rows) as operation:
+            with self.assertRaises(RetirementError):
+                operation.unlink(mutate)
+            self.assertEqual(len(operation.removed), 1)
+            self.assertEqual(operation.removed[0]["retired_inode_allocated_bytes"], 0)
+            with self.assertRaises(RetirementError):
+                operation.remaining_selection()
+        self.assertEqual(alias.read_bytes(), b"changed contents")
+
+    def test_post_unlink_metadata_change_is_not_accepted_as_link_transition(self):
+        alias, rows = self.pair()
+        real_unlink = os.unlink
+
+        def change_mode(name, *, dir_fd):
+            real_unlink(name, dir_fd=dir_fd)
+            alias.chmod(0o400)
+
+        with self.aliases(rows) as operation:
+            with mock.patch("os.unlink", side_effect=change_mode), self.assertRaises(RetirementError):
+                operation.unlink(lambda: None)
+            self.assertEqual(len(operation.removed), 1)
+            with self.assertRaises(RetirementError):
+                operation.remaining_selection()
+        self.assertTrue(alias.exists())
+
+    def test_recreated_removed_alias_is_preserved_and_prevents_resume(self):
+        alias, rows = self.pair()
+        real_unlink = os.unlink
+
+        def recreate(name, *, dir_fd):
+            real_unlink(name, dir_fd=dir_fd)
+            self.first.write_bytes(b"new owner")
+
+        with self.aliases(rows) as operation:
+            with mock.patch("os.unlink", side_effect=recreate), self.assertRaises(RetirementError):
+                operation.unlink(lambda: None)
+            self.assertEqual(len(operation.removed), 1)
+            with self.assertRaises(RetirementError):
+                operation.remaining_selection()
+        self.assertEqual(self.first.read_bytes(), b"new owner")
+        self.assertEqual(alias.read_bytes(), b"first original")
+
+    def test_alias_durability_failure_keeps_once_only_count_and_blocks_resume(self):
+        alias, rows = self.pair()
+        with self.aliases(rows) as operation:
+            with mock.patch("os.fsync", side_effect=OSError("disk error")), \
+                 self.assertRaises(RetirementError):
+                operation.unlink(lambda: None)
+            self.assertEqual(len(operation.removed), 2)
+            self.assertEqual(len(operation.durability_failures), 2)
+            self.assertEqual(sum(r["retired_inode_allocated_bytes"] for r in operation.removed),
+                             rows[0]["stamp"][8])
+            with self.assertRaises(RetirementError):
+                operation.remaining_selection()
+        self.assertFalse(alias.exists())
+
+    def test_alias_name_replacement_after_prepare_is_preserved(self):
+        alias, rows = self.pair()
+        with self.aliases(rows) as operation:
+            alias.rename(alias.with_suffix(".original"))
+            alias.write_bytes(b"replacement")
+            with self.assertRaises(RetirementError):
+                operation.unlink(lambda: None)
+            self.assertEqual(operation.removed, [])
+        self.assertEqual(alias.read_bytes(), b"replacement")
+        self.assert_originals()
 
 
 if __name__ == "__main__":

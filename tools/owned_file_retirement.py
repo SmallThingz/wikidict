@@ -121,9 +121,14 @@ class ExactFileRetirement:
     artifact keepers. Source/nonuse/other proof verification stays in the caller.
     No method mutates an unselected name or a directory. ``removed`` records
     successful unlink calls even if subsequent fsync or verification fails.
+
+    ``complete_alias_groups=True`` accepts hardlinks only when every link to
+    each selected inode is named in this transaction. Never split such a group
+    across batches. Sum ``retired_inode_allocated_bytes``, not the per-name
+    allocation observations, to account for these groups without double counting.
     """
 
-    def __init__(self, root, selected, protected=()):
+    def __init__(self, root, selected, protected=(), *, complete_alias_groups=False):
         self.root = os.fspath(root)
         self.root_parts = _components(self.root)
         self.selected = [dict(row, stamp=list(row["stamp"])) for row in selected]
@@ -131,6 +136,8 @@ class ExactFileRetirement:
         _require(bool(self.selected), "empty selection")
         rows = self.selected + self.protected
         _require(len({row["path"] for row in rows}) == len(rows), "duplicate path")
+        _require(isinstance(complete_alias_groups, bool), "explicit alias policy required")
+        self.complete_alias_groups = complete_alias_groups
         self.removed = []
         self.durability_failures = []
         self.synced_parents = []
@@ -141,6 +148,7 @@ class ExactFileRetirement:
         self._prepared = False
         self._started = False
         self._used = False
+        self._alias_transition_failed = False
 
     def _parent(self, path):
         parts = _components(path)
@@ -172,12 +180,13 @@ class ExactFileRetirement:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
                      dir_fd=parent["fd"])
         bound = {"row": row, "parent": parent, "name": name, "fd": fd,
-                 "selected": selected}
+                 "selected": selected, "expected_stamp": list(row["stamp"])}
         self._files.append(bound)
         value = os.fstat(fd)
         _require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid(),
                  "candidate or keeper is not an owned regular file")
-        _require(not selected or value.st_nlink == 1, "selected file has aliases")
+        _require(not selected or self.complete_alias_groups or value.st_nlink == 1,
+                 "selected file has aliases")
         self._check_file(bound)
         digest = hashlib.sha256()
         for block in iter(lambda: os.read(fd, 1024 * 1024), b""):
@@ -196,14 +205,27 @@ class ExactFileRetirement:
         self._started = True
         try:
             self._open_root()
+            groups = {}
+            for row in self.selected:
+                _require(len(row["stamp"]) == 9, "invalid recorded identity")
+                groups.setdefault(tuple(row["stamp"][:2]), []).append(row)
+            if self.complete_alias_groups:
+                for rows in groups.values():
+                    first = rows[0]
+                    _require(first["stamp"][7] == len(rows), "incomplete alias group")
+                    _require(all(row["stamp"] == first["stamp"] and
+                                 row["bytes"] == first["bytes"] and
+                                 row["sha256"] == first["sha256"] for row in rows),
+                             "alias group identities disagree")
             for row in self.protected:
                 self._open_file(row, False)
             for row in self.selected:
                 self._open_file(row, True)
             selected_ids = {tuple(row["stamp"][:2]) for row in self.selected}
             keeper_ids = {tuple(row["stamp"][:2]) for row in self.protected}
-            _require(len(selected_ids) == len(self.selected) and
-                     not selected_ids.intersection(keeper_ids), "selected inode is protected")
+            _require(self.complete_alias_groups or len(selected_ids) == len(self.selected),
+                     "selected inode has aliases")
+            _require(not selected_ids.intersection(keeper_ids), "selected inode is protected")
             self._check_parents()
             self._prepared = True
             return self
@@ -229,7 +251,7 @@ class ExactFileRetirement:
                 os.close(fd)
 
     def _check_file(self, bound):
-        wanted = bound["row"]["stamp"]
+        wanted = bound["expected_stamp"]
         _require(file_stamp(os.fstat(bound["fd"])) == wanted, "open file identity changed")
         value = os.stat(bound["name"], dir_fd=bound["parent"]["fd"], follow_symlinks=False)
         _require(file_stamp(value) == wanted, "selected or protected pathname changed")
@@ -241,6 +263,43 @@ class ExactFileRetirement:
         except FileNotFoundError:
             return
         raise RetirementError("selected name reappeared; replacement was preserved")
+
+    def _advance_alias_group(self, bound, before, removed):
+        """Accept only the nlink/ctime transition caused by our successful unlink."""
+        self._alias_transition_failed = True
+        after = file_stamp(os.fstat(bound["fd"]))
+        _require(after[:6] == before[:6] and after[8] == before[8] and
+                 after[7] == before[7] - 1 and after[6] >= before[6],
+                 "unexpected post-unlink inode change")
+        removed["post_unlink_stamp"] = after
+        removed["retired_inode_allocated_bytes"] = before[8] if after[7] == 0 else 0
+        for other in self._files:
+            if other["selected"] and other["row"]["stamp"][:2] == before[:2]:
+                other["expected_stamp"] = list(after)
+        self._alias_transition_failed = False
+
+    def remaining_selection(self):
+        """Return authenticated remaining rows after a durable partial operation.
+
+        Call before close, while custody is still held. A new transaction must
+        reauthenticate these rows and all nonuse/recovery proofs; this method
+        neither retries an unlink nor rewrites the original selection receipt.
+        A post-unlink identity failure or recreated name prevents this export.
+        """
+        _require(self._prepared and self._used and not self.durability_failures and
+                 not self._alias_transition_failed,
+                 "remaining selection is not safely exportable")
+        self._check_parents()
+        removed_paths = {row["path"] for row in self.removed}
+        for row in self.removed:
+            self._check_absent(row)
+        remaining = []
+        for bound in self._files:
+            if bound["row"]["path"] not in removed_paths:
+                self._check_file(bound)
+                if bound["selected"]:
+                    remaining.append(dict(bound["row"], stamp=list(bound["expected_stamp"])))
+        return remaining
 
     def unlink(self, verify_proofs):
         """Verify caller proofs and every remaining selected/keeper before each unlink."""
@@ -261,11 +320,16 @@ class ExactFileRetirement:
                     if other["row"]["path"] not in removed_paths:
                         self._check_file(other)
                 observed = file_stamp(os.fstat(bound["fd"]))
-                _require(observed == bound["row"]["stamp"], "pre-unlink identity changed")
+                _require(observed == bound["expected_stamp"], "pre-unlink identity changed")
                 os.unlink(bound["name"], dir_fd=bound["parent"]["fd"])
-                self.removed.append(dict(bound["row"], allocated_bytes_before_unlink=observed[8]))
+                removed = dict(bound["row"], pre_unlink_stamp=observed,
+                               allocated_bytes_before_unlink=observed[8],
+                               retired_inode_allocated_bytes=0 if self.complete_alias_groups else observed[8])
+                self.removed.append(removed)
                 removed_paths.add(bound["row"]["path"])
                 dirty_parents[bound["parent"]["path"]] = bound["parent"]
+                if self.complete_alias_groups:
+                    self._advance_alias_group(bound, observed, removed)
                 self._check_absent(bound["row"])
             verify_proofs()
             self._check_parents()
