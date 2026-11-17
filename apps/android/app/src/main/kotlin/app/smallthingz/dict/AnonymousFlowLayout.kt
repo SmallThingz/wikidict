@@ -48,7 +48,7 @@ internal fun AnonymousFlowLayout(
     linkColor: Color,
     inline: (AnonymousFlowEvent.Inline, Int) -> Spanned,
     figureSpec: (AnonymousFlowEvent.FigureObject, Int) -> AnonymousFigureMeasureSpec,
-    inlineNodes: (NativeAnonymousFlowGeometry) -> List<FloatInteractionNode>,
+    inlineNodes: (NativeAnonymousFlowGeometry) -> List<FloatInteractionNode> = { emptyList() },
     semanticGeometry: (AnonymousFlowEvent.FigureObject, Int, Int) -> FloatTextGeometry?,
     insets: NativeTextInsets = NativeTextInsets(),
     inlineSemantic: (AnonymousFlowEvent.Inline, String) -> List<AnonymousInlineTextPart> = { _, text ->
@@ -66,6 +66,7 @@ internal fun AnonymousFlowLayout(
     decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null },
     unavailable: @Composable (String) -> Unit = { ReaderLayoutUnavailable(it) },
     intrinsicWidths: (((AnonymousFlowEvent.FigureObject) -> Int) -> NativeWidthRange)? = null,
+    inlineNodeSources: ((NativeAnonymousFlowGeometry) -> List<NativeAnonymousInlineNode>)? = null,
     child: @Composable (AnonymousFlowEvent.FigureObject) -> Unit,
 ) {
     val publishCellBaselines = LocalNativeContainerTextContext.current?.cellText != null
@@ -147,7 +148,7 @@ internal fun AnonymousFlowLayout(
                     spec.normalContentLeft?.invoke(placeable.width), spec.usedBox)
             }, insets = insets, inlineNodes = inlineNodes, inlineSemantic = inlineSemantic,
                 carriedExclusions = exclusions, decoration = decoration, outsideMarkerHeight = outsideMarkerHeight,
-                decorationBounds = decorationBounds)
+                decorationBounds = decorationBounds, inlineNodeSources = inlineNodeSources)
             if (geometry.height > constraints.maxHeight)
                 throw UnsupportedFloatLayout("Anonymous flow exceeds its available height")
             try { Constraints.fixed(width, geometry.height) }

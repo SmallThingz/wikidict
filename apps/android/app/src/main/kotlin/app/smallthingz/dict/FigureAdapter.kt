@@ -221,23 +221,24 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
                     childMinimumFloor = event.figure.tableCaptionLayout != null,
                     normalContentLeft = { frameWidth -> preparedFigure.normalLeft(available, frameWidth) },
                     usedBox = preparedFigure.blockUsedBox()) },
-            inlineNodes = { geometry -> buildList {
+            inlineNodeSources = { geometry -> buildList {
                 if (prefix.isNotEmpty()) {
                     val band = geometry.firstLineBand()
                     val bounds = if (rtl) RectF(band.right, band.top, band.right + markerWidth, band.bottom)
                         else RectF(band.left - markerWidth, band.top, band.left, band.bottom)
-                    add(FloatInteractionNode(0, FloatInteractionKind.MARKER, 0, 0, listOf(bounds), prefix, null, null))
+                    add(NativeAnonymousInlineNode(FloatInteractionNode(0, FloatInteractionKind.MARKER, 0, 0,
+                        listOf(bounds), prefix, null, null), 0, 0))
                 }
                 addAll(content.events.filterIsInstance<AnonymousFlowEvent.Inline>().flatMap { event ->
                 val source = geometry.offsets.inlineSources.single { it.event === event }
                 val local = AnonymousInlineNodeGeometry(geometry, source)
-                checkNotNull(prepared[event]?.native).nodes(local).map { node -> node.copy(
+                checkNotNull(prepared[event]?.native).nodes(local).map { node -> NativeAnonymousInlineNode(node.copy(
                     start = geometry.selection.semanticOffset(source.start + node.start),
                     end = geometry.selection.semanticOffset(source.start + node.end),
                     label = node.label?.let { label -> if (label.toString() == local.text.subSequence(node.start, node.end).toString())
                         geometry.text.subSequence(geometry.selection.semanticOffset(source.start + node.start),
                             geometry.selection.semanticOffset(source.start + node.end)) else label },
-                ) }
+                ), source.start + node.start, source.start + node.end) }
                 })
             } },
             semanticGeometry = { event, _, _ -> measured[event.id] },

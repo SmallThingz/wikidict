@@ -198,7 +198,14 @@ internal class NativeFloatContextGeometry private constructor(
         paragraphs.filter { it.paintHere }.forEach { paragraph -> val saved = canvas.save()
             canvas.translate(paragraph.x, paragraph.y); paragraph.geometry.paintOrdinary(canvas); canvas.restoreToCount(saved) }
     }
+    override fun interactionNodeAt(x: Float, y: Float): FloatInteractionNode? {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { group ->
+            return nodes.lastOrNull { it.id in group.nodeIds && it.contains(x, y) }
+        }
+        return nodes.lastOrNull { it.contains(x, y) }
+    }
     override fun offsetForPosition(x: Float, y: Float): Int {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return it.sourceOffset }
         children.lastOrNull { it.bounds.contains(x, y) }?.let { return it.offset }
         paragraphs.lastOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
             return it.offset + it.geometry.offsetForPosition(x - it.x, y - it.y)

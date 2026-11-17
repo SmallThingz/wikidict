@@ -3346,4 +3346,239 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(shiftedOnly.usedLineHeight(0) * 2f, doubled.usedLineHeight(0), .00001f)
         assertEquals("\uFFFC", doubled.text.toString())
     }
+
+    @Test
+    fun anonymousPositionedImagesRetainNativeOwnershipAndPaintAboveLaterOrdinaryActions() {
+        val root = paint()
+        val draws = mutableListOf<String>()
+        val calls = mutableListOf<String>()
+        var integerMeasurements = 0
+        val imageAction: () -> Unit = { calls += "image" }
+        val inlineAction: () -> Unit = { calls += "inline" }
+        val laterAction: () -> Unit = { calls += "later" }
+        class Image(val placement: NativeImageOccurrencePlacement?) : android.text.style.ReplacementSpan(),
+            NativeFloatInlineImage, NativeNoWrapInlineImage {
+            override val nativeImageId: Int get() = 71
+            override val nativeImageSourceOffset: Int get() = 0
+            override val nativeImageWidth: Float get() = 40f
+            override val nativeImageHeight: Float get() = 20f
+            override val nativeImageOccurrence: NativeImageOccurrencePlacement? get() = placement
+            override val nativeUsedMetrics: NativeUsedLineMetrics get() = NativeUsedLineMetrics(-4f, 16f)
+            override val nativeImageInkBounds: NativeFloatBounds get() = NativeFloatBounds(0f, 0f, 40f, 20f)
+            override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds =
+                nativeImageInkBounds.translated(0f, nativeUsedMetrics.top)
+            override fun drawNativeImage(canvas: Canvas, outer: RectF) {
+                draws += "image"
+                canvas.drawRect(outer, Paint().apply { color = Color.BLUE })
+            }
+            override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int,
+                fm: Paint.FontMetricsInt?): Int {
+                check(placement == null) { "Positioned image entered the integer replacement path" }
+                integerMeasurements++
+                return 40
+            }
+            override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int,
+                x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
+                check(placement == null)
+                drawNativeImage(canvas, RectF(x, y - 4f, x + 40f, y + 16f))
+            }
+        }
+        fun strut(source: SpannableString): Spanned = SpannedString(source.apply {
+            setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root),
+                NativeLineHeightPolicy.Pixels(bodyPixels), strut = true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        })
+        fun withBitmap(width: Int, height: Int, block: (Bitmap) -> Unit) {
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            var primary: Throwable? = null
+            try { block(bitmap) }
+            catch (failure: Throwable) { primary = failure; throw failure }
+            finally {
+                try { bitmap.recycle() }
+                catch (cleanup: Throwable) {
+                    val failure = primary
+                    if (failure == null) throw cleanup
+                    if (failure !== cleanup) failure.addSuppressed(cleanup)
+                }
+            }
+        }
+        class FlowFixture(val alt: String, val placement: NativeImageOccurrencePlacement?, val includeInline: Boolean = true) {
+            val image = Image(placement)
+            val imageSpan = Span("link", "", "image-target", image = InlineImage("Synthetic.png", 40, 20, alt = alt,
+                occurrenceLayout = placement?.let { InlineImageOccurrenceLayout(
+                    SignedContainerMargin(StyleLengthUnit.Px, it.translationX),
+                    SignedContainerMargin(StyleLengthUnit.Px, it.translationY),
+                    StyleLength(StyleLengthUnit.Px, it.paddingLeft), StyleLength(StyleLengthUnit.Px, it.paddingRight)) }))
+            val inlineSpan = Span("link", "F", "inline-target")
+            val content = anonymousFlowContent(Block("paragraph", 0, emptyList(), flow = buildList {
+                add(FlowPart.Inline(listOf(imageSpan)))
+                if (includeInline) add(FlowPart.Inline(listOf(inlineSpan)))
+            }),
+                AnonymousFlowContext(BidiResolvedDirection.Ltr, "ja", null))
+            val imageSource = strut(SpannableString("\uFFFC").apply {
+                setSpan(image, 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+            val inlineSource = strut(SpannableString("F"))
+            fun sources(geometry: NativeAnonymousFlowGeometry): List<NativeAnonymousInlineNode> =
+                geometry.offsets.inlineSources.map { source ->
+                    val original = source.event.spans.single()
+                    val isImage = original === imageSpan
+                    check(isImage || original === inlineSpan)
+                    NativeAnonymousInlineNode(FloatInteractionNode(if (isImage) 201 else 202,
+                        if (isImage) FloatInteractionKind.IMAGE else FloatInteractionKind.LINK,
+                        geometry.selection.semanticOffset(source.start), geometry.selection.semanticOffset(source.end),
+                        geometry.nativeRectsForRange(source.start, source.end), if (isImage) alt else original.text,
+                        original.target, if (isImage) imageAction else inlineAction), source.start, source.end)
+                }
+            fun build(width: Int, sourceProvenance: Boolean = true,
+                exclusions: List<NativeFloatExclusion> = emptyList()): NativeAnonymousFlowGeometry =
+                NativeAnonymousFlowGeometry.build(content, root, width,
+                    inline = { event -> when (event.spans.single()) {
+                        imageSpan -> imageSource
+                        inlineSpan -> inlineSource
+                        else -> error("Unexpected original inline event")
+                    } }, figure = { _, _ -> error("No figure source in this fixture") },
+                    carriedExclusions = exclusions,
+                    inlineNodes = { geometry -> sources(geometry).map { it.node } },
+                    inlineSemantic = { event, text -> anonymousInlineSemantic(event.layoutSpans, text) },
+                    inlineNodeSources = if (sourceProvenance) ({ geometry -> sources(geometry) }) else null)
+        }
+        val laterSource = strut(SpannableString("M").apply {
+            setSpan(android.text.style.BackgroundColorSpan(Color.RED), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        })
+        fun later(width: Int, exclusions: List<NativeFloatExclusion> = emptyList()): NativeFloatGeometry =
+            NativeFloatGeometry.build(laterSource, root, width, emptyList(), carriedExclusions = exclusions,
+                textDirection = TextDirectionHeuristics.LTR, nodeFactory = { geometry -> listOf(
+                    FloatInteractionNode(301, FloatInteractionKind.LINK, 0, 1, geometry.rectsForRange(0, 1),
+                        "M", "later-target", laterAction)) })
+        val width = 160
+        val laterReference = later(width)
+        val laterBox = laterReference.nodes.single().bounds.single()
+        for (alt in listOf("", "original image alt")) {
+            val zero = FlowFixture(alt, NativeImageOccurrencePlacement(0f, 0f, .25f, .75f)).build(width)
+            val unshiftedImage = zero.nodes.single { it.kind == FloatInteractionKind.IMAGE }.bounds.single()
+            assertEquals(.25f, unshiftedImage.left, 0f)
+            assertEquals(40f, unshiftedImage.width(), 0f)
+            assertEquals(41f, zero.caretRect(alt.length).left, 0f)
+            val placement = NativeImageOccurrencePlacement(laterBox.centerX() - unshiftedImage.centerX(),
+                zero.textBottom + laterBox.centerY() - unshiftedImage.centerY(), .25f, .75f)
+            val fixture = FlowFixture(alt, placement)
+            val unavailable = assertThrows(UnsupportedFloatLayout::class.java) {
+                fixture.build(width, sourceProvenance = false)
+            }
+            assertEquals("Positioned anonymous inline actions need original native ranges", unavailable.message)
+            var actualFlow: NativeAnonymousFlowGeometry? = null
+            val outer = NativeFloatContextGeometry.build(width, listOf(
+                NativeFloatContextPart.Flow(41, { available, exclusions ->
+                    fixture.build(available, exclusions = exclusions).also { actualFlow = it }
+                }),
+                NativeFloatContextPart.Text(laterSource, { available, exclusions -> later(available, exclusions) })))
+            val flow = checkNotNull(actualFlow)
+            assertEquals("\uFFFCF", flow.offsets.nativeText)
+            assertEquals(alt + "F", flow.text.toString())
+            assertEquals(alt + "F\nM", outer.text.toString())
+            assertEquals(zero.textBottom, flow.textBottom, 0f)
+            assertSame(fixture.imageSpan, flow.offsets.inlineSources[0].event.spans.single())
+            assertSame(fixture.inlineSpan, flow.offsets.inlineSources[1].event.spans.single())
+            val imageNode = flow.nodes.single { it.kind == FloatInteractionKind.IMAGE }
+            val inlineNode = flow.nodes.single { it.kind == FloatInteractionKind.LINK }
+            assertEquals(0, imageNode.start)
+            assertEquals(alt.length, imageNode.end)
+            assertEquals(alt.length, inlineNode.start)
+            assertEquals(alt.length + 1, inlineNode.end)
+            assertEquals(41f, flow.caretRect(inlineNode.start).left, 0f)
+            assertSame(imageAction, imageNode.onClick)
+            assertSame(inlineAction, inlineNode.onClick)
+            assertEquals("image-target", imageNode.tooltip)
+            assertEquals(alt, imageNode.label.toString())
+            if (alt.isEmpty()) assertEquals(imageNode.start, inlineNode.start)
+            val phase = flow.positionedGroups.single()
+            assertEquals(0, phase.sourceOffset)
+            assertEquals(setOf(imageNode.id), phase.nodeIds)
+            assertFalse(inlineNode.id in phase.nodeIds)
+            sameRect(RectF(unshiftedImage).apply { offset(placement.translationX, placement.translationY) },
+                imageNode.bounds.single(), 0f)
+            val outerImage = outer.nodes.single { it.kind == FloatInteractionKind.IMAGE }
+            val outerLater = outer.nodes.single { it.tooltip == "later-target" }
+            assertEquals(alt.length + 2, outerLater.start)
+            assertSame(laterAction, outerLater.onClick)
+            val outerPhase = outer.positionedGroups.single()
+            assertEquals(setOf(outerImage.id), outerPhase.nodeIds)
+            assertEquals(0, outerPhase.sourceOffset)
+            sameRect(imageNode.bounds.single(), outerImage.bounds.single(), 0f)
+            val overlap = RectF(outerImage.bounds.single())
+            assertTrue(overlap.intersect(outerLater.bounds.single()))
+            assertTrue(overlap.width() > 1f && overlap.height() > 1f)
+            withBitmap(width, ceil(maxOf(outer.height.toFloat(), overlap.bottom) + 4f).toInt()) { bitmap ->
+                // Flow is a real separately painted child (paintHere=false); Context owns its final positioned phase.
+                draws.clear()
+                flow.paintOrdinary(Canvas(bitmap))
+                outer.paintOrdinary(Canvas(bitmap))
+                assertTrue("Ordinary phases must not draw the positioned image", draws.isEmpty())
+                val backgroundPixel = (0 until bitmap.height).firstNotNullOfOrNull { y ->
+                    (0 until bitmap.width).firstOrNull { x -> overlap.contains(x + .5f, y + .5f) &&
+                        bitmap.getPixel(x, y) == Color.RED }?.let { x -> x to y }
+                }
+                assertNotNull("The later ordinary link really paints under the image", backgroundPixel)
+                val (x, y) = checkNotNull(backgroundPixel)
+                bitmap.eraseColor(Color.TRANSPARENT)
+                draws.clear()
+                flow.paintOrdinary(Canvas(bitmap))
+                outer.paint(Canvas(bitmap))
+                assertEquals(listOf("image"), draws)
+                assertEquals(Color.BLUE, bitmap.getPixel(x, y))
+                val px = x + .5f; val py = y + .5f
+                assertTrue(outerLater.contains(px, py))
+                assertTrue(outerImage.contains(px, py))
+                assertEquals(imageNode.id, flow.interactionNodeAt(px, py)!!.id)
+                assertEquals(outerImage.id, outer.interactionNodeAt(px, py)!!.id)
+                assertEquals(0, flow.offsetForPosition(px, py))
+                assertEquals(0, outer.offsetForPosition(px, py))
+                calls.clear()
+                outer.interactionNodeAt(px, py)!!.onClick!!.invoke()
+                assertEquals(listOf("image"), calls)
+            }
+        }
+        assertEquals(0, integerMeasurements)
+        // Empty authored alt does not turn a real inline image into a generated figure-only strut.
+        val emptyOnly = FlowFixture("", NativeImageOccurrencePlacement(0f, 0f, .25f, .75f), includeInline = false).build(width)
+        assertEquals("\uFFFC", emptyOnly.offsets.nativeText)
+        assertEquals("", emptyOnly.text.toString())
+        assertTrue(emptyOnly.height >= 20)
+        assertTrue(emptyOnly.textBottom >= 20f)
+        assertEquals(20f, emptyOnly.nativeRectsForRange(0, 1).single().height(), 0f)
+        assertTrue(emptyOnly.characterRects(0, 0).isEmpty())
+        assertEquals(0 to 0, emptyOnly.nodes.single().let { it.start to it.end })
+        assertSame(imageAction, emptyOnly.nodes.single().onClick)
+        assertEquals(0, emptyOnly.positionedGroups.single().sourceOffset)
+        assertEquals(setOf(emptyOnly.nodes.single().id), emptyOnly.positionedGroups.single().nodeIds)
+        withBitmap(width, emptyOnly.height + 24) { emptyBitmap ->
+            draws.clear(); emptyOnly.paintOrdinary(Canvas(emptyBitmap)); assertTrue(draws.isEmpty())
+            draws.clear(); emptyOnly.paint(Canvas(emptyBitmap)); assertEquals(listOf("image"), draws)
+        }
+        // Absence of occurrence metadata retains the original inline callback and ordinary paint route.
+        val legacyFixture = FlowFixture("legacy alt", null)
+        val legacy = legacyFixture.build(width, sourceProvenance = false)
+        val legacyWithSources = legacyFixture.build(width)
+        assertTrue(integerMeasurements > 0)
+        assertTrue(legacy.positionedGroups.isEmpty())
+        assertTrue(legacyWithSources.positionedGroups.isEmpty())
+        assertEquals("legacy altF", legacy.text.toString())
+        assertEquals(legacy.text.toString(), legacyWithSources.text.toString())
+        assertEquals(legacy.height, legacyWithSources.height)
+        assertEquals(legacy.nodes.map { it.start to it.end }, legacyWithSources.nodes.map { it.start to it.end })
+        legacy.nodes.zip(legacyWithSources.nodes).forEach { (before, after) ->
+            assertSame(before.onClick, after.onClick)
+            assertEquals(before.bounds, after.bounds)
+        }
+        withBitmap(width, legacy.height + 24) { first ->
+          withBitmap(width, legacyWithSources.height + 24) { second ->
+            draws.clear(); legacy.paintOrdinary(Canvas(first)); assertEquals(listOf("image"), draws)
+            draws.clear(); legacyWithSources.paintOrdinary(Canvas(second)); assertEquals(listOf("image"), draws)
+            val left = IntArray(first.width * first.height); val right = IntArray(second.width * second.height)
+            first.getPixels(left, 0, first.width, 0, 0, first.width, first.height)
+            second.getPixels(right, 0, second.width, 0, 0, second.width, second.height)
+            assertArrayEquals(left, right)
+          }
+        }
+    }
 }

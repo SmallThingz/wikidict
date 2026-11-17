@@ -55,6 +55,10 @@ internal data class PlacedAnonymousFigure(
     val paintsOutsideLineClip: Boolean = false,
 )
 
+/** Original native interval before image alt text changes the public source length. */
+internal data class NativeAnonymousInlineNode(val node: FloatInteractionNode,
+    val nativeStart: Int, val nativeEnd: Int)
+
 /**
  * A single native paragraph owns text, scopes and measured figure objects. NativeFloatGeometry
  * resolves each line again after float exclusions change; no pre-reordered strings or text shards
@@ -65,6 +69,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
     private val native: NativeFloatGeometry,
     val figures: List<PlacedAnonymousFigure>,
     inlineNodes: (NativeAnonymousFlowGeometry) -> List<FloatInteractionNode>,
+    inlineNodeSources: ((NativeAnonymousFlowGeometry) -> List<NativeAnonymousInlineNode>)?,
 ) : FloatTextGeometry {
     private val figureById = figures.associateBy { it.anchor.event.id }
     val selection = AnonymousFlowSelection.build(offsets) { figureById.getValue(it.event.id).measured.geometry.text }
@@ -94,9 +99,15 @@ internal class NativeAnonymousFlowGeometry private constructor(
         NativeFloatExclusion(it.occurrence.side, NativeFloatBounds(it.outer.left, it.outer.top, it.outer.right, it.outer.bottom))
     }
     internal fun firstLineBand(): RectF = native.firstLineBand()
-    private data class OwnedNode(val value: FloatInteractionNode, val figure: Int? = null, val localId: Int = value.id)
+    private data class OwnedNode(val value: FloatInteractionNode, val figure: Int? = null,
+        val localId: Int = value.id, val nativeStart: Int? = null, val nativeEnd: Int? = null)
     private val ownedNodes = buildList {
-        addAll(inlineNodes(this@NativeAnonymousFlowGeometry).map { OwnedNode(it) })
+        val sourced = inlineNodeSources?.invoke(this@NativeAnonymousFlowGeometry)
+        if (sourced == null) addAll(inlineNodes(this@NativeAnonymousFlowGeometry).map { OwnedNode(it) })
+        else addAll(sourced.map { owner ->
+            require(owner.nativeStart in 0..native.text.length && owner.nativeEnd in owner.nativeStart..native.text.length)
+            OwnedNode(owner.node, nativeStart = owner.nativeStart, nativeEnd = owner.nativeEnd)
+        })
         figures.forEach { placed ->
             val start = figureSegments.getValue(placed.anchor.event.id).start
             placed.measured.geometry.nodes.forEach { node -> add(OwnedNode(node.translated(placed.bounds.left, placed.bounds.top).copy(
@@ -108,14 +119,35 @@ internal class NativeAnonymousFlowGeometry private constructor(
     override val nodes = ownedNodes.mapIndexed { index, node -> node.value.copy(id = index) }
     private val figureNodeIds = ownedNodes.withIndex().filter { it.value.figure != null }
         .associate { (it.value.figure to it.value.localId) to it.index }
-    override val positionedGroups: List<NativePositionedGroup> by lazy { figures.flatMap { placed ->
-        val start = figureSegments.getValue(placed.anchor.event.id).start
-        placed.measured.geometry.positionedGroups.map { group ->
-            group.translated(placed.bounds.left, placed.bounds.top, start) { id ->
-                figureNodeIds.getValue(placed.anchor.event.id to id)
+    private data class OwnedPositionedGroup(val group: NativePositionedGroup,
+        val nativeOffset: Int, val childOffset: Int = 0, val figure: Int? = null)
+    init {
+        if (native.positionedGroups.isNotEmpty() && ownedNodes.any {
+                it.figure == null && it.nativeStart == null && it.value.kind != FloatInteractionKind.MARKER
+            }) throw UnsupportedFloatLayout("Positioned anonymous inline actions need original native ranges")
+    }
+    private val ownedPositionedGroups: List<OwnedPositionedGroup> by lazy {
+        val inline = native.positionedGroups.map { group ->
+            val ids = ownedNodes.withIndex().filter { (_, owner) ->
+                owner.figure == null && owner.nativeStart != null && owner.nativeEnd != null &&
+                    owner.nativeStart <= group.sourceOffset && owner.nativeEnd > group.sourceOffset
+            }.map { it.index }.toSet()
+            OwnedPositionedGroup(group.copy(nodeIds = ids,
+                sourceOffset = selection.semanticOffset(group.sourceOffset)), group.sourceOffset)
+        }
+        val children = figures.flatMap { placed ->
+            val start = figureSegments.getValue(placed.anchor.event.id).start
+            placed.measured.geometry.positionedGroups.map { group ->
+                OwnedPositionedGroup(group.translated(placed.bounds.left, placed.bounds.top, start) { id ->
+                    figureNodeIds.getValue(placed.anchor.event.id to id)
+                }, placed.anchor.nativeOffset, group.sourceOffset, placed.anchor.event.id)
             }
         }
-    } }
+        // Expanded or empty alt/caption strings can share public offsets. The original
+        // event position, followed by its child's source order, owns deferred paint order.
+        (inline + children).sortedWith(compareBy({ it.nativeOffset }, { it.childOffset }))
+    }
+    override val positionedGroups: List<NativePositionedGroup> by lazy { ownedPositionedGroups.map { it.group } }
 
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
         native.ordinaryPaintBounds + figures.flatMap { placed ->
@@ -137,7 +169,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
         positionedGroups.forEach { it.paint(canvas) }
     }
     override fun paintOrdinary(canvas: Canvas) {
-        native.paint(canvas)
+        native.paintOrdinary(canvas)
         // Native text paints through per-line clips. A minimum-driven overflowing block
         // paints once at its measured bounds after those clips, like an anchored float.
         figures.filter { it.paintsOutsideLineClip }.forEach { drawFigure(canvas, it.measured, it.bounds) }
@@ -214,9 +246,12 @@ internal class NativeAnonymousFlowGeometry private constructor(
         }
     }
     override fun cursorAt(x: Float, y: Float): InlineCursor? {
-        val figure = figures.asReversed().firstOrNull { placed ->
-            placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
-        } ?: figures.asReversed().firstOrNull {
+        ownedPositionedGroups.lastOrNull { it.group.contains(x, y) }?.let { owner ->
+            val placed = owner.figure?.let(figureById::getValue)
+            return if (placed == null) native.cursorAt(x, y)
+                else placed.measured.geometry.cursorAt(x - placed.bounds.left, y - placed.bounds.top)
+        }
+        val figure = figures.asReversed().firstOrNull {
             it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top) ||
                 it.measured.geometry.containsInput(x - it.bounds.left, y - it.bounds.top)
         }
@@ -226,9 +261,12 @@ internal class NativeAnonymousFlowGeometry private constructor(
     }
 
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? {
-        val figure = figures.asReversed().firstOrNull { placed ->
-            placed.measured.geometry.positionedGroups.any { it.contains(x - placed.bounds.left, y - placed.bounds.top) }
-        } ?: figures.asReversed().firstOrNull {
+        ownedPositionedGroups.lastOrNull { it.group.contains(x, y) }?.let { owner ->
+            val placed = owner.figure?.let(figureById::getValue)
+            return if (placed == null) native.horizontalScrollTargetAt(x, y)
+                else placed.measured.geometry.horizontalScrollTargetAt(x - placed.bounds.left, y - placed.bounds.top)
+        }
+        val figure = figures.asReversed().firstOrNull {
             it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top)
         } ?: figures.asReversed().firstOrNull {
             it.measured.geometry.containsInput(x - it.bounds.left, y - it.bounds.top)
@@ -491,6 +529,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
             decoration: (Canvas, NativeFloatGeometry) -> Unit = { _, _ -> },
             outsideMarkerHeight: Float = 0f,
             decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds? = { null },
+            inlineNodeSources: ((NativeAnonymousFlowGeometry) -> List<NativeAnonymousInlineNode>)? = null,
         ): NativeAnonymousFlowGeometry {
             require(width >= 0 && width <= Int.MAX_VALUE / 4)
             val prepared = content.events.filterIsInstance<AnonymousFlowEvent.Inline>().map { it to inline(it) }
@@ -565,7 +604,8 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 }
             }
             // A figure-only owner has no authored text line. Generated controls must not add a strut.
-            if (offsets.logicalText.isEmpty() && source.isNotEmpty()) {
+            if (offsets.logicalText.isEmpty() && source.isNotEmpty() &&
+                offsets.inlineSources.none { it.start < it.end }) {
                 source.setSpan(object : LineHeightSpan {
                     override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int,
                         v: Int, fm: Paint.FontMetricsInt) {
@@ -619,7 +659,7 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 }
                 PlacedAnonymousFigure(anchor, box, bounds, inFlow[anchor]?.paintsOutsideLineClip == true)
             }
-            return NativeAnonymousFlowGeometry(offsets, native, placed, inlineNodes)
+            return NativeAnonymousFlowGeometry(offsets, native, placed, inlineNodes, inlineNodeSources)
         }
     }
 }
