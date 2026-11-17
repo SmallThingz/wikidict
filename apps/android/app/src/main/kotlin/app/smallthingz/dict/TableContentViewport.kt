@@ -8,6 +8,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.IntrinsicMeasurable
 import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.Measurable
 import androidx.compose.ui.layout.MeasurePolicy
 import androidx.compose.ui.layout.MeasureResult
@@ -57,8 +59,27 @@ internal fun TableContentColumn(modifier: Modifier, spacing: Dp, content: @Compo
 /** The same grid receives the real viewport and exposes its unconstrained paint width to scrolling. */
 @Composable
 internal fun TableContentViewport(scrolling: Boolean, content: @Composable () -> Unit) {
-    val modifier = if (scrolling) Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()) else Modifier
-    Layout(content = content, modifier = modifier, measurePolicy = object : MeasurePolicy {
+    val scroll = if (scrolling) rememberScrollState() else null
+    val inheritedClip = LocalNativeScrollClip.current
+    val semantic = LocalNativeClippedAbsoluteCoordinateScope.current != null && scrolling
+    val clip = androidx.compose.runtime.remember(inheritedClip, semantic) {
+        if (semantic) NativeScrollClip(inheritedClip) else null
+    }
+    val view = androidx.compose.ui.platform.LocalView.current
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
+    val modifier = if (scroll == null) Modifier else Modifier.fillMaxWidth().then(
+        if (clip == null) Modifier else Modifier.onGloballyPositioned { coordinates ->
+            clip.update(coordinates.boundsInWindow(), view)
+            clip.updateSemanticScroll(coordinates) {
+                scroll.maxValue.takeIf { it in 0..TablePixelLimit }?.let { range ->
+                    androidx.compose.ui.geometry.Offset(if (rtl) -range.toFloat() + scroll.value else -scroll.value.toFloat(), 0f)
+                }
+            }
+        }).horizontalScroll(scroll)
+    val sourceContent: @Composable () -> Unit = {
+        androidx.compose.runtime.CompositionLocalProvider(LocalNativeScrollClip provides (clip ?: inheritedClip), content = content)
+    }
+    Layout(content = sourceContent, modifier = modifier, measurePolicy = object : MeasurePolicy {
         override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
             // horizontalScroll preserves the filled viewport minimum while removing its maximum.
             val viewport = if (scrolling) constraints.minWidth else

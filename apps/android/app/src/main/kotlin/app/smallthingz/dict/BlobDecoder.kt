@@ -17,10 +17,10 @@ object BlobDecoder {
         val extendedFeatures = magicVersion == 90
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
-            // Only implemented Y low bits compose with Z; clipped-absolute remains unavailable.
-            require(it and 13056 != 0 && it and 13183 == it) { "Invalid extended presentation feature flags" }
+            // All implemented Y low bits compose with the existing Z high features.
+            require(it and 13056 != 0 && it and 13311 == it) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
-            require(it in 1..127) { "Invalid owner geometry feature flags" }
+            require(it in 1..255) { "Invalid owner geometry feature flags" }
         } else 0
         val positionedContainers = ownerGeometryFlags and 256 != 0
         r.ownerGeometry = ownerGeometry
@@ -32,6 +32,7 @@ object BlobDecoder {
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
         r.imageOccurrences = ownerGeometryFlags and 32 != 0
         r.citationNavigation = ownerGeometryFlags and 64 != 0
+        r.clippedAbsolutes = ownerGeometryFlags and 128 != 0
         val version = if (magicVersion in 65..86 || ownerGeometry) 57 else magicVersion
         r.fontScales = magicVersion in 65..86 || ownerGeometry
         r.fontScaleBases = magicVersion in 66..86 || ownerGeometry
@@ -171,7 +172,7 @@ object BlobDecoder {
             directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
             r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
             r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout &&
-            r.audioControls == r.hasAudioControl) {
+            r.audioControls == r.hasAudioControl && r.clippedAbsolutes == r.hasClippedAbsolute) {
             "Y/Z features do not match owner geometry payload"
         }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
@@ -214,6 +215,8 @@ object BlobDecoder {
         var hasInlineBoxGroup = false
         var imageOccurrences = false
         var hasImageOccurrence = false
+        var clippedAbsolutes = false
+        var hasClippedAbsolute = false
         var explanations = false
         var colors = false
         var anchors = false
@@ -294,7 +297,7 @@ object BlobDecoder {
             return List(size) { index(Int.MAX_VALUE) }
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
-        fun spans(): List<Span> = List(count((if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27) + if (audioControls) 1 else 0)) { span() }
+        fun spans(): List<Span> = List(count((if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27) + (if (audioControls) 1 else 0) + (if (clippedAbsolutes) 1 else 0))) { span() }
         private fun span(citationBacklink: Boolean = false): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
@@ -360,13 +363,14 @@ object BlobDecoder {
             val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup() else null
             val citationMarker = if (citationNavigation && presence()) citationMarker() else null
             val audioControl = if (audioControls && presence()) audioControl() else null
+            val clippedAbsolute = if (clippedAbsolutes && presence()) clippedAbsolute() else null
             if (image != null && linkPaint != null) {
                 require(imageLinkPaints) { "Image link paint requires R" }
                 hasImageLinkPaintFeature = true
             }
             val source = Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint.takeUnless { citationBacklink }, inlineStyle=inlineStyle.takeUnless { citationBacklink }, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup, citationMarker=citationMarker, audioControl=audioControl)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint.takeUnless { citationBacklink }, inlineStyle=inlineStyle.takeUnless { citationBacklink }, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup, citationMarker=citationMarker, audioControl=audioControl, clippedAbsolute=clippedAbsolute)
             return if (citationBacklink) CitationBacklinkSpanWitness.withPolicies(source, linkPaint, inlineStyle) else source
         }
         private fun audioControl(): AudioControl {
@@ -399,11 +403,24 @@ object BlobDecoder {
             hasCitationNavigation = true
             return CitationMarker(reference, occurrence, anchor, policy and 1 != 0, isolation, targeted)
         }
-        fun citationBacklinks(): List<ReferenceBacklink> = List(count(7 + if (audioControls) 1 else 0)) {
+        fun citationBacklinks(): List<ReferenceBacklink> = List(count(7 + (if (audioControls) 1 else 0) + (if (clippedAbsolutes) 1 else 0))) {
             val occurrence = u32()
             require(remainingItems > 0) { "Citation backlink span exceeds the presentation budget" }
             remainingItems--
             ReferenceBacklink.withPolicies(occurrence, span(citationBacklink = true)).also { hasCitationNavigation = true }
+        }
+        private fun clippedAbsolute(): ClippedAbsoluteInline = content {
+            require(buffer.remaining() >= 35) { "Truncated clipped absolute inline" }
+            val staticParentDirection = when (byte()) {
+                1 -> BidiResolvedDirection.Ltr
+                2 -> BidiResolvedDirection.Rtl
+                else -> throw IllegalArgumentException("Invalid clipped static-parent direction")
+            }
+            val width = styleLength()
+            val height = styleLength()
+            val margin = ContainerMargins(ContainerMargin.Length(containerMarginLength()), ContainerMargin.Length(containerMarginLength()),
+                ContainerMargin.Length(containerMarginLength()), ContainerMargin.Length(containerMarginLength()))
+            ClippedAbsoluteInline(width, height, margin, spans(), staticParentDirection).also { hasClippedAbsolute = true }
         }
         private fun imageOccurrenceLayout(): InlineImageOccurrenceLayout {
             require(imageOccurrences && remainingItems > 0 && buffer.remaining() >= 20) {

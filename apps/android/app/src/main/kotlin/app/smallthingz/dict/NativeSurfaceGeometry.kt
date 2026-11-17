@@ -17,6 +17,11 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override val height: Int get() = surface.height
     override val textBaselines: NativeTextBaselines? get() = content.textBaselines?.translated(dy)
     override val nodes: List<FloatInteractionNode> = content.nodes.map { it.translated(dx, dy) }
+    override val clippedAbsoluteSemanticLocations get() = content.clippedAbsoluteSemanticLocations.map { it.translated(dx, dy) }
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        return content.clippedAbsoluteSemanticLocation(start, end)?.translated(dx, dy)
+    }
     override val positionedGroups get() = content.positionedGroups.map { it.translated(dx, dy) }
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         content.extents.ink?.translated(dx, dy), content.extents.interaction?.translated(dx, dy))

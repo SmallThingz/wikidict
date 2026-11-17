@@ -98,7 +98,7 @@ internal data class NativeHeadingAction(val label: String, val collapsed: Boolea
 private data class NativeStyleRange(val start: Int, val end: Int, val paint: TextPaint, val bold: Boolean, val italic: Boolean,
     val baselineShiftMultiplier: Float, val letterSpacingPixels: Float?, val familyFailure: String? = null)
 private data class NativeInlineSourceRange(val span: Span, val start: Int, val end: Int,
-    val declaringPaint: TextPaint?, val emptyPaint: TextPaint?, val rubyParentPath: String? = null)
+    val declaringPaint: TextPaint?, val emptyPaint: TextPaint?, val rubyParentPath: String? = null, val clippedChild: Boolean = false)
 private data class NativeResolvedInlineStyle(val source: NativeInlineSourceRange,
     val height: Float?, val shift: Float?, val thickness: Float?)
 private class NativePaintSpan(private val value: TextPaint, private val missingLink: NativeMissingLinkPaint? = null,
@@ -281,6 +281,8 @@ internal fun prepareNativeFloatText(
     rubyWeight: FontWeight? = null,
     referenceBacklink: ReferenceBacklink? = null,
     staticInlineParent: NativeStaticInlineParent? = null,
+    terminalFallback: Boolean = false,
+    clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = LocalNativeClippedAbsoluteCoordinateScope.current,
 ): PreparedNativeFloatText {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -289,6 +291,18 @@ internal fun prepareNativeFloatText(
     val effective = LocalTextStyle.current.merge(style)
     val ruby = rubyStyledTextContexts(spans, rubyWeight, effective)
     val visibleSpans = ruby?.leaves?.map { checkNotNull(it.range.span) } ?: spans
+    val clippedRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.ClippedAbsolute }
+    val nativeAnnotation = if (clippedRanges.isEmpty()) annotated else
+        rubyStyledTextAnnotation(checkNotNull(ruby), rubyWeight, onLink, measureClippedChildren = true)
+    check(nativeAnnotation.text == annotated.text) { "Clipped measurement must preserve the original UTF-16 source" }
+    fun clippedLeaf(index: Int): Boolean = ruby?.leaves?.get(index)?.range?.role == RubyTextRole.ClippedText
+    val paintedSpans = visibleSpans.filterIndexed { index, _ -> !clippedLeaf(index) }
+    val clippedOwners = clippedRanges.associate { range ->
+        range.path to remember(NativeActionGroupIdentity(range)) { NativeClippedAbsoluteOwner(checkNotNull(range.span), range.path) }
+    }
+    val clippedRunOverlap = runs.any { run -> clippedRanges.any { run.start < it.end && run.end > it.start } &&
+        clippedRanges.none { run.start >= it.start && run.end <= it.end } }
+    val nativeRuns = runs.filter { run -> clippedRanges.none { run.start < it.end && run.end > it.start } }
     check(ruby == null || ruby.projection.text == annotated.text) { "Ruby annotations must retain original UTF-16 offsets" }
     fun sourceLength(span: Span): Int = if (ruby == null) listOf(span).nativeLogicalLength() else
         (if (span.image != null || span.kind == "line_break") 1 else span.text.length) + span.trail.length
@@ -306,7 +320,7 @@ internal fun prepareNativeFloatText(
         range.path to remember(NativeActionGroupIdentity(range)) { NativeInlineBoxOwner(checkNotNull(range.span), range.path) }
     }
     val actionGroupRanges = ruby?.projection?.ranges.orEmpty().filter { range ->
-        range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup && checkNotNull(range.span).let {
+        range.role == RubyTextRole.ActionGroup || range.role in setOf(RubyTextRole.BoxGroup, RubyTextRole.ClippedAbsolute) && checkNotNull(range.span).let {
             // Keep declared ownership even when the existing native target check must refuse it.
             it.kind == "link" || it.kind == "external_link"
         }
@@ -354,13 +368,13 @@ internal fun prepareNativeFloatText(
         it.anchor == citationTargetAnchor
     }?.targetStyle
     fun selectedLinkPolicy(span: Span): LinkPaint? = citationTarget(span)?.paint ?: span.linkPaint
-    val citationPaintUnavailable = NativeOrdinaryLinkPaintUnavailable.takeIf { visibleSpans.any { span ->
+    val citationPaintUnavailable = NativeOrdinaryLinkPaintUnavailable.takeIf { paintedSpans.any { span ->
         span.citationMarker != null && !validCitationMarkerSpan(span) ||
             span.linkPaint != null && span.entryLink().local &&
                 !(span.citationMarker != null && validCitationMarkerSpan(span) ||
                     referenceBacklink?.span === span && validCitationSpanLinkPaint(span))
     } }
-    val paintUnavailable = citationPaintUnavailable ?: ordinaryLinkPaintUnavailable(visibleSpans, edition)
+    val paintUnavailable = citationPaintUnavailable ?: ordinaryLinkPaintUnavailable(paintedSpans, edition)
         ?: NativeOrdinaryLinkPaintUnavailable.takeIf { paddingRanges.any {
             it.span?.linkPaint != null && (it.start == it.end || it !in paddingActions)
         } } ?: "Inline action group source action is unavailable".takeIf { actionGroupRanges.any {
@@ -444,7 +458,7 @@ internal fun prepareNativeFloatText(
             span.legacyFontFamily() ?: inherited?.legacyFamily.takeIf { span.fontFamily == null })
     }
     check(familyOffset == annotated.length) { "Authored family offsets must retain the original logical string" }
-    val hasInlineFamily = visibleSpans.hasAuthoredFontFamily()
+    val hasInlineFamily = paintedSpans.hasAuthoredFontFamily()
     val sourceLineStarts = if (ownerWrap != TextWrap.NoWrap) null
         else if (ruby == null) nativeNoWrapSourceLineStarts(visibleSpans) else buildSet {
             // V supplies an actual declaring metric point, not a synthetic hard break or glyph.
@@ -475,7 +489,7 @@ internal fun prepareNativeFloatText(
     val legacyOwnerFamily = effective.fontFamily.takeIf {
         preformattedOwner && (hasInlineFamily || sourceFamily is ContainerFontFamily.Stack)
     }
-    val replacementFamilyFailure = runs.any { run -> familyRanges.any { it.family != null && it.start < run.end && it.end > run.start } }
+    val replacementFamilyFailure = nativeRuns.any { run -> familyRanges.any { it.family != null && it.start < run.end && it.end > run.start } }
     var familyFailure: String? = if (replacementFamilyFailure) NativeInlineFamilyReplacementUnavailable else null
     fun familyPaint(run: NativeStyleRange): TextPaint {
         if (familyFailure == null) familyFailure = run.familyFailure
@@ -507,12 +521,12 @@ internal fun prepareNativeFloatText(
                 familyRanges = listOf(NativeSourceFamilyRange(0, 1, span.fontFamily,
                     span.legacyFontFamily() ?: rubyLeaf?.legacyFamily)),
                 legacyOwnerFamily = legacyOwnerFamily).single()) else null
-            NativeInlineSourceRange(span, start, inlineOffset, declaring, empty, rubyLeaf?.parentGroupPath)
+            NativeInlineSourceRange(span, start, inlineOffset, declaring, empty, rubyLeaf?.parentGroupPath, clippedLeaf(index))
         }
     }
     check(inlineOffset == annotated.length) { "Authored inline metric offsets must retain the original logical string" }
     val inlineParagraphCuts = if (inlineSources.isEmpty()) emptyList() else paragraphBreaks.map { it + 1 }
-    val styles = (if (noSourceLines) emptyList() else nativeStyleRanges(annotated, effective, linkColor,
+    val styles = (if (noSourceLines) emptyList() else nativeStyleRanges(nativeAnnotation, effective, linkColor,
         inlineSources.flatMap { listOf(it.start, it.end) } + inlineParagraphCuts, inheritedFamily, familyRanges,
         legacyOwnerFamily, sourceLineStarts.takeIf { ruby == null })).map { range ->
         val target = paintedLinks.singleOrNull { it.start <= range.start && it.end >= range.end }
@@ -611,6 +625,12 @@ internal fun prepareNativeFloatText(
     val normalBodySize = MaterialTheme.typography.bodyLarge.fontSize
     val cssPixelTextZoom = LocalCssPixelTextZoom.current
     var inlineFailure: String? = when {
+        clippedRanges.isNotEmpty() && (prefix.isNotEmpty() || heading || headingActions.isNotEmpty()) ->
+            "Clipped absolute marker or heading layout is unavailable"
+        clippedRunOverlap -> "Clipped absolute intersects a compound Egyptian run"
+        ruby?.leaves?.any { it.range.role == RubyTextRole.ClippedText && it.range.start == it.range.end &&
+            it.range.span?.kind in setOf("link", "external_link") } == true ->
+            "Clipped absolute empty descendant action is unavailable"
         absoluteOwner != null && ownerWrap != TextWrap.NoWrap -> "Absolute declaring font requires its complete no-wrap owner."
         sourceLineStarts != null && (prefix.isNotEmpty() || heading || headingActions.isNotEmpty()) ->
             "No-wrap marker or heading line ownership is unavailable."
@@ -623,7 +643,7 @@ internal fun prepareNativeFloatText(
             val wrapOnly = span.inlineStyle?.wrap?.let { span.inlineStyle == InlineTextStyle(wrap = it) } == true
             // The native gap owner verifies a uniform source context before collapsing.
             // Ordinary/body whitespace retains the existing explicit refusal.
-            span.isUnsupportedAuthoredWhitespaceOwner() && !(gap && wrapOnly)
+            !clippedLeaf(index) && span.isUnsupportedAuthoredWhitespaceOwner() && !(gap && wrapOnly)
         } ->
             "Authored inline whitespace effects require a retained collapsed source owner"
         else -> null
@@ -690,7 +710,10 @@ internal fun prepareNativeFloatText(
                 NativeAuthoredUnderline(decoration.style, decoration.color?.let { canonicalColorArgb(it)!!.toInt() }, thickness)
             }
             val sourceDirection = owner?.direction ?: range.span?.direction.orEmpty()
-            val groupDirection = when (sourceDirection) {
+            val groupDirection = when (range.span?.clippedAbsolute?.staticParentDirection) {
+                BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
+                BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
+                null -> when (sourceDirection) {
                 "ltr" -> TextDirectionHeuristics.LTR
                 "rtl" -> TextDirectionHeuristics.RTL
                 else -> group.parentGroupPath?.let { rubyFormats[it]?.direction }
@@ -699,6 +722,7 @@ internal fun prepareNativeFloatText(
                         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
                         null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
                     }
+                }
             }
             val padding = range.span?.inlinePaddingGroup?.let { model ->
                 fun edge(value: StyleLength): Float {
@@ -745,10 +769,29 @@ internal fun prepareNativeFloatText(
                         inset(overlay.insets.bottom), inset(overlay.insets.left)), borders(overlay.border)) },
                     currentColorPaint = action?.let(::groupPaintAt))
             }
+            val clipped = range.span?.clippedAbsolute?.let { model ->
+                val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
+                    "Clipped absolute containing-block coordinate owner is unavailable")
+                fun pixels(value: Float, unit: StyleLengthUnit): Float {
+                    val used = value.toDouble() * if (unit == StyleLengthUnit.Px) density.density else bodyPixels
+                    if (!used.isFinite() || kotlin.math.abs(used) > TablePixelLimit)
+                        throw UnsupportedFloatLayout("Clipped absolute length exceeds native geometry")
+                    return used.toFloat()
+                }
+                fun length(value: StyleLength): Float = pixels(value.value, value.unit)
+                fun margin(value: ContainerMargin): Float {
+                    val signed = (value as? ContainerMargin.Length)?.value
+                        ?: throw UnsupportedFloatLayout("Clipped absolute margin is not definite")
+                    return pixels(signed.value, signed.unit)
+                }
+                NativeClippedAbsoluteFormat(clippedOwners.getValue(path), length(model.width), length(model.height),
+                    NativeClippedAbsoluteMargins(margin(model.margin.top), margin(model.margin.right),
+                        margin(model.margin.bottom), margin(model.margin.left)), scope)
+            }
             rubyFormats[path] = NativeRubyGroupFormat(paint, groupDirection, height, shift,
                 authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift,
                 padding = padding, actionPaint = if (range in groupActions) groupPaintAt(range) else null,
-                actionOwner = actionGroupOwners[path], box = box)
+                actionOwner = actionGroupOwners[path], box = box, clippedAbsolute = clipped)
         } catch (failure: UnsupportedFloatLayout) {
             inlineFailure = failure.message ?: "Ruby declaring geometry is unavailable"
         }
@@ -911,15 +954,15 @@ internal fun prepareNativeFloatText(
             paint.letterSpacing, paint.textScaleX, paint.textSkewX, paint.color, paint.bgColor,
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
             group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
-            group.padding, group.actionPaint, group.actionOwner,
+            group.padding, group.actionPaint, group.actionOwner, group.clippedAbsolute?.let { listOf(it.width, it.height, it.margins) },
             group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint) })
     }
-    val shapeKey = listOf(annotated, runs, effective, ruby, actionGroupOwners, boxOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
+    val shapeKey = listOf(annotated, nativeAnnotation, clippedAbsoluteScope?.revisionKey, nativeRuns, effective, ruby, actionGroupOwners, boxOwners, clippedOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
         styles.map { listOf(it.start, it.end, it.paint.typeface, it.paint.textSize, it.paint.color, it.paint.bgColor, it.paint.baselineShift) })
     val shaped by produceState<Pair<Any, Map<Int, NativeEgyptianSpanPreparation>>?>(null, shapeKey) {
         val result = linkedMapOf<Int, NativeEgyptianSpanPreparation>()
-        for (run in if (replacementFamilyFailure) emptyList() else runs) {
+        for (run in if (replacementFamilyFailure) emptyList() else nativeRuns) {
             val paint = paintAt(run.start)
             styles.firstOrNull { run.start in it.start until it.end }?.let {
                 paint.isFakeBoldText = it.bold
@@ -935,7 +978,7 @@ internal fun prepareNativeFloatText(
     }
     val prepared = shaped?.takeIf { it.first == shapeKey }?.second.orEmpty()
     val textState = when {
-        runs.isNotEmpty() && prepared.size != runs.size -> "Loading Egyptian glyph layout"
+        nativeRuns.isNotEmpty() && prepared.size != nativeRuns.size -> "Loading Egyptian glyph layout"
         prepared.values.any { !it.available } -> "Egyptian glyph layout unavailable"
         else -> null
     }
@@ -945,7 +988,7 @@ internal fun prepareNativeFloatText(
         null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
     }
     val nativeSource: ((Int) -> Spanned)? =
-        if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
+        if (nativeRuns.isNotEmpty() && prepared.size != nativeRuns.size) null else { width ->
                 if (familyFailure != null) throw UnsupportedFloatLayout(checkNotNull(familyFailure))
                 val native = SpannableString(annotated.text)
                 if (ownerWrap != null && (native.isNotEmpty() || sourceLineStarts != null)) native.setSpan(
@@ -965,7 +1008,29 @@ internal fun prepareNativeFloatText(
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
                     val paragraphStyle = annotated.paragraphStyles.filter { it.start <= start && it.end >= end }
                         .fold(effective.toParagraphStyle()) { merged, range -> merged.merge(range.item) }
-                    val paragraphRtl = direction.isRtl(annotated.text, start, end - start)
+                    val paragraphText = if (clippedRanges.isEmpty()) annotated.text.substring(start, end) else buildString {
+                        var at = start
+                        clippedRanges.filter { it.start < end && it.end > start }.sortedBy { it.start }.forEach { range ->
+                            append(annotated.text, at, maxOf(at, range.start))
+                            at = minOf(end, range.end)
+                        }
+                        append(annotated.text, at, end)
+                    }
+                    val staticParents = clippedRanges.filter { it.start < end && it.end > start }
+                        .map { checkNotNull(checkNotNull(it.span).clippedAbsolute).staticParentDirection }.distinct()
+                    if (staticParents.size > 1) throw UnsupportedFloatLayout("Clipped static-parent directions conflict in one paragraph")
+                    val staticParent = staticParents.singleOrNull()
+                    val explicitParent = when (direction) {
+                        TextDirectionHeuristics.LTR -> BidiResolvedDirection.Ltr
+                        TextDirectionHeuristics.RTL -> BidiResolvedDirection.Rtl
+                        else -> null
+                    }
+                    if (staticParent != null && explicitParent != null && staticParent != explicitParent)
+                        throw UnsupportedFloatLayout("Clipped source static-parent direction conflicts with explicit represented parent")
+                    val paragraphRtl = staticParent?.let { it == BidiResolvedDirection.Rtl }
+                        ?: direction.isRtl(paragraphText, 0, paragraphText.length)
+                    if (staticParent != null) native.setSpan(NativeClippedParagraphDirection(staticParent), start, end,
+                        if (start == end) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     val alignment = when (paragraphStyle.textAlign) {
                         TextAlign.Center -> Layout.Alignment.ALIGN_CENTER
                         TextAlign.Left -> if (paragraphRtl) Layout.Alignment.ALIGN_OPPOSITE else Layout.Alignment.ALIGN_NORMAL
@@ -1049,7 +1114,7 @@ internal fun prepareNativeFloatText(
                     if (end > 0) native.setSpan(NativeLineGap(ceil(gapDp * density.density)),
                         end - 1, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
-                runs.forEach { run ->
+                nativeRuns.forEach { run ->
                     // The replacement owns its baseline and decoration; native TextLine must not apply them again.
                     val replacementPaint = paintAt(run.start).apply { baselineShift = 0; isUnderlineText = false; isStrikeThruText = false; bgColor = 0 }
                     native.setSpan(NativePaintSpan(replacementPaint), run.start, run.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -1079,6 +1144,9 @@ internal fun prepareNativeFloatText(
                     ranges.forEach { (start, end, paint) ->
                         val flags = if (start == end) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                         val shift = resolved.shift ?: paint.baselineShift.toFloat()
+                        val clippedPoint = if (clippedRanges.isNotEmpty() && start == end &&
+                            !source.clippedChild &&
+                            (resolved.height != null || resolved.shift != null)) NativeClippedVisibleMetricPoint() else null
                         if (resolved.height != null || resolved.shift != null) {
                             val primary = NativePrimaryFontMetrics.from(paint).copy(baselineShift = shift)
                             val declaring = source.declaringPaint?.let {
@@ -1090,9 +1158,10 @@ internal fun prepareNativeFloatText(
                                 ?: source.rubyParentPath?.let { rubyFormats[it]?.lineHeight }
                                 ?: inlineParentPolicies.lastOrNull { it.first <= start && it.second >= end }?.third
                                 ?: NativeLineHeightPolicy.Normal
-                            native.setSpan(NativeAuthoredInlineMetrics(primary, policy, declaring), start, end, flags)
+                            native.setSpan(NativeAuthoredInlineMetrics(primary, policy, declaring, clippedPoint), start, end, flags)
+                            if (clippedPoint != null) native.setSpan(NativeClippedVisibleMetricMarker(clippedPoint), start, end, flags)
                         }
-                        resolved.shift?.let { native.setSpan(NativeAuthoredBaselineShift(it), start, end, flags) }
+                        resolved.shift?.let { native.setSpan(NativeAuthoredBaselineShift(it, clippedPoint), start, end, flags) }
                         authored.decoration?.let { decoration ->
                             native.setSpan(NativeAuthoredUnderline(decoration.style,
                                 decoration.color?.let { canonicalColorArgb(it)!!.toInt() }, resolved.thickness), start, end, flags)
@@ -1131,7 +1200,21 @@ internal fun prepareNativeFloatText(
                             val ancestor = childRange?.let { child ->
                                 paddingRanges.lastOrNull { child.path.startsWith(it.path + "/") }
                             }
+                            val clippedLocation = geometry.clippedAbsoluteSemanticLocation(range.start, range.end)
+                            if (clippedRanges.any { range.start >= it.start && range.end <= it.end } && clippedLocation == null)
+                                throw UnsupportedFloatLayout("Clipped absolute action location is unavailable")
+                            val clippedActionSpan = if (clippedLocation == null) null else (actionGroup?.span ?:
+                                ruby?.leaves?.singleOrNull { leaf ->
+                                    val source = checkNotNull(leaf.range.span)
+                                    leaf.range.role == RubyTextRole.ClippedText && range.start >= leaf.range.start && range.end <= leaf.range.end &&
+                                        when (val link = range.item) {
+                                            is LinkAnnotation.Clickable -> source.hasInternalAction() && source.target == link.tag
+                                            is LinkAnnotation.Url -> externalLinkUrl(source) == link.url
+                                            else -> false
+                                        }
+                                }?.range?.span ?: throw UnsupportedFloatLayout("Clipped absolute action lost its source metadata"))
                             val rawFragments = when {
+                                clippedLocation != null -> emptyList()
                                 actionGroup != null -> geometry.inlineActionGroupRects(actionGroupOwners.getValue(actionGroup.path), range.start, range.end)
                                     ?: throw UnsupportedFloatLayout("Inline action group geometry is unavailable")
                                 paddingOwner != null -> geometry.inlinePaddingGroupRects(paddingOwner, range.start, range.end)
@@ -1155,21 +1238,21 @@ internal fun prepareNativeFloatText(
                                     ?: throw UnsupportedFloatLayout("Inline box child action geometry is unavailable")
                             }
                             val ordinary = if (actionGroup == null) ordinaryPolicies[range.start to range.end] else actionGroup.span?.linkPaint
-                            val focus = if (ordinary != null) ordinaryLinkFocusPaint(ordinary,
+                            val focus = if (clippedLocation != null) null else if (ordinary != null) ordinaryLinkFocusPaint(ordinary,
                                 nativeLinkFocusFragments(geometry, range.start, range.end, fragments), density.density, bodyPixels)
                             else captionScope?.takeIf { linkPaints.containsKey(range.start to range.end) }?.let { scope ->
                                 figureLinkFocusPaint(scope.policy, nativeLinkFocusFragments(geometry,
                                     range.start, range.end, fragments), scope.density, scope.bodyPixels)
                             }
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                fragments, annotated.subSequence(range.start, range.end), (actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
+                                fragments, annotated.subSequence(range.start, range.end), (clippedActionSpan ?: actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
                                  citationCallbacks[range.start to range.end] ?: actionGroup?.let { actionGroupCallbacks.getValue(it.path) } ?: { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
                                     if (missingLinkPaint != null) onMissingLinkActivated()
                                     else state?.actionIdentity?.target?.let {
                                         (if (ordinary != null) visits else captionScope?.visits)?.record(it)
                                     }
                                     Unit
-                                }, missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker))
+                                }, stateDescription = clippedActionSpan?.explanation?.takeIf { it.isNotEmpty() }, missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker, clippedAbsoluteLocation = clippedLocation))
                         }
                         val firstImage = nativeLinks.size
                         images.forEach { image ->
@@ -1225,7 +1308,7 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection, terminalFallback) { Any() }
     val citationPreparation = rememberNativeCitationPreparation(revision,
         citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
         layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
@@ -1318,6 +1401,7 @@ internal fun prepareNativeFloatText(
     }, nativeSource?.takeIf { layoutUnavailable == null }?.let { NativePreparedText(layoutPaint, it, nativeNodes, direction,
         insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null,
         citationPreparation = citationPreparation, staticInline = staticInline) }, fallback = {
+        if (!terminalFallback) {
         // The normal float owner already holds this image state. Failure UI reuses it.
         CompositionLocalProvider(LocalInlineImageOwner provides owner,
             LocalInlineImageOccurrenceFallback provides images.any { it.span.image?.occurrenceLayout != null },
@@ -1330,6 +1414,7 @@ internal fun prepareNativeFloatText(
                 }
                 if (!authoredHeading) headingActions.forEach { action -> TextButton(onClick = action.onClick) { Text(action.label) } }
             }
+        }
         }
     }, ordinaryLinkPaintRevision = ordinaryPaintRevision, emptyInlineOwner = emptyInlineOwner, geometryAtWidth = geometryAtWidth,
         geometryForColumns = geometryForColumns,

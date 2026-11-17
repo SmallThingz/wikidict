@@ -56,6 +56,10 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
     breakWordMinimum: Boolean = false, textDirection: TextDirectionHeuristic? = null): NativeWidthRange {
     require(inset.isFinite() && inset >= 0f)
     val rubyDirection = textDirection ?: android.text.TextDirectionHeuristics.FIRSTSTRONG_LTR
+    NativeClippedAbsoluteProjection.create(source)?.let { clipped ->
+        if (!clipped.hasFlow) return NativeWidthRange(0, 0)
+        return nativeTextWidthRange(clipped.visual, paint, inset, breakWordMinimum, textDirection)
+    }
     if (nativeHasPositionedInlineImages(source)) {
         if (textDirection == null && source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java)
                 .any { it.wrap == TextWrap.NoWrap })

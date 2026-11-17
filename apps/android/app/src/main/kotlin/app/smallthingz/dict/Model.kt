@@ -37,6 +37,7 @@ data class Span(
     val citationMarker: CitationMarker? = null,
     private val citationBacklinkWitness: CitationBacklinkSpanWitness? = null,
     val audioControl: AudioControl? = null,
+    val clippedAbsolute: ClippedAbsoluteInline? = null,
 ) {
     internal val isQualifiedCitationBacklink: Boolean get() = citationBacklinkWitness != null
     init {
@@ -48,24 +49,35 @@ data class Span(
         val citationLocal = citationMarker != null || citationBacklinkWitness != null
         require(!citationLocal || validScopedSpanFields(this)) { "Invalid citation source fields" }
         require(ruby == null || kind == "text" && text.isEmpty() && target.isEmpty() && trail.isEmpty() &&
-            targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null) { "Ruby requires a sole ordinary text owner" }
+            targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null && clippedAbsolute == null) { "Ruby requires a sole ordinary text owner" }
         require(ruby == null || validRubyChild(this)) { "Invalid ruby owner" }
         inlinePaddingGroup?.let {
-            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null && inlineActionGroup == null && inlineBoxGroup == null &&
+            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null && inlineActionGroup == null && inlineBoxGroup == null && clippedAbsolute == null &&
                 validRubyBodyChild(this)) { "Invalid inline padding owner" }
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         inlineActionGroup?.let {
             require(kind in setOf("link", "external_link") && target.isNotEmpty() && text.isEmpty() &&
-                trail.isEmpty() && image == null && ruby == null && inlinePaddingGroup == null && inlineBoxGroup == null &&
+                trail.isEmpty() && image == null && ruby == null && inlinePaddingGroup == null && inlineBoxGroup == null && clippedAbsolute == null &&
                 validRubyBodyChild(this)) { "Invalid inline action owner" }
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         inlineBoxGroup?.let {
             require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null &&
-                inlinePaddingGroup == null && inlineActionGroup == null && validRubyChild(this)) {
+                inlinePaddingGroup == null && inlineActionGroup == null && clippedAbsolute == null && validRubyChild(this)) {
                 "Invalid inline box owner"
             }
+            PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
+        }
+        clippedAbsolute?.let {
+            require(text.isEmpty() && trail.isEmpty() && image == null && ruby == null &&
+                inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null && validRubyChild(this)) {
+                "Invalid clipped absolute inline owner"
+            }
+            require(direction.isEmpty() || direction == when (it.staticParentDirection) {
+                BidiResolvedDirection.Ltr -> "ltr"
+                BidiResolvedDirection.Rtl -> "rtl"
+            }) { "Clipped owner direction must match its static parent" }
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
@@ -95,12 +107,12 @@ data class Span(
         require(image == null || (text.isEmpty() && trail.isEmpty())) { "Inline image occurrences cannot also contain text" }
         inlineStyle?.let { policy ->
             require(image == null && when (kind) {
-                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null || inlinePaddingGroup != null || inlineBoxGroup != null)
-                "link", "external_link" -> (target.isNotEmpty() || citationLocal) && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null)
+                "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null || inlinePaddingGroup != null || inlineBoxGroup != null || clippedAbsolute != null)
+                "link", "external_link" -> (target.isNotEmpty() || citationLocal) && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null || clippedAbsolute != null)
                 else -> false
             }) { "Inline effects require an ordinary text owner or an empty line-height strut" }
-            require(policy.cursor == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null) { "Empty inline struts cannot own a cursor" }
-            require(policy.wrap == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null) { "Empty inline struts cannot own wrapping" }
+            require(policy.cursor == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null || clippedAbsolute != null) { "Empty inline struts cannot own a cursor" }
+            require(policy.wrap == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null || clippedAbsolute != null) { "Empty inline struts cannot own wrapping" }
             require(fontScale == null || fontScale.isFinite() && fontScale >= 0f) { "Invalid inline owner font scale" }
             require(!policy.fontNormalized || fontScale != null && fontScaleBasis != FontScaleBasis.Context) {
                 "Normalized inline font requires an explicit non-context scale"
@@ -153,7 +165,7 @@ internal fun validCitationLinkShape(span: Span): Boolean = span.kind == "link" &
     span.target.isEmpty() && span.trail.isEmpty() && span.targetFragment?.let {
         it.isNotEmpty() && validPresentationString(it)
     } == true && span.image == null && span.ruby == null && span.inlinePaddingGroup == null &&
-    span.inlineActionGroup == null && span.inlineBoxGroup == null
+    span.inlineActionGroup == null && span.inlineBoxGroup == null && span.clippedAbsolute == null
 
 internal fun validCitationSpanLinkPaint(span: Span): Boolean = validCitationLinkShape(span) &&
     (span.linkPaint == null || (span.foreground == null || span.foreground == span.linkPaint.normal.foreground) &&
@@ -197,7 +209,7 @@ private fun validAudioControlOwner(span: Span): Boolean {
     if (span.kind != "link" || !span.target.startsWith("File:") || span.target.length == 5 ||
         span.trail.isNotEmpty() || span.targetFragment != null || span.image != null || span.ruby != null ||
         span.inlinePaddingGroup != null || span.inlineActionGroup != null || span.inlineBoxGroup != null ||
-        span.citationMarker != null || span.isQualifiedCitationBacklink || span.linkPaint != null ||
+        span.citationMarker != null || span.isQualifiedCitationBacklink || span.clippedAbsolute != null || span.linkPaint != null ||
         !validScopedSpanFields(span)) return false
     val classes = span.classes.split(' ', '\t', '\r', '\n', '\u000b', '\u000c')
     if ("wikidict-media" !in classes) return false
@@ -256,6 +268,19 @@ private class CitationNavigationValidation {
         }
     }
 }
+
+/** An authored empty clip keeps its source body and static-position box, never a text spacer. */
+data class ClippedAbsoluteInline(val width: StyleLength, val height: StyleLength,
+    val margin: ContainerMargins, val children: List<Span>, val staticParentDirection: BidiResolvedDirection) {
+    init {
+        require(listOf(margin.top, margin.right, margin.bottom, margin.left).all { it is ContainerMargin.Length }) {
+            "Clipped absolute margins must be definite lengths"
+        }
+        require(children.isNotEmpty()) { "Clipped absolute inline requires a child" }
+        PresentationSpanVisitor { _, _ -> }.clippedAbsolute(this)
+    }
+}
+
 /** A paint value at the declaring inline boundary; current color remains dynamic. */
 sealed interface InlineBoxColor {
     data object CurrentColor : InlineBoxColor
@@ -407,6 +432,10 @@ internal fun validRubyChild(span: Span): Boolean = span.image == null && span.au
 internal fun validRubyBodyChild(span: Span): Boolean = validRubyChild(span) &&
     span.text.none { it == '\t' || it == '\n' || it == '\r' || it == '\u000c' } &&
     span.trail.none { it == '\t' || it == '\n' || it == '\r' || it == '\u000c' }
+
+internal fun validClippedAbsoluteChild(span: Span): Boolean = validRubyBodyChild(span) &&
+    span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null &&
+    span.inlineBoxGroup == null && span.clippedAbsolute == null && span.citationMarker == null && !span.isQualifiedCitationBacklink
 
 typealias LinkState = FigureLinkState
 
@@ -1157,6 +1186,19 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     var validateAbsoluteContainers = false
     private var relativeContainerAvailable = false
     private var staticInlineParent = false
+    private var clippedNonstaticAncestor = false
+    private fun createsClippedContainingBlock(style: ContainerStyle?): Boolean = style != null &&
+        (style.positioning != null || style.absolutePosition != null || style.absoluteStatic != null || style.positionedScope != null)
+    private fun createsClippedContainingBlock(figure: Figure): Boolean {
+        val table = figure.tableCaptionLayout
+        if (table != null && (createsClippedContainingBlock(table.wrapper) || table.media.positioning != null ||
+            createsClippedContainingBlock(table.captionBefore) || table.viewportStates.size > 16 || table.viewportStates.any {
+                createsClippedContainingBlock(it.wrapper) || it.media.positioning != null || createsClippedContainingBlock(it.captionBefore)
+            })) return true
+        val block = figure.blockMediaLayout
+        return block != null && (createsClippedContainingBlock(block.wrapper) || block.media.positioning != null ||
+            block.viewportStates.size > 16 || block.viewportStates.any { createsClippedContainingBlock(it.wrapper) || it.media.positioning != null })
+    }
     private inline fun <T> withoutRelativeContainer(read: () -> T): T {
         val previous = relativeContainerAvailable
         val previousStatic = staticInlineParent
@@ -1196,16 +1238,20 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     private fun spanList(value: List<Span>, preformatted: Boolean, contentDepth: Int,
         display: Boolean, rubyChild: Boolean, gap: Boolean = false, actionOwner: Span? = null, boxChild: Boolean = false,
-        citationBacklink: Boolean = false) {
+        citationBacklink: Boolean = false, clippedChild: Boolean = false) {
         charge(value.size)
         for (span in value) {
             citation(span, citationBacklink)
+            require(span.clippedAbsolute == null || !rubyChild && !boxChild && !clippedChild) {
+                "Clipped absolute inline cannot nest in a structural inline owner"
+            }
+            if (clippedChild) require(validClippedAbsoluteChild(span)) { "Invalid clipped absolute inline child" }
             if (rubyChild) require(if (gap) validRubyChild(span) else validRubyBodyChild(span)) {
                 "Invalid ruby child for its body or gap context"
             }
             if (boxChild) require(validRubyChild(span)) { "Invalid inline box child" }
             if (gap) require(span.kind == "text" && span.target.isEmpty() && span.targetFragment == null &&
-                span.image == null && span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null && span.inlineBoxGroup == null && span.trail.isEmpty() && span.text.all {
+                span.image == null && span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null && span.inlineBoxGroup == null && span.clippedAbsolute == null && span.trail.isEmpty() && span.text.all {
                     it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == '\u000c'
                 }) { "Ruby gaps require CSS whitespace text without actions" }
             require(actionOwner == null || span.kind == "text") { "Inline padding action repeats a descendant action" }
@@ -1223,6 +1269,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                 inlineBoxGroup(it, contentDepth, actionOwner ?: span.takeIf { it.kind in setOf("link", "external_link") },
                     strictBody = rubyChild)
             }
+            span.clippedAbsolute?.let {
+                clippedAbsolute(it, contentDepth, span.takeIf { it.kind in setOf("link", "external_link") })
+            }
         }
         if (display) visit(value, preformatted)
     }
@@ -1234,6 +1283,14 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         }
     }
     fun bodyTypography(value: BodyTypography?) { if (value != null) charge(1) }
+    fun clippedAbsolute(value: ClippedAbsoluteInline, contentDepth: Int = 0, actionOwner: Span? = null) {
+        require(!clippedNonstaticAncestor) { "Clipped absolute inline requires static ancestry to the Entry root" }
+        val depth = descend(contentDepth)
+        val before = actualTextLeaves
+        spanList(value.children, false, depth, display = false, rubyChild = false, clippedChild = true,
+            actionOwner = actionOwner)
+        require(actualTextLeaves != before) { "Clipped absolute inline requires actual child text or trail" }
+    }
     fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
         strictBody: Boolean = false) {
         val depth = descend(contentDepth)
@@ -1278,9 +1335,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
         onBlock(value)
-        // Legacy rendering ignores these prefix runs. New AUDIO custody still validates
+        // Legacy rendering ignores these prefix runs. New typed custody still validates
         // their serialized owners and budgets without invoking display callbacks.
-        if ((value.table != null || value.kind == "rule") && value.spans.any { it.audioControl != null })
+        if ((value.table != null || value.kind == "rule") && value.spans.any { it.audioControl != null || it.clippedAbsolute != null })
             spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
         when {
             value.container != null -> {
@@ -1298,12 +1355,15 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                     relativeContainerAvailable = false
                 } else if (style.positioning == ContainerPositioning.RelativeAuto) relativeContainerAvailable = true
                 staticInlineParent = value.container.blocks.size == 1 && validContainerStaticParentStyle(style)
+                val previousClipped = clippedNonstaticAncestor
+                clippedNonstaticAncestor = previousClipped || createsClippedContainingBlock(style)
                 try {
                     onContainer(value.container)
                     blocks(value.container.blocks, tableDepth, descend(contentDepth))
                 } finally {
                     relativeContainerAvailable = previous
                     staticInlineParent = previousStatic
+                    clippedNonstaticAncestor = previousClipped
                 }
             }
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
@@ -1314,27 +1374,36 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun figure(value: Figure, tableDepth: Int, contentDepth: Int): Unit = withoutRelativeContainer {
         if (!visitFigures) return@withoutRelativeContainer
-        onFigure(value)
-        val contentVisitor = visitFigureContent
-        if (contentVisitor == null) spans(listOf(value.content.span), contentDepth = contentDepth)
-        else {
-            charge(1)
-            citation(value.content.span)
-            if (value.content.span.image?.occurrenceLayout != null) charge(1)
-            // The custom callback owns the root image occurrence, including Figure sizing.
-            // Descendants still share this visitor's budget without displaying them twice.
-            value.content.span.ruby?.let { ruby(it, contentDepth) }
-            value.content.span.inlinePaddingGroup?.let {
-                inlinePaddingGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+        val previousClipped = clippedNonstaticAncestor
+        clippedNonstaticAncestor = previousClipped || createsClippedContainingBlock(value)
+        try {
+            onFigure(value)
+            val contentVisitor = visitFigureContent
+            if (contentVisitor == null) spans(listOf(value.content.span), contentDepth = contentDepth)
+            else {
+                charge(1)
+                citation(value.content.span)
+                if (value.content.span.image?.occurrenceLayout != null) charge(1)
+                // The custom callback owns the root image occurrence, including Figure sizing.
+                // Descendants still share this visitor's budget without displaying them twice.
+                value.content.span.ruby?.let { ruby(it, contentDepth) }
+                value.content.span.inlinePaddingGroup?.let {
+                    inlinePaddingGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+                }
+                value.content.span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, value.content.span) }
+                value.content.span.inlineBoxGroup?.let {
+                    inlineBoxGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+                }
+                value.content.span.clippedAbsolute?.let {
+                    clippedAbsolute(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+                }
+                contentVisitor(value.content)
             }
-            value.content.span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, value.content.span) }
-            value.content.span.inlineBoxGroup?.let {
-                inlineBoxGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
-            }
-            contentVisitor(value.content)
+            val rich = value.captionBlocks
+            if (rich == null) spans(value.caption, contentDepth = contentDepth) else blocks(rich, tableDepth, descend(contentDepth))
+        } finally {
+            clippedNonstaticAncestor = previousClipped
         }
-        val rich = value.captionBlocks
-        if (rich == null) spans(value.caption, contentDepth = contentDepth) else blocks(rich, tableDepth, descend(contentDepth))
     }
     fun parts(value: List<FlowPart>, tableDepth: Int, contentDepth: Int) {
         charge(value.size)
@@ -1460,9 +1529,9 @@ data class Section(val level: Int, val title: String, val blocks: List<Block>, v
                 companion.table == null && companion.flow == null && companion.container == null &&
                 companion.figure == null && companion.style == null && companion.ruleStyle == null &&
                 companion.textAlign == null && companion.spans.isNotEmpty() && companion.spans.all {
-                    it.kind in setOf("text", "link", "external_link") && (it.text.isNotEmpty() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null) &&
-                        it.trail.isEmpty() && (it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.direction.isEmpty())
-                } && (if (companion.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null }) rubyFallbackText(companion.spans)
+                    it.kind in setOf("text", "link", "external_link") && (it.text.isNotEmpty() || it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.clippedAbsolute != null) &&
+                        it.trail.isEmpty() && (it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.clippedAbsolute != null || it.direction.isEmpty())
+                } && (if (companion.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.clippedAbsolute != null }) rubyFallbackText(companion.spans)
                     else companion.spans.joinToString("") { it.text }) == title) { "Invalid authored heading companion" }
         }
     }
@@ -1706,7 +1775,7 @@ internal fun Entry.isInstalled(installed: (String) -> Boolean): Boolean =
 private val previewClassWhitespace = Regex("\\s+")
 
 fun textOf(spans: List<Span>): String =
-    (if (spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null }) rubyFallbackText(spans) else spans.joinToString("") { it.text + it.trail })
+    (if (spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.clippedAbsolute != null }) rubyFallbackText(spans) else spans.joinToString("") { it.text + it.trail })
         .replace(Regex("\\s+"), " ").trim()
 
 
@@ -1775,6 +1844,18 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
         }
         collect(false, explanations)
         collect(true, advisories)
+        if (spans.any { it.clippedAbsolute != null }) {
+            val projection = rubyGraphicalProjection(spans)
+            for (range in projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }) {
+                val owner = checkNotNull(range.span)
+                val label = projection.text.substring(range.start, range.end)
+                if (owner.explanation.isNotEmpty() && label.isNotBlank())
+                    explanations.add(TextDetail(TextDetailKind.Abbreviation, label, owner.explanation, context()))
+                owner.tooltip?.takeIf { it.isNotEmpty() }?.let { tooltip ->
+                    advisories.add(TextDetail(TextDetailKind.Advisory, label, tooltip, context()))
+                }
+            }
+        }
     }
     return explanations.toList() + advisories.toList()
 }
@@ -1814,6 +1895,16 @@ private fun entryAnnotations(entry: Entry, kind: TextDetailKind, valueOf: (Span)
             if (annotation.isNotEmpty()) label.append(span.text).append(span.trail)
         }
         finish()
+        if (spans.any { it.clippedAbsolute != null }) {
+            val projection = rubyGraphicalProjection(spans)
+            for (range in projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }) {
+                val owner = checkNotNull(range.span)
+                val label = projection.text.substring(range.start, range.end)
+                val annotation = valueOf(owner)
+                if (annotation.isNotEmpty() && label.isNotBlank())
+                    result.add(TextDetail(kind, label, annotation, context()))
+            }
+        }
     }
     visitEntryAnnotationRuns(entry, ::include)
     return result.toList()

@@ -597,4 +597,151 @@ class RubyTextTest {
         assertSame(ordinary, rubyGraphicalSpans(ordinary))
         assertSame(ordinary.single(), rubyFallbackSpans(ordinary).single())
     }
+    @Test fun clippedAbsoluteKeepsOriginalSemanticOccurrencesButEmitsNoVisualFallback() {
+        val px = StyleLength(StyleLengthUnit.Px, 1f)
+        val negative = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -1f))
+        val margins = ContainerMargins(negative, negative, negative, negative)
+        val first = Span("link", "A\ud83d\ude80", "first-target", trail = "\u0301", italic = true,
+            fontScale = 17f, fontScaleBasis = FontScaleBasis.CssPx, language = "hu",
+            tooltip = "child advisory", explanation = "child explanation")
+        val second = Span("link", "A", "second-target", trail = "\u00a0", bold = true,
+            fontScale = .75f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val children = listOf(first, second)
+        val payload = ClippedAbsoluteInline(px, px, margins, children, staticParentDirection = BidiResolvedDirection.Ltr)
+        val clipped = Span("text", "", tooltip = "owner advisory", explanation = "owner explanation",
+            clippedAbsolute = payload)
+        val before = text("before:"); val after = text(":after")
+        val source = listOf(before, clipped, clipped, after)
+        val body = "A\ud83d\ude80\u0301A\u00a0"
+        val projection = rubyGraphicalProjection(source, "entry/clipped")
+        assertEquals("before:$body$body:after", projection.text)
+        assertEquals(projection.text, rubyBaseText(source))
+        assertEquals(projection.text, rubyFallbackText(source))
+        val owners = projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }
+        assertEquals(2, owners.size); assertTrue(owners.all { it.span === clipped })
+        assertEquals(listOf(7 to 13, 13 to 19), owners.map { it.start to it.end })
+        assertEquals(listOf("entry/clipped/spans/1", "entry/clipped/spans/2"), owners.map { it.path })
+        assertTrue(owners.all { projection.text.substring(it.start, it.end) == body })
+        assertTrue(owners.all { it.span!!.tooltip == "owner advisory" && it.span!!.explanation == "owner explanation" })
+        val leaves = projection.ranges.filter { it.role == RubyTextRole.ClippedText }
+        assertEquals(4, leaves.size)
+        assertEquals(listOf(first, second, first, second), leaves.map { it.span })
+        assertEquals(listOf(7 to 11, 11 to 13, 13 to 17, 17 to 19), leaves.map { it.start to it.end })
+        assertEquals("entry/clipped/spans/1/clippedAbsolute/children/0", leaves.first().path)
+        for (flat in listOf(rubyGraphicalSpans(source), rubyFallbackSpans(source))) {
+            assertEquals(listOf(before, first, second, first, second, after), flat)
+            assertSame(first, flat[1]); assertSame(second, flat[2])
+            assertEquals("child advisory", flat[1].tooltip); assertNull(flat[2].tooltip)
+            assertEquals("child explanation", flat[1].explanation); assertEquals("", flat[2].explanation)
+        }
+        val visual = rubyVisualFallbackSpans(source)
+        assertEquals(listOf(before, after), visual); assertSame(before, visual[0]); assertSame(after, visual[1])
+        assertEquals("before::after", visual.joinToString("") { it.text + it.trail })
+        assertTrue(rubyVisualFallbackSpans(listOf(clipped)).isEmpty())
+        assertSame(children, clipped.clippedAbsolute!!.children)
+        assertSame(margins, clipped.clippedAbsolute!!.margin)
+        assertEquals(-1f, (clipped.clippedAbsolute!!.margin.left as ContainerMargin.Length).value.value, 0f)
+        assertEquals(listOf("first-target", "second-target"), children.map { it.target })
+
+        val policy = LinkPaint(normal = LinkState("#112233", false), hover = LinkState("#223344", true),
+            active = LinkState("#334455", false), hoverActive = LinkState("#445566", true),
+            visited = LinkState("#556677", false), visitedHover = LinkState("#667788", true),
+            visitedActive = LinkState("#778899", false), visitedHoverActive = LinkState("#8899aa", true),
+            underlineOnFocus = false, focusOutline = null)
+        fun states(value: LinkPaint) = listOf(value.normal, value.hover, value.active, value.hoverActive,
+            value.visited, value.visitedHover, value.visitedActive, value.visitedHoverActive)
+        val original = states(policy)
+        val glyph = text("read", "!").copy(underline = true, italic = true, fontScale = .5f,
+            tooltip = "own child tooltip")
+        val action = Span("link", "", "owner-action", targetFragment = "part", foreground = "#112233",
+            tooltip = "action tooltip", explanation = "action explanation", linkPaint = policy,
+            clippedAbsolute = payload.copy(children = listOf(glyph)))
+        val semantic = rubyFallbackSpans(listOf(action)).single()
+        assertEquals("owner-action", semantic.target); assertEquals("part", semantic.targetFragment)
+        assertEquals("read!", rubyFallbackText(listOf(action)))
+        assertEquals("own child tooltip", semantic.tooltip); assertEquals("action explanation", semantic.explanation)
+        assertEquals(.5f, semantic.fontScale!!, 0f); assertTrue(semantic.italic)
+        assertTrue(states(semantic.linkPaint!!).all { it.underline })
+        assertEquals(original.map { it.foreground }, states(semantic.linkPaint!!).map { it.foreground })
+        assertEquals(original, states(policy)); assertSame(policy, action.linkPaint)
+        assertEquals("text", glyph.kind); assertEquals("", glyph.target)
+        assertTrue(rubyVisualFallbackSpans(listOf(action)).isEmpty())
+        val ordinary = listOf(text("ordinary", "!"))
+        assertSame(ordinary, rubyGraphicalSpans(ordinary))
+        assertSame(ordinary.single(), rubyVisualFallbackSpans(ordinary).single())
+    }
+
+    @Test fun nativeTerminalProjectionFlattensFallbackOwnersButKeepsClippedSourceAndPolicies() {
+        val px = StyleLength(StyleLengthUnit.Px, 1f)
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val negative = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -1f))
+        val first = Span("link", "A\ud83d\ude80", "hidden-first", trail = "\u0301", italic = true,
+            fontScale = 17f, fontScaleBasis = FontScaleBasis.CssPx, language = "hu",
+            tooltip = "child tooltip", explanation = "child explanation")
+        val second = Span("link", "A", "hidden-second", trail = "\u00a0", bold = true)
+        val children = listOf(first, second)
+        val clipped = Span("text", "", tooltip = "owner tooltip", explanation = "owner explanation",
+            clippedAbsolute = ClippedAbsoluteInline(px, px,
+                ContainerMargins(negative, negative, negative, negative), children,
+                staticParentDirection = BidiResolvedDirection.Ltr))
+        val hiddenReading = text("B")
+        val ruby = single(listOf(text("B")), listOf(hiddenReading))
+        assertTrue(rubyAnnotationHidden(ruby.ruby!!.segments.single(), ruby.ruby!!.segments.single().annotations.single()))
+        val policy = LinkPaint(normal = LinkState("#112233", false), hover = LinkState("#223344", true),
+            active = LinkState("#334455", false), hoverActive = LinkState("#445566", true),
+            visited = LinkState("#556677", false), visitedHover = LinkState("#667788", true),
+            visitedActive = LinkState("#778899", false), visitedHoverActive = LinkState("#8899aa", true),
+            underlineOnFocus = false, focusOutline = null)
+        val action = Span("link", "", "outer-action", foreground = "#112233", linkPaint = policy,
+            inlineActionGroup = InlineActionGroup(listOf(ruby)))
+        val ownLink = Span("external_link", "U", "https://example.test/child", italic = true,
+            fontScale = .75f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val padding = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(px, px, listOf(ownLink)))
+        val boxLeaf = text("X", "!").copy(inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(9f, FontScaleBasis.CssPx))))
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val box = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            none.copy(right = InlineBoxBorderEdge.Solid(px, InlineBoxColor.CurrentColor)), emptyList(), listOf(boxLeaf)))
+        val image = Span("text", "", image = InlineImage("Controlled.png", widthPx = 20))
+        val source = listOf(action, clipped, padding, box, clipped, image)
+        val terminal = rubyNativeTerminalProjection(source, "entry/terminal")
+        assertSame(source, terminal.source)
+        assertTrue(terminal.spans.all { it.ruby == null && it.inlinePaddingGroup == null &&
+            it.inlineActionGroup == null && it.inlineBoxGroup == null })
+        assertTrue(terminal.spans.filter { it.clippedAbsolute != null }.all { it === clipped })
+        val body = "A\ud83d\ude80\u0301A\u00a0"
+        assertEquals("B\uff08B\uff09${body}UX!${body}\ufffc", terminal.projection.text)
+        assertEquals("B${body}UX!${body}\ufffc", rubyGraphicalText(source))
+        val clipRanges = terminal.projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }
+        assertEquals(listOf(4 to 10, 13 to 19), clipRanges.map { it.start to it.end })
+        assertEquals(listOf("entry/terminal/spans/4", "entry/terminal/spans/7"), clipRanges.map { it.path })
+        assertTrue(clipRanges.all { it.span === clipped && terminal.projection.text.substring(it.start, it.end) == body })
+        val childRanges = terminal.projection.ranges.filter { it.role == RubyTextRole.ClippedText }
+        assertEquals(listOf(first, second, first, second), childRanges.map { it.span })
+        assertEquals(listOf(4 to 8, 8 to 10, 13 to 17, 17 to 19), childRanges.map { it.start to it.end })
+        assertSame(children, clipped.clippedAbsolute!!.children)
+        assertEquals("owner tooltip", clipped.tooltip); assertEquals("child tooltip", first.tooltip)
+        assertEquals("child explanation", first.explanation); assertEquals(17f, first.fontScale!!, 0f)
+        val flattenedReadings = terminal.spans.filter { it.text == "B" }
+        assertEquals(2, flattenedReadings.size)
+        assertTrue(flattenedReadings.all { it.target == "outer-action" && it.linkPaint === policy })
+        assertTrue(terminal.spans.filter { it.text == "\uff08" || it.text == "\uff09" }.all {
+            it.kind == "text" && it.target.isEmpty() && it.linkPaint == null
+        })
+        assertSame(ownLink, terminal.spans.single { it.text == "U" })
+        assertSame(boxLeaf, terminal.spans.single { it.text == "X" })
+        assertSame(boxLeaf.inlineStyle, terminal.spans.single { it.text == "X" }.inlineStyle)
+        assertSame(image, terminal.spans.last()); assertSame(image.image, terminal.spans.last().image)
+        val replay = rubyNativeTerminalProjection(terminal.spans, "entry/terminal")
+        assertSame(terminal.spans, replay.spans)
+        assertEquals(terminal.projection, replay.projection)
+        assertSame(policy, action.linkPaint); assertFalse(policy.normal.underline)
+        assertEquals("text", hiddenReading.kind); assertEquals("", hiddenReading.target)
+        val ordinary = listOf(text("unchanged", "!"))
+        assertSame(ordinary, rubyNativeTerminalProjection(ordinary).spans)
+        assertSame(clipped, rubyNativeTerminalProjection(listOf(clipped)).spans.single())
+        assertTrue(rubyNativeTerminalProjection(emptyList()).projection.text.isEmpty())
+    }
+
 }

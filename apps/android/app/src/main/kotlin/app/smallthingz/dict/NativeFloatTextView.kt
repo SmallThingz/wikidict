@@ -279,8 +279,20 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     private data class RevealLocation(val rect: RectF, val clip: RectF?, val precise: NativeTextClip? = null)
     private data class PendingViewportReveal(val text: String, val offset: Int,
         val ownerNodes: List<FloatInteractionNode>, val node: FloatInteractionNode? = null,
-        var ready: Boolean = false)
+        var ready: Boolean = false, var clippedScope: NativeClippedAbsoluteCoordinateScope? = null)
+    private var clippedRevealCancellation: (() -> Unit)? = null
     private var pendingViewportReveal: PendingViewportReveal? = null
+        set(value) {
+            if (field !== value) {
+                val cancel = clippedRevealCancellation
+                clippedRevealCancellation = null
+                field = value
+                cancel?.invoke()
+            }
+        }
+    private fun clippedRevealLocation(layout: FloatTextGeometry, pending: PendingViewportReveal): NativeClippedAbsoluteSemanticLocation? =
+        pending.node?.let { saved -> layout.nodes.firstOrNull { sameInputNode(saved, it) }?.clippedAbsoluteLocation }
+            ?: pending.offset.takeIf { it < layout.text.length }?.let { layout.clippedAbsoluteSemanticLocation(it, it + 1) }
 
     internal fun updateScrollClip(next: NativeScrollClip?) {
         if (scrollClip === next) return
@@ -299,6 +311,10 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (!originalOwnerAvailable()) return false
         val current = geometry ?: return false
         if (offset !in 0..current.text.length) return false
+        if (offset < current.text.length && current.clippedAbsoluteSemanticLocation(offset, offset + 1) != null) {
+            beginViewportReveal(PendingViewportReveal(current.text.toString(), offset, current.nodes.toList()))
+            return true
+        }
         if (current.clipForOffset(offset) == null) {
             pendingViewportReveal = null
             val rect = Rect(); current.caretRect(offset).roundOut(rect)
@@ -316,8 +332,10 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             pending.ownerNodes.zip(layout.nodes).any { (before, after) -> !sameInputNode(before, after) }) return null
         if (pending.node != null) {
             val node = layout.nodes.firstOrNull { sameInputNode(pending.node, it) } ?: return null
+            val retained = node.clippedAbsoluteLocation
             return RevealLocation(RectF(nodeRevealBounds(node) ?: layout.caretRect(node.start)),
-                node.clipBounds?.let(::RectF), node.preciseClip)
+                (retained?.clipBounds ?: node.clipBounds.takeIf { retained == null })?.let(::RectF),
+                if (retained == null) node.preciseClip else retained.preciseClip)
         }
         return RevealLocation(RectF(layout.caretRect(pending.offset)), layout.clipForOffset(pending.offset)?.let(::RectF),
             layout.preciseClipForOffset(pending.offset))
@@ -334,7 +352,18 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                 postOnAnimation { finishViewportReveal() }
             }
         }
-        if (pending.node != null) layout.revealNode(pending.node.id, completed)
+        val clipped = clippedRevealLocation(layout, pending)
+        pending.clippedScope = clipped?.coordinateScope
+        if (clipped != null) {
+            val projected = projectClippedAbsolute(clipped, clipResult = false)
+            if (projected == null) { pendingViewportReveal = null; return }
+            val cancel = projected.authority.reveal(projected.screen) { success ->
+                if (pendingViewportReveal === pending) {
+                    if (success) completed() else { pendingViewportReveal = null; failCitationReveal(pending.node) }
+                }
+            }
+            if (pendingViewportReveal === pending && !pending.ready) clippedRevealCancellation = cancel
+        } else if (pending.node != null) layout.revealNode(pending.node.id, completed)
         else layout.revealOffset(pending.offset, completed)
     }
 
@@ -347,18 +376,26 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val emptyOwner = pending.node?.let { saved ->
             layout.nodes.firstOrNull { it.id == saved.id }?.let(::emptyLinkBands)
         } != null
-        val visible = if (emptyOwner) clippedEmptyBand(current.rect, current.clip, current.precise)
+        val clippedOwner = clippedRevealLocation(layout, pending)
+        if (pending.clippedScope !== clippedOwner?.coordinateScope) {
+            pendingViewportReveal = null; failCitationReveal(pending.node); return
+        }
+        val visible = if (clippedOwner != null) clippedAbsoluteLocalBounds(clippedOwner)
+        else if (emptyOwner) clippedEmptyBand(current.rect, current.clip, current.precise)
         else RectF(current.rect).apply {
             current.clip?.let { if (!intersect(it)) setEmpty() }
             current.precise?.let { set(it.bounds(this) ?: RectF()) }
         }
-        if (visible == null || !emptyOwner && (visible.isEmpty ||
+        if (visible == null || clippedOwner == null && !emptyOwner && (visible.isEmpty ||
             pending.node != null && layout.nodes.firstOrNull { it.id == pending.node.id }?.bounds?.none { !it.isEmpty } == true)) {
             pendingViewportReveal = null
             failCitationReveal(pending.node)
             return
         }
         pendingViewportReveal = null
+        // The authenticated containing-block owner already revealed this location. Sending
+        // it through the descendant View would scroll an intervening table a second time.
+        if (clippedOwner != null) return
         if (revealCitationParent(visible, pending.node)) return
         val rectangle = Rect(); visible.roundOut(rectangle)
         rectangle.offset(paddingLeft, paddingTop)
@@ -709,7 +746,8 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (before == null || after == null) return before == null && after == null
         if (before.id != after.id || before.kind != after.kind || before.start != after.start || before.end != after.end ||
             before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick ||
-            before.customActions != after.customActions || before.citationMarker != after.citationMarker) return false
+            before.customActions != after.customActions || before.citationMarker != after.citationMarker ||
+            before.clippedAbsoluteLocation?.coordinateScope !== after.clippedAbsoluteLocation?.coordinateScope) return false
         val identity = before.missingLinkPaint?.actionIdentity
         val nextIdentity = after.missingLinkPaint?.actionIdentity
         return if (identity != null || nextIdentity != null)
@@ -905,6 +943,14 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val node = layout.nodes.firstOrNull {
             it.id == target.nodeId && it.start == target.start && it.end == target.end
         }
+        node?.clippedAbsoluteLocation?.let { location ->
+            val rectangle = clippedAbsoluteLocalBounds(location)
+            if (rectangle == null) outRect.setEmpty() else {
+                rectangle.roundOut(outRect)
+                outRect.offset(paddingLeft, paddingTop)
+            }
+            return
+        }
         val character = if (node != null && target.offset < node.end)
             layout.characterRects(target.offset, 1).firstOrNull() else null
         val fragment = node?.bounds?.firstOrNull { character != null && RectF.intersects(it, character) }
@@ -1011,6 +1057,11 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
 
     /** Reveal the first fragment or declaring band without changing selection or invoking its action. */
     private fun revealVirtualNode(node: FloatInteractionNode) {
+        if (node.clippedAbsoluteLocation != null) {
+            val layout = geometry ?: return
+            beginViewportReveal(PendingViewportReveal(layout.text.toString(), node.start, layout.nodes.toList(), node))
+            return
+        }
         if (node.clipBounds == null) {
             pendingViewportReveal = null
             val bounds = nodeRevealBounds(node) ?: run { failCitationReveal(node); return }
@@ -1126,6 +1177,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun onDetachedFromWindow() {
+        pendingViewportReveal = null
         finishCitationReveal(false)
         citationNavigation?.remove(this)
         tableCoordinates = null
@@ -1164,6 +1216,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             if (liveTableCoordinates() == null) { info.setBoundsInParent(Rect()); return }
         }
         if (!originalOwnerAvailable()) { info.isVisibleToUser = false; return }
+        includeClippedAbsoluteHostBounds(info)
         info.className = "android.widget.TextView"
         info.text = logicalText.toString()
         AccessibilityNodeInfoCompat.wrap(info).stateDescription = hostStateDescription
@@ -1312,6 +1365,10 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                 }
                 addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
                 addAction(if (isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+                node.clippedAbsoluteLocation?.let { location ->
+                    setClippedAbsoluteAccessibilityBounds(this, location)
+                    return@apply
+                }
                 emptyLinkBands(node)?.let { bands ->
                     setEmptyLinkAccessibilityBounds(this, node, bands)
                     return@apply
@@ -1386,6 +1443,9 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                 AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS -> {
                     if (virtualAccessibilityFocus != node.id) return false
                     virtualAccessibilityFocus = View.NO_ID
+                    pendingViewportReveal?.let { pending ->
+                        if (pending.clippedScope != null && sameInputNode(pending.node, node)) pendingViewportReveal = null
+                    }
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                 }
                 AccessibilityNodeInfo.ACTION_FOCUS -> {
@@ -1445,7 +1505,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     private fun nodeRevealBounds(node: FloatInteractionNode): RectF? =
-        node.bounds.firstOrNull { !it.isEmpty } ?: emptyLinkBands(node)?.firstOrNull()
+        node.clippedAbsoluteLocation?.bounds ?: node.bounds.firstOrNull { !it.isEmpty } ?: emptyLinkBands(node)?.firstOrNull()
 
     private fun clippedEmptyBand(band: RectF, rectangle: RectF?, precise: NativeTextClip?): RectF? = projectEmptyLinkBand {
         if (!isEmptyLinkBand(band)) null else {
@@ -1477,6 +1537,148 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             }
             null
         }
+    }
+
+    /** Authored clipped-absolute source is retained for AX independently of its empty
+     * paint/input clip and zero-flow host. Only real outer clips constrain this location. */
+    private data class ClippedAbsoluteProjection(val local: RectF, val screen: RectF,
+        val authority: NativeClippedAbsoluteCoordinateProjection)
+
+    private fun clippedAbsoluteBounds(bounds: RectF, clip: NativeTextClip?): RectF? {
+        if (!listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).all(Float::isFinite) ||
+            bounds.left > bounds.right || bounds.top > bounds.bottom)
+            throw UnsupportedFloatLayout("Clipped absolute semantic bounds are unavailable")
+        if (clip == null) return RectF(bounds)
+        return when {
+            bounds.width() == 0f && bounds.height() == 0f ->
+                RectF(bounds).takeIf { clip.contains(bounds.left, bounds.top) }
+            bounds.width() == 0f || bounds.height() == 0f ->
+                clip.segmentBounds(bounds.left, bounds.top, bounds.right, bounds.bottom)
+            else -> clip.bounds(bounds)
+        }
+    }
+
+    private fun clippedAbsoluteLocalBounds(location: NativeClippedAbsoluteSemanticLocation): RectF? =
+        projectClippedAbsolute(location)?.local
+
+    /** Public API 29+ preserves the entire Float transform through the window origin;
+     * this application's API 31 minimum needs no rounded getLocationOnScreen anchor. */
+    private fun semanticViewToScreen(view: View): Matrix =
+        checkedSemanticMatrix(Matrix().also(view::transformMatrixToGlobal))
+
+    private fun checkedSemanticMatrix(matrix: Matrix): Matrix {
+        val values = FloatArray(9).also(matrix::getValues)
+        if (!values.all(Float::isFinite) || values[6] != 0f || values[7] != 0f || values[8] != 1f ||
+            !matrix.invert(Matrix()))
+            throw UnsupportedFloatLayout("Clipped absolute semantic transform is unavailable")
+        return matrix
+    }
+
+    private fun clippedAbsoluteToScreen(): Matrix? {
+        val matrix = if (tableCoordinateOwner != null) {
+            val coordinates = liveTableCoordinates() ?: return null
+            val source = floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f)
+            val target = FloatArray(6)
+            repeat(3) { index ->
+                val point = coordinates.localToScreen(Offset(source[index * 2], source[index * 2 + 1]))
+                target[index * 2] = point.x; target[index * 2 + 1] = point.y
+            }
+            val fourth = coordinates.localToScreen(Offset(1f, 1f))
+            val value = Matrix()
+            if (!target.all(Float::isFinite) || !value.setPolyToPoly(source, 0, target, 0, 3))
+                throw UnsupportedFloatLayout("Clipped absolute table coordinates are unavailable")
+            val check = floatArrayOf(1f, 1f).also(value::mapPoints)
+            if (!fourth.x.isFinite() || !fourth.y.isFinite() ||
+                kotlin.math.abs(check[0] - fourth.x) > .01f || kotlin.math.abs(check[1] - fourth.y) > .01f)
+                throw UnsupportedFloatLayout("Clipped absolute table perspective is unavailable")
+            checkedSemanticMatrix(value)
+        } else semanticViewToScreen(this)
+        matrix.preTranslate((paddingLeft - scrollX).toFloat(), (paddingTop - scrollY).toFloat())
+        return checkedSemanticMatrix(matrix)
+    }
+
+    private fun projectClippedAbsolute(location: NativeClippedAbsoluteSemanticLocation,
+        clipResult: Boolean = true): ClippedAbsoluteProjection? = projectEmptyLinkBand {
+        if (!isAttachedToWindow || !isShown || windowVisibility != VISIBLE || needsGeometry || !originalOwnerAvailable())
+            return@projectEmptyLinkBand null
+        var ancestor: View? = this
+        while (ancestor != null) {
+            if (ancestor.alpha <= 0f) return@projectEmptyLinkBand null
+            ancestor = ancestor.parent as? View
+        }
+        val sourceToScreen = clippedAbsoluteToScreen() ?: return@projectEmptyLinkBand null
+        val scope = location.coordinateScope
+            ?: throw UnsupportedFloatLayout("Clipped absolute containing-block authority is unavailable")
+        val authority = scope.project(sourceToScreen, scrollClip, location.viewportSteps) ?: return@projectEmptyLinkBand null
+        val toScreen = checkedSemanticMatrix(authority.toScreen)
+        var screenClip: NativeTextClip? = if (clipResult) authority.clip else null
+        if (clipResult) {
+            location.clipBounds?.let { bounds ->
+                val own = NativeTextClip.rectangle(bounds).transformed(toScreen)
+                screenClip = screenClip?.intersected(own) ?: own
+            }
+            location.preciseClip?.transformed(toScreen)?.let { own ->
+                screenClip = screenClip?.intersected(own) ?: own
+            }
+        }
+        val box = location.bounds
+        clippedAbsoluteBounds(box, null) // Validate even an unclipped reveal request.
+        val screen = if (box.width() == 0f || box.height() == 0f) {
+            val points = floatArrayOf(box.left, box.top, box.right, box.bottom).also(toScreen::mapPoints)
+            if (!points.all(Float::isFinite)) throw UnsupportedFloatLayout("Clipped absolute semantic location is unavailable")
+            val clip = screenClip
+            if (points[0] == points[2] && points[1] == points[3])
+                RectF(points[0], points[1], points[0], points[1]).takeIf { clip == null || clip.contains(points[0], points[1]) }
+            else if (clip == null) RectF(minOf(points[0], points[2]), minOf(points[1], points[3]),
+                maxOf(points[0], points[2]), maxOf(points[1], points[3]))
+            else clip.segmentBounds(points[0], points[1], points[2], points[3])
+        } else {
+            val envelope = RectF(box).also { toScreen.mapRect(it) }
+            screenClip?.intersected(NativeTextClip.rectangle(box).transformed(toScreen))?.bounds(envelope)
+                ?: envelope.takeIf { screenClip == null }
+        } ?: return@projectEmptyLinkBand null
+        val screenToSource = Matrix()
+        if (!sourceToScreen.invert(screenToSource)) throw UnsupportedFloatLayout("Clipped absolute source transform is unavailable")
+        val local = RectF(screen).also { screenToSource.mapRect(it) }
+        if (!listOf(local.left, local.top, local.right, local.bottom).all(Float::isFinite))
+            throw UnsupportedFloatLayout("Clipped absolute local semantic bounds are unavailable")
+        ClippedAbsoluteProjection(local, screen, authority).takeIf { authority.isCurrent() }
+    }
+
+    private fun setClippedAbsoluteAccessibilityBounds(info: AccessibilityNodeInfo,
+        location: NativeClippedAbsoluteSemanticLocation) {
+        val projection = projectClippedAbsolute(location)
+        info.setBoundsInParent(Rect().also { out -> projection?.local?.let { local ->
+            RectF(local).apply { offset(paddingLeft.toFloat(), paddingTop.toFloat()) }.roundOut(out)
+        } })
+        info.setBoundsInScreen(Rect().also { projection?.screen?.roundOut(it) })
+        // A genuine zero-area retained semantic anchor remains discoverable. It never
+        // contributes pointer area, a glyph, focus paint, or a measured View dimension.
+        info.isVisibleToUser = projection != null
+    }
+
+    private fun includeClippedAbsoluteHostBounds(info: AccessibilityNodeInfo) {
+        val projections = geometry?.clippedAbsoluteSemanticLocations.orEmpty().mapNotNull(::projectClippedAbsolute)
+        if (projections.isEmpty()) return
+        val visible = projections.map { it.screen }.toMutableList()
+        if (info.isVisibleToUser) {
+            val original = Rect().also(info::getBoundsInScreen)
+            if (!original.isEmpty) visible += RectF(original)
+        }
+        val screen = RectF(visible.minOf { it.left }, visible.minOf { it.top },
+            visible.maxOf { it.right }, visible.maxOf { it.bottom })
+        info.setBoundsInScreen(Rect().also(screen::roundOut))
+        projectEmptyLinkBand {
+            val parentView = parent as? View
+            if (parentView != null) {
+                val inverse = Matrix()
+                if (!semanticViewToScreen(parentView).invert(inverse))
+                    throw UnsupportedFloatLayout("Clipped absolute semantic parent is unavailable")
+                val parentBounds = RectF(screen).also { inverse.mapRect(it) }
+                info.setBoundsInParent(Rect().also(parentBounds::roundOut))
+            }
+        }
+        info.isVisibleToUser = true
     }
 
     private fun setEmptyLinkAccessibilityBounds(info: AccessibilityNodeInfo, node: FloatInteractionNode,

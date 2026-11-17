@@ -138,6 +138,16 @@ internal class NativeFloatContextGeometry private constructor(
     private data class Paragraph(val partIndex: Int, val offset: Int, val x: Float, val y: Float, val geometry: FloatTextGeometry,
         val textBottom: Float, val paintHere: Boolean = true, val ordinary: Boolean = false,
         val outOfFlow: Boolean = false)
+    override val clippedAbsoluteSemanticLocations get() = paragraphs.flatMap { paragraph ->
+        paragraph.geometry.clippedAbsoluteSemanticLocations.map { it.translated(paragraph.x, paragraph.y) }
+    }
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        val paragraph = paragraphs.singleOrNull { start >= it.offset && end <= it.offset + it.geometry.text.length }
+            ?: return null
+        return paragraph.geometry.clippedAbsoluteSemanticLocation(start - paragraph.offset, end - paragraph.offset)
+            ?.translated(paragraph.x, paragraph.y)
+    }
     override val textBaselines: NativeTextBaselines? by lazy {
         val lines = paragraphs.filterNot { it.outOfFlow }.mapNotNull { it.geometry.textBaselines?.translated(it.y) }
         NativeTextBaselines.of(lines.firstNotNullOfOrNull { it.first },

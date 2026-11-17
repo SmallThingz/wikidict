@@ -391,7 +391,8 @@ internal data class NativeContainerLeaf(val block: Block, val previous: Block?, 
     val format: NativeContainerTextFormat?, val context: ContainerTextContext?,
     val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false,
     val ownerWrap: TextWrap? = null, val bodyTypographyExcluded: Boolean = false,
-    val staticInlineParent: NativeStaticInlineParent? = null)
+    val staticInlineParent: NativeStaticInlineParent? = null,
+    val clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = null)
 
 private data class NativePositionedParent(val paddingTop: Float)
 
@@ -438,6 +439,15 @@ internal fun nativeOrdinaryAbsolutePosition(position: ContainerAbsolutePosition,
     return NativeAbsolutePosition(containingBlockId, offset(position.left), offset(position.top))
 }
 
+/** Coordinate provenance is independent of typography and follows the original source tree. */
+private fun Container.hasClippedAbsoluteDescendant(): Boolean {
+    var found = false
+    PresentationSpanVisitor { _, _ -> }.apply {
+        onSpan = { if (it.clippedAbsolute != null) found = true }
+    }.blocks(blocks)
+    return found
+}
+
 /** Table/Figure descendants start independent adapter trees and never lend this anchor. */
 private fun Container.hasOrdinaryAbsoluteDescendant(): Boolean = blocks.any { block ->
     block.container?.let { it.style.absolutePosition != null || it.style.absoluteStatic != null ||
@@ -467,6 +477,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     leaf: @Composable (NativeContainerLeaf) -> List<NativeFloatContextSpec>
 ): List<NativeFloatContextSpec> {
     val inheritedWrap = LocalNativeContainerTextWrap.current
+    val inheritedClippedScope = LocalNativeClippedAbsoluteCoordinateScope.current
     val tableDirection = LocalCompiledTableTextDirection.current
     val columnBreakWordMinimum = LocalCaptionBreakWord.current
     val parentTextStyle = androidx.compose.material3.LocalTextStyle.current
@@ -486,7 +497,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         declaringFormat: NativeContainerTextFormat? = null,
         ordinaryContainingBlock: Int? = null, staticScope: NativeStaticInlineScope? = null,
         staticInlineParent: NativeStaticInlineParent? = null,
-        sourceAlign: androidx.compose.ui.text.style.TextAlign? = null): List<NativeFloatContextSpec> {
+        sourceAlign: androidx.compose.ui.text.style.TextAlign? = null,
+        clippedScope: NativeClippedAbsoluteCoordinateScope? = null): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
         val groups = if (row) containerFlowItems(values) else values.indices.map { ContainerFlowItem.Block(it) }
         for (group in groups) {
@@ -501,6 +513,12 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 val ordinaryStatic = resolved.box.absoluteStatic
                 val immediateStatic = staticScope?.takeIf { it.child === container && ordinaryStatic != null }
                 val scope = resolved.box.positionedScope
+                val nonstaticClippedAncestor = resolved.box.positioning != null || ordinaryAbsolute != null ||
+                    ordinaryStatic != null || scope != null
+                val clippedDomainFailure = if (nonstaticClippedAncestor && container.hasClippedAbsoluteDescendant())
+                    "Clipped absolute content requires Entry-root all-static ancestry" else null
+                // The typed clipped subset never borrows a closer represented positioned owner.
+                val nextClippedScope = clippedScope.takeUnless { nonstaticClippedAncestor }
                 val ordinaryRelative = resolved.box.positioning == ContainerPositioning.RelativeAuto && scope == null &&
                     (resolved.box.ownerFont != null || resolved.box.textWrap != null || container.hasOrdinaryAbsoluteDescendant())
                 val inheritedContext = if ((context.bodyOrigin != null || context.bodyDirection != null) &&
@@ -580,7 +598,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
                         inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
-                        nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign)
+                        nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign, nextClippedScope)
                 }
                 CompositionLocalProvider(LocalAuthoredBackground provides background) {
                     if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
@@ -627,7 +645,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     columnBreakWordMinimum = columnBreakWordMinimum)
                 val failure = textFailure ?: (if (scope == null && absolute == null)
                     nativeScrollportUnavailable(container.style, row) else null)
-                val domainFailure = failure ?: when {
+                val domainFailure = clippedDomainFailure ?: failure ?: when {
                     absolute != null && (positionedParent == null || !nativeAbsoluteParagraphs(container.blocks)) ->
                         "Absolute text requires its direct scope and unreplaced ordinary paragraphs"
                     ordinaryAbsolute != null && (ordinaryContainingBlock == null || !nativeAbsoluteParagraphs(container.blocks)) ->
@@ -663,20 +681,22 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
                         roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
                         inside, inScrollport, ownerWrap.takeUnless { rendered.kind == "heading" }, bodyTypographyExcluded = excludesBody,
-                        staticInlineParent = staticInlineParent)
+                        staticInlineParent = staticInlineParent, clippedAbsoluteScope = clippedScope)
                     fun bindColumnPolicy(prepared: NativeFloatContextSpec): NativeFloatContextSpec {
                         val policy = original.columnBreakInside ?: return prepared
                         // A non-Text fallback keeps its original body. The column adapter
                         // rejects that represented child before fragmentation is attempted.
                         return (prepared as? NativeFloatContextSpec.Text)?.copy(columnBreakInside = policy) ?: prepared
                     }
-                    if (excludesBody) {
-                        CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child).map(::bindColumnPolicy) }
-                    } else if (format?.ownerFont == null) children += leaf(child).map(::bindColumnPolicy) else {
-                        CompositionLocalProvider(LocalCellWeight provides null,
-                            LocalTableLineHeightPixels provides null,
-                            LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {
-                            children += leaf(child).map(::bindColumnPolicy)
+                    CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides clippedScope) {
+                        if (excludesBody) {
+                            CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child).map(::bindColumnPolicy) }
+                        } else if (format?.ownerFont == null) children += leaf(child).map(::bindColumnPolicy) else {
+                            CompositionLocalProvider(LocalCellWeight provides null,
+                                LocalTableLineHeightPixels provides null,
+                                LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {
+                                children += leaf(child).map(::bindColumnPolicy)
+                            }
                         }
                     }
                 }
@@ -695,5 +715,5 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     return visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
         blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
         false, false, blocks.indices.map { it }, false, ownerWrap = inheritedWrap,
-        sourceAlign = staticInlineAlign ?: inheritedAlign?.composeAlign())
+        sourceAlign = staticInlineAlign ?: inheritedAlign?.composeAlign(), clippedScope = inheritedClippedScope)
 }

@@ -34,6 +34,7 @@ internal data class NativeFloatPlannedRow(
     val nativeFitAdvance: Float,
     val natural: NativeUsedLineMetrics,
     val paddedNatural: NativeUsedLineMetrics,
+    val requiredFlowWidth: Float? = null,
 )
 
 /** A selected LineBreaker result plus the unchanged float/clear placement algorithm.
@@ -110,6 +111,7 @@ internal class NativeFloatRowPlan private constructor(
             if (wrap?.noWrap != null && carriedExclusions.isNotEmpty() && exactAvailableWidth == null)
                 throw UnsupportedFloatLayout("No-wrap source cannot inherit float exclusions")
             val runs = NativeFloatRowRuns(source, paint, direction)
+            val clippedProbe = source.getSpans(0, source.length, NativeClippedProbeAllocation::class.java).singleOrNull()
             var left = intArrayOf(0)
             var right = intArrayOf(0)
             val seen = mutableSetOf<List<Int>>()
@@ -139,8 +141,11 @@ internal class NativeFloatRowPlan private constructor(
                     rows.map { it.end }.toIntArray(), natural, occurrences, carriedExclusions, flowInsets,
                     usedLineMetrics, wrap?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } },
                     exactAvailableWidth = exactAvailableWidth,
-                    requiredLineWidths = if (exactAvailableWidth != null && wrap?.noWrap != null)
-                        FloatArray(rows.size) { rows[it].visibleAdvance } else null)
+                    requiredLineWidths = when {
+                        exactAvailableWidth != null && wrap?.noWrap != null -> FloatArray(rows.size) { rows[it].visibleAdvance }
+                        clippedProbe != null -> FloatArray(rows.size) { rows[it].requiredFlowWidth ?: 0f }
+                        else -> null
+                    })
                 if (left.contentEquals(flow.left) && right.contentEquals(flow.right)) {
                     rows.forEachIndexed { index, row ->
                         if (flow.constrainedByFloat[index] && row.visibleAdvance > availableWidth - flow.left[index] - flow.right[index])
@@ -165,6 +170,9 @@ internal class NativeFloatRowPlan private constructor(
 private fun nativeFloatRows(source: Spanned, paint: TextPaint, runs: NativeFloatRowRuns,
     width: Float, left: IntArray, right: IntArray, wrap: NativeTextWrapPlan?,
     alignment: Layout.Alignment): List<NativeFloatPlannedRow> {
+    source.getSpans(0, source.length, NativeClippedProbeAllocation::class.java).singleOrNull()?.let {
+        return nativeClippedProbeRows(source, paint, runs, width, left, right, wrap, alignment, it)
+    }
     if (source.getSpans(0, source.length, NativeRubyLinePlan::class.java).isNotEmpty() ||
         source.getSpans(0, source.length, NativeRubyBreaks::class.java).isNotEmpty())
         return nativeRubyFloatRows(source, paint, runs, width, left, right, wrap, alignment)
@@ -271,6 +279,10 @@ internal data class NativeFloatRowIntrinsicWidths(val minimum: Float, val maximu
 /** Preserve native advances until a caller actually publishes an integer measurement. */
 internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
     breakWordMinimum: Boolean): NativeFloatRowIntrinsicWidths {
+    NativeClippedAbsoluteProjection.create(source)?.let { clipped ->
+        if (!clipped.hasFlow) return NativeFloatRowIntrinsicWidths(0f, 0f)
+        return nativeFloatRowIntrinsicWidths(clipped.visual, paint, direction, breakWordMinimum)
+    }
     nativeRubyLayout(source, paint, direction, exactAdvances = true)?.let { unbroken ->
         val maximum = nativeFloatRowIntrinsicWidths(unbroken.native, paint, direction, breakWordMinimum).maximum
         val fragmented = checkNotNull(nativeRubyLayout(source, paint, direction,

@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.SpannedString
@@ -4370,5 +4371,439 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(nativeSuffix.nativeRubyLineRanges(0), richSuffix.nativeRubyLineRanges(0))
         assertEquals(nativeSuffix.nativeSingleLineAdvance(), richSuffix.nativeSingleLineAdvance(), .0001f)
         sameRect(nativeSuffix.caretRect(4), richSuffix.caretRect(4), .001f)
+    }
+
+    @Test
+    fun clippedAbsoluteRetainsLogicalOwnersWithoutFlowGlyphsOrPointerArea() {
+        val root = paint()
+        val hit = mutableListOf<String>()
+        val margin = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -1f))
+        val child = Span(kind = "link", text = "retained", target = "retained-target")
+        val clipped = Span(kind = "text", text = "", clippedAbsolute = ClippedAbsoluteInline(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 1f),
+            ContainerMargins(margin, margin, margin, margin), listOf(child), BidiResolvedDirection.Ltr))
+        class Prepared(val spans: List<Span>, val margins: NativeClippedAbsoluteMargins =
+            NativeClippedAbsoluteMargins(-1f, -1f, -1f, -1f), val boxWidth: Float = 1f, val boxHeight: Float = 1f,
+            val visiblePoint: Boolean = false, val unownedPoint: Boolean = false, val nowrap: Boolean = false) {
+            val projection = rubyGraphicalProjection(spans)
+            val ranges = projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }
+            val scope = NativeClippedAbsoluteCoordinateOwner().rootScope
+            val formats = ranges.associate { range -> range.path to NativeRubyGroupFormat(root,
+                TextDirectionHeuristics.LTR, NativeLineHeightPolicy.Pixels(24f),
+                clippedAbsolute = NativeClippedAbsoluteFormat(NativeClippedAbsoluteOwner(checkNotNull(range.span), range.path),
+                    boxWidth, boxHeight, margins, scope)) }
+            val actions = ranges.mapIndexed { index, range ->
+                Triple(range.start, range.end, { hit += "original-$index" })
+            }
+            val source: Spanned = SpannedString(SpannableString(projection.text).apply {
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Pixels(24f), strut = true),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                ranges.forEach { range ->
+                    setSpan(SourcePaint(root), range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(NativeAuthoredInlineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Pixels(500f)),
+                        range.start, range.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                if (visiblePoint || unownedPoint) {
+                    val key = if (visiblePoint) NativeClippedVisibleMetricPoint() else null
+                    setSpan(NativeAuthoredInlineMetrics(NativePrimaryFontMetrics.from(root).copy(baselineShift = 5f), NativeLineHeightPolicy.Pixels(40f),
+                        clippedVisiblePoint = key), 0, 0, Spanned.SPAN_MARK_MARK)
+                    setSpan(NativeAuthoredBaselineShift(5f, key), 0, 0, Spanned.SPAN_MARK_MARK)
+                    if (key != null) setSpan(NativeClippedVisibleMetricMarker(key), 0, 0, Spanned.SPAN_MARK_MARK)
+                }
+                if (nowrap) setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true, sourceLineStarts = listOf(0)),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(NativeRubyPreparedSource(projection, this, root, TextDirectionHeuristics.LTR, formats),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            })
+            fun build(width: Int, rtl: Boolean = false): NativeFloatGeometry = NativeFloatGeometry.build(source, root, width,
+                emptyList(), includeFontPadding = false, textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                nodeFactory = { geometry -> actions.mapIndexed { index, (start, end, callback) ->
+                    FloatInteractionNode(index, FloatInteractionKind.LINK, start, end, geometry.rectsForRange(start, end),
+                        source.subSequence(start, end), "original tooltip", callback)
+                } })
+        }
+        fun ordinary(text: String, width: Int, rtl: Boolean = false): NativeFloatGeometry {
+            val source = SpannableString(text).apply {
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Pixels(24f), strut = true),
+                    0, length, if (isEmpty()) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            return NativeFloatGeometry.build(source, root, width, emptyList(), includeFontPadding = false,
+                textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR)
+        }
+        val mixed = Prepared(listOf(Span(kind = "text", text = "A"), clipped, Span(kind = "text", text = "B")))
+        val wide = 400
+        val geometry = mixed.build(wide)
+        val reference = ordinary("AB", wide)
+        val metrics = root.fontMetrics
+        val hypotheticalTop = (500f - (metrics.descent - metrics.ascent)) / 2f
+        val prefixAdvance = root.getRunAdvance("AretainedB", 0, 10, 0, 10, false, 1)
+        val bodyAdvance = root.getRunAdvance("retained", 0, 8, 0, 8, false, 8)
+        val range = mixed.ranges.single()
+        assertEquals("AretainedB", geometry.text.toString())
+        assertEquals(reference.nativeSingleLineAdvance(), geometry.nativeSingleLineAdvance(), 0f)
+        assertEquals(reference.height, geometry.height)
+        assertEquals(reference.nativeUsedLineMetrics(0), geometry.nativeUsedLineMetrics(0))
+        sameRect(reference.caretRect(1), geometry.caretRect(range.end), 0f)
+        sameRect(reference.characterRects(1, 1).single()!!, geometry.characterRects(range.end, 1).single()!!, 0f)
+        assertTrue(geometry.characterRects(range.start, range.end - range.start).all { it == null })
+        assertTrue(geometry.rectsForRange(range.start, range.end).isEmpty())
+        assertTrue(geometry.clipForOffset(range.start + 1)!!.isEmpty)
+        val location = geometry.clippedAbsoluteSemanticLocations.single().bounds
+        sameRect(RectF(prefixAdvance - 1f, hypotheticalTop, prefixAdvance, hypotheticalTop + 1f), location, .001f)
+        assertEquals(1f, location.width(), 0f)
+        assertEquals(1f, location.height(), 0f)
+        val node = geometry.nodes.single()
+        assertSame(mixed.actions.single().third, node.onClick)
+        assertEquals("original tooltip", node.tooltip)
+        assertTrue(node.bounds.isEmpty())
+        assertNull(node.focusPaint)
+        assertFalse(node.contains(location.centerX(), location.centerY()))
+        assertNull(geometry.interactionNodeAt(location.centerX(), location.centerY()))
+        sameRect(location, node.clippedAbsoluteLocation!!.bounds, 0f)
+        node.onClick!!.invoke()
+        assertEquals(listOf("original-0"), hit)
+        assertEquals(nativeTextWidthRange(SpannedString("AB"), root), nativeTextWidthRange(mixed.source, root))
+        val bitmap = Bitmap.createBitmap(100, 80, Bitmap.Config.ARGB_8888)
+        try {
+            geometry.paintSelection(Canvas(bitmap), range.start, range.end, Paint().apply { color = Color.MAGENTA })
+            assertTrue((0 until bitmap.height).all { y -> (0 until bitmap.width).all { x -> bitmap.getPixel(x, y) == 0 } })
+        } finally { bitmap.recycle() }
+        val narrowWidth = ceil(reference.nativeSingleLineAdvance() / 2f).toInt().coerceAtLeast(1)
+        val narrow = mixed.build(narrowWidth)
+        val narrowReference = ordinary("AB", narrowWidth)
+        assertEquals(narrowReference.height, narrow.height)
+        assertEquals(narrowReference.shapedLineCount, narrow.shapedLineCount)
+        sameRect(narrowReference.caretRect(1), narrow.caretRect(range.end), 0f)
+        assertEquals((0 until mixed.source.length).toList(), (0 until narrow.shapedLineCount).flatMap {
+            val bounds = narrow.nativeRangeOfLine(it); (bounds.first until bounds.second).toList()
+        })
+        sameRect(location, mixed.build(wide).clippedAbsoluteSemanticLocations.single().bounds, 0f)
+        val rtlOwner = clipped.copy(clippedAbsolute = checkNotNull(clipped.clippedAbsolute).copy(staticParentDirection = BidiResolvedDirection.Rtl))
+        val rtl = Prepared(listOf(Span(kind = "text", text = "A"), rtlOwner, Span(kind = "text", text = "B"))).build(wide, rtl = true)
+        val rtlReference = ordinary("AB", wide, rtl = true)
+        val rtlLocation = rtl.clippedAbsoluteSemanticLocations.single().bounds
+        val fullAdvance = root.getRunAdvance("AretainedB", 0, 10, 0, 10, false, 10)
+        assertEquals(wide - (fullAdvance - 2f) + prefixAdvance - 1f + bodyAdvance - 1f, rtlLocation.left, .001f)
+        assertEquals(hypotheticalTop, rtlLocation.top, .001f)
+        sameRect(rtlReference.caretRect(1), rtl.caretRect(range.end), 0f)
+
+        val only = Prepared(listOf(clipped), nowrap = true)
+        val empty = only.build(80)
+        assertEquals(child.text, empty.text.toString())
+        assertEquals(0, empty.height)
+        assertEquals(0, empty.shapedLineCount)
+        assertEquals(0f, empty.textBottom, 0f)
+        assertNull(empty.textBaselines)
+        assertEquals(0f, empty.nativeSingleLineAdvance(), 0f)
+        assertEquals(NativeWidthRange(0, 0), nativeTextWidthRange(only.source, root))
+        assertTrue(empty.characterRects(0, child.text.length).all { it == null })
+        assertTrue(empty.ordinaryPaintBounds.isEmpty())
+        assertNull(empty.extents.ink)
+        assertNull(empty.extents.interaction)
+        assertEquals(1, empty.nodes.size)
+        sameRect(RectF(-1f, hypotheticalTop, 0f, hypotheticalTop + 1f),
+            empty.clippedAbsoluteSemanticLocations.single().bounds, .001f)
+        assertEquals(minOf(0f, hypotheticalTop), empty.scrollableBounds.top, .001f)
+        assertEquals(0, Prepared(listOf(clipped), unownedPoint = true).build(80).height)
+        val pointSource = Prepared(listOf(Span(kind = "text", text = "", inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(40f, FontScaleBasis.CssPx)),
+            baselineShift = InlineComputedLength(-5f, FontScaleBasis.CssPx),
+        )), clipped), visiblePoint = true)
+        val visiblePoint = pointSource.build(80)
+        assertEquals(40f, visiblePoint.usedLineHeight(0), .00001f)
+        assertEquals(visiblePoint.nativeRubyLineBaseline(0) + 5f, visiblePoint.baselineForOffset(0), .00001f)
+        assertEquals(child.text, visiblePoint.text.toString())
+        assertTrue(visiblePoint.characterRects(0, child.text.length).all { it == null })
+        // The same styled source callback is reused twice, as in anonymous concatenation.
+        val copy = SpannableString(pointSource.source.toString() + "\n" + pointSource.source.toString())
+        for (offset in listOf(0, pointSource.source.length + 1)) {
+            pointSource.source.getSpans(0, pointSource.source.length, Any::class.java).forEach { span ->
+                copy.setSpan(nativeInlineStyleSpanCopy(span), offset + pointSource.source.getSpanStart(span),
+                    offset + pointSource.source.getSpanEnd(span), pointSource.source.getSpanFlags(span))
+            }
+        }
+        assertEquals(2, copy.getSpans(0, copy.length, NativeClippedVisibleMetricMarker::class.java).size)
+        val copied = NativeFloatGeometry.build(copy, root, 80, emptyList(), includeFontPadding = false,
+            textDirection = TextDirectionHeuristics.LTR)
+        assertEquals(2, copied.shapedLineCount)
+        assertEquals(40f, copied.usedLineHeight(0), .00001f)
+        assertEquals(40f, copied.usedLineHeight(1), .00001f)
+        assertEquals(copied.nativeRubyLineBaseline(0) + 5f, copied.baselineForOffset(0), .00001f)
+        assertEquals(copied.nativeRubyLineBaseline(1) + 5f, copied.baselineForOffset(pointSource.source.length + 1), .00001f)
+        assertEquals(child.text + "\n" + child.text, copied.text.toString())
+        val repeated = Prepared(listOf(clipped, clipped)).build(80)
+        assertEquals(child.text.repeat(2), repeated.text.toString())
+        assertEquals(2, repeated.clippedAbsoluteSemanticLocations.size)
+        assertEquals(2, repeated.nodes.size)
+        assertNotEquals(repeated.nodes[0].start, repeated.nodes[1].start)
+        assertEquals(0, repeated.height)
+        val positive = Prepared(listOf(clipped), NativeClippedAbsoluteMargins(2f, 3f, 4f, 5f), 8f, 9f).build(80)
+        sameRect(RectF(5f, hypotheticalTop, 13f, hypotheticalTop + 9f),
+            positive.clippedAbsoluteSemanticLocations.single().bounds, .001f)
+        assertEquals(0, positive.height)
+        val point = Prepared(listOf(clipped), NativeClippedAbsoluteMargins(0f, 0f, 0f, 0f), 0f, 0f).build(0)
+        assertTrue(point.clippedAbsoluteSemanticLocations.single().bounds.isEmpty)
+        assertEquals(0, point.height)
+        assertTrue(point.nodes.single().bounds.isEmpty())
+    }
+
+    @Test
+    fun clippedStaticProbeUsesRealNoWrapTextSignedMarginsAndIndependentDeclaringMetrics() {
+        val parent = paint().apply { textSize = 20f }
+        val declaring = paint().apply { textSize = 26f; typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD) }
+        val childPaint = paint().apply { textSize = 18f }
+        val body = "Tooltip time to peak concentrations"
+        val zeroMargin = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, 0f))
+        val child = Span(kind = "link", text = body, target = "retained-target", inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(18f, FontScaleBasis.CssPx))))
+        fun clipped(children: List<Span> = listOf(child), direction: String = "",
+            staticParent: BidiResolvedDirection = BidiResolvedDirection.Ltr) = Span(kind = "text", text = "",
+            direction = direction, clippedAbsolute = ClippedAbsoluteInline(StyleLength(StyleLengthUnit.Px, 1f),
+                StyleLength(StyleLengthUnit.Px, 1f), ContainerMargins(zeroMargin, zeroMargin, zeroMargin, zeroMargin), children, staticParent))
+        class Probe(val spans: List<Span>, val margins: NativeClippedAbsoluteMargins,
+            val ownerPaint: TextPaint = declaring, val bodyPaint: TextPaint = childPaint,
+            val parentPaint: TextPaint = parent, val ownerShift: Float? = null) {
+            val projection = rubyGraphicalProjection(spans)
+            val owners = projection.ranges.filter { it.role == RubyTextRole.ClippedAbsolute }
+            val scope = NativeClippedAbsoluteCoordinateOwner().rootScope
+            val source: Spanned = SpannableString(projection.text).apply {
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(parentPaint), NativeLineHeightPolicy.Pixels(50f), strut = true,
+                    includePrimaryInNormal = true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                val formats = owners.associate { owner -> owner.path to NativeRubyGroupFormat(ownerPaint,
+                    TextDirectionHeuristics.LTR, NativeLineHeightPolicy.Pixels(40f), localBaselineShift = ownerShift,
+                    clippedAbsolute = NativeClippedAbsoluteFormat(NativeClippedAbsoluteOwner(checkNotNull(owner.span), owner.path),
+                        1f, 1f, margins, scope)) }
+                owners.forEach { owner ->
+                    setSpan(SourcePaint(bodyPaint), owner.start, owner.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(NativeAuthoredInlineMetrics(NativePrimaryFontMetrics.from(bodyPaint), NativeLineHeightPolicy.Pixels(18f)),
+                        owner.start, owner.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                setSpan(NativeRubyPreparedSource(projection, this, parentPaint, TextDirectionHeuristics.LTR, formats),
+                    0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            fun build(width: Float, rtl: Boolean = false, carry: List<NativeFloatExclusion> = emptyList(),
+                alignment: Layout.Alignment = Layout.Alignment.ALIGN_NORMAL): NativeFloatGeometry =
+                NativeFloatGeometry.build(source, parentPaint, kotlin.math.floor(width).toInt(), emptyList(),
+                    alignment = alignment,
+                    textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                    carriedExclusions = carry, includeFontPadding = false, exactAvailableWidth = width)
+        }
+        fun usedTop(paint: TextPaint, height: Float): Float {
+            val fm = paint.fontMetrics
+            return fm.ascent - (height - (fm.descent - fm.ascent)) / 2f
+        }
+        fun expectedTop(parentPaint: TextPaint = parent, ownerPaint: TextPaint = declaring, bodyPaint: TextPaint = childPaint): Float =
+            -minOf(usedTop(parentPaint, 50f), usedTop(ownerPaint, 40f), usedTop(bodyPaint, 18f)) + ownerPaint.fontMetrics.ascent
+        fun location(value: NativeFloatGeometry) = value.clippedAbsoluteSemanticLocations.single().bounds
+        val prefix = "AA "
+        val suffix = " Z"
+        val owner = clipped()
+        val spans = listOf(Span(kind = "text", text = prefix), owner, Span(kind = "text", text = suffix))
+        val signed = NativeClippedAbsoluteMargins(-1f, -1f, -1f, -1f)
+        val fixture = Probe(spans, signed)
+        // Independent native metric contexts: the ordinary prefix and the complete
+        // hidden child retain their own declaring Paint, with no 1px surrogate.
+        val complete = prefix + body + suffix
+        val prefixAdvance = parent.getRunAdvance(complete, 0, prefix.length, 0, prefix.length, false, prefix.length)
+        val bodyAdvance = childPaint.getRunAdvance(complete, prefix.length, prefix.length + body.length,
+            prefix.length, prefix.length + body.length, false, prefix.length + body.length)
+        val threshold = (prefixAdvance.toDouble() + bodyAdvance - 2.0).toFloat()
+        val fits = fixture.build(threshold + .25f)
+        val wraps = fixture.build(threshold - .25f)
+        assertEquals(prefixAdvance - 1f, location(fits).left, .001f)
+        assertEquals(expectedTop(), location(fits).top, .001f)
+        assertEquals(-1f, location(wraps).left, .001f)
+        assertEquals(50f + expectedTop(), location(wraps).top, .001f)
+        assertEquals(1f, location(fits).width(), 0f)
+        assertEquals(1f, location(fits).height(), 0f)
+        val withoutMargins = Probe(spans, NativeClippedAbsoluteMargins(0f, 0f, 0f, 0f)).build(threshold + .25f)
+        assertEquals(50f + expectedTop(), location(withoutMargins).top, .001f)
+        assertEquals(fits.height, wraps.height)
+        assertEquals(fits.shapedLineCount, wraps.shapedLineCount)
+        assertEquals(complete, fits.text.toString())
+        val owned = fixture.owners.single()
+        assertTrue(fits.characterRects(owned.start, owned.end - owned.start).all { it == null })
+        assertTrue(fits.rectsForRange(owned.start, owned.end).isEmpty())
+        assertTrue(fits.clippedAbsoluteSemanticLocations.single().coordinateScope === fixture.scope)
+        val visible = SpannableString(prefix + suffix).apply {
+            setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(parent), NativeLineHeightPolicy.Pixels(50f), strut = true,
+                includePrimaryInNormal = true), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val ordinary = NativeFloatGeometry.build(visible, parent, kotlin.math.floor(threshold + .25f).toInt(), emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, includeFontPadding = false, exactAvailableWidth = threshold + .25f)
+        assertEquals(ordinary.height, fits.height)
+        val actual = Bitmap.createBitmap(ceil(threshold + 8f).toInt(), 90, Bitmap.Config.ARGB_8888)
+        val expected = Bitmap.createBitmap(actual.width, actual.height, Bitmap.Config.ARGB_8888)
+        try {
+            fits.paint(Canvas(actual)); ordinary.paint(Canvas(expected))
+            assertTrue(actual.sameAs(expected))
+        } finally { actual.recycle(); expected.recycle() }
+        val alone = Probe(listOf(owner), signed)
+        val emptyFlow = alone.build(threshold)
+        assertEquals(0, emptyFlow.height)
+        assertEquals(0, emptyFlow.shapedLineCount)
+        assertNull(emptyFlow.textBaselines)
+        assertEquals(-1f, location(emptyFlow).left, .001f)
+        assertEquals(expectedTop(), location(emptyFlow).top, .001f)
+        val verticalOnly = Probe(listOf(owner), signed.copy(top = 17f, bottom = -23f)).build(threshold)
+        sameRect(location(emptyFlow), location(verticalOnly), .001f)
+        val largeParent = TextPaint(parent).apply { textSize = 70f; typeface = Typeface.SERIF }
+        val changedParent = Probe(listOf(owner), signed, parentPaint = largeParent).build(threshold)
+        assertEquals(expectedTop(parentPaint = largeParent), location(changedParent).top, .001f)
+        assertNotEquals(location(emptyFlow).top, location(changedParent).top)
+        assertEquals(0, changedParent.height)
+        val rtlSource = Probe(listOf(clipped(staticParent = BidiResolvedDirection.Rtl)), signed)
+        val rtl = rtlSource.build(threshold, rtl = true)
+        assertEquals(threshold + 1f - 1f, location(rtl).left, .001f)
+        assertEquals(expectedTop(), location(rtl).top, .001f)
+        val mismatch = Probe(listOf(clipped(direction = "ltr")), signed)
+        assertThrows(UnsupportedFloatLayout::class.java) { mismatch.build(threshold, rtl = true) }
+        assertEquals(0, mismatch.build(threshold).height)
+        val inheritedFallback = NativeFloatGeometry.build(alone.source, parent, threshold.toInt(), emptyList(),
+            textDirection = TextDirectionHeuristics.FIRSTSTRONG_RTL, includeFontPadding = false,
+            exactAvailableWidth = threshold)
+        sameRect(location(emptyFlow), location(inheritedFallback), .001f)
+        // Physical left/right differ from logical start/end under the typed RTL proof.
+        val physicalLeft = rtlSource.build(threshold, rtl = true, alignment = Layout.Alignment.ALIGN_OPPOSITE)
+        val physicalRight = rtlSource.build(threshold, rtl = true, alignment = Layout.Alignment.ALIGN_NORMAL)
+        assertEquals(bodyAdvance - 2f, location(physicalLeft).left, .001f)
+        assertEquals(threshold, location(physicalRight).left, .001f)
+        val blocker = NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, threshold, 83f))
+        val below = alone.build(threshold, carry = listOf(blocker))
+        assertEquals(83f + expectedTop(), location(below).top, .001f)
+        assertEquals(0, below.height)
+        assertEquals(listOf(blocker), below.exclusions)
+        val partialWidth = bodyAdvance + 20f
+        val partialBlocker = NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 40f, 83f))
+        val partial = alone.build(partialWidth, carry = listOf(partialBlocker))
+        assertEquals(83f + expectedTop(), location(partial).top, .001f)
+        assertEquals(0, partial.height)
+        sameRect(location(emptyFlow), location(alone.build(threshold)), .001f)
+
+        // The adjacent empty visible owner remains independent even when both
+        // clipped owners have a numeric displacement and share its source boundary.
+        val pointLeaf = Span(kind = "text", text = "", inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(40f, FontScaleBasis.CssPx)),
+            baselineShift = InlineComputedLength(-3f, FontScaleBasis.CssPx)))
+        val pointFixture = Probe(listOf(owner, pointLeaf, owner), signed, ownerShift = 9f)
+        val pointKey = NativeClippedVisibleMetricPoint()
+        val pointPrimary = NativePrimaryFontMetrics.from(parent).copy(baselineShift = 3f)
+        val pointSource = SpannableString(pointFixture.source).apply {
+            val at = body.length
+            setSpan(NativeAuthoredInlineMetrics(pointPrimary, NativeLineHeightPolicy.Pixels(40f), clippedVisiblePoint = pointKey),
+                at, at, Spanned.SPAN_MARK_MARK)
+            setSpan(NativeAuthoredBaselineShift(3f, pointKey), at, at, Spanned.SPAN_MARK_MARK)
+            setSpan(NativeClippedVisibleMetricMarker(pointKey), at, at, Spanned.SPAN_MARK_MARK)
+        }
+        val pointProjection = checkNotNull(NativeClippedAbsoluteProjection.create(pointSource))
+        pointProjection.occurrences.forEach { occurrence ->
+            val privateSource = pointProjection.hypothetical(occurrence).source
+            val metric = privateSource.getSpans(0, privateSource.length, NativeAuthoredInlineMetrics::class.java)
+                .single { it.clippedVisiblePoint === pointKey }
+            val shift = privateSource.getSpans(0, privateSource.length, NativeAuthoredBaselineShift::class.java)
+                .single { it.clippedVisiblePoint === pointKey }
+            assertEquals(pointPrimary, metric.primary)
+            assertEquals(3f, shift.shift, 0f)
+            assertEquals(privateSource.getSpanStart(metric), privateSource.getSpanEnd(metric))
+        }
+        val dominantPoint = pointLeaf.copy(inlineStyle = pointLeaf.inlineStyle!!.copy(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(200f, FontScaleBasis.CssPx))))
+        val isolatedPointFixture = Probe(listOf(Span(kind = "text", text = "X", direction = "ltr"),
+            dominantPoint, owner), signed, ownerShift = 9f)
+        val isolatedPointSource = SpannableString(isolatedPointFixture.source).apply {
+            setSpan(NativeAuthoredInlineMetrics(pointPrimary, NativeLineHeightPolicy.Pixels(200f), clippedVisiblePoint = pointKey),
+                1, 1, Spanned.SPAN_MARK_MARK)
+            setSpan(NativeAuthoredBaselineShift(3f, pointKey), 1, 1, Spanned.SPAN_MARK_MARK)
+            setSpan(NativeClippedVisibleMetricMarker(pointKey), 1, 1, Spanned.SPAN_MARK_MARK)
+        }
+        val isolatedPointGeometry = NativeFloatGeometry.build(isolatedPointSource, parent, 500, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, includeFontPadding = false, exactAvailableWidth = 500f)
+        val pointContentTop = -(usedTop(parent, 200f) + 3f) + declaring.fontMetrics.ascent + 9f
+        assertEquals(pointContentTop, location(isolatedPointGeometry).top, .001f)
+        assertEquals(200f, isolatedPointGeometry.usedLineHeight(0), .001f)
+        assertEquals(isolatedPointGeometry.nativeRubyLineBaseline(0) + 3f,
+            isolatedPointGeometry.baselineForOffset(1), .001f)
+        assertEquals(1, isolatedPointGeometry.nativeRubyShapingSource.getSpans(0,
+            isolatedPointGeometry.nativeRubyShapingSource.length, NativeAuthoredInlineMetrics::class.java)
+            .count { it.clippedVisiblePoint === pointKey })
+        assertTrue(location(isolatedPointGeometry).top > location(isolatedPointFixture.build(500f)).top + 50f)
+
+        // This invokes the same real private fitter with a distinct ordinary
+        // citation sibling. Its internal space is a valid Unicode break, but the
+        // original citation owner forbids both ordinary and emergency cuts there.
+        val citation = CitationMarker(1L, 1L, "clipped-probe-citation", nowrap = true)
+        val markerText = "[12 34]"
+        val privateText = SpannableString(markerText + " " + body).apply {
+            setSpan(NativeCitationMarkerSpan(citation), 0, markerText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(NativeClippedProbeAllocation(markerText.length + 1, length, signed),
+                markerText.length + 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(parent), NativeLineHeightPolicy.Pixels(50f), strut = true),
+                0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val citationWidth = parent.measureText(markerText) / 2f
+        val citationPlan = NativeFloatRowPlan.build(privateText, parent, kotlin.math.floor(citationWidth).toInt(),
+            emptyList(), Layout.Alignment.ALIGN_NORMAL, TextDirectionHeuristics.LTR, 0f, 1f, false, emptyList(),
+            NativeTextInsets(), null, false, citationWidth)
+        assertTrue(citationPlan.rows.none { it.end in 1 until markerText.length })
+        assertEquals(privateText.length, citationPlan.rows.last().end)
+        assertEquals(privateText.toString(), citationPlan.source.toString())
+        val mixedParagraphs = Probe(listOf(Span(kind = "text", text = "first\n"),
+            Span(kind = "text", text = "Latin", direction = "ltr"),
+            clipped(staticParent = BidiResolvedDirection.Rtl)), signed)
+        val mixedProjection = checkNotNull(NativeClippedAbsoluteProjection.create(mixedParagraphs.source))
+        val compiledMixed = checkNotNull(nativeRubyLayout(mixedProjection.visual, parent,
+            TextDirectionHeuristics.FIRSTSTRONG_LTR, exactAdvances = true))
+        val secondNativeStart = compiledMixed.native.toString().indexOf('\n') + 1
+        assertTrue(secondNativeStart > 0)
+        assertEquals('\u2066', compiledMixed.native[secondNativeStart])
+        assertEquals(BidiResolvedDirection.Rtl, nativeClippedParagraphDirectionAt(compiledMixed.native, secondNativeStart))
+        val mixedPlan = NativeFloatRowPlan.build(compiledMixed.native, parent, 400, emptyList(),
+            Layout.Alignment.ALIGN_NORMAL, TextDirectionHeuristics.FIRSTSTRONG_LTR, 0f, 1f, false, emptyList(),
+            NativeTextInsets(), null, false, 400f)
+        assertFalse(mixedPlan.rows.first().paragraph.rtl)
+        assertTrue(mixedPlan.rows.last().paragraph.rtl)
+        // Public mixed-paragraph selection must retain the current ordinary line
+        // boxes; until that split is represented, refusal is explicit and recoverable.
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatGeometry.build(mixedParagraphs.source, parent, 400, emptyList(),
+                textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR, includeFontPadding = false)
+        }
+        val recoveredParagraphs = Probe(listOf(Span(kind = "text", text = "first\n"),
+            Span(kind = "text", text = "Latin", direction = "ltr"), owner), signed).build(400f)
+        assertEquals("first\nLatin" + body, recoveredParagraphs.text.toString())
+        assertEquals(2, recoveredParagraphs.shapedLineCount)
+        val isolatedFirst = Span(kind = "text", text = "אבג", direction = "rtl")
+        val uniformSource = Probe(listOf(isolatedFirst, Span(kind = "text", text = "\nLatin"), owner), signed)
+        val uniformProjection = checkNotNull(NativeClippedAbsoluteProjection.create(uniformSource.source))
+        val uniform = NativeFloatGeometry.build(uniformSource.source, parent, 400, emptyList(),
+            textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR, includeFontPadding = false)
+        val ordinaryUniformSource = SpannableString(uniformProjection.visual).apply {
+            getSpans(0, length, NativeClippedParagraphDirection::class.java).forEach(::removeSpan)
+        }
+        val ordinaryUniform = NativeFloatGeometry.build(ordinaryUniformSource, parent, 400, emptyList(),
+            textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR, includeFontPadding = false)
+        assertEquals(1, uniform.nativeRubyLineDirection(0))
+        for (offset in 0 until ordinaryUniformSource.length)
+            sameRect(ordinaryUniform.caretRect(offset), uniform.caretRect(offset), .001f)
+        val isolatedConflict = Probe(listOf(isolatedFirst, Span(kind = "text", text = "\nLatin"),
+            clipped(staticParent = BidiResolvedDirection.Rtl)), signed)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            NativeFloatGeometry.build(isolatedConflict.source, parent, 400, emptyList(),
+                textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR, includeFontPadding = false)
+        }
+        val conflict = Probe(listOf(owner, clipped(staticParent = BidiResolvedDirection.Rtl)), signed)
+        assertThrows(UnsupportedFloatLayout::class.java) { conflict.build(400f) }
+        assertThrows(UnsupportedFloatLayout::class.java) { fits.inColumns(List(fits.shapedLineCount) { 0f to 0f }) }
+        sameRect(location(fits), location(fixture.build(threshold + .25f)), .001f)
+        val zero = TextPaint(childPaint).apply { textSize = 0f }
+        val zeroOwner = Probe(listOf(clipped(listOf(Span(kind = "text", text = " ")))),
+            NativeClippedAbsoluteMargins(0f, 0f, 0f, 0f), ownerPaint = zero, bodyPaint = zero).build(0f)
+        assertEquals(0, zeroOwner.height)
+        assertEquals(0f, location(zeroOwner).left, 0f)
+        assertEquals(expectedTop(ownerPaint = zero, bodyPaint = zero), location(zeroOwner).top, .001f)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            Probe(listOf(clipped(listOf(Span(kind = "text", text = " ")))), signed,
+                ownerPaint = zero, bodyPaint = zero).build(0f)
+        }
     }
 }

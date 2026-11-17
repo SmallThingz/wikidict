@@ -42,6 +42,16 @@ internal class NativeSemanticGroup(
         node.translated(segment.child.x, segment.child.y).copy(
             start = segment.start + node.start, end = segment.start + node.end)
     } }).mapIndexed { index, node -> node.copy(id = index) }
+    override val clippedAbsoluteSemanticLocations get() = children.flatMap { child ->
+        child.geometry.clippedAbsoluteSemanticLocations.map { it.translated(child.x, child.y) }
+    }
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        val segment = segments.singleOrNull { start >= it.start && end <= it.end } ?: return null
+        val child = segment.child
+        return child.geometry.clippedAbsoluteSemanticLocation(start - segment.start, end - segment.start)
+            ?.translated(child.x, child.y)
+    }
     override val positionedGroups: List<NativePositionedGroup> by lazy {
         var base = extraNodes.size
         segments.flatMap { segment ->

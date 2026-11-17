@@ -67,7 +67,7 @@ class RubyModelCodecTest {
                 (if (value.small) 8 else 0) or (if (value.superscript) 16 else 0) or
                 (if (value.subscript) 32 else 0) or (if (value.strike) 64 else 0) or (if (value.underline) 128 else 0))
             string(value.text, "$label.text"); string(value.target); string(value.trail)
-            string(value.language); string(value.classes); string(value.direction); string(value.explanation)
+            string(value.language); string(value.classes); string(value.direction, "$label.direction"); string(value.explanation)
             byte(if (value.foreground == null) 0 else 1); value.foreground?.let { string(it) }
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
@@ -146,6 +146,22 @@ class RubyModelCodecTest {
             } else require(value.citationMarker == null)
             if (version == 'Z' && yFlags and 8192 != 0) audioTail(value.audioControl, "$label.audio")
             else require(value.audioControl == null)
+            if ((version == 'Y' || version == 'Z') && yFlags and 128 != 0) {
+                mark("$label.clipped"); byte(if (value.clippedAbsolute == null) 0 else 1)
+                value.clippedAbsolute?.let { clipped ->
+                    mark("$label.clipped.staticParentDirection")
+                    byte(when (clipped.staticParentDirection) { BidiResolvedDirection.Ltr -> 1; BidiResolvedDirection.Rtl -> 2 })
+                    mark("$label.clipped.width"); byte(clipped.width.unit.ordinal); f32(clipped.width.value)
+                    mark("$label.clipped.height"); byte(clipped.height.unit.ordinal); f32(clipped.height.value)
+                    listOf("top" to clipped.margin.top, "right" to clipped.margin.right,
+                        "bottom" to clipped.margin.bottom, "left" to clipped.margin.left).forEach { (name, margin) ->
+                        val length = (margin as ContainerMargin.Length).value
+                        mark("$label.clipped.$name"); byte(length.unit.ordinal); f32(length.value)
+                    }
+                    mark("$label.clipped.children.count"); u32(clipped.children.size.toLong())
+                    clipped.children.forEachIndexed { index, child -> span(child, "$label.clipped.child.$index") }
+                }
+            } else require(value.clippedAbsolute == null)
             mark("$label.end")
         }
         private fun audioTail(value: AudioControl?, label: String) {
@@ -276,6 +292,8 @@ class RubyModelCodecTest {
             repeat(count) { out.write(record) }
             spans(listOf(Span("text", "x")), "$label.0.box.body")
             if (yFlags and 64 != 0) byte(0) // No marker on the raw Box owner.
+            if (version == 'Z' && yFlags and 8192 != 0) byte(0) // No AUDIO policy on the raw Box owner.
+            if (yFlags and 128 != 0) byte(0) // The raw Box owner also has the nullable clipped tail.
             following?.let { span(it, "$label.1") }
         }
         private fun linkPaint(value: LinkPaint) {
@@ -2590,7 +2608,7 @@ class RubyModelCodecTest {
         assertArrayEquals(byteArrayOf(1) + ByteArray(20), bytes.copyOfRange(presence, end))
         reject("Occurrence presence is strict", changed(bytes, presence, 2))
         reject("Empty Y census", changed(bytes, wire.at.getValue("yFeatures"), 0))
-        reject("Unknown Y capability", changed(bytes, wire.at.getValue("yFeatures"), 128))
+        reject("Clipped feature cannot replace image occurrence payload", changed(bytes, wire.at.getValue("yFeatures"), 128))
         for (name in listOf("x", "y", "left", "right")) {
             val start = wire.at.getValue("root.0.image.occurrence.$name")
             reject("Unknown $name unit", changed(bytes, start, 2))
@@ -3099,7 +3117,7 @@ class RubyModelCodecTest {
         reject("Non-reference marker role", changed(bytes, wire.at.getValue("root.0.start") + 1, 0))
         reject("Forged marker normal checksum", changed(bytes, wire.at.getValue("root.0.start") + 2, 128))
         reject("Backlink cannot contain a marker", changed(bytes, wire.at.getValue("backlinks.0.0.span.citation"), 1))
-        reject("Pending128 remains unsupported", changed(bytes, wire.at.getValue("yFeatures"), 128))
+        reject("Clipped feature cannot replace citation payload", changed(bytes, wire.at.getValue("yFeatures"), 128))
         reject("Feature debt", changed(bytes, wire.at.getValue("yFeatures"), 1))
         for (end in wire.at.getValue(payload)..bytes.lastIndex) reject("Truncated citation/trailer at $end", bytes.copyOf(end))
         reject("EOF remains exact", bytes + byteArrayOf(0))
@@ -3298,7 +3316,7 @@ class RubyModelCodecTest {
         reject("Literal simultaneous fixed and static", changed(simultaneous, wire.at.getValue("$styleKey.extension"), 5))
         reject("Exact P census remains", changed(bytes, wire.at.getValue("features"), 64))
         reject("Z still needs bit256", changed(bytes, 5, 0))
-        reject("Pending clip128 remains unsupported", changed(bytes, 4, 128))
+        reject("Clipped tail and census are required beside static positioning", changed(bytes, 4, 128))
         for (end in bytes.indices) reject("Truncated static $end", bytes.copyOf(end))
         reject("Trailing static data", bytes + byteArrayOf(0))
         val debt = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(relative(leaf)) } }
@@ -4018,6 +4036,405 @@ class RubyModelCodecTest {
                 val visitor = PresentationSpanVisitor { _, _ -> }.apply { onSpan = { if (it.audioControl != null) found.add(it) } }
                 read(bytes).sections.forEach { visitor.blocks(it.blocks) }
                 assertEquals(listOf(owner), found)
+            }
+        }
+    }
+
+    @Test fun clippedAbsoluteRetainsAuthoredGeometryOriginalTextActionsAndAnnotationsAcrossAllSinks() {
+        // Synthetic typed policy: this does not qualify the Hungarian producer or native paint.
+        val px = StyleLengthUnit.Px
+        val minus = ContainerMargin.Length(SignedContainerMargin(px, -1f))
+        val child = Span("link", "time", "Time", trail = " ", targetFragment = "peak", tooltip = "Child tip",
+            explanation = "Child explanation", language = "hu", italic = true)
+        val external = Span("external_link", "to peak", "https://example.test/peak", trail = " ", bold = true)
+        val children = listOf(text("Tooltip "), child, external, text("concentrations"))
+        val group = ClippedAbsoluteInline(StyleLength(px, 1f), StyleLength(px, 1f),
+            ContainerMargins(minus, minus, minus, minus), children, staticParentDirection = BidiResolvedDirection.Rtl)
+        val source = Span("text", "", language = "hu", direction = "rtl", fontScale = 1.35f, tooltip = "Owner tip",
+            explanation = "Owner explanation", inlineStyle = InlineTextStyle(cursor = InlineCursor.Help, wrap = TextWrap.BreakWord),
+            clippedAbsolute = group)
+        val label = "Tooltip time to peak concentrations"
+        val visited = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { visited.add(it) } }.spans(listOf(source))
+        assertEquals(5, visited.size)
+        assertSame(source, visited.first())
+        children.forEachIndexed { index, span -> assertSame(span, visited[index + 1]) }
+        assertSame(group, source.clippedAbsolute)
+        assertSame(children, group.children)
+        assertEquals(label, textOf(listOf(source)))
+        assertEquals("before ${label} after", textOf(listOf(text("before "), source, text(" after"))))
+        for (sink in Sink.entries) {
+            val wire = Wire('Y', 128)
+            val entry = read(wire.document(listOf(source), sink, features = 16, headingTitle = label))
+            val decoded = selected(entry, sink)
+            assertEquals(sink.name, source, decoded)
+            assertEquals("rtl", decoded.direction) // Explicit clipped-owner bidi agrees with its separate parent field.
+            assertEquals(BidiResolvedDirection.Rtl, decoded.clippedAbsolute!!.staticParentDirection)
+            assertEquals(label, textOf(listOf(decoded)))
+            assertEquals(EntryLink("Time", "peak"), decoded.clippedAbsolute!!.children[1].entryLink())
+            assertEquals(external, decoded.clippedAbsolute!!.children[2])
+            assertTrue(entry.abbreviations.any { it.label == label && it.explanation == "Owner explanation" })
+            assertTrue(entry.abbreviations.any { it.label == "time " && it.explanation == "Child explanation" })
+            assertTrue(entry.textDetails.any { it.kind == TextDetailKind.Advisory && it.label == label && it.description == "Owner tip" })
+            assertTrue(entry.textDetails.any { it.kind == TextDetailKind.Advisory && it.label == "time " && it.description == "Child tip" })
+        }
+        val state = LinkState("#123456", false)
+        val paint = LinkPaint(state, state, state, state, state, state, state, state, false)
+        val leaf = Span("text", "owned", foreground = "#123456", fontScale = 0.5f)
+        val action = Span("link", "", "Whole owner", targetFragment = "owned", foreground = "#123456", linkPaint = paint,
+            clippedAbsolute = group.copy(children = listOf(leaf)))
+        val actionEntry = read(Wire('Y', 128).document(listOf(action)))
+        assertEquals(action, actionEntry.displayTitle.single())
+        assertSame(leaf, action.clippedAbsolute!!.children.single())
+        assertEquals(EntryLink("Whole owner", "owned"), actionEntry.displayTitle.single().entryLink())
+        assertEquals("text", actionEntry.displayTitle.single().clippedAbsolute!!.children.single().kind)
+        assertEquals(0.5f, actionEntry.displayTitle.single().clippedAbsolute!!.children.single().fontScale)
+        val emptyMetric = Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        assertEquals(listOf(emptyMetric, text(" ")), group.copy(children = listOf(emptyMetric, text(" "))).children)
+        assertEquals("citation", group.copy(children = listOf(Span("text", "source", role = "citation"))).children.single().role)
+
+        val zero = StyleLength(px, 0f)
+        val borders = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val box = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), borders,
+            emptyList(), listOf(text("box"))))
+        val image = Span("text", "", image = InlineImage("Probe.svg", 120,
+            occurrenceLayout = InlineImageOccurrenceLayout(zero, zero, zero, zero)))
+        val font = InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, fontFamily = ContainerFontFamily.SansSerif)
+        val body = BodyTypography(font, direction = BidiResolvedDirection.Rtl)
+        val reference = Reference(1, 1, "kept", listOf(source), bodyTypography = body)
+        val complete = Wire('Y', 191).apply { containerStyleOverride = { containerOwnerStyle(font, label = it) } }
+        val bytes = complete.document(listOf(box, source, image), Sink.Container, features = 20,
+            bodyTypography = body, referenceValues = listOf(reference), mediaValues = listOf(Media("Probe.svg", "image", "Original media")))
+        val entry = read(bytes)
+        val container = entry.sections.single().blocks.single().container!!
+        assertEquals(font, container.style.ownerFont)
+        assertEquals(listOf(box, source, image), container.blocks.single().spans)
+        assertEquals(listOf(reference), entry.references)
+        assertEquals(body, entry.bodyTypography)
+        assertEquals(listOf(image.image), entry.inlineImages)
+        reject("Clipped union preserves pending family census", changed(bytes, complete.at.getValue("features"), 16))
+
+
+        // Current Z joins keep citation and AUDIO in their existing positions, then append Clipped.
+        val marker = Span("link", "[1]", targetFragment = "reference-9", role = "reference",
+            citationMarker = CitationMarker(9, 7, "clip-return"))
+        val backlink = ReferenceBacklink.withPolicies(7, Span("link", "return", targetFragment = "clip-return"))
+        val note = Reference(9, 1, "", emptyList(), backlinks = listOf(backlink))
+        val audio = Span("link", "Audio", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val clipped = Span("text", "", clippedAbsolute = group)
+        val paragraph = Block("paragraph", 0, listOf(marker, clipped, audio), columnBreakInside = ColumnBreakInside.Avoid)
+        val minimum = Table(emptyList(), emptyList(), style = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Px, 7f)))
+        fun root(block: Block) = Block("container", 0, emptyList(), container = Container(listOf(block,
+            Block("table", 0, emptyList(), table = minimum)), ContainerStyle(textWrap = TextWrap.Normal)))
+        val flags = 128 or 64 or 256 or 512 or 4096 or 8192
+        val catalog = listOf(Media("Tone.ogg", "audio", ""))
+        val mixed = Wire('Z', flags).apply { paragraphOverride = { positionedBlock(root(paragraph), "clipMixed") } }
+        val mixedBytes = mixed.document(emptyList(), Sink.Body, referenceValues = listOf(note), mediaValues = catalog)
+        val mixedEntry = read(mixedBytes)
+        assertEquals(root(paragraph), mixedEntry.sections.single().blocks.single())
+        assertEquals(listOf(note), mixedEntry.references)
+        assertEquals(catalog, mixedEntry.media)
+        assertSame(clipped, paragraph.spans[1])
+        assertSame(group, clipped.clippedAbsolute)
+        val audioPath = "clipMixed.child0.spans.2"
+        val citationAt = mixed.at.getValue("$audioPath.citation")
+        val audioAt = mixed.at.getValue("$audioPath.audio")
+        val clippedAt = mixed.at.getValue("$audioPath.clipped")
+        assertEquals(citationAt + 1, audioAt)
+        assertEquals(audioAt + 2, clippedAt)
+        assertArrayEquals(byteArrayOf(0, 1, 0, 0), mixedBytes.copyOfRange(citationAt, clippedAt + 1))
+        val backlinkPath = "backlinks.0.0.span"
+        assertEquals(mixed.at.getValue("$backlinkPath.audio") + 1, mixed.at.getValue("$backlinkPath.clipped"))
+        reject("Mixed clipped tail cannot be omitted", replace(mixedBytes, clippedAt, clippedAt + 1, byteArrayOf()))
+        reject("Mixed clipped owner cannot lose flag128", changed(mixedBytes, mixed.at.getValue("yFeatures"), flags and 127))
+        val missingOwner = paragraph.copy(spans = listOf(marker, text("ordinary"), audio))
+        reject("Mixed actual clipped census is independent", Wire('Z', flags).apply {
+            paragraphOverride = { positionedBlock(root(missingOwner), "missingClipped") }
+        }.document(emptyList(), Sink.Body, referenceValues = listOf(note), mediaValues = catalog))
+
+        // Independent common-core literal: all-auto AUDIO followed by absent Clipped is exactly [1,0,0].
+        val audioClip = Wire('Z', 8192 or 128)
+        val isolated = audioClip.isolatedSpan(audio)
+        assertArrayEquals(byteArrayOf(1, 0, 0), isolated.takeLast(3).toByteArray())
+        assertArrayEquals(Wire('Z', 8192).isolatedSpan(audio) + byteArrayOf(0), isolated)
+        val pair = Wire('Z', 8192 or 128)
+        val pairBytes = pair.document(listOf(audio, clipped), mediaValues = catalog)
+        assertEquals(listOf(audio, clipped), read(pairBytes).displayTitle)
+        val pairTail = pair.at.getValue("root.0.audio")
+        reject("Reversed common AUDIO-Clipped framing", replace(pairBytes, pairTail, pairTail + 3, byteArrayOf(0, 1, 0)))
+    }
+
+    @Test fun clippedAbsoluteRejectsMalformedOwnersNestedPayloadsAndWireWithoutChangingLegacyBytes() {
+        val px = StyleLengthUnit.Px
+        val zero = StyleLength(px, 0f)
+        val minus = ContainerMargin.Length(SignedContainerMargin(px, -1f))
+        val margin = ContainerMargins(minus, minus, minus, minus)
+        val group = ClippedAbsoluteInline(zero, zero, margin, listOf(text("x")), staticParentDirection = BidiResolvedDirection.Rtl)
+        val source = Span("text", "", clippedAbsolute = group)
+        val wire = Wire('Y', 128)
+        val bytes = wire.document(listOf(source))
+        assertEquals(source, read(bytes).displayTitle.single())
+        assertNotNull(read(bytes).displayTitle.single().clippedAbsolute)
+        val present = wire.at.getValue("root.0.clipped")
+        val direction = wire.at.getValue("root.0.clipped.staticParentDirection")
+        val start = wire.at.getValue("root.0.clipped.width")
+        val count = wire.at.getValue("root.0.clipped.children.count")
+        assertEquals(30, count - start)
+        assertEquals(35, count + 4 - (present + 1)) // Required direction plus the existing minimum body.
+        assertEquals(present + 1, direction)
+        assertEquals(direction + 1, start)
+        assertEquals(2, bytes[direction].toInt())
+        assertEquals(1, bytes[present].toInt())
+        for (tag in listOf(0, 3, 255)) reject("Required static-parent direction tag $tag", changed(bytes, direction, tag))
+        reject("Unpublished old clipped payload has no direction", replace(bytes, direction, direction + 1, byteArrayOf()))
+        val ltr = source.copy(clippedAbsolute = group.copy(staticParentDirection = BidiResolvedDirection.Ltr))
+        val ltrWire = Wire('Y', 128)
+        val ltrBytes = ltrWire.document(listOf(ltr))
+        assertEquals(1, ltrBytes[ltrWire.at.getValue("root.0.clipped.staticParentDirection")].toInt())
+        assertEquals(ltr, read(ltrBytes).displayTitle.single())
+        assertEquals(BidiResolvedDirection.Rtl, source.clippedAbsolute!!.staticParentDirection)
+        assertSame(group, source.clippedAbsolute)
+        invalid("Explicit owner direction cannot contradict static parent") { source.copy(direction = "ltr") }
+        invalid("Clipped owner direction cannot remain auto") { source.copy(direction = "auto") }
+        val matching = source.copy(direction = "rtl")
+        val matchingWire = Wire('Y', 128)
+        val matchingBytes = matchingWire.document(listOf(matching))
+        assertEquals(matching, read(matchingBytes).displayTitle.single())
+        val directionText = matchingWire.at.getValue("root.0.direction.bytes")
+        reject("Forged clipped owner direction conflict", replace(matchingBytes, directionText, directionText + 3, "ltr".encodeToByteArray()))
+        val autoOwner = replace(matchingBytes, directionText, directionText + 3, "auto".encodeToByteArray())
+        reject("Forged unresolved clipped owner direction", changed32(autoOwner, matchingWire.at.getValue("root.0.direction"), 4))
+        val ordinaryAuto = Span("text", "ordinary", direction = "auto")
+        assertEquals(listOf(ordinaryAuto, source), read(Wire('Y', 128).document(listOf(ordinaryAuto, source))).displayTitle)
+        reject("Strict clipped presence", changed(bytes, present, 2))
+        reject("No zero capability mask", changed(bytes, wire.at.getValue("yFeatures"), 0))
+        for (flags in listOf(64, 192, 255)) reject("Forged capability tails or census $flags", changed(bytes, wire.at.getValue("yFeatures"), flags))
+        for (field in listOf("width", "height", "top", "right", "bottom", "left")) {
+            val at = wire.at.getValue("root.0.clipped.$field")
+            reject("Unknown $field unit", changed(bytes, at, 2))
+            for (invalid in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                reject("Nonfinite $field", changed32(bytes, at + 1, invalid.toRawBits().toLong() and 0xffff_ffffL))
+        }
+        for (field in listOf("width", "height")) reject("Negative $field", changed32(bytes,
+            wire.at.getValue("root.0.clipped.$field") + 1, (-1f).toRawBits().toLong() and 0xffff_ffffL))
+        reject("Empty child array", changed32(bytes, count, 0))
+        reject("Impossible child count", changed32(bytes, count, 0xffff_ffffL))
+        for (size in present until bytes.size) reject("Truncated clipped payload $size", bytes.copyOf(size))
+        reject("Clipped trailing byte", bytes + byteArrayOf(0))
+        reject("Flag128 requires an actual owner", Wire('Y', 128).document(listOf(text("ordinary"))))
+        val plain = text("ordinary")
+        val nullable = Wire('Y', 128)
+        val nullableSpan = nullable.isolatedSpan(plain)
+        val oldSpan = Wire('V').isolatedSpan(plain)
+        assertArrayEquals(oldSpan + byteArrayOf(0), nullableSpan)
+        assertEquals(oldSpan.size, nullable.at.getValue("isolated.clipped"))
+        val body = BodyTypography(InlineFontSnapshot(fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, fontNormalized = true))
+        val oldY = Wire('Y', 2).document(listOf(plain), bodyTypography = body)
+        val flagged = Wire('Y', 130)
+        val flaggedBytes = flagged.document(listOf(plain), bodyTypography = body)
+        val removed = replace(flaggedBytes, flagged.at.getValue("root.0.clipped"), flagged.at.getValue("root.0.clipped") + 1, byteArrayOf())
+        assertArrayEquals(oldY, changed(removed, flagged.at.getValue("yFeatures"), 2))
+        val withOwner = Wire('Y', 130)
+        reject("Payload cannot lose its capability", changed(withOwner.document(listOf(source), bodyTypography = body),
+            withOwner.at.getValue("yFeatures"), 2))
+        for (version in listOf('W', 'X', 'Z')) reject("Unsupported or wrong-width header $version", changed(bytes, 3, version.code))
+        invalid("Auto margin has no definite static box") { group.copy(margin = margin.copy(left = ContainerMargin.Auto)) }
+        invalid("Negative width") { group.copy(width = StyleLength(px, -1f)) }
+        invalid("Nonfinite margin") { group.copy(margin = margin.copy(top = ContainerMargin.Length(SignedContainerMargin(px, Float.NaN)))) }
+        invalid("Empty clipped body") { group.copy(children = emptyList()) }
+        invalid("Metric-only clipped body") { group.copy(children = listOf(Span("text", "", inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx)))))) }
+        invalid("Clipped owner has no own text") { source.copy(text = "own") }
+        invalid("Clipped owner has no own trail") { source.copy(trail = "own") }
+        invalid("Clipped owner cannot also be Ruby") { source.copy(ruby = simple().ruby) }
+        invalid("Text owner cannot hide an action target") { source.copy(target = "Target") }
+        invalid("Action owner needs target") { source.copy(kind = "link") }
+        val forbidden = listOf(Span("line_break", ""), Span("text", "x", classes = "wikidict-media"),
+            Span("text", "", image = InlineImage("Probe.svg")), simple(), source,
+            Span("text", "", inlinePaddingGroup = InlinePaddingGroup(StyleLength(px, 1f), zero, listOf(text("x")))),
+            Span("link", "", "Action", inlineActionGroup = InlineActionGroup(listOf(text("x")))))
+        for (child in forbidden) invalid("Unsupported child ${child.kind}/${child.classes}") { group.copy(children = listOf(child)) }
+        for (control in listOf('\t', '\n', '\r', '\u000c')) {
+            invalid("Raw body control") { group.copy(children = listOf(text("x${control}y"))) }
+            invalid("Raw trail control") { group.copy(children = listOf(Span("link", "x", "Target", trail = control.toString()))) }
+            reject("Forged raw body control", changed(bytes, wire.at.getValue("root.0.clipped.child.0.text.bytes"), control.code))
+        }
+        val marker = Span("link", "[1]", targetFragment = "reference-9", role = "reference",
+            citationMarker = CitationMarker(9, 7, "clip-return"))
+        val backlink = ReferenceBacklink.withPolicies(7, Span("link", "return", targetFragment = "clip-return"))
+        val audio = Span("link", "Play", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        for (child in listOf(marker, backlink.span, audio)) {
+            invalid("Current qualified policy cannot enter clipped children") { group.copy(children = listOf(child)) }
+            invalid("Current qualified owner cannot also carry clipped payload") { child.copy(text = "", clippedAbsolute = group) }
+        }
+        val nested = Wire('Y', 128).isolatedSpan(source)
+        reject("Nested clipped carrier", replace(bytes, wire.at.getValue("root.0.clipped.child.0.start"),
+            wire.at.getValue("root.0.clipped.child.0.end"), nested))
+        val duplicate = Span("link", "x", "Same")
+        invalid("Even equal descendant action repeats owner") { Span("link", "", "Same", clippedAbsolute = group.copy(children = listOf(duplicate))) }
+        val state = LinkState("#123456", false)
+        val paint = LinkPaint(state, state, state, state, state, state, state, state, false)
+        invalid("Owner paint cannot overwrite a child color") {
+            Span("link", "", "Owner", linkPaint = paint, clippedAbsolute = group.copy(children = listOf(Span("text", "x", foreground = "#654321"))))
+        }
+        val edge = StyleLength(px, 1f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        invalid("Ruby cannot contain clipped carrier") { owner(listOf(base(source))) }
+        invalid("Padding cannot contain clipped carrier") { InlinePaddingGroup(edge, zero, listOf(source)) }
+        invalid("Action cannot contain clipped carrier") { InlineActionGroup(listOf(source)) }
+        invalid("Box cannot contain clipped carrier") { InlineBoxGroup(StyleEdges(zero, zero, zero, zero), none, emptyList(), listOf(source)) }
+        val contexts = listOf(
+            simple() to "root.0.segment0.base0.body.0",
+            Span("text", "", inlinePaddingGroup = InlinePaddingGroup(edge, zero, listOf(text("x")))) to "root.0.padding.body.0",
+            Span("link", "", "Owner", inlineActionGroup = InlineActionGroup(listOf(text("x")))) to "root.0.action.body.0",
+            Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), none, emptyList(), listOf(text("x")))) to "root.0.box.body.0")
+        for ((context, path) in contexts) {
+            val raw = Wire('Y', if (context.inlineBoxGroup == null) 128 else 132)
+            val original = raw.document(listOf(context))
+            val child = Wire('Y', if (context.inlineBoxGroup == null) 128 else 132).isolatedSpan(source)
+            reject("Forged structural context $path", replace(original, raw.at.getValue("$path.start"), raw.at.getValue("$path.end"), child))
+        }
+
+        // The initial carrier has one Entry-root containing block. An ordinary holder never clears ancestry debt.
+        fun paragraph(value: Span = source) = Block("paragraph", 0, listOf(value))
+        fun wrapper(child: Block, style: ContainerStyle = ContainerStyle()) =
+            Block("container", 0, emptyList(), container = Container(listOf(child), style))
+        val relativeStyle = ContainerStyle(positioning = ContainerPositioning.RelativeAuto)
+        fun entry(blocks: List<Block>, references: List<Reference> = emptyList(), media: List<Media> = emptyList()) =
+            Entry("Clip ancestry", emptyList(), "language", "Hungarian", "hu", listOf(Section(2, "Body", blocks)), references, media = media)
+        val staticRoot = wrapper(wrapper(paragraph()))
+        assertEquals(staticRoot, entry(listOf(staticRoot)).sections.single().blocks.single())
+        val directRelative = wrapper(wrapper(paragraph()), relativeStyle)
+        invalid("Relative ancestry survives an ordinary intermediate") { entry(listOf(directRelative)) }
+        val nestedTable = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+            blocks = listOf(Block("list_item", 1, listOf(source), listPath = "*"))))))
+        val table = Table(listOf(source), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nestedTable))))
+        val tableBlock = Block("table", 0, emptyList(), table = table)
+        val staticTable = wrapper(tableBlock)
+        assertEquals(staticTable, entry(listOf(staticTable)).sections.single().blocks.single())
+        val relativeTable = wrapper(wrapper(tableBlock), relativeStyle)
+        invalid("Table, nested cell and list ownership cannot erase nonstatic ancestry") { entry(listOf(relativeTable)) }
+        for ((block, accepted) in listOf(staticRoot to true, directRelative to false, staticTable to true, relativeTable to false)) {
+            val raw = Wire('Y', 128).apply { paragraphOverride = { positionedBlock(block, "clippedAncestry") } }
+            val literal = raw.document(emptyList(), Sink.Body)
+            if (accepted) assertEquals(block, read(literal).sections.single().blocks.single())
+            else reject("Literal nonstatic clipped ancestry", literal)
+        }
+        val figure = read(Wire('Y', 128).document(listOf(source), Sink.FigureCaption))
+            .sections.single().blocks.single().figure!!
+        val figureBlock = Block("paragraph", 0, emptyList(), figure = figure)
+        assertEquals(figureBlock, entry(listOf(figureBlock)).sections.single().blocks.single())
+        invalid("Figure caption retains incoming nonstatic ancestry") { entry(listOf(wrapper(figureBlock, relativeStyle))) }
+        val figureBorders = FigureBorderEdges(FigureBorderEdge.None, FigureBorderEdge.None, FigureBorderEdge.None, FigureBorderEdge.None)
+        val mediaPolicy = FigureMediaLayout(FigureMediaStrut(1f, direction = BidiResolvedDirection.Ltr), InlineBoxVerticalAlign.Middle)
+        val captionLayout = TableCaptionLayout(TableCollapse.Collapse, ContainerStyle(), figureBorders, figureBorders, mediaPolicy)
+        val imageFigure = figure.copy(content = FigureContent.Image(Span("text", "", image = InlineImage("Probe.svg")),
+            FigureSizingPolicy.Intrinsic), format = FigureFormat.Framed, frameBorder = FigureBorder.None, tableCaptionLayout = captionLayout)
+        val imageCatalog = listOf(Media("Probe.svg", "image", ""))
+        fun imageBlock(value: Figure) = Block("paragraph", 0, emptyList(), figure = value)
+        assertEquals(imageFigure, entry(listOf(imageBlock(imageFigure)), media = imageCatalog).sections.single().blocks.single().figure)
+        val positionedMedia = mediaPolicy.copy(positioning = ContainerPositioning.RelativeAuto)
+        for (layout in listOf(captionLayout.copy(media = positionedMedia),
+            captionLayout.copy(viewportStates = listOf(FigureViewportState(500, ContainerStyle(), positionedMedia))))) {
+            val positionedFigure = imageFigure.copy(tableCaptionLayout = layout)
+            invalid("Figure media and every responsive state retain nonstatic ancestry") {
+                entry(listOf(imageBlock(positionedFigure)), media = imageCatalog)
+            }
+        }
+        // A nonstatic sibling without clipped content must not poison following roots or reference bodies.
+        val ordinaryRelative = wrapper(paragraph(text("ordinary")), relativeStyle)
+        val reference = Reference(1, 1, "clip", listOf(source))
+        val recovered = entry(listOf(ordinaryRelative, staticTable, figureBlock), listOf(reference))
+        assertEquals(listOf(ordinaryRelative, staticTable, figureBlock), recovered.sections.single().blocks)
+        assertEquals(listOf(reference), recovered.references)
+    }
+
+    @Test fun clippedAbsoluteSharesOwnerChildBudgetAndExistingContentTableLimitsWithoutReset() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val margin = ContainerMargin.Length(zero)
+        val clipped = Span("text", "", clippedAbsolute = ClippedAbsoluteInline(zero, zero,
+            ContainerMargins(margin, margin, margin, margin), listOf(text("kept")), staticParentDirection = BidiResolvedDirection.Ltr))
+        // Real empty rows keep exact M/M+1 work without allocating a million styled overlay graphs.
+        val limit = 1 shl 20
+        fun table(rows: Int, caption: List<Span> = listOf(clipped)) = Table(caption,
+            java.util.Collections.nCopies(rows, emptyList<Cell>()))
+        val maximum = limit - 2 // clipped owner and child; no separate payload item
+        val visited = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { visited.add(it) } }.table(table(maximum))
+        assertEquals(listOf(clipped, text("kept")), visited)
+        assertSame(clipped, visited.first())
+        invalid("Clipped children share the preceding model budget") {
+            PresentationSpanVisitor { _, _ -> }.table(table(maximum + 1))
+        }
+        PresentationSpanVisitor { _, _ -> }.table(table(maximum + 1, listOf(text("ordinary"))))
+        val decoderRows = limit - 4 // Section + Table Block + clipped owner + child
+        fun literal(rows: Int): ByteArray = Wire('Y', 128).apply {
+            paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = table(rows)), "clipBudget") }
+        }.document(emptyList(), Sink.Body)
+        val decoded = read(literal(decoderRows)).sections.single().blocks.single().table!!
+        assertEquals(decoderRows, decoded.rows.size)
+        assertEquals(listOf(clipped), decoded.caption)
+        assertTrue(decoded.rows.all { it.isEmpty() })
+        reject("Clipped children share preceding wire items", literal(decoderRows + 1))
+
+        val clippedPrefix = Block("table", 0, listOf(clipped), table = table(1, emptyList()))
+        val prefixOwners = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> assertTrue(spans.isEmpty()) }.apply { onSpan = { prefixOwners.add(it) } }
+            .blocks(listOf(clippedPrefix))
+        assertEquals(listOf(clipped, text("kept")), prefixOwners)
+        assertSame(clipped, prefixOwners.first())
+        val clippedPrefixWire = Wire('Y', 128).apply {
+            paragraphOverride = { audioPrefixTable(checkNotNull(clippedPrefix.table)) }
+        }
+        assertEquals(clippedPrefix, read(clippedPrefixWire.document(listOf(clipped), Sink.Body))
+            .sections.single().blocks.single())
+
+        // Both new policies in an ignored legacy prefix share one raw budget and no display callback.
+        val audio = Span("link", "Play", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val prefix = listOf(clipped, audio)
+        fun prefixBlock(rows: Int) = Block("table", 0, prefix, table = table(rows, emptyList()))
+        val raw = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> assertTrue(spans.isEmpty()) }.apply { onSpan = { raw.add(it) } }
+            .blocks(listOf(prefixBlock(limit - 5))) // Block + clipped owner/child + AUDIO owner/control
+        assertEquals(listOf(clipped, text("kept"), audio), raw)
+        assertSame(clipped, raw.first())
+        assertSame(audio, raw.last())
+        invalid("Ignored clipped/AUDIO prefix model M+1") {
+            PresentationSpanVisitor { _, _ -> }.blocks(listOf(prefixBlock(limit - 4)))
+        }
+        val catalog = listOf(Media("Tone.ogg", "audio", ""))
+        fun prefixLiteral(rows: Int): ByteArray = Wire('Z', 8192 or 128).apply {
+            paragraphOverride = { audioPrefixTable(checkNotNull(prefixBlock(rows).table)) }
+        }.document(prefix, Sink.Body, mediaValues = catalog)
+        val prefixRows = limit - 7 // add Section and Media to the direct block walk
+        val decodedPrefix = read(prefixLiteral(prefixRows)).sections.single().blocks.single()
+        assertEquals(prefix, decodedPrefix.spans)
+        assertEquals(prefixRows, checkNotNull(decodedPrefix.table).rows.size)
+        reject("Ignored clipped/AUDIO prefix decoder M+1", prefixLiteral(prefixRows + 1))
+        PresentationSpanVisitor { _, _ -> }.spans(listOf(clipped), contentDepth = 15)
+        invalid("Clipped consumes one content level") { PresentationSpanVisitor { _, _ -> }.spans(listOf(clipped), contentDepth = 16) }
+        for (depth in listOf(15, 16)) {
+            val bytes = Wire('Y', 128).document(listOf(clipped), Sink.Container, containers = depth)
+            if (depth == 16) reject("Container plus clipped content17", bytes)
+            else assertEquals("kept", read(bytes).let { entry ->
+                var block = entry.sections.single().blocks.single()
+                repeat(depth) { block = block.container!!.blocks.single() }
+                textOf(block.spans)
+            })
+        }
+        for (depth in listOf(32, 33)) {
+            val wire = Wire('Y', 128).apply { paragraphOverride = { tableChain(depth) } }
+            val bytes = wire.document(listOf(clipped), Sink.Body)
+            if (depth == 33) reject("Clipped keeps table32 maximum", bytes)
+            else {
+                val seen = mutableListOf<Span>()
+                PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.blocks(read(bytes).sections.single().blocks)
+                assertEquals(listOf(clipped, text("kept")), seen)
             }
         }
     }

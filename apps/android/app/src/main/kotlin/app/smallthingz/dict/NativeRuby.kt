@@ -39,6 +39,7 @@ internal class NativeRubyGroupFormat(
     val actionPaint: NativeMissingLinkPaint? = null,
     val actionOwner: NativeInlineActionOwner? = null,
     val box: NativeInlineBoxFormat? = null,
+    val clippedAbsolute: NativeClippedAbsoluteFormat? = null,
 ) {
     val paint = TextPaint(paint)
     init {
@@ -1822,7 +1823,9 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                         first = lf + 1
                     }
                 } else if (span.usesInlineDirectionIsolate()) isolate(resolveDirection(span.direction,
-                    prepared.projection.text.substring(range.start, range.end), fallbackRtl), emit)
+                    prepared.projection.text.substring(range.start, range.end),
+                    nativeClippedParagraphDirectionAt(original, sourceStart + range.start)?.let { it == BidiResolvedDirection.Rtl }
+                        ?: fallbackRtl), emit)
                 else emit()
                 if (marker != null) {
                     val body = pieces.drop(firstPiece).filterIsInstance<NativeRubyPiece.Text>()
@@ -2509,9 +2512,21 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             is NativeRubyPiece.Text -> listOf(piece.start to piece.end)
             is NativeRubyPiece.Column -> piece.column.children.flatMap { it.ranges }
         }
+        val clippedPoints = nativeInlineRanges(original, NativeClippedVisibleMetricMarker::class.java)
         original.getSpans(0, original.length, Any::class.java).forEach { span ->
             if (span is NativeRubyPreparedSource) return@forEach
             val start = original.getSpanStart(span); val end = original.getSpanEnd(span)
+            val clippedPointKey = when (span) {
+                is NativeAuthoredInlineMetrics -> span.clippedVisiblePoint
+                is NativeAuthoredBaselineShift -> span.clippedVisiblePoint
+                else -> null
+            }
+            if (start == end && clippedPointKey != null && clippedPoints.any {
+                    it.start == start && it.end == end && it.value.key === clippedPointKey }) {
+                val at = result.nativeOffset(start)
+                target.setSpan(nativeRubySpanCopy(span), at, at, original.getSpanFlags(span))
+                return@forEach
+            }
             // An entirely empty source still has one enclosing paragraph strut.
             // Its point belongs to the generated empty owners, not an adjacent source range.
             val emptyRootStrut = original.isEmpty() && start == 0 && end == 0 &&
@@ -2520,7 +2535,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             val covered = pieces.filter { piece -> ranges(piece).any { (a, b) ->
                 a < end && b > start || emptyRootStrut && a == 0 && b == 0
             } }
-            if (span is NativeRunLineMetrics && span.strut || span is ParagraphStyle ||
+            if (span is NativeRunLineMetrics && span.strut || span is ParagraphStyle || span is NativeClippedParagraphDirection ||
                 span is NativeAuthoredTextWrap && span.inheritedOwner) {
                 if (covered.isNotEmpty()) {
                     val first = covered.minOf { it.nativeStart }; val last = covered.maxOf { it.nativeEnd }
@@ -2535,8 +2550,12 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                             } || boxScopes.any { scope -> scope.start < end && scope.end > start })) NativeRunLineMetrics(span.primary, span.policy, strut = true,
                                 includePrimaryInNormal = span.includePrimaryInNormal, independentNormalStrut = true)
                         else nativeRubySpanCopy(span)
-                    val a = if (start == 0) 0 else first
-                    val b = if (end == original.length) target.length else last
+                    val a = if (copy is NativeClippedParagraphDirection)
+                        target.toString().lastIndexOf('\n', first - 1) + 1
+                        else if (start == 0) 0 else first
+                    val b = if (copy is NativeClippedParagraphDirection)
+                        target.toString().indexOf('\n', a).let { if (it < 0) target.length else it + 1 }
+                        else if (end == original.length) target.length else last
                     if (copy is NativeAuthoredTextWrap) inheritedWraps += NativeInlineRange(a, b, copy)
                     else target.setSpan(copy, a, b, original.getSpanFlags(span))
                 }
@@ -2665,7 +2684,7 @@ private fun validateCollapsedGap(source: Spanned, start: Int, end: Int, base: Te
         throw UnsupportedFloatLayout("Collapsed ruby gap has distinct unrepresented inline effects")
 }
 
-private fun nativeRubySpanCopy(span: Any): Any = when (span) {
+internal fun nativeRubySpanCopy(span: Any): Any = when (span) {
     is NativeRunLineMetrics -> NativeRunLineMetrics(span.primary, span.policy, span.strut,
         span.includePrimaryInNormal, span.independentNormalStrut)
     is ReplacementSpan -> span
@@ -2726,7 +2745,7 @@ private fun nativeRubyGroupPaint(format: NativeRubyGroupFormat, left: Float, wid
 /** Complete source paint snapshots remain absolute until this one slice boundary. Both
  * native measure and dynamic draw dispatch preserve original span order; displacement
  * is replaced only after the complete effective paint has been resolved. */
-private fun nativeRubyLocalSource(source: Spanned, base: TextPaint, parent: NativeRubyScriptState,
+internal fun nativeRubyLocalSource(source: Spanned, base: TextPaint, parent: NativeRubyScriptState,
     inheritedPolicy: NativeLineHeightPolicy, placement: Float = 0f,
     modeAt: (Int) -> NativeRubyScriptMode): SpannableString {
     val result = SpannableString(source)

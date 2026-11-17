@@ -155,6 +155,21 @@ internal fun nativeScrollportAllocation(viewport: Int, usedHeight: Float, layout
 /** A viewport belongs to its real Compose owner. Native virtual descendants intersect the same
  * screen clip, including nested owners, instead of assuming the Android host window is the clip. */
 internal class NativeScrollClip(private val parent: NativeScrollClip?) {
+    internal val semanticParent: NativeScrollClip? get() = parent
+    private var semanticCoordinates: androidx.compose.ui.layout.LayoutCoordinates? = null
+    private var semanticTranslation: (() -> Offset?)? = null
+    fun updateSemanticScroll(coordinates: androidx.compose.ui.layout.LayoutCoordinates, translation: () -> Offset?) {
+        semanticCoordinates = coordinates; semanticTranslation = translation
+    }
+    fun semanticScrollTranslationInScreen(): Offset? {
+        val coordinates = semanticCoordinates?.takeIf { it.isAttached } ?: return null
+        val shift = semanticTranslation?.invoke() ?: return null
+        if (!shift.x.isFinite() || !shift.y.isFinite())
+            throw UnsupportedFloatLayout("Clipped absolute viewport translation is unavailable")
+        val origin = coordinates.localToScreen(Offset.Zero)
+        val moved = coordinates.localToScreen(shift)
+        return (moved - origin).takeIf { it.x.isFinite() && it.y.isFinite() }
+    }
     private var screen: RectF? = null
     private var preciseScreen: NativeTextClip? = null
     fun update(bounds: Rect, view: View, precise: NativeTextClip? = null) {
@@ -239,6 +254,11 @@ internal fun NativeContainerScrollport(spec: NativeScrollportSpec, linkColor: Co
         LocalNativeContextContainAtEnd provides true) {
         Layout(modifier = viewportMeasureInput.modifier.fillMaxWidth().clipToBounds().onGloballyPositioned {
             clip.update(it.boundsInWindow(), view)
+            clip.updateSemanticScroll(it) {
+                scroll.maxValue.takeIf { range -> range in 0..TablePixelLimit }?.let { range ->
+                    Offset(if (environment.direction == LayoutDirection.Rtl) -range.toFloat() + scroll.value else -scroll.value.toFloat(), 0f)
+                }
+            }
         }.horizontalScroll(scroll), content = {
             NativeFloatContextLayout(spec.parts, Modifier, linkColor, containAtEnd = true,
                 revealIndex = revealIndex, revealToken = request,
@@ -503,6 +523,7 @@ private fun NativePositionedContainerScrollport(spec: NativeScrollportSpec, link
     val drag = rememberDraggableState { owner.scrollBy(-it) }
     val wheelFactor = remember(view) { android.view.ViewConfiguration.get(view.context).scaledHorizontalScrollFactor }
     val clipHeight = remember(identity) { floatArrayOf(0f) }
+    val semanticPan = remember(identity) { arrayOfNulls<Float>(1) }
     // Scroll actions use physical coordinates. The real child keeps its source paragraph direction.
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
         Layout(modifier = remeasure.modifier.then(export?.measurement?.modifier ?: Modifier).fillMaxWidth()
@@ -511,6 +532,7 @@ private fun NativePositionedContainerScrollport(spec: NativeScrollportSpec, link
             }.onGloballyPositioned { coordinates ->
                 val origin = coordinates.localToWindow(Offset.Zero)
                 clip.update(Rect(origin.x, origin.y, origin.x + coordinates.size.width, origin.y + clipHeight[0]), view)
+                clip.updateSemanticScroll(coordinates) { semanticPan[0]?.let { Offset(it, 0f) } }
             }.then(if (policy.overflowX == PositionedOverflowX.Scroll) Modifier
                 .draggable(drag, Orientation.Horizontal, startDragImmediately = scroll.isScrollInProgress,
                     onDragStarted = { owner.cancel() }, onDragStopped = { owner.fling(-it) })
@@ -538,6 +560,7 @@ private fun NativePositionedContainerScrollport(spec: NativeScrollportSpec, link
                 override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = measurables.first().minIntrinsicWidth(height)
                 override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = measurables.first().maxIntrinsicWidth(height)
                 override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+                    semanticPan[0] = null
                     val ticket = export?.begin(binding, constraints)
                     val viewport = constraints.maxWidth.takeIf { constraints.hasBoundedWidth && it in 0..TablePixelLimit }
                         ?: throw UnsupportedFloatLayout("Positioned scrollport requires a bounded containing width")
@@ -596,12 +619,13 @@ private fun NativePositionedContainerScrollport(spec: NativeScrollportSpec, link
                     val bar = measurables[2].measure(Constraints.fixed(viewport, height))
                     val offset = minOf(scroll.value.toFloat(), allocation.overflow)
                     val translation = if (rtl) -allocation.overflow + offset else -offset
+                    semanticPan[0] = translation
                     val originY = allocation.originY + warning.measuredHeight
                     val rectangle = RectF(0f, 0f, viewport.toFloat(), clipHeight[0])
                     val placement = NativeTableBlockPlacement(rectangle, rectangle, allocation.originX, originY, translation,
                         viewport, body.height, 0, 0, 0f, 0f, viewport, height,
                         owner.takeIf { failure == null && policy.overflowX == PositionedOverflowX.Scroll && allocation.overflow > 0f }, owner::reveal,
-                        unavailable = failure != null)
+                        unavailable = failure != null, semanticScrollClip = clip)
                     val projected = input?.let { NativeTableViewportGeometry(it, placement, publication::afterPublication) }
                     val geometry = projected?.let { NativeFloatContextGeometry.viewport(it, minOf(exactHeight, height.toFloat())) }
                     val revision = owner.measured()

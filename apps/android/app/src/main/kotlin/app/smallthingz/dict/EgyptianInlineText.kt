@@ -47,7 +47,8 @@ internal data class EgyptianTextRun(val start: Int, val end: Int, val text: Stri
 internal fun egyptianTextRuns(spans: List<Span>): List<EgyptianTextRun> {
     if (!spans.hasNativeInlineGroups()) return ordinaryEgyptianTextRuns(spans)
     return rubyGraphicalProjection(spans).ranges.flatMap { range ->
-        val span = range.span.takeUnless { range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup }
+        val span = range.span.takeUnless { range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup ||
+            range.role == RubyTextRole.ClippedAbsolute || range.role == RubyTextRole.ClippedText }
         if (span == null) emptyList() else ordinaryEgyptianTextRuns(listOf(span), directionControls = false).map {
             it.copy(start = range.start + it.start, end = range.start + it.end)
         }

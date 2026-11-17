@@ -44,7 +44,7 @@ internal data class RubyStyledTextContexts(
 )
 
 /** Equal data from a new source still owns new original occurrence references. */
-private class RubySourceIdentity(private val source: List<Span>) {
+internal class RubySourceIdentity(private val source: List<Span>) {
     override fun equals(other: Any?): Boolean = other is RubySourceIdentity && source === other.source
     override fun hashCode(): Int = System.identityHashCode(source)
 }
@@ -84,7 +84,7 @@ private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: T
         kind = if (declaringAction) span.kind else "text", text = " ",
         target = if (declaringAction) span.target else "", trail = "",
         targetFragment = span.targetFragment.takeIf { declaringAction }, image = null, ruby = null,
-        inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, citationMarker = null,
+        inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, clippedAbsolute = null, citationMarker = null,
         linkPaint = span.linkPaint.takeIf { declaringAction })) }
     val annotation = styledTextAnnotationWithoutDirectionControls(probe, weight, enclosingStyle) { }
     val plain = annotation.spanStyles.fold(enclosingStyle.toSpanStyle()) { value, range -> value.merge(range.item) }
@@ -134,13 +134,15 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
         val inheritedFace = familyOwner?.style?.fontFamily ?: rootStyle.fontFamily
         val owner = range.base?.owner ?: range.annotation?.owner
         if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup ||
-            range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup || owner != null) {
+            range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup ||
+            range.role == RubyTextRole.ClippedAbsolute || owner != null) {
             val source = range.span ?: inlineFontSnapshotSpan(checkNotNull(owner).font)
             val ownLegacy = source.legacyFontFamily()
             val family = source.fontFamily ?: inheritedFamily.takeIf { ownLegacy == null }
             val legacy = if (source.fontFamily != null) null else ownLegacy ?: inheritedLegacy
             val inheritsRootTraits = parent == null && owner == null && range.role != RubyTextRole.PaddingGroup &&
-                range.role != RubyTextRole.ActionGroup && range.role != RubyTextRole.BoxGroup
+                range.role != RubyTextRole.ActionGroup && range.role != RubyTextRole.BoxGroup &&
+                range.role != RubyTextRole.ClippedAbsolute
             val fontSeed = if (inheritsRootTraits) enclosing else enclosing.copy(
                 fontSize = rootStyle.fontSize, fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal,
                 baselineShift = BaselineShift.None,
@@ -154,7 +156,7 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
                     ?: inheritedForeground)) {
                 resolved = if (owner == null) rubySpanTextStyle(source, effectiveWeight.takeIf { inheritsRootTraits }, fontSeed,
                     declaringAction = range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup ||
-                        range.role == RubyTextRole.BoxGroup)
+                        range.role == RubyTextRole.BoxGroup || range.role == RubyTextRole.ClippedAbsolute)
                     else rubyFontSnapshotStyle(owner.font, fontSeed, rootStyle)
             }
             if (owner != null) resolved = resolved.copy(
@@ -175,10 +177,11 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
     }
 }
 
-/** Logical annotations use source UTF-16 offsets; native isolation is shaping metadata. */
+/** Logical annotations use source UTF-16 offsets; native isolation is shaping metadata.
+ * Private hypothetical measurement can request ordinary style lowering for clipped children. */
 @Composable
 internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: FontWeight?,
-    onLink: (EntryLink) -> Unit): AnnotatedString {
+    onLink: (EntryLink) -> Unit, measureClippedChildren: Boolean = false): AnnotatedString {
     val builder = AnnotatedString.Builder()
     val currentLink = rememberUpdatedState(onLink)
     val inheritedContext = LocalNativeContainerTextContext.current
@@ -186,6 +189,22 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
     val inheritedForeground = LocalFigureCaptionForeground.current
     for (leaf in contexts.leaves) {
         val span = checkNotNull(leaf.range.span)
+        if (leaf.range.role == RubyTextRole.ClippedText && !measureClippedChildren) {
+            // Retain genuine source/actions, without asking a clipped descendant for a font or glyph probe.
+            check(builder.length == leaf.range.start)
+            builder.append(span.text)
+            builder.append(span.trail)
+            check(builder.length == leaf.range.end)
+            val styles = TextLinkStyles(style = SpanStyle())
+            if (leaf.range.start < leaf.range.end) {
+                if (span.hasInternalAction()) builder.addLink(LinkAnnotation.Clickable(span.target, styles) {
+                    currentLink.value(span.entryLink())
+                }, leaf.range.start, leaf.range.end)
+                else externalLinkUrl(span)?.let { builder.addLink(LinkAnnotation.Url(it, styles),
+                    leaf.range.start, leaf.range.end) }
+            }
+            continue
+        }
         var annotation = AnnotatedString("")
         CompositionLocalProvider(LocalTextStyle provides leaf.enclosingStyle,
             LocalCellWeight provides cellWeight.takeIf { leaf.parentGroupPath == null },
@@ -204,7 +223,8 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
     // The declaring action owns one interval. Its normal paint already entered the
     // inherited context; these annotations must not overwrite explicit child paints.
     contexts.groups.values.filter { it.range.role == RubyTextRole.PaddingGroup ||
-        it.range.role == RubyTextRole.ActionGroup || it.range.role == RubyTextRole.BoxGroup }.forEach { group ->
+        it.range.role == RubyTextRole.ActionGroup || it.range.role == RubyTextRole.BoxGroup ||
+        it.range.role == RubyTextRole.ClippedAbsolute }.forEach { group ->
         val range = group.range
         val span = checkNotNull(range.span)
         if (range.start < range.end) {

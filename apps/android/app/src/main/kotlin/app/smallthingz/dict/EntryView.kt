@@ -54,6 +54,7 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.IntrinsicMeasurable
 import androidx.compose.ui.layout.IntrinsicMeasureScope
 import androidx.compose.ui.layout.Measurable
@@ -381,6 +382,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             LocalDensity.current, direction = typography.direction) }
         val currentLink = rememberUpdatedState(readerLink)
         val cache = remember(entry, colors.primary, colors.surfaceContainer) { TextCache(currentLink) }
+        val clippedEntryIdentity = NativeClippedEntryIdentity(entry)
+        val clippedCoordinateOwner = remember(clippedEntryIdentity) {
+            if (nativeEntryHasClippedAbsolute(entry)) NativeClippedAbsoluteCoordinateOwner() else null
+        }
         val typedImages = entry.inlineImages
         val imageOwner = if (typedImages.isEmpty()) null else rememberInlineImageViewOwner(typedImages, entry.media, settings, entry.edition, entry.legacyImageFiles, entry.rasterImages)
         val remainingMedia = remember(entry) {
@@ -405,6 +410,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner, LocalCellHeadingRequest provides cellHeadingRequest,
+            LocalNativeClippedAbsoluteCoordinateScope provides clippedCoordinateOwner?.rootScope,
             LocalNativeCitationNavigation provides citationNavigation.takeIf { citationEnabled },
             LocalNativeCitationTargetAnchor provides citationNavigation.targetAnchor,
             LocalSourceHeadingReveal provides revealSourceHeading,
@@ -418,7 +424,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             sourceKeys = floatRuns.map { run -> visibleRows.slice(run).map { it.key } }.toSet(),
             direction = entry.bodyTypography?.direction, imageOwner = imageOwner, images = typedImages,
             modifier = Modifier.weight(1f).fillMaxWidth()) { listModifier, documentPadding, documentOverflow ->
-        LazyColumn(listModifier.nestedScroll(dockScroll).testTag("entry-scroll")
+        val clippedRootModifier = nativeClippedEntryRootModifier(clippedCoordinateOwner, scroll)
+        LazyColumn(listModifier.then(clippedRootModifier).nestedScroll(dockScroll).testTag("entry-scroll")
             .onGloballyPositioned { viewportCoordinates = it }, state = scroll, contentPadding = documentPadding) {
             item("title", contentType = "title") {
                 Column(Modifier.padding(bottom = 6.dp)) {
@@ -1335,7 +1342,7 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
 
 /** These actual cell owners expose synchronous height intrinsics; richer surfaces fail closed. */
 internal fun pairedTableCellHasIntrinsicHeight(cell: Cell): Boolean = cell.blocks == null && cell.nestedTable == null &&
-    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null && it.image == null && !it.hasClassToken("wikidict-media") &&
+    cell.spans.all { it.ruby == null && it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null && it.clippedAbsolute == null && it.image == null && !it.hasClassToken("wikidict-media") &&
         it.kind in setOf("text", "link", "external_link", "line_break") } && egyptianTextRuns(cell.spans).isEmpty()
 
 /** One unchanged centered paragraph has the same real text height as a spans-only cell. */
@@ -1343,7 +1350,7 @@ internal fun intrinsicTableSingleParagraph(cell: Cell): Block? {
     if (cell.spans.isNotEmpty() || cell.nestedTable != null) return null
     val block = cell.blocks?.singleOrNull() ?: return null
     if (block != Block("paragraph", 0, block.spans, textAlign = CellTextAlign.Center) ||
-        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.image != null ||
+        !block.spans.hasCompiledInlineContent() || block.spans.any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.clippedAbsolute != null || it.image != null ||
             it.hasClassToken("wikidict-media") || it.kind !in setOf("text", "link", "external_link", "line_break") } ||
         egyptianTextRuns(block.spans).isNotEmpty()) return null
     return block
@@ -1894,6 +1901,8 @@ internal fun inlineMediaFiles(entry: Entry): Set<String> = buildSet {
 
 internal val LocalAuthoredInlineNative = staticCompositionLocalOf { true }
 internal val LocalRubyNative = staticCompositionLocalOf { true }
+/** Terminal native projection may fail visibly once; it must never recurse or paint clipped source. */
+internal val LocalClippedAbsoluteTerminalFallback = staticCompositionLocalOf { false }
 
 /** Resolve a complete declaring font from the original typography context, never a descendant Paint. */
 @Composable
@@ -1907,7 +1916,16 @@ internal fun inlineMetricOwnerAnnotation(span: Span, style: TextStyle): Annotate
 @Composable
 internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = inheritedContainerBodyStyle(), onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false) {
     val nativeRuby = LocalRubyNative.current
-    if (source.hasNativeInlineGroups() && !nativeRuby) {
+    val terminalClipped = LocalClippedAbsoluteTerminalFallback.current
+    if (!nativeRuby && !terminalClipped && source.any { it.clippedAbsolute != null }) {
+        val terminal = remember(RubySourceIdentity(source)) { rubyNativeTerminalProjection(source) }
+        CompositionLocalProvider(LocalRubyNative provides true,
+            LocalClippedAbsoluteTerminalFallback provides true) {
+            StyledText(terminal.spans, modifier, weight, style, onLink, preserveWhitespace = true)
+        }
+        return
+    }
+    if (source.hasNativeInlineGroups() && !nativeRuby && !terminalClipped) {
         StyledText(rubyFallbackSpans(source), modifier, weight, style, onLink,
             preserveWhitespace = true)
         return
@@ -1961,7 +1979,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val terminalImageFallback = sourceImageOccurrence && LocalInlineImageOccurrenceFallback.current
     val sourceInlineFamily = spans.hasAuthoredFontFamily()
     val nativeInlineStyle = LocalAuthoredInlineNative.current
-    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null }) != null) {
+    if (sourceLinkPaint && nativeLinkPaint && ordinaryLinkPaintUnavailable(spans.filter { it.inlinePaddingGroup == null && it.inlineActionGroup == null && it.inlineBoxGroup == null && it.clippedAbsolute == null }) != null) {
         Column(modifier) {
             Text(NativeOrdinaryLinkPaintUnavailable)
             CompositionLocalProvider(LocalOrdinaryLinkPaintNative provides false,
@@ -1971,14 +1989,14 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         }
         return
     }
-    if (!terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerWrap != null && nativeInlineStyle || containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
+    if (terminalClipped || !terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerWrap != null && nativeInlineStyle || containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
         (!sourceLinkPaint || nativeLinkPaint) && (!(sourceInlineStyle || sourceFontStack || sourceInlineFamily) || nativeInlineStyle)))) {
         val native = prepareNativeFloatText(spans, annotated, egyptianRuns,
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign),
             linkColor, availableMedia, LocalReaderSettings.current, LocalEntryEdition.current, onLink,
             nativeLineHeight = lineHeightPixels?.let { NativeLineHeightPolicy.Pixels(it) } ?: containerFormat?.lineHeight,
             sourceFamily = sourceFamily, ownerFont = containerFormat?.ownerFont, rubyWeight = weight,
-            ownerWrap = containerWrap.takeIf { nativeInlineStyle })
+            ownerWrap = containerWrap.takeIf { nativeInlineStyle }, terminalFallback = terminalClipped)
         val nativeModifier = if (LocalNativePreformattedText.current) modifier.width(IntrinsicSize.Max) else modifier
         NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(native, 0f)), nativeModifier, linkColor) { _, _ ->
             error("Native inline text has no delegated child")
@@ -2320,11 +2338,13 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             listOf(NativeFloatContextSpec.Flow(index, box?.after ?: gap, leaf.path,
                 box, !paragraphHasContent(block, preserveCompiledText = preserveCompiledText) && prefix.isEmpty()) { carried, published ->
                 val content: @Composable () -> Unit = {
-                    AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
-                        inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
-                        carriedExclusions = carried, onFlowGeometry = published,
-                        prefix = prefix, indentPixels = blockIndentDp(block) * density.density,
-                        nativeLineHeight = format?.lineHeight, ownerFont = format?.ownerFont)
+                    CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope) {
+                        AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
+                            inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
+                            carriedExclusions = carried, onFlowGeometry = published,
+                            prefix = prefix, indentPixels = blockIndentDp(block) * density.density,
+                            nativeLineHeight = format?.lineHeight, ownerFont = format?.ownerFont)
+                    }
                 }
                 // Flow is composed after the preparation provider has returned. Retain
                 // this source leaf's direction and its independent exclusion provenance.
@@ -2528,6 +2548,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     @Composable fun originalChild(id: Int, originalWidth: NativeLayoutInput<Int>) {
         val leaf = originalChildren.getValue(id)
         CompositionLocalProvider(LocalFloatTableWidthReference provides originalWidth,
+            LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope,
             LocalNativeContainerTextWrap provides leaf.ownerWrap,
             LocalFloatMarginsConsumed provides nativeTableConsumesMargins(leaf.block.table,
                 leaf.block.table?.takeIf { it.blockViewport != null }?.blockViewportAt(documentViewport)),
@@ -2790,5 +2811,96 @@ internal fun ReferenceBacklinkView(backlink: ReferenceBacklink, onLink: (EntryLi
     NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(prepared, 0f)),
         Modifier.width(IntrinsicSize.Max), MaterialTheme.colorScheme.primary) { _, _ ->
         error("Reference backlink has no delegated child")
+    }
+}
+
+
+private class NativeClippedEntryIdentity(private val source: Entry) {
+    override fun equals(other: Any?): Boolean = other is NativeClippedEntryIdentity && other.source === source
+    override fun hashCode(): Int = System.identityHashCode(source)
+}
+
+private fun nativeEntryHasClippedAbsolute(entry: Entry): Boolean {
+    var found = false
+    val visitor = PresentationSpanVisitor { _, _ -> }.apply {
+        onSpan = { if (it.clippedAbsolute != null) found = true }
+    }
+    visitor.spans(entry.displayTitle)
+    visitor.spans(entry.preamble)
+    entry.sections.forEach { visitor.blocks(it.blocks) }
+    entry.references.forEach { reference ->
+        reference.visitSpanRuns { spans, _ -> if (spans.any { it.clippedAbsolute != null }) found = true }
+    }
+    return found
+}
+
+private class NativeClippedEntryRootBinding {
+    var active = true
+    var coordinates: LayoutCoordinates? = null
+    var cancelReveal: (() -> Unit)? = null
+}
+
+private fun nativeClippedReaderScreenBounds(coordinates: LayoutCoordinates): android.graphics.RectF {
+    val window = coordinates.boundsInWindow()
+    val delta = coordinates.localToScreen(Offset.Zero) - coordinates.localToWindow(Offset.Zero)
+    return android.graphics.RectF(window.left + delta.x, window.top + delta.y,
+        window.right + delta.x, window.bottom + delta.y)
+}
+
+/** This is the actual reader viewport/scroll owner, independent of BODY typography. */
+@Composable
+private fun nativeClippedEntryRootModifier(owner: NativeClippedAbsoluteCoordinateOwner?,
+    list: androidx.compose.foundation.lazy.LazyListState): Modifier {
+    if (owner == null) return Modifier
+    val binding = remember(owner) { NativeClippedEntryRootBinding() }
+    val requester = remember(owner) { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    val parentReveal = remember(owner, requester, scope) { NativeCitationParentReveal(requester, scope) }
+    val scrollClip = LocalNativeScrollClip.current
+    DisposableEffect(owner, binding) {
+        onDispose {
+            binding.active = false
+            binding.cancelReveal?.invoke()
+            owner.clear(binding)
+        }
+    }
+    return parentReveal.modifier.onGloballyPositioned { coordinates ->
+        binding.coordinates = coordinates
+        if (!binding.active || !coordinates.isAttached) {
+            binding.cancelReveal?.invoke()
+            binding.cancelReveal = null
+            owner.clear(binding)
+        } else {
+            val current = { binding.active && binding.coordinates === coordinates && coordinates.isAttached }
+            owner.publish(owner.rootScope, binding, coordinates, Offset.Zero, scrollClip,
+                NativeTextClip.rectangle(nativeClippedReaderScreenBounds(coordinates)), current,
+                reveal = { screen, complete ->
+                    binding.cancelReveal?.invoke()
+                    var parentCancel: (() -> Unit)? = null
+                    val job = scope.launch {
+                        try {
+                            if (!current()) { complete(false); return@launch }
+                            val viewport = nativeClippedReaderScreenBounds(coordinates)
+                            val delta = when {
+                                screen.top < viewport.top -> screen.top - viewport.top
+                                screen.bottom > viewport.bottom -> if (screen.height() <= viewport.height())
+                                    screen.bottom - viewport.bottom else screen.top - viewport.top
+                                else -> 0f
+                            }
+                            val moved = list.scrollBy(delta)
+                            val shifted = android.graphics.RectF(screen).apply { offset(0f, -moved) }
+                            if (!current()) complete(false) else parentCancel = parentReveal.revealIncludingEmpty(shifted, shifted) {
+                                complete(it && current())
+                            }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            complete(false)
+                            throw cancelled
+                        }
+                    }
+                    val cancel = { parentCancel?.invoke(); job.cancel(); Unit }
+                    binding.cancelReveal = cancel
+                    cancel
+                })
+        }
     }
 }

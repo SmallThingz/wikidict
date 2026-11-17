@@ -166,7 +166,14 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
             inlineBoxProbe: Boolean = false,
             exactAvailableWidth: Float? = null,
             exactParagraphInsets: Boolean = false,
-        ): NativeFloatGeometry = if (exactParagraphInsets && exactAvailableWidth == null) {
+        ): NativeFloatGeometry {
+            NativeClippedAbsoluteProjection.create(source)?.let { clipped ->
+                return NativeClippedAbsoluteGeometry.build(clipped, paint, width, occurrences, alignment,
+                    textDirection, lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary,
+                    carriedExclusions, nodeFactory, insets, usedLineMetrics, decoration, decorationBounds,
+                    includeFontPadding, exactAvailableWidth, exactParagraphInsets)
+            }
+            return if (exactParagraphInsets && exactAvailableWidth == null) {
             throw UnsupportedFloatLayout("Exact paragraph gutters require an exact width without floats")
         } else if (exactParagraphInsets && source.isEmpty() &&
             source.getSpans(0, 0, NativeRubyPreparedSource::class.java).isNotEmpty()) {
@@ -189,15 +196,16 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
                 usedLineMetrics = usedLineMetrics, includeFontPadding = includeFontPadding,
                 rubyProbe = rubyProbe, inlineBoxProbe = inlineBoxProbe)
             shaped.withEmptyColumnLane(left, right, nodeFactory, decoration, decorationBounds)
-        } else if (exactAvailableWidth != null &&
+        } else if ((exactAvailableWidth != null || nativeHasClippedParagraphDirection(source)) &&
             source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty()) {
             if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() || usedLineMetrics != null ||
                 nativeHasPositionedInlineImages(source))
                 throw UnsupportedFloatLayout("Exact rich rows require source-owned metrics without floats or positioned images")
-            nativeRubyFloatGeometry(source, paint, width, exactAvailableWidth, alignment, textDirection,
-                lineSpacingExtra, lineSpacingMultiplier, insets, includeFontPadding, exactParagraphInsets,
+            nativeRubyFloatGeometry(source, paint, width, exactAvailableWidth ?: width.toFloat(), alignment, textDirection,
+                lineSpacingExtra, lineSpacingMultiplier, insets, includeFontPadding,
+                exactParagraphInsets || nativeHasClippedParagraphDirection(source) && insets != NativeTextInsets(),
                 nodeFactory, decoration, decorationBounds)
-        } else if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source)) {
+        } else if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source) || nativeHasClippedParagraphDirection(source)) {
             NativeFloatRowGeometry.build(source, paint, width, occurrences, alignment, textDirection,
                 lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
                 nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
@@ -206,6 +214,7 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
             lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
             nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
             rubyProbe, inlineBoxProbe)
+        }
     }
 }
 

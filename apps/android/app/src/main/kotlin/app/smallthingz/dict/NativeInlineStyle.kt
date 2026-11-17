@@ -19,10 +19,12 @@ internal data class NativeAuthoredInlineMetrics(
     val primary: NativePrimaryFontMetrics,
     val policy: NativeLineHeightPolicy,
     val declaringPrimary: NativePrimaryFontMetrics? = null,
+    val clippedVisiblePoint: NativeClippedVisibleMetricPoint? = null,
 )
 
 /** Physical downward displacement; the source's positive raise is negated by lowering. */
-internal data class NativeAuthoredBaselineShift(val shift: Float) {
+internal data class NativeAuthoredBaselineShift(val shift: Float,
+    val clippedVisiblePoint: NativeClippedVisibleMetricPoint? = null) {
     init {
         require(shift.isFinite() && kotlin.math.abs(shift) <= TablePixelLimit)
     }
@@ -47,6 +49,7 @@ internal fun nativeInlineStyleSpanCopy(span: Any): Any = when (span) {
     is NativeAuthoredCursor -> span.copy()
     is NativeCitationMarkerSpan -> span.copy()
     is NativeAuthoredTextWrap -> span.copy()
+    is NativeClippedVisibleMetricMarker -> NativeClippedVisibleMetricMarker(span.key)
     is NativeRubyPreparedSource -> NativeRubyPreparedSource(span.projection, span.source, span.paint,
         span.direction, span.groups, span.parentScript, span.visualOmissions, span.visualSpaces,
         span.visualSpaceNeighbors, span.protectedSpaces)

@@ -222,6 +222,42 @@ internal fun nativeTableContentClip(shape: NativeTableCornerShape, contentRect: 
     NativeTextClip.table(shape, contentRect)
 
 /** All offsets are UTF-16 indices in [text]; layout must never insert line breaks. */
+/** The real clipped owner's border box is semantic metadata only. Its own empty
+ * paint/hit clip is deliberately absent here; these clips belong to outer owners. */
+internal class NativeClippedAbsoluteSemanticLocation(
+    bounds: RectF,
+    clipBounds: RectF? = null,
+    val preciseClip: NativeTextClip? = null,
+    val coordinateScope: NativeClippedAbsoluteCoordinateScope? = null,
+    val viewportSteps: List<NativeClippedAbsoluteViewportStep> = emptyList(),
+) {
+    private val location = RectF(bounds)
+    private val outerClip = clipBounds?.let(::RectF)
+    val bounds: RectF get() = RectF(location)
+    val clipBounds: RectF? get() = outerClip?.let(::RectF)
+    init {
+        require(listOf(location.left, location.top, location.right, location.bottom).all(Float::isFinite) &&
+            location.left <= location.right && location.top <= location.bottom)
+        require(outerClip == null || listOf(outerClip.left, outerClip.top, outerClip.right, outerClip.bottom).all(Float::isFinite))
+    }
+    fun translated(x: Float, y: Float) = NativeClippedAbsoluteSemanticLocation(
+        RectF(location).apply { offset(x, y) }, outerClip?.let { RectF(it).apply { offset(x, y) } },
+        preciseClip?.translated(x, y), coordinateScope, viewportSteps)
+    fun throughViewport(x: Float, y: Float, panX: Float, panY: Float, clipOwner: NativeScrollClip?,
+        rect: RectF, precise: NativeTextClip?): NativeClippedAbsoluteSemanticLocation {
+        if (coordinateScope == null) return translated(x, y).withOuterClip(rect, precise)
+        val boundary = clipOwner ?: throw UnsupportedFloatLayout("Clipped absolute viewport provenance is unavailable")
+        return NativeClippedAbsoluteSemanticLocation(RectF(location).apply { offset(x, y) },
+            outerClip?.let { RectF(it).apply { offset(x, y) } }, preciseClip?.translated(x, y),
+            coordinateScope, viewportSteps + NativeClippedAbsoluteViewportStep(boundary, panX, panY))
+    }
+    fun withOuterClip(rect: RectF, precise: NativeTextClip? = null): NativeClippedAbsoluteSemanticLocation {
+        val clipped = outerClip?.let { RectF(it).apply { if (!intersect(rect)) setEmpty() } } ?: RectF(rect)
+        val shape = preciseClip?.intersected(rect)?.let { if (precise == null) it else it.intersected(precise) } ?: precise
+        return NativeClippedAbsoluteSemanticLocation(location, clipped, shape, coordinateScope, viewportSteps)
+    }
+}
+
 internal interface FloatTextGeometry {
     val text: CharSequence
     val width: Int
@@ -251,6 +287,9 @@ internal interface FloatTextGeometry {
     val textBaselines: NativeTextBaselines? get() = null
     /** Deferred paint groups retain this owner's text and node indices; no second child graph. */
     val positionedGroups: List<NativePositionedGroup> get() = emptyList()
+    val clippedAbsoluteSemanticLocations: List<NativeClippedAbsoluteSemanticLocation> get() = emptyList()
+    /** Only one wholly owned, nonempty source interval can authenticate this location. */
+    fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? = null
     /** Fixed boxes default to their allocation; text/composite owners publish their signed overflow. */
     val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         NativeFloatBounds(0f, 0f, width.toFloat(), height.toFloat()),
@@ -349,6 +388,7 @@ internal data class FloatInteractionNode(
     /** Image source policy uses input-focus modality without text-link key/state handling. */
     val sourceFocusVisible: Boolean = false,
     val citationMarker: CitationMarker? = null,
+    val clippedAbsoluteLocation: NativeClippedAbsoluteSemanticLocation? = null,
 ) {
     fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
         (preciseClip?.contains(x, y) ?: true) &&
@@ -359,6 +399,7 @@ internal data class FloatInteractionNode(
         focusPaint = focusPaint?.translated(x, y),
         clipBounds = clipBounds?.let { RectF(it).apply { offset(x, y) } },
         preciseClip = preciseClip?.translated(x, y),
+        clippedAbsoluteLocation = clippedAbsoluteLocation?.translated(x, y),
     )
 }
 

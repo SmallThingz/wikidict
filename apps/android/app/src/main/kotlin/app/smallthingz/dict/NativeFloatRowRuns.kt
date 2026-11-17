@@ -352,7 +352,8 @@ internal class NativeFloatRowRuns(source: Spanned, paint: TextPaint, private val
     }
 
     private fun paragraph(start: Int, end: Int, measuredEnd: Int): NativeFloatRunParagraph {
-        val rtl = direction.isRtl(source, start, measuredEnd - start)
+        val rtl = nativeClippedParagraphDirectionAt(source, start)?.let { it == BidiResolvedDirection.Rtl }
+            ?: direction.isRtl(source, start, measuredEnd - start)
         if (start == measuredEnd) return NativeFloatRunParagraph(start, end, measuredEnd, rtl, null, null)
         val chars = CharArray(measuredEnd - start) { source[start + it] }
         val bidi = Bidi().apply { setPara(chars, (if (rtl) 1 else 0).toByte(), null) }

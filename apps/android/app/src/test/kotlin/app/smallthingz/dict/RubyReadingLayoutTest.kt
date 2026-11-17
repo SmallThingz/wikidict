@@ -327,4 +327,58 @@ class RubyReadingLayoutTest {
         assertTrue(pairedTableCellHasIntrinsicHeight(ordinary))
         assertSame(paragraph, intrinsicTableSingleParagraph(centered))
     }
+    @Test fun clippedAbsoluteSourceAdmissionRetainsCopyRangesWithoutHiddenGlyphShaping() {
+        val px = StyleLength(StyleLengthUnit.Px, 1f)
+        val negative = ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -1f))
+        val sign = "\ud80c\udc00"
+        val child = Span("link", "A\ud83d\ude80", "clipped-target", trail = "\u0301", direction = "rtl",
+            tooltip = "child detail", explanation = "child explanation")
+        val hiddenSign = Span("text", sign, classes = "Egyp", fontScale = 2f)
+        val children = listOf(child, hiddenSign)
+        val clipped = Span("text", "", clippedAbsolute = ClippedAbsoluteInline(px, px,
+            ContainerMargins(negative, negative, negative, negative), children,
+            staticParentDirection = BidiResolvedDirection.Ltr))
+        val before = Span("text", "q")
+        val after = Span("text", sign, classes = "Egyp", direction = "ltr")
+        val source = listOf(before, clipped, after)
+        val logical = "qA\ud83d\ude80\u0301$sign$sign"
+        assertTrue(source.hasNativeInlineGroups()); assertFalse(source.hasRuby())
+        assertTrue(source.hasCompiledInlineContent())
+        assertSame(source, compactSpans(source))
+        val block = Block("paragraph", 0, source)
+        assertSame(source, ordinaryInlineDisplaySpans(block)); assertSame(source, paragraphDisplaySpans(block))
+        assertEquals(logical, rubyGraphicalText(source)); assertEquals(9, source.nativeLogicalLength())
+        val parts = anonymousInlineSemantic(source, logical)
+        assertEquals(logical, parts.joinToString("") { it.text })
+        assertEquals(listOf(0 to 1, 1 to 5, 5 to 7, 7 to 9), parts.map { it.start to it.end })
+        assertTrue(parts.none { it.replacement })
+        val projection = rubyGraphicalProjection(source)
+        val ownerRange = projection.ranges.single { it.role == RubyTextRole.ClippedAbsolute }
+        assertSame(clipped, ownerRange.span); assertEquals(1, ownerRange.start); assertEquals(7, ownerRange.end)
+        assertEquals("A\ud83d\ude80\u0301$sign", projection.text.substring(ownerRange.start, ownerRange.end))
+        assertSame(child, projection.ranges.single { it.span === child }.span)
+        val run = egyptianTextRuns(source).single()
+        assertEquals(7, run.start); assertEquals(9, run.end); assertEquals(sign, run.text)
+        assertTrue(run.reuseLtr)
+        val visual = rubyVisualFallbackSpans(source)
+        assertEquals(listOf(before, after), visual)
+        assertEquals("q$sign", visual.joinToString("") { it.text + it.trail })
+        assertFalse(clipped.isEmptyInlineMetricOwner())
+        assertFalse(clipped.isUnsupportedAuthoredWhitespaceOwner())
+        assertNull(inlineMetricOwnerSpan(clipped).clippedAbsolute)
+        assertSame(children, clipped.clippedAbsolute!!.children)
+        assertEquals("clipped-target", child.target); assertEquals("child detail", child.tooltip)
+        assertEquals("rtl", child.direction); assertEquals(2f, hiddenSign.fontScale!!, 0f)
+
+        val ordinary = Cell(listOf(Span("link", "body", "ordinary")), false, 1, 1)
+        val centeredBlock = Block("paragraph", 0, ordinary.spans, textAlign = CellTextAlign.Center)
+        val centered = Cell(emptyList(), false, 1, 1, blocks = listOf(centeredBlock))
+        assertTrue(pairedTableCellHasIntrinsicHeight(ordinary))
+        assertSame(centeredBlock, intrinsicTableSingleParagraph(centered))
+        assertFalse(pairedTableCellHasIntrinsicHeight(ordinary.copy(spans = source)))
+        assertNull(intrinsicTableSingleParagraph(centered.copy(blocks = listOf(centeredBlock.copy(spans = source)))))
+        assertEquals("body", ordinary.spans.single().text)
+        assertSame(centeredBlock, centered.blocks!!.single())
+    }
+
 }

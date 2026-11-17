@@ -245,7 +245,14 @@ internal class NativeCitationParentReveal(private val requester: BringIntoViewRe
     private var coordinates: LayoutCoordinates? = null
     val modifier: Modifier = Modifier.bringIntoViewRequester(requester).onGloballyPositioned { coordinates = it }
     fun reveal(local: android.graphics.RectF, screen: android.graphics.RectF?,
-        completed: (Boolean) -> Unit): () -> Unit {
+        completed: (Boolean) -> Unit): () -> Unit = revealBounds(local, screen, completed, allowEmpty = false)
+
+    /** Clipped source boxes can have a real zero extent; keep that point without a hit-area shim. */
+    fun revealIncludingEmpty(local: android.graphics.RectF, screen: android.graphics.RectF?,
+        completed: (Boolean) -> Unit): () -> Unit = revealBounds(local, screen, completed, allowEmpty = true)
+
+    private fun revealBounds(local: android.graphics.RectF, screen: android.graphics.RectF?,
+        completed: (Boolean) -> Unit, allowEmpty: Boolean): () -> Unit {
         val expected = coordinates
         val job = scope.launch {
             try {
@@ -256,7 +263,8 @@ internal class NativeCitationParentReveal(private val requester: BringIntoViewRe
                     if (corners.any { !it.x.isFinite() || !it.y.isFinite() }) { completed(false); return@launch }
                     Rect(corners.minOf { it.x }, corners.minOf { it.y }, corners.maxOf { it.x }, corners.maxOf { it.y })
                 }
-                if (listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).any { !it.isFinite() } || bounds.isEmpty) {
+                if (listOf(bounds.left, bounds.top, bounds.right, bounds.bottom).any { !it.isFinite() } ||
+                    bounds.width < 0f || bounds.height < 0f || !allowEmpty && bounds.isEmpty) {
                     completed(false); return@launch
                 }
                 requester.bringIntoView(bounds)

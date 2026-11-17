@@ -342,6 +342,10 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
     private val source: AnonymousInlineSource) : FloatTextGeometry by owner {
     override val text: CharSequence = owner.offsets.nativeText.substring(source.start, source.end)
     override fun rectsForRange(start: Int, end: Int): List<RectF> = owner.nativeRectsForRange(source.start + start, source.start + end)
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        return owner.nativeClippedAbsoluteSemanticLocation(source.start + start, source.start + end)
+    }
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
         this.owner.nativeInlinePaddingGroupRects(owner, source.start + start, source.start + end)
     override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =

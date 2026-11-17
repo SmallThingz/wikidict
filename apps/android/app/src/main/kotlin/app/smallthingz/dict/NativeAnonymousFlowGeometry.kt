@@ -78,6 +78,9 @@ internal class NativeAnonymousFlowGeometry private constructor(
     override val width: Int get() = native.width
     override val height: Int get() = native.height
     override val textBaselines: NativeTextBaselines? get() = native.textBaselines
+    override val clippedAbsoluteSemanticLocations get() = native.clippedAbsoluteSemanticLocations + figures.flatMap { placed ->
+        placed.measured.geometry.clippedAbsoluteSemanticLocations.map { it.translated(placed.bounds.left, placed.bounds.top) }
+    }
     val textBottom: Float get() = native.textBottom
     val scrollableBounds: NativeFloatBounds by lazy {
         figures.fold(native.scrollableBounds) { bounds, figure ->
@@ -175,6 +178,8 @@ internal class NativeAnonymousFlowGeometry private constructor(
         figures.filter { it.paintsOutsideLineClip }.forEach { drawFigure(canvas, it.measured, it.bounds) }
     }
     internal fun nativeRectsForRange(start: Int, end: Int): List<RectF> = native.rectsForRange(start, end)
+    internal fun nativeClippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? =
+        native.clippedAbsoluteSemanticLocation(start, end)
     internal fun nativeInlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? =
         native.inlinePaddingGroupRects(owner, start, end)
     internal fun nativeInlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? =
@@ -357,6 +362,29 @@ internal class NativeAnonymousFlowGeometry private constructor(
             at = moved
         }
         return offset
+    }
+
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (start < first.start || end > covered.last().end) return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            return placed.measured.geometry.clippedAbsoluteSemanticLocation(start - first.start, end - first.start)
+                ?.translated(placed.bounds.left, placed.bounds.top)
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        val begin = inline.first()
+        val last = inline.last()
+        return native.clippedAbsoluteSemanticLocation(
+            begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
+            last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
     }
 
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int): List<RectF>? {

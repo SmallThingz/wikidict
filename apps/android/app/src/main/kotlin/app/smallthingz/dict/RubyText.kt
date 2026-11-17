@@ -1,8 +1,8 @@
 package app.smallthingz.dict
 
-/** A graphical source range, before the native shaper adds any layout-only bidi controls. */
+/** A logical source range, before native shaping or empty-clip visual excision. */
 internal enum class RubyTextRole {
-    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup,
+    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup, ClippedAbsolute, ClippedText,
 }
 
 internal data class RubyTextRange(
@@ -18,6 +18,19 @@ internal data class RubyTextRange(
 
 internal data class RubyTextProjection(val text: String, val ranges: List<RubyTextRange>)
 
+/** Terminal coordinates differ from graphical Ruby coordinates. Keep the original
+ * source alongside the one-way native input; clipping still owns its original children. */
+internal data class RubyNativeTerminalProjection(val source: List<Span>, val spans: List<Span>,
+    val projection: RubyTextProjection)
+
+internal fun rubyNativeTerminalProjection(source: List<Span>, sourcePath: String = "ruby"): RubyNativeTerminalProjection {
+    val spans = if (source.none { it.ruby != null || it.inlinePaddingGroup != null ||
+        it.inlineActionGroup != null || it.inlineBoxGroup != null }) source else source.flatMap { span ->
+        if (span.clippedAbsolute != null) listOf(span) else rubyFallbackSpans(listOf(span))
+    }
+    return RubyNativeTerminalProjection(source, spans, rubyGraphicalProjection(spans, sourcePath))
+}
+
 /** Base characters include retained gaps and trails, but never readings or rp. */
 internal fun rubyBaseText(spans: List<Span>): String = buildString {
     fun appendBase(source: List<Span>) {
@@ -26,7 +39,9 @@ internal fun rubyBaseText(spans: List<Span>): String = buildString {
             val padding = span.inlinePaddingGroup
             val action = span.inlineActionGroup
             val box = span.inlineBoxGroup
-            if (box != null) appendBase(box.spans)
+            val clipped = span.clippedAbsolute
+            if (clipped != null) appendBase(clipped.children)
+            else if (box != null) appendBase(box.spans)
             else if (action != null) appendBase(action.spans)
             else if (padding != null) appendBase(padding.spans)
             else if (ruby == null) append(span.text).append(span.trail) else ruby.segments.forEach { segment ->
@@ -68,10 +83,11 @@ internal fun rubyGraphicalSpans(spans: List<Span>): List<Span> {
     val ranges = rubyGraphicalProjection(spans).ranges
     return ranges.mapNotNull { range ->
         if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup ||
-            range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup) null
+            range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup ||
+            range.role == RubyTextRole.ClippedAbsolute) null
         else range.span?.rubyFallbackAction(ranges.lastOrNull { ancestor ->
             (ancestor.role == RubyTextRole.PaddingGroup || ancestor.role == RubyTextRole.ActionGroup ||
-                ancestor.role == RubyTextRole.BoxGroup) &&
+                ancestor.role == RubyTextRole.BoxGroup || ancestor.role == RubyTextRole.ClippedAbsolute) &&
                 range.path.startsWith(ancestor.path + "/") &&
                 ancestor.span?.kind in setOf("link", "external_link")
         }?.span)
@@ -102,7 +118,11 @@ private class RubyGraphicalTextBuilder {
             val padding = span.inlinePaddingGroup
             val action = span.inlineActionGroup
             val box = span.inlineBoxGroup
-            if (box != null) group(RubyTextRange(RubyTextRole.BoxGroup, childPath, start, start, span = span)) {
+            val clipped = span.clippedAbsolute
+            if (clipped != null) group(RubyTextRange(RubyTextRole.ClippedAbsolute, childPath, start, start, span = span)) {
+                // The real source remains addressable; native layout separately excises its visual allocation.
+                appendSpans(clipped.children, "$childPath/clippedAbsolute/children", RubyTextRole.ClippedText)
+            } else if (box != null) group(RubyTextRange(RubyTextRole.BoxGroup, childPath, start, start, span = span)) {
                 // Empty absolute overlays are paint records, never logical source children.
                 appendSpans(box.spans, "$childPath/inlineBoxGroup/spans", role)
             } else if (action != null) group(RubyTextRange(RubyTextRole.ActionGroup, childPath, start, start, span = span)) {
@@ -185,7 +205,13 @@ private fun Span.rubyFallbackAction(owner: Span?): Span {
 
 /** Terminal projection retains all readings, including graphically auto-hidden ones.
  * Inherited base decoration is transient; reading/RP boundaries reset it. */
-internal fun rubyFallbackSpans(spans: List<Span>): List<Span> = buildList {
+internal fun rubyFallbackSpans(spans: List<Span>): List<Span> = rubyFallbackProjection(spans, visual = false)
+
+/** Visual fallback alone is not a logical selection/copy source. A mapped fallback owner
+ * must retain the original projection when these fully clipped intervals are omitted. */
+internal fun rubyVisualFallbackSpans(spans: List<Span>): List<Span> = rubyFallbackProjection(spans, visual = true)
+
+private fun rubyFallbackProjection(spans: List<Span>, visual: Boolean): List<Span> = buildList {
     fun appendFallback(source: List<Span>, inheritedUnderline: Boolean = false, inheritedStrike: Boolean = false,
         inheritedAction: Span? = null) {
         source.forEach { span ->
@@ -193,7 +219,12 @@ internal fun rubyFallbackSpans(spans: List<Span>): List<Span> = buildList {
             val padding = span.inlinePaddingGroup
             val action = span.inlineActionGroup
             val box = span.inlineBoxGroup
-            if (box != null) appendFallback(box.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
+            val clipped = span.clippedAbsolute
+            if (clipped != null) {
+                if (!visual) appendFallback(clipped.children, inheritedUnderline || span.underline,
+                    inheritedStrike || span.strike,
+                    span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
+            } else if (box != null) appendFallback(box.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
                 span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
             else if (action != null) appendFallback(action.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike, span)
             else if (padding != null) appendFallback(padding.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,

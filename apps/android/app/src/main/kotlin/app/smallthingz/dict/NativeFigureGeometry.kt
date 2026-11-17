@@ -27,6 +27,11 @@ internal class NativeFigureGeometry(
     override val text: CharSequence get() = caption.text
     private val captionX = metrics.captionLeft
     private val captionY = metrics.captionTop + metrics.captionPadding.top
+    override val clippedAbsoluteSemanticLocations get() = caption.clippedAbsoluteSemanticLocations.map { it.translated(captionX, captionY) }
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        return caption.clippedAbsoluteSemanticLocation(start, end)?.translated(captionX, captionY)
+    }
     val imageBounds = RectF(metrics.imageLeft, metrics.imageTop,
         metrics.imageLeft + metrics.image.width, metrics.imageTop + metrics.image.height)
     private val resolvedImageNodes = imageNodes(imageBounds).map { it.copy(start = 0, end = 0) }

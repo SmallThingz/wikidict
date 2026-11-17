@@ -283,6 +283,7 @@ internal data class NativeTableBlockPlacement(
     val unavailable: Boolean = false,
     val clipped: Boolean = true,
     val cornerClip: NativeTableCornerShape? = null,
+    val semanticScrollClip: NativeScrollClip? = null,
 )
 
 private class TableBlockScrollOwner(private val state: ScrollState, private val scope: CoroutineScope,
@@ -502,6 +503,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
     val painted = remember { arrayOfNulls<Pair<NativeContainerDecoration, RectF>>(1) }
     val drawPublication = remember { TableBlockDrawPublication() }
     val contentClip = remember { arrayOfNulls<RectF>(1) }
+    val semanticPan = remember(binding) { arrayOfNulls<Float>(1) }
     val overflowClip = remember { arrayOfNulls<RectF>(1) }
     val preciseContentClip = remember { arrayOfNulls<NativeTextClip>(1) }
     val unavailable = remember(binding) { booleanArrayOf(false) }
@@ -554,6 +556,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                         origin.x + (overflow.right - rect.left), origin.y + (overflow.bottom - rect.top))
                     clip.update(bounds, view,
                         preciseContentClip[0]?.translated(origin.x - rect.left, origin.y - rect.top))
+                    clip.updateSemanticScroll(coordinates) { semanticPan[0]?.let { Offset(it, 0f) } }
                 }
             }.then(if (focusOwner == null) Modifier.horizontalScroll(scroll) else
                 Modifier.draggable(drag, Orientation.Horizontal, startDragImmediately = scroll.isScrollInProgress,
@@ -725,6 +728,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
             var publicationRevision = 0L
             var publicationScroll = 0
             painted[0] = null
+            semanticPan[0] = null
             overflowClip[0] = null
             preciseContentClip[0] = null
             try {
@@ -811,6 +815,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 if (policy.isSeparateCornerGrid || intrinsicTable) overflowClip[0] = clipBounds
                 preciseContentClip[0] = cornerClip?.let { nativeTableContentClip(it, clipBounds) }
                 val scrolling = tableBlockScrollGeometry(box.contentWidth, body.extentWidth, scroll.value, rtl)
+                semanticPan[0] = scrolling.physicalTranslation
                 focusViewport = box.contentWidth
                 focusOffset = (-scrolling.physicalTranslation).coerceIn(0f, scrolling.overflow)
                 focusOverflow = scrolling.overflow
@@ -823,7 +828,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 val placement = NativeTableBlockPlacement(borderBounds, clipBounds,
                     viewportX + scrolling.alignment, viewportY, scrolling.physicalTranslation,
                     body.gridWidth, body.gridHeight, body.captionWidth, body.captionHeight, 0f, body.gridY.toFloat(),
-                    ownerWidth, ownerHeight, scrollOwner.takeIf { scrolling.overflow > 0f }, scrollOwner::reveal, cornerClip = cornerClip)
+                    ownerWidth, ownerHeight, scrollOwner.takeIf { scrolling.overflow > 0f }, scrollOwner::reveal, cornerClip = cornerClip, semanticScrollClip = clip)
                 onPlacement?.invoke(placement)?.let { throw UnsupportedFloatLayout(it) }
                 input?.publishBlock(binding, table, blockHeight, body.gridWidth, body.gridHeight, exactBlockHeight)
                 painted[0] = box.decoration to borderBounds
@@ -869,6 +874,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                 unavailable[0] = true
             }
             painted[0] = null
+            semanticPan[0] = null
             overflowClip[0] = null
             preciseContentClip[0] = null
             if (!attempted) {
@@ -893,6 +899,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     catch (_: UnsupportedFloatLayout) { null }
                     catch (_: IllegalArgumentException) { null }
                 if (scrollGeometry != null) {
+                semanticPan[0] = scrollGeometry.physicalTranslation
                 scrollOwner.contentWidth = width
                 scrollOwner.gridWidth = retained.extentWidth
                 scrollOwner.rtl = rtl
@@ -905,7 +912,7 @@ internal fun TableBlockViewportBox(table: Table, policy: TableBlockViewport,
                     scrollGeometry.alignment, warning.measuredHeight.toFloat(), scrollGeometry.physicalTranslation,
                     retained.gridWidth, retained.gridHeight, retained.captionWidth, retained.captionHeight,
                     0f, retained.gridY.toFloat(), ownerWidth, height,
-                    scrollOwner.takeIf { narrow && scrollGeometry.overflow > 0f }, scrollOwner::reveal, unavailable = true, clipped = narrow))
+                    scrollOwner.takeIf { narrow && scrollGeometry.overflow > 0f }, scrollOwner::reveal, unavailable = true, clipped = narrow, semanticScrollClip = clip.takeIf { narrow }))
                 fallbackPublished = rejected == null
                 }
             }

@@ -21,6 +21,14 @@ internal class NativeTableViewportGeometry(
     private val clip = RectF(placement.contentClip)
     private val precise = placement.cornerClip?.let { nativeTableContentClip(it, clip) }
     override val hasPreciseClips: Boolean get() = precise != null || content.hasPreciseClips
+    private fun semanticLocation(value: NativeClippedAbsoluteSemanticLocation) =
+        if (!placement.clipped) value.translated(x, y) else value.throughViewport(
+            x, y, placement.physicalScrollX, 0f, placement.semanticScrollClip, clip, precise)
+    override val clippedAbsoluteSemanticLocations get() = content.clippedAbsoluteSemanticLocations.map(::semanticLocation)
+    override fun clippedAbsoluteSemanticLocation(start: Int, end: Int): NativeClippedAbsoluteSemanticLocation? {
+        if (start < 0 || end <= start || end > text.length) return null
+        return content.clippedAbsoluteSemanticLocation(start, end)?.let(::semanticLocation)
+    }
     private fun containsClip(x: Float, y: Float): Boolean = clip.contains(x, y) && (precise?.contains(x, y) ?: true)
     private fun paintClip(canvas: Canvas) { canvas.clipRect(clip); precise?.clip(canvas) }
     private fun translated(rect: RectF) = RectF(rect).apply { offset(x, y) }
@@ -35,8 +43,10 @@ internal class NativeTableViewportGeometry(
     private fun emptyBand(rect: RectF): Boolean = rect.left == rect.right && rect.top <= rect.bottom &&
         listOf(rect.left, rect.top, rect.right, rect.bottom).all(Float::isFinite)
     private fun reveal(rect: RectF?, currentPlacement: NativeTableBlockPlacement?, complete: () -> Unit,
-        allowEmptyBand: Boolean = false) {
-        if (rect == null || rect.isEmpty && !(allowEmptyBand && emptyBand(rect)) || currentPlacement == null) complete()
+        allowEmptyBand: Boolean = false, allowEmptySemanticLocation: Boolean = false) {
+        val semanticBox = rect != null && allowEmptySemanticLocation && rect.left <= rect.right && rect.top <= rect.bottom &&
+            listOf(rect.left, rect.top, rect.right, rect.bottom).all(Float::isFinite)
+        if (rect == null || rect.isEmpty && !(allowEmptyBand && emptyBand(rect) || semanticBox) || currentPlacement == null) complete()
         else currentPlacement.revealContentRect(RectF(rect), complete)
     }
     override val nodes: List<FloatInteractionNode> = content.nodes.map { node ->
@@ -49,6 +59,7 @@ internal class NativeTableViewportGeometry(
         shifted.copy(bounds = (if (ownClip == null) node.bounds.mapNotNull(::clipped)
             else shifted.bounds.mapNotNull(ownClip::bounds)) + emptyBands, preciseClip = ownClip,
             clipBounds = shifted.clipBounds?.let(::intersected) ?: RectF(clip),
+            clippedAbsoluteLocation = node.clippedAbsoluteLocation?.let(::semanticLocation),
             onReveal = { complete ->
                 content.revealNode(node.id) {
                     afterContentPublication { current, currentPlacement ->
@@ -56,8 +67,10 @@ internal class NativeTableViewportGeometry(
                             ?.firstOrNull { it.id == node.id && it.kind == node.kind &&
                                 it.start == node.start && it.end == node.end }
                         val emptyOwner = fresh?.let { it.kind == FloatInteractionKind.LINK && it.start == it.end } == true
-                        reveal(fresh?.bounds?.firstOrNull { !it.isEmpty || emptyOwner && emptyBand(it) },
-                            currentPlacement, complete, allowEmptyBand = emptyOwner)
+                        val semanticLocation = fresh?.clippedAbsoluteLocation
+                        reveal(semanticLocation?.bounds ?: fresh?.bounds?.firstOrNull { !it.isEmpty || emptyOwner && emptyBand(it) },
+                            currentPlacement, complete, allowEmptyBand = emptyOwner,
+                            allowEmptySemanticLocation = semanticLocation != null)
                     }
                 }
             })
