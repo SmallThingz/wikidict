@@ -3756,6 +3756,41 @@ class SealedFrontendBuildPolicyTests(SealedFrontendTests):
             plain.replace('    const worker_object = bundleWorkerObject(b);\n',
                           '    const worker_object = bundleWorkerObject(b);\n' + cache._INSTALL_ONLY_SOURCE, 1)))
 
+    def test_exact_verifier_target_keeps_real_sealed_frontend_and_native_objects(self):
+        old,current=self.policy_sources()
+        self.assertEqual(cache._native_build_policy_projection(old),cache._native_build_policy_projection(current))
+        root,seal,path,data,reference,roles,proof_path,proof=self.policy_prepared()
+        self.assertEqual(seal,self.selected(reference)[3])
+        self.assertEqual(seal,cache.read_marker(root/cache.COMPLETED_EXPANDER))
+        original=cache._frontend_reference(cache._frontend_reference(data['sealed_frontend']['preparation_result'])['role_map'])
+        for key,value in original['dict-bundle-build']['dependencies'].items():
+            if key!='runtime_source:build.zig':self.assertEqual(value,roles['dict-bundle-build']['dependencies'][key])
+
+
+    def test_altered_verifier_target_edges_or_native_settings_refuse(self):
+        old,current=self.policy_sources()
+        mutations=[
+            ('target','b.step("prepare-blob-verify",','b.step("foreign-verify",'),
+            ('artifact','if (artifact == blob_verify_exe) prepare_blob_verify','if (artifact == blob_build_exe) prepare_blob_verify'),
+            ('dependency','prepare_blob_verify.dependOn(&install.step);','prepare_blob_verify.dependOn(&llvm_exe.step);'),
+            ('extra dependency','prepare_blob_verify.dependOn(&install.step);','prepare_blob_verify.dependOn(&install.step); prepare_blob_verify.dependOn(&module_extract_exe.step);'),
+            ('missing declaration','    const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");\n',''),
+            ('missing edge','        if (artifact == blob_verify_exe) prepare_blob_verify.dependOn(&install.step);\n',''),
+            ('duplicate graph','    const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");','    const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool"); const prepare_blob_verify2 = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");'),
+            ('native mode','.strip = true','.strip = false'),
+        ]
+        for label,needle,replacement in mutations:
+            with self.subTest(label=label):
+                self.assertIn(needle,current);wrong=current.replace(needle,replacement,1)
+                try:projection=cache._native_build_policy_projection(wrong)
+                except ValueError:pass
+                else:self.assertNotEqual(cache._native_build_policy_projection(old),projection)
+                with mock.patch.object(self,'policy_sources',return_value=(old,wrong)):
+                    root,seal,path,data,reference,roles,proof_path,proof=self.policy_prepared()
+                    with self.assertRaises(ValueError):self.selected(reference)
+                    self.assertEqual(seal,cache.read_marker(root/cache.COMPLETED_EXPANDER))
+
+
     def test_runtime_only_install_reuses_original_worker_graph_and_refuses_other_edges(self):
         old, current = self.policy_sources()
         plain = current.replace(cache._INSTALL_ONLY_SOURCE + cache._RUNTIME_ONLY_SOURCE, '', 1)

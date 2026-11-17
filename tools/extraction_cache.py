@@ -2673,6 +2673,12 @@ def _native_build_policy_projection(source):
             tokens, found = _policy_replace(tokens, before, prefix + suffix)
             count += found
         if count > 1: raise ValueError('Duplicate native install-only graph')
+    # This public target installs only the existing verifier artifact. Match
+    # the complete original loop so altered targets or dependency edges remain.
+    verifier_before = _build_policy_tokens('    const prepare_captured_writer = b.step("prepare-captured-writer", "Prepare the existing blob tool for authenticated retained-page diagnostics");\n    const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");\n    const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");\n    for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {\n        const install = b.addInstallArtifact(artifact, .{});\n        prepare_blob_tools.dependOn(&install.step);\n        if (artifact == blob_build_exe) prepare_captured_writer.dependOn(&install.step);\n        if (artifact == blob_verify_exe) prepare_blob_verify.dependOn(&install.step);\n    }')
+    verifier_after = _build_policy_tokens('    const prepare_captured_writer = b.step("prepare-captured-writer", "Prepare the existing blob tool for authenticated retained-page diagnostics");\n    const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");\n    for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {\n        const install = b.addInstallArtifact(artifact, .{});\n        prepare_blob_tools.dependOn(&install.step);\n        if (artifact == blob_build_exe) prepare_captured_writer.dependOn(&install.step);\n    }')
+    tokens, verifier_count = _policy_replace(tokens, verifier_before, verifier_after)
+    if verifier_count > 1: raise ValueError('Duplicate verifier-only install graph')
     test_step = _build_policy_tokens('const test_step = b.step("test", "Run bundle encoder, data reader, Lua, and tooling tests");')
     locations = [i for i in range(len(tokens)) if tokens[i:i + len(test_step)] == test_step]
     if len(locations) != 1: raise ValueError('Ambiguous test aggregate')
