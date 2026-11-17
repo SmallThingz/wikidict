@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRV and DPRY decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRV, DPRY and DPRZ decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,15 +13,21 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89) { "Unsupported presentation format" }
-        val ownerGeometry = magicVersion == 89
-        val ownerGeometryFlags = if (ownerGeometry) r.byte().also {
-            require(it in 1..63) { "Invalid owner geometry feature flags" }
+        require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89 || magicVersion == 90) { "Unsupported presentation format" }
+        val positionedContainers = magicVersion == 90
+        val ownerGeometry = magicVersion == 89 || positionedContainers
+        val ownerGeometryFlags = if (positionedContainers) r.u16().also {
+            // Only implemented Y low bits compose with Z; clipped-absolute remains unavailable.
+            require(it and 256 != 0 && it and 383 == it) { "Invalid positioned Container feature flags" }
+        } else if (ownerGeometry) r.byte().also {
+            require(it in 1..127) { "Invalid owner geometry feature flags" }
         } else 0
         r.ownerGeometry = ownerGeometry
+        r.positionedContainers = positionedContainers
         r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
         r.imageOccurrences = ownerGeometryFlags and 32 != 0
+        r.citationNavigation = ownerGeometryFlags and 64 != 0
         val version = if (magicVersion in 65..86 || ownerGeometry) 57 else magicVersion
         r.fontScales = magicVersion in 65..86 || ownerGeometry
         r.fontScaleBases = magicVersion in 66..86 || ownerGeometry
@@ -134,6 +140,9 @@ object BlobDecoder {
         val styledReferences = if (ownerGeometryFlags and 8 != 0) references.map { reference ->
             if (r.presence()) reference.copy(bodyTypography = r.bodyTypography(directions)) else reference
         } else references
+        val navigationReferences = if (r.citationNavigation) styledReferences.map {
+            it.copy(backlinks = r.citationBacklinks())
+        } else styledReferences
         require((features and 4 != 0) == r.hasFontFamilyFeature) { "Font family feature does not match payload" }
         require((features and 8 != 0) == r.hasTableFloatClearFeature) { "Table float clear feature does not match payload" }
         require((features and 16 != 0) == r.hasTextFlowFeature) { "Text flow feature does not match payload" }
@@ -156,11 +165,12 @@ object BlobDecoder {
             (ownerGeometryFlags and 2 != 0) == (bodyTypography != null) &&
             (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
             directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
-            r.imageOccurrences == r.hasImageOccurrence) {
-            "Y features do not match owner geometry payload"
+            r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers) {
+            "Y/Z features do not match owner geometry payload"
         }
+        require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
-        val entry = Entry(title, display, kind, language, code, styledSections, styledReferences, preamble, media,
+        val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
             bodyAdjoining = bodyAdjoining, bodyTypography = bodyTypography)
         // G uses the shared count/byte budget; C/D and E/F retain their wire limits.
@@ -181,7 +191,11 @@ object BlobDecoder {
         var hasInlinePaddingGroup = false
         var inlineActionGroups = false
         var hasInlineActionGroup = false
+        var citationNavigation = false
+        var hasCitationNavigation = false
         var ownerGeometry = false
+        var positionedContainers = false
+        var hasPositionedContainers = false
         var containerOwnerFonts = false
         var hasContainerOwnerFont = false
         var inlineBoxGroups = false
@@ -269,7 +283,7 @@ object BlobDecoder {
         }
         fun blockPaths(): List<List<Int>> = List(count(4)) { blockPath() }
         fun spans(): List<Span> = List(count(if (inlineBoxGroups) 41 else if (inlineActionGroups) 40 else if (inlinePaddingGroups) 39 else if (rubySpans) 38 else if (tooltips) 37 else if (targetFragments) 36 else if (inlineImages) 35 else if (fontScales) 34 else if (spanBackgrounds) 33 else if (colors) 32 else if (explanations) 31 else 27)) { span() }
-        private fun span(): Span {
+        private fun span(citationBacklink: Boolean = false): Span {
             val kind = enum(inline); val role = enum(roles); val f = byte()
             val text = string(); val target = string(); val trail = string()
             val language = string(); val classes = string(); val direction = string()
@@ -332,13 +346,34 @@ object BlobDecoder {
             val inlinePaddingGroup = if (inlinePaddingGroups && presence()) inlinePaddingGroup() else null
             val inlineActionGroup = if (inlineActionGroups && presence()) inlineActionGroup() else null
             val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup() else null
+            val citationMarker = if (citationNavigation && presence()) citationMarker() else null
             if (image != null && linkPaint != null) {
                 require(imageLinkPaints) { "Image link paint requires R" }
                 hasImageLinkPaintFeature = true
             }
-            return Span(kind, text, target, trail, language, classes, direction,
+            val source = Span(kind, text, target, trail, language, classes, direction,
                 bold=f and 1 != 0, italic=f and 2 != 0, code=f and 4 != 0, small=f and 8 != 0,
-                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint, inlineStyle=inlineStyle, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup)
+                superscript=f and 16 != 0, subscript=f and 32 != 0, strike=f and 64 != 0, underline=f and 128 != 0, role=role, explanation=explanation, foreground=foreground, background=background, fontScale=fontScale, fontScaleBasis=basis, image=image, targetFragment=targetFragment, tooltip=tooltip, fontFeatures=fontFeatures, linkPaint=linkPaint.takeUnless { citationBacklink }, inlineStyle=inlineStyle.takeUnless { citationBacklink }, fontFamily=fontFamily, ruby=ruby, inlinePaddingGroup=inlinePaddingGroup, inlineActionGroup=inlineActionGroup, inlineBoxGroup=inlineBoxGroup, citationMarker=citationMarker)
+            return if (citationBacklink) CitationBacklinkSpanWitness.withPolicies(source, linkPaint, inlineStyle) else source
+        }
+        private fun citationMarker(): CitationMarker {
+            require(remainingItems > 0) { "Citation marker exceeds the presentation budget" }
+            remainingItems--
+            val reference = u32(); val occurrence = u32(); val anchor = string()
+            val policy = byte()
+            require(policy and 7 == policy) { "Unknown citation marker policy" }
+            val isolation = if (policy and 4 != 0)
+                BidiResolvedDirection.entries.getOrNull(byte()) ?: error("Unknown citation isolation") else null
+            val targeted = if (policy and 2 != 0)
+                CitationTargetStyle(ordinaryLinkPaint(), if (presence()) figureColor() else null) else null
+            hasCitationNavigation = true
+            return CitationMarker(reference, occurrence, anchor, policy and 1 != 0, isolation, targeted)
+        }
+        fun citationBacklinks(): List<ReferenceBacklink> = List(count(7)) {
+            val occurrence = u32()
+            require(remainingItems > 0) { "Citation backlink span exceeds the presentation budget" }
+            remainingItems--
+            ReferenceBacklink.withPolicies(occurrence, span(citationBacklink = true)).also { hasCitationNavigation = true }
         }
         private fun imageOccurrenceLayout(): InlineImageOccurrenceLayout {
             require(imageOccurrences && remainingItems > 0 && buffer.remaining() >= 20) {
@@ -789,7 +824,7 @@ object BlobDecoder {
                     if (containerOwnerFonts) 0xfe800000L else 0xff800000L
                 } else if (absoluteText) 0xff000000L else 0xff800000L) == 0L) { "Unknown container style field" }
             }.toInt() else u16()
-            return ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
+            val base = ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
                 if (flags and 2 != 0) styleEdges() else null,
                 if (flags and 4 != 0) containerWidth() else null,
                 if (flags and 8 != 0) TableFloatSide.entries.getOrNull(byte()) ?: error("Unknown container float") else null,
@@ -815,6 +850,22 @@ object BlobDecoder {
                 if (flags and 4194304 != 0) containerFontFamily() else null,
                 if (flags and 8388608 != 0) positionedScope() else null,
                 if (flags and 16777216 != 0) containerOwnerFont() else null)
+            val style = if (positionedContainers) {
+                val extension = byte().also { require(it and 3 == it) { "Unknown positioned Container extension" } }
+                val position = if (extension and 1 != 0)
+                    ContainerAbsolutePosition(containerMarginLength(), containerMarginLength()) else null
+                val wrap = if (extension and 2 != 0) when (byte()) {
+                    0 -> TextWrap.Normal
+                    1 -> TextWrap.NoWrap
+                    else -> error("Unknown Container text wrap")
+                } else null
+                base.copy(absolutePosition = position, textWrap = wrap)
+            } else base
+            if (style.requiresPositionedContainers()) {
+                require(positionedContainers) { "Positioned Container fields require Z" }
+                hasPositionedContainers = true
+            }
+            return style
         }
         private fun container(tableDepth: Int): Container = content {
             val style = containerStyle()

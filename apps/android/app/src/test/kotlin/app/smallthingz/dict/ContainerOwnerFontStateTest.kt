@@ -285,4 +285,80 @@ class ContainerOwnerFontStateTest {
         assertEquals(baseline, nativeWithoutBodyTextContext(directionOnly, 20.sp, density))
     }
 
+    @Test fun qualifiedBacklinkStartsWithIndependentNormalInsteadOfTheExcludedBodyPolicy() {
+        val numeric = ContainerTextContext(lineHeight = ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Px, 53f)),
+            fontFamily = ContainerFontFamily.Stack(emptyList(), GenericFontFamily.Serif))
+        val bodyOwner = resolved(ContainerStyle(ownerFont = font(2f),
+            lineHeight = ContainerLineHeight.Multiplier(3f)).textContext(numeric), 120f)
+            .copy(bodyOrigin = NativeBodyTextOrigin(numeric, numeric))
+        val excluded = checkNotNull(nativeWithoutBodyTextContext(bodyOwner, 20.sp, density))
+        assertEquals(NativeLineHeightPolicy.Pixels(106f), nativeContainerTextFormat(excluded, 20.sp, body, density).lineHeight)
+        val backlink = ReferenceBacklink.withPolicies(7, Span("link", "return", targetFragment = "stored-return"))
+        val source = backlink.span
+        val basis = nativeReferenceBacklinkStyle(20.sp)
+        assertEquals(20.sp, basis.fontSize)
+        assertEquals(FontFamily.Default, basis.fontFamily)
+        assertEquals(FontWeight.Normal, basis.fontWeight)
+        assertEquals(FontStyle.Normal, basis.fontStyle)
+        assertNull(basis.fontFeatureSettings)
+        assertNull(basis.localeList)
+        assertEquals(BaselineShift.None, basis.baselineShift)
+        assertEquals(0.sp, basis.letterSpacing)
+        assertNull(basis.textGeometricTransform)
+        assertEquals(androidx.compose.ui.text.style.TextDecoration.None, basis.textDecoration)
+        assertEquals(androidx.compose.ui.unit.TextUnit.Unspecified, basis.lineHeight)
+        assertEquals(NativeLineHeightPolicy.Normal, nativeReferenceBacklinkLineHeight(backlink, null))
+        assertEquals(NativeLineHeightPolicy.Normal, nativeReferenceBacklinkLineHeight(backlink, 106f))
+        assertSame(source, backlink.span)
+        assertSame(numeric, nativeWithoutBodyTextContext(bodyOwner, 20.sp, density))
+    }
+
+    @Test fun qualifiedBacklinkNumericHeightOverridesItsRootIncludingZeroAndMissingResolutionRefuses() {
+        val source = Span("link", "a", targetFragment = "return-a")
+        val zero = ReferenceBacklink.withPolicies(1, source, inlineStyle = InlineTextStyle(lineHeight =
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        assertEquals(NativeLineHeightPolicy.Pixels(0f), nativeReferenceBacklinkLineHeight(zero, 0f))
+        val font = InlineFontSnapshot(fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            superscript = true)
+        val script = Span("link", "b", targetFragment = "return-b", fontScale = .5f,
+            fontScaleBasis = FontScaleBasis.NormalBody, superscript = true)
+        val relative = ReferenceBacklink.withPolicies(2, script, inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.FontRelative(1.25f, font)))
+        assertEquals(NativeLineHeightPolicy.Pixels(30f), nativeReferenceBacklinkLineHeight(relative, 30f))
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeReferenceBacklinkLineHeight(relative, null) }
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeReferenceBacklinkLineHeight(relative, Float.NaN) }
+        assertNull(source.inlineStyle)
+        assertNull(script.inlineStyle)
+        assertEquals("b", relative.span.text)
+        assertEquals("return-b", relative.span.targetFragment)
+    }
+
+    @Test fun qualifiedBacklinkMetricProbePreservesOriginalBasisAndAppliesLegacyScriptOnlyOnce() {
+        val backlink = ReferenceBacklink.withPolicies(3,
+            Span("link", "2", targetFragment = "return-script", fontScale = .5f, superscript = true))
+        val source = backlink.span
+        val snapshot = nativeReferenceBacklinkFont(backlink)
+        val probe = inlineFontSnapshotSpan(snapshot)
+        assertEquals(FontScaleBasis.Context, snapshot.fontScaleBasis)
+        assertEquals(.5f, snapshot.fontScale!!, 0f)
+        assertTrue(snapshot.superscript)
+        assertFalse(snapshot.fontNormalized)
+        assertFalse(snapshot.bold); assertFalse(snapshot.italic); assertFalse(snapshot.code)
+        assertNull(snapshot.fontFamily); assertNull(snapshot.fontFeatures)
+        assertEquals(24f, spanFontPixels(probe, 60f, 90f), .0001f)
+        assertEquals(spanFontPixels(source, 60f, 90f), spanFontPixels(probe, 60f, 90f), 0f)
+        val absolute = Span("link", "n", targetFragment = "return-normalized", fontScale = .5f,
+            fontScaleBasis = FontScaleBasis.NormalBody, superscript = true)
+        val normalized = ReferenceBacklink.withPolicies(4, absolute, inlineStyle = InlineTextStyle(fontNormalized = true))
+        assertEquals(45f, spanFontPixels(inlineFontSnapshotSpan(nativeReferenceBacklinkFont(normalized)), 60f, 90f), 0f)
+        val copiedProbe = inlineMetricOwnerSpan(normalized.span)
+        assertEquals("text", copiedProbe.kind)
+        assertEquals(" ", copiedProbe.text)
+        assertNull(copiedProbe.targetFragment)
+        assertNull(copiedProbe.citationMarker)
+        assertTrue(copiedProbe.inlineStyle!!.fontNormalized)
+        assertSame(source, backlink.span)
+        assertNull(source.inlineStyle)
+    }
+
 }

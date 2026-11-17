@@ -34,8 +34,17 @@ data class Span(
     val inlinePaddingGroup: InlinePaddingGroup? = null,
     val inlineActionGroup: InlineActionGroup? = null,
     val inlineBoxGroup: InlineBoxGroup? = null,
+    val citationMarker: CitationMarker? = null,
+    private val citationBacklinkWitness: CitationBacklinkSpanWitness? = null,
 ) {
+    internal val isQualifiedCitationBacklink: Boolean get() = citationBacklinkWitness != null
     init {
+        require(citationMarker == null || validCitationMarkerSpan(this)) { "Invalid citation marker owner" }
+        require(citationBacklinkWitness == null || citationMarker == null && validCitationLinkShape(this)) {
+            "Invalid qualified citation backlink copy"
+        }
+        val citationLocal = citationMarker != null || citationBacklinkWitness != null
+        require(!citationLocal || validCitationSpanFields(this)) { "Invalid citation source fields" }
         require(ruby == null || kind == "text" && text.isEmpty() && target.isEmpty() && trail.isEmpty() &&
             targetFragment == null && image == null && inlinePaddingGroup == null && inlineActionGroup == null && inlineBoxGroup == null) { "Ruby requires a sole ordinary text owner" }
         require(ruby == null || validRubyChild(this)) { "Invalid ruby owner" }
@@ -58,7 +67,7 @@ data class Span(
             PresentationSpanVisitor { _, _ -> }.spans(listOf(this))
         }
         require(tooltip == null || validPresentationString(tooltip)) { "Invalid span tooltip" }
-        require(linkPaint == null || kind in setOf("link", "external_link") && target.isNotEmpty()) {
+        require(linkPaint == null || kind in setOf("link", "external_link") && (target.isNotEmpty() || citationLocal)) {
             "Source link paint requires an ordinary link action"
         }
         require(linkPaint == null || image == null ||
@@ -85,7 +94,7 @@ data class Span(
         inlineStyle?.let { policy ->
             require(image == null && when (kind) {
                 "text" -> target.isEmpty() && (text.isNotEmpty() || policy.lineHeight != null || ruby != null || inlinePaddingGroup != null || inlineBoxGroup != null)
-                "link", "external_link" -> target.isNotEmpty() && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null)
+                "link", "external_link" -> (target.isNotEmpty() || citationLocal) && (text.isNotEmpty() || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null)
                 else -> false
             }) { "Inline effects require an ordinary text owner or an empty line-height strut" }
             require(policy.cursor == null || text.isNotEmpty() || ruby != null || inlinePaddingGroup != null || inlineActionGroup != null || inlineBoxGroup != null) { "Empty inline struts cannot own a cursor" }
@@ -102,6 +111,112 @@ data class Span(
     }
 }
 
+
+/** Explicit navigation identity; labels and array order never supply an occurrence. */
+data class CitationTargetStyle(val paint: LinkPaint, val background: FigureColor? = null) {
+    init { require(background != FigureColor.NativeTheme) { "Citation target background requires source RGB or transparent" } }
+}
+data class CitationMarker(val reference: Long, val occurrence: Long, val anchor: String,
+    val nowrap: Boolean = false, val isolation: BidiResolvedDirection? = null,
+    val targetStyle: CitationTargetStyle? = null) {
+    init {
+        require(reference in 1L..0xffff_fffeL && occurrence in 1L..0xffff_fffeL &&
+            anchor.isNotEmpty() && validPresentationString(anchor)) { "Invalid citation occurrence identity" }
+    }
+}
+
+/** Opaque construction proof only; neither its value nor its presence is serialized. */
+class CitationBacklinkSpanWitness private constructor() {
+    companion object {
+        private val instance = CitationBacklinkSpanWitness()
+        internal fun withPolicies(span: Span, linkPaint: LinkPaint?, inlineStyle: InlineTextStyle?): Span =
+            span.copy(linkPaint = linkPaint, inlineStyle = inlineStyle, citationBacklinkWitness = instance)
+    }
+}
+
+data class ReferenceBacklink private constructor(val occurrence: Long, val span: Span) {
+    init {
+        require(occurrence in 1L..0xffff_fffeL && span.isQualifiedCitationBacklink && span.citationMarker == null &&
+            validCitationSpanLinkPaint(span)) { "Invalid reference backlink" }
+    }
+    companion object {
+        /** The ordinary template supplies every original field; only these local policies need scoped construction. */
+        fun withPolicies(occurrence: Long, span: Span, linkPaint: LinkPaint? = span.linkPaint,
+            inlineStyle: InlineTextStyle? = span.inlineStyle): ReferenceBacklink =
+            ReferenceBacklink(occurrence, CitationBacklinkSpanWitness.withPolicies(span, linkPaint, inlineStyle))
+    }
+}
+
+internal fun validCitationLinkShape(span: Span): Boolean = span.kind == "link" && span.text.isNotEmpty() &&
+    span.target.isEmpty() && span.trail.isEmpty() && span.targetFragment?.let {
+        it.isNotEmpty() && validPresentationString(it)
+    } == true && span.image == null && span.ruby == null && span.inlinePaddingGroup == null &&
+    span.inlineActionGroup == null && span.inlineBoxGroup == null
+
+internal fun validCitationSpanLinkPaint(span: Span): Boolean = validCitationLinkShape(span) &&
+    (span.linkPaint == null || (span.foreground == null || span.foreground == span.linkPaint.normal.foreground) &&
+        span.underline == span.linkPaint.normal.underline)
+
+internal fun validCitationMarkerSpan(span: Span): Boolean {
+    val marker = span.citationMarker ?: return false
+    return validCitationSpanLinkPaint(span) && span.role == "reference" &&
+        span.targetFragment == "reference-${marker.reference}" &&
+        (marker.isolation == null || span.direction.isEmpty()) &&
+        (marker.targetStyle == null || span.linkPaint != null)
+}
+
+private fun validCitationSpanFields(span: Span): Boolean =
+    span.role in setOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference") &&
+    listOf(span.text, span.target, span.trail, span.language, span.classes, span.direction,
+        span.explanation).all(::validPresentationString) &&
+        (span.foreground == null || Regex("#[0-9a-f]{6}").matches(span.foreground)) &&
+        (span.background == null || Regex("#[0-9a-f]{6}").matches(span.background)) &&
+        (span.fontScale == null || span.fontScale.isFinite() && span.fontScale >= 0f)
+
+/** Attached to the existing whole-entry budget walk, including custom Figure content callbacks. */
+private class CitationNavigationValidation {
+    private var found = false
+    private var duplicateReference = false
+    private val references = linkedSetOf<Long>()
+    private val markers = linkedMapOf<Pair<Long, Long>, String>()
+    private val backlinks = linkedMapOf<Pair<Long, Long>, String>()
+    private val anchors = hashSetOf<String>()
+    private val reserved = hashSetOf<String>()
+    fun reserve(anchor: String, fallback: String) {
+        if (anchor.isNotEmpty()) reserved += anchor
+        if (fallback.isNotEmpty()) reserved += fallback
+    }
+    fun reference(value: Reference) {
+        if (!references.add(value.number)) duplicateReference = true
+    }
+    fun marker(span: Span) {
+        val marker = checkNotNull(span.citationMarker)
+        found = true
+        require(validCitationMarkerSpan(span)) { "Invalid citation marker" }
+        require(markers.put(marker.reference to marker.occurrence, marker.anchor) == null &&
+            anchors.add(marker.anchor)) { "Duplicate citation occurrence or return anchor" }
+    }
+    fun backlink(reference: Reference, value: ReferenceBacklink) {
+        found = true
+        require(reference.kind == ReferenceKind.Note && value.span.citationMarker == null &&
+            validCitationSpanLinkPaint(value.span)) { "Invalid reference backlink owner" }
+        require(backlinks.put(reference.number to value.occurrence, checkNotNull(value.span.targetFragment)) == null) {
+            "Duplicate reference backlink occurrence"
+        }
+    }
+    fun finish() {
+        if (!found) return
+        require(!duplicateReference && markers.isNotEmpty() && markers.size == backlinks.size) {
+            "Citation markers and backlinks require unique matching reference identities"
+        }
+        val footers = references.mapTo(hashSetOf()) { "reference-$it" }
+        require(footers.none { it in reserved }) { "Reference footer collides with an authored anchor" }
+        for ((identity, anchor) in markers) {
+            require(identity.first in references && anchor !in reserved && anchor !in footers &&
+                backlinks[identity] == anchor) { "Citation return destination does not match its original occurrence" }
+        }
+    }
+}
 /** A paint value at the declaring inline boundary; current color remains dynamic. */
 sealed interface InlineBoxColor {
     data object CurrentColor : InlineBoxColor
@@ -995,8 +1110,18 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 /** Authoritative content only. Table depth and content depth never reset at a sink. */
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
     var visitFigures = true
+    /** Complete Entry validation only; standalone subtrees can precede their eventual ancestor. */
+    var validateAbsoluteContainers = false
+    private var relativeContainerAvailable = false
+    private inline fun <T> withoutRelativeContainer(read: () -> T): T {
+        val previous = relativeContainerAvailable
+        relativeContainerAvailable = false
+        return try { read() } finally { relativeContainerAvailable = previous }
+    }
     /** Raw semantic validation includes hidden readings and fallback runs; display callbacks stay whole. */
     var onSpan: (Span) -> Unit = {}
+    var onCitationMarker: (Span) -> Unit = {}
+    var onBlock: (Block) -> Unit = {}
     var onTable: (Table, Int, Int) -> Unit = { _, _, _ -> }
     var onContainer: (Container) -> Unit = {}
     var onFigure: (Figure) -> Unit = {}
@@ -1004,14 +1129,28 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     private var remaining = 1 shl 20
     private var actualTextLeaves = 0
     private fun charge(count: Int) { require(count <= remaining) { "Presentation item budget exceeded" }; remaining -= count }
+    private fun citation(span: Span, backlink: Boolean = false) {
+        require(!span.isQualifiedCitationBacklink || backlink) { "Qualified backlink escaped its reference prefix" }
+        if (span.citationMarker != null) {
+            require(!backlink && validCitationMarkerSpan(span)) { "Invalid citation marker context" }
+            charge(1)
+            onCitationMarker(span)
+        }
+    }
+    fun backlink(value: ReferenceBacklink) {
+        charge(1)
+        spanList(listOf(value.span), false, 0, display = true, rubyChild = false, citationBacklink = true)
+    }
     private fun descend(depth: Int): Int { require(depth < MaxContentDepth) { "Content nesting is too deep" }; return depth + 1 }
     fun spans(value: List<Span>, preformatted: Boolean = false, contentDepth: Int = 0) {
         spanList(value, preformatted, contentDepth, display = true, rubyChild = false)
     }
     private fun spanList(value: List<Span>, preformatted: Boolean, contentDepth: Int,
-        display: Boolean, rubyChild: Boolean, gap: Boolean = false, actionOwner: Span? = null, boxChild: Boolean = false) {
+        display: Boolean, rubyChild: Boolean, gap: Boolean = false, actionOwner: Span? = null, boxChild: Boolean = false,
+        citationBacklink: Boolean = false) {
         charge(value.size)
         for (span in value) {
+            citation(span, citationBacklink)
             if (rubyChild) require(if (gap) validRubyChild(span) else validRubyBodyChild(span)) {
                 "Invalid ruby child for its body or gap context"
             }
@@ -1088,11 +1227,20 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         charge(value.size); value.forEach { block(it, tableDepth, contentDepth) }
     }
     fun block(value: Block, tableDepth: Int = 0, contentDepth: Int = 0) {
+        onBlock(value)
         when {
             value.container != null -> {
                 if (value.container.style.ownerFont != null) charge(1)
-                onContainer(value.container)
-                blocks(value.container.blocks, tableDepth, descend(contentDepth))
+                val previous = relativeContainerAvailable
+                val style = value.container.style
+                if (validateAbsoluteContainers && style.absolutePosition != null) {
+                    require(previous) { "Absolute Container requires a represented relative ancestor" }
+                    relativeContainerAvailable = false
+                } else if (style.positioning == ContainerPositioning.RelativeAuto) relativeContainerAvailable = true
+                try {
+                    onContainer(value.container)
+                    blocks(value.container.blocks, tableDepth, descend(contentDepth))
+                } finally { relativeContainerAvailable = previous }
             }
             value.table != null -> table(value.table, tableDepth + 1, contentDepth)
             value.figure != null -> figure(value.figure, tableDepth, contentDepth)
@@ -1100,13 +1248,14 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             value.kind != "rule" -> spans(value.spans, value.kind == "preformatted", contentDepth)
         }
     }
-    fun figure(value: Figure, tableDepth: Int, contentDepth: Int) {
-        if (!visitFigures) return
+    fun figure(value: Figure, tableDepth: Int, contentDepth: Int): Unit = withoutRelativeContainer {
+        if (!visitFigures) return@withoutRelativeContainer
         onFigure(value)
         val contentVisitor = visitFigureContent
         if (contentVisitor == null) spans(listOf(value.content.span), contentDepth = contentDepth)
         else {
             charge(1)
+            citation(value.content.span)
             if (value.content.span.image?.occurrenceLayout != null) charge(1)
             // The custom callback owns the root image occurrence, including Figure sizing.
             // Descendants still share this visitor's budget without displaying them twice.
@@ -1131,7 +1280,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             is FlowPart.Scope -> parts(part.scope.parts, tableDepth, descend(contentDepth))
         } }
     }
-    fun table(value: Table, tableDepth: Int = 1, contentDepth: Int = 0) {
+    fun table(value: Table, tableDepth: Int = 1, contentDepth: Int = 0): Unit = withoutRelativeContainer {
         require(tableDepth <= MaxTableDepth) { "Table nesting is too deep" }
         onTable(value, tableDepth, contentDepth)
         val rich = value.captionBlocks
@@ -1213,7 +1362,8 @@ data class SectionHeadingStyle(val box: ContainerStyle, val font: InlineFontSnap
             (box.overflow == null || box.overflow == ContainerOverflow.Visible) &&
             box.floatSide == null && box.flexItem == null && box.alignItems == null && box.columns == null &&
             box.positioning == null && box.screenMaxWidth == null && box.height == null &&
-            box.minHeight == null && box.marginValues == null && box.ownerFont == null) { "Unsupported heading box" }
+            box.minHeight == null && box.marginValues == null && box.ownerFont == null &&
+            box.absolutePosition == null && box.textWrap == null) { "Unsupported heading box" }
         require(font.fontScale != null && font.fontScaleBasis == FontScaleBasis.NormalBody &&
             font.fontScale == box.ownerFontScale && font.language.isNotEmpty() &&
             font.language.toByteArray(Charsets.UTF_8).size <= 1024 && font.role == "normal" &&
@@ -1249,8 +1399,9 @@ data class Media(val file: String, val kind: String, val caption: String)
 enum class ReferenceKind { Note, Fragment }
 data class Reference(val number: Long, val groupNumber: Long?, val group: String, val spans: List<Span>,
     val kind: ReferenceKind = ReferenceKind.Note, val blocks: List<Block>? = null,
-    val bodyTypography: BodyTypography? = null) {
+    val bodyTypography: BodyTypography? = null, val backlinks: List<ReferenceBacklink> = emptyList()) {
     init {
+        require(backlinks.isEmpty() || kind == ReferenceKind.Note) { "Only notes may own citation backlinks" }
         require(blocks == null || spans.isEmpty()) { "Ordered reference blocks cannot also contain legacy spans" }
         blocks?.let(::validatePositionedRootBlocks)
         require(number in 1L..0xffff_fffeL) { "Reference item identity is outside the wire range" }
@@ -1261,8 +1412,14 @@ data class Reference(val number: Long, val groupNumber: Long?, val group: String
 }
 internal fun Reference.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) {
     val content = blocks
-    if (content != null) content.forEach { it.visitSpanRuns(visit) }
-    else visit(spans, false)
+    if (backlinks.isEmpty()) {
+        if (content != null) content.forEach { it.visitSpanRuns(visit) }
+        else visit(spans, false)
+    } else {
+        val visitor = PresentationSpanVisitor(visit = visit)
+        backlinks.forEach(visitor::backlink)
+        if (content == null) visitor.spans(spans) else visitor.blocks(content)
+    }
 }
 /** Applies to the complete semantic Section body, before References and Media. */
 enum class BodyAdjoiningPolicy { Ordinary }
@@ -1412,6 +1569,10 @@ private fun Block.cluePreview(): String {
  * occurrence. Ruby descendants are validated even when graphical projection hides them. */
 internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> = buildList {
     val visitor = PresentationSpanVisitor { _, _ -> }
+    visitor.validateAbsoluteContainers = true
+    val citations = CitationNavigationValidation()
+    visitor.onCitationMarker = citations::marker
+    visitor.onBlock = { citations.reserve(it.anchor, it.anchorFallback) }
     visitor.onSpan = { span -> span.image?.let { add(RasterImageOccurrence(it)) } }
     visitor.visitFigureContent = { content ->
         if (content is FigureContent.Image) add(RasterImageOccurrence(checkNotNull(content.span.image), content.sizing))
@@ -1444,13 +1605,16 @@ internal fun rasterImageOccurrences(entry: Entry): List<RasterImageOccurrence> =
     }
     visitor.bodyTypography(entry.bodyTypography)
     visitor.spans(entry.displayTitle); visitor.spans(entry.preamble)
-    entry.sections.forEach { visitor.blocks(it.blocks) }
+    entry.sections.forEach { citations.reserve(it.anchor, it.anchorFallback); visitor.blocks(it.blocks) }
     inReference = true
     entry.references.forEach { reference ->
+        citations.reference(reference)
         visitor.bodyTypography(reference.bodyTypography)
+        reference.backlinks.forEach { citations.backlink(reference, it); visitor.backlink(it) }
         val blocks = reference.blocks
         if (blocks == null) visitor.spans(reference.spans) else visitor.blocks(blocks)
     }
+    citations.finish()
 }
 
 internal fun WordHit.isInstalled(installed: (String) -> Boolean): Boolean =

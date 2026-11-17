@@ -291,4 +291,73 @@ class NativeDelegatedPaintProofTest {
         assertNull(owner.fallbackReason)
         assertNull(owner.refusalEvidence)
     }
+
+    @Test fun ordinaryAbsoluteCellsKeepRealOwnersAndDistinctRepeatedFlowRevisions() {
+        fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
+        val action = Span("link", "label", "Exact target", targetFragment = "Exact_fragment")
+        val label = Block("container", 0, emptyList(), container = Container(
+            listOf(Block("paragraph", 0, listOf(action))), ContainerStyle(
+                width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 120f)), height = px(20f),
+                absolutePosition = ContainerAbsolutePosition(SignedContainerMargin(StyleLengthUnit.Px, -3f),
+                    SignedContainerMargin(StyleLengthUnit.Px, 7f)))))
+        val flow = Block("paragraph", 0, emptyList(), flow = listOf(FlowPart.Inline(listOf(Span("text", "image neighbor")))))
+        val container = Container(listOf(flow, flow, label),
+            ContainerStyle(positioning = ContainerPositioning.RelativeAuto, textWrap = TextWrap.NoWrap))
+        val block = Block("container", 0, emptyList(), container = container)
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(block)))))
+        assertTrue(nativeDelegatedAbsoluteTable(table))
+        assertTrue(!nativeDelegatedFigureTable(table))
+        assertTrue(tableUsesContentWidths(table))
+        val withoutAbsolute = table.copy(rows = listOf(listOf(table.rows.single().single().copy(
+            blocks = listOf(block.copy(container = container.copy(blocks = listOf(flow))))))))
+        assertTrue(!nativeDelegatedAbsoluteTable(withoutAbsolute))
+        assertTrue(!tableUsesContentWidths(withoutAbsolute))
+        var invalidations = 0
+        val owner = NativeDelegatedTableOwner(table) { invalidations++ }
+        val cell = owner.cells.single()
+        assertTrue(nativeDelegatedAbsoluteCell(cell, listOf(block)) === cell)
+        assertNull(nativeDelegatedAbsoluteCell(cell, listOf(block.copy())))
+        assertTrue(cell.sourceBlock === block)
+        assertTrue(container.blocks[0] === container.blocks[1])
+        owner.begin("source", 240)
+        cell.preparedAbsoluteSource("same font/source")
+        cell.preparedAbsoluteFlow("cell/block-0/container/block-0", flow, "first loading")
+        cell.preparedAbsoluteFlow("cell/block-0/container/block-1", flow, "second loading")
+        owner.refuse("original measured refusal")
+        owner.composedFallback(true)
+        val stableInvalidations = invalidations
+        repeat(3) {
+            cell.preparedAbsoluteFlow("cell/block-0/container/block-0", flow, "first loading")
+            cell.preparedAbsoluteFlow("cell/block-0/container/block-1", flow, "second loading")
+            assertEquals("original measured refusal", owner.fallbackReason)
+        }
+        assertEquals(stableInvalidations, invalidations)
+        cell.preparedAbsoluteFlow("cell/block-0/container/block-1", flow, "second ready")
+        assertNull(owner.fallbackReason)
+        assertTrue(invalidations > stableInvalidations)
+        assertTrue(runCatching {
+            cell.preparedAbsoluteFlow("cell/block-0/container/block-1", flow.copy(), "foreign replacement")
+        }.exceptionOrNull() is IllegalArgumentException)
+        assertTrue(container.blocks.last().container!!.blocks.single().spans.single() === action)
+        assertEquals("Exact_fragment", action.targetFragment)
+    }
+
+    @Test fun ordinaryAbsoluteOverflowNeedsTheActualRootExportRatherThanAVisibleClip() {
+        val original = cells()
+        val required = original.map { it.copy(requiresRootExtent = true) }
+        val wideClip = box(0f, 0f, 1000f, 1000f)
+        val shortRoot = surroundings().copy(rootState = NativeDelegatedRootState(rootView,
+            box(40f, 0f, 240f, 580f), wideClip, emptyList()))
+        assertTrue(permitted(original, shortRoot)) // Existing Figure policy is unchanged.
+        val failure = nativeDelegatedPaintDecision(shortRoot, required, owners)
+        assertTrue(failure is NativeDelegatedPaintDecision.Unavailable)
+        assertEquals("Absolute table overflow exceeds the existing document extent",
+            (failure as NativeDelegatedPaintDecision.Unavailable).reason)
+        val actualExport = shortRoot.copy(rootState = shortRoot.rootState!!.copy(surface = table))
+        assertTrue(permitted(required, actualExport))
+        assertEquals(shortRoot.allocation, actualExport.allocation)
+        assertEquals(original.map { it.cell }, required.map { it.cell })
+        assertEquals(original.map { it.physicalSurface }, required.map { it.physicalSurface })
+        assertTrue(!permitted(required, actualExport.copy(otherInk = listOf(box(90f, 30f, 100f, 40f)))))
+    }
 }

@@ -262,7 +262,7 @@ internal fun Span.isUnsupportedAuthoredWhitespaceOwner(): Boolean = ruby == null
 
 /** Typed owners retain their original children and surrounding compiled spacing. */
 internal fun List<Span>.hasRuby(): Boolean = any { it.ruby != null }
-internal fun List<Span>.hasNativeInlineGroups(): Boolean = any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null }
+internal fun List<Span>.hasNativeInlineGroups(): Boolean = any { it.ruby != null || it.inlinePaddingGroup != null || it.inlineActionGroup != null || it.inlineBoxGroup != null || it.citationMarker != null }
 
 /** New family fields preserve the whole compiled inline owner, including its unstyled neighbours. */
 internal fun List<Span>.hasAuthoredFontFamily(): Boolean = any { span ->
@@ -296,6 +296,7 @@ internal fun inlineFontSnapshotSpan(snapshot: InlineFontSnapshot): Span = Span("
 
 internal fun inlineMetricOwnerSpan(span: Span): Span = span.copy(kind = "text", text = " ", target = "", trail = "",
     direction = "", image = null, ruby = null, inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, targetFragment = null, linkPaint = null, underline = false, strike = false,
+    citationMarker = null, citationBacklinkWitness = null,
     inlineStyle = if (span.inlineStyle?.fontNormalized == true) InlineTextStyle(fontNormalized = true) else null)
 
 internal fun tableHasAuthoredInlineStyles(table: Table): Boolean {

@@ -163,10 +163,12 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
             includeFontPadding: Boolean = true,
             rubyProbe: Boolean = false,
             inlineBoxProbe: Boolean = false,
-        ): NativeFloatGeometry = if (nativeHasPositionedInlineImages(source)) {
+            exactAvailableWidth: Float? = null,
+        ): NativeFloatGeometry = if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source)) {
             NativeFloatRowGeometry.build(source, paint, width, occurrences, alignment, textDirection,
                 lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
-                nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding)
+                nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
+                exactAvailableWidth)
         } else NativeStaticFloatGeometry.build(source, paint, width, occurrences, alignment, textDirection,
             lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
             nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
@@ -199,6 +201,12 @@ private class NativeStaticFloatGeometry private constructor(
     private val alignedImages = nativeInlineRanges(text as Spanned, NativeAlignedImageSelection::class.java)
         .filter { it.start < it.end && it.value.nativeImageSelectionBounds != null }
     private val linePainter = NativeLinePainter(layout)
+    private val citationFit = nativeHasCitationNoWrap(text as Spanned) &&
+        text.getSpans(0, text.length, NativeRubyLinePlan::class.java).isNotEmpty()
+    private fun horizontalOffset(line: Int, x: Float): Int = if (!citationFit)
+        layout.getOffsetForHorizontal(line, x - originX(line)) else linePainter.getOffsetForHorizontal(line,
+            x - linePainter.horizontalShift(NativeLinePaintPlacement(line, flow.baselines[line],
+                flow.left[line], flow.right[line], originX(line))))
     override val nodes: List<FloatInteractionNode> = nodeFactory(this)
     private fun linePresent(line: Int): Boolean = flow.sourceLinePresent?.get(line) ?: true
     override val textBaselines: NativeTextBaselines? get() {
@@ -318,7 +326,7 @@ private class NativeStaticFloatGeometry private constructor(
         inlineBox?.let { return it.offsetForPosition(x, y) }
         floats.lastOrNull { it.content.contains(x, y) }?.let { return it.occurrence.offset }
         val line = lineForPosition(x, y)
-        return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
+        return horizontalOffset(line, x).coerceIn(0, text.length)
     }
 
     internal override fun baselineForOffset(offset: Int): Float {
@@ -333,7 +341,9 @@ private class NativeStaticFloatGeometry private constructor(
         inlineBox?.let { return it.caretRect(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
-        val x = layout.getPrimaryHorizontal(offset) + originX(line)
+        val x = if (!citationFit) layout.getPrimaryHorizontal(offset) + originX(line) else
+            linePainter.caretHorizontalOnLine(line, offset, NativeLinePaintPlacement(line,
+                flow.baselines[line], flow.left[line], flow.right[line], originX(line)))
         if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
         if (text.isEmpty() && hasNativeAuthoredInlineMetrics(text))
             return RectF(x, flow.tops[line], x + 1f, flow.bottoms[line])
@@ -675,7 +685,7 @@ private class NativeStaticFloatGeometry private constructor(
     internal override fun nativeRubyLineOffsetForPosition(line: Int, x: Float, y: Float): Int {
         ruby?.let { return it.offsetOnLine(line, x, y) }
         inlineBox?.let { return it.offsetOnLine(line, x, y) }
-        return layout.getOffsetForHorizontal(line, x - originX(line)).coerceIn(0, text.length)
+        return horizontalOffset(line, x).coerceIn(0, text.length)
     }
     internal override fun nativeRubyLineCursorAt(line: Int, x: Float, y: Float): InlineCursor? {
         ruby?.let { return it.cursorOnLine(line, x, y) }
@@ -934,7 +944,8 @@ private class NativeStaticFloatGeometry private constructor(
                 }
                 throw UnsupportedFloatLayout("Ruby fragments did not converge with native float bands")
             }
-            if (!inlineBoxProbe && source.getSpans(0, source.length, NativeInlineBoxSpan::class.java).isNotEmpty()) {
+            if (!inlineBoxProbe && (source.getSpans(0, source.length, NativeInlineBoxSpan::class.java).isNotEmpty() ||
+                    nativeHasCitationNoWrap(source))) {
                 if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty())
                     throw UnsupportedFloatLayout("Inline box float exclusions are unavailable")
                 if (usedLineMetrics != null)
@@ -947,7 +958,8 @@ private class NativeStaticFloatGeometry private constructor(
                 val right = width - ceil((insets.right + insets.extraRight).toDouble()).toFloat()
                 val spans = nativeInlineRanges(bounded, NativeInlineBoxSpan::class.java)
                 val allocated = spans.any { it.value.box.leftAdvance > 0f || it.value.box.rightAdvance > 0f }
-                val fit = if (allocated) widths.fit((right - left).coerceAtLeast(0f)) else null
+                val fit = if (allocated || nativeHasCitationNoWrap(bounded))
+                    widths.fit((right - left).coerceAtLeast(0f)) else null
                 val fitting = SpannableString(bounded)
                 if (fit != null) {
                     fitting.getSpans(0, fitting.length, NativeRubyLinePlan::class.java).forEach(fitting::removeSpan)
@@ -958,6 +970,8 @@ private class NativeStaticFloatGeometry private constructor(
                     lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, emptyList(),
                     insets = insets, includeFontPadding = includeFontPadding, rubyProbe = rubyProbe, inlineBoxProbe = true)
                 NativeTextWrapPlan.create(bounded, paint)?.validateResult(raw.layout)
+                if (spans.isEmpty()) return NativeStaticFloatGeometry(raw.text, width, raw.layout, raw.flow,
+                    nodeFactory, decoration, decorationBounds)
                 val overflow = fit?.overflowingStarts ?: (0 until raw.shapedLineCount).filter {
                     raw.nativeInlineVisibleAdvance(it) > (right - left).coerceAtLeast(0f)
                 }.map { raw.nativeRangeOfLine(it).first }.toSet()

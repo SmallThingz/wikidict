@@ -84,7 +84,8 @@ private fun rubySpanTextStyle(span: Span, weight: FontWeight?, enclosingStyle: T
         kind = if (declaringAction) span.kind else "text", text = " ",
         target = if (declaringAction) span.target else "", trail = "",
         targetFragment = span.targetFragment.takeIf { declaringAction }, image = null, ruby = null,
-        inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, linkPaint = span.linkPaint.takeIf { declaringAction })) }
+        inlinePaddingGroup = null, inlineActionGroup = null, inlineBoxGroup = null, citationMarker = null,
+        linkPaint = span.linkPaint.takeIf { declaringAction })) }
     val annotation = styledTextAnnotationWithoutDirectionControls(probe, weight, enclosingStyle) { }
     val plain = annotation.spanStyles.fold(enclosingStyle.toSpanStyle()) { value, range -> value.merge(range.item) }
     val resolved = if (!declaringAction) plain else annotation.getLinkAnnotations(0, annotation.length)

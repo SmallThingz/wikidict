@@ -34,13 +34,67 @@ internal fun nativeDelegatedFigureTable(table: Table): Boolean = table.caption.i
                 ?: figure.caption.all { it.image == null })
     } }
 
+/** Separate enrollment for ordinary absolute Containers. The existing measured cell
+ * surface, ancestry and paint/input proof still decide whether it can be used. */
+internal fun nativeDelegatedAbsoluteTable(table: Table): Boolean = table.caption.isEmpty() &&
+    table.captionBlocks == null && table.style?.isInline != true && table.rows.any { it.isNotEmpty() } &&
+    table.rows.all { row -> row.all { cell ->
+        val block = cell.blocks?.singleOrNull()
+        val container = block?.container
+        fun hasAbsolute(value: Container): Boolean = value.blocks.any { child ->
+            child.container?.let { it.style.absolutePosition != null || hasAbsolute(it) } == true
+        }
+        cell.spans.isEmpty() && cell.nestedTable == null && block?.kind == "container" && block.style == null &&
+            container != null && container.style.positioning == ContainerPositioning.RelativeAuto &&
+            container.style.positionedScope == null && hasAbsolute(container)
+    } }
+
+/** Identity is required: another equal Block cannot borrow this cell's measured surface. */
+internal fun nativeDelegatedAbsoluteCell(owner: NativeDelegatedCellOwner?, blocks: List<Block>): NativeDelegatedCellOwner? =
+    owner?.takeIf { it.table.ordinaryAbsolute && blocks.size == 1 && blocks.single() === it.sourceBlock }
+
+internal data class NativeDelegatedDocumentOverflow(val physical: NativeFloatBounds, val scrollable: NativeFloatBounds?)
+
+internal data class NativeDelegatedAbsoluteFlow(val owner: NativeDelegatedCellOwner, val block: Block, val path: String)
+internal val LocalNativeDelegatedAbsoluteFlow = staticCompositionLocalOf<NativeDelegatedAbsoluteFlow?> { null }
+
 internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegatedTableOwner) {
     val sourceBlock: Block = checkNotNull(tableGrid(table.table).cells[index].cell.blocks).single()
+    private val absoluteFlowBlocks: List<Block> = if (!table.ordinaryAbsolute) emptyList() else buildList {
+        fun collect(block: Block) {
+            if (block.figure != null || block.flow != null) add(block)
+            else block.container?.blocks?.forEach(::collect)
+        }
+        collect(sourceBlock)
+    }
+    private var absoluteSourceRevision: Any? = null
+    private val absoluteFlowRevisions = linkedMapOf<String, Pair<Block, Any>>()
+    fun ownsAbsoluteFlow(block: Block): Boolean = absoluteFlowBlocks.any { it === block }
+    fun preparedAbsoluteSource(revision: Any) {
+        if (absoluteSourceRevision != revision) {
+            absoluteSourceRevision = revision
+            publishAbsoluteRevision()
+        }
+    }
+    fun preparedAbsoluteFlow(path: String, block: Block, revision: Any) {
+        require(ownsAbsoluteFlow(block)) { "Only the original cell Flow may publish its preparation" }
+        val old = absoluteFlowRevisions[path]
+        require(old == null || old.first === block) { "A Flow occurrence cannot change its source owner" }
+        if (old?.second != revision) {
+            absoluteFlowRevisions[path] = block to revision
+            publishAbsoluteRevision()
+        }
+    }
+    private fun publishAbsoluteRevision() {
+        val source = absoluteSourceRevision ?: return
+        table.prepared(index, listOf(source, absoluteFlowRevisions.toSortedMap().map { (path, value) -> path to value.second }))
+    }
     var cellCoordinates: LayoutCoordinates? = null
     var contextCoordinates: LayoutCoordinates? = null
     var viewCoordinates: LayoutCoordinates? = null
     private var originalView: NativeFloatTextView? = null
     private var physical: NativeSurfaceGeometry? = null
+    private var scrollableBounds: NativeFloatBounds? = null
     private var logicalWidth = 0
     private var logicalHeight = 0
     private var minimumTouchWidth = 0f
@@ -57,10 +111,11 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
     private var placement: Placement? = null
 
     fun measured(view: NativeFloatTextView, surface: NativeSurfaceGeometry, width: Int, height: Int,
-        touchWidth: Float, touchHeight: Float) {
-        if (originalView !== view || physical !== surface) table.invalidate()
+        touchWidth: Float, touchHeight: Float, scrollableBounds: NativeFloatBounds? = null) {
+        if (originalView !== view || physical !== surface || this.scrollableBounds != scrollableBounds) table.invalidate()
         originalView = view
         physical = surface
+        this.scrollableBounds = scrollableBounds
         logicalWidth = width
         logicalHeight = height
         minimumTouchWidth = touchWidth
@@ -77,6 +132,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         if (originalView === view) {
             originalView = null
             physical = null
+            scrollableBounds = null
             placement = null
             envelopes = null
             envelopeSurface = null
@@ -128,12 +184,15 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         if (coordinates.size.width != logicalWidth || coordinates.size.height != logicalHeight) return missing("logical context dimensions changed")
         val origin = translationTo(root, coordinates) ?: return missing("context transform is not a translation")
         val ownerOrigin = Offset(origin.x + surface.surface.left, origin.y + surface.surface.top)
+        // Layout advances/boxes remain separate from the expanded physical paint surface.
+        val scrollable = scrollableBounds?.translated(origin.x, origin.y)
+        if (table.ordinaryAbsolute && scrollable == null) return missing("cell scrollable layout bounds absent")
         val physicalBox = NativeFloatBounds(ownerOrigin.x, ownerOrigin.y,
             ownerOrigin.x + surface.width, ownerOrigin.y + surface.height)
         if (measuredBox(root, nativeCoordinates) != physicalBox || view.delegatedCellOwner !== this) return missing("physical View box or owner differs")
         val cellBox = measuredBox(root, cell) ?: return missing("cell transform is not a translation")
         val grid = table.gridCoordinates?.takeIf { it.isAttached } ?: return missing("table grid coordinates absent/detached")
-        // These direct Figure cells have source overflow:visible. A real inner clip must
+        // These enrolled source cells have overflow:visible. A real inner clip must
         // not become authority to discard glyphs, focus or handles. Only the normal table
         // and outer Entry viewports above the grid can limit their visible/input domain.
         val innerClip = clippedBox(root, grid, nativeCoordinates)
@@ -164,10 +223,11 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
                 surface.content.width - surface.surface.left.toFloat(), surface.content.height - surface.surface.top.toFloat())
             envelopes = Envelopes(listOfNotNull(surface.extents.ink) + nativeDelegatedFocusInk(surface.nodes, density) +
                 hostFocus + selection,
-                surface.positionedGroups.flatMap { group ->
-                    // Focus is painted once by the original View in the parent state phase.
-                    group.bounds.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
-                },
+                if (table.ordinaryAbsolute) listOfNotNull(surface.extents.ink) else
+                    surface.positionedGroups.flatMap { group ->
+                        // Focus is painted once by the original View in the parent state phase.
+                        group.bounds.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
+                    },
                 (surface.nodes.flatMap { it.bounds } + surface.rectsForRange(0, surface.text.length))
                     .map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) } + handleInput +
                     listOfNotNull(logical, surface.extents.interaction) + surface.positionedGroups.flatMap { group ->
@@ -183,7 +243,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
         return NativeDelegatedMeasuredCell(view, generation, cellBox, physicalBox, ancestors,
             local.ink.map(::translated), local.deferred.map(::translated), local.input.map(::translated),
             minimumTouchWidth, minimumTouchHeight, local.state.map(::translated), local.ordinary.map(::translated),
-            root, innerClip)
+            root, innerClip, requiresRootExtent = table.ordinaryAbsolute, scrollableBounds = scrollable)
     }
 }
 
@@ -191,6 +251,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
  * interactive until the post-layout proof succeeds. A refusal recomposes the existing
  * complete unavailable-content branch; the provisional graph remains gated meanwhile. */
 internal class NativeDelegatedTableOwner(val table: Table, private val invalidateParent: () -> Unit) {
+    val ordinaryAbsolute: Boolean = nativeDelegatedAbsoluteTable(table)
     private var statePaintRevision by mutableStateOf(0)
     fun statePaintChanged() {
         // AndroidView.update observes reads. Notify the draw reader without subscribing
@@ -281,6 +342,16 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
     private var rootCoordinates: LayoutCoordinates? = null
     var gridCoordinates: LayoutCoordinates? = null
     private var measuredSurroundings: NativeDelegatedSurroundings? = null
+    private data class DocumentOverflow(val generation: Any, val bounds: NativeDelegatedDocumentOverflow)
+    private var documentOverflow: DocumentOverflow? = null
+
+    /** Bounds are retained relative to the original outer table allocation. Rebase onto
+     * this measure's allocation so preceding flow and document-origin changes cannot drift. */
+    fun documentOverflow(allocation: NativeFloatBounds): NativeDelegatedDocumentOverflow? = documentOverflow
+        ?.takeIf { ordinaryAbsolute && fallbackReason == null && !fallbackComposed && it.generation === generation }
+        ?.bounds?.let { value -> NativeDelegatedDocumentOverflow(
+            value.physical.translated(allocation.left, allocation.top),
+            value.scrollable?.translated(allocation.left, allocation.top)) }
     private var accepted by mutableStateOf(false)
     private var acceptedGeneration: Any? = null
     private var acceptedGrid: NativeFloatBounds? = null
@@ -291,6 +362,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         if (previous != null && previous != revision) {
             accepted = false
             generation = Any()
+            documentOverflow = null
             awaitingNativeComposition = fallbackComposed
             fallbackReason = null
             refusalEvidence = null
@@ -308,6 +380,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
             source = sourceRevision
             width = containingWidth
             generation = Any()
+            documentOverflow = null
             awaitingNativeComposition = fallbackComposed
             fallbackReason = null
             refusalEvidence = null
@@ -423,6 +496,34 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
             val snapshot = cell.snapshot(root, generation) { stage = it } ?: return unavailable(
                 "The delegated table's original native owner is not current", "cell[${cell.index}] $stage")
             measured += snapshot
+        }
+        if (ordinaryAbsolute) {
+            val left = measured.minOf { it.physicalSurface.left } - surroundings.allocation.left
+            val top = measured.minOf { it.physicalSurface.top } - surroundings.allocation.top
+            val right = measured.maxOf { it.physicalSurface.right } - surroundings.allocation.left
+            val bottom = measured.maxOf { it.physicalSurface.bottom } - surroundings.allocation.top
+            val scrollable = measured.mapNotNull { it.scrollableBounds }
+            if (scrollable.size != measured.size)
+                return unavailable("Absolute table scrollable layout bounds are absent", "document extent")
+            val scrollLeft = scrollable.minOf { it.left } - surroundings.allocation.left
+            val scrollTop = scrollable.minOf { it.top } - surroundings.allocation.top
+            val scrollRight = scrollable.maxOf { it.right } - surroundings.allocation.left
+            val scrollBottom = scrollable.maxOf { it.bottom } - surroundings.allocation.top
+            if (!listOf(left, top, right, bottom, scrollLeft, scrollTop, scrollRight, scrollBottom).all { it.isFinite() } ||
+                left > right || top > bottom || scrollLeft > scrollRight || scrollTop > scrollBottom)
+                return unavailable("Absolute table overflow is outside native coordinates", "document extent")
+            val bounds = NativeDelegatedDocumentOverflow(NativeFloatBounds(left, top, right, bottom),
+                NativeFloatBounds(scrollLeft, scrollTop, scrollRight, scrollBottom))
+            val previous = documentOverflow
+            if (previous == null || previous.generation !== generation || previous.bounds != bounds) {
+                documentOverflow = DocumentOverflow(generation, bounds)
+                accepted = false
+                cells.forEach { it.measurementPending() }
+                invalidateParent()
+                // The next measure includes this actual overflow in the root export.
+                // Until its real placement is checked, no provisional owner is admitted.
+                return null
+            }
         }
         val expected = cells.map { it.registeredOwner() ?: return unavailable("Original cell owner detached", "owner identity") }
         rootStatePlacement = RootStatePlacement(stateView, stateSurface, stateCoordinates, stateBounds, stateClip)

@@ -186,6 +186,7 @@ class EntryAnchorRequest(val entryKey: String, val target: String)
 /** In-memory state for one reader visit; never shared between same-title owners. */
 class EntryReadingState {
     internal val scroll = androidx.compose.foundation.lazy.LazyListState()
+    internal val documentScroll = NativeDocumentScrollState()
     internal var foldKey: List<Any?>? = null
     internal var folds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>? = null
 }
@@ -207,6 +208,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
         val scroll = readingState?.scroll ?: rememberLazyListState()
+        val documentScroll = readingState?.documentScroll ?: remember { NativeDocumentScrollState() }
         val reportScroll by rememberUpdatedState(onScrollDirection)
         val threshold = with(LocalDensity.current) { 20.dp.toPx() }
         val dockScroll = remember(scroll, threshold) {
@@ -266,6 +268,39 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val entryTextSections = remember(entry, foldedKeys) { foldedEntryTextSections(entry.readingRows, foldedKeys) }
         var cellHeadingRequest by remember { mutableStateOf<CellHeadingRequest?>(null) }
         var sourceRevealFailed by remember { mutableStateOf(false) }
+        var citationRevealFailed by remember { mutableStateOf(false) }
+        val citationEnabled = entry.references.any { it.backlinks.isNotEmpty() }
+        val citationLocations = remember(entry) { if (citationEnabled) citationDestinations(entry) else emptyMap() }
+        val citationNavigation = remember(entry, readingState) { NativeCitationNavigation() }
+        val citationRequest = citationNavigation.request
+        LaunchedEffect(citationNavigation, citationRequest, citationNavigation.revision) {
+            val request = citationRequest ?: return@LaunchedEffect
+            val currentOwner = citationNavigation.owner(request.marker)
+            if (currentOwner == null && citationNavigation.failure(request.marker.anchor) != null) {
+                if (citationNavigation.complete(request)) {
+                    citationRevealFailed = true
+                    request.externalRequest?.let(onAnchorConsumed)
+                }
+                return@LaunchedEffect
+            }
+            if (request.revealStarted) return@LaunchedEffect
+            if (currentOwner == null) return@LaunchedEffect
+            withFrameNanos { }
+            if (citationNavigation.request === request) {
+                val owner = citationNavigation.owner(request.marker) ?: return@LaunchedEffect
+                val completed: (Boolean) -> Unit = { success ->
+                    if (citationNavigation.complete(request)) {
+                        citationRevealFailed = !success
+                        request.externalRequest?.let(onAnchorConsumed)
+                    }
+                }
+                if (!owner.view.revealCitation(owner.geometry, request,
+                    current = { citationNavigation.request === request }, completed = completed)) completed(false)
+            }
+        }
+        fun clearCitationRequest(replacingExternal: EntryAnchorRequest? = null) {
+            citationNavigation.clear()?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
+        }
         var viewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
         val revealDensity = LocalDensity.current.density
         fun clearHeadingRequest(replacingExternal: EntryAnchorRequest? = null) {
@@ -274,6 +309,20 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             previous?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
         }
         fun jumpToAnchor(target: String, externalRequest: EntryAnchorRequest? = null): Boolean {
+            clearCitationRequest(externalRequest)
+            citationRevealFailed = false
+            val citation = target.takeIf { it.startsWith("#") }?.substring(1)?.let(citationLocations::get)
+            if (citation != null) {
+                clearHeadingRequest(externalRequest)
+                sourceRevealFailed = false
+                if (!citation.graphical) { citationRevealFailed = true; return false }
+                citationFoldKeys(entry, citation).forEach { folded[it] = false }
+                val index = citationScrollIndex(entry, citation, folded.filterValues { it }.keys)
+                if (index == null) { citationRevealFailed = true; return false }
+                citationNavigation.start(citation.marker, externalRequest)
+                scroll.requestScrollToItem(index)
+                return true
+            }
             val destination = headingDestination(entry, target)
             val headingRow = entry.readingRows.firstOrNull { it.key == destination?.rowKey }
             val compiledHeading = destination?.compiledId == true
@@ -315,14 +364,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         val readerLink: (EntryLink) -> Unit = { target ->
             onNavigate()
-            if (target.local) jumpToAnchor("#${target.fragment}") else onLink(target)
+            if (target.local) jumpToAnchor("#${target.fragment}") else { clearCitationRequest(); onLink(target) }
         }
         LaunchedEffect(entry.key, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
                 jumpToAnchor(it.target, it)
                 // Source positioning completes after its measured scroll (or explicit refusal).
                 // Missing and legacy fragments retain their existing one-shot behavior.
-                if (cellHeadingRequest?.externalRequest !== it) onAnchorConsumed(it)
+                if (cellHeadingRequest?.externalRequest !== it && citationNavigation.request?.externalRequest !== it) onAnchorConsumed(it)
             }
         }
         val bodyText = entry.bodyTypography?.let { typography -> nativeBodyTextContext(
@@ -355,12 +404,21 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner, LocalCellHeadingRequest provides cellHeadingRequest,
+            LocalNativeCitationNavigation provides citationNavigation.takeIf { citationEnabled },
+            LocalNativeCitationTargetAnchor provides citationNavigation.targetAnchor,
             LocalSourceHeadingReveal provides revealSourceHeading,
             LocalCellHeadingReached provides { request -> if (cellHeadingRequest === request) cellHeadingRequest = null }) {
         Column(Modifier.fillMaxSize()) {
         if (sourceRevealFailed) Text(SourceHeadingRevealUnavailable, color = MaterialTheme.colorScheme.error)
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().nestedScroll(dockScroll).testTag("entry-scroll")
-            .onGloballyPositioned { viewportCoordinates = it }, state = scroll, contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 56.dp)) {
+        if (citationRevealFailed) Text(CitationRevealUnavailable, color = MaterialTheme.colorScheme.error)
+        NativeDocumentScroll(documentScroll, enabled = remember(entry) { nativeDocumentScrollNeeded(entry) },
+            resourceKey = listOf(entry, settings, imageOwner, MaterialTheme.typography.bodyLarge,
+                LocalNativeContainerTextContext.current, LocalCssPixelTextZoom.current),
+            sourceKeys = floatRuns.map { run -> visibleRows.slice(run).map { it.key } }.toSet(),
+            direction = entry.bodyTypography?.direction, imageOwner = imageOwner, images = typedImages,
+            modifier = Modifier.weight(1f).fillMaxWidth()) { listModifier, documentPadding, documentOverflow ->
+        LazyColumn(listModifier.nestedScroll(dockScroll).testTag("entry-scroll")
+            .onGloballyPositioned { viewportCoordinates = it }, state = scroll, contentPadding = documentPadding) {
             item("title", contentType = "title") {
                 Column(Modifier.padding(bottom = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -371,6 +429,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                             DropdownMenu(contents, { contents = false }, Modifier.heightIn(max = 340.dp)) {
                                 entry.readingRows.forEach { row -> row.heading?.let { section ->
                                     if (section.headingStyle != null || sectionInContents(section, entry.language)) DropdownMenuItem(text = { Text(section.title) }, onClick = {
+                                        clearCitationRequest()
+                                        citationRevealFailed = false
                                         onNavigate()
                                         contents = false
                                         if (cellHeadingRequest?.anchorMatch?.revealTop != null) clearHeadingRequest()
@@ -458,6 +518,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     val sectionRows = rows.mapIndexedNotNull { index, item -> if (item.heading == null) null else index to item }.toMap()
                     val actions = sectionRows.mapValues { (_, item) -> actionsForSection(item) }
                     bodyText?.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
+                    NativeDocumentOverflowItem(documentOverflow, visibleRows.slice(run).map { it.key }) {
                     NativeFloatBlockContext(blocks, readerLink, row.sectionKey, Modifier,
                         inCell = false, gridPath = "root", gapDp = 6f, trailingGap = true,
                         containAtEnd = true, blockPaths = rows.map { it.key }, gapsDp = rows.map { if (it.compact) 2f else 6f },
@@ -465,6 +526,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary || blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() },
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
                         bodyTextContext = bodyText?.getOrNull())
+                    }
                 } else if (rowIndex !in floatCovered) {
                     row.heading?.let { section ->
                         if (sectionHeadingVisible(section, entry.language)) {
@@ -512,6 +574,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 val label = referenceLabel(ref)
                 Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.primary)
+                    ref.backlinks.forEach { ReferenceBacklinkView(it, readerLink) }
                     ReferenceBody(ref, Modifier.weight(1f), readerLink)
 
                 }
@@ -531,6 +594,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         }
         }
+        }
       }
     }
 }
@@ -539,6 +603,10 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
 /** Only the existing weighted reference body enters this scope; label/backlink UI stays outside. */
 @Composable
 internal fun ReferenceBody(reference: Reference, modifier: Modifier, onLink: (EntryLink) -> Unit) {
+    if (LocalNativeContainerTextWrap.current != null) {
+        CompositionLocalProvider(LocalNativeContainerTextWrap provides null) { ReferenceBody(reference, modifier, onLink) }
+        return
+    }
     WithoutBodyTypography {
         val content: @Composable () -> Unit = {
             val blocks = reference.blocks
@@ -693,7 +761,8 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
                 Box(Modifier.weight(1f)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
             }
         }
-        block.kind == "heading" -> CellHeading(block, path, onLink)
+        block.kind == "heading" -> if (LocalNativeContainerTextWrap.current == null) CellHeading(block, path, onLink)
+            else CompositionLocalProvider(LocalNativeContainerTextWrap provides null) { CellHeading(block, path, onLink) }
         block.ruleStyle != null -> AuthoredRule(block.ruleStyle)
         block.kind == "rule" -> HorizontalDivider(color =
             authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: DividerDefaults.color)
@@ -1753,7 +1822,8 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
     val sourceFamily = LocalNativeContainerTextContext.current?.fontFamily
     val sourceFontStack = sourceFamily is ContainerFontFamily.Stack
     val authoredFamily = sourceFontStack || source.hasAuthoredFontFamily()
-    val preserveOwner = preserveWhitespace || authoredFamily || source.hasNativeInlineGroups()
+    val containerWrap = LocalNativeContainerTextWrap.current
+    val preserveOwner = preserveWhitespace || authoredFamily || source.hasNativeInlineGroups() || containerWrap == TextWrap.NoWrap
     val spans = if (source.hasNativeInlineGroups()) source else
         remember(source, preserveOwner) { if (preserveOwner) source else compactSpans(source) }
     val availableMedia = LocalEntryMedia.current
@@ -1794,13 +1864,14 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         }
         return
     }
-    if (!terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
+    if (!terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerWrap != null && nativeInlineStyle || containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
         (!sourceLinkPaint || nativeLinkPaint) && (!(sourceInlineStyle || sourceFontStack || sourceInlineFamily) || nativeInlineStyle)))) {
         val native = prepareNativeFloatText(spans, annotated, egyptianRuns,
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign),
             linkColor, availableMedia, LocalReaderSettings.current, LocalEntryEdition.current, onLink,
             nativeLineHeight = lineHeightPixels?.let { NativeLineHeightPolicy.Pixels(it) } ?: containerFormat?.lineHeight,
-            sourceFamily = sourceFamily, ownerFont = containerFormat?.ownerFont, rubyWeight = weight)
+            sourceFamily = sourceFamily, ownerFont = containerFormat?.ownerFont, rubyWeight = weight,
+            ownerWrap = containerWrap.takeIf { nativeInlineStyle })
         val nativeModifier = if (LocalNativePreformattedText.current) modifier.width(IntrinsicSize.Max) else modifier
         NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(native, 0f)), nativeModifier, linkColor) { _, _ ->
             error("Native inline text has no delegated child")
@@ -1980,9 +2051,14 @@ private fun nativeTableConsumesMargins(table: Table?, blockViewport: TableBlockV
 private fun FloatBlockSequence(blocks: List<Block>, onLink: (EntryLink) -> Unit, path: String,
     modifier: Modifier = Modifier, inCell: Boolean = false, gridPath: String = "root", gapDp: Float,
     trailingGap: Boolean) {
-    val delegatedSource = LocalNativeDelegatedCell.current?.sourceBlock
+    val delegatedOwner = LocalNativeDelegatedCell.current
+    val delegatedSource = delegatedOwner?.sourceBlock
+    val absoluteCell = nativeDelegatedAbsoluteCell(delegatedOwner, blocks)
     if (blocks.needsNativeBlockSequence(delegatedSource)) {
-        NativeFloatBlockContext(blocks, onLink, path, modifier, inCell, gridPath, gapDp, trailingGap)
+        // The real expanded cell surface still needs the delegated post-placement proof.
+        // Do not allocate its out-of-flow ink as normal cell/document height.
+        NativeFloatBlockContext(blocks, onLink, path, modifier, inCell, gridPath, gapDp, trailingGap,
+            fixedHeightReachable = absoluteCell != null, positionedPaintRoot = absoluteCell != null)
     } else {
         val content: @Composable () -> Unit = {
             blocks.forEachIndexed { index, block ->
@@ -2041,6 +2117,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             bodyOrigin = context.bodyOrigin?.copy(lineHeightInherited = false))
     } ?: ContainerTextContext(if (normalBodySize.value == 0f) 1f else
         baseStyle.fontSize.value / normalBodySize.value, rootLineHeight)
+    val absoluteCell = nativeDelegatedAbsoluteCell(LocalNativeDelegatedCell.current, blocks)
     val sourceIds = remember { linkedMapOf<String, Int>() }
     fun sourceId(key: String): Int = sourceIds.getOrPut(key) { sourceIds.size }
     val mediaControls = mutableMapOf<Int, List<Media>>()
@@ -2052,7 +2129,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             (gapsDp?.get(index) ?: gapDp) * density.density else 0f
     }
     val ruleDarkTheme = LocalReaderDarkTheme.current
-    val parts = prepareNativeContainerTree(blocks, path, gridPath, blockPaths, gaps, rootContext,
+    val originalParts = prepareNativeContainerTree(blocks, path, gridPath, blockPaths, gaps, rootContext,
         baseStyle, figureInheritedAlign(inheritedAlign, LocalLayoutDirection.current), normalBodySize,
         density, documentViewport,
         rtl, LocalReaderDarkTheme.current, documentSurface || fixedHeightReachable, ::sourceId,
@@ -2142,8 +2219,14 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 // Flow is composed after the preparation provider has returned. Retain
                 // this source leaf's direction and its independent exclusion provenance.
                 val context = leaf.context
-                if (context?.bodyDirection == null) content() else
-                    CompositionLocalProvider(LocalNativeContainerTextContext provides context, content = content)
+                val occurrence = absoluteCell?.takeIf { it.ownsAbsoluteFlow(block) }?.let {
+                    NativeDelegatedAbsoluteFlow(it, block, leaf.path)
+                }
+                if (context?.bodyDirection == null && occurrence == null && leaf.ownerWrap == null) content() else
+                    CompositionLocalProvider(LocalNativeContainerTextContext provides
+                        (if (context?.bodyDirection != null) context else LocalNativeContainerTextContext.current),
+                        LocalNativeContainerTextWrap provides leaf.ownerWrap,
+                        LocalNativeDelegatedAbsoluteFlow provides occurrence, content = content)
             })
         } else if (block.kind in nativeTextKinds && block.table == null && block.feature == null) {
             val displayed = if (preserveCompiledText) block.spans else paragraphDisplaySpans(block)
@@ -2246,7 +2329,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                         throw UnsupportedFloatLayout("Authored child width exceeds the native range")
                     value?.let { kotlin.math.round(it).toInt() }
                 }, overflowViewport = nativeTableAdmitted && table != null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && !inCell && !leaf.inScrollport,
-                delegatedTable = table?.takeIf { nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && block.feature == null && !inCell && !leaf.inScrollport && nativeDelegatedFigureTable(it) },
+                delegatedTable = table?.takeIf { nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && block.feature == null && !inCell && !leaf.inScrollport && (nativeDelegatedFigureTable(it) || nativeDelegatedAbsoluteTable(it)) },
                 autoMarginTable = automaticTable, autoMargins = automaticMargins.takeIf { automaticTable != null },
                 fixedMarginTable = fixedTable, pairedMarginTable = pairedTable,
                 blockViewport = blockViewport,
@@ -2283,6 +2366,20 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     fun flattened(items: List<NativeFloatContextSpec>): List<NativeFloatContextSpec> = items.flatMap { item ->
         (item as? NativeFloatContextSpec.Container)?.preparedParts?.let(::flattened) ?: listOf(item)
     }
+    if (absoluteCell != null) {
+        val revision = listOf(blocks, rootContext, baseStyle, settings, edition, media,
+            LocalMissingLinkOwner.current, flattened(originalParts).filterIsInstance<NativeFloatContextSpec.Text>().map {
+                listOf(it.prepared.native?.paint?.typeface, it.prepared.native?.paint?.textSize,
+                    it.prepared.stateDescription, it.prepared.ordinaryLinkPaintRevision)
+            })
+        SideEffect { absoluteCell.preparedAbsoluteSource(revision) }
+    }
+    val delegatedFailure = absoluteCell?.table?.fallbackReason
+    // Keep the same source slots and resource preparation alive. The existing unavailable
+    // context path retains all original text/actions after a measured table proof refuses.
+    val parts = if (delegatedFailure == null) originalParts else originalParts.map { part ->
+        if (part is NativeFloatContextSpec.Container) part.copy(unavailableReason = delegatedFailure) else part
+    }
     val revealIndex = flattened(parts).indexOfFirst { when (it) {
         is NativeFloatContextSpec.Text -> it.path == request?.path
         is NativeFloatContextSpec.Flow -> it.path == request?.path
@@ -2291,6 +2388,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     @Composable fun originalChild(id: Int, originalWidth: NativeLayoutInput<Int>) {
         val leaf = originalChildren.getValue(id)
         CompositionLocalProvider(LocalFloatTableWidthReference provides originalWidth,
+            LocalNativeContainerTextWrap provides leaf.ownerWrap,
             LocalFloatMarginsConsumed provides nativeTableConsumesMargins(leaf.block.table,
                 leaf.block.table?.takeIf { it.blockViewport != null }?.blockViewportAt(documentViewport)),
             LocalNativeContainerTextContext provides (if (leaf.bodyTypographyExcluded) leaf.context
@@ -2491,5 +2589,53 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
             SelectionColumn(parts, context.direction, insideSink)
         }
         }
+    }
+}
+
+private class ReferenceBacklinkSourceIdentity(private val source: ReferenceBacklink) {
+    override fun equals(other: Any?): Boolean = other is ReferenceBacklinkSourceIdentity && source === other.source
+    override fun hashCode(): Int = System.identityHashCode(source)
+}
+
+/** A prefix is independent of both Entry and Reference BODY typography. This provider is
+ * also retained by the existing visible-unavailable fallback; no source Span is rewritten. */
+@Composable
+private fun ReferenceBacklinkTextContext(style: TextStyle, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalTextStyle provides style,
+        LocalNativeContainerTextContext provides null, LocalNativeContainerTextWrap provides null,
+        LocalCellWeight provides null, LocalCellLetterSpacingPixels provides null,
+        LocalCellTextAlign provides null, LocalTableLineHeightPixels provides null,
+        LocalNativePreformattedText provides false, LocalAuthoredBackground provides null,
+        LocalFigureCaptionForeground provides null, LocalFigureCaptionLinkScope provides null,
+        LocalCompiledTableSourceLanguage provides null,
+        LocalReferenceBodyTypography provides false, content = content)
+}
+
+@Composable
+internal fun prepareNativeReferenceBacklink(backlink: ReferenceBacklink,
+    onLink: (EntryLink) -> Unit): PreparedNativeFloatText {
+    val style = nativeReferenceBacklinkStyle(MaterialTheme.typography.bodyLarge.fontSize)
+    val spans = remember(ReferenceBacklinkSourceIdentity(backlink)) { listOf(backlink.span) }
+    val snapshot = nativeReferenceBacklinkFont(backlink)
+    lateinit var prepared: PreparedNativeFloatText
+    ReferenceBacklinkTextContext(style) {
+        val annotated = styledTextAnnotation(spans, null, style, onLink)
+        prepared = prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style,
+            MaterialTheme.colorScheme.primary, emptyList(), LocalReaderSettings.current,
+            LocalEntryEdition.current, onLink, nativeLineHeight = NativeLineHeightPolicy.Normal,
+            sourceFamily = null, ownerFont = NativeDeclaringFont(snapshot, style,
+                NativeDeclaringFontKind.ReferenceBacklink), referenceBacklink = backlink)
+    }
+    return prepared.copy(fallback = {
+        ReferenceBacklinkTextContext(style) { prepared.fallback() }
+    })
+}
+
+@Composable
+internal fun ReferenceBacklinkView(backlink: ReferenceBacklink, onLink: (EntryLink) -> Unit) {
+    val prepared = prepareNativeReferenceBacklink(backlink, onLink)
+    NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(prepared, 0f)),
+        Modifier.width(IntrinsicSize.Max), MaterialTheme.colorScheme.primary) { _, _ ->
+        error("Reference backlink has no delegated child")
     }
 }

@@ -6,11 +6,14 @@ import android.graphics.Path
 import android.graphics.RectF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
 import kotlin.math.ceil
 import kotlin.math.floor
+
+internal val LocalNativeContainerTextWrap = staticCompositionLocalOf<TextWrap?> { null }
 
 /** Paint belongs to the solved border box, not to its margin allocation or descendant ink. */
 internal data class NativeContainerPaintEdge(val width: Float, val color: Int?, val dotted: Boolean = false)
@@ -189,8 +192,11 @@ internal fun paintNativeTableBorder(canvas: Canvas, edge: TableBorderSegment, co
 internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
     rtl: Boolean, dark: Boolean, flexItem: Boolean,
-    positioned: NativePositionedScrollportPolicy? = null, absolute: NativeAbsoluteTextPlacement? = null): NativeFloatContextSpec.Container = try {
-    supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem, positioned, absolute)
+    positioned: NativePositionedScrollportPolicy? = null, absolute: NativeAbsoluteTextPlacement? = null,
+    absolutePosition: NativeAbsolutePosition? = null,
+    absoluteContainingBlock: NativeAbsoluteContainingBlock? = null): NativeFloatContextSpec.Container = try {
+    supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem, positioned, absolute,
+        absolutePosition, absoluteContainingBlock)
 } catch (error: UnsupportedFloatLayout) {
     // Keep the real leaves available to the existing visible fallback. Geometry
     // limits must not discard the body by throwing out of composition.
@@ -208,11 +214,16 @@ internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
 private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
     rtl: Boolean, dark: Boolean, flexItem: Boolean,
-    positioned: NativePositionedScrollportPolicy?, absolute: NativeAbsoluteTextPlacement?): NativeFloatContextSpec.Container {
+    positioned: NativePositionedScrollportPolicy?, absolute: NativeAbsoluteTextPlacement?,
+    absolutePosition: NativeAbsolutePosition?, absoluteContainingBlock: NativeAbsoluteContainingBlock?): NativeFloatContextSpec.Container {
     val style = resolved.box
     if ((style.positionedScope != null) != (positioned != null) ||
         (style.positioning is ContainerPositioning.Absolute) != (absolute != null))
         throw UnsupportedFloatLayout("Positioned content requires its own direct source scope")
+    if ((style.absolutePosition != null) != (absolutePosition != null))
+        throw UnsupportedFloatLayout("Absolute positioned content requires its nearest relative Container")
+    if (absoluteContainingBlock != null && (style.positioning != ContainerPositioning.RelativeAuto || positioned != null))
+        throw UnsupportedFloatLayout("Absolute containing block requires an ordinary relative Container")
     if (positioned == null) nativeScrollportUnavailable(style, flexItem)?.let { throw UnsupportedFloatLayout(it) }
     if (positioned != null && (flexItem || style.height != null || style.minHeight != null))
         throw UnsupportedFloatLayout("This positioned scrollport needs an ordinary auto-height owner")
@@ -267,13 +278,15 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         }).takeIf { it.background != null || it.edges!!.any { edge -> edge.color != null && edge.width > 0f } }
     val relativeAuto = style.positioning == ContainerPositioning.RelativeAuto
     if (relativeAuto && positioned == null && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
-            style.columns != null || children.any { it !is NativeFloatContextSpec.Text }))
+            style.columns != null || absoluteContainingBlock == null && children.any { it !is NativeFloatContextSpec.Text }))
         throw UnsupportedFloatLayout("Positioned groups require one ordinary plaintext owner")
     if (positioned != null && children.any { it !is NativeFloatContextSpec.Text &&
             (it !is NativeFloatContextSpec.Container || it.absolute == null) })
         throw UnsupportedFloatLayout("This positioned scope needs direct text, image and absolute text owners")
     if (absolute != null && children.any { it !is NativeFloatContextSpec.Text })
         throw UnsupportedFloatLayout("Absolute text requires ordinary paragraph owners")
+    if (absolutePosition != null && children.any { it !is NativeFloatContextSpec.Text })
+        throw UnsupportedFloatLayout("Absolute positioned content requires ordinary paragraph owners")
     val columns = style.columns?.let { NativeColumnPolicy(it.count, length(it.gap), rtl) }
     if (columns != null && (style.height != null || style.layout == ContainerLayout.FlexRow ||
             style.overflow == ContainerOverflow.Auto))
@@ -328,7 +341,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         fixedContentHeight = containerUsedHeight(style, padding.top + padding.bottom,
             density, normalBodyFont)?.content,
         minimum = containerMinimumHeight(style, padding.top + padding.bottom, density, normalBodyFont),
-        absolute = absolute,
+        absolute = absolute, absolutePosition = absolutePosition, absoluteContainingBlock = absoluteContainingBlock,
         scrollport = positioned?.let { NativeScrollportSpec(children, scrollPadding, it) },
         content = {})
 }
@@ -340,6 +353,24 @@ internal data class NativeContainerLeaf(val block: Block, val previous: Block?, 
     val ownerWrap: TextWrap? = null, val bodyTypographyExcluded: Boolean = false)
 
 private data class NativePositionedParent(val paddingTop: Float)
+
+/** New absolute offsets use ordinary Container CSS lengths, not the legacy absolute text zoom basis. */
+internal fun nativeOrdinaryAbsolutePosition(position: ContainerAbsolutePosition, containingBlockId: Int,
+    density: Float, normalBodyFont: Float): NativeAbsolutePosition {
+    require(density.isFinite() && density > 0f && normalBodyFont.isFinite() && normalBodyFont >= 0f)
+    fun offset(value: ContainerMarginLength): Float {
+        val pixels = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density else normalBodyFont
+        if (!pixels.isFinite() || kotlin.math.abs(pixels) > TablePixelLimit)
+            throw UnsupportedFloatLayout("Absolute Container offset exceeds native geometry")
+        return pixels.toFloat()
+    }
+    return NativeAbsolutePosition(containingBlockId, offset(position.left), offset(position.top))
+}
+
+/** Table/Figure descendants start independent adapter trees and never lend this anchor. */
+private fun Container.hasOrdinaryAbsoluteDescendant(): Boolean = blocks.any { block ->
+    block.container?.let { it.style.absolutePosition != null || it.hasOrdinaryAbsoluteDescendant() } == true
+}
 
 internal fun positionedOverflowAt(scope: PositionedScope, viewport: Double): PositionedOverflowX {
     if (!viewport.isFinite() || viewport < 0.0) throw UnsupportedFloatLayout("Positioned scope needs the source viewport width")
@@ -362,6 +393,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     id: (String) -> Int, positionedPaintReachable: Boolean = false,
     leaf: @Composable (NativeContainerLeaf) -> List<NativeFloatContextSpec>
 ): List<NativeFloatContextSpec> {
+    val inheritedWrap = LocalNativeContainerTextWrap.current
     val bodyPixels = normalBodySize.value * density.density * density.fontScale
     val positionedBodyPixels = with(density) { normalBodySize.toPx() }
     fun groupIndices(item: ContainerFlowItem): List<Int> = when (item) {
@@ -375,7 +407,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         gaps: List<Float>, context: ContainerTextContext, align: CellTextAlign?, inside: Boolean,
         row: Boolean, roots: List<Int?>, inScrollport: Boolean,
         positionedParent: NativePositionedParent? = null, ownerWrap: TextWrap? = null,
-        declaringFormat: NativeContainerTextFormat? = null): List<NativeFloatContextSpec> {
+        declaringFormat: NativeContainerTextFormat? = null,
+        ordinaryContainingBlock: Int? = null): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
         val groups = if (row) containerFlowItems(values) else values.indices.map { ContainerFlowItem.Block(it) }
         for (group in groups) {
@@ -386,9 +419,12 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
             if (container != null) {
                 val resolved = container.style.atViewport(rootViewport)
                 val absolute = resolved.box.positioning as? ContainerPositioning.Absolute
+                val ordinaryAbsolute = resolved.box.absolutePosition
                 val scope = resolved.box.positionedScope
+                val ordinaryRelative = resolved.box.positioning == ContainerPositioning.RelativeAuto && scope == null &&
+                    (resolved.box.ownerFont != null || resolved.box.textWrap != null || container.hasOrdinaryAbsoluteDescendant())
                 val inheritedContext = if ((context.bodyOrigin != null || context.bodyDirection != null) &&
-                    (resolved.box.positioning != null || scope != null))
+                    (resolved.box.positioning != null || ordinaryAbsolute != null || scope != null))
                     nativeWithoutBodyTextContext(context, normalBodySize, density)
                         ?: checkNotNull(context.bodyOrigin).baseline else context
                 val requestedContext = resolved.box.textContext(inheritedContext)
@@ -430,7 +466,12 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     (it.value.toDouble() * if (it.unit == StyleLengthUnit.Px) density.density else positionedBodyPixels).toFloat()
                 } ?: 0f
                 val childScope = scope?.let { NativePositionedParent(paddingTop) }
-                val nextWrap = absolute?.textWrap ?: scope?.textWrap ?: ownerWrap
+                val nextWrap = absolute?.textWrap ?: scope?.textWrap ?: resolved.box.textWrap ?: ownerWrap
+                val nextOrdinaryContainingBlock = when {
+                    ordinaryRelative -> id(paths[first])
+                    ordinaryAbsolute != null || absolute != null || scope != null -> null
+                    else -> ordinaryContainingBlock
+                }
                 CompositionLocalProvider(LocalAuthoredBackground provides background) {
                     children += visit(container.blocks,
                         container.blocks.indices.map { "${paths[first]}/container/block-$it" },
@@ -438,7 +479,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         List(container.blocks.size) { 0f }, next, nextAlign, true,
                         resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
                         inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
-                        childScope, nextWrap, absoluteFormat?.getOrNull())
+                        childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock)
                 }
                 val placement = if (absolute == null || positionedParent == null) null else
                     NativeAbsoluteTextPlacement(absolute.left.value * density.density,
@@ -449,20 +490,43 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     textFailure = textFailure ?: error.message ?: "Positioned viewport geometry is unavailable"
                     null
                 }
+                var ordinaryPlacement: NativeAbsolutePosition? = null
+                var ordinaryAnchor: NativeAbsoluteContainingBlock? = null
+                try {
+                    ordinaryPlacement = ordinaryAbsolute?.let { value -> ordinaryContainingBlock?.let { containingId ->
+                        nativeOrdinaryAbsolutePosition(value, containingId, density.density, bodyPixels)
+                    } }
+                    if (ordinaryRelative) {
+                        fun padding(value: StyleLength?): Float {
+                            val pixels = value?.let { it.value.toDouble() *
+                                if (it.unit == StyleLengthUnit.Px) density.density else bodyPixels } ?: 0.0
+                            if (!pixels.isFinite() || pixels !in 0.0..TablePixelLimit.toDouble())
+                                throw UnsupportedFloatLayout("Relative Container padding exceeds native geometry")
+                            return pixels.toFloat()
+                        }
+                        // The native content origin already includes border; only authored padding is removed.
+                        ordinaryAnchor = NativeAbsoluteContainingBlock(padding(resolved.box.padding?.left),
+                            padding(resolved.box.padding?.top))
+                    }
+                } catch (error: UnsupportedFloatLayout) {
+                    textFailure = textFailure ?: error.message ?: "Absolute Container geometry is unavailable"
+                }
                 val prepared = nativeContainerSpec(id(paths[first]), resolved, children,
                     density.density, if (absolute != null || scope != null) positionedBodyPixels else bodyPixels,
-                    rtl, dark, row, scopePolicy, placement)
+                    rtl, dark, row, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor)
                 val failure = textFailure ?: (if (scope == null && absolute == null)
                     nativeScrollportUnavailable(container.style, row) else null)
                 val domainFailure = failure ?: when {
                     absolute != null && (positionedParent == null || !nativeAbsoluteParagraphs(container.blocks)) ->
                         "Absolute text requires its direct scope and unreplaced ordinary paragraphs"
-                    inScrollport && positionedParent == null && scope == null && (resolved.box.positioning != null || resolved.box.columns != null ||
+                    ordinaryAbsolute != null && (ordinaryContainingBlock == null || !nativeAbsoluteParagraphs(container.blocks)) ->
+                        "Absolute positioned content requires its nearest relative Container and ordinary paragraphs"
+                    inScrollport && positionedParent == null && scope == null && (resolved.box.positioning != null || ordinaryAbsolute != null || resolved.box.columns != null ||
                         resolved.box.layout == ContainerLayout.FlexRow) ->
                         "This child layout is unavailable inside a local scrollport"
                     resolved.needsDocumentExtent() && !fixedHeightReachable && absolute == null ->
                         "Container overflow needs this owner's document extent export"
-                    resolved.box.positioning != null && !positionedPaintReachable ->
+                    (resolved.box.positioning != null || ordinaryAbsolute != null) && !positionedPaintReachable ->
                         "Positioned painting needs this owner's Entry stacking context"
                     else -> null
                 }
@@ -485,7 +549,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     val child = NativeContainerLeaf(rendered, if (inside) null else values.getOrNull(index - 1),
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
                         roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
-                        inside, inScrollport, ownerWrap, bodyTypographyExcluded = excludesBody)
+                        inside, inScrollport, ownerWrap.takeUnless { rendered.kind == "heading" }, bodyTypographyExcluded = excludesBody)
                     if (excludesBody) {
                         CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child) }
                     } else if (format?.ownerFont == null) children += leaf(child) else {
@@ -510,5 +574,5 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     }
     return visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
         blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
-        false, false, blocks.indices.map { it }, false)
+        false, false, blocks.indices.map { it }, false, ownerWrap = inheritedWrap)
 }

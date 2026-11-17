@@ -48,6 +48,7 @@ internal class NativeFloatRowPlan private constructor(
     val flow: NativeFloatFlow,
     val nativeLineMetrics: List<NativeUsedLineMetrics>,
     val alignment: Layout.Alignment,
+    val availableWidth: Float = width.toFloat(),
 ) {
     fun lineAt(offset: Int): Int {
         require(offset in 0..source.length)
@@ -70,8 +71,13 @@ internal class NativeFloatRowPlan private constructor(
             direction: TextDirectionHeuristic, lineSpacingExtra: Float, lineSpacingMultiplier: Float,
             requireDrainedAtBoundary: Boolean, carriedExclusions: List<NativeFloatExclusion>,
             insets: NativeTextInsets, usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?,
-            includeFontPadding: Boolean): NativeFloatRowPlan {
+            includeFontPadding: Boolean, exactAvailableWidth: Float? = null): NativeFloatRowPlan {
             require(width >= 0 && width <= Int.MAX_VALUE / 4)
+            val availableWidth = exactAvailableWidth ?: width.toFloat()
+            if (exactAvailableWidth != null && (!availableWidth.isFinite() || availableWidth < 0f ||
+                    availableWidth > TablePixelLimit || floor(availableWidth).toInt() != width ||
+                    occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() || insets != NativeTextInsets()))
+                throw UnsupportedFloatLayout("Exact Float text width requires an unexcluded zero-inset paragraph")
             require(lineSpacingExtra.isFinite() && lineSpacingExtra >= 0f)
             require(lineSpacingMultiplier.isFinite() && lineSpacingMultiplier > 0f)
             require(occurrences.map { it.sourceId }.distinct().size == occurrences.size)
@@ -91,7 +97,7 @@ internal class NativeFloatRowPlan private constructor(
             repeat(64) {
                 if (!seen.add(left.toList() + listOf(-1) + right.toList()))
                     throw UnsupportedFloatLayout("Float image row exclusions cycle")
-                val rows = nativeFloatRows(source, paint, runs, width, left, right, wrap, alignment)
+                val rows = nativeFloatRows(source, paint, runs, availableWidth, left, right, wrap, alignment)
                 val natural = rows.mapIndexed { index, row ->
                     var metric = row.natural
                     if (includeFontPadding) metric = NativeUsedLineMetrics(
@@ -115,12 +121,12 @@ internal class NativeFloatRowPlan private constructor(
                     usedLineMetrics, wrap?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } })
                 if (left.contentEquals(flow.left) && right.contentEquals(flow.right)) {
                     rows.forEachIndexed { index, row ->
-                        if (flow.constrainedByFloat[index] && row.visibleAdvance > width - flow.left[index] - flow.right[index])
+                        if (flow.constrainedByFloat[index] && row.visibleAdvance > availableWidth - flow.left[index] - flow.right[index])
                             throw UnsupportedFloatLayout("Native Float image row exceeds the remaining float lane")
                     }
                     if (requireDrainedAtBoundary && flow.exclusions.any { it.outer.bottom > flow.bottom + 0.01f })
                         throw UnsupportedFloatLayout("Active float crosses an unsupported formatting boundary")
-                    return NativeFloatRowPlan(source, TextPaint().apply { set(paint) }, width, runs, rows, flow, natural, alignment)
+                    return NativeFloatRowPlan(source, TextPaint().apply { set(paint) }, width, runs, rows, flow, natural, alignment, availableWidth)
                 }
                 left = flow.left; right = flow.right
             }
@@ -130,7 +136,7 @@ internal class NativeFloatRowPlan private constructor(
 }
 
 private fun nativeFloatRows(source: Spanned, paint: TextPaint, runs: NativeFloatRowRuns,
-    width: Int, left: IntArray, right: IntArray, wrap: NativeTextWrapPlan?,
+    width: Float, left: IntArray, right: IntArray, wrap: NativeTextWrapPlan?,
     alignment: Layout.Alignment): List<NativeFloatPlannedRow> {
     val result = mutableListOf<NativeFloatPlannedRow>()
     val indents = IntArray(maxOf(left.size, right.size)) { index ->
@@ -157,7 +163,7 @@ private fun nativeFloatRows(source: Spanned, paint: TextPaint, runs: NativeFloat
         val initialIndent = indents[minOf(result.size, indents.lastIndex)]
         // NoWrap removes soft fitting pressure, rather than rounding a measured
         // prefix into a threshold. Actual published coordinates remain bounded.
-        val paragraphWidth = if (noWrap == null) width.toFloat() else maxOf(width.toFloat(),
+        val paragraphWidth = if (noWrap == null) width else maxOf(width,
             TablePixelLimit * 2f + initialIndent)
         val constraints = LineBreaker.ParagraphConstraints().apply { setWidth(paragraphWidth) }
         val fitted = breaker.computeLineBreaks(measured, constraints, result.size)

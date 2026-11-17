@@ -1183,4 +1183,89 @@ class ReadingLayoutTest {
         assertTrue(readingRows(listOf(Section(3, "Usage", blanks))).none { it.block != null })
     }
 
+
+    @Test fun citationDestinationsKeepEqualLabelsDistinctAndOpenTheirActualSourceRow() {
+        fun marker(occurrence: Long, anchor: String) = Span("link", "[7]", "", role = "reference",
+            targetFragment = "reference-7", citationMarker = CitationMarker(7, occurrence, anchor, nowrap = true))
+        val first = marker(3, "stored-cite-first")
+        val second = marker(9, "stored-cite-second")
+        val body = Block("paragraph", 0, listOf(first, Span("text", " retained body "), second))
+        val definition = Block("definition", 1, listOf(Span("text", "meaning")), number = "1")
+        fun backlink(occurrence: Long, anchor: String) = ReferenceBacklink.withPolicies(occurrence,
+            Span("link", "return-$occurrence", "", targetFragment = anchor))
+        val links = listOf(backlink(9, "stored-cite-second"), backlink(3, "stored-cite-first"))
+        val reference = Reference(7, 1, "", listOf(Span("text", "note body")), backlinks = links)
+        val entry = Entry("citation fixture", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Usage", listOf(body, definition))), listOf(reference))
+        val destinations = citationDestinations(entry)
+        assertEquals(listOf("stored-cite-first", "stored-cite-second"), destinations.keys.toList())
+        val one = destinations.getValue("stored-cite-first")
+        val two = destinations.getValue("stored-cite-second")
+        assertSame(first, one.span)
+        assertSame(second, two.span)
+        assertEquals(3L, one.marker.occurrence)
+        assertEquals(9L, two.marker.occurrence)
+        assertEquals("block-0-0", one.rowKey)
+        assertEquals(one.rowKey, two.rowKey)
+        assertTrue(one.graphical && two.graphical)
+        assertNull(destinations["[7]"])
+        assertNull(destinations["reference-7"])
+        assertNull(citationScrollIndex(entry, one, setOf("heading-0")))
+        assertEquals(setOf("heading-0", "heading-0-details"), citationFoldKeys(entry, one))
+        val folded = mutableSetOf("heading-0", "heading-0-details", "references")
+        folded.removeAll(citationFoldKeys(entry, one))
+        assertEquals(2, citationScrollIndex(entry, one, folded))
+        assertEquals(2, citationScrollIndex(entry, two, folded))
+        assertEquals(listOf(9L, 3L), reference.backlinks.map { it.occurrence })
+        val reordered = entry.copy(references = listOf(reference.copy(backlinks = links.reversed())))
+        val changed = citationDestinations(reordered)
+        assertSame(first, changed.getValue("stored-cite-first").span)
+        assertSame(second, changed.getValue("stored-cite-second").span)
+        assertEquals(listOf(first, body.spans[1], second), body.spans)
+        assertEquals("[7] retained body [7]", textOf(body.spans))
+    }
+
+    @Test fun citationDestinationsUseAuthoritativeCaptionCellPreambleAndReferenceBodySinks() {
+        fun marker(occurrence: Long) = Span("link", "[7]", "", role = "reference",
+            targetFragment = "reference-7", citationMarker = CitationMarker(7, occurrence, "saved-anchor-$occurrence"))
+        val preamble = marker(1)
+        val caption = marker(2)
+        val cell = marker(3)
+        val referenceMarker = marker(4)
+        val table = Table(listOf(caption), listOf(listOf(Cell(listOf(cell), false, 1, 1))))
+        val reference = Reference(7, 1, "", listOf(referenceMarker), backlinks = listOf(4L, 2L, 1L, 3L).map {
+            ReferenceBacklink.withPolicies(it, Span("link", "return-$it", "", targetFragment = "saved-anchor-$it"))
+        })
+        val entry = Entry("citation sinks", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(Block("table", 0, emptyList(), table = table)))),
+            listOf(reference), preamble = listOf(preamble))
+        val destinations = citationDestinations(entry)
+        assertEquals(4, destinations.size)
+        assertEquals(listOf(1L, 2L, 3L, 4L), destinations.values.map { it.marker.occurrence })
+        val pre = destinations.getValue("saved-anchor-1")
+        val cap = destinations.getValue("saved-anchor-2")
+        val content = destinations.getValue("saved-anchor-3")
+        val note = destinations.getValue("saved-anchor-4")
+        assertSame(preamble, pre.span)
+        assertSame(caption, cap.span)
+        assertSame(cell, content.span)
+        assertSame(referenceMarker, note.span)
+        assertEquals(CitationSourceSlot.Preamble, pre.slot)
+        assertEquals(CitationSourceSlot.Reference, note.slot)
+        assertEquals(0, note.referenceIndex)
+        assertEquals("block-0-0", cap.rowKey)
+        assertEquals(cap.rowKey, content.rowKey)
+        assertEquals(setOf("preamble"), citationFoldKeys(entry, pre))
+        assertEquals(setOf("references"), citationFoldKeys(entry, note))
+        assertEquals(1, citationScrollIndex(entry, pre, emptySet()))
+        assertEquals(3, citationScrollIndex(entry, cap, emptySet()))
+        assertEquals(3, citationScrollIndex(entry, content, emptySet()))
+        assertEquals(5, citationScrollIndex(entry, note, emptySet()))
+        assertTrue(destinations.values.all { it.graphical })
+        assertEquals("[1]", referenceLabel(reference))
+        assertEquals(listOf(preamble), entry.preamble)
+        assertSame(table, entry.sections.single().blocks.single().table)
+        assertSame(referenceMarker, entry.references.single().spans.single())
+    }
+
 }

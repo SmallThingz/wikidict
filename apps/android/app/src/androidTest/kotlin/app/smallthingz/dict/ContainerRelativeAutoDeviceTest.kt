@@ -6,6 +6,7 @@ import android.view.View
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
@@ -14,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -22,6 +24,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -259,5 +262,544 @@ class ContainerRelativeAutoDeviceTest {
             }
             assertEquals(List(3) { "caption-target" }, opened)
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+    }
+
+    /** Direct typed, source-shaped synthetic control: no earned FR media IR or source rendition.
+     * The real source requests an auto-width right float Table and a left-floated image240.
+     * This fixture supplies its own 240x144 asset and explicit test typography/zero grid edges.
+     */
+    @Test fun absoluteLabelsKeepNearestRelativePaddingOriginInsideARealFloatingTable() {
+        val phase = mutableStateOf(0)
+        val opened = mutableListOf<String>()
+        val failures = mutableListOf<String>()
+        val figureImage = InlineImage("Synthetic-FR-relative.png", widthPx = 240,
+            alt = "Synthetic floated image")
+        val imageSpan = Span("text", "", image = figureImage)
+        val labels = listOf(
+            Span("link", "Repère", "relative-anchor", foreground = "#008000"),
+            Span("link", "CHEVAUCHE", "earlier-label", foreground = "#d00000"),
+            Span("link", "CHEVAUCHE", "later-label", foreground = "#0000d0"),
+            Span("external_link", "Cible externe", "https://example.test/fr-label", foreground = "#000000"),
+            Span("text", "Ici", bold = true, foreground = "#000000"))
+        val reference = Span("text", "Repère", foreground = "#707070")
+        val referenceBreak = Span("line_break", "")
+        // Real ordinary source lines cover the nearby labels in the later CB controls.
+        // They are not a fake document surface or a height-only spacer.
+        val referenceLines = listOf(reference) + List(6) { Span("text", "Repère", foreground = "#707070") }
+        val referenceSpans = referenceLines.flatMapIndexed { index, span ->
+            if (index == 0) listOf(span) else listOf(referenceBreak, span)
+        }
+        val font = InlineFontSnapshot(18f, FontScaleBasis.CssPx, fontNormalized = true, language = "fr")
+        fun zero() = StyleEdges(px(0f), px(0f), px(0f), px(0f))
+        fun paragraph(span: Span) = Block("paragraph", 0, listOf(span), style = BlockStyle(margins = zero()))
+        fun label(index: Int, oversized: Boolean = false, fractional: Boolean = false, leftward: Boolean = false, direct: Boolean = false): Block {
+            val left = listOf(7f, 20f, 20f, 10f, 70f)[index]
+            val top = listOf(13f, 50f, 50f, 92f, 120f)[index]
+            return group(listOf(paragraph(labels[index])), ContainerStyle(
+                width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px,
+                    if (oversized && index == 3) 520f else if (index in 0..2) (if (fractional) 160.5f else 160f) else 120f)),
+                height = px(20f), textAlign = if (index in 1..2) CellTextAlign.Right else CellTextAlign.Center,
+                lineHeight = ContainerLineHeight.Length(px(20f)), ownerFont = font,
+                absolutePosition = ContainerAbsolutePosition(if (leftward && index == 3) SignedContainerMargin(StyleLengthUnit.Px, -400f) else px(if (direct && index == 3) 200f else left), px(if (oversized && index == 3) 900f else top))))
+        }
+        val originalLabels = labels.indices.map { label(it) }
+        val figure = Figure(FigureContent.Image(imageSpan, FigureSizingPolicy.RequestedFit),
+            FigureFormat.Thumbnail, FigurePlacement.FloatLeft, FigureClear.None, zero(), zero(), zero(),
+            1f, px(20f), FigureColor.Transparent, FigureBorder.None, FigureColor.Transparent,
+            FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent)
+        val imageBlock = Block("paragraph", 0, emptyList(), figure = figure)
+        val ordered = (0..10).map { state ->
+            if (state == 7) listOf(0, 2, 1, 3, 4) else labels.indices.toList()
+        }
+        val entries = (0..10).map { state ->
+            val placed = ordered[state].map { index ->
+                if (state in listOf(1, 7, 9) && index == 3) label(index, oversized = true, leftward = state == 7, direct = state == 9)
+                else if (state in 6..7 && index in 0..2) label(index, fractional = true)
+                else originalLabels[index]
+            }
+            val content = if (state !in 3..6) listOf(imageBlock) + placed else {
+                val moved = state >= 4
+                val referenceBlock = Block("paragraph", 0, referenceSpans,
+                    style = BlockStyle(margins = zero()))
+                val wrapper = group(listOf(referenceBlock) + placed, ContainerStyle(
+                    width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, if (state in 6..7) 160.5f else 160f)),
+                    clear = FigureClear.Both,
+                    margins = StyleEdges(px(if (moved) 179f else 157f), px(0f), px(0f), px(0f)),
+                    padding = StyleEdges(px(if (moved) 9f else 5f), px(4f), px(3f), px(if (moved) 13f else 3f)),
+                    textAlign = CellTextAlign.Center, ownerFont = font,
+                    lineHeight = ContainerLineHeight.Length(px(20f)),
+                    positioning = if (state in 5..6) ContainerPositioning.RelativeAuto else null))
+                listOf(imageBlock, wrapper)
+            }
+            val relative = group(content, ContainerStyle(positioning = ContainerPositioning.RelativeAuto,
+                overflow = ContainerOverflow.Visible, textWrap = TextWrap.NoWrap,
+                // Later synthetic CB controls block top-margin collapse through this parent.
+                // The source-shaped first/recovery phases retain the zero-edge relative owner.
+                padding = if (state in 3..6) StyleEdges(px(1f), px(0f), px(0f), px(0f)) else null))
+            val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+                blocks = listOf(relative)))), geometry = TableGeometry(border = 0, cellSpacing = 0, cellPadding = 0),
+                style = TableStyle(border = StyleBorder.None, collapse = TableCollapse.Separate,
+                    floatSide = TableFloatSide.Right, clear = FigureClear.Right))
+            Entry("Synthetic positioned labels", emptyList(), "language", "French", "fr",
+                listOf(Section(0, "", listOf(if (state == 9) relative else Block("table", 0, emptyList(), table = table)))), emptyList(),
+                media = listOf(Media(figureImage.file, "image", "")), bodyAdjoining = BodyAdjoiningPolicy.Ordinary,
+                bodyTypography = if (state == 7) BodyTypography(
+                    InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true, language = "fr"),
+                    direction = BidiResolvedDirection.Rtl) else null)
+        }.toMutableList().apply {
+            this[2] = this[0]; this[8] = this[0]; this[10] = this[0]
+        }
+        val directory = java.io.File(compose.activity.cacheDir, "absolute-table-${java.util.UUID.randomUUID()}")
+            .apply { check(mkdirs()) }
+        val bitmap = android.graphics.Bitmap.createBitmap(240, 144, android.graphics.Bitmap.Config.ARGB_8888)
+        val png = try {
+            bitmap.eraseColor(android.graphics.Color.rgb(220, 220, 220))
+            java.io.ByteArrayOutputStream().use { output ->
+                check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)); output.toByteArray()
+            }
+        } finally { bitmap.recycle() }
+        val url = "https://example.test/synthetic-fr-relative.png"
+        val cache = MediaCache(compose.activity, directory = directory, metadata = {
+            """{"query":{"pages":[{"imageinfo":[{"url":"$url","width":240,"height":144,"mime":"image/png"}]}]}}""".encodeToByteArray()
+        }, openMedia = { requested -> check(requested == url); java.io.ByteArrayInputStream(png) })
+        val settings = AppSettings(allowImages = true, allowAudio = false, mediaCacheMb = 1,
+            collapseOtherSections = false, collapseDetails = false)
+        val reading = EntryReadingState()
+        val bodyIndex = entryReadingStartIndex(entries.first(), emptySet()) +
+            visibleEntryReadingRows(entries.first(), emptySet()).indexOfFirst { it.block != null }
+        val focus = androidx.compose.ui.focus.FocusRequester()
+        var face: android.graphics.Typeface? = null
+        var rootWindow = androidx.compose.ui.geometry.Rect.Zero
+        val uriHandler = object : androidx.compose.ui.platform.UriHandler {
+            override fun openUri(uri: String) { opened += uri }
+        }
+        val gridMatcher = SemanticsMatcher("actual table grid") { node ->
+            node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)
+                ?.startsWith("compiled-table-grid") == true
+        }
+        fun grid() = compose.onAllNodes(gridMatcher, useUnmergedTree = true).onFirst()
+        fun horizontalRange() = compose.onNodeWithTag("entry-document-scroll").fetchSemanticsNode()
+            .config[androidx.compose.ui.semantics.SemanticsProperties.HorizontalScrollAxisRange]
+        fun expectedText(state: Int) = buildString {
+            append('\ufffc')
+            if (state in 3..6) append('\n').append(referenceLines.joinToString("\n") { it.text })
+            ordered[state].forEach { append('\n').append(labels[it].text) }
+        }
+        fun actualView(state: Int): NativeFloatTextView {
+            val candidates = views()
+            return compose.runOnIdle { candidates.single { view ->
+                view.logicalText.toString() == expectedText(state) &&
+                    view.currentMeasuredGeometry?.nodes?.count { it.kind == FloatInteractionKind.LINK } == 4
+            } }
+        }
+        fun rectNear(a: android.graphics.RectF, b: android.graphics.RectF, tolerance: Float = .02f) {
+            assertEquals(a.left, b.left, tolerance); assertEquals(a.top, b.top, tolerance)
+            assertEquals(a.right, b.right, tolerance); assertEquals(a.bottom, b.bottom, tolerance)
+        }
+        fun scrollOverflow(state: Int, view: NativeFloatTextView, sourceRtl: Boolean, authoredLeft: Float) {
+            val scroll = compose.onNodeWithTag("entry-scroll")
+            val viewport = scroll.fetchSemanticsNode().boundsInWindow
+            val horizontal = compose.onNodeWithTag("entry-document-scroll")
+            val horizontalViewport = horizontal.fetchSemanticsNode().boundsInWindow
+            val range = horizontalRange()
+            assertEquals(0f, range.value(), .02f)
+            var distance = 0f
+            compose.runOnIdle {
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val item = geometry.nodes.single { it.kind == FloatInteractionKind.LINK && it.label.toString() == labels[3].text }
+                val at = IntArray(2); view.getLocationInWindow(at)
+                val target = item.bounds.single()
+                distance = target.centerY() + at[1] + view.paddingTop - viewport.center.y
+                assertTrue(distance > 500f)
+                // Zero source edges put this left-floated Figure at the relative CB origin.
+                // The positive absolute border box contributes all of its declared width,
+                // including blank area after its centered text, to the document range.
+                val imageLeft = geometry.nodes.single { it.kind == FloatInteractionKind.IMAGE }.bounds.single().left
+                val boxOrigin = imageLeft + at[0] + view.paddingLeft + authoredLeft
+                val minimumRange = if (sourceRtl) horizontalViewport.left - boxOrigin
+                    else boxOrigin + 520f - horizontalViewport.right
+                assertTrue(minimumRange > 0f)
+                assertTrue(range.maxValue() >= minimumRange - 1f)
+            }
+            scroll.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(0f, distance)) }
+            compose.waitForIdle()
+            var pan = 0f
+            compose.runOnIdle {
+                val item = checkNotNull(view.currentMeasuredGeometry).nodes.single {
+                    it.kind == FloatInteractionKind.LINK && it.label.toString() == labels[3].text
+                }
+                val at = IntArray(2); view.getLocationInWindow(at)
+                pan = if (sourceRtl) horizontalViewport.left - (item.bounds.single().left + at[0] + view.paddingLeft) + 4f
+                    else item.bounds.single().right + at[0] + view.paddingLeft - horizontalViewport.right + 4f
+                assertTrue(pan > 0f)
+            }
+            // Foundation's semantic ScrollBy advances ScrollState for positive x in both directions;
+            // BODY RTL maps that value to physical movement right, exposing its reachable negative side.
+            horizontal.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(pan, 0f)) }
+            compose.waitForIdle()
+            assertTrue(horizontalRange().value() > 0f)
+            assertSame("Scrolling keeps the original cell owner", view, actualView(state))
+            lateinit var exposed: android.graphics.RectF
+            compose.runOnIdle {
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val item = geometry.nodes.single { it.kind == FloatInteractionKind.LINK && it.label.toString() == labels[3].text }
+                val at = IntArray(2); view.getLocationInWindow(at)
+                exposed = android.graphics.RectF(item.bounds.single()).apply {
+                    offset(at[0] + view.paddingLeft.toFloat(), at[1] + view.paddingTop.toFloat())
+                }
+                assertTrue(exposed.top >= viewport.top - 1f && exposed.bottom <= viewport.bottom + 1f)
+                assertTrue(exposed.left >= horizontalViewport.left - 1f && exposed.right <= horizontalViewport.right + 1f)
+                val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(item.id))
+                try { assertTrue(info.isVisibleToUser); assertTrue(info.isClickable) } finally { info.recycle() }
+                assertTrue(reading.scroll.firstVisibleItemIndex == bodyIndex && reading.scroll.firstVisibleItemScrollOffset > 0)
+                val before = opened.size
+                assertTrue(view.accessibilityNodeProvider.performAction(item.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(before + 1, opened.size); assertEquals(labels[3].target, opened.last())
+            }
+            assertTrue(exposed.intersect(viewport.left, viewport.top, viewport.right, viewport.bottom))
+            val outside = compose.onNodeWithTag("absolute-table-root").captureToImage().asAndroidBitmap()
+            try {
+                var ink = 0
+                for (y in maxOf(0, kotlin.math.floor(exposed.top - rootWindow.top).toInt()) until
+                    minOf(outside.height, kotlin.math.ceil(exposed.bottom - rootWindow.top).toInt()))
+                    for (x in maxOf(0, kotlin.math.floor(exposed.left - rootWindow.left).toInt()) until
+                        minOf(outside.width, kotlin.math.ceil(exposed.right - rootWindow.left).toInt())) {
+                        val pixel = outside.getPixel(x, y)
+                        if (android.graphics.Color.red(pixel) < 100 && android.graphics.Color.green(pixel) < 100 &&
+                            android.graphics.Color.blue(pixel) < 100) ink++
+                    }
+                assertTrue("The original outside label is actually painted after real Entry scrolling", ink > 5)
+            } finally { outside.recycle() }
+            val currentPan = horizontalRange().value()
+            horizontal.performSemanticsAction(SemanticsActions.ScrollBy) { assertTrue(it(-currentPan, 0f)) }
+            compose.waitForIdle()
+            assertEquals(0f, horizontalRange().value(), .02f)
+            scroll.performScrollToIndex(bodyIndex); compose.waitForIdle()
+            assertSame(view, actualView(state))
+        }
+        data class Snapshot(val frame: androidx.compose.ui.geometry.Rect,
+            val image: android.graphics.RectF, val anchor: android.graphics.RectF,
+            val right: android.graphics.RectF, val reference: android.graphics.RectF?, val text: String, val documentExtent: Int)
+        var initial: Snapshot? = null
+        var static: Snapshot? = null
+        var moved: Snapshot? = null
+        var near: Snapshot? = null
+        var readyFailures: List<String>? = null
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val zoom = if (phase.value in 6..7) 1.25f else 1f
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalCssPixelTextZoom provides zoom,
+                    // The RTL overflow phase uses explicit BODY direction, deliberately opposite this UI.
+                    androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+                    LocalInlineImageCache provides cache, androidx.compose.ui.platform.LocalUriHandler provides uriHandler,
+                    LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                    val resolved = androidx.compose.ui.platform.LocalFontFamilyResolver.current.resolve(
+                        androidx.compose.ui.text.font.FontFamily.Monospace,
+                        androidx.compose.ui.text.font.FontWeight.Normal,
+                        androidx.compose.ui.text.font.FontStyle.Normal,
+                        androidx.compose.ui.text.font.FontSynthesis.All).value as android.graphics.Typeface
+                    androidx.compose.runtime.SideEffect { face = resolved }
+                    DictTheme("light") { MaterialTheme(typography = MaterialTheme.typography.copy(
+                        bodyLarge = MaterialTheme.typography.bodyLarge.copy(fontSize = 20.sp, lineHeight = 24.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, letterSpacing = 0.sp))) {
+                        Box(Modifier.width(if (phase.value in 6..7) 460.dp else 380.dp).height(700.dp)
+                            .background(Color.White).testTag("absolute-table-root")
+                            .focusRequester(focus).focusable()
+                            .onGloballyPositioned { rootWindow = it.boundsInWindow() }) {
+                            EntryView(entries[phase.value], false, {}, onLink = { opened += it.target }, settings = settings, readingState = reading)
+                        }
+                    } }
+                }
+            } }
+            for (state in 0..8) {
+                compose.runOnIdle { phase.value = state }; compose.waitForIdle()
+                compose.waitUntil(5000) {
+                    val candidates = views()
+                    compose.runOnIdle { candidates.any { view -> view.logicalText.toString() == expectedText(state) &&
+                        view.currentMeasuredGeometry?.nodes?.any {
+                            it.kind == FloatInteractionKind.IMAGE && it.stateDescription.isNullOrEmpty()
+                        } == true } }
+                }
+                compose.waitForIdle()
+                compose.onAllNodesWithText("Unable to display this layout.", useUnmergedTree = true).assertCountEquals(0)
+                val view = actualView(state)
+                compose.onAllNodes(gridMatcher, useUnmergedTree = true).assertCountEquals(1)
+                val frame = grid().fetchSemanticsNode().boundsInWindow
+                assertEquals("Only the real Figure determines this zero-edge auto Table width", 240f, frame.width, .02f)
+                lateinit var snapshot: Snapshot
+                lateinit var overlap: android.graphics.RectF
+                var overlapWinner = -1
+                compose.runOnIdle {
+                    val geometry = checkNotNull(view.currentMeasuredGeometry)
+                    assertEquals(expectedText(state), geometry.text.toString())
+                    assertEquals(1, geometry.text.count { it == '\ufffc' })
+                    val imageNode = geometry.nodes.single { it.kind == FloatInteractionKind.IMAGE }
+                    val imageBounds = android.graphics.RectF(imageNode.bounds.single())
+                    assertEquals(240f, imageBounds.width(), .02f)
+                    assertEquals(144f, imageBounds.height(), .02f)
+                    val links = geometry.nodes.filter { it.kind == FloatInteractionKind.LINK }.sortedBy { it.start }
+                    val expectedLinks = ordered[state].filter { labels[it].kind != "text" }
+                    assertEquals(4, links.size)
+                    links.zip(expectedLinks).forEach { (item, index) ->
+                        assertEquals(labels[index].text, item.label.toString())
+                        assertEquals(labels[index].text, geometry.text.subSequence(item.start, item.end).toString())
+                        assertTrue(item.bounds.isNotEmpty())
+                        val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(item.id))
+                        try { assertEquals(labels[index].text, info.text.toString()); assertTrue(info.isClickable)
+                            if (state in listOf(1, 7) && index == 3) assertFalse(info.isVisibleToUser)
+                            else {
+                                assertTrue(info.isVisibleToUser)
+                                val expectedParent = android.graphics.RectF(item.bounds.single()).apply {
+                                    offset(view.paddingLeft.toFloat() - view.scrollX, view.paddingTop.toFloat() - view.scrollY)
+                                }
+                                val expectedBounds = Rect().also(expectedParent::roundOut)
+                                val actualBounds = Rect().also(info::getBoundsInParent)
+                                assertEquals(expectedBounds, actualBounds)
+                            }
+                        } finally { info.recycle() }
+                    }
+                    val anchorNode = links.single { it.label.toString() == labels[0].text }
+                    val start = geometry.caretRect(anchorNode.start)
+                    val end = geometry.caretRect(anchorNode.end)
+                    val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        typeface = checkNotNull(face); textSize = 18f * if (state in 6..7) 1.25f else 1f
+                    }
+                    assertEquals(paint.measureText(labels[0].text), end.left - start.left, .02f)
+                    val at = IntArray(2); view.getLocationInWindow(at)
+                    fun inGrid(rect: android.graphics.RectF) = android.graphics.RectF(rect).apply {
+                        offset(at[0] + view.paddingLeft - frame.left, at[1] + view.paddingTop - frame.top)
+                    }
+                    val anchor = inGrid(start)
+                    val ref = if (state in 3..6) inGrid(geometry.caretRect(geometry.text.indexOf(reference.text))) else null
+                    if (state !in 3..6) {
+                        val lineWidth = if (state == 7) 160.5f else 160f
+                        val imageLeft = inGrid(imageBounds).left
+                        assertEquals(imageLeft + 7f + (lineWidth - paint.measureText(labels[0].text)) / 2f, anchor.left, .02f)
+                        val right = links.first { it.label.toString() == labels[1].text }
+                        assertEquals(imageLeft + 20f + lineWidth - paint.measureText(labels[1].text),
+                            inGrid(geometry.caretRect(right.start)).left, .02f)
+                    }
+                    if (state in 3..6) {
+                        val firstReference = geometry.text.indexOf(reference.text)
+                        for (line in 1 until referenceLines.size) {
+                            val lineStart = firstReference + line * (reference.text.length + 1)
+                            assertEquals("Real BRs keep generic Container LH20 physical while the CSS font zooms", 20f * line,
+                                geometry.caretRect(lineStart).top - geometry.caretRect(firstReference).top, .02f)
+                        }
+                    }
+                    val rightNode = links.first { it.label.toString() == labels[1].text }
+                    snapshot = Snapshot(frame, inGrid(imageBounds), anchor,
+                        inGrid(geometry.caretRect(rightNode.start)), ref, geometry.text.toString(),
+                        reading.scroll.layoutInfo.visibleItemsInfo.single { it.index == bodyIndex }.size)
+                    if (state in 5..6) {
+                        val declaredWidth = if (state in 6..7) 160.5f else 160f
+                        // Ordinary reference text retains its existing integer line allocation;
+                        // only the absolute label has the new exact Float line width.
+                        val centerRemainder = (declaredWidth - kotlin.math.floor(declaredWidth)) / 2f
+                        assertEquals(checkNotNull(ref).left + 7f - 13f + centerRemainder, anchor.left, .02f)
+                    }
+                    view.setSelection(0, view.logicalText.length)
+                    assertEquals(expectedText(state), view.selectedTextForCopy())
+                    assertTrue(view.accessibilityNodeProvider.performAction(View.NO_ID,
+                        AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                    val coincident = links.filter { it.label.toString() == labels[1].text }
+                    assertEquals(2, coincident.size)
+                    overlap = android.graphics.RectF(coincident.first().bounds.single())
+                    assertTrue(overlap.intersect(coincident.last().bounds.single()))
+                    overlapWinner = coincident.last().id
+                    assertEquals(overlapWinner, geometry.interactionNodeAt(overlap.centerX(), overlap.centerY())?.id)
+                    focus.requestFocus()
+                }
+                compose.waitForIdle()
+                when (state) {
+                    0 -> { initial = snapshot; readyFailures = failures.toList() }
+                    1, 7 -> {
+                        val before = checkNotNull(initial)
+                        assertEquals(before.frame.width, frame.width, .02f)
+                        assertEquals(before.frame.height, frame.height, .02f)
+                        rectNear(before.image, snapshot.image)
+                        if (state == 1) rectNear(before.anchor, snapshot.anchor)
+                        assertEquals(before.text, snapshot.text)
+                        assertTrue("Actual document allocation must reach the outside absolute owner", snapshot.documentExtent > before.documentExtent + 700)
+                    }
+                    2, 8 -> {
+                        val before = checkNotNull(initial)
+                        assertEquals(before.frame.width, frame.width, .02f)
+                        assertEquals(before.frame.height, frame.height, .02f)
+                        assertEquals(before.documentExtent, snapshot.documentExtent)
+                        rectNear(before.image, snapshot.image)
+                        rectNear(before.anchor, snapshot.anchor)
+                        assertEquals(before.text, snapshot.text)
+                        assertEquals(0f, horizontalRange().maxValue(), .02f)
+                        assertEquals(0f, horizontalRange().value(), .02f)
+                    }
+                    3 -> static = snapshot
+                    4 -> {
+                        val before = checkNotNull(static)
+                        assertEquals(before.frame.width, frame.width, .02f)
+                        rectNear(before.image, snapshot.image)
+                        rectNear(before.anchor, snapshot.anchor)
+                        val afterReference = checkNotNull(snapshot.reference)
+                        val beforeReference = checkNotNull(before.reference)
+                        assertEquals(26f, afterReference.top - beforeReference.top, .02f)
+                        assertEquals(26f, frame.height - before.frame.height, .02f)
+                        assertEquals(10f, afterReference.left - beforeReference.left, .02f)
+                        assertEquals(before.text, snapshot.text)
+                        moved = snapshot
+                    }
+                    5 -> {
+                        val before = checkNotNull(moved)
+                        assertEquals(before.frame.width, frame.width, .02f)
+                        assertEquals(before.frame.height, frame.height, .02f)
+                        rectNear(checkNotNull(before.reference), checkNotNull(snapshot.reference))
+                        // The same absolute paragraph keeps its own metric band. Its new CB
+                        // starts after the original relative parent's 1px padding and 179px
+                        // ordinary margin; the known 144px float cannot supply clearance here.
+                        // This compares two Float carets, not Static versus Float selection bands.
+                        assertEquals(1f + 179f, snapshot.anchor.top - before.anchor.top, .02f)
+                        assertEquals(before.text, snapshot.text)
+                        near = snapshot
+                    }
+                    6 -> {
+                        val before = checkNotNull(near)
+                        assertEquals(before.frame.width, frame.width, .02f)
+                        assertEquals(before.frame.height, frame.height, .02f)
+                        rectNear(before.image, snapshot.image)
+                        assertEquals(before.text, snapshot.text)
+                        if (state == 6) {
+                            val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                                typeface = checkNotNull(face)
+                            }
+                            fun advance(text: String, size: Float): Float { paint.textSize = size; return paint.measureText(text) }
+                            val centerGrowth = advance(labels[0].text, 22.5f) - advance(labels[0].text, 18f)
+                            val rightGrowth = advance(labels[1].text, 22.5f) - advance(labels[1].text, 18f)
+                            // The extra half pixel belongs to the actual line width, not just the outer box.
+                            assertEquals(.25f - centerGrowth / 2f, snapshot.anchor.left - before.anchor.left, .02f)
+                            assertEquals(.5f - rightGrowth, snapshot.right.left - before.right.left, .02f)
+                        }
+                    }
+                }
+                if (state > 0) assertEquals("No new native refusal after the initial asset is Ready", readyFailures, failures)
+                if (state in listOf(1, 7)) scrollOverflow(state, view, state == 7, if (state == 7) -400f else 10f)
+                // These two original links deliberately paint identical glyphs at one source box.
+                // Actual Table/cell rendering, not software geometry paint, determines this raster.
+                val window = IntArray(2)
+                compose.runOnIdle { view.getLocationInWindow(window) }
+                val ox = window[0] + view.paddingLeft - rootWindow.left
+                val oy = window[1] + view.paddingTop - rootWindow.top
+                val captured = compose.onNodeWithTag("absolute-table-root").captureToImage().asAndroidBitmap()
+                var red = 0; var blue = 0
+                try {
+                    for (y in maxOf(0, kotlin.math.floor(overlap.top + oy).toInt()) until
+                        minOf(captured.height, kotlin.math.ceil(overlap.bottom + oy).toInt()))
+                        for (x in maxOf(0, kotlin.math.floor(overlap.left + ox).toInt()) until
+                            minOf(captured.width, kotlin.math.ceil(overlap.right + ox).toInt())) {
+                            val p = captured.getPixel(x, y)
+                            if (android.graphics.Color.red(p) > 100 && android.graphics.Color.blue(p) < 50 && android.graphics.Color.green(p) < 50) red++
+                            if (android.graphics.Color.blue(p) > 100 && android.graphics.Color.red(p) < 50 && android.graphics.Color.green(p) < 50) blue++
+                        }
+                    if (state == 7) { assertTrue(red > 5); assertEquals(0, blue) }
+                    else { assertTrue(blue > 5); assertEquals(0, red) }
+                } finally { captured.recycle() }
+                val beforeTouch = opened.size
+                compose.onNodeWithTag("absolute-table-root").performTouchInput {
+                    click(Offset(overlap.centerX() + ox, overlap.centerY() + oy))
+                }
+                compose.waitForIdle()
+                assertEquals(beforeTouch + 1, opened.size)
+                assertEquals(if (state == 7) "earlier-label" else "later-label", opened.last())
+                compose.runOnIdle {
+                    val geometry = checkNotNull(view.currentMeasuredGeometry)
+                    val links = geometry.nodes.filter { it.kind == FloatInteractionKind.LINK }.sortedBy { it.start }
+                    links.zip(ordered[state].filter { labels[it].kind != "text" }).forEach { (item, index) ->
+                        if (state in listOf(1, 7) && index == 3) return@forEach // Activated at its real scrolled location above.
+                        val before = opened.size
+                        assertTrue(view.accessibilityNodeProvider.performAction(item.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                        assertEquals(before + 1, opened.size)
+                        assertEquals(labels[index].target, opened.last())
+                    }
+                    // Stored source owners and Figure stay intact; no ImageMap or synthesized label target.
+                    assertSame(figureImage, imageSpan.image)
+                    originalLabels.forEachIndexed { index, block ->
+                        assertSame(labels[index], checkNotNull(block.container).blocks.single().spans.single())
+                    }
+                    assertNull(figureImage.map); assertEquals("text", imageSpan.kind); assertTrue(imageSpan.target.isEmpty())
+                    assertEquals(4, labels.count { it.kind in listOf("link", "external_link") })
+                    assertTrue(labels.last().bold)
+                }
+            }
+            // The same new absolute owner must publish document reach without a Table bridge.
+            compose.runOnIdle { phase.value = 9 }; compose.waitForIdle()
+            compose.waitUntil(5000) {
+                val candidates = views()
+                compose.runOnIdle { candidates.any { it.logicalText.toString() == expectedText(9) &&
+                    it.currentMeasuredGeometry?.nodes?.count { node -> node.kind == FloatInteractionKind.LINK } == 4 &&
+                    it.currentMeasuredGeometry?.nodes?.any { node ->
+                        node.kind == FloatInteractionKind.IMAGE && node.stateDescription.isNullOrEmpty()
+                    } == true } }
+            }
+            compose.waitForIdle()
+            compose.onAllNodes(gridMatcher, useUnmergedTree = true).assertCountEquals(0)
+            compose.onAllNodesWithText("Unable to display this layout.", useUnmergedTree = true).assertCountEquals(0)
+            val direct = actualView(9)
+            compose.runOnIdle {
+                val geometry = checkNotNull(direct.currentMeasuredGeometry)
+                assertEquals(expectedText(9), geometry.text.toString())
+                assertEquals(1, geometry.text.count { it == '\ufffc' })
+                val imageBounds = geometry.nodes.single { it.kind == FloatInteractionKind.IMAGE }.bounds.single()
+                assertEquals(240f, imageBounds.width(), .02f); assertEquals(144f, imageBounds.height(), .02f)
+                val outside = geometry.nodes.single { it.kind == FloatInteractionKind.LINK && it.label.toString() == labels[3].text }
+                val info = checkNotNull(direct.accessibilityNodeProvider.createAccessibilityNodeInfo(outside.id))
+                try { assertFalse(info.isVisibleToUser); assertTrue(info.isClickable) } finally { info.recycle() }
+                assertTrue(reading.scroll.layoutInfo.visibleItemsInfo.single { it.index == bodyIndex }.size >
+                    checkNotNull(initial).documentExtent + 700)
+                direct.setSelection(0, direct.logicalText.length)
+                assertEquals(expectedText(9), direct.selectedTextForCopy())
+                assertTrue(direct.accessibilityNodeProvider.performAction(View.NO_ID, AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                focus.requestFocus()
+            }
+            compose.waitForIdle()
+            scrollOverflow(9, direct, sourceRtl = false, authoredLeft = 200f)
+            assertEquals(readyFailures, failures)
+            compose.runOnIdle { phase.value = 10 }; compose.waitForIdle()
+            compose.waitUntil(5000) {
+                val candidates = views()
+                compose.runOnIdle { candidates.any { it.logicalText.toString() == expectedText(10) &&
+                    it.currentMeasuredGeometry?.nodes?.count { node -> node.kind == FloatInteractionKind.LINK } == 4 &&
+                    it.currentMeasuredGeometry?.nodes?.any { node ->
+                        node.kind == FloatInteractionKind.IMAGE && node.stateDescription.isNullOrEmpty()
+                    } == true } }
+            }
+            compose.waitForIdle()
+            compose.onAllNodes(gridMatcher, useUnmergedTree = true).assertCountEquals(1)
+            val restored = grid().fetchSemanticsNode().boundsInWindow
+            assertEquals(checkNotNull(initial).frame.width, restored.width, .02f)
+            assertEquals(checkNotNull(initial).frame.height, restored.height, .02f)
+            assertEquals(0f, horizontalRange().maxValue(), .02f); assertEquals(0f, horizontalRange().value(), .02f)
+            compose.runOnIdle {
+                assertEquals(checkNotNull(initial).documentExtent,
+                    reading.scroll.layoutInfo.visibleItemsInfo.single { it.index == bodyIndex }.size)
+                assertEquals(readyFailures, failures)
+            }
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            var cleanupFailure: Throwable? = null
+            fun cleanup(action: () -> Unit) {
+                try { action() } catch (failure: Throwable) {
+                    val previous = cleanupFailure
+                    if (previous == null) cleanupFailure = failure else if (previous !== failure) previous.addSuppressed(failure)
+                }
+            }
+            cleanup { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            cleanup { kotlinx.coroutines.runBlocking { cache.clear() } }
+            cleanup { check(directory.deleteRecursively()) }
+            cleanupFailure?.let { failure ->
+                val original = primary
+                if (original == null) throw failure else if (original !== failure) original.addSuppressed(failure)
+            }
+        }
     }
 }

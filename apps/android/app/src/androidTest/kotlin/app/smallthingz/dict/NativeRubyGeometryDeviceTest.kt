@@ -3581,4 +3581,239 @@ class NativeRubyGeometryDeviceTest {
           }
         }
     }
+
+    @Test fun citationMarkersKeepOriginalRangesPrivateIsolationAndLocalNoWrap() {
+        fun marker(text: String, nowrap: Boolean = true,
+            isolation: BidiResolvedDirection? = null): Span = leaf(text, scale = .5f,
+                color = "#ff0000", script = true).copy(kind = "link", target = "",
+                role = "reference", targetFragment = "reference-1", direction = "",
+                citationMarker = CitationMarker(1L, 1L, "cite-note-1-1", nowrap, isolation))
+        val calls = mutableListOf<Span>()
+        val original = marker("[12 34]")
+        val before = leaf("aa ")
+        val after = leaf(" zz t")
+        val fixture = prepare(listOf(before, original, after), onAction = { calls += it })
+        val range = fixture.range(original)
+        assertEquals("aa [12 34] zz t", fixture.source.toString())
+        assertSame(original, range.span)
+        assertEquals("", original.direction)
+        val styled = SpannableString(fixture.source).apply {
+            getSpans(0, length, NativeRubyPreparedSource::class.java).forEach(::removeSpan)
+        }
+        val measured = android.text.PrecomputedText.create(styled,
+            android.text.PrecomputedText.Params.Builder(TextPaint(fixture.body))
+                .setTextDirection(TextDirectionHeuristics.LTR)
+                .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build())
+        val markerAdvance = measured.getWidth(range.start, range.end)
+        assertTrue(markerAdvance > fixture.body.measureText("aa"))
+        assertTrue(markerAdvance > fixture.body.measureText("zz"))
+        val fitsMarker = ceil(markerAdvance.toDouble()).toInt() + 2
+        val overflowsMarker = (markerAdvance / 2f).toInt().coerceAtLeast(1)
+        val ordinary = java.text.BreakIterator.getLineInstance(fixture.body.textLocale).apply {
+            setText(styled.toString())
+        }
+        assertTrue(ordinary.isBoundary(range.start))
+        assertTrue(ordinary.isBoundary(range.start + 4)) // The original internal space is a real opportunity.
+        assertTrue(ordinary.isBoundary(range.end + 1))
+        val emergency = android.text.StaticLayout.Builder.obtain(measured, 0, measured.length,
+            TextPaint(fixture.body), 0).setTextDirection(TextDirectionHeuristics.LTR)
+            .setIncludePad(false).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+        assertTrue((0 until emergency.lineCount).any {
+            emergency.getLineEnd(it) > range.start && emergency.getLineEnd(it) < range.end
+        })
+        val tagged = SpannableString(styled).apply {
+            setSpan(NativeCitationMarkerSpan(checkNotNull(original.citationMarker)), range.start, range.end,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val widths = NativeInlineBoxWidths(tagged, fixture.body, TextDirectionHeuristics.LTR)
+        val directFit = widths.fit(fitsMarker.toFloat())
+        assertEquals(range.start, directFit.ends[0])
+        assertEquals(range.end + 1, directFit.ends[1])
+        assertEquals(markerAdvance, directFit.advances[1], .001f)
+        for (width in listOf(fitsMarker, overflowsMarker)) {
+            val fit = widths.fit(width.toFloat())
+            assertTrue(fit.ends.none { it > range.start && it < range.end })
+        }
+        val expectedMinimum = ceil(markerAdvance.toDouble()).toInt()
+        val expectedMaximum = ceil(measured.getWidth(0, styled.length).toDouble()).toInt()
+        for (legacyMinimum in listOf(false, true)) {
+            assertEquals(NativeWidthRange(expectedMinimum, expectedMaximum), widths.intrinsic(0f, legacyMinimum))
+            assertEquals(NativeWidthRange(expectedMinimum, expectedMaximum),
+                nativeTextWidthRange(fixture.source, fixture.body, breakWordMinimum = legacyMinimum,
+                    textDirection = TextDirectionHeuristics.LTR))
+        }
+        val plainMarker = original.copy(citationMarker = null)
+        val plain = prepare(listOf(before, plainMarker, after))
+        val natural = plain.build(512)
+        val naturalCharacters = natural.characterRects(range.start, range.end - range.start)
+        val standalone = prepare(listOf(plainMarker)).build(512)
+        val standaloneCharacters = standalone.characterRects(0, plainMarker.text.length)
+        val wide = fixture.build(512)
+        assertEquals(styled.toString(), wide.text.toString())
+        naturalCharacters.zip(wide.characterRects(range.start, range.end - range.start)).forEach { (a, b) ->
+            sameRect(checkNotNull(a), checkNotNull(b))
+        }
+        assertEquals(natural.nativeUsedLineMetrics(0), wide.nativeUsedLineMetrics(0))
+        assertEquals(raster(natural), raster(wide))
+        assertTrue(checkNotNull(raster(wide)[Color.RED]).count > 0)
+        for (width in listOf(fitsMarker, overflowsMarker, fitsMarker, 512)) {
+            val geometry = fixture.build(width)
+            assertEquals(styled.toString(), geometry.text.toString())
+            assertFalse(geometry.text.any { it in "\u2066\u2067\u2069" })
+            assertActions(fixture, geometry)
+            val rows = (0 until geometry.shapedLineCount).map(geometry::nativeRubyLineRanges)
+            val ownedRow = rows.indexOfFirst { pieces -> pieces.any { range.start >= it.first && range.start < it.second } }
+            assertTrue(ownedRow >= 0)
+            for (at in range.start until range.end) {
+                assertEquals(rows[ownedRow], geometry.visualLineRanges(at))
+                assertEquals(1, rows.count { pieces -> pieces.any { at >= it.first && at < it.second } })
+            }
+            val actual = geometry.characterRects(range.start, range.end - range.start)
+            // Compare at the same physical X before Region quantization. The wide
+            // paragraph's fractional prefix is not a transferable pixel offset.
+            val expectedCharacters = if (width == 512) naturalCharacters else standaloneCharacters
+            val dy = checkNotNull(actual.first()).top - checkNotNull(expectedCharacters.first()).top
+            expectedCharacters.zip(actual).forEach { (expected, got) ->
+                sameRect(RectF(checkNotNull(expected)).apply { offset(0f, dy) }, checkNotNull(got))
+            }
+            if (width < 512) assertEquals(standalone.caretRect(0).left,
+                geometry.caretRect(range.start).left, .001f)
+            if (width < 512) {
+                assertTrue(ownedRow > 0)
+                val afterLetter = range.end + 1
+                assertTrue(rows.indexOfFirst { pieces -> pieces.any { afterLetter >= it.first && afterLetter < it.second } } > ownedRow)
+            }
+            if (width == overflowsMarker) assertTrue(box(geometry, range).width() > width)
+            checkNotNull(geometry.nodes.single().onClick).invoke()
+        }
+        assertEquals(listOf(original, original, original, original), calls)
+        val disabledMarker = original.copy(citationMarker = checkNotNull(original.citationMarker).copy(nowrap = false))
+        val disabled = prepare(listOf(before, disabledMarker, after)).build(overflowsMarker)
+        val ordinaryPlain = plain.build(overflowsMarker)
+        assertEquals(ordinaryPlain.text.toString(), disabled.text.toString())
+        assertEquals(ordinaryPlain.shapedLineCount, disabled.shapedLineCount)
+        assertEquals(ordinaryPlain.characterRects(0, ordinaryPlain.text.length), disabled.characterRects(0, disabled.text.length))
+        assertEquals(raster(ordinaryPlain), raster(disabled))
+        assertTrue((range.start until range.end).map { disabled.visualLineRanges(it) }.distinct().size > 1)
+
+        for ((label, suffix) in listOf("12\u00a0" to "", "12\u202f" to "", "12 " to "",
+                "[1]" to "\u00a0")) {
+            val spaceMarker = marker(label)
+            val spaceFixture = prepare(listOf(spaceMarker, leaf(suffix)))
+            val spaceRange = spaceFixture.range(spaceMarker)
+            val exactSource = SpannableString(spaceFixture.source).apply {
+                getSpans(0, length, NativeRubyPreparedSource::class.java).forEach(::removeSpan)
+            }
+            val exactMeasured = android.text.PrecomputedText.create(exactSource,
+                android.text.PrecomputedText.Params.Builder(TextPaint(spaceFixture.body))
+                    .setTextDirection(TextDirectionHeuristics.LTR)
+                    .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                    .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build())
+            val completeAdvance = exactMeasured.getWidth(0, exactSource.length)
+            assertTrue(completeAdvance > exactMeasured.getWidth(0, exactSource.length - 1))
+            exactSource.setSpan(NativeCitationMarkerSpan(checkNotNull(spaceMarker.citationMarker)),
+                spaceRange.start, spaceRange.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val expected = ceil(completeAdvance.toDouble()).toInt()
+            for (legacyMinimum in listOf(false, true)) {
+                assertEquals(NativeWidthRange(expected, expected),
+                    NativeInlineBoxWidths(exactSource, spaceFixture.body, TextDirectionHeuristics.LTR)
+                        .intrinsic(0f, legacyMinimum))
+                assertEquals(NativeWidthRange(expected, expected),
+                    nativeTextWidthRange(spaceFixture.source, spaceFixture.body,
+                        breakWordMinimum = legacyMinimum, textDirection = TextDirectionHeuristics.LTR))
+            }
+            val spaceGeometry = spaceFixture.build(512)
+            assertEquals(label + suffix, spaceGeometry.text.toString())
+            assertActions(spaceFixture, spaceGeometry)
+        }
+
+        // The oracle shapes the same resolved source with explicit native isolates. It
+        // contains no citation metadata and does not use the compiler's source mapping.
+        for (isolation in listOf(BidiResolvedDirection.Ltr, BidiResolvedDirection.Rtl)) {
+            val sourceMarker = marker("[\u05d0\u05d1 12]", isolation = isolation)
+            val isolated = prepare(listOf(leaf("A \u05d2 "), sourceMarker, leaf(" z")))
+            val own = isolated.range(sourceMarker)
+            val expectedSource = android.text.SpannableStringBuilder(isolated.source).apply {
+                getSpans(0, length, NativeRubyPreparedSource::class.java).forEach(::removeSpan)
+                insert(own.end, "\u2069")
+                insert(own.start, if (isolation == BidiResolvedDirection.Rtl) "\u2067" else "\u2066")
+            }
+            val expected = NativeFloatGeometry.build(SpannedString(expectedSource), isolated.body, 512,
+                emptyList(), textDirection = TextDirectionHeuristics.LTR)
+            val actual = isolated.build(512)
+            assertEquals(isolated.projection.text, actual.text.toString())
+            assertFalse(actual.text.any { it in "\u2066\u2067\u2069" })
+            assertActions(isolated, actual)
+            for (at in actual.text.indices) {
+                val nativeAt = at + (if (at >= own.start) 1 else 0) + (if (at >= own.end) 1 else 0)
+                val expectedCharacter = expected.characterRects(nativeAt, 1).single()
+                val actualCharacter = actual.characterRects(at, 1).single()
+                if (expectedCharacter == null) assertNull(actualCharacter)
+                else sameRect(expectedCharacter, checkNotNull(actualCharacter))
+            }
+            for (at in own.start until own.end) {
+                sameRect(expected.caretRect(at + 1), actual.caretRect(at))
+                assertTrue(actual.visualOffset(at, -1) in 0..actual.text.length)
+                assertTrue(actual.visualOffset(at, 1) in 0..actual.text.length)
+            }
+            assertEquals(expected.nativeUsedLineMetrics(0), actual.nativeUsedLineMetrics(0))
+            assertEquals(raster(expected), raster(actual))
+        }
+        for (rtl in listOf(false, true)) for (alignment in listOf(
+                android.text.Layout.Alignment.ALIGN_CENTER, android.text.Layout.Alignment.ALIGN_OPPOSITE)) {
+            val alignedMarker = marker("MMMMMMMM")
+            val aligned = prepare(listOf(before, alignedMarker, after), rtl = rtl)
+            val own = aligned.range(alignedMarker)
+            val unmarked = prepare(listOf(alignedMarker.copy(citationMarker = null)), rtl = rtl)
+            val intactSource = SpannableString(unmarked.source).apply {
+                getSpans(0, length, NativeRubyPreparedSource::class.java).forEach(::removeSpan)
+                setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap, inheritedOwner = true,
+                    sourceLineStarts = listOf(0)), 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val ownAdvance = paint(.5f).measureText(alignedMarker.text)
+            for (lane in listOf(ceil(ownAdvance.toDouble()).toInt() + 9,
+                    (ownAdvance / 2f).toInt().coerceAtLeast(1))) {
+                val expected = NativeFloatGeometry.build(SpannedString(intactSource), unmarked.body,
+                    lane, emptyList(), alignment = alignment, textDirection = direction)
+                val actual = NativeFloatGeometry.build(aligned.source, aligned.body, lane, emptyList(),
+                    alignment = alignment, textDirection = direction)
+                assertEquals(aligned.projection.text, actual.text.toString())
+                assertEquals(1, expected.shapedLineCount)
+                assertEquals(1, (own.start until own.end).map { actual.visualLineRanges(it) }.distinct().size)
+                val expectedCharacters = expected.characterRects(0, alignedMarker.text.length)
+                val actualCharacters = actual.characterRects(own.start, alignedMarker.text.length)
+                val dy = checkNotNull(actualCharacters.first()).top - checkNotNull(expectedCharacters.first()).top
+                expectedCharacters.zip(actualCharacters).forEach { (reference, got) ->
+                    sameRect(RectF(checkNotNull(reference)).apply { offset(0f, dy) }, checkNotNull(got))
+                }
+                // Interior native carets avoid importing a paragraph-start bidi affinity.
+                for (at in 1 until alignedMarker.text.length) {
+                    val expectedCaret = checkNotNull(expected.nativeRubyLineCaret(0, at))
+                    sameRect(RectF(expectedCaret).apply { offset(0f, dy) }, actual.caretRect(own.start + at))
+                    assertEquals(own.start + at,
+                        actual.offsetForPosition(expectedCaret.left, expectedCaret.centerY() + dy))
+                }
+            }
+        }
+        val multilineMarker = marker("[12]\n[34]", isolation = BidiResolvedDirection.Rtl)
+        val multiline = prepare(listOf(multilineMarker))
+        val forced = multiline.build(1)
+        assertEquals("[12]\n[34]", forced.text.toString())
+        assertEquals(2, forced.shapedLineCount)
+        assertTrue(forced.isHardLineBreak(4))
+        assertActions(multiline, forced)
+        val forcedRows = (0 until forced.shapedLineCount).map(forced::nativeRubyLineRanges)
+        for (at in forced.text.indices) {
+            val expectedRow = if (at <= 4) 0 else 1
+            assertTrue(forcedRows[expectedRow].any { at >= it.first && at < it.second })
+            assertEquals(1, forcedRows.count { pieces -> pieces.any { at >= it.first && at < it.second } })
+        }
+        val forcedWide = multiline.build(512)
+        assertEquals(forced.text.toString(), forcedWide.text.toString())
+        assertEquals(2, forcedWide.shapedLineCount)
+        assertEquals(forcedRows, (0 until forcedWide.shapedLineCount).map(forcedWide::nativeRubyLineRanges))
+    }
 }

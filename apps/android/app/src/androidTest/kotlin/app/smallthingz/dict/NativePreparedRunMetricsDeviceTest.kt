@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -1181,6 +1182,208 @@ class NativePreparedRunMetricsDeviceTest {
             }
             assertEquals(11, actions.size)
             assertEquals(0, namedProbes)
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun citationBacklinkUsesItsActualFontNormalAndNumericBandsOutsideReferenceBody() {
+        // Direct typed controls: a Normal backlink is consumer coverage, not producer admission.
+        val plain = Span("link", "Return", targetFragment = "original-citation-return",
+            fontScale = 1.25f, fontScaleBasis = FontScaleBasis.Context)
+        val normal = ReferenceBacklink.withPolicies(7, plain)
+        val relative = ReferenceBacklink.withPolicies(7, plain, inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.FontRelative(1.5f, InlineFontSnapshot(fontScale = 1.25f))))
+        val zero = ReferenceBacklink.withPolicies(7, plain, inlineStyle = InlineTextStyle(
+            lineHeight = InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx))))
+        val cases = listOf(normal, normal, relative, zero, normal, normal)
+        val phase = mutableStateOf(0)
+        val bodySpan = Span("link", "Body", target = "independent-reference-body")
+        val bodyFont = InlineFontSnapshot(fontScale = 1.6f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontNormalized = true, bold = true, italic = true, fontFamily = ContainerFontFamily.SansSerif)
+        val reference = Reference(41, 9, "", listOf(bodySpan), bodyTypography = BodyTypography(
+            bodyFont, ContainerLineHeight.Length(StyleLength(StyleLengthUnit.Px, 52f))))
+        val root = TextStyle(fontSize = 20.sp, lineHeight = 77.sp, fontFamily = FontFamily.Serif,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+            fontFeatureSettings = "smcp", letterSpacing = 3.sp)
+        val actions = mutableListOf<EntryLink>()
+        var activity: android.app.Activity? = null
+        var prepared: PreparedNativeFloatText? = null
+        var basisPixels = 0f
+        var prefixBounds: androidx.compose.ui.geometry.Rect? = null
+        var bodyBounds: androidx.compose.ui.geometry.Rect? = null
+        val originalNormal = mutableMapOf<Float, Pair<Float, Float>>()
+        var primary: Throwable? = null
+        fun views(): List<NativeFloatTextView> {
+            val found = mutableListOf<NativeFloatTextView>()
+            fun visit(view: android.view.View) {
+                if (view is NativeFloatTextView && view.isShown) found += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activity).window.decorView)
+            return found
+        }
+        try {
+            compose.activityRule.scenario.onActivity { host ->
+                activity = host
+                host.setContent {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = root)) {
+                        val zoom = if (phase.value == 4) 1.5f else 1f
+                        CompositionLocalProvider(LocalDensity provides Density(1f, zoom),
+                            LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr) {
+                            val density = LocalDensity.current
+                            val inherited = nativeBodyTextContext(bodyFont.copy(fontScale = 3f),
+                                ContainerLineHeight.Multiplier(4f), null, 20.sp, root, density).getOrThrow()
+                            val hostile = phase.value != 0
+                            CompositionLocalProvider(
+                                androidx.compose.material3.LocalTextStyle provides root,
+                                LocalNativeContainerTextContext provides if (hostile) inherited else null,
+                                LocalCellWeight provides if (hostile) androidx.compose.ui.text.font.FontWeight.Black else null,
+                                LocalCellLetterSpacingPixels provides if (hostile) 6f else null,
+                                LocalTableLineHeightPixels provides if (hostile) 91f else null,
+                                LocalNativePreformattedText provides hostile) {
+                                val value = prepareNativeReferenceBacklink(cases[phase.value]) { actions += it }
+                                SideEffect { prepared = value; basisPixels = with(density) { 20.sp.toPx() } }
+                                Layout(content = {
+                                    androidx.compose.foundation.layout.Row(
+                                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                                            Modifier.width(androidx.compose.foundation.layout.IntrinsicSize.Max)
+                                                .onGloballyPositioned { prefixBounds = it.boundsInRoot() },
+                                            MaterialTheme.colorScheme.primary) { _, _ ->
+                                            error("Backlink has no delegated child")
+                                        }
+                                        CompositionLocalProvider(LocalCellWeight provides null,
+                                            LocalCellLetterSpacingPixels provides null,
+                                            LocalTableLineHeightPixels provides null,
+                                            LocalNativePreformattedText provides false) {
+                                            ReferenceBody(reference, Modifier.weight(1f)
+                                                .onGloballyPositioned { bodyBounds = it.boundsInRoot() }) { actions += it }
+                                        }
+                                    }
+                                }) { children, constraints ->
+                                    val child = children.single().measure(Constraints.fixedWidth(360))
+                                    layout(constraints.constrainWidth(360), constraints.constrainHeight(child.height)) {
+                                        child.place(0, 0)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (index in cases.indices) {
+                compose.runOnIdle { phase.value = index }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val backlink = cases[index]
+                    val value = checkNotNull(prepared)
+                    val native = checkNotNull(value.native)
+                    val source = native.source(360)
+                    val geometry = checkNotNull(value.geometry).invoke(360, emptyList(), false)
+                    val expectedPixels = basisPixels * 1.25f
+                    val independent = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        typeface = android.graphics.Typeface.DEFAULT
+                        textSize = expectedPixels
+                    }
+                    val metrics = independent.fontMetrics
+                    assertEquals(expectedPixels, native.paint.textSize, .001f)
+                    assertEquals(android.graphics.Typeface.NORMAL, native.paint.typeface.style)
+                    assertFalse(native.paint.isFakeBoldText)
+                    assertEquals(0f, native.paint.textSkewX, 0f)
+                    assertEquals(0f, native.paint.letterSpacing, 0f)
+                    assertTrue(native.paint.fontFeatureSettings.isNullOrEmpty())
+                    assertEquals(0, native.paint.baselineShift)
+                    assertEquals(metrics.ascent, native.paint.fontMetrics.ascent, .001f)
+                    assertEquals(metrics.descent, native.paint.fontMetrics.descent, .001f)
+                    assertEquals("Return", source.toString())
+                    assertEquals("Return", geometry.text.toString())
+                    assertEquals(1, geometry.shapedLineCount)
+                    val runs = source.getSpans(0, source.length, NativeRunLineMetrics::class.java)
+                    val strut = runs.single { it.strut }
+                    assertEquals(expectedPixels, strut.primary.fontSize, .001f)
+                    assertEquals(metrics.ascent, strut.primary.ascent, .001f)
+                    assertEquals(metrics.descent, strut.primary.descent, .001f)
+                    val height: Float
+                    val expectedBaseline: Float
+                    if (index == 2 || index == 3) {
+                        height = if (index == 2) expectedPixels * 1.5f else 0f
+                        val top = metrics.ascent - (height - (metrics.descent - metrics.ascent)) / 2f
+                        expectedBaseline = -top
+                        assertTrue(runs.all { it.policy == NativeLineHeightPolicy.Pixels(height) })
+                        val authored = source.getSpans(0, source.length, NativeAuthoredInlineMetrics::class.java)
+                        assertTrue(authored.isNotEmpty())
+                        assertTrue(authored.all { it.policy == NativeLineHeightPolicy.Pixels(height) })
+                    } else {
+                        val independentlyShaped = android.text.StaticLayout.Builder.obtain("Return", 0, 6, independent, 360)
+                            .setIncludePad(true).setUseLineSpacingFromFallbacks(true).setLineSpacing(0f, 1f)
+                            .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                            .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+                        val baseline = independentlyShaped.getLineBaseline(0).toFloat()
+                        val top = minOf(independentlyShaped.getLineTop(0) - baseline, metrics.ascent)
+                        val bottom = maxOf(independentlyShaped.getLineBottom(0) - baseline, metrics.descent)
+                        height = bottom - top
+                        expectedBaseline = -top
+                        assertTrue(runs.all { it.policy == NativeLineHeightPolicy.Normal })
+                        assertTrue(strut.includePrimaryInNormal)
+                        val measured = geometry.textBottom to geometry.baselineForOffset(0)
+                        val previous = originalNormal.putIfAbsent(expectedPixels, measured)
+                        if (previous != null) assertEquals(previous, measured)
+                    }
+                    assertEquals(height, geometry.textBottom, .001f)
+                    assertEquals(expectedBaseline, geometry.baselineForOffset(0), .001f)
+                    assertEquals(independent.measureText("Return"), geometry.nativeSingleLineAdvance(), .01f)
+                    assertEquals(6, geometry.characterRects(0, 6).count { it != null })
+                    val prefix = checkNotNull(prefixBounds)
+                    val body = checkNotNull(bodyBounds)
+                    assertEquals(prefix.right + 8f, body.left, .001f)
+                    assertEquals(360f, body.right, .001f)
+                    val prefixView = views().single { it.currentMeasuredGeometry?.text?.toString() == "Return" }
+                    val actual = checkNotNull(prefixView.currentMeasuredGeometry)
+                    val actualContent = (actual as NativeSurfaceGeometry).content
+                    assertEquals(height, actualContent.extents.usedHeight, .001f)
+                    assertEquals(expectedBaseline, checkNotNull(checkNotNull(actualContent.textBaselines).first), .001f)
+                    val node = actual.nodes.single { it.onClick != null }
+                    assertEquals("Return", node.label?.toString())
+                    prefixView.setSelection(node.start, node.end)
+                    assertEquals("Return", prefixView.selectedTextForCopy())
+                    prefixView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                        android.view.KeyEvent.KEYCODE_ESCAPE))
+                    val provider = checkNotNull(prefixView.accessibilityNodeProvider)
+                    val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                    try {
+                        assertTrue(info.isClickable)
+                        assertEquals("Return", info.text?.toString())
+                    } finally { info.recycle() }
+                    assertTrue(provider.performAction(node.id,
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals(EntryLink("", "original-citation-return"), actions.last())
+                    val bodyView = views().single { it.currentMeasuredGeometry?.text?.toString() == "Body" }
+                    val bodyGeometry = checkNotNull(bodyView.currentMeasuredGeometry)
+                    assertEquals(52f, (bodyGeometry as NativeSurfaceGeometry).content.extents.usedHeight, .001f)
+                    val bodyNode = bodyGeometry.nodes.single { it.onClick != null }
+                    assertTrue(checkNotNull(bodyView.accessibilityNodeProvider).performAction(bodyNode.id,
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertEquals("independent-reference-body", actions.last().target)
+                    assertSame(bodySpan, reference.spans.single())
+                    assertEquals(plain.text, backlink.span.text)
+                    assertEquals(plain.targetFragment, backlink.span.targetFragment)
+                    assertFalse(backlink.span.bold); assertFalse(backlink.span.italic)
+                    assertFalse(backlink.span.superscript); assertEquals("normal", backlink.span.role)
+                }
+            }
+            assertEquals(cases.size * 2, actions.size)
         } catch (failure: Throwable) {
             primary = failure
             throw failure

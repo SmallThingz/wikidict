@@ -65,6 +65,7 @@ private fun prepareAnonymousInline(event: AnonymousFlowEvent.Inline, style: Text
         MaterialTheme.colorScheme.primary, reader.media, reader.settings, reader.edition, reader.onLink,
         imageOwnerOverride = imageOwner, missingLinkPaint = missingLinkPaint, onMissingLinkActivated = onMissingLinkActivated,
         nativeLineHeight = nativeLineHeight, figureImageActions = figureImageActions, ownerFont = ownerFont,
+        ownerWrap = LocalNativeContainerTextWrap.current,
         ownerDirection = event.context.direction.takeIf { event.containingScopeId != null &&
             LocalNativeContainerTextContext.current?.bodyDirection != null })
 }
@@ -82,7 +83,8 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     nativeLineHeight: NativeLineHeightPolicy? = null,
     ownerFont: NativeDeclaringFont? = null,
 ) {
-    val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack
+    val preserveCompiledText = LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack ||
+        LocalNativeContainerTextWrap.current == TextWrap.NoWrap
     val legacyDirection = if (LocalLayoutDirection.current == LayoutDirection.Ltr)
         BidiResolvedDirection.Ltr else BidiResolvedDirection.Rtl
     val bodyDirection = LocalNativeContainerTextContext.current?.bodyDirection
@@ -106,6 +108,7 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     val reader = FigureReaderContext(media, settings, edition, onLink, actionOwner)
     val positionedBoundary = LocalNativePositionedPaintUnavailable.current
     val delegated = LocalNativeDelegatedFigureScope.current?.takeIf { it.sourceBlock === block }
+    val absoluteFlow = LocalNativeDelegatedAbsoluteFlow.current?.takeIf { it.block === block }
     val captionBreakWord = LocalCaptionBreakWord.current
     if (positionedBoundary != null && delegated == null &&
         content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>().any {
@@ -143,15 +146,18 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
     }
     val base = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context), style, reader,
         nativeLineHeight = nativeLineHeight, ownerFont = ownerFont)
-    if (delegated != null) {
+    if (delegated != null || absoluteFlow != null) {
         // Keep this existing resource preparation alive while the one content slot uses
         // its complete fallback. A loading/error/ready or font transition can then retry
         // measured eligibility without a second media or caption composition.
         val revision = listOf(content, style, settings, edition, reader.actionOwner, figures.values.map { it.sourceRevision },
             base.native?.paint?.typeface, base.native?.paint?.textSize,
             prepared.values.mapNotNull { it.ordinaryLinkPaintRevision })
-        SideEffect { delegated.table.prepared(delegated.index, revision) }
-        delegated.table.fallbackReason?.let { reason ->
+        SideEffect {
+            if (delegated != null) delegated.table.prepared(delegated.index, revision)
+            else checkNotNull(absoluteFlow).let { it.owner.preparedAbsoluteFlow(it.path, block, revision) }
+        }
+        delegated?.table?.fallbackReason?.let { reason ->
             onGeometry(null)
             UnavailableAnonymousContent(block, modifier, reason, style, reader) {
                 figures.values.forEach { it.unavailableActions() }
@@ -264,6 +270,8 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
                 figures.values.forEach { it.unavailableActions() }
             } },
             intrinsicWidths = intrinsicWidths,
+            citationStatuses = content.events.filterIsInstance<AnonymousFlowEvent.Inline>()
+                .mapNotNull { prepared[it]?.citationPreparation },
         ) { event -> figures.getValue(event.id).content {
             if (it == null) measured.remove(event.id) else measured[event.id] = it
         } }
@@ -968,8 +976,12 @@ private fun CaptionFailureSurface(input: NativeLayoutInput<CaptionFallbackPass?>
                 val packed = try { Constraints.fixed(physical.width, physical.height) }
                     catch (_: IllegalArgumentException) { return@mapNotNull null }
                 val owner = subcompose("owner-$index") {
-                    AndroidView(factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
+                    val citationNavigation = LocalNativeCitationNavigation.current
+                    val citationParentReveal = rememberNativeCitationParentReveal()
+                    AndroidView(modifier = citationParentReveal?.modifier ?: Modifier, factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
                         view.updateScrollClip(scrollClip)
+                        view.updateCitationNavigation(citationNavigation)
+                        view.updateCitationParentReveal(citationParentReveal)
                         view.bind({ width -> check(width == physical.width); physical },
                             color.copy(alpha = .25f).toArgb(), color.toArgb())
                     })

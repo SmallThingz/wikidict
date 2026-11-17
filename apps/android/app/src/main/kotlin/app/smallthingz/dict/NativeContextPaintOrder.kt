@@ -2,9 +2,12 @@ package app.smallthingz.dict
 
 /** Source IDs never change when the same owner's paint phase changes. */
 internal data class NativePaintOrderNode(val source: Int, val positioned: Boolean = false,
-    val children: List<NativePaintOrderNode> = emptyList(), val absolute: Boolean = false)
+    val children: List<NativePaintOrderNode> = emptyList(), val absolute: Boolean = false,
+    val absoluteContainingBlock: Boolean = false,
+    val absolutePositionContainingBlock: Int? = null)
 
 internal fun nativeContextPaintSequence(roots: List<NativePaintOrderNode>, absoluteScope: Boolean = false): List<Int> {
+    if (roots.any { it.hasOrdinaryAbsoluteMetadata() }) return nativeOrdinaryAbsolutePaintSequence(roots, absoluteScope)
     val ordinary = mutableListOf<Int>()
     val positioned = mutableListOf<NativePaintOrderNode>()
     val seen = mutableSetOf<Int>()
@@ -54,6 +57,7 @@ internal data class NativePaintBox(val id: Int, val rank: Int, val leaves: Set<I
 /** The separate Figure caption renderer has no prepared Container/fragment owner yet. */
 internal fun Block.hasColumnsOrPositionedContainer(): Boolean = when {
     container != null -> container.style.columns != null || container.style.positioning != null ||
+        container.style.absolutePosition != null ||
         container.blocks.any(Block::hasColumnsOrPositionedContainer)
     table != null -> table.hasColumnsOrPositionedContainer()
     figure != null -> figure.captionBlocks?.any(Block::hasColumnsOrPositionedContainer) == true
@@ -164,4 +168,53 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
             ?: return context.offsetForPosition(x, y)
         return leaf.offset + leaf.geometry.offsetForPosition(x - leaf.x, y - leaf.y)
     }
+}
+
+/** Only the new authenticated containing-block metadata enables this traversal. */
+private fun NativePaintOrderNode.hasOrdinaryAbsoluteMetadata(): Boolean =
+    absoluteContainingBlock || absolutePositionContainingBlock != null || children.any { it.hasOrdinaryAbsoluteMetadata() }
+
+private fun nativeOrdinaryAbsolutePaintSequence(roots: List<NativePaintOrderNode>, absoluteScope: Boolean): List<Int> {
+    val seen = mutableSetOf<Int>()
+    val positioned = mutableListOf<NativePaintOrderNode>()
+    fun discover(nodes: List<NativePaintOrderNode>, containingBlock: Int?,
+        insideAbsolute: Boolean, directScopeChild: Boolean = false) {
+        nodes.forEach { node ->
+            check(seen.add(node.source)) { "A paint owner must have one source identity" }
+            val target = node.absolutePositionContainingBlock
+            require(!node.absolute || target == null) { "An absolute owner needs one positioning authority" }
+            require(!node.absoluteContainingBlock || node.positioned && !node.absolute && target == null) {
+                "An ordinary containing block must be a relative positioned owner"
+            }
+            require(!insideAbsolute || !node.positioned) {
+                "Nested positioned groups below absolute text are unavailable"
+            }
+            require(!node.absolute || directScopeChild && node.positioned) {
+                "Absolute painting requires a direct authenticated scope owner"
+            }
+            require(target == null || node.positioned && containingBlock == target) {
+                "Absolute paint requires its nearest authenticated containing block"
+            }
+            if (node.positioned) positioned += node
+            // An unmarked legacy positioned owner cannot lend an ancestor's new
+            // containing-block authority. Deferred media leaves establish no scope.
+            val next = when {
+                node.absoluteContainingBlock -> node.source
+                node.positioned -> null
+                else -> containingBlock
+            }
+            discover(node.children, next, insideAbsolute || node.absolute || target != null)
+        }
+    }
+    discover(roots, null, false, directScopeChild = absoluteScope)
+    val result = mutableListOf<Int>()
+    fun ordinary(node: NativePaintOrderNode) {
+        result += node.source
+        node.children.filterNot { it.positioned }.forEach(::ordinary)
+    }
+    roots.filterNot { it.positioned }.forEach(::ordinary)
+    // Relative z-auto is not an atomic stacking context: every positioned owner
+    // uses one global source-preorder queue and emits only its ordinary subtree.
+    positioned.forEach(::ordinary)
+    return result
 }

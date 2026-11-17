@@ -85,6 +85,11 @@ private class NativeActionGroupIdentity(private val range: RubyTextRange) {
     override fun hashCode(): Int = 31 * (31 * (31 * System.identityHashCode(range.span) +
         range.path.hashCode()) + range.start) + range.end
 }
+private class NativeCitationOccurrenceIdentity(private val span: Span, private val start: Int, private val end: Int) {
+    override fun equals(other: Any?): Boolean = other is NativeCitationOccurrenceIdentity &&
+        span === other.span && start == other.start && end == other.end
+    override fun hashCode(): Int = 31 * (31 * System.identityHashCode(span) + start) + end
+}
 private data class NativeTextActionRange(val start: Int, val end: Int, val item: LinkAnnotation?,
     val group: RubyTextRange? = null)
 
@@ -274,6 +279,7 @@ internal fun prepareNativeFloatText(
     headingLabel: String? = null, ownerWrap: TextWrap? = null,
     ownerFont: NativeDeclaringFont? = null,
     rubyWeight: FontWeight? = null,
+    referenceBacklink: ReferenceBacklink? = null,
 ): PreparedNativeFloatText {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -322,6 +328,14 @@ internal fun prepareNativeFloatText(
         if (groupActions.isEmpty()) contexts.leaves.map { it.range }
         else (contexts.leaves.map { it.range } + groupActions).sortedWith(compareBy({ it.start }, { it.path }))
     }.orEmpty()
+    val citationSourceRanges = ruby?.leaves?.mapIndexedNotNull { index, leaf ->
+        leaf.range.span?.takeIf { it.citationMarker != null }?.let {
+            NativeCaptionLinkRange(index, it, leaf.range.start, leaf.range.end)
+        }
+    } ?: nativeCaptionLinkRanges(visibleSpans).filter { referenceBacklink?.span === it.span }
+    val citationOwners = citationSourceRanges.associate { range ->
+        (range.start to range.end) to remember(NativeCitationOccurrenceIdentity(range.span, range.start, range.end)) { Any() }
+    }
     val paragraphBreaks = annotated.text.indices.filter { offset ->
         annotated.text[offset] == '\n' && rubyGaps.none { offset in it.start until it.end }
     }
@@ -332,14 +346,27 @@ internal fun prepareNativeFloatText(
     val documentTitle = LocalMissingLinkDocument.current
     val documentOwner = LocalMissingLinkOwner.current ?: captionOwner
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val paintUnavailable = ordinaryLinkPaintUnavailable(visibleSpans, edition)
+    val citationTargetAnchor = LocalNativeCitationTargetAnchor.current?.takeIf { anchor ->
+        citationSourceRanges.any { it.span.citationMarker?.anchor == anchor }
+    }
+    fun citationTarget(span: Span): CitationTargetStyle? = span.citationMarker?.takeIf {
+        it.anchor == citationTargetAnchor
+    }?.targetStyle
+    fun selectedLinkPolicy(span: Span): LinkPaint? = citationTarget(span)?.paint ?: span.linkPaint
+    val citationPaintUnavailable = NativeOrdinaryLinkPaintUnavailable.takeIf { visibleSpans.any { span ->
+        span.citationMarker != null && !validCitationMarkerSpan(span) ||
+            span.linkPaint != null && span.entryLink().local &&
+                !(span.citationMarker != null && validCitationMarkerSpan(span) ||
+                    referenceBacklink?.span === span && validCitationSpanLinkPaint(span))
+    } }
+    val paintUnavailable = citationPaintUnavailable ?: ordinaryLinkPaintUnavailable(visibleSpans, edition)
         ?: NativeOrdinaryLinkPaintUnavailable.takeIf { paddingRanges.any {
             it.span?.linkPaint != null && (it.start == it.end || it !in paddingActions)
         } } ?: "Inline action group source action is unavailable".takeIf { actionGroupRanges.any {
             val span = checkNotNull(it.span)
             !span.hasInternalAction() && externalLinkUrl(span) == null
         } }
-    val paintedLinks = remember(visibleSpans, captionScope, ruby?.projection, actionGroupOwners) {
+    val paintedLinks = remember(visibleSpans, captionScope, ruby?.projection, actionGroupOwners, citationOwners) {
         if (captionScope == null && visibleSpans.none { it.linkPaint != null } &&
             groupActions.none { it.span?.linkPaint != null }) emptyList()
         else (ruby?.let {
@@ -351,14 +378,15 @@ internal fun prepareNativeFloatText(
             }
         } ?: nativeCaptionLinkRanges(visibleSpans)).filter { it.span.linkPaint != null || captionScope != null }
     }
-    val ordinaryPolicies = paintedLinks.associate { (it.start to it.end) to it.span.linkPaint }
+    val ordinaryPolicies = paintedLinks.associate { (it.start to it.end) to selectedLinkPolicy(it.span) }
     val paintedStates = paintedLinks.map { range ->
-        val ordinary = range.span.linkPaint
+        val ordinary = selectedLinkPolicy(range.span)
         val scope = captionScope.takeIf { ordinary == null }
         val target = missingLinkTarget(range.span, edition,
             if (ordinary != null) documentTitle else checkNotNull(scope).documentTitle)
         val identity = MissingLinkActionIdentity(if (ordinary != null) documentOwner else checkNotNull(scope).owner, target,
-            paintedSourceRanges.getOrNull(range.index)?.let { actionGroupOwners[it.path] }
+            citationOwners[range.start to range.end]
+                ?: paintedSourceRanges.getOrNull(range.index)?.let { actionGroupOwners[it.path] }
                 ?: NativeLinkOccurrenceIdentity(captionOwner, range.index, range.start, range.end, range.span))
         val visited = (if (ordinary != null) visits else checkNotNull(scope).visits).contains(target)
         // Span.underline is only the ordinary normal-state checksum. Existing Figure owners
@@ -381,6 +409,18 @@ internal fun prepareNativeFloatText(
         .firstOrNull { (range, _) -> range.first <= start && range.second >= end }?.value
     fun groupPaintAt(range: RubyTextRange): NativeMissingLinkPaint? = if (range.path in actionGroupOwners)
         missingLinkPaint ?: actionGroupPaints[range.path] else linkPaintAt(range.start, range.end)
+    val citationCallbacks = linkedMapOf<Pair<Int, Int>, () -> Unit>()
+    for (range in citationSourceRanges) {
+        val state = linkPaintAt(range.start, range.end)
+        val activate = rememberUpdatedState<() -> Unit> {
+            onLink(range.span.entryLink())
+            if (missingLinkPaint != null) onMissingLinkActivated()
+            else state?.actionIdentity?.target?.let { visits.record(it) }
+        }
+        citationCallbacks[range.start to range.end] = remember(citationOwners.getValue(range.start to range.end)) {
+            { activate.value() }
+        }
+    }
     val actionGroupCallbacks = linkedMapOf<String, () -> Unit>()
     for (range in actionGroupRanges) {
         val span = checkNotNull(range.span)
@@ -427,6 +467,7 @@ internal fun prepareNativeFloatText(
             !visibleSpans.hasCompiledInlineContent() && prefix.isEmpty() && !heading && headingActions.isEmpty())
     val containerOwner = ownerFont?.takeIf { it.kind == NativeDeclaringFontKind.Container }
     val absoluteOwner = ownerFont?.takeIf { it.kind == NativeDeclaringFontKind.Absolute }
+    val backlinkOwner = ownerFont?.takeIf { it.kind == NativeDeclaringFontKind.ReferenceBacklink }
     val preformattedOwner = absoluteOwner == null && LocalNativePreformattedText.current
     val inheritedFamily = sourceFamily.takeUnless { emptyInlineOwner ||
         preformattedOwner && sourceFamily is ContainerFontFamily.Stack }
@@ -470,9 +511,20 @@ internal fun prepareNativeFloatText(
     }
     check(inlineOffset == annotated.length) { "Authored inline metric offsets must retain the original logical string" }
     val inlineParagraphCuts = if (inlineSources.isEmpty()) emptyList() else paragraphBreaks.map { it + 1 }
-    val styles = if (noSourceLines) emptyList() else nativeStyleRanges(annotated, effective, linkColor,
+    val styles = (if (noSourceLines) emptyList() else nativeStyleRanges(annotated, effective, linkColor,
         inlineSources.flatMap { listOf(it.start, it.end) } + inlineParagraphCuts, inheritedFamily, familyRanges,
-        legacyOwnerFamily, sourceLineStarts.takeIf { ruby == null })
+        legacyOwnerFamily, sourceLineStarts.takeIf { ruby == null })).map { range ->
+        val target = paintedLinks.singleOrNull { it.start <= range.start && it.end >= range.end }
+            ?.span?.let(::citationTarget)
+        if (target == null) range else range.copy(paint = TextPaint(range.paint).apply {
+            // Target background null is an explicit transparent reset of the source normal background.
+            bgColor = when (val background = target.background) {
+                null, FigureColor.Transparent -> 0
+                is FigureColor.Rgb -> checkNotNull(canonicalColorArgb(background.value)).toInt()
+                FigureColor.NativeTheme -> throw UnsupportedFloatLayout("Citation target background is unavailable")
+            }
+        })
+    }
     styles.forEach { familyPaint(it) }
     val basePaint = if (noSourceLines) TextPaint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 0f }
         else if (absoluteOwner == null) familyPaint(nativeStyleRanges(AnnotatedString(" "), effective, linkColor,
@@ -518,7 +570,20 @@ internal fun prepareNativeFloatText(
                 declaring.snapshot.fontFamily, inlineFontSnapshotSpan(declaring.snapshot).legacyFontFamily()))).single())
             .apply { textSize = checkNotNull(declaring.fontPixels); baselineShift = 0 }
     }
-    val layoutPaint = containerOwnerPaint ?: cellOwnerPaint ?: basePaint
+    if ((referenceBacklink != null) != (backlinkOwner != null))
+        familyFailure = "Reference backlink declaring font is unavailable."
+    val backlinkOwnerPaint = backlinkOwner?.let { declaring ->
+        val qualified = referenceBacklink
+        if (qualified == null || spans.size != 1 || spans.single() !== qualified.span || ruby != null ||
+            declaring.snapshot != nativeReferenceBacklinkFont(qualified) ||
+            declaring.snapshot.language.isNotEmpty() && nativeTableOwnerLanguageTag(declaring.snapshot.language) == null) {
+            familyFailure = "Reference backlink declaring font is unavailable."
+            null
+        } else familyPaint(nativeStyleRanges(inlineFontSnapshotAnnotation(declaring.snapshot, effective),
+            effective, linkColor, familyRanges = listOf(NativeSourceFamilyRange(0, 1,
+                declaring.snapshot.fontFamily, inlineFontSnapshotSpan(declaring.snapshot).legacyFontFamily()))).single())
+    }
+    val layoutPaint = backlinkOwnerPaint ?: containerOwnerPaint ?: cellOwnerPaint ?: basePaint
     val cellMetricRevision = cellOwner?.let {
         listOf(cellState, cellOwnerPaint?.typeface, cellOwnerPaint?.textSize)
     }
@@ -701,6 +766,15 @@ internal fun prepareNativeFloatText(
         inlineFailure = failure.message ?: "Authored inline geometry is unavailable"
         emptyList()
     }
+    val backlinkInlineStyle = referenceBacklink?.let { backlink -> inlineStyles.singleOrNull {
+        it.source.span === backlink.span && it.source.start == 0 && it.source.end == annotated.length
+    } }
+    val backlinkPolicy = if (backlinkOwner == null || referenceBacklink == null) null else try {
+        nativeReferenceBacklinkLineHeight(referenceBacklink, backlinkInlineStyle?.height)
+    } catch (failure: UnsupportedFloatLayout) {
+        inlineFailure = failure.message
+        null
+    }
     val inlineRevision = inlineStyles.map { resolved ->
         val source = resolved.source
         listOf(source.span, resolved.height, resolved.shift, resolved.thickness,
@@ -818,7 +892,7 @@ internal fun prepareNativeFloatText(
             group.padding, group.actionPaint, group.actionOwner,
             group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint) })
     }
-    val shapeKey = listOf(annotated, runs, effective, ruby, actionGroupOwners, boxOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
+    val shapeKey = listOf(annotated, runs, effective, ruby, actionGroupOwners, boxOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
         styles.map { listOf(it.start, it.end, it.paint.typeface, it.paint.textSize, it.paint.color, it.paint.bgColor, it.paint.baselineShift) })
     val shaped by produceState<Pair<Any, Map<Int, NativeEgyptianSpanPreparation>>?>(null, shapeKey) {
@@ -897,13 +971,17 @@ internal fun prepareNativeFloatText(
                             else -> NativeLineHeightPolicy.Normal
                         }
                         val policy = when {
+                            backlinkPolicy != null -> backlinkPolicy
                             explicit?.isSp == true -> NativeLineHeightPolicy.Pixels(with(density) { explicit.toPx() })
                             explicit?.isEm == true -> NativeLineHeightPolicy.Pixels(basePaint.textSize * explicit.value)
                             else -> inheritedPolicy
                         }
                         inlineParentPolicies += Triple(start, end, policy)
-                        native.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(layoutPaint), policy,
-                            strut = true, includePrimaryInNormal = cellOwnerPaint != null || containerOwnerPaint != null),
+                        val primary = NativePrimaryFontMetrics.from(layoutPaint).let { metrics ->
+                            backlinkInlineStyle?.shift?.let { metrics.copy(baselineShift = it) } ?: metrics
+                        }
+                        native.setSpan(NativeRunLineMetrics(primary, policy,
+                            strut = true, includePrimaryInNormal = cellOwnerPaint != null || containerOwnerPaint != null || backlinkOwnerPaint != null),
                             start, end, if (start == end && (inlineSources.isNotEmpty() || cellOwnerPaint != null || containerOwnerPaint != null))
                                 Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         styles.forEach { run ->
@@ -1011,6 +1089,10 @@ internal fun prepareNativeFloatText(
         if (sourceLineStarts?.isEmpty() == true) emptyList() else buildList {
                          nativeLinks.forEachIndexed { index, range ->
                             val actionGroup = range.group
+                            val citationSource = citationSourceRanges.singleOrNull {
+                                it.start == range.start && it.end == range.end
+                            }?.span
+                            val citationMarker = citationSource?.citationMarker
                             val state = if (actionGroup == null) linkPaintAt(range.start, range.end) else groupPaintAt(actionGroup)
                             val paddingAction = paddingActions.singleOrNull { it.start == range.start && it.end == range.end }
                             val paddingOwner = paddingAction?.span
@@ -1058,14 +1140,14 @@ internal fun prepareNativeFloatText(
                                     range.start, range.end, fragments), scope.density, scope.bodyPixels)
                             }
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
-                                fragments, annotated.subSequence(range.start, range.end), (actionGroup?.span ?: paddingOwner)?.tooltip,
-                                 actionGroup?.let { actionGroupCallbacks.getValue(it.path) } ?: { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
+                                fragments, annotated.subSequence(range.start, range.end), (actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
+                                 citationCallbacks[range.start to range.end] ?: actionGroup?.let { actionGroupCallbacks.getValue(it.path) } ?: { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
                                     if (missingLinkPaint != null) onMissingLinkActivated()
                                     else state?.actionIdentity?.target?.let {
                                         (if (ordinary != null) visits else captionScope?.visits)?.record(it)
                                     }
                                     Unit
-                                }, missingLinkPaint = state, focusPaint = focus))
+                                }, missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker))
                         }
                         val firstImage = nativeLinks.size
                         images.forEach { image ->
@@ -1121,8 +1203,12 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val factory: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? =
-        nativeSource?.let { source -> { width, carried, requireDrained ->
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor) { Any() }
+    val citationPreparation = rememberNativeCitationPreparation(revision,
+        citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
+        layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
+    val widthFactory: ((Int, List<NativeFloatExclusion>, Boolean, Float?) -> NativeFloatGeometry)? =
+        nativeSource?.let { source -> { width, carried, requireDrained, exactWidth ->
                 if (layoutUnavailable != null) throw UnsupportedFloatLayout(layoutUnavailable)
                 val native = source(width)
                 val floats = emptyList<NativeFloatOccurrence>()
@@ -1169,11 +1255,20 @@ internal fun prepareNativeFloatText(
                         }
                         bounds
                     },
-                    nodeFactory = nativeNodes)
+                    nodeFactory = nativeNodes, exactAvailableWidth = exactWidth)
 
 
         } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts) { Any() }
+    val factory: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = widthFactory?.let { create ->
+        { width, carried, requireDrained -> create(width, carried, requireDrained, null) }
+    }
+    val geometryAtWidth: ((Float, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = widthFactory?.let { create ->
+        { width, carried, requireDrained ->
+            if (!width.isFinite() || width < 0f || width > TablePixelLimit)
+                throw UnsupportedFloatLayout("Absolute text width exceeds native geometry")
+            create(kotlin.math.floor(width).toInt(), carried, requireDrained, width)
+        }
+    }
     return PreparedNativeFloatText(annotated.text, layoutUnavailable ?: textState, revision, factory, {
         val detail = details
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {
@@ -1191,7 +1286,8 @@ internal fun prepareNativeFloatText(
             }
         }
     }, nativeSource?.takeIf { layoutUnavailable == null }?.let { NativePreparedText(layoutPaint, it, nativeNodes, direction,
-        insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null) }, fallback = {
+        insets.left + insets.right + insets.extraLeft + insets.extraRight, breakWordMinimum = authoredHeading && ownerWrap == null,
+        citationPreparation = citationPreparation) }, fallback = {
         // The normal float owner already holds this image state. Failure UI reuses it.
         CompositionLocalProvider(LocalInlineImageOwner provides owner,
             LocalInlineImageOccurrenceFallback provides images.any { it.span.image?.occurrenceLayout != null },
@@ -1205,7 +1301,8 @@ internal fun prepareNativeFloatText(
                 if (!authoredHeading) headingActions.forEach { action -> TextButton(onClick = action.onClick) { Text(action.label) } }
             }
         }
-    }, ordinaryLinkPaintRevision = ordinaryPaintRevision, emptyInlineOwner = emptyInlineOwner)
+    }, ordinaryLinkPaintRevision = ordinaryPaintRevision, emptyInlineOwner = emptyInlineOwner, geometryAtWidth = geometryAtWidth,
+        citationPreparation = citationPreparation)
 
 }
 
@@ -1265,6 +1362,8 @@ internal data class PreparedNativeFloatText(
     /** Only source ordinary links contribute; interaction flags remain draw-only. */
     val ordinaryLinkPaintRevision: Any? = null,
     val emptyInlineOwner: Boolean = false,
+    val geometryAtWidth: ((Float, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = null,
+    val citationPreparation: NativeCitationPreparationStatus? = null,
 )
 
 /** Styled source and actions, before paragraph shaping. Anonymous owners shape this source once. */
@@ -1275,4 +1374,5 @@ internal data class NativePreparedText(
     val direction: TextDirectionHeuristic,
     val horizontalInsets: Float = 0f,
     val breakWordMinimum: Boolean = false,
+    val citationPreparation: NativeCitationPreparationStatus? = null,
 )

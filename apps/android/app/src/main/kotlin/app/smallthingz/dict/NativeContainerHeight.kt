@@ -76,3 +76,30 @@ internal fun nativeDocumentVerticalExtent(usedHeight: Int, surfaceTop: Int,
         throw UnsupportedFloatLayout("Document overflow exceeds native geometry")
     return NativeDocumentVerticalExtent((-top).toInt(), height.toInt())
 }
+
+/** Scroll allocation keeps the original containing width. Ink and the opposite
+ * origin-exterior side never enlarge the reachable document range. */
+internal data class NativeDocumentHorizontalExtent(val viewportWidth: Int, val overflow: Float, val range: Int)
+
+internal fun nativeDocumentHorizontalExtent(viewportWidth: Int, scrollable: NativeFloatBounds?,
+    rtl: Boolean): NativeDocumentHorizontalExtent {
+    if (viewportWidth !in 0..TablePixelLimit)
+        throw UnsupportedFloatLayout("Document horizontal viewport exceeds native geometry")
+    val overflow = if (scrollable == null) 0.0 else if (rtl)
+        maxOf(0.0, -scrollable.left.toDouble()) else
+        maxOf(0.0, scrollable.right.toDouble() - viewportWidth.toDouble())
+    val range = kotlin.math.ceil(overflow)
+    if (!overflow.isFinite() || range > TablePixelLimit.toDouble() - viewportWidth.toDouble())
+        throw UnsupportedFloatLayout("Document horizontal overflow exceeds native geometry")
+    return NativeDocumentHorizontalExtent(viewportWidth, overflow.toFloat(), range.toInt())
+}
+
+/** The selected document scroll owner starts at CSS y=0. Late descendant layout
+ * extends its bottom; physical surface top/ink do not move the normal origin. */
+internal fun nativeDocumentScrollableVerticalExtent(usedHeight: Int,
+    scrollable: NativeFloatBounds): NativeDocumentVerticalExtent {
+    val bottom = kotlin.math.ceil(maxOf(0.0, scrollable.bottom.toDouble()))
+    if (bottom > TablePixelLimit)
+        throw UnsupportedFloatLayout("Document overflow exceeds native geometry")
+    return nativeDocumentVerticalExtent(usedHeight, 0, bottom.toInt())
+}

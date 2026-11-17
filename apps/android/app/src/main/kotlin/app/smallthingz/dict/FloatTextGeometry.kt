@@ -227,6 +227,11 @@ internal interface FloatTextGeometry {
     val width: Int
     val height: Int
     val nodes: List<FloatInteractionNode>
+    val citationMarkerRanges: List<NativeCitationMarkerRange> get() = nodes.mapNotNull { node ->
+        node.citationMarker?.let { NativeCitationMarkerRange(it, node.start, node.end, node.id) }
+    }
+    fun citationMarkerRange(anchor: String): NativeCitationMarkerRange? =
+        citationMarkerRanges.singleOrNull { it.marker.anchor == anchor }
     /** Completion follows the owner's actual scroll and fresh geometry publication. */
     fun revealOffset(offset: Int, onRevealed: () -> Unit) { onRevealed() }
     fun revealNode(id: Int, onRevealed: () -> Unit) {
@@ -343,6 +348,7 @@ internal data class FloatInteractionNode(
     val preciseClip: NativeTextClip? = null,
     /** Image source policy uses input-focus modality without text-link key/state handling. */
     val sourceFocusVisible: Boolean = false,
+    val citationMarker: CitationMarker? = null,
 ) {
     fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
         (preciseClip?.contains(x, y) ?: true) &&

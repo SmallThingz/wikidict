@@ -31,7 +31,7 @@ internal class NativeFloatRowGeometry private constructor(
     private fun present(line: Int): Boolean = plan.flow.sourceLinePresent?.get(line) ?: true
     private val mappedRows = plan.rows.mapIndexed { line, row ->
         val left = plan.flow.left[line].toFloat() + (origins?.get(line)?.first ?: 0f)
-        val right = width - plan.flow.right[line].toFloat() + (origins?.get(line)?.first ?: 0f)
+        val right = plan.availableWidth - plan.flow.right[line].toFloat() + (origins?.get(line)?.first ?: 0f)
         val physical = when (row.alignment) {
             Layout.Alignment.ALIGN_CENTER -> NativeFloatRowPhysicalAlignment.Center
             Layout.Alignment.ALIGN_NORMAL -> if (row.paragraph.rtl) NativeFloatRowPhysicalAlignment.Right else NativeFloatRowPhysicalAlignment.Left
@@ -77,7 +77,7 @@ internal class NativeFloatRowGeometry private constructor(
     override fun firstLineBand(): RectF {
         val line = plan.rows.indices.firstOrNull(::present) ?: return RectF()
         val x = origins?.get(line)?.first ?: 0f
-        return RectF(plan.flow.left[line] + x, tops[line], width - plan.flow.right[line] + x, bottoms[line])
+        return RectF(plan.flow.left[line] + x, tops[line], plan.availableWidth - plan.flow.right[line] + x, bottoms[line])
     }
     override fun headingOwnerContentTop(): Float? {
         if (text.isEmpty() || nodes.count { it.kind == FloatInteractionKind.HEADING && it.start == 0 && it.end == text.length } != 1) return null
@@ -152,7 +152,7 @@ internal class NativeFloatRowGeometry private constructor(
         } } + listOfNotNull(decorationBounds(this))
     }
     override val scrollableBounds: NativeFloatBounds by lazy {
-        var bounds = NativeFloatBounds(0f, 0f, width.toFloat(), textBottom)
+        var bounds = NativeFloatBounds(0f, 0f, plan.availableWidth, textBottom)
         plan.rows.indices.filter(::present).forEach { line ->
             nativeRubyLineAdvanceBounds(line)?.let { bounds = bounds.enclosing(NativeFloatBounds(it.left, tops[line], it.right, bottoms[line])) }
         }
@@ -379,7 +379,7 @@ internal class NativeFloatRowGeometry private constructor(
             val start = mappedRows[line].originX + if (row.paragraph.rtl) row.advance - row.visibleAdvance else 0f
             RectF(start, tops[line], start + row.visibleAdvance, bottoms[line])
         }
-    internal override fun nativeLineAvailableWidth(line: Int): Float = width - plan.flow.left[line].toFloat() - plan.flow.right[line]
+    internal override fun nativeLineAvailableWidth(line: Int): Float = plan.availableWidth - plan.flow.left[line].toFloat() - plan.flow.right[line]
     internal override fun nativeSingleLineAdvance(): Float { check(shapedLineCount == 1); return nativeLineAdvance(0) }
     internal override fun nativeLineAdvance(line: Int): Float = plan.rows[line].advance
     internal override fun nativeUsedLineMetrics(line: Int): NativeUsedLineMetrics = NativeUsedLineMetrics(tops[line] - baselines[line], bottoms[line] - baselines[line])
@@ -404,10 +404,11 @@ internal class NativeFloatRowGeometry private constructor(
             carriedExclusions: List<NativeFloatExclusion>, nodeFactory: (NativeFloatGeometry) -> List<FloatInteractionNode>,
             insets: NativeTextInsets, usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?,
             decoration: (Canvas, NativeFloatGeometry) -> Unit,
-            decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?, includeFontPadding: Boolean): NativeFloatRowGeometry {
+            decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?, includeFontPadding: Boolean,
+            exactAvailableWidth: Float? = null): NativeFloatRowGeometry {
             val plan = NativeFloatRowPlan.build(SpannedString(source), TextPaint().apply { set(paint) }, width, occurrences,
                 alignment, direction, lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary,
-                carriedExclusions, insets, usedLineMetrics, includeFontPadding)
+                carriedExclusions, insets, usedLineMetrics, includeFontPadding, exactAvailableWidth)
             return NativeFloatRowGeometry(plan, nodeFactory, decoration, decorationBounds)
         }
     }

@@ -19,6 +19,8 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
     private val direction: TextDirectionHeuristic) {
     private val source = source
     private val boxes = nativeInlineRanges(source, NativeInlineBoxSpan::class.java)
+    private val markers = nativeInlineRanges(source, NativeCitationMarkerSpan::class.java)
+        .filter { it.value.marker.nowrap }
     private val wrap = NativeTextWrapPlan.create(source, paint)
     private val measured = PrecomputedText.create(source, PrecomputedText.Params.Builder(TextPaint(paint))
         .setTextDirection(direction).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
@@ -30,7 +32,10 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
     }
     private val ordinary: List<Int>
     init {
-        require(source.isNotEmpty() && boxes.isNotEmpty())
+        require(source.isNotEmpty() && (boxes.isNotEmpty() || markers.isNotEmpty()))
+        if (markers.any { it.start < 0 || it.start >= it.end || it.end > source.length } ||
+            markers.sortedBy { it.start }.zipWithNext().any { (a, b) -> a.end > b.start })
+            throw UnsupportedFloatLayout("Citation no-wrap lost its disjoint nonempty source intervals")
         if (source.any { it == '\t' || it == '\r' || it == '\u000b' || it == '\u000c' ||
                 it == '\u0085' || it == '\u2028' || it == '\u2029' })
             throw UnsupportedFloatLayout("Inline box paragraph has unsupported native control layout")
@@ -53,7 +58,13 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
             var at = breaks.first()
             while (at != BreakIterator.DONE) { add(at); at = breaks.next() }
         }).filter { it > 0 }.plus(paragraphs.map { it.second }).distinct().sorted()
+            .filter(::allowedMarkerBoundary)
     }
+
+    // A marker suppresses only its interior soft opportunities. Keep the original
+    // paragraph ends, including a real hard LF inside a no-wrap source range.
+    private fun allowedMarkerBoundary(end: Int): Boolean = markers.none { end > it.start && end < it.end } ||
+        paragraphs.any { it.second == end }
 
     private fun paragraph(at: Int): Pair<Int, Int> = paragraphs.first { at >= it.first && at < it.second }
     private fun parentRtl(box: NativeInlineBoxSpan, at: Int): Boolean = box.parentRtl ?: paragraph(at).let {
@@ -78,7 +89,11 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
     }
     fun advance(start: Int, end: Int, intrinsicMinimum: Boolean = false): Float {
         var last = visibleEnd(start, end)
-        if (intrinsicMinimum) while (last > start && source[last - 1].isWhitespace()) last--
+        if (intrinsicMinimum) {
+            if (markers.isEmpty()) while (last > start && source[last - 1].isWhitespace()) last--
+            else while (last > start && nativeFloatRowLineEndSpace(source[last - 1]) &&
+                markers.none { last - 1 >= it.start && last - 1 < it.end }) last--
+        }
         val value = try { if (last == start) 0f else measured.getWidth(start, last) }
         catch (_: IllegalArgumentException) {
             throw UnsupportedFloatLayout("Inline box width crosses a native paragraph")
@@ -97,7 +112,8 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
             .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE).build()
         (0 until layout.lineCount).map { layout.getLineEnd(it) }.distinct().filter {
-            wrap?.permitsEmergencyBreak(it) ?: (it > 0 && it < source.length)
+            allowedMarkerBoundary(it) &&
+                (wrap?.permitsEmergencyBreak(it) ?: (it > 0 && it < source.length))
         }
     }
 

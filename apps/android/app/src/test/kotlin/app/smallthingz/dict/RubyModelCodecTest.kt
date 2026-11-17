@@ -89,7 +89,7 @@ class RubyModelCodecTest {
                 image.widthPx?.let(::u32); image.heightPx?.let(::u32)
                 image.alt?.let { string(it) }; image.tooltip?.let { string(it) }
                 image.verticalAlign?.let { byte(it.ordinal) }
-                if (version == 'Y' && yFlags and 32 != 0) {
+                if ((version == 'Y' || version == 'Z') && yFlags and 32 != 0) {
                     mark("$label.image.occurrence"); byte(if (image.occurrenceLayout == null) 0 else 1)
                     image.occurrenceLayout?.let { layout ->
                         listOf("x" to layout.x, "y" to layout.y, "left" to layout.paddingLeft, "right" to layout.paddingRight)
@@ -102,11 +102,11 @@ class RubyModelCodecTest {
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
-            if (version == 'S' || version == 'T' || version == 'U' || version == 'V' || version == 'Y') {
+            if (version == 'S' || version == 'T' || version == 'U' || version == 'V' || (version == 'Y' || version == 'Z')) {
                 mark("$label.ruby"); byte(if (value.ruby == null) 0 else 1)
                 value.ruby?.let { ruby(it, label) }
             } else require(value.ruby == null)
-            if (version == 'U' || version == 'V' || version == 'Y') {
+            if (version == 'U' || version == 'V' || (version == 'Y' || version == 'Z')) {
                 mark("$label.padding"); byte(if (value.inlinePaddingGroup == null) 0 else 1)
                 value.inlinePaddingGroup?.let { group ->
                     mark("$label.padding.left"); byte(group.left.unit.ordinal); f32(group.left.value)
@@ -115,14 +115,35 @@ class RubyModelCodecTest {
                 }
             } else require(value.inlinePaddingGroup == null)
             mark("$label.padding.end")
-            if (version == 'V' || version == 'Y') {
+            if (version == 'V' || (version == 'Y' || version == 'Z')) {
                 mark("$label.action"); byte(if (value.inlineActionGroup == null) 0 else 1)
                 value.inlineActionGroup?.let { spans(it.spans, "$label.action.body") }
             } else require(value.inlineActionGroup == null)
-            if (version == 'Y' && yFlags and 4 != 0) {
+            if ((version == 'Y' || version == 'Z') && yFlags and 4 != 0) {
                 mark("$label.box"); byte(if (value.inlineBoxGroup == null) 0 else 1)
                 value.inlineBoxGroup?.let { inlineBox(it, "$label.box") }
             } else require(value.inlineBoxGroup == null)
+            if ((version == 'Y' || version == 'Z') && yFlags and 64 != 0) {
+                val name = "$label.citation"
+                mark(name); byte(if (value.citationMarker == null) 0 else 1)
+                value.citationMarker?.let { marker ->
+                    mark("$name.reference"); u32(marker.reference)
+                    mark("$name.occurrence"); u32(marker.occurrence)
+                    string(marker.anchor, "$name.anchor")
+                    mark("$name.policy"); byte((if (marker.nowrap) 1 else 0) or
+                        (if (marker.targetStyle != null) 2 else 0) or (if (marker.isolation != null) 4 else 0))
+                    marker.isolation?.let { mark("$name.isolation"); byte(it.ordinal) }
+                    marker.targetStyle?.let { style ->
+                        linkPaint(style.paint); mark("$name.background"); byte(if (style.background == null) 0 else 1)
+                        when (val color = style.background) {
+                            null -> Unit
+                            FigureColor.NativeTheme -> byte(0)
+                            FigureColor.Transparent -> byte(1)
+                            is FigureColor.Rgb -> { byte(2); string(color.value) }
+                        }
+                    }
+                }
+            } else require(value.citationMarker == null)
             mark("$label.end")
         }
         private fun boxLength(value: StyleLength, label: String) {
@@ -165,6 +186,7 @@ class RubyModelCodecTest {
             spans(value.spans, "$label.body")
         }
         private fun referenceBlock(value: Block, label: String) {
+            if (version == 'Z') { positionedBlock(value, label); return }
             val container = value.container
             when {
                 value == Block("paragraph", 0, value.spans) -> {
@@ -198,7 +220,7 @@ class RubyModelCodecTest {
                 is ContainerLineHeight.Multiplier -> { byte(1); f32(height.value) }
                 is ContainerLineHeight.Length -> { byte(2); boxLength(height.value, "$label.length") }
             }
-            if (version == 'Y' && yFlags and 16 != 0) {
+            if ((version == 'Y' || version == 'Z') && yFlags and 16 != 0) {
                 mark("$label.direction"); byte(when (value.direction) {
                     null -> 0
                     BidiResolvedDirection.Ltr -> 1
@@ -209,7 +231,7 @@ class RubyModelCodecTest {
         }
         /** Raw Y owners exercise depth beyond constructor admission without a second codec. */
         fun boxChain(depth: Int, label: String) {
-            require(version == 'Y' && yFlags and 4 != 0)
+            require((version == 'Y' || version == 'Z') && yFlags and 4 != 0)
             mark("$label.count"); u32(1)
             fun nested(left: Int, name: String) {
                 if (left == 0) { span(Span("text", "leaf"), name); return }
@@ -221,7 +243,7 @@ class RubyModelCodecTest {
         }
         /** Reuses one literal overlay record, without a million test-only offset keys. */
         fun boxBudget(count: Int, label: String, following: Span? = null) {
-            require(version == 'Y' && yFlags and 4 != 0)
+            require((version == 'Y' || version == 'Z') && yFlags and 4 != 0)
             mark("$label.count"); u32(if (following == null) 1 else 2)
             out.write(Wire('V').isolatedSpan(Span("text", ""))); byte(1)
             repeat(4) { length() }; repeat(4) { byte(0) }; u32(count.toLong())
@@ -230,6 +252,7 @@ class RubyModelCodecTest {
             }.out.toByteArray()
             repeat(count) { out.write(record) }
             spans(listOf(Span("text", "x")), "$label.0.box.body")
+            if (yFlags and 64 != 0) byte(0) // No marker on the raw Box owner.
             following?.let { span(it, "$label.1") }
         }
         private fun linkPaint(value: LinkPaint) {
@@ -254,6 +277,7 @@ class RubyModelCodecTest {
             u32((0x1000000 or (if (scale != null) 0x10000 else 0) or (if (family != null) 0x400000 else 0)).toLong())
             scale?.let(::f32); family?.let(::fontFamily)
             fontSnapshot(owner, "$label.owner")
+            if (version == 'Z' && yFlags and 256 != 0) byte(0)
         }
         fun ownedParagraph(owner: InlineFontSnapshot, empty: Boolean = false) {
             prefix(13); byte(0); tail(); containerOwnerStyle(owner)
@@ -262,9 +286,119 @@ class RubyModelCodecTest {
         }
         /** Repeated records share no test offset map; the wire still contains each real owner. */
         fun ownerBudget(count: Int, owner: InlineFontSnapshot) {
-            prefix(13); byte(0); tail(); u32(0); u32(count.toLong())
+            prefix(13); byte(0); tail(); u32(0)
+            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+            u32(count.toLong())
             val record = Wire(version, yFlags).apply { ownedParagraph(owner, empty = true) }.out.toByteArray()
             repeat(count) { out.write(record) }
+        }
+        /** Literal Z Container subset; existing primitives retain every ordinary span field. */
+        fun positionedStyle(value: ContainerStyle, label: String) {
+            require(value == ContainerStyle(width = value.width, lineHeight = value.lineHeight,
+                textAlign = value.textAlign, overflow = value.overflow, ownerFontScale = value.ownerFontScale,
+                height = value.height, positioning = value.positioning, fontFamily = value.fontFamily,
+                ownerFont = value.ownerFont, absolutePosition = value.absolutePosition, textWrap = value.textWrap))
+            mark("$label.flags")
+            val flags = (if (value.width != null) 4 else 0) or (if (value.lineHeight != null) 4096 else 0) or
+                (if (value.textAlign != null) 8192 else 0) or (if (value.overflow != null) 32768 else 0) or
+                (if (value.ownerFontScale != null) 65536 else 0) or (if (value.height != null) 131072 else 0) or
+                (if (value.positioning != null) 524288 else 0) or (if (value.fontFamily != null) 4194304 else 0) or
+                (if (value.ownerFont != null) 16777216 else 0)
+            u32(flags.toLong())
+            value.width?.let { width ->
+                mark("$label.width")
+                when (width) {
+                    ContainerWidth.Auto -> byte(0)
+                    ContainerWidth.FitContent -> byte(2)
+                    is ContainerWidth.Length -> { byte(1); mark("$label.width.unit"); byte(width.value.unit.ordinal)
+                        mark("$label.width.value"); f32(width.value.value) }
+                }
+            }
+            value.lineHeight?.let { height ->
+                mark("$label.lineHeight")
+                when (height) {
+                    ContainerLineHeight.Normal -> byte(0)
+                    is ContainerLineHeight.Multiplier -> { byte(1); f32(height.value) }
+                    is ContainerLineHeight.Length -> { byte(2); positionedLength(height.value, "$label.lineHeight.length") }
+                }
+            }
+            value.textAlign?.let { byte(it.ordinal) }
+            value.overflow?.let { byte(it.ordinal) }
+            value.ownerFontScale?.let(::f32)
+            value.height?.let { positionedLength(it, "$label.height") }
+            value.positioning?.let { require(it == ContainerPositioning.RelativeAuto); byte(0) }
+            value.fontFamily?.let(::fontFamily)
+            value.ownerFont?.let { fontSnapshot(it, "$label.owner") }
+            if (version == 'Z' && yFlags and 256 != 0) {
+                mark("$label.extension")
+                byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0))
+                value.absolutePosition?.let {
+                    positionedLength(it.left, "$label.left"); positionedLength(it.top, "$label.top")
+                }
+                value.textWrap?.let {
+                    mark("$label.wrap")
+                    byte(when (it) { TextWrap.Normal -> 0; TextWrap.NoWrap -> 1; else -> error("Unsupported fixture wrap") })
+                }
+            } else require(value.absolutePosition == null && value.textWrap == null)
+            mark("$label.end")
+        }
+        private fun positionedLength(value: ContainerMarginLength, label: String) {
+            mark("$label.unit"); byte(value.unit.ordinal); mark("$label.value"); f32(value.value)
+        }
+        /** Full real child lists, including Table/cell boundaries, without another encoder. */
+        fun positionedBlock(value: Block, label: String = "positioned") {
+            val container = value.container
+            val table = value.table
+            when {
+                container != null -> {
+                    require(value == Block("container", 0, emptyList(), container = container))
+                    prefix(13); byte(0); tail(); positionedStyle(container.style, "$label.style")
+                    mark("$label.children"); u32(container.blocks.size.toLong())
+                    container.blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.child$index") }
+                }
+                table != null -> {
+                    require(value == Block("table", 0, emptyList(), table = table))
+                    prefix(12); positionedTable(table, "$label.table"); tail()
+                }
+                else -> {
+                    require(value == Block("paragraph", 0, value.spans))
+                    byte(0); byte(0); byte(0); spans(value.spans, "$label.spans")
+                    byte(0); string(""); string(""); byte(0); tail()
+                }
+            }
+        }
+        private fun positionedTable(value: Table, label: String) {
+            require(value.geometry == null && value.style == null && value.blockViewport == null && value.floatViewport == null)
+            byte(1); byte(0); spans(value.caption, "$label.caption"); u32(value.rows.size.toLong())
+            value.rows.forEachIndexed { rowIndex, row ->
+                u32(row.size.toLong())
+                row.forEachIndexed { cellIndex, cell ->
+                    val name = "$label.row$rowIndex.cell$cellIndex"
+                    require(cell.background == null && cell.style == null)
+                    byte(if (cell.header) 1 else 0); u16(cell.colspan); u16(cell.rowspan); byte(0)
+                    spans(cell.spans, "$name.spans")
+                    if (cell.nestedTable == null) byte(0) else positionedTable(cell.nestedTable, "$name.nested")
+                    byte(if (cell.blocks == null) 0 else 1)
+                    cell.blocks?.let { blocks -> u32(blocks.size.toLong())
+                        blocks.forEachIndexed { index, child -> positionedBlock(child, "$name.block$index") } }
+                    byte(0)
+                }
+            }
+            byte(0); byte(if (value.captionBlocks == null) 0 else 1)
+            value.captionBlocks?.let { blocks -> u32(blocks.size.toLong())
+                blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.captionBlock$index") } }
+        }
+        fun positionedBudget(count: Int) {
+            val zero = StyleLength(StyleLengthUnit.Px, 0f)
+            val absolute = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 0f)), height = zero,
+                absolutePosition = ContainerAbsolutePosition(zero, zero))
+            fun label(text: String) = Block("container", 0, emptyList(), container = Container(listOf(
+                Block("paragraph", 0, listOf(Span("link", text, "Budget target")))), absolute))
+            // Each empty row is a real counted collection node, without a separately styled Container graph.
+            val rows = java.util.Collections.nCopies(count, emptyList<Cell>())
+            positionedBlock(Block("container", 0, emptyList(), container = Container(listOf(label("before"),
+                Block("table", 0, emptyList(), table = Table(emptyList(), rows)), label("after")),
+                ContainerStyle(positioning = ContainerPositioning.RelativeAuto))), "budgetRoot")
         }
         private fun fontSnapshot(value: InlineFontSnapshot, label: String) {
             mark("$label.flags")
@@ -381,7 +515,9 @@ class RubyModelCodecTest {
                     repeat(containers) { index ->
                         prefix(13); byte(0); tail()
                         val style = containerStyleOverride
-                        if (style == null) u32(0) else style("container$index")
+                        if (style == null) {
+                            u32(0); if (version == 'Z' && yFlags and 256 != 0) byte(0)
+                        } else style("container$index")
                         u32(1)
                     }
                     paragraph()
@@ -406,6 +542,7 @@ class RubyModelCodecTest {
         private fun headingStyle(extensions: Boolean) {
             u32((1 or 2 or 16 or 2048 or 4096 or 65536 or 4194304).toLong())
             repeat(8) { length() }; byte(0); byte(0); byte(0); f32(1f); byte(0)
+            if (version == 'Z' && yFlags and 256 != 0) byte(0)
             byte(1); f32(1f); byte(1); byte(0); string("ja"); string(""); byte(0); byte(0)
             if (extensions) byte(0)
         }
@@ -415,7 +552,8 @@ class RubyModelCodecTest {
             referenceValues: List<Reference>? = null, referenceTypography: BodyTypography? = null, mediaValues: List<Media>? = null): ByteArray {
             selected = values
             out.write("DPR$version".encodeToByteArray())
-            if (version == 'Y') { mark("yFeatures"); byte(yFlags) }
+            if (version == 'Z') { mark("yFeatures"); u16(yFlags) }
+            else if (version == 'Y') { mark("yFeatures"); byte(yFlags) }
             if (sink == Sink.Display) root("root") else spans(emptyList(), "display")
             val bodyOwner = sink !in listOf(Sink.Display, Sink.Preamble, Sink.Reference, Sink.ReferenceBlocks)
             val section = bodyOwner || alignment || clear
@@ -461,11 +599,20 @@ class RubyModelCodecTest {
             bodyTypography?.let { this.bodyTypography(it) }
             val referenceOwners = referenceValues?.map { it.bodyTypography }
                 ?: if (reference) listOf(referenceTypography) else emptyList()
-            if (version == 'Y' && yFlags and 8 != 0) referenceOwners.forEachIndexed { index, typography ->
+            if ((version == 'Y' || version == 'Z') && yFlags and 8 != 0) referenceOwners.forEachIndexed { index, typography ->
                 val label = "referenceTypography.$index"
                 mark("$label.presence"); byte(if (typography == null) 0 else 1)
                 typography?.let { this.bodyTypography(it, label) }
             } else require(referenceOwners.all { it == null })
+            val backlinkLists = referenceValues?.map { it.backlinks } ?: if (reference) listOf(emptyList()) else emptyList()
+            if ((version == 'Y' || version == 'Z') && yFlags and 64 != 0) backlinkLists.forEachIndexed { index, values ->
+                val label = "backlinks.$index"
+                mark("$label.count"); u32(values.size.toLong())
+                values.forEachIndexed { position, value ->
+                    val name = "$label.$position"
+                    mark("$name.occurrence"); u32(value.occurrence); span(value.span, "$name.span")
+                }
+            } else require(backlinkLists.all { it.isEmpty() })
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -1742,7 +1889,8 @@ class RubyModelCodecTest {
         }
         invalid("Family alias cannot fill an absent snapshot request") { ContainerStyle(ownerFont = font, fontFamily = family) }
         reject("Literal absent snapshot family", bytes(font, family = family, features = 4).second)
-        invalid("RelativeAuto is a distinct owner") { ContainerStyle(ownerFont = font, positioning = ContainerPositioning.RelativeAuto) }
+        assertTrue("RelativeAuto with an owner font requires Z",
+            ContainerStyle(ownerFont = font, positioning = ContainerPositioning.RelativeAuto).requiresPositionedContainers())
         val zero = StyleLength(StyleLengthUnit.Px, 0f)
         val absolute = ContainerPositioning.Absolute(zero, zero, font, InlineComputedLength(0f, FontScaleBasis.CssPx), TextWrap.NoWrap)
         invalid("Absolute is a distinct owner") { ContainerStyle(ownerFont = font, positioning = absolute,
@@ -2006,7 +2154,7 @@ class RubyModelCodecTest {
         reject("Flag4 debt", Wire('Y', 4).document(listOf(text("ordinary"))))
         reject("Flag2 debt", Wire('Y', 2).document(emptyList()))
         reject("Unflagged BODY tail", Wire('Y', 4).document(listOf(box), bodyTypography = body))
-        for (bad in listOf('W', 'X', 'Z')) assertEquals("Unsupported presentation format",
+        for (bad in listOf('W', 'X', '[')) assertEquals("Unsupported presentation format",
             runCatching { read(changed(good, 3, bad.code)) }.exceptionOrNull()!!.message)
         val noBox = Span("link", "", "Legacy", inlineActionGroup = InlineActionGroup(listOf(text("v"))))
         assertArrayEquals(Wire('V').isolatedSpan(noBox), Wire('Y', 2).isolatedSpan(noBox))
@@ -2325,7 +2473,7 @@ class RubyModelCodecTest {
         assertArrayEquals(byteArrayOf(1) + ByteArray(20), bytes.copyOfRange(presence, end))
         reject("Occurrence presence is strict", changed(bytes, presence, 2))
         reject("Empty Y census", changed(bytes, wire.at.getValue("yFeatures"), 0))
-        reject("Unknown Y capability", changed(bytes, wire.at.getValue("yFeatures"), 64))
+        reject("Unknown Y capability", changed(bytes, wire.at.getValue("yFeatures"), 128))
         for (name in listOf("x", "y", "left", "right")) {
             val start = wire.at.getValue("root.0.image.occurrence.$name")
             reject("Unknown $name unit", changed(bytes, start, 2))
@@ -2417,5 +2565,476 @@ class RubyModelCodecTest {
             if (depth == 33) reject("Image does not relax table depth", bytes)
             else assertEquals(listOf(image), read(bytes).inlineImages)
         }
+    }
+
+    @Test fun positionedZRetainsDefiniteLabelsOriginalChildrenAndIndependentDeclaringContextsAcrossSinks() {
+        // Synthetic data-boundary fixture; no FR producer or rendered-layout claim.
+        val px = StyleLengthUnit.Px
+        val em = StyleLengthUnit.Em
+        val font = InlineFontSnapshot(18f, FontScaleBasis.CssPx, fontNormalized = true,
+            language = "fr", classes = "label-owner")
+        val labels = listOf("thumb", "index", "middle", "ring", "little").mapIndexed { index, label ->
+            val span = if (index == 3) Span("text", label, bold = true, fontScale = 18f,
+                fontScaleBasis = FontScaleBasis.CssPx, inlineStyle = InlineTextStyle(fontNormalized = true))
+            else Span("link", label, "Target$index", targetFragment = "French", tooltip = "Tip$index",
+                explanation = "Meaning$index", fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx, inlineStyle = InlineTextStyle(fontNormalized = true))
+            val style = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, if (index == 4) 160f else 120f)),
+                height = StyleLength(px, 20f), textAlign = if (index % 2 == 0) CellTextAlign.Center else CellTextAlign.Right,
+                lineHeight = ContainerLineHeight.Length(StyleLength(px, 20f)), ownerFont = font,
+                absolutePosition = ContainerAbsolutePosition(if (index == 0) SignedContainerMargin(px, -2f) else StyleLength(px, index * 12f),
+                    if (index == 4) StyleLength(em, .25f) else StyleLength(px, index * 20f)), textWrap = TextWrap.NoWrap)
+            Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(span))), style))
+        }
+        val image = Span("text", "", image = InlineImage("Hand.png", 240, alt = "Hand"))
+        val middle = Block("container", 0, emptyList(), container = Container(labels, ContainerStyle(textWrap = TextWrap.Normal)))
+        val relative = Container(listOf(Block("paragraph", 0, listOf(image)), middle), ContainerStyle(
+            positioning = ContainerPositioning.RelativeAuto, overflow = ContainerOverflow.Visible,
+            ownerFont = font.copy(fontScale = 20f, bold = false), textWrap = TextWrap.NoWrap))
+        val root = Block("container", 0, emptyList(), container = relative)
+        val media = listOf(Media("Hand.png", "image", "Source image"))
+        assertSame(labels, middle.container!!.blocks)
+        assertSame(font, labels.first().container!!.style.ownerFont)
+        assertSame(image, relative.blocks.first().spans.single())
+        val expectedSpans = listOf(image) + labels.flatMap { it.container!!.blocks.single().spans }
+        for (sink in listOf(Sink.Body, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val wire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(root, "labels") } }
+            val bytes = wire.document(emptyList(), sink, mediaValues = media)
+            assertArrayEquals(byteArrayOf(68, 80, 82, 90, 1, 1), bytes.copyOf(6))
+            val decoded = read(bytes)
+            val containers = mutableListOf<Container>()
+            val visitor = PresentationSpanVisitor { _, _ -> }.apply { onContainer = containers::add }
+            decoded.sections.forEach { visitor.blocks(it.blocks) }
+            decoded.references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
+            assertEquals("Complete original subtree at $sink", relative, containers.first())
+            assertEquals(labels.map { it.container!!.style }, containers.drop(2).map { it.style })
+            val retained = mutableListOf<Span>()
+            PresentationSpanVisitor { spans, _ -> retained.addAll(spans) }.blocks(containers.first().blocks)
+            assertEquals(expectedSpans, retained)
+            assertEquals(listOf("Target0", "Target1", "Target2", "Target4"), retained.filter { it.kind == "link" }.map { it.target })
+            assertTrue(retained.single { it.text == "ring" }.bold)
+            assertEquals(media, decoded.media)
+            assertNull(decoded.bodyTypography)
+        }
+        val comboOnly = ContainerStyle(positioning = ContainerPositioning.RelativeAuto, ownerFont = font)
+        val combo = Block("container", 0, emptyList(), container = Container(emptyList(), comboOnly))
+        val comboWire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(combo) } }
+        val comboBytes = comboWire.document(emptyList(), Sink.Body)
+        assertEquals(0, comboBytes[comboWire.at.getValue("positioned.style.extension")].toInt())
+        assertEquals(comboOnly, read(comboBytes).sections.single().blocks.single().container!!.style)
+        val noFont = labels.first().copy(container = labels.first().container!!.copy(
+            style = labels.first().container!!.style.copy(ownerFont = null)))
+        val noFontRoot = root.copy(container = Container(listOf(noFont), ContainerStyle(positioning = ContainerPositioning.RelativeAuto)))
+        val noFontWire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(noFontRoot) } }
+        assertEquals(noFontRoot, read(noFontWire.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+        val zero = StyleLength(px, 0f)
+        val nested = Span("link", "", "RubyAction", inlineActionGroup = InlineActionGroup(listOf(
+            Span("text", "", inlinePaddingGroup = InlinePaddingGroup(StyleLength(px, 1f), zero, listOf(simple()))))))
+        val none = InlineBoxBorderEdge.None
+        val boxSpan = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            InlineBoxBorderEdges(none, none, none, none), spans = listOf(nested)))
+        val moved = Span("text", "", image = InlineImage("Occurrence.png", 12, alt = "second",
+            occurrenceLayout = InlineImageOccurrenceLayout(zero, zero, zero, zero)))
+        val fullRoot = root.copy(container = relative.copy(blocks = relative.blocks + Block("paragraph", 0, listOf(boxSpan, moved))))
+        val body = BodyTypography(font, direction = BidiResolvedDirection.Ltr)
+        val reference = Reference(1, null, "reference", listOf(text("reference")), ReferenceKind.Fragment,
+            bodyTypography = body.copy(direction = BidiResolvedDirection.Rtl))
+        val allFlags = Wire('Z', 319).apply { paragraphOverride = { positionedBlock(fullRoot) } }
+        val allBytes = allFlags.document(emptyList(), Sink.Body, bodyTypography = body, referenceValues = listOf(reference),
+            mediaValues = media + Media("Occurrence.png", "image", ""))
+        val all = read(allBytes)
+        assertEquals(fullRoot, all.sections.single().blocks.single())
+        assertEquals(body, all.bodyTypography); assertEquals(listOf(reference), all.references)
+        assertEquals(listOf(image.image, moved.image), all.inlineImages)
+        for (bit in listOf(1, 2, 4, 8, 16, 32, 256)) {
+            val flags = 319 xor bit
+            reject("Exact combined Z bit $bit", allBytes.copyOf().also { it[4] = flags.toByte(); it[5] = (flags ushr 8).toByte() })
+        }
+    }
+
+    @Test fun positionedZValidatesNearestRelativeBoundariesLocalFieldsAndExactWireCensus() {
+        val px = StyleLengthUnit.Px
+        val zero = StyleLength(px, 0f)
+        val font = InlineFontSnapshot(18f, FontScaleBasis.CssPx, fontNormalized = true)
+        val style = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 120f)), height = StyleLength(px, 20f),
+            ownerFont = font, absolutePosition = ContainerAbsolutePosition(SignedContainerMargin(px, -3f), StyleLength(StyleLengthUnit.Em, .5f)),
+            textWrap = TextWrap.NoWrap, lineHeight = ContainerLineHeight.Length(StyleLength(px, 20f)))
+        fun box(children: List<Block>, value: ContainerStyle = ContainerStyle()) =
+            Block("container", 0, emptyList(), container = Container(children, value))
+        val leaf = Block("paragraph", 0, listOf(Span("link", "kept", "Destination", targetFragment = "Part")))
+        val absolute = box(listOf(leaf), style)
+        fun relative(vararg children: Block) = box(children.toList(), ContainerStyle(positioning = ContainerPositioning.RelativeAuto))
+        fun entry(vararg blocks: Block) = Entry("Z", emptyList(), "language", "French", "fr",
+            listOf(Section(2, "Body", blocks.toList())), emptyList())
+        fun table(child: Block) = Block("table", 0, emptyList(), table = Table(emptyList(),
+            listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(child))))))
+        fun literal(root: Block): Pair<Wire, ByteArray> {
+            val wire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(root) } }
+            return wire to wire.document(emptyList(), Sink.Body)
+        }
+        val valid = relative(box(listOf(absolute)))
+        assertSame(valid, entry(valid).sections.single().blocks.single())
+        assertEquals(valid, read(literal(valid).second).sections.single().blocks.single())
+        val nearer = relative(box(listOf(relative(absolute))))
+        assertEquals(nearer, read(literal(nearer).second).sections.single().blocks.single())
+        val renewed = relative(box(listOf(relative(absolute)), style))
+        assertEquals(renewed, read(literal(renewed).second).sections.single().blocks.single())
+        val cellRoot = table(relative(absolute))
+        assertEquals(cellRoot, read(literal(cellRoot).second).sections.single().blocks.single())
+        for ((label, invalidRoot) in listOf("orphan" to absolute, "ordinary is not anchor" to box(listOf(absolute)),
+                "absolute consumes anchor" to relative(box(listOf(box(listOf(absolute))), style)),
+                "table resets external anchor" to relative(table(absolute)),
+                "sibling relative cannot lend anchor" to box(listOf(relative(leaf), absolute)))) {
+            invalid(label) { entry(invalidRoot) }; reject(label, literal(invalidRoot).second)
+        }
+        val validEntry = entry(valid)
+        invalid("Independent section resets anchor") { validEntry.copy(sections = validEntry.sections + Section(2, "Other", listOf(absolute))) }
+        val orphanReference = Reference(1, null, "ref", emptyList(), ReferenceKind.Fragment, listOf(absolute))
+        invalid("Reference cannot borrow body anchor") { validEntry.copy(references = listOf(orphanReference)) }
+        val referenceWire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(valid) } }
+        reject("Literal reference cannot borrow body anchor", referenceWire.document(emptyList(), Sink.Body,
+            referenceValues = listOf(orphanReference)))
+        for (sink in listOf(Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure, Sink.TableRichCaption)) {
+            val wire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(absolute) } }
+            reject("Independent replaced owner at $sink", wire.document(emptyList(), sink))
+        }
+        val figureWire = Wire('Z', 257).apply { paragraphOverride = { positionedBlock(valid) } }
+        val originalFigure = read(figureWire.document(emptyList(), Sink.FigureRichCaption))
+            .sections.single().blocks.single().figure!!
+        val originalFigureBlock = Block("paragraph", 0, emptyList(), figure = originalFigure)
+        val recoveredFigure = relative(originalFigureBlock)
+        assertSame(recoveredFigure, entry(recoveredFigure).sections.single().blocks.single())
+        val unanchoredFigure = originalFigureBlock.copy(figure = originalFigure.copy(captionBlocks = listOf(absolute)))
+        invalid("Figure cannot borrow actual external relative anchor") { entry(relative(unanchoredFigure)) }
+        assertSame(originalFigure.content, unanchoredFigure.figure!!.content)
+        val zeroMargins = ContainerMargins(ContainerMargin.Length(zero), ContainerMargin.Length(zero),
+            ContainerMargin.Length(zero), ContainerMargin.Length(zero))
+        assertEquals(style.absolutePosition, style.copy(padding = StyleEdges(zero, zero, zero, zero), marginValues = zeroMargins,
+            border = ContainerBorder.None, background = ContainerColor.Transparent, boxSizing = ContainerBoxSizing.ContentBox).absolutePosition)
+        val invalidStyles = listOf<Pair<String, () -> ContainerStyle>>(
+            "relative and absolute" to { style.copy(positioning = ContainerPositioning.RelativeAuto) },
+            "missing width" to { style.copy(width = null) }, "auto width" to { style.copy(width = ContainerWidth.Auto) },
+            "fit width" to { style.copy(width = ContainerWidth.FitContent) },
+            "percent width" to { style.copy(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f))) },
+            "missing height" to { style.copy(height = null) }, "float" to { style.copy(floatSide = TableFloatSide.Left) },
+            "clear" to { style.copy(clear = FigureClear.None) }, "layout" to { style.copy(layout = ContainerLayout.Flow) },
+            "max width" to { style.copy(maxWidth = ContainerMaxWidth.None) }, "min height" to { style.copy(minHeight = zero) },
+            "overflow" to { style.copy(overflow = ContainerOverflow.Visible) },
+            "border box" to { style.copy(boxSizing = ContainerBoxSizing.BorderBox) },
+            "padding" to { style.copy(padding = StyleEdges(zero, zero, zero, StyleLength(px, 1f))) },
+            "auto margin" to { style.copy(marginValues = zeroMargins.copy(left = ContainerMargin.Auto)) },
+            "background" to { style.copy(background = ContainerColor.Rgb("#000000")) },
+            "border" to { style.copy(border = ContainerBorder.Solid(StyleLength(px, 1f), ContainerColor.Transparent)) },
+            "break word" to { style.copy(textWrap = TextWrap.BreakWord) })
+        invalidStyles.forEach { (label, make) -> invalid(label, make) }
+        for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            invalid("Nonfinite absolute $bad") { ContainerAbsolutePosition(SignedContainerMargin(px, bad), zero) }
+        }
+        val (wire, bytes) = literal(valid)
+        val key = "positioned.child0.child0.style"
+        for (flags in listOf(0, 1, 63, 256 or 64, 256 or 128, 256 or 512, 65535)) {
+            val bad = bytes.copyOf().also { it[4] = flags.toByte(); it[5] = (flags ushr 8).toByte() }
+            reject("Strict Z LEu16 flags $flags", bad)
+        }
+        reject("Z owner bit debt", bytes.copyOf().also { it[4] = 0 })
+        reject("Reserved old style bit23", changed32(bytes, wire.at.getValue("$key.flags"), 0x800000))
+        reject("Unknown extension mask", changed(bytes, wire.at.getValue("$key.extension"), 4))
+        reject("Unknown position unit", changed(bytes, wire.at.getValue("$key.left.unit"), 2))
+        reject("No ordinal alias for nowrap", changed(bytes, wire.at.getValue("$key.wrap"), 2))
+        reject("Literal percentage width", changed(bytes, wire.at.getValue("$key.width.unit"), StyleWidthUnit.Percent.ordinal))
+        for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            reject("Literal nonfinite left $bad", changed32(bytes, wire.at.getValue("$key.left.value"), bad.toRawBits().toLong()))
+            reject("Literal nonfinite top $bad", changed32(bytes, wire.at.getValue("$key.top.value"), bad.toRawBits().toLong()))
+        }
+        reject("Literal negative height", changed32(bytes, wire.at.getValue("$key.height.value"), (-1f).toRawBits().toLong()))
+        reject("Wrong inherited P census", changed(bytes, wire.at.getValue("features"), 64))
+        for (end in bytes.indices) reject("Truncated Z $end", bytes.copyOf(end))
+        reject("Trailing Z data", bytes + byteArrayOf(0))
+        val plain = box(listOf(leaf))
+        val debt = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(plain) } }
+        reject("No actual positioned payload", debt.document(emptyList(), Sink.Body))
+        val oldStyle = ContainerStyle(ownerFont = font)
+        val old = Wire('Y', 1).apply { paragraphOverride = { positionedBlock(box(listOf(leaf), oldStyle)) } }
+        val oldBytes = old.document(emptyList(), Sink.Body)
+        assertEquals(box(listOf(leaf), oldStyle), read(oldBytes).sections.single().blocks.single())
+        val oldCombo = Wire('Y', 1).apply { paragraphOverride = {
+            positionedBlock(box(listOf(leaf), oldStyle.copy(positioning = ContainerPositioning.RelativeAuto))) } }
+        reject("Y cannot borrow relative owner capability", oldCombo.document(emptyList(), Sink.Body))
+        assertArrayEquals(Wire('Y', 1).isolatedSpan(leaf.spans.single()), Wire('Z', 257).isolatedSpan(leaf.spans.single()))
+        for (header in listOf("DPRZ", "DPRZ\u0000")) reject("Truncated known Z header", header.encodeToByteArray())
+    }
+
+    @Test fun positionedZSharesOriginalContentTableAndItemLimitsWithoutSkippingOutOfFlowChildren() {
+        val px = StyleLengthUnit.Px
+        val absolute = ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 0f)), height = StyleLength(px, 0f),
+            absolutePosition = ContainerAbsolutePosition(StyleLength(px, 0f), StyleLength(px, 0f)))
+        for (depth in listOf(2, 16, 17)) {
+            val wire = Wire('Z', 256).apply { containerStyleOverride = { label ->
+                val index = label.removePrefix("container").toInt()
+                positionedStyle(when (index) {
+                    0 -> ContainerStyle(positioning = ContainerPositioning.RelativeAuto)
+                    depth - 1 -> absolute
+                    else -> ContainerStyle()
+                }, label)
+            } }
+            val bytes = wire.document(listOf(Span("link", "deep", "Deep")), Sink.Container, containers = depth)
+            if (depth == 17) reject("Absolute cannot reset content17", bytes) else {
+                val decoded = read(bytes)
+                val values = mutableListOf<Container>()
+                PresentationSpanVisitor { _, _ -> }.apply { onContainer = values::add }.blocks(decoded.sections.single().blocks)
+                assertEquals(depth, values.size)
+                assertEquals(absolute, values.last().style)
+                assertEquals("Deep", values.last().blocks.single().spans.single().target)
+            }
+        }
+        for (depth in listOf(32, 33)) {
+            val wire = Wire('Z', 256).apply {
+                containerStyleOverride = { positionedStyle(ContainerStyle(textWrap = TextWrap.Normal), it) }
+                paragraphOverride = { tableChain(depth, mixed = true) }
+            }
+            val bytes = wire.document(listOf(text("table")), Sink.Container)
+            if (depth == 33) reject("Z retains table33 refusal", bytes) else {
+                val depths = mutableListOf<Int>()
+                PresentationSpanVisitor { _, _ -> }.apply { onTable = { _, level, _ -> depths.add(level) } }
+                    .blocks(read(bytes).sections.single().blocks)
+                assertEquals((1..32).toList(), depths)
+            }
+        }
+        val empty = Block("container", 0, emptyList(), container = Container(emptyList(), ContainerStyle(textWrap = TextWrap.Normal)))
+        var visited = 0
+        PresentationSpanVisitor { _, _ -> }.apply { onContainer = { visited++ } }
+            .blocks(java.util.Collections.nCopies(1 shl 20, empty))
+        assertEquals(1 shl 20, visited)
+        invalid("Explicit wrap does not reset item budget") {
+            PresentationSpanVisitor { _, _ -> }.blocks(java.util.Collections.nCopies((1 shl 20) + 1, empty))
+        }
+        // Exact decoder budget: section + root + three child blocks + two paragraphs + two link Spans = 9.
+        val rows = (1 shl 20) - 9
+        val exact = Wire('Z', 256).apply { paragraphOverride = { positionedBudget(rows) } }
+        val decoded = read(exact.document(emptyList(), Sink.Body))
+        val root = decoded.sections.single().blocks.single().container!!
+        assertEquals(ContainerStyle(positioning = ContainerPositioning.RelativeAuto), root.style)
+        assertEquals(3, root.blocks.size)
+        val filler = root.blocks[1].table!!
+        assertEquals(rows, filler.rows.size)
+        assertTrue(filler.rows.all { it.isEmpty() })
+        assertEquals(TableGrid(emptyList(), rows, 0), tableGrid(filler))
+        for ((index, label) in listOf(0 to "before", 2 to "after")) {
+            val child = root.blocks[index].container!!
+            assertEquals(absolute, child.style)
+            assertEquals(listOf(Block("paragraph", 0, listOf(Span("link", label, "Budget target")))), child.blocks)
+        }
+        val excess = Wire('Z', 256).apply { paragraphOverride = { positionedBudget(rows + 1) } }
+        reject("Raw Z item count is one shared budget", excess.document(emptyList(), Sink.Body))
+    }
+
+    @Test fun citation64RetainsExplicitPairsPoliciesAndEveryOrdinarySpanSink() {
+        val states = List(8) { LinkState("#12345$it", it % 2 == 1) }
+        val paint = LinkPaint(states[0], states[1], states[2], states[3], states[4], states[5], states[6], states[7], true)
+        val targeted = paint.copy(normal = LinkState("#abcdef", true))
+        val metrics = InlineTextStyle(lineHeight = InlineLineHeight.Computed(InlineComputedLength(15f, FontScaleBasis.CssPx)))
+        fun marker(reference: Long, occurrence: Long, anchor: String) = Span("link", "[same]", role = "reference",
+            targetFragment = "reference-$reference", tooltip = "marker tooltip", explanation = "marker explanation",
+            superscript = true, small = true, fontScale = .5f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontFeatures = FontFeaturePolicy.Normal, foreground = states[0].foreground, background = "#fefefe", linkPaint = paint, inlineStyle = metrics,
+            citationMarker = CitationMarker(reference, occurrence, anchor, true, BidiResolvedDirection.Rtl,
+                CitationTargetStyle(targeted, FigureColor.Rgb("#ffeedd"))))
+        fun backlink(occurrence: Long, anchor: String, styled: Boolean = true): ReferenceBacklink {
+            val template = Span("link", "↩same", targetFragment = anchor, tooltip = "backlink tooltip",
+                explanation = "backlink explanation", bold = true, fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx,
+                foreground = if (styled) states[0].foreground else null,
+                fontFamily = if (styled) ContainerFontFamily.SansSerif else null)
+            val result = ReferenceBacklink.withPolicies(occurrence, template, if (styled) paint else null, if (styled) metrics else null)
+            assertNull(template.linkPaint); assertNull(template.inlineStyle)
+            assertFalse(template.isQualifiedCitationBacklink)
+            assertNotSame(template, result.span)
+            assertEquals(template.copy(linkPaint = null, inlineStyle = null), result.span.copy(
+                linkPaint = null, inlineStyle = null, citationBacklinkWitness = null))
+            assertSame(result.span, result.copy().span)
+            return result
+        }
+        val first = marker(41, 7, "return-first")
+        val second = marker(41, 2, "return-second")
+        val third = marker(9, 101, "return-third")
+        val references = listOf(
+            Reference(9, 2, "other", listOf(text("Reference nine")), backlinks = listOf(backlink(101, "return-third"))),
+            Reference(41, 1, "notes", listOf(text("Reference forty-one")), backlinks = listOf(
+                backlink(2, "return-second", false), backlink(7, "return-first"))))
+        val wire = Wire('Y', 64)
+        val decoded = read(wire.document(listOf(first, text(" + "), second, third), features = 4, referenceValues = references))
+        assertEquals(listOf(first, text(" + "), second, third), decoded.displayTitle)
+        assertEquals(references, decoded.references)
+        assertEquals(listOf(2L, 7L), decoded.references[1].backlinks.map { it.occurrence })
+        assertEquals(listOf("↩same", "Reference nine"), mutableListOf<String>().also { runs ->
+            decoded.references.first().visitSpanRuns { values, _ -> runs += values.joinToString("") { it.text } }
+        })
+        assertEquals("[same] + [same][same]", rubyFallbackText(decoded.displayTitle))
+        assertEquals(targeted, decoded.displayTitle.first().citationMarker!!.targetStyle!!.paint)
+        assertNotEquals(decoded.displayTitle.first().linkPaint!!.normal,
+            decoded.displayTitle.first().citationMarker!!.targetStyle!!.paint.normal)
+        val reset = first.copy(citationMarker = first.citationMarker!!.copy(targetStyle = CitationTargetStyle(targeted)))
+        val resetSource = read(Wire('Y', 64).document(listOf(reset, second, third), features = 4, referenceValues = references)).displayTitle.first()
+        assertEquals("#fefefe", resetSource.background)
+        assertNull(resetSource.citationMarker!!.targetStyle!!.background)
+        for (sink in Sink.entries.filterNot { it == Sink.Reference || it == Sink.ReferenceBlocks }) {
+            val source = marker(9, 11, "return-${sink.name}").copy(citationMarker = CitationMarker(9, 11, "return-${sink.name}"))
+            val note = Reference(9, 1, "", emptyList(), backlinks = listOf(backlink(11, "return-${sink.name}", false)))
+            val result = read(Wire('Y', 64).document(listOf(source), sink, headingTitle = source.text, referenceValues = listOf(note)))
+            val seen = mutableListOf<Span>()
+            val visitor = PresentationSpanVisitor { _, _ -> }.apply { onCitationMarker = seen::add }
+            visitor.spans(result.displayTitle); visitor.spans(result.preamble)
+            result.sections.forEach { visitor.blocks(it.blocks) }
+            assertEquals(sink.name, listOf(source), seen)
+            assertEquals(note, result.references.single())
+        }
+        for (ordered in listOf(false, true)) {
+            val note = Reference(9, 1, "", if (ordered) emptyList() else listOf(third),
+                blocks = if (ordered) listOf(Block("container", 0, emptyList(), container = Container(listOf(
+                    Block("paragraph", 0, listOf(third))), ContainerStyle()))) else null,
+                backlinks = listOf(backlink(101, "return-third", false)))
+            assertEquals(note, read(Wire('Y', 64).document(emptyList(), referenceValues = listOf(note))).references.single())
+        }
+        val z = Wire('Z', 320).apply { containerStyleOverride = { positionedStyle(ContainerStyle(textWrap = TextWrap.Normal), it) } }
+        val zEntry = read(z.document(listOf(first, second, third), Sink.Container, features = 4, referenceValues = references))
+        assertEquals(listOf(first, second, third), zEntry.sections.single().blocks.single().container!!.blocks.single().spans)
+        assertEquals(references, zEntry.references)
+    }
+
+    @Test fun citation64RejectsForgedPoliciesPairsAnchorsAndQualifiedSpanEscapes() {
+        val state = LinkState("#112233", false)
+        val paint = LinkPaint(state, state, state, state, state, state, state, state, false)
+        val metrics = InlineTextStyle(lineHeight = InlineLineHeight.Computed(InlineComputedLength(15f, FontScaleBasis.CssPx)))
+        val marker = Span("link", "[7]", targetFragment = "reference-9", role = "reference", linkPaint = paint,
+            inlineStyle = metrics, citationMarker = CitationMarker(9, 7, "return-seven", true, BidiResolvedDirection.Ltr,
+                CitationTargetStyle(paint, FigureColor.Transparent)))
+        val back = ReferenceBacklink.withPolicies(7, Span("link", "↑", targetFragment = "return-seven"), paint, metrics)
+        val note = Reference(9, 1, "", emptyList(), backlinks = listOf(back))
+        fun entry(markers: List<Span> = listOf(marker), refs: List<Reference> = listOf(note), sections: List<Section> = emptyList()) =
+            Entry("Citations", markers, "language", "Japanese", "ja", sections, refs)
+        assertSame(marker, entry().displayTitle.single())
+        val copiedBack = back.copy(span = back.span.copy(text = "original copied label"))
+        assertSame(copiedBack.span, entry(refs = listOf(note.copy(backlinks = listOf(copiedBack)))).references.single().backlinks.single().span)
+        invalid("Isolation cannot compete with span direction") { marker.copy(direction = "rtl") }
+        invalid("Target paint requires an independent normal policy") { marker.copy(linkPaint = null) }
+        invalid("Malformed anchor UTF16") { marker.citationMarker!!.copy(anchor = "\ud800") }
+        for (id in listOf(0L, 0xffff_ffffL, -1L)) {
+            invalid("Reference ID") { marker.citationMarker!!.copy(reference = id) }
+            invalid("Occurrence ID") { marker.citationMarker!!.copy(occurrence = id) }
+            invalid("Backlink ID") { back.copy(occurrence = id) }
+        }
+        invalid("Ordinary local paint stays refused") { Span("link", "local", targetFragment = "a", linkPaint = paint) }
+        invalid("Ordinary local inline metrics stay refused") { Span("link", "local", targetFragment = "a", inlineStyle = metrics) }
+        invalid("Witness copy cannot become text") { back.span.copy(kind = "text") }
+        invalid("Witness copy cannot gain an external target") { back.span.copy(target = "Elsewhere") }
+        invalid("Witness copy cannot gain trail") { back.span.copy(trail = "tail") }
+        invalid("Wrapper copy cannot replace qualified source with an ordinary template") {
+            back.copy(span = Span("link", "↑", targetFragment = "return-seven"))
+        }
+        invalid("Only note owns backlinks") { note.copy(kind = ReferenceKind.Fragment, groupNumber = null) }
+        invalid("Duplicate reference identity") { entry(refs = listOf(note, note.copy(backlinks = emptyList()))) }
+        invalid("Duplicate pair") { entry(listOf(marker, marker)) }
+        invalid("Missing backlink") { entry(refs = listOf(note.copy(backlinks = emptyList()))) }
+        invalid("Backlink without marker") { entry(emptyList()) }
+        invalid("Duplicate backlink") { entry(refs = listOf(note.copy(backlinks = listOf(back, back)))) }
+        invalid("Wrong stored return target") { entry(refs = listOf(note.copy(backlinks = listOf(back.copy(span = back.span.copy(targetFragment = "wrong")))))) }
+        invalid("Marker anchor collides with canonical footer") { entry(listOf(marker.copy(citationMarker = marker.citationMarker!!.copy(anchor = "reference-9")))) }
+        for (fallback in listOf(false, true)) {
+            val section = Section(2, "Anchored", emptyList(), anchor = if (fallback) "" else "return-seven",
+                anchorFallback = if (fallback) "return-seven" else "")
+            invalid("Section return anchor collision") { entry(sections = listOf(section)) }
+            invalid("Footer collision") { entry(sections = listOf(section.copy(anchor = "reference-9", anchorFallback = ""))) }
+            val block = Block("paragraph", 0, listOf(text("x")), anchor = if (fallback) "" else "return-seven",
+                anchorFallback = if (fallback) "return-seven" else "")
+            invalid("Nested Block return anchor collision") { entry(sections = listOf(Section(2, "Body", listOf(
+                Block("container", 0, emptyList(), container = Container(listOf(block), ContainerStyle())))))) }
+        }
+        val escaping = back.span
+        invalid("Display escape") { entry(listOf(escaping)) }
+        invalid("Preamble escape") { entry().copy(preamble = listOf(escaping)) }
+        invalid("Section escape") { entry(sections = listOf(Section(2, "Body", listOf(Block("paragraph", 0, listOf(escaping)))))) }
+        invalid("Reference body escape") { entry(refs = listOf(note.copy(spans = listOf(escaping)))) }
+        invalid("Container escape") { PresentationSpanVisitor { _, _ -> }.blocks(listOf(Block("container", 0, emptyList(),
+            container = Container(listOf(Block("paragraph", 0, listOf(escaping))), ContainerStyle())))) }
+        invalid("Cell escape") { PresentationSpanVisitor { _, _ -> }.table(Table(emptyList(), listOf(listOf(Cell(listOf(escaping), false, 1, 1))))) }
+        invalid("Ruby body escape") { owner(listOf(base(escaping))) }
+        invalid("Ruby reading marker remains outside its child domain") { owner(listOf(base(text("x"))), listOf(annotation(marker))) }
+        invalid("Ruby RP marker remains outside its child domain") { owner(listOf(base(text("x"))), listOf(annotation(text("y"), before = listOf(marker), explicit = true))) }
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        invalid("Padding child marker remains outside its child domain") { InlinePaddingGroup(zero, StyleLength(StyleLengthUnit.Px, 1f), listOf(marker)) }
+        invalid("Action child marker remains outside its child domain") { InlineActionGroup(listOf(marker)) }
+        val edges = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        invalid("Box child marker remains outside its child domain") { InlineBoxGroup(StyleEdges(zero, zero, zero, zero), edges, spans = listOf(marker)) }
+        val wire = Wire('Y', 64)
+        val bytes = wire.document(listOf(marker), referenceValues = listOf(note))
+        val payload = "root.0.citation"
+        reject("Citation presence", changed(bytes, wire.at.getValue(payload), 2))
+        reject("Unknown marker policy", changed(bytes, wire.at.getValue("$payload.policy"), 8))
+        reject("Unknown isolation", changed(bytes, wire.at.getValue("$payload.isolation"), 2))
+        reject("Unknown target background presence", changed(bytes, wire.at.getValue("$payload.background"), 2))
+        reject("Native theme target background", changed(bytes, wire.at.getValue("$payload.background") + 1, 0))
+        for (name in listOf("reference", "occurrence")) for (id in listOf(0L, 0xffff_ffffL))
+            reject("Invalid marker $name", changed32(bytes, wire.at.getValue("$payload.$name"), id))
+        reject("Unknown reference", changed32(bytes, wire.at.getValue("$payload.reference"), 8))
+        reject("Invalid backlink occurrence", changed32(bytes, wire.at.getValue("backlinks.0.0.occurrence"), 0))
+        reject("Mismatched backlink occurrence", changed32(bytes, wire.at.getValue("backlinks.0.0.occurrence"), 6))
+        reject("Forged backlink count", changed32(bytes, wire.at.getValue("backlinks.0.count"), 0xffff_ffffL))
+        reject("Empty marker anchor", replace(bytes, wire.at.getValue("$payload.anchor"), wire.at.getValue("$payload.policy"), ByteArray(4)))
+        reject("Non-reference marker role", changed(bytes, wire.at.getValue("root.0.start") + 1, 0))
+        reject("Forged marker normal checksum", changed(bytes, wire.at.getValue("root.0.start") + 2, 128))
+        reject("Backlink cannot contain a marker", changed(bytes, wire.at.getValue("backlinks.0.0.span.citation"), 1))
+        reject("Pending128 remains unsupported", changed(bytes, wire.at.getValue("yFeatures"), 128))
+        reject("Feature debt", changed(bytes, wire.at.getValue("yFeatures"), 1))
+        for (end in wire.at.getValue(payload)..bytes.lastIndex) reject("Truncated citation/trailer at $end", bytes.copyOf(end))
+        reject("EOF remains exact", bytes + byteArrayOf(0))
+    }
+
+    @Test fun citation64KeepsNullWireBytesAndSharesLatePrefixFeatureAndItemBudgets() {
+        val plain = text("ordinary")
+        val legacy = Wire('V').document(listOf(plain))
+        val unused = Wire('Y', 64)
+        val unusedBytes = unused.document(listOf(plain))
+        reject("Bit64 needs an actual paired marker", unusedBytes)
+        // Remove only the new header byte and per-Span presence: every V payload byte is unchanged.
+        val presence = unused.at.getValue("root.0.citation")
+        val withoutPresence = replace(unusedBytes, presence, presence + 1, byteArrayOf())
+        val restored = changed(withoutPresence.copyOfRange(0, 4) + withoutPresence.copyOfRange(5, withoutPresence.size), 3, 'V'.code)
+        assertArrayEquals(legacy, restored)
+        val marker = Span("link", "[1]", role = "reference", targetFragment = "reference-9",
+            citationMarker = CitationMarker(9, 23, "return-budget"))
+        val prefix = ReferenceBacklink.withPolicies(23, Span("link", "↑", targetFragment = "return-budget",
+            fontFamily = ContainerFontFamily.SansSerif))
+        val note = Reference(9, 1, "", emptyList(), backlinks = listOf(prefix))
+        val wire = Wire('Y', 64)
+        val bytes = wire.document(listOf(marker), referenceValues = listOf(note), features = 4)
+        assertEquals(note, read(bytes).references.single())
+        reject("Late backlink font-family payload owes P bit4", changed(bytes, wire.at.getValue("features"), 0))
+        val noFamily = note.copy(backlinks = listOf(ReferenceBacklink.withPolicies(23,
+            Span("link", "↑", targetFragment = "return-budget"))))
+        reject("P bit4 cannot be paid by marker identity", Wire('Y', 64).document(listOf(marker), referenceValues = listOf(noFamily), features = 4))
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f), right = InlineBoxInset(StyleWidthUnit.Px, 0f)), edges)
+        fun box(count: Int) = Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), edges,
+            java.util.Collections.nCopies(count, overlay), listOf(text("x"))))
+        fun entry(count: Int) = Entry("Budget", listOf(box(count), marker), "language", "Japanese", "ja", emptyList(), listOf(noFamily))
+        // Model: Box + leaf + marker Span + marker payload + backlink wrapper + backlink Span.
+        val modelMaximum = (1 shl 20) - 6
+        assertEquals(modelMaximum, entry(modelMaximum).displayTitle.first().inlineBoxGroup!!.overlays.size)
+        invalid("Citation payload and prefix share the model budget") { entry(modelMaximum + 1) }
+        // Decoder additionally retains its historical reference-slot charge; no retroactive model charge.
+        val wireMaximum = (1 shl 20) - 7
+        for (count in listOf(wireMaximum, wireMaximum + 1)) {
+            val raw = Wire('Y', 68).apply { rootOverride = { boxBudget(count, it, marker) } }
+            val encoded = raw.document(emptyList(), referenceValues = listOf(noFamily))
+            if (count == wireMaximum) {
+                val decoded = read(encoded)
+                assertEquals(marker, decoded.displayTitle.last())
+                assertEquals(noFamily, decoded.references.single())
+                assertEquals(count, decoded.displayTitle.first().inlineBoxGroup!!.overlays.size)
+            } else reject("Late backlink cannot restart the wire item budget", encoded)
+        }
+        // No citation data means historical duplicate references still have their old model behavior.
+        val old = Reference(9, 1, "", emptyList())
+        assertEquals(2, Entry("Legacy", listOf(plain), "language", "Japanese", "ja", emptyList(), listOf(old, old)).references.size)
     }
 }

@@ -72,8 +72,12 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
     }
 
     fun measurePreparedContainer(part: NativeFloatContextPart.Container,
-        carried: List<NativeFloatExclusion>, collapse: NativeMarginCollapse): NativeFloatContextGeometry {
+        carried: List<NativeFloatExclusion>, collapse: NativeMarginCollapse,
+        absoluteOrigin: NativeAbsoluteOrigin? = null,
+        exactTextWidth: Float? = null): NativeFloatContextGeometry {
         val isolated = part.floatSide != null || part.isolatesFloats
+        if ((isolated || part.columns != null || part.row != null) && part.preparedParts?.hasNativeAbsolutePosition() == true)
+            throw UnsupportedFloatLayout("Absolute containing-block coordinates across isolated layout are unavailable")
         check(!isolated || carried.isEmpty()) { "An isolated owner cannot inherit outer float exclusions" }
         return measureContainer(part, collapse) {
             if (part.columns != null) {
@@ -88,7 +92,8 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
                     part.fixedContentHeight)
             } else NativeFloatContextGeometry.build(part.contentWidth, checkNotNull(part.preparedParts),
                 containAtEnd = isolated, carriedExclusions = carried, allowProtrudingFloats = !isolated,
-                adjoining = true, marginCollapse = collapse, preparation = this)
+                adjoining = true, marginCollapse = collapse, preparation = this, absoluteOrigin = absoluteOrigin,
+                exactTextWidth = exactTextWidth)
         }
     }
 
@@ -136,7 +141,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
         val exclusions = incoming.toMutableList()
         val cursor = NativeMarginCursor(NativeMarginCollapse(true, true))
         for (part in parts) {
-            if (part is NativeFloatContextPart.Container && part.absolute != null) continue
+            if (part is NativeFloatContextPart.Container && (part.absolute != null || part.absolutePosition != null)) continue
             val margins = profile(part)
             if (margins == null) {
                 val normalY = tableClearanceY(cursor.floatTop, nativeClearForPart(part), exclusions)

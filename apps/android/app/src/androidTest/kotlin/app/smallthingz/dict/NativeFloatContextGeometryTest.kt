@@ -1075,4 +1075,323 @@ class NativeFloatContextGeometryTest {
             }
         }
 
+    @Test fun ordinaryAbsoluteLabelsKeepNearestPaddingOriginAndSourcePaintOrder() {
+        val black = android.graphics.Color.BLACK
+        val calls = mutableListOf<Int>()
+        val actions = List<() -> Unit>(4) { index -> { calls += index } }
+        val zero = FloatMargins(0f, 0f, 0f, 0f)
+        val outerId = 100
+        val wrapperId = 200
+        val imageId = 700
+        val outerMargin = FloatMargins(7f, 0f, 0f, 9f)
+        val outerPadding = FloatMargins(13f, 5f, 3f, 11f)
+        data class Label(val text: String, val width: Float, val left: Float, val top: Float,
+            val alignment: Layout.Alignment, val rtl: Boolean, val paint: TextPaint,
+            val source: SpannableString, val action: (() -> Unit)?)
+        fun label(text: String, width: Float, left: Float, top: Float,
+            alignment: Layout.Alignment, rtl: Boolean, color: Int, bold: Boolean,
+            action: (() -> Unit)?, noWrap: Boolean = true): Label {
+            val resolved = TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = 18f
+                this.color = color
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF,
+                    if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                if (!noWrap) {
+                    isSubpixelText = true
+                    letterSpacing = 1f / 32f
+                }
+            }
+            val source = SpannableString(text).apply {
+                setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(resolved),
+                    NativeLineHeightPolicy.Pixels(20f), strut = true), 0, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (noWrap) setSpan(NativeAuthoredTextWrap(TextWrap.NoWrap,
+                    inheritedOwner = true, sourceLineStarts = listOf(0)), 0, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                else setSpan(NativeAuthoredTextWrap(TextWrap.Normal), 0, length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            return Label(text, width, left, top, alignment, rtl, resolved, source, action)
+        }
+        fun shaped(label: Label, width: Float = label.width,
+            carried: List<NativeFloatExclusion> = emptyList()): NativeFloatGeometry =
+            NativeFloatGeometry.build(label.source, label.paint, kotlin.math.floor(width).toInt(),
+                emptyList(), alignment = label.alignment,
+                textDirection = if (label.rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                carriedExclusions = carried, exactAvailableWidth = width, nodeFactory = { geometry ->
+                    label.action?.let { action -> listOf(FloatInteractionNode(0, FloatInteractionKind.LINK,
+                        0, label.text.length, geometry.rectsForRange(0, label.text.length),
+                        label.text, null, action)) } ?: emptyList()
+                })
+        fun textPart(label: Label) = NativeFloatContextPart.Text(label.source,
+            { width, carried -> shaped(label, width.toFloat(), carried) },
+            buildAtWidth = { width, carried -> shaped(label, width, carried) })
+        fun horizontal(content: Float, margin: Float = 0f, padding: Float = 0f, right: Float = 0f) =
+            NativeContainerHorizontal(margin + padding + content + right, content,
+                padding + content + right, margin, margin + padding, 0f, margin + padding + content + right)
+        fun container(id: Int, width: Float, parts: List<NativeFloatContextPart>,
+            margin: FloatMargins = zero, padding: FloatMargins = zero,
+            containing: NativeAbsoluteContainingBlock? = null,
+            absolute: NativeAbsolutePosition? = null) = NativeFloatContextPart.Container(id,
+            kotlin.math.floor(width).toInt(), { _, _ -> error("Prepared source must be measured recursively") },
+            margins = margin, padding = padding, preparedParts = parts,
+            horizontal = horizontal(width, margin.left, padding.left, padding.right),
+            fixedContentHeight = if (absolute == null) null else 20f,
+            absolutePosition = absolute, absoluteContainingBlock = containing)
+        val tail = label("Following normal body", 280f, 0f, 0f, Layout.Alignment.ALIGN_NORMAL,
+            false, black, false, null)
+        val tailReference = shaped(tail)
+        data class Scene(val geometry: NativeFloatContextGeometry, val input: NativeContextPaintInput,
+            val labels: List<Label>, val references: List<NativeFloatGeometry>,
+            val expectedBoxes: List<RectF>, val paintSequence: List<Int>, val ranks: Map<Int, Int>,
+            val normal: NativeFloatContextGeometry, val tailTop: Float)
+        fun scene(marginLeft: Float, paddingLeft: Float, paddingTop: Float,
+            nearer: Boolean, fractional: Boolean = false, overflow: Boolean = false,
+            wrongOwner: Boolean = false): Scene {
+            val fraction = if (fractional) .5f else 0f
+            val labels = listOf(
+                label("MMMM", 120f + fraction, 40f, 30f, Layout.Alignment.ALIGN_CENTER,
+                    false, android.graphics.Color.RED, false, actions[0]),
+                label("MMMM", 120f + fraction, 40f, 30f, Layout.Alignment.ALIGN_CENTER,
+                    false, android.graphics.Color.BLUE, false, actions[1]),
+                label(if (fractional) "\u05d0\u05d1\u05d2\u05d3" else "middle", 160f + fraction, 60f, 65f,
+                    if (fractional) Layout.Alignment.ALIGN_NORMAL else Layout.Alignment.ALIGN_OPPOSITE,
+                    fractional, android.graphics.Color.GREEN, false, actions[2]),
+                label(if (overflow) "W".repeat(40) else "MMMM", if (overflow) 340.5f else 160f + fraction,
+                    70f, 90f, Layout.Alignment.ALIGN_OPPOSITE, false, android.graphics.Color.MAGENTA,
+                    false, actions[3]),
+                label("MMMM", 160f + fraction, 70f, 90f, Layout.Alignment.ALIGN_OPPOSITE,
+                    false, black, true, null))
+            val references = labels.map { shaped(it) }
+            val wrapperMargin = FloatMargins(5f, 0f, 0f, marginLeft)
+            val wrapperPadding = FloatMargins(paddingTop, 3f, 2f, paddingLeft)
+            val owner = if (nearer && !wrongOwner) wrapperId else outerId
+            val absoluteParts = labels.mapIndexed { index, value ->
+                container(300 + index, value.width, listOf(textPart(value)),
+                    absolute = NativeAbsolutePosition(owner, value.left, value.top))
+            }
+            fun body(withLabels: Boolean): List<NativeFloatContextPart> {
+                val image = NativeFloatContextPart.Child(imageId, NativeBlockWidth.FixedPx(240f),
+                    { request ->
+                        assertEquals(240f, checkNotNull(request.requestedWidth), 0f)
+                        NativeBlockMeasure(240f, 240f, 120f)
+                    })
+                val wrapper = container(wrapperId, 160f, if (withLabels) absoluteParts else emptyList(),
+                    wrapperMargin, wrapperPadding,
+                    if (nearer) NativeAbsoluteContainingBlock(paddingLeft, paddingTop) else null)
+                val outer = container(outerId, 240f, listOf(image, wrapper), outerMargin, outerPadding,
+                    NativeAbsoluteContainingBlock(outerPadding.left, outerPadding.top))
+                return listOf(outer, textPart(tail))
+            }
+            val geometry = NativeFloatContextGeometry.build(280, body(true), adjoining = true)
+            val normal = NativeFloatContextGeometry.build(280, body(false), adjoining = true)
+            // The containing block's padding edge precedes its content edge. A static
+            // wrapper changes only the traversal origin, not this CSS coordinate basis.
+            val originX = if (nearer) 20f + marginLeft else 9f
+            val originY = if (nearer) 20f + 120f + 5f else 7f
+            val expectedBoxes = labels.map { RectF(originX + it.left, originY + it.top,
+                originX + it.left + it.width, originY + it.top + 20f) }
+            val tree = listOf(NativePaintOrderNode(0, positioned = true,
+                children = listOf(NativePaintOrderNode(1), NativePaintOrderNode(2, positioned = nearer,
+                    children = labels.indices.map { index -> NativePaintOrderNode(3 + 2 * index,
+                        positioned = true, children = listOf(NativePaintOrderNode(4 + 2 * index)),
+                        absolutePositionContainingBlock = if (nearer) 2 else 0) },
+                    absoluteContainingBlock = nearer)), absoluteContainingBlock = true), NativePaintOrderNode(13))
+            val sequence = nativeContextPaintSequence(tree)
+            assertEquals(listOf(13, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12), sequence)
+            val ranks = sequence.withIndex().associate { it.value to it.index }
+            val leafRanks = labels.indices.associate { it + 1 to ranks.getValue(4 + 2 * it) } + (6 to ranks.getValue(13))
+            val boxes = listOf(NativePaintBox(outerId, ranks.getValue(0), (0..5).toSet()),
+                NativePaintBox(wrapperId, ranks.getValue(2), (1..5).toSet())) + labels.indices.map {
+                NativePaintBox(300 + it, ranks.getValue(3 + 2 * it), setOf(it + 1)) }
+            return Scene(geometry, NativeContextPaintInput(geometry, leafRanks,
+                mapOf(imageId to ranks.getValue(1)), boxes), labels, references, expectedBoxes,
+                sequence, ranks, normal, 7f + 13f + 120f + 5f + paddingTop + 2f + 3f)
+        }
+        fun shifted(rect: RectF, x: Float, y: Float) = RectF(rect).apply { offset(x, y) }
+        fun verify(value: Scene) {
+            val geometry = value.geometry
+            assertEquals(280, geometry.width)
+            assertEquals(value.normal.usedHeight, geometry.usedHeight, 0f)
+            assertEquals(value.normal.textBottom, geometry.textBottom, 0f)
+            assertEquals(value.tailTop + tailReference.textBottom, geometry.textBottom, 0f)
+            assertEquals(value.normal.ownExclusions, geometry.ownExclusions)
+            assertTrue(geometry.ownExclusions.isEmpty())
+            assertTrue(geometry.flowChildren.isEmpty())
+            assertEquals(RectF(20f, 20f, 260f, 140f), geometry.children.single().bounds)
+            assertEquals(value.normal.children.single().bounds, geometry.children.single().bounds)
+            assertEquals("\ufffc\n" + value.labels.joinToString("\n") { it.text } + "\n" + tail.text,
+                geometry.text.toString())
+            assertEquals(4, geometry.nodes.size)
+            assertEquals((0..3).toList(), geometry.nodes.map { it.id })
+            val leaves = geometry.inputLeaves()
+            assertEquals((1..6).toList(), leaves.map { it.sourceIndex })
+            value.labels.forEachIndexed { index, label ->
+                val expected = value.expectedBoxes[index]
+                assertEquals(expected, geometry.ordinaryBounds[300 + index])
+                val leaf = leaves.single { it.sourceIndex == index + 1 }
+                val reference = value.references[index]
+                assertEquals(expected.left, leaf.x, 0f)
+                assertEquals(expected.top, leaf.y, 0f)
+                assertEquals(label.text, geometry.text.subSequence(leaf.offset, leaf.offset + label.text.length).toString())
+                assertEquals(reference.rectsForRange(0, label.text.length).map { shifted(it, expected.left, expected.top) },
+                    geometry.rectsForRange(leaf.offset, leaf.offset + label.text.length))
+                assertEquals(reference.characterRects(0, label.text.length).map { it?.let { box -> shifted(box, expected.left, expected.top) } },
+                    geometry.characterRects(leaf.offset, label.text.length))
+                for (offset in 0 until label.text.length) assertEquals(
+                    shifted(reference.caretRect(offset), expected.left, expected.top), geometry.caretRect(leaf.offset + offset))
+                assertEquals(1, reference.shapedLineCount)
+                val advance = label.paint.measureText(label.text)
+                assertEquals(advance, reference.nativeLineAdvance(0), .0001f)
+                val band = checkNotNull(reference.nativeRubyLineAdvanceBounds(0))
+                if (label.alignment == Layout.Alignment.ALIGN_CENTER)
+                    assertEquals((label.width - advance) / 2f, band.left, .0001f)
+                else assertEquals(label.width, band.right, .0001f)
+                if (index < 4) {
+                    val node = geometry.nodes[index]
+                    assertEquals(leaf.offset, node.start)
+                    assertEquals(leaf.offset + label.text.length, node.end)
+                    assertSame(actions[index], node.onClick)
+                    assertEquals(geometry.rectsForRange(node.start, node.end), node.bounds)
+                }
+            }
+            val tailLeaf = leaves.single { it.sourceIndex == 6 }
+            assertEquals(value.tailTop, tailLeaf.y, 0f)
+            assertEquals(value.tailTop + checkNotNull(tailReference.textBaselines?.first),
+                checkNotNull(geometry.textBaselines?.first), 0f)
+            assertEquals(geometry.text.toString(), value.input.text.toString())
+            assertEquals(geometry.nodes.map { it.start to it.end }, value.input.nodes.map { it.start to it.end })
+        }
+        fun raster(draw: (android.graphics.Canvas) -> Unit): IntArray {
+            val bitmap = android.graphics.Bitmap.createBitmap(900, 400, android.graphics.Bitmap.Config.ARGB_8888)
+            var failure: Throwable? = null
+            try {
+                draw(android.graphics.Canvas(bitmap))
+                return IntArray(bitmap.width * bitmap.height).also {
+                    bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                }
+            } catch (error: Throwable) { failure = error; throw error }
+            finally {
+                try { bitmap.recycle() } catch (cleanup: Throwable) {
+                    val primary = failure
+                    if (primary == null) throw cleanup
+                    if (primary !== cleanup) primary.addSuppressed(cleanup)
+                }
+            }
+        }
+        fun paintScene(value: Scene) = raster { canvas ->
+            value.paintSequence.forEach { source ->
+                if (source == 1) canvas.drawRect(value.geometry.children.single().bounds,
+                    android.graphics.Paint().apply { color = android.graphics.Color.CYAN })
+                val index = when {
+                    source == 13 -> 6
+                    source in 4..12 && source % 2 == 0 -> (source - 4) / 2 + 1
+                    else -> null
+                }
+                index?.let { leaf ->
+                    val placed = checkNotNull(value.geometry.textPaintPart(leaf))
+                    val saved = canvas.save()
+                    try { canvas.translate(placed.x, placed.y); placed.geometry.paint(canvas) }
+                    finally { canvas.restoreToCount(saved) }
+                }
+            }
+        }
+        fun overlappingInputAndPaint(value: Scene) {
+            calls.clear()
+            val actual = paintScene(value)
+            val top = value.expectedBoxes[1]
+            val blueReference = raster { canvas ->
+                canvas.translate(top.left, top.top); value.references[1].paint(canvas)
+            }
+            val blue = blueReference.indices.firstOrNull { blueReference[it] == android.graphics.Color.BLUE }
+            assertNotNull("The independently shaped top label must have an opaque source-color pixel", blue)
+            val pixel = checkNotNull(blue)
+            assertEquals(android.graphics.Color.BLUE, actual[pixel])
+            val x = (pixel % 900) + .5f
+            val y = (pixel / 900) + .5f
+            assertTrue(value.geometry.nodes[0].contains(x, y))
+            assertTrue(value.geometry.nodes[1].contains(x, y))
+            assertEquals(1, checkNotNull(value.input.interactionNodeAt(x, y)).id)
+            val leaf = value.geometry.inputLeaves().single { it.sourceIndex == 2 }
+            assertEquals(leaf.offset + value.references[1].offsetForPosition(x - top.left, y - top.top),
+                value.input.offsetForPosition(x, y))
+            checkNotNull(value.input.interactionNodeAt(x, y)?.onClick).invoke()
+            listOf(0, 2, 3).forEach { checkNotNull(value.geometry.nodes[it].onClick).invoke() }
+            assertEquals(listOf(1, 0, 2, 3), calls)
+            val under = value.geometry.nodes[3].bounds.single()
+            val self = value.references[4].rectsForRange(0, value.labels[4].text.length).single().let {
+                shifted(it, value.expectedBoxes[4].left, value.expectedBoxes[4].top) }
+            val intersection = RectF(under)
+            assertTrue(intersection.intersect(self))
+            assertTrue(value.geometry.nodes[3].contains(intersection.centerX(), intersection.centerY()))
+            val selfReference = raster { canvas ->
+                canvas.translate(value.expectedBoxes[4].left, value.expectedBoxes[4].top)
+                value.references[4].paint(canvas)
+            }
+            val selfPixel = selfReference.indices.firstOrNull { index ->
+                selfReference[index] == black && under.contains((index % 900) + .5f, (index / 900) + .5f)
+            }
+            assertNotNull("Actual bold self ink must overlap the earlier source link", selfPixel)
+            assertEquals(black, actual[checkNotNull(selfPixel)])
+            assertNull("Later bold self text blocks the earlier link without creating a new action",
+                value.input.interactionNodeAt(intersection.centerX(), intersection.centerY()))
+            val selfLeaf = value.geometry.inputLeaves().single { it.sourceIndex == 5 }
+            assertEquals(selfLeaf.offset + value.references[4].offsetForPosition(
+                intersection.centerX() - value.expectedBoxes[4].left,
+                intersection.centerY() - value.expectedBoxes[4].top),
+                value.input.offsetForPosition(intersection.centerX(), intersection.centerY()))
+        }
+        val first = scene(17f, 19f, 7f, nearer = false)
+        val changedStatic = scene(31f, 23f, 11f, nearer = false)
+        val nearest = scene(31f, 23f, 11f, nearer = true)
+        val fractional = scene(17f, 19f, 7f, nearer = false, fractional = true)
+        listOf(first, changedStatic, nearest, fractional).forEach { verify(it); overlappingInputAndPaint(it) }
+        assertEquals(first.expectedBoxes, changedStatic.expectedBoxes)
+        assertNotEquals(changedStatic.expectedBoxes, nearest.expectedBoxes)
+        assertThrows(UnsupportedFloatLayout::class.java) { scene(31f, 23f, 11f, nearer = true, wrongOwner = true) }
+        val overflow = scene(17f, 19f, 7f, nearer = false, overflow = true)
+        verify(overflow)
+        assertTrue(overflow.labels[3].width > 240f)
+        assertTrue(overflow.references[3].nativeLineAdvance(0) > overflow.labels[3].width)
+        assertEquals(first.geometry.usedHeight, overflow.geometry.usedHeight, 0f)
+        assertTrue(overflow.geometry.scrollableBounds.right >= overflow.expectedBoxes[3].right)
+        assertTrue(overflow.geometry.scrollableBounds.right > overflow.geometry.width)
+        assertEquals(first.geometry.children.single().bounds, overflow.geometry.children.single().bounds)
+
+        // Normal fitting consumes the fractional width itself, independently checked
+        // against the public native fitter using the complete original measured paragraph.
+        val normal = label("alpha beta gamma delta epsilon", 120.5f, 0f, 0f,
+            Layout.Alignment.ALIGN_CENTER, false, black, false, null, noWrap = false)
+        val measured = checkNotNull(NativeFloatRowRuns(normal.source, normal.paint,
+            TextDirectionHeuristics.LTR).paragraphs.single().measured)
+        val breaker = android.graphics.text.LineBreaker.Builder()
+            .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
+        fun fit(width: Float) = breaker.computeLineBreaks(measured,
+            android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(width) }, 0)
+        val threshold = normal.text.indices.filter { normal.text[it] == ' ' }.drop(1)
+            .map { measured.getWidth(0, it) }.firstOrNull { exact ->
+                val rounded = kotlin.math.floor(exact)
+                exact > rounded && fit(exact).getLineBreakOffset(0) > fit(rounded).getLineBreakOffset(0)
+            }
+        assertNotNull("A real ordinary word boundary must discriminate Float fitting from integer flooring", threshold)
+        for (width in listOf(120.5f, checkNotNull(threshold))) {
+            val result = fit(width)
+            val absolute = container(901, width, listOf(textPart(normal.copy(width = width))),
+                absolute = NativeAbsolutePosition(900, 0f, 0f))
+            val owner = container(900, 240f, listOf(absolute), containing = NativeAbsoluteContainingBlock(0f, 0f))
+            val normalContext = NativeFloatContextGeometry.build(240, listOf(owner), adjoining = true)
+            val normalLeaf = normalContext.inputLeaves().single().geometry as NativeFloatGeometry
+            assertTrue(result.lineCount > 1)
+            assertEquals(result.lineCount, normalLeaf.shapedLineCount)
+            assertEquals((0 until result.lineCount).map { result.getLineBreakOffset(it) },
+                (0 until normalLeaf.shapedLineCount).map { normalLeaf.nativeRangeOfLine(it).second })
+            assertEquals(normal.text, normalContext.text.toString())
+            assertEquals(0f, normalContext.usedHeight, 0f)
+            assertEquals(RectF(0f, 0f, width, 20f), normalContext.ordinaryBounds[901])
+            assertTrue(normalContext.scrollableBounds.bottom >= normalLeaf.textBottom)
+        }
+        verify(scene(17f, 19f, 7f, nearer = false))
+    }
+
 }

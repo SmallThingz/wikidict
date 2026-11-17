@@ -94,4 +94,92 @@ class ContainerHeightTest {
         assertEquals(NativeDocumentVerticalExtent(0, 50), nativeDocumentVerticalExtent(50, 5, 20))
         assertThrows(UnsupportedFloatLayout::class.java) { nativeDocumentVerticalExtent(0, Int.MIN_VALUE, 10) }
     }
+    @Test fun documentHorizontalExtentKeepsContainingWidthAndActualOriginSide() {
+        val signed = NativeFloatBounds(-25.25f, -900f, 160.5f, 900f)
+        assertEquals(NativeDocumentHorizontalExtent(100, 60.5f, 61),
+            nativeDocumentHorizontalExtent(100, signed, rtl = false))
+        assertEquals(NativeDocumentHorizontalExtent(100, 25.25f, 26),
+            nativeDocumentHorizontalExtent(100, signed, rtl = true))
+        for (rtl in listOf(false, true)) {
+            assertEquals(NativeDocumentHorizontalExtent(100, 0f, 0),
+                nativeDocumentHorizontalExtent(100, null, rtl))
+            assertEquals(NativeDocumentHorizontalExtent(100, 0f, 0),
+                nativeDocumentHorizontalExtent(100, NativeFloatBounds(0f, -900f, 100f, 900f), rtl))
+        }
+        val leftOnly = NativeFloatBounds(-50f, 0f, 90f, 20f)
+        val rightOnly = NativeFloatBounds(10f, 0f, 150f, 20f)
+        assertEquals(NativeDocumentHorizontalExtent(100, 0f, 0),
+            nativeDocumentHorizontalExtent(100, leftOnly, rtl = false))
+        assertEquals(NativeDocumentHorizontalExtent(100, 50f, 50),
+            nativeDocumentHorizontalExtent(100, leftOnly, rtl = true))
+        assertEquals(NativeDocumentHorizontalExtent(100, 50f, 50),
+            nativeDocumentHorizontalExtent(100, rightOnly, rtl = false))
+        assertEquals(NativeDocumentHorizontalExtent(100, 0f, 0),
+            nativeDocumentHorizontalExtent(100, rightOnly, rtl = true))
+        // Late table publication changes the scroll allocation, never the width
+        // supplied to original paragraph, percentage or containing-block layout.
+        val before = nativeDocumentHorizontalExtent(100, NativeFloatBounds(-10f, 0f, 110f, 20f), false)
+        val after = nativeDocumentHorizontalExtent(100, signed, false)
+        assertEquals(10, before.range)
+        assertEquals(61, after.range)
+        assertEquals(before.viewportWidth, after.viewportWidth)
+        assertEquals(100, after.viewportWidth)
+        assertEquals(NativeDocumentHorizontalExtent(100, 60.5f, 61),
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(-900f, -1200f, 160.5f, 1800f), false))
+        assertEquals(NativeDocumentHorizontalExtent(100, 25.25f, 26),
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(-25.25f, -1200f, 900f, 1800f), true))
+    }
+
+    @Test fun documentHorizontalRangeRoundsOnlyPublicationAndChecksWholeAllocation() {
+        val next = java.lang.Math.nextUp(100f)
+        assertEquals(NativeDocumentHorizontalExtent(100, next - 100f, 1),
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(0f, 0f, next, 1f), false))
+        assertEquals(NativeDocumentHorizontalExtent(100, 0f, 0),
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(0f, 0f, java.lang.Math.nextDown(100f), 1f), false))
+        assertEquals(NativeDocumentHorizontalExtent(100, Float.MIN_VALUE, 1),
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(-Float.MIN_VALUE, 0f, 100f, 1f), true))
+        val limit = TablePixelLimit.toFloat()
+        assertEquals(NativeDocumentHorizontalExtent(TablePixelLimit, 0f, 0),
+            nativeDocumentHorizontalExtent(TablePixelLimit, NativeFloatBounds(0f, 0f, limit, 1f), false))
+        assertEquals(NativeDocumentHorizontalExtent(0, limit, TablePixelLimit),
+            nativeDocumentHorizontalExtent(0, NativeFloatBounds(-limit, 0f, 0f, 1f), true))
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentHorizontalExtent(TablePixelLimit,
+                NativeFloatBounds(0f, 0f, java.lang.Math.nextUp(limit), 1f), false)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentHorizontalExtent(1, NativeFloatBounds(-limit, 0f, 0f, 1f), true)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(0f, 0f, Float.MAX_VALUE, 1f), false)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentHorizontalExtent(100, NativeFloatBounds(-Float.MAX_VALUE, 0f, 100f, 1f), true)
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeDocumentHorizontalExtent(-1, null, false) }
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeDocumentHorizontalExtent(TablePixelLimit + 1, null, true) }
+    }
+
+    @Test fun documentScrollableVerticalExtentUsesLateBottomWithoutReanchoringSurfaceTop() {
+        assertEquals(NativeDocumentVerticalExtent(0, 901),
+            nativeDocumentScrollableVerticalExtent(0, NativeFloatBounds(-60f, -12f, 100f, 900.25f)))
+        assertEquals(NativeDocumentVerticalExtent(0, 50),
+            nativeDocumentScrollableVerticalExtent(50, NativeFloatBounds(-1000f, -1000f, 1000f, 20f)))
+        assertEquals(NativeDocumentVerticalExtent(0, 0),
+            nativeDocumentScrollableVerticalExtent(0, NativeFloatBounds(-50f, -100f, 100f, -20f)))
+        assertEquals(NativeDocumentVerticalExtent(0, 51),
+            nativeDocumentScrollableVerticalExtent(20, NativeFloatBounds(0f, 0f, 100f, java.lang.Math.nextUp(50f))))
+        assertEquals(NativeDocumentVerticalExtent(0, TablePixelLimit),
+            nativeDocumentScrollableVerticalExtent(0, NativeFloatBounds(0f, 0f, 100f, TablePixelLimit.toFloat())))
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentScrollableVerticalExtent(0,
+                NativeFloatBounds(0f, 0f, 100f, java.lang.Math.nextUp(TablePixelLimit.toFloat())))
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentScrollableVerticalExtent(TablePixelLimit + 1, NativeFloatBounds(0f, 0f, 0f, 0f))
+        }
+        // The pre-existing physical-surface allocator retains its old signed-top contract.
+        assertEquals(NativeDocumentVerticalExtent(12, 913), nativeDocumentVerticalExtent(0, -12, 901))
+    }
+
 }

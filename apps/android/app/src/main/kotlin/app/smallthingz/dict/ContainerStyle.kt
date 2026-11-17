@@ -26,6 +26,10 @@ sealed interface ContainerPositioning {
         }
     }
 }
+/** Physical offsets from the nearest represented relative Container padding box. */
+data class ContainerAbsolutePosition(val left: ContainerMarginLength, val top: ContainerMarginLength) {
+    init { require(left.value.isFinite() && top.value.isFinite()) { "Invalid absolute Container offset" } }
+}
 enum class PositionedOverflowX { Scroll, Hidden }
 enum class PositionedOverflowY { Auto }
 data class PositionedViewportState(val minWidthPx: Long, val overflowX: PositionedOverflowX,
@@ -150,20 +154,40 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     val height: StyleLength? = null, val columns: ContainerColumns? = null,
     val positioning: ContainerPositioning? = null, val minHeight: StyleLength? = null,
     val marginValues: ContainerMargins? = null, val fontFamily: ContainerFontFamily? = null,
-    val positionedScope: PositionedScope? = null, val ownerFont: InlineFontSnapshot? = null) {
+    val positionedScope: PositionedScope? = null, val ownerFont: InlineFontSnapshot? = null,
+    val absolutePosition: ContainerAbsolutePosition? = null, val textWrap: TextWrap? = null) {
     init {
         ownerFont?.let { font ->
             require(font.fontNormalized && font.fontScale != null &&
                 font.fontScaleBasis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) {
                 "Container owner font requires a normalized explicit size"
             }
-            require(positioning == null && positionedScope == null) {
-                "Container owner font cannot replace a positioned owner"
+            require((positioning == null || positioning == ContainerPositioning.RelativeAuto) && positionedScope == null) {
+                "Container owner font cannot replace a legacy absolute owner"
             }
             require(ownerFontScale == null || font.fontScaleBasis == FontScaleBasis.NormalBody &&
                 ownerFontScale == font.fontScale) { "Container owner font scale alias disagrees" }
             require(fontFamily == null || font.fontFamily == fontFamily) {
                 "Container owner font family alias disagrees"
+            }
+        }
+        require(textWrap == null || textWrap == TextWrap.Normal || textWrap == TextWrap.NoWrap) {
+            "Unsupported Container text wrap"
+        }
+        if (absolutePosition != null) {
+            val definiteWidth = (width as? ContainerWidth.Length)?.value
+            require(positioning == null && positionedScope == null && definiteWidth != null &&
+                definiteWidth.unit != StyleWidthUnit.Percent && height != null &&
+                floatSide == null && clear == null && columns == null && layout == null && alignItems == null &&
+                flexItem == null && maxWidth == null && minHeight == null && screenMaxWidth == null && overflow == null &&
+                (boxSizing == null || boxSizing == ContainerBoxSizing.ContentBox) &&
+                (padding == null || listOf(padding.top, padding.right, padding.bottom, padding.left).all { it.value == 0f }) &&
+                (margins == null || listOf(margins.top, margins.right, margins.bottom, margins.left).all { it.value == 0f }) &&
+                (marginValues == null || listOf(marginValues.top, marginValues.right, marginValues.bottom, marginValues.left)
+                    .all { it is ContainerMargin.Length && it.value.value == 0f }) &&
+                (border == null || border == ContainerBorder.None) &&
+                (background == null || background == ContainerColor.Transparent)) {
+                "Unsupported absolute Container box"
             }
         }
         if (positioning is ContainerPositioning.Absolute) {
@@ -271,6 +295,9 @@ internal data class ContainerViewportStyle(val box: ContainerStyle, val margins:
     val ownsFormattingContext: Boolean get() = box.floatSide != null ||
         box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto || box.columns != null
 }
+internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || textWrap != null ||
+    ownerFont != null && positioning == ContainerPositioning.RelativeAuto
+
 data class Container(val blocks: List<Block>, val style: ContainerStyle = ContainerStyle()) {
     init {
         require(supportedContainerShape(this, 1)) { "Unsupported container heading, positioning or depth" }

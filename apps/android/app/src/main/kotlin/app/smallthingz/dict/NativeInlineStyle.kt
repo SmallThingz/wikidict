@@ -45,6 +45,7 @@ internal fun nativeInlineStyleSpanCopy(span: Any): Any = when (span) {
     is NativeAuthoredBaselineShift -> span.copy()
     is NativeAuthoredUnderline -> span.copy()
     is NativeAuthoredCursor -> span.copy()
+    is NativeCitationMarkerSpan -> span.copy()
     is NativeAuthoredTextWrap -> span.copy()
     is NativeRubyPreparedSource -> NativeRubyPreparedSource(span.projection, span.source, span.paint,
         span.direction, span.groups, span.parentScript, span.visualOmissions, span.visualSpaces,

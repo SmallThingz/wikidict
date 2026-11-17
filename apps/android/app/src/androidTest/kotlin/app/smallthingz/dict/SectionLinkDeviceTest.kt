@@ -1,6 +1,7 @@
 package app.smallthingz.dict
 
 import androidx.activity.compose.setContent
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
@@ -945,6 +946,392 @@ class SectionLinkDeviceTest {
         paintChecks.forEach { (label, result) -> assertTrue("$label must visibly point left in collapsed RTL: ${result.second}", result.first) }
     }
 
+
+    @Test fun repeatedCitationBacklinksReturnToOriginalNativeRangesAndResetTargetPaint() {
+        // Synthetic typed identities deliberately disagree with label text and record order.
+        fun policy(colors: List<String>): LinkPaint {
+            val states = colors.mapIndexed { index, color -> FigureLinkState(color, index % 2 == 0) }
+            return LinkPaint(states[0], states[1], states[2], states[3], states[4], states[5], states[6], states[7],
+                underlineOnFocus = true)
+        }
+        val normalPaint = policy(listOf("#0022cc", "#227733", "#772233", "#772277",
+            "#5533aa", "#337777", "#885522", "#444444"))
+        val targetPaint = policy(listOf("#006600", "#884400", "#cc0033", "#663388",
+            "#008833", "#996600", "#cc3366", "#336666"))
+        val target = CitationTargetStyle(targetPaint, background = null)
+        fun marker(reference: Long, occurrence: Long, anchor: String, direction: BidiResolvedDirection) =
+            Span("link", "[41 repeat]", targetFragment = "reference-$reference", role = "reference",
+                superscript = true, fontScale = .75f, fontScaleBasis = FontScaleBasis.NormalBody,
+                foreground = normalPaint.normal.foreground,
+                underline = normalPaint.normal.underline, background = "#ffe600", linkPaint = normalPaint,
+                inlineStyle = InlineTextStyle(fontNormalized = true),
+                citationMarker = CitationMarker(reference, occurrence, anchor, nowrap = true,
+                    isolation = direction, targetStyle = target))
+        val first = marker(41, 3, "citation-original-alpha", BidiResolvedDirection.Ltr)
+        val later = marker(41, 9, "citation-original-omega", BidiResolvedDirection.Rtl)
+        val other = marker(7, 2, "citation-other-seven", BidiResolvedDirection.Ltr)
+        val start = Span("text", "MMM ")
+        val between = Span("text", "\n" + "Ordinary source line\n".repeat(32) + "\u05d0\u05d1 ")
+        val finish = Span("text", " \u05d2\u05d3\nTail ")
+        val spans = listOf(start, first, between, later, finish, other)
+        val literal = spans.joinToString("") { it.text }
+        val firstStart = start.text.length
+        val laterStart = firstStart + first.text.length + between.text.length
+        fun backlink(occurrence: Long, label: String, anchor: String) = ReferenceBacklink.withPolicies(occurrence,
+            Span("link", label, targetFragment = anchor))
+        val returnLater = backlink(9, "Return later", "citation-original-omega")
+        val returnFirst = backlink(3, "Return first", "citation-original-alpha")
+        val returnOther = backlink(2, "Return seven", "citation-other-seven")
+        val fortyOne = Reference(41, 6, "", listOf(Span("text", "Footer forty-one")),
+            backlinks = listOf(returnLater, returnFirst))
+        val seven = Reference(7, 2, "", listOf(Span("text", "Footer seven")), backlinks = listOf(returnOther))
+        val entry = Entry("Native citation occurrence", emptyList(), "supplemental", null, "", listOf(
+            Section(2, "Citations", listOf(Block("paragraph", 0, spans)))), listOf(seven, fortyOne))
+        val selectedEntry = androidx.compose.runtime.mutableStateOf(entry,
+            androidx.compose.runtime.referentialEqualityPolicy())
+        val reading = EntryReadingState()
+        val width = androidx.compose.runtime.mutableStateOf(300)
+        val request = androidx.compose.runtime.mutableStateOf<EntryAnchorRequest?>(null)
+        val external = mutableListOf<EntryLink>()
+        val consumed = mutableListOf<EntryAnchorRequest>()
+        val failures = mutableListOf<String>()
+        var navigationCount = 0
+        var primary: Throwable? = null
+        fun views(): List<NativeFloatTextView> {
+            val result = mutableListOf<NativeFloatTextView>()
+            fun visit(view: android.view.View) {
+                if (view is NativeFloatTextView && view.isShown) result += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(compose.activity.window.decorView)
+            return result
+        }
+        fun markerOwner(anchor: String): Pair<NativeFloatTextView, NativeCitationMarkerRange>? =
+            views().firstNotNullOfOrNull { view -> view.currentMeasuredGeometry?.citationMarkerRange(anchor)?.let { view to it } }
+        fun visible(anchor: String): Boolean {
+            val (view, range) = markerOwner(anchor) ?: return false
+            val info = view.accessibilityNodeProvider.createAccessibilityNodeInfo(range.nodeId) ?: return false
+            return try { info.isVisibleToUser } finally { info.recycle() }
+        }
+        fun waitVisible(anchor: String, inputFocus: Boolean = false) {
+            compose.waitUntil(5000) {
+                var result = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    result = visible(anchor)
+                    if (result && inputFocus) {
+                        val (view, range) = checkNotNull(markerOwner(anchor))
+                        val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(range.nodeId))
+                        result = try { info.isFocused } finally { info.recycle() }
+                    }
+                }
+                result
+            }
+            compose.waitForIdle()
+        }
+        fun backlinkOwner(label: String): Pair<NativeFloatTextView, FloatInteractionNode>? =
+            views().firstNotNullOfOrNull { view -> view.currentMeasuredGeometry?.nodes
+                ?.singleOrNull { it.onClick != null && it.label?.toString() == label }?.let { view to it } }
+        fun waitBacklink(label: String) {
+            compose.waitUntil(5000) {
+                var found = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    val match = backlinkOwner(label)
+                    if (match != null) {
+                        val info = match.first.accessibilityNodeProvider.createAccessibilityNodeInfo(match.second.id)
+                        found = info?.isVisibleToUser == true
+                        info?.recycle()
+                    }
+                }
+                found
+            }
+            compose.waitForIdle()
+        }
+        fun activateBacklink(label: String) {
+            compose.runOnIdle {
+                val (view, node) = checkNotNull(backlinkOwner(label))
+                assertTrue(view.accessibilityNodeProvider.performAction(node.id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+            }
+        }
+        fun node(anchor: String): FloatInteractionNode {
+            val (view, range) = checkNotNull(markerOwner(anchor))
+            return checkNotNull(view.currentMeasuredGeometry).nodes.single { it.id == range.nodeId }
+        }
+        fun assertInputFocus(anchor: String, expected: Boolean) {
+            val (view, range) = checkNotNull(markerOwner(anchor))
+            val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(range.nodeId))
+            try { assertEquals(expected, info.isFocused) } finally { info.recycle() }
+        }
+        fun colorPixels(anchor: String, color: Int = 0xffffe600.toInt(), inset: Int = 0): Int {
+            lateinit var rectangle: android.graphics.RectF
+            compose.runOnIdle {
+                val (view, _) = checkNotNull(markerOwner(anchor))
+                val location = IntArray(2).also(view::getLocationInWindow)
+                val boxes = node(anchor).bounds.filter { !it.isEmpty }
+                rectangle = android.graphics.RectF(boxes.first())
+                boxes.drop(1).forEach(rectangle::union)
+                rectangle.offset(location[0] + view.paddingLeft.toFloat(), location[1] + view.paddingTop.toFloat())
+            }
+            val scene = compose.onNodeWithTag("citation-occurrence-scene")
+            val origin = scene.fetchSemanticsNode().boundsInWindow
+            rectangle.offset(-origin.left, -origin.top)
+            val bitmap = scene.captureToImage().asAndroidBitmap()
+            try {
+                val left = (kotlin.math.ceil(rectangle.left).toInt() + inset).coerceIn(0, bitmap.width)
+                val right = (kotlin.math.floor(rectangle.right).toInt() - inset).coerceIn(left, bitmap.width)
+                val top = (kotlin.math.ceil(rectangle.top).toInt() + inset).coerceIn(0, bitmap.height)
+                val bottom = (kotlin.math.floor(rectangle.bottom).toInt() - inset).coerceIn(top, bitmap.height)
+                assertTrue(right > left && bottom > top)
+                var count = 0
+                for (y in top until bottom) for (x in left until right)
+                    if (bitmap.getPixel(x, y) == color) count++
+                return count
+            } finally { bitmap.recycle() }
+        }
+        try {
+            compose.activityRule.scenario.onActivity { host -> host.setContent {
+                DictTheme("light") {
+                    MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = androidx.compose.ui.text.TextStyle(
+                        fontSize = 20.sp, lineHeight = 26.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, letterSpacing = 0.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Normal))) {
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, 1f),
+                            androidx.compose.ui.platform.LocalLayoutDirection provides androidx.compose.ui.unit.LayoutDirection.Ltr,
+                            LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                            androidx.compose.material3.Surface(color = androidx.compose.ui.graphics.Color(0xffc7e3ed),
+                                modifier = androidx.compose.ui.Modifier.width(width.value.dp).height(300.dp)
+                                    .testTag("citation-occurrence-scene")) {
+                                EntryView(selectedEntry.value, false, {}, onLink = { external += it }, readingState = reading,
+                                    anchorRequest = request.value, onAnchorConsumed = { consumed += it },
+                                    onNavigate = { navigationCount++ }, settings = AppSettings(
+                                        collapseOtherSections = false, collapseDetails = false, allowImages = false, allowAudio = false))
+                            }
+                        }
+                    }
+                }
+            } }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                assertTrue(view.accessibilityNodeProvider.performAction(range.nodeId,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            }
+            waitVisible("citation-original-alpha")
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                assertSame(first.citationMarker, range.marker)
+                assertEquals(firstStart, range.start); assertEquals(firstStart + first.text.length, range.end)
+                val late = checkNotNull(geometry.citationMarkerRange("citation-original-omega"))
+                assertSame(later.citationMarker, late.marker)
+                assertEquals(laterStart, late.start); assertEquals(laterStart + later.text.length, late.end)
+                assertEquals(3, geometry.citationMarkerRanges.size)
+                assertEquals(literal, view.logicalText.toString())
+                assertFalse(literal.any { it in '\u2066'..'\u2069' })
+                view.setSelection(0, literal.length)
+                assertEquals(literal, view.selectedTextForCopy())
+                view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE))
+                assertEquals(normalPaint, checkNotNull(node("citation-original-alpha").missingLinkPaint).ordinaryPolicy)
+                assertFalse(visible("citation-original-omega"))
+                assertTrue(external.isEmpty()); assertEquals(0, navigationCount)
+            }
+            assertTrue(colorPixels("citation-original-alpha") > 8)
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                val before = navigationCount
+                assertTrue(view.accessibilityNodeProvider.performAction(range.nodeId,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(checkNotNull(node("citation-original-alpha").missingLinkPaint).focused)
+                assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,
+                    android.view.KeyEvent.KEYCODE_ENTER)))
+                assertEquals(before, navigationCount)
+                assertTrue(checkNotNull(node("citation-original-alpha").missingLinkPaint).active)
+                view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertEquals(before + 1, navigationCount)
+            }
+            waitBacklink("Return later")
+            compose.runOnIdle {
+                val (laterView, _) = checkNotNull(backlinkOwner("Return later"))
+                val (firstView, _) = checkNotNull(backlinkOwner("Return first"))
+                val laterAt = IntArray(2).also(laterView::getLocationInWindow)
+                val firstAt = IntArray(2).also(firstView::getLocationInWindow)
+                assertTrue("Stored reverse backlink order stays visible", laterAt[0] < firstAt[0])
+                assertEquals(1, navigationCount); assertTrue(external.isEmpty())
+            }
+            activateBacklink("Return later")
+            waitVisible("citation-original-omega", inputFocus = true)
+            compose.runOnIdle {
+                assertEquals(2, navigationCount); assertTrue(external.isEmpty())
+                assertFalse(visible("citation-original-alpha"))
+                assertInputFocus("citation-original-omega", true)
+                assertInputFocus("citation-original-alpha", false)
+                val paint = checkNotNull(node("citation-original-omega").missingLinkPaint)
+                assertEquals(targetPaint, paint.ordinaryPolicy)
+                assertTrue(paint.visited); assertFalse(paint.hovered); assertFalse(paint.active)
+                val state = targetPaint.state(paint.visited, paint.hovered, paint.active)
+                assertEquals(0xff000000.toInt() or state.foreground.substring(1).toInt(16), paint.appearance().color)
+                assertEquals(state.underline || paint.focused && targetPaint.underlineOnFocus, paint.appearance().underline)
+                assertEquals(normalPaint, checkNotNull(node("citation-original-alpha").missingLinkPaint).ordinaryPolicy)
+                val (view, range) = checkNotNull(markerOwner("citation-original-omega"))
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(later.text, geometry.text.subSequence(range.start, range.end).toString())
+                assertEquals(later.text.length, geometry.characterRects(range.start, range.end - range.start).count { it != null })
+                for (offset in range.start until range.end)
+                    assertEquals(geometry.visualLineRanges(range.start), geometry.visualLineRanges(offset))
+            }
+            // Target background=null must clear the ordinary yellow background in actual Compose paint.
+            assertEquals(0, colorPixels("citation-original-omega"))
+            assertTrue(colorPixels("citation-original-omega", 0xff008833.toInt()) > 0)
+            assertTrue(colorPixels("citation-original-omega", 0xffc7e3ed.toInt(), inset = 1) > 8)
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-omega"))
+                assertTrue(view.accessibilityNodeProvider.performAction(range.nodeId,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+            }
+            waitBacklink("Return first")
+            activateBacklink("Return first")
+            waitVisible("citation-original-alpha", inputFocus = true)
+            compose.runOnIdle {
+                assertEquals(4, navigationCount)
+                assertInputFocus("citation-original-alpha", true)
+                assertInputFocus("citation-original-omega", false)
+                assertEquals(targetPaint, checkNotNull(node("citation-original-alpha").missingLinkPaint).ordinaryPolicy)
+                assertEquals(normalPaint, checkNotNull(node("citation-original-omega").missingLinkPaint).ordinaryPolicy)
+                assertFalse(visible("citation-original-omega"))
+            }
+            assertEquals(0, colorPixels("citation-original-alpha"))
+            assertTrue(colorPixels("citation-original-alpha", 0xff008833.toInt()) > 0)
+            assertTrue(colorPixels("citation-original-alpha", 0xffc7e3ed.toInt(), inset = 1) > 8)
+            var originalIdentity: Any? = null
+            var originalCallback: (() -> Unit)? = null
+            var narrowWidth = 0
+            compose.runOnIdle {
+                val (view, _) = checkNotNull(markerOwner("citation-original-alpha"))
+                originalIdentity = checkNotNull(node("citation-original-alpha").missingLinkPaint).actionIdentity
+                originalCallback = node("citation-original-alpha").onClick
+                val content = (checkNotNull(view.currentMeasuredGeometry) as NativeSurfaceGeometry).content
+                narrowWidth = width.value - content.width + 125
+                width.value = narrowWidth
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val content = (geometry as NativeSurfaceGeometry).content
+                assertEquals(125, content.width)
+                val source = android.text.SpannableString(start.text + first.text).apply {
+                    setSpan(android.text.style.AbsoluteSizeSpan(15), firstStart, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                val probe = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    typeface = android.graphics.Typeface.MONOSPACE; textSize = 20f
+                }
+                val ordinary = android.text.StaticLayout.Builder.obtain(source, 0, source.length, probe, 125)
+                    .setIncludePad(true).setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                    .setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE).build()
+                assertEquals(ordinary.getLineForOffset(0), ordinary.getLineForOffset(firstStart))
+                assertTrue(ordinary.getLineForOffset(source.length - 1) > ordinary.getLineForOffset(firstStart))
+                val markerLine = geometry.visualLineRanges(range.start)
+                for (offset in range.start until range.end) assertEquals(markerLine, geometry.visualLineRanges(offset))
+                assertNotEquals(geometry.visualLineRanges(0), markerLine)
+                assertSame(originalIdentity, checkNotNull(node("citation-original-alpha").missingLinkPaint).actionIdentity)
+                assertSame(originalCallback, node("citation-original-alpha").onClick)
+                val expected = android.text.TextPaint(probe).apply { textSize = 15f }.measureText(first.text)
+                val beginning = checkNotNull(geometry.caretRect(range.start))
+                val end = checkNotNull(geometry.caretRect(range.end))
+                assertEquals("Stored normalized font is used once", expected, kotlin.math.abs(end.left - beginning.left), 1.1f)
+                assertEquals(literal, geometry.text.toString())
+                width.value = 300
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertSame(originalIdentity, checkNotNull(node("citation-original-alpha").missingLinkPaint).actionIdentity)
+                assertSame(originalCallback, node("citation-original-alpha").onClick)
+                request.value = EntryAnchorRequest(entry.key, "#citation-original-omega")
+            }
+            waitVisible("citation-original-omega")
+            compose.waitUntil(5000) {
+                var completed = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                    completed = request.value?.let { it in consumed } == true
+                }
+                completed
+            }
+            compose.runOnIdle {
+                assertEquals(listOf(request.value), consumed)
+                assertEquals(targetPaint, checkNotNull(node("citation-original-omega").missingLinkPaint).ordinaryPolicy)
+                assertEquals(normalPaint, checkNotNull(node("citation-original-alpha").missingLinkPaint).ordinaryPolicy)
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                assertTrue(view.accessibilityNodeProvider.performAction(range.nodeId,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS, null))
+            }
+            waitVisible("citation-original-alpha")
+            assertTrue(colorPixels("citation-original-alpha") > 8)
+            compose.runOnIdle {
+                assertEquals(normalPaint, checkNotNull(node("citation-original-alpha").missingLinkPaint).ordinaryPolicy)
+                assertSame(first, spans[1]); assertSame(later, spans[3]); assertSame(other, spans[5])
+                assertSame(returnLater, fortyOne.backlinks[0]); assertSame(returnFirst, fortyOne.backlinks[1])
+                assertSame(seven, entry.references[0]); assertSame(fortyOne, entry.references[1])
+                assertTrue(external.isEmpty()); assertEquals(4, navigationCount)
+            }
+            // The existing Float-row structural guard supplies a genuine unavailable
+            // preparation. Images stay disabled; no asset request or synthetic font0 is involved.
+            val edge = StyleLength(StyleLengthUnit.Px, 0f)
+            val occurrence = Span("text", "", image = InlineImage("Citation refusal.png", 1, 1,
+                occurrenceLayout = InlineImageOccurrenceLayout(edge, edge, edge, edge)))
+            val refused = entry.copy(sections = listOf(entry.sections.single().copy(blocks = listOf(
+                Block("paragraph", 0, spans + occurrence)))),
+                media = listOf(Media(checkNotNull(occurrence.image).file, "image", "")))
+            lateinit var failedRequest: EntryAnchorRequest
+            compose.runOnIdle {
+                failures.clear()
+                selectedEntry.value = refused
+                failedRequest = EntryAnchorRequest(refused.key, "#citation-original-omega")
+                request.value = failedRequest
+            }
+            compose.waitUntil(5000) {
+                var done = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { done = failedRequest in consumed }
+                done
+            }
+            compose.onNodeWithText(CitationRevealUnavailable, useUnmergedTree = true).assertIsDisplayed()
+            compose.runOnIdle {
+                assertTrue(failures.contains("Positioned inline images inside structural inline groups are unavailable"))
+                assertSame(later, refused.sections.single().blocks.single().spans[3])
+                assertSame(occurrence, refused.sections.single().blocks.single().spans.last())
+                assertEquals(1, consumed.count { it === failedRequest })
+                selectedEntry.value = entry
+                request.value = EntryAnchorRequest(entry.key, "#citation-original-alpha")
+            }
+            waitVisible("citation-original-alpha", inputFocus = true)
+            compose.waitUntil(5000) {
+                var done = false
+                InstrumentationRegistry.getInstrumentation().runOnMainSync { done = request.value in consumed }
+                done
+            }
+            compose.onAllNodesWithText(CitationRevealUnavailable, useUnmergedTree = true).assertCountEquals(0)
+            compose.runOnIdle {
+                val (view, range) = checkNotNull(markerOwner("citation-original-alpha"))
+                assertSame(first.citationMarker, range.marker)
+                assertEquals(literal, view.logicalText.toString())
+                assertEquals(3, consumed.size)
+                assertTrue(external.isEmpty()); assertEquals(4, navigationCount)
+            }
+        } catch (failure: Throwable) {
+            primary = failure
+            throw failure
+        } finally {
+            try {
+                compose.activityRule.scenario.onActivity { it.setContent {} }
+                compose.waitForIdle()
+            } catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
 
 }
 

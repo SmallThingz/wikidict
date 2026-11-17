@@ -17,6 +17,8 @@ internal data class NativeDelegatedMeasuredCell(
     val ordinaryInk: List<NativeFloatBounds> = ink,
     val rootOwner: Any? = null,
     val innerClip: NativeFloatBounds? = null,
+    val requiresRootExtent: Boolean = false,
+    val scrollableBounds: NativeFloatBounds? = null,
 )
 
 /** Innermost first; a real clipping ancestor limits reach without changing the owner. */
@@ -70,7 +72,7 @@ internal fun nativeDelegatedPaintDecision(
     val all = listOf(surroundings.allocation, rootState.surface, rootState.clip) + rootState.input +
         rootState.fallbackInput + otherInk + otherInput + cells.flatMap {
         listOf(it.cell, it.physicalSurface) + it.realInputAncestors.map { ancestor -> ancestor.bounds } +
-            it.ink + it.deferredInk + it.input + it.ordinaryStateInk + it.ordinaryInk + listOfNotNull(it.innerClip)
+            it.ink + it.deferredInk + it.input + it.ordinaryStateInk + it.ordinaryInk + listOfNotNull(it.innerClip, it.scrollableBounds)
     }
     if (all.any { !it.finiteOrdered() }) return refuse("A delegated owner envelope is invalid")
     if ((rootState.input + rootState.fallbackInput).any { !rootState.surface.encloses(it) })
@@ -88,6 +90,10 @@ internal fun nativeDelegatedPaintDecision(
             return refuse("The original cell extends beyond its measured table grid")
         if (cell.innerClip != cell.physicalSurface)
             return refuse("A cell-to-grid clip discards source-visible native overflow")
+        // The ordinary absolute family has no late child-to-document extent export.
+        // Actual root geometry, never the viewport clip, must already cover this surface.
+        if (cell.requiresRootExtent && !rootState.surface.encloses(cell.physicalSurface))
+            return refuse("Absolute table overflow exceeds the existing document extent")
         // Ordinary Touch must reach the original AndroidView through its actual ancestors.
         // No stylus-only expansion or direct View event forwarding establishes this condition.
         if (cell.realInputAncestors.isEmpty()) return refuse("The original input ancestry is unavailable")

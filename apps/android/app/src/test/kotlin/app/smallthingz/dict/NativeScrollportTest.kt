@@ -155,4 +155,124 @@ class NativeScrollportTest {
         input.semantic.changed()
         assertNull(input.measured(next)); assertFalse(input.publish(current, failure, bounds))
     }
+
+    @Test fun documentExtentKeepsMeasuredLazyItemsButReplacesStaleLeasesAndResources() {
+        val state = NativeDocumentScrollState()
+        val firstKey = listOf("section", "table")
+        val secondKey = listOf("next")
+        val keys = setOf<Any>(firstKey, secondKey)
+        val registry = state.registry(listOf("source", "font20"), 124, 100, 200, 12, false, keys)
+        val first = registry.publisher(firstKey)
+        val oldOwner = Any()
+        first.attach(oldOwner)
+        first.publish(oldOwner, 100, NativeFloatBounds(0f, 0f, 160.5f, 20f))
+        assertEquals(61, registry.range)
+        first.detach(oldOwner)
+        assertEquals("Lazy disposal retains an actually measured range", 61, registry.range)
+        val replacement = Any()
+        first.attach(replacement)
+        first.remove(replacement)
+        assertEquals("A remounted first measurement failure clears its retained old extent", 0, registry.range)
+        first.publish(replacement, 100, NativeFloatBounds(0f, 0f, 120f, 20f))
+        first.detach(oldOwner)
+        first.remove(oldOwner)
+        first.publish(oldOwner, 100, NativeFloatBounds(0f, 0f, 900f, 20f))
+        assertEquals("The new occurrence replaces, rather than unions with, its old extent", 20, registry.range)
+        first.publish(replacement, 100, NativeFloatBounds(0f, 0f, 105f, 20f))
+        assertEquals("A fresh smaller publication shrinks the same source item", 5, registry.range)
+        first.publish(replacement, 99, NativeFloatBounds(0f, 0f, 900f, 20f))
+        assertEquals("A stale width cannot change this viewport generation", 5, registry.range)
+        val second = registry.publisher(secondKey)
+        val secondOwner = Any()
+        second.attach(secondOwner)
+        second.publish(secondOwner, 100, NativeFloatBounds(0f, 0f, 140f, 20f))
+        second.detach(secondOwner)
+        first.remove(replacement)
+        assertEquals(40, registry.range)
+        registry.retain(setOf(firstKey))
+        assertEquals("Real source removal prunes the detached known item", 0, registry.range)
+        second.publish(secondOwner, 100, NativeFloatBounds(0f, 0f, 900f, 20f))
+        assertEquals(0, registry.range)
+        first.publish(replacement, 100, NativeFloatBounds(0f, 0f, 130f, 20f))
+        registry.deactivate()
+        registry.activate()
+        assertEquals("Returning to the same visit retains measured extents", 30, registry.range)
+        val changed = state.registry(listOf("source", "font40"), 124, 100, 200, 12, false, keys)
+        assertNotSame(registry, changed)
+        assertEquals(0, changed.range)
+        first.publish(replacement, 100, NativeFloatBounds(0f, 0f, 900f, 20f))
+        assertEquals("An old resource generation cannot publish to its replacement", 0, changed.range)
+        val assetStates = mutableMapOf<String, InlineImageAssetState>("file" to InlineImageAssetState.Loading)
+        val knownPixels = mutableListOf<InlineImagePixels?>(null)
+        val loading = nativeDocumentImageRevision(assetStates, knownPixels)
+        val imageOwner = Any()
+        fun forAssets(revision: Pair<Map<String, InlineImageAssetState>, List<InlineImagePixels?>>) =
+            state.registry(listOf("source", imageOwner, revision), 124, 100, 200, 12, false, keys)
+        val loadingRegistry = forAssets(loading)
+        val loadingPublisher = loadingRegistry.publisher(firstKey)
+        loadingPublisher.attach(replacement)
+        loadingPublisher.publish(replacement, 100, NativeFloatBounds(0f, 0f, 160f, 20f))
+        loadingPublisher.detach(replacement)
+        assertSame(loadingRegistry, forAssets(nativeDocumentImageRevision(assetStates, knownPixels)))
+        knownPixels[0] = InlineImagePixels(80f, 40f)
+        val metadata = nativeDocumentImageRevision(assetStates, knownPixels)
+        assertNull("The retained revision is immutable", loading.second.single())
+        assertEquals(InlineImageAssetState.Loading, metadata.first.getValue("file"))
+        val metadataRegistry = forAssets(metadata)
+        assertNotSame("Known axes invalidate even while Loading is unchanged", loadingRegistry, metadataRegistry)
+        assertEquals(0, metadataRegistry.range)
+        val metadataPublisher = metadataRegistry.publisher(firstKey)
+        metadataPublisher.attach(replacement)
+        metadataPublisher.publish(replacement, 100, NativeFloatBounds(0f, 0f, 120f, 20f))
+        metadataPublisher.detach(replacement)
+        assetStates["file"] = InlineImageAssetState.Failed
+        val failed = nativeDocumentImageRevision(assetStates, knownPixels)
+        assertEquals(InlineImageAssetState.Loading, metadata.first.getValue("file"))
+        val failedRegistry = forAssets(failed)
+        assertNotSame(metadataRegistry, failedRegistry)
+        assertEquals("Same-owner loading/error changes cannot reuse detached extents", 0, failedRegistry.range)
+        metadataPublisher.publish(replacement, 100, NativeFloatBounds(0f, 0f, 900f, 20f))
+        assertEquals(0, failedRegistry.range)
+    }
+
+    @Test fun documentHorizontalAllocationKeepsNormalWidthAndUsesRepresentedOriginDirection() {
+        val body = Block("paragraph", 0, listOf(Span("text", "label")))
+        fun entry(block: Block) = Entry("synthetic document owner", emptyList(), "language", "French", "fr",
+            listOf(Section(2, "Body", listOf(block))), emptyList())
+        fun relative(children: List<Block>) = Block("container", 0, emptyList(),
+            container = Container(children, ContainerStyle(positioning = ContainerPositioning.RelativeAuto)))
+        val legacy = entry(relative(listOf(body)))
+        assertFalse("Existing relative or plain source must keep the old list composition", nativeDocumentScrollNeeded(legacy))
+        val absolute = Block("container", 0, emptyList(), container = Container(listOf(body),
+            ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 24f)), height = px(20f),
+                absolutePosition = ContainerAbsolutePosition(px(0f), px(0f)))))
+        val direct = relative(listOf(absolute))
+        assertTrue("The owner exists before any positive overflow is measured", nativeDocumentScrollNeeded(entry(direct)))
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), header = false, colspan = 1, rowspan = 1, blocks = listOf(direct)))))
+        assertTrue("A real table cell keeps the same document export", nativeDocumentScrollNeeded(
+            entry(Block("table", 0, emptyList(), table = table))))
+        assertSame(body, absolute.container!!.blocks.single())
+        val viewport = 124
+        val padding = 12
+        for (outerRtl in listOf(false, true)) for (direction in listOf(null, BidiResolvedDirection.Ltr, BidiResolvedDirection.Rtl)) {
+            val expectedRtl = direction == BidiResolvedDirection.Rtl || direction == null && outerRtl
+            val rtl = nativeDocumentRtl(direction, outerRtl)
+            assertEquals(expectedRtl, rtl)
+            for (range in listOf(0, 26, 61)) {
+                val allocation = nativeDocumentAllocation(viewport, padding, range, rtl)
+                assertEquals(viewport + range, allocation.width)
+                assertEquals(100, allocation.width - allocation.leftPadding - allocation.rightPadding)
+                val reverseScrolling = rtl != outerRtl
+                for (scroll in setOf(0, range)) {
+                    // Selected ScrollNode uses this logical offset, then placeRelative mirrors it.
+                    val logical = if (reverseScrolling) scroll - range else -scroll
+                    val physical = if (outerRtl) viewport - allocation.width - logical else logical
+                    assertEquals(padding + if (rtl) scroll else -scroll, physical + allocation.leftPadding)
+                }
+            }
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDocumentAllocation(TablePixelLimit, 12, 1, false)
+        }
+    }
 }

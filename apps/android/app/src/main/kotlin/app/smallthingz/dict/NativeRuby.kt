@@ -1788,7 +1788,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             if (it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) 0 else 1 }))
         val rootText = buildString {
             events.forEach { range ->
-                if (range.role == RubyTextRole.Owner || range.span?.usesInlineDirectionIsolate() == true) append('\ufffc')
+                if (range.role == RubyTextRole.Owner || range.span?.usesInlineDirectionIsolate() == true ||
+                    range.span?.citationMarker?.isolation != null) append('\ufffc')
                 else if (range.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) append(directText(prepared, range))
                 else append(prepared.projection.text, range.start, range.end)
             }
@@ -1800,12 +1801,34 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             RubyTextRole.ActionGroup, RubyTextRole.BoxGroup -> action(prepared, range, sourceStart, context, fallbackRtl)
             else -> {
                 val span = checkNotNull(range.span)
-                val emit = { text(sourceStart + range.start, sourceStart + range.end,
-                    styled = context?.styled?.subSequence(range.start - context.range.start,
-                        range.end - context.range.start) as? Spanned, preservePoint = context != null) }
-                if (span.usesInlineDirectionIsolate()) isolate(resolveDirection(span.direction,
+                fun emitPart(first: Int, last: Int) = text(sourceStart + first, sourceStart + last,
+                    styled = context?.styled?.subSequence(first - context.range.start,
+                        last - context.range.start) as? Spanned, preservePoint = context != null)
+                val emit = { emitPart(range.start, range.end) }
+                val marker = span.citationMarker
+                val firstPiece = pieces.size
+                if (marker?.isolation != null) {
+                    // A real LF ends a native bidi paragraph. Reopen the stored isolate
+                    // on its next actual text without adding any public source character.
+                    val rtl = marker.isolation == BidiResolvedDirection.Rtl
+                    var first = range.start
+                    while (first < range.end) {
+                        val lf = prepared.projection.text.indexOf('\n', first)
+                            .let { if (it < 0 || it >= range.end) range.end else it }
+                        if (first < lf) isolate(rtl) { emitPart(first, lf) }
+                        if (lf < range.end) emitPart(lf, lf + 1)
+                        first = lf + 1
+                    }
+                } else if (span.usesInlineDirectionIsolate()) isolate(resolveDirection(span.direction,
                     prepared.projection.text.substring(range.start, range.end), fallbackRtl), emit)
                 else emit()
+                if (marker != null) {
+                    val body = pieces.drop(firstPiece).filterIsInstance<NativeRubyPiece.Text>()
+                    val first = body.firstOrNull()?.nativeStart
+                    val last = body.lastOrNull()?.nativeEnd
+                    if (first != null && last != null && first < last)
+                        native.setSpan(NativeCitationMarkerSpan(marker), first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
             }
         } }
     }
@@ -1923,6 +1946,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             throw UnsupportedFloatLayout("Inline action inside a ruby child needs native fragment paint")
         if (prepared.projection.ranges.any { it.role == RubyTextRole.BoxGroup && it.path.startsWith(range.path + "/") })
             throw UnsupportedFloatLayout("Inline box inside a ruby child needs native fragment allocation")
+        if (prepared.projection.ranges.any { it.span?.citationMarker != null && it.path.startsWith(range.path + "/") })
+            throw UnsupportedFloatLayout("Citation marker inside a ruby child needs mapped fragment isolation")
         val format = checkNotNull(prepared.groups[range.path])
         val placement = nativeRubyBaselinePlacement(nativeRubyScriptMode(range), format.baselineShift,
             format.localBaselineShift, parentScript)

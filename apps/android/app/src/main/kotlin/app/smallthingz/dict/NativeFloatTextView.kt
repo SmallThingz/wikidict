@@ -65,12 +65,16 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         }
     }
     internal fun positionTableCoordinates(owner: Any, coordinates: LayoutCoordinates) {
-        if (tableCoordinateOwner === owner) tableCoordinates = coordinates.takeIf { it.isAttached }
+        if (tableCoordinateOwner === owner) {
+            tableCoordinates = coordinates.takeIf { it.isAttached }
+            publishCitationOwner()
+        }
     }
     internal fun clearTableCoordinates(owner: Any) {
         if (tableCoordinateOwner === owner) {
             tableCoordinates = null
             tableCoordinateOwner = null
+            publishCitationOwner()
         }
     }
     private fun liveTableCoordinates(): LayoutCoordinates? = tableCoordinates?.takeIf {
@@ -89,11 +93,135 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             clearPendingLinkKey("delegated-owner-unavailable")
             actionMode?.finish()
         }
+        publishCitationOwner()
         isFocusable = available
         isFocusableInTouchMode = available
         importantForAccessibility = if (available) IMPORTANT_FOR_ACCESSIBILITY_YES else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         invalidate()
         sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
+    private var citationNavigation: NativeCitationNavigation? = null
+    internal fun updateCitationNavigation(next: NativeCitationNavigation?) {
+        if (citationNavigation === next) return
+        citationNavigation?.remove(this)
+        citationNavigation = next
+        publishCitationOwner()
+    }
+    private fun publishCitationOwner() {
+        val registry = citationNavigation ?: return
+        val current = geometry
+        if (needsGeometry || current == null || !isAttachedToWindow || !originalOwnerAvailable() ||
+            tableCoordinateOwner != null && liveTableCoordinates() == null) {
+            registry.remove(this)
+            return
+        }
+        // Publish outside measure and authenticate the exact measured owner again after placement.
+        post {
+            if (citationNavigation === registry && geometry === current && !needsGeometry &&
+                isAttachedToWindow && originalOwnerAvailable() &&
+                (tableCoordinateOwner == null || liveTableCoordinates() != null)) registry.publish(this, current)
+        }
+    }
+    private var citationParentReveal: NativeCitationParentReveal? = null
+    internal fun updateCitationParentReveal(next: NativeCitationParentReveal?) {
+        if (citationParentReveal === next) return
+        finishCitationReveal(false)
+        citationParentReveal = next
+    }
+    private class CitationReveal(val request: NativeCitationRequest, val text: String,
+        val node: FloatInteractionNode, val tableOwner: Any?, val clip: NativeScrollClip?,
+        val current: () -> Boolean, val completed: (Boolean) -> Unit) {
+        var parentCompleted = false
+        var cancelParent: (() -> Unit)? = null
+    }
+    private var citationReveal: CitationReveal? = null
+    private var citationRevealObserver: android.view.ViewTreeObserver? = null
+    private val citationPreDraw = android.view.ViewTreeObserver.OnPreDrawListener {
+        checkCitationReveal()
+        true
+    }
+    private fun removeCitationObserver() {
+        citationRevealObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(citationPreDraw)
+        citationRevealObserver = null
+    }
+    internal fun cancelCitationReveal(request: NativeCitationRequest) {
+        val pending = citationReveal ?: return
+        if (pending.request !== request) return
+        citationReveal = null
+        pending.cancelParent?.invoke()
+        removeCitationObserver()
+        if (pendingViewportReveal?.node?.citationMarker == request.marker) pendingViewportReveal = null
+    }
+    private fun finishCitationReveal(success: Boolean) {
+        val pending = citationReveal ?: return
+        cancelCitationReveal(pending.request)
+        if (pending.current()) pending.completed(success)
+    }
+    private fun failCitationReveal(node: FloatInteractionNode?) {
+        if (node?.citationMarker != null && citationReveal?.request?.marker == node.citationMarker)
+            finishCitationReveal(false)
+    }
+    private fun checkCitationReveal() {
+        val pending = citationReveal ?: return
+        if (!pending.current()) { cancelCitationReveal(pending.request); return }
+        if (!isAttachedToWindow || !isEnabled || tableCoordinateOwner !== pending.tableOwner || scrollClip !== pending.clip) {
+            finishCitationReveal(false); return
+        }
+        if (needsGeometry || isLayoutRequested) return
+        val layout = geometry
+        val node = layout?.nodes?.singleOrNull { it.citationMarker == pending.request.marker }
+        if (layout == null || layout.text.toString() != pending.text || !sameInputNode(pending.node, node)) {
+            finishCitationReveal(false); return
+        }
+        if (!hasFocus() || virtualKeyboardFocus != checkNotNull(node).id) { finishCitationReveal(false); return }
+        // Native clipping and the Compose parent each have an actual asynchronous completion.
+        if (pendingViewportReveal != null || !pending.parentCompleted) return
+        if (!originalOwnerAvailable() || tableCoordinateOwner != null && liveTableCoordinates() == null) {
+            finishCitationReveal(false); return
+        }
+        val info = nodeProvider.createAccessibilityNodeInfo(node.id) ?: run { finishCitationReveal(false); return }
+        val visible = try {
+            val screen = Rect()
+            info.getBoundsInScreen(screen)
+            info.isFocused && info.isVisibleToUser && !screen.isEmpty
+        } finally { info.recycle() }
+        finishCitationReveal(visible)
+    }
+    private fun revealCitationParent(bounds: RectF, node: FloatInteractionNode?): Boolean {
+        val pending = citationReveal ?: return false
+        if (node?.citationMarker != pending.request.marker) return false
+        val parent = citationParentReveal ?: run { finishCitationReveal(false); return true }
+        val local = RectF(bounds).apply { offset(paddingLeft.toFloat(), paddingTop.toFloat()) }
+        val screen = tableBoundsToScreen(bounds)
+        pending.cancelParent = parent.reveal(local, screen) { success ->
+            if (citationReveal === pending && pending.current()) {
+                if (!success) finishCitationReveal(false) else {
+                    pending.parentCompleted = true
+                    invalidate()
+                }
+            }
+        }
+        if (citationReveal !== pending) pending.cancelParent?.invoke()
+        return true
+    }
+    internal fun revealCitation(expected: FloatTextGeometry, request: NativeCitationRequest,
+        current: () -> Boolean, completed: (Boolean) -> Unit): Boolean {
+        val marker = request.marker
+        if (geometry !== expected || needsGeometry || !isEnabled || !isAttachedToWindow ||
+            !originalOwnerAvailable() || tableCoordinateOwner != null && liveTableCoordinates() == null) return false
+        val range = expected.citationMarkerRanges.singleOrNull { it.marker == marker } ?: return false
+        val node = expected.nodes.singleOrNull { it.id == range.nodeId && it.start == range.start &&
+            it.end == range.end && it.citationMarker == marker && it.onClick != null } ?: return false
+        citationReveal?.request?.let(::cancelCitationReveal)
+        citationReveal = CitationReveal(request, expected.text.toString(), node, tableCoordinateOwner,
+            scrollClip, current, completed)
+        request.revealOwner = this
+        request.revealStarted = true
+        citationRevealObserver = viewTreeObserver.also { it.addOnPreDrawListener(citationPreDraw) }
+        // This retains the existing action/selection owner; completion waits for actual visibility.
+        if (!nodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_FOCUS, null)) finishCitationReveal(false)
+        invalidate()
+        return true
     }
     private var lastMeasuredWidth = -1
     private var hostStateDescription: CharSequence? = null
@@ -199,7 +327,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val layout = geometry ?: return
         pendingViewportReveal = pending
         pending.ready = false
-        if (revealLocation(layout, pending) == null) { pendingViewportReveal = null; return }
+        if (revealLocation(layout, pending) == null) { pendingViewportReveal = null; failCitationReveal(pending.node); return }
         val completed: () -> Unit = {
             if (pendingViewportReveal === pending) {
                 pending.ready = true
@@ -213,9 +341,9 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     private fun finishViewportReveal() {
         val pending = pendingViewportReveal ?: return
         if (!pending.ready || needsGeometry || isLayoutRequested) return
-        if (!originalOwnerAvailable()) { pendingViewportReveal = null; return }
+        if (!originalOwnerAvailable()) { pendingViewportReveal = null; failCitationReveal(pending.node); return }
         val layout = geometry ?: return
-        val current = revealLocation(layout, pending) ?: run { pendingViewportReveal = null; return }
+        val current = revealLocation(layout, pending) ?: run { pendingViewportReveal = null; failCitationReveal(pending.node); return }
         val emptyOwner = pending.node?.let { saved ->
             layout.nodes.firstOrNull { it.id == saved.id }?.let(::emptyLinkBands)
         } != null
@@ -227,9 +355,11 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (visible == null || !emptyOwner && (visible.isEmpty ||
             pending.node != null && layout.nodes.firstOrNull { it.id == pending.node.id }?.bounds?.none { !it.isEmpty } == true)) {
             pendingViewportReveal = null
+            failCitationReveal(pending.node)
             return
         }
         pendingViewportReveal = null
+        if (revealCitationParent(visible, pending.node)) return
         val rectangle = Rect(); visible.roundOut(rectangle)
         rectangle.offset(paddingLeft, paddingTop)
         requestRectangleOnScreen(rectangle, false)
@@ -259,6 +389,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             // Factories also change on reflow. Reconcile held input against the measured
             // source/action owners; a timer or event while geometry is dirty must refuse it.
             needsGeometry = true
+            citationNavigation?.remove(this)
             requestLayout()
         }
         invalidate()
@@ -318,6 +449,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val desiredHeight = (geometry?.height ?: 0) + paddingTop + paddingBottom
         setMeasuredDimension(resolveSize(desiredWidth, widthMeasureSpec), resolveSize(desiredHeight, heightMeasureSpec))
         if (pendingViewportReveal?.ready == true) postOnAnimation { finishViewportReveal() }
+        publishCitationOwner()
     }
 
     override fun invalidate() {
@@ -577,7 +709,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (before == null || after == null) return before == null && after == null
         if (before.id != after.id || before.kind != after.kind || before.start != after.start || before.end != after.end ||
             before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick ||
-            before.customActions != after.customActions) return false
+            before.customActions != after.customActions || before.citationMarker != after.citationMarker) return false
         val identity = before.missingLinkPaint?.actionIdentity
         val nextIdentity = after.missingLinkPaint?.actionIdentity
         return if (identity != null || nextIdentity != null)
@@ -881,7 +1013,8 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     private fun revealVirtualNode(node: FloatInteractionNode) {
         if (node.clipBounds == null) {
             pendingViewportReveal = null
-            val bounds = nodeRevealBounds(node) ?: return
+            val bounds = nodeRevealBounds(node) ?: run { failCitationReveal(node); return }
+            if (revealCitationParent(bounds, node)) return
             val visible = Rect()
             bounds.roundOut(visible)
             visible.offset(paddingLeft, paddingTop)
@@ -987,7 +1120,14 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         return super.onKeyUp(keyCode, event)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        publishCitationOwner()
+    }
+
     override fun onDetachedFromWindow() {
+        finishCitationReveal(false)
+        citationNavigation?.remove(this)
         tableCoordinates = null
         delegatedCellOwner?.clear(this)
         delegatedStateOwner?.clearRootState(this)
@@ -1002,6 +1142,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     override fun onFocusChanged(gainFocus: Boolean, direction: Int, previouslyFocusedRect: Rect?) {
         super.onFocusChanged(gainFocus, direction, previouslyFocusedRect)
         if (!gainFocus) {
+            finishCitationReveal(false)
             ordinaryLinkFocusVisible = false
             clearPendingLinkKey("focus-lost")
             virtualKeyboardFocus = View.NO_ID

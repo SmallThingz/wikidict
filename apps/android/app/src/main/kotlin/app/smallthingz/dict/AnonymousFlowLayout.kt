@@ -67,6 +67,7 @@ internal fun AnonymousFlowLayout(
     unavailable: @Composable (String) -> Unit = { ReaderLayoutUnavailable(it) },
     intrinsicWidths: (((AnonymousFlowEvent.FigureObject) -> Int) -> NativeWidthRange)? = null,
     inlineNodeSources: ((NativeAnonymousFlowGeometry) -> List<NativeAnonymousInlineNode>)? = null,
+    citationStatuses: List<NativeCitationPreparationStatus> = emptyList(),
     child: @Composable (AnonymousFlowEvent.FigureObject) -> Unit,
 ) {
     val publishCellBaselines = LocalNativeContainerTextContext.current?.cellText != null
@@ -75,26 +76,37 @@ internal fun AnonymousFlowLayout(
     val positionedParent = LocalNativePositionedPaintParent.current
     val captionBreakWord = LocalCaptionBreakWord.current
     val figures = content.events.filterIsInstance<AnonymousFlowEvent.FigureObject>()
+    val citationOwner = rememberNativeCitationGeometryOwner(citationStatuses)
+    val inheritedCitationOwners = LocalNativeCitationGeometryOwners.current
+    val childCitationOwners = inheritedCitationOwners + listOfNotNull(citationOwner)
     val surfaceInput = remember { NativeLayoutInput<AnonymousSurfaceRequest?>(null) }
     CompositionLocalProvider(LocalNativeSemanticMeasurement provides semantic,
         LocalNativePositionedPaintParent provides true) {
     Layout(modifier = modifier.then(if (measureInput == null) semantic.modifier else Modifier).fillMaxWidth(), content = {
-        figures.forEach { event -> key(event.id) {
-            TableContentColumn(Modifier.clearAndSetSemantics { }, 0.dp) { child(event) }
-        } }
+        CompositionLocalProvider(LocalNativeCitationGeometryOwners provides childCitationOwners) {
+            figures.forEach { event -> key(event.id) {
+                TableContentColumn(Modifier.clearAndSetSemantics { }, 0.dp) { child(event) }
+            } }
+        }
         // Intrinsic queries visit real Figure children, never this paint/input surface slot.
         SubcomposeLayout(surfaceInput.modifier) { constraints ->
             val request = checkNotNull(surfaceInput.value)
             val physical = request.geometry
             val surface = if (physical == null) subcompose("unsupported-flow") {
-                unavailable(request.failure ?: "Geometry unavailable")
+                CompositionLocalProvider(LocalNativeCitationGeometryOwners provides inheritedCitationOwners) {
+                    unavailable(request.failure ?: "Geometry unavailable")
+                }
             }.single() else subcompose("native-anonymous-flow") {
                 if (!interactionOwner) Canvas(Modifier) { physical.paint(drawContext.canvas.nativeCanvas) }
                 else {
                     val coordinates = rememberNativeTableCoordinateBinding()
-                    AndroidView(modifier = coordinates?.modifier ?: Modifier,
+                    val citationNavigation = LocalNativeCitationNavigation.current
+                    val citationParentReveal = rememberNativeCitationParentReveal()
+                    AndroidView(modifier = (coordinates?.modifier ?: Modifier).then(citationParentReveal?.modifier ?: Modifier),
                         factory = { NativeFloatTextView(it, scrollClip) }, update = { view ->
                         view.updateScrollClip(scrollClip)
+                        view.updateCitationNavigation(citationNavigation)
+                        view.updateCitationParentReveal(citationParentReveal)
                         coordinates?.bind(view)
                         view.bind({ actualWidth -> check(actualWidth == physical.width); physical },
                             linkColor.copy(alpha = .25f).toArgb(), linkColor.toArgb())
@@ -105,6 +117,12 @@ internal fun AnonymousFlowLayout(
             layout(measured.width, measured.height) { measured.place(0, 0) }
         }
     }, measurePolicy = object : MeasurePolicy {
+      private val defaultIntrinsics = this.defaultIntrinsicPolicy()
+      private var citationIntrinsicDepth = 0
+      private fun <T> citationIntrinsic(block: () -> T): T {
+        citationIntrinsicDepth++
+        return try { block() } finally { citationIntrinsicDepth-- }
+      }
       private fun widths(measurables: List<IntrinsicMeasurable>, maximum: Boolean): NativeWidthRange {
         val byId = figures.mapIndexed { index, figure -> figure.id to measurables[index] }.toMap()
         val figureWidth: (AnonymousFlowEvent.FigureObject) -> Int = { event ->
@@ -118,6 +136,12 @@ internal fun AnonymousFlowLayout(
       }
       override fun IntrinsicMeasureScope.minIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = widths(measurables, false).minimum
       override fun IntrinsicMeasureScope.maxIntrinsicWidth(measurables: List<IntrinsicMeasurable>, height: Int) = widths(measurables, true).maximum
+      override fun IntrinsicMeasureScope.minIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int): Int = citationIntrinsic {
+        with(defaultIntrinsics) { this@minIntrinsicHeight.minIntrinsicHeight(measurables, width) }
+      }
+      override fun IntrinsicMeasureScope.maxIntrinsicHeight(measurables: List<IntrinsicMeasurable>, width: Int): Int = citationIntrinsic {
+        with(defaultIntrinsics) { this@maxIntrinsicHeight.maxIntrinsicHeight(measurables, width) }
+      }
       override fun MeasureScope.measure(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
         val started = preparedBinding?.let { measureInput?.begin(it, constraints) }
         val exclusions = started?.key?.request?.exclusions ?: carriedExclusions.toList()
@@ -167,6 +191,8 @@ internal fun AnonymousFlowLayout(
             onFlowUnavailable()
             surfaceInput.update(AnonymousSurfaceRequest(null, failure.message))
             val message = measurables.last().measure(constraints)
+            if (citationIntrinsicDepth == 0)
+                citationOwner?.reportFailure(failure.message ?: "Anonymous flow geometry is unavailable")
             return layout(message.width, message.height) { message.place(0, 0) }
         }
         val geometry = result.getOrNull()
@@ -180,6 +206,7 @@ internal fun AnonymousFlowLayout(
               onFlowGeometry(geometry)
               surfaceInput.update(AnonymousSurfaceRequest(physical))
               val surface = measurables.last().measure(Constraints.fixed(physical.width, physical.height))
+              if (citationIntrinsicDepth == 0) citationOwner?.reportSuccess()
               val alignmentLines = geometry.textBaselines?.takeIf { publishCellBaselines }?.let { lines -> listOfNotNull<Pair<androidx.compose.ui.layout.AlignmentLine, Int>>(
                   lines.first?.let { androidx.compose.ui.layout.FirstBaseline to it.roundToInt() },
                   lines.last?.let { androidx.compose.ui.layout.LastBaseline to it.roundToInt() }).toMap() } ?: emptyMap()

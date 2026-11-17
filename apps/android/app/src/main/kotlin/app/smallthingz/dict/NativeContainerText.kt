@@ -63,7 +63,7 @@ internal data class NativeDeclaringFont(val snapshot: InlineFontSnapshot,
     val style: TextStyle?, val kind: NativeDeclaringFontKind = NativeDeclaringFontKind.Absolute,
     val fontPixels: Float? = null)
 
-internal enum class NativeDeclaringFontKind { Absolute, Container }
+internal enum class NativeDeclaringFontKind { Absolute, Container, ReferenceBacklink }
 
 /** A rendering-context copy may update W's legacy size/family aliases. The stored source
  * snapshot is never changed; resolved metrics survive only an unchanged declaring font. */
@@ -257,4 +257,31 @@ internal fun WithoutBodyTypography(content: @Composable () -> Unit) {
         val restored = nativeWithoutBodyTextContext(context, MaterialTheme.typography.bodyLarge.fontSize, LocalDensity.current)
         CompositionLocalProvider(LocalNativeContainerTextContext provides restored, content = content)
     }
+}
+
+/** The qualified footer run starts on the original body size, not a BODY/Cell/label font.
+ * The unchanged stored Span supplies every effective trait exactly once. */
+internal fun nativeReferenceBacklinkStyle(normalBodySize: TextUnit): TextStyle {
+    require(normalBodySize.isSp && normalBodySize.value.isFinite() && normalBodySize.value >= 0f)
+    return TextStyle(fontSize = normalBodySize, fontFamily = androidx.compose.ui.text.font.FontFamily.Default,
+        fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal, baselineShift = BaselineShift.None,
+        letterSpacing = 0.sp, textDecoration = androidx.compose.ui.text.style.TextDecoration.None)
+}
+
+/** A fresh metric-only value avoids copying the local-action qualification into a text probe. */
+internal fun nativeReferenceBacklinkFont(backlink: ReferenceBacklink): InlineFontSnapshot = backlink.span.let { span ->
+    InlineFontSnapshot(span.fontScale, span.fontScaleBasis, span.small, span.superscript, span.subscript,
+        span.inlineStyle?.fontNormalized == true, span.bold, span.italic, span.code,
+        span.language, span.classes, span.role, span.fontFeatures, span.fontFamily)
+}
+
+/** The native resolver supplies the same used height as the authored leaf. A missing resolved
+ * numeric height is unavailable; it must never silently fall back to Normal. */
+internal fun nativeReferenceBacklinkLineHeight(backlink: ReferenceBacklink,
+    resolvedHeight: Float?): NativeLineHeightPolicy = if (backlink.span.inlineStyle?.lineHeight == null) {
+    NativeLineHeightPolicy.Normal
+} else {
+    if (resolvedHeight == null || !resolvedHeight.isFinite() || resolvedHeight < 0f || resolvedHeight > TablePixelLimit)
+        throw UnsupportedFloatLayout("Reference backlink line height is unavailable.")
+    NativeLineHeightPolicy.Pixels(resolvedHeight)
 }

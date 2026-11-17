@@ -72,7 +72,7 @@ internal fun tableHasComputedCellStyle(table: Table): Boolean = table.style?.bor
 } }
 /** Enrolled native Figure cells supply real intrinsic widths even with padding-only styles. */
 internal fun tableUsesContentWidths(table: Table, inherited: Boolean = false): Boolean =
-    inherited || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table)
+    inherited || tableHasComputedCellStyle(table) || nativeDelegatedFigureTable(table) || nativeDelegatedAbsoluteTable(table)
 
 /** Table-box fields retain their geometry; font-size caps and decoration projection do not apply. */
 internal fun tableBoxLengthPixels(value: StyleLength, density: Float, bodyFontPixels: Float): Int {
