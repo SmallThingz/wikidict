@@ -4012,5 +4012,92 @@ class SealedFrontendRestoredSourceTests(SealedFrontendTests):
                 with self.assertRaises(ValueError): cache._frontend_completed_source(root, dump, None)
 
 
+
+class ExtractionMetadataRefreshTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+    def custody_fixture(self):
+        root, dump, _ = self.fixture()
+        seal_path = root / cache.COMPLETED_EXPANDER
+        original = seal_path.read_bytes(); seal = json.loads(original)
+        names = sorted([*cache.FILES, 'modules/123.lua'])
+        expected = dict(version=4, extractor_args=list(cache.EXTRACTOR_ARGS),
+            dump_sha256='a'*64, index_sha256='b'*64,
+            namespace_registry_sha256='f'*64, transclusion_redirects_sha256=None,
+            page_redirects_sha256=None, unicode_case={'libraries': []},
+            tool={'extractor_sha256': 'c'*64, 'libraries': []})
+        key = cache.hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+        backing = self.base / ('extraction-custody-'+str(self.sequence)) / key
+        (backing/'modules').mkdir(parents=True)
+        for name in names: cache._owned_extraction_link(root/name, backing/name)
+        assets = [r for r in seal['identity']['assets'] if r[0] in names]
+        manifest = backing/'.complete.json'
+        manifest.write_text(json.dumps(dict(asset_ownership=cache.EXTRACTION_OWNERSHIP,
+            identity=expected, assets=assets)))
+        selection = dict(original_seal_sha256=cache.hashlib.sha256(original).hexdigest(),
+            cache_manifest=dict(path=str(manifest), bytes=manifest.stat().st_size, sha256=cache.sha256(manifest)), names=names)
+        return root, dump, backing, original, selection
+
+    def test_extraction_custody_exact_alias_bytes_once_and_seal_unchanged(self):
+        root, dump, backing, original, selection = self.custody_fixture()
+        digest = selection['original_seal_sha256']
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(root,dump,digest)
+        original_digest = cache.stable_file_digest; reads=[]
+        def counted(path, **kwargs):
+            if Path(path).is_relative_to(root) and str(Path(path).relative_to(root)) in selection['names']:reads.append(str(Path(path).relative_to(root)))
+            return original_digest(path, **kwargs)
+        with mock.patch.object(cache, 'stable_file_digest', side_effect=counted), mock.patch.object(cache, 'validate_extraction_completion', wraps=cache.validate_extraction_completion) as complete:
+            first=cache.frozen_runtime_context(root,dump,digest,extraction_metadata_refresh=selection)
+            second=cache.frozen_runtime_context(root,dump,digest,extraction_metadata_refresh=selection)
+            self.assertEqual(selection['names'], sorted(reads));self.assertEqual(1,complete.call_count)
+        self.assertEqual(first,second)
+        self.assertEqual(original,(root/cache.COMPLETED_EXPANDER).read_bytes())
+        restored=json.loads(json.dumps(first));restored['runtime_stamps']['assets']=json.loads(original)['runtime_stamps']['assets']
+        self.assertEqual(json.loads(original),restored)
+
+    def test_extraction_custody_rejects_changed_bytes_aliases_selection_and_other_assets(self):
+        for change in ('body-restored-mtime','mode','inode','alias-copy','alias-symlink','source-symlink','missing-name','manifest','manifest-digest','unselected-worker','provider-update'):
+            with self.subTest(change=change):
+                root,dump,backing,original,selection=self.custody_fixture();source=root/'modules/123.lua';alias=backing/'modules/123.lua';before=source.stat()
+                if change=='body-restored-mtime':source.write_bytes(b'return 2');cache.os.utime(source,ns=(before.st_atime_ns,before.st_mtime_ns))
+                elif change=='mode':source.chmod(0o600)
+                elif change=='inode':
+                    fresh=root/'modules/new';fresh.write_bytes(source.read_bytes());cache.os.utime(fresh,ns=(before.st_atime_ns,before.st_mtime_ns));fresh.replace(source)
+                elif change=='alias-copy':alias.unlink();alias.write_bytes(source.read_bytes())
+                elif change=='alias-symlink':alias.unlink();alias.symlink_to(source)
+                elif change=='source-symlink':source.unlink();source.symlink_to(alias)
+                elif change=='missing-name':selection['names'].remove('modules/123.lua')
+                elif change=='manifest':(backing/'.complete.json').write_text('{}')
+                elif change=='manifest-digest':
+                    p=backing/'.complete.json';record=json.loads(p.read_text());next(r for r in record['assets'] if r[0]=='modules/123.lua')[2]='0'*64;p.write_text(json.dumps(record));selection['cache_manifest'].update(bytes=p.stat().st_size,sha256=cache.sha256(p))
+                elif change=='unselected-worker':(root/'dict-bundle-expander').chmod(0o600)
+                with self.assertRaises((ValueError,OSError)):
+                    cache.frozen_runtime_context(root,dump,selection['original_seal_sha256'],extraction_metadata_refresh=selection,provider_update=change=='provider-update')
+                self.assertEqual(original,(root/cache.COMPLETED_EXPANDER).read_bytes())
+
+    def test_extraction_custody_rejects_alias_mutation_during_and_after_hash(self):
+        for after in (False,True):
+            with self.subTest(after=after):
+                root,dump,backing,original,selection=self.custody_fixture();digest=selection['original_seal_sha256']
+                if after:cache.frozen_runtime_context(root,dump,digest,extraction_metadata_refresh=selection)
+                target=backing/'modules/123.lua'
+                def mutate():
+                    body=target.read_bytes();target.unlink();target.write_bytes(body)
+                if after:
+                    mutate()
+                    with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,digest,extraction_metadata_refresh=selection)
+                else:
+                    digest_file=cache.stable_file_digest;fired=False
+                    def mutating(path,**kwargs):
+                        nonlocal fired
+                        value=digest_file(path,**kwargs)
+                        if not fired and Path(path)==root/selection['names'][-1]:fired=True;mutate()
+                        return value
+                    with mock.patch.object(cache,'stable_file_digest',side_effect=mutating):
+                        with self.assertRaises(ValueError):cache.frozen_runtime_context(root,dump,digest,extraction_metadata_refresh=selection)
+                    self.assertTrue(fired)
+
+
 if __name__ == "__main__":
     unittest.main()

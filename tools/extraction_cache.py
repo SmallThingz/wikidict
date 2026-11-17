@@ -651,7 +651,102 @@ def _closed_metadata_custody(root, recorded, expected_sha, receipt):
     return successor
 
 
-def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None, restored_dump=None):
+# Current byte validation, not an assertion about the historical linking actor.
+# Bindings live only in the validating process and never replace the old seal.
+_EXTRACTION_METADATA_BINDINGS = {}
+
+
+def _extraction_metadata_refresh(root, recorded, expected_sha, selection):
+    import stat
+    if (not isinstance(selection, dict) or set(selection) != {'original_seal_sha256', 'cache_manifest', 'names'}
+            or selection['original_seal_sha256'] != expected_sha
+            or not isinstance(selection['names'], list) or not selection['names']
+            or any(not isinstance(n, str) for n in selection['names'])
+            or selection['names'] != sorted(set(selection['names']))):
+        raise ValueError('Invalid extraction metadata refresh selection')
+    reference = selection['cache_manifest']
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'bytes', 'sha256'}
+            or not isinstance(reference['path'], str) or type(reference['bytes']) is not int
+            or not 0 < reference['bytes'] <= MAX_MARKER_BYTES
+            or not isinstance(reference['sha256'], str)
+            or not re.fullmatch('[0-9a-f]{64}', reference['sha256'])):
+        raise ValueError('Invalid extraction cache manifest descriptor')
+    manifest = Path(reference['path']); backing = manifest.parent
+    if (manifest.name != '.complete.json' or not manifest.is_absolute()
+            or str(manifest) != os.path.normpath(str(manifest)) or backing == root
+            or backing.is_relative_to(root) or root.is_relative_to(backing)):
+        raise ValueError('Invalid extraction cache alias root')
+    manifest_custody = _restored_dump_custody(manifest)
+    if manifest_custody[0][3] != reference['bytes']:
+        raise ValueError('Extraction cache manifest size changed')
+    with manifest.open('rb') as stream:
+        if _full_stamp(os.fstat(stream.fileno())) != manifest_custody[0]:
+            raise ValueError('Extraction cache manifest replaced before reading')
+        raw = stream.read(reference['bytes'] + 1)
+        if _full_stamp(os.fstat(stream.fileno())) != manifest_custody[0]:
+            raise ValueError('Extraction cache manifest changed during reading')
+    if (len(raw) != reference['bytes'] or hashlib.sha256(raw).hexdigest() != reference['sha256']
+            or _restored_dump_custody(manifest) != manifest_custody):
+        raise ValueError('Extraction cache manifest changed')
+    cached = json.loads(raw)
+    if not extraction_ownership_proven(backing):
+        raise ValueError('Extraction cache lacks normal owned publication identity')
+    names = selection['names']; assets = cached['assets']
+    if ([r[0] for r in assets] != names
+            or not set(names) <= set(recorded['runtime_stamps']['assets'])
+            or cached['identity']['dump_sha256'] != recorded['identity']['verified_input'][0]
+            or cached['identity']['index_sha256'] != recorded['identity']['verified_input'][1]):
+        raise ValueError('Extraction metadata selection differs from original inputs')
+    original_assets = {n: [size, digest] for n, size, digest in recorded['identity']['assets']}
+    held = []
+    for name, size, digest in assets:
+        if (original_assets.get(name) != [size, digest]
+                or recorded['runtime_stamps']['snapshot_links'].get(name) is not None):
+            raise ValueError('Extraction cache differs from original core assets')
+        source, alias = root / name, backing / name
+        source_custody, alias_custody = _restored_dump_custody(source), _restored_dump_custody(alias)
+        current, alias_current = source.lstat(), alias.lstat()
+        old = recorded['runtime_stamps']['assets'][name]
+        if (not isinstance(old, list) or len(old) != 6 or any(type(x) is not int for x in old)
+                or not stat.S_ISREG(old[2]) or old[3] != size
+                or list(source_custody[0][:5]) != old[:5]
+                or source_custody[0] != alias_custody[0]
+                or current.st_uid != os.geteuid() or alias_current.st_uid != current.st_uid
+                or current.st_gid != alias_current.st_gid
+                or current.st_nlink < 2 or current.st_nlink != alias_current.st_nlink):
+            raise ValueError('Extraction metadata change exceeds owned alias custody: ' + name)
+        held.append((name, source_custody, alias_custody, current.st_uid, current.st_gid, current.st_nlink))
+    key = (os.getpid(), str(root), expected_sha, json.dumps(selection, sort_keys=True, separators=(',', ':')))
+    guard = (manifest_custody, tuple(held))
+    previous = _EXTRACTION_METADATA_BINDINGS.get(key)
+    if previous is not None and previous != guard:
+        raise ValueError('Validated extraction metadata custody changed')
+    if previous is None:
+        for name, size, digest in assets:
+            if stable_file_digest(root / name) != [size, digest]:
+                raise ValueError('Extraction core bytes differ from original seal and cache: ' + name)
+        validate_extraction_completion(root)
+    # Check every alias after the complete hash transaction, including the final
+    # member and directories; cached calls earn exactly the same custody checks.
+    for name, source_before, alias_before, uid, gid, links in held:
+        source, alias = root / name, backing / name
+        if (_restored_dump_custody(source) != source_before
+                or _restored_dump_custody(alias) != alias_before
+                or any((p.lstat().st_uid, p.lstat().st_gid, p.lstat().st_nlink) != (uid, gid, links)
+                       for p in (source, alias))):
+            raise ValueError('Extraction alias changed during validation: ' + name)
+    if _restored_dump_custody(manifest) != manifest_custody:
+        raise ValueError('Extraction cache manifest changed during validation')
+    _EXTRACTION_METADATA_BINDINGS[key] = guard
+    successor = dict(recorded)
+    successor['runtime_stamps'] = dict(recorded['runtime_stamps'])
+    successor['runtime_stamps']['assets'] = dict(recorded['runtime_stamps']['assets'])
+    for name, custody, *_ in held:
+        successor['runtime_stamps']['assets'][name] = list(custody[0])
+    return successor
+
+
+def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None, extraction_metadata_refresh=None, restored_dump=None):
     """Validate an original completed seal, never the current compilation graph.
 
     None means the old/absent seal cannot authorize source-custody release.
@@ -688,6 +783,10 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
             if provider_update:
                 raise ValueError('Snapshot refresh requires the original ready context')
             value = _snapshot_metadata_refresh(root, value, expected_sha, snapshot_metadata_refresh)
+        if extraction_metadata_refresh is not None:
+            if provider_update:
+                raise ValueError('Extraction metadata refresh requires original ready context')
+            value = _extraction_metadata_refresh(root, value, expected_sha, extraction_metadata_refresh)
         if metadata_custody_refresh is not None:
             if provider_update:
                 raise ValueError('Metadata custody requires an original ready context')
