@@ -14,6 +14,7 @@ add_library(wikidict-product STATIC
     LibraryStore.cpp
     MediaPanel.cpp
     InlineVectorImages.hpp
+    InlineAudioControls.hpp
 )
 add_library(wikidict-gui SHARED main.cpp)
 qt_add_resources(wikidict-gui reader_font PREFIX "/fonts"

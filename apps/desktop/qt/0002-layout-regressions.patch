@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14635 @@
+@@ -3,24 +3,14666 @@
 
 
  #include <QTest>
@@ -180,6 +180,36 @@
 +        return QSizeF(qMin(qreal(16), qMax(qreal(1), width)), 12);
 +    }
 +    void drawObject(QPainter *, const QRectF &, QTextDocument *, int, const QTextFormat &) override {}
++};
++
++class ProjectedRegisteredObjectHandler : public QObject, public QTextObjectInterface
++{
++    Q_OBJECT
++    Q_INTERFACES(QTextObjectInterface)
++public:
++    QTextDocument *expectedDocument = nullptr;
++    int expectedPosition = -1;
++    int expectedType = QTextFormat::UserObject + 0x71;
++    int sizeCalls = 0, drawCalls = 0;
++    bool valid = true;
++    QSizeF size = QSizeF(120, 80);
++    QRectF painted;
++    void check(QTextDocument *document, int position, const QTextFormat &format)
++    {
++        valid = valid && document == expectedDocument && position == expectedPosition
++            && format.objectType() == expectedType && !format.isImageFormat()
++            && format.property(QTextFormat::UserProperty + 0x5871) == QVariant(7);
++    }
++    QSizeF intrinsicSize(QTextDocument *document, int position, const QTextFormat &format) override
++    {
++        ++sizeCalls; check(document, position, format); return size;
++    }
++    void drawObject(QPainter *painter, const QRectF &rect, QTextDocument *document,
++                    int position, const QTextFormat &format) override
++    {
++        ++drawCalls; check(document, position, format); painted = rect;
++        painter->fillRect(rect, QColor(20, 90, 160));
++    }
 +};
 +
 +class PlainContainerPaintCounter : public QObject, public QTextObjectInterface
@@ -1590,6 +1620,7 @@
 +    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
 +    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
 +    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
++    void projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics();
 +    void projectedRubyUsesResolvedBaseMetricsOnly();
 +    void projectedRubyRejectsMalformedMetrics();
 +    void projectedRubyKeepsOnlyAdmittedOrdinaryBoundaries();
@@ -14658,7 +14689,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15259,1560 @@
+@@ -648,5 +15290,1731 @@
      }
  }
 
@@ -15097,6 +15128,177 @@
 +// Source-only test slots for the existing native QTextDocumentLayout test class.
 +// Requires existing private qtextengine_p.h include. Not inserted or compiled.
 +// These are engine metric/boundary controls, not Ruby paint/copy/AX acceptance.
++void tst_QTextDocumentLayout::projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics()
++{
++    for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft})
++    for (auto alignment : {QTextCharFormat::AlignNormal, QTextCharFormat::AlignTop,
++                           QTextCharFormat::AlignMiddle, QTextCharFormat::AlignBottom}) {
++        const QString prefix = direction == Qt::RightToLeft ? QStringLiteral("\u05d0\u05d1 ") : QStringLiteral("Before ");
++        const QString suffix = direction == Qt::RightToLeft ? QStringLiteral(" \u05d2\u05d3") : QStringLiteral(" after");
++        ProjectedRegisteredObjectHandler handler;
++        QTextDocument document;
++        document.setLayoutEnabled(false);
++        document.setDocumentMargin(0);
++        auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout());
++        QVERIFY(native);
++        native->registerHandler(handler.expectedType, &handler);
++        QTextCursor cursor(&document);
++        cursor.insertText(QStringLiteral("Earlier source block"));
++        cursor.insertBlock();
++        const int first = cursor.position();
++        cursor.insertText(prefix);
++        const int objectPosition = cursor.position();
++        QTextCharFormat object;
++        object.setObjectType(handler.expectedType);
++        object.setVerticalAlignment(alignment);
++        object.setProperty(QTextFormat::UserProperty + 0x5871, 7);
++        cursor.insertText(QString(QChar::ObjectReplacementCharacter), object);
++        cursor.insertText(suffix, QTextCharFormat());
++        const int last = cursor.position();
++        handler.expectedDocument = &document;
++        handler.expectedPosition = objectPosition;
++        const auto source = document.toRawText();
++        const int count = document.characterCount();
++        QVERIFY(first > 0);
++        const QVariantMap flow{{"first", first}, {"last", last}, {"direction", int(direction)},
++            {"joins", QVariantList{}}, {"parts", QVariantList{
++                QVariantMap{{"kind", "text"}, {"first", first}, {"last", last}}}}};
++        QVERIFY(native->wikidictSetLogicalFlows({flow}));
++        document.setLayoutEnabled(true);
++        // The stock document uses the same source and handler without logical
++        // projection. Object Leading/Trailing at one position are the same
++        // insertion boundary, so they are not an object-width oracle.
++        ProjectedRegisteredObjectHandler stockHandler;
++        QTextDocument stock;
++        stock.setLayoutEnabled(false);
++        stock.setDefaultFont(document.defaultFont());
++        stock.setDocumentMargin(document.documentMargin());
++        QTextOption stockOption=document.defaultTextOption(); stockOption.setTextDirection(direction);
++        stock.setDefaultTextOption(stockOption);
++        auto *stockNative=qobject_cast<QTextDocumentLayout *>(stock.documentLayout());
++        QVERIFY(stockNative);
++        stockHandler.expectedDocument=&stock; stockHandler.expectedPosition=objectPosition;
++        stockHandler.size=handler.size;
++        stockNative->registerHandler(stockHandler.expectedType,&stockHandler);
++        QTextCursor stockCursor(&stock);
++        stockCursor.insertText(QStringLiteral("Earlier source block")); stockCursor.insertBlock();
++        stockCursor.insertText(prefix);
++        QCOMPARE(stockCursor.position(),objectPosition);
++        stockCursor.insertText(QString(QChar::ObjectReplacementCharacter),object);
++        stockCursor.insertText(suffix,QTextCharFormat());
++        QCOMPARE(stock.toRawText(),source);
++        stock.setLayoutEnabled(true);
++        for (int width : {640, 350, 640}) {
++            document.setTextWidth(width);
++            native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto position = native->wikidictLogicalPosition(objectPosition);
++            QVERIFY(position.value(QStringLiteral("handled")).toBool());
++            QVERIFY(handler.sizeCalls > 0);
++            QVERIFY(handler.valid);
++            QVERIFY(position.value(QStringLiteral("lineHeight")).toReal() + .01 >= handler.size.height());
++            if (alignment == QTextCharFormat::AlignNormal)
++                QVERIFY(position.value(QStringLiteral("lineAscent")).toReal() + .01 >= handler.size.height());
++            stock.setTextWidth(width); stockNative->documentSize();
++            QCOMPARE(stockNative->wikidictParagraphBoxLayoutError(),0);
++            const auto stockBlock=stock.findBlock(objectPosition);
++            const auto stockLine=stockBlock.layout()->lineForTextPosition(objectPosition-stockBlock.position());
++            QVERIFY(stockLine.isValid()); QVERIFY(stockHandler.sizeCalls>0); QVERIFY(stockHandler.valid);
++            const qreal projectedAdvance=position.value(QStringLiteral("lineAdvance")).toReal();
++            const QString context=QStringLiteral("direction=%1 width=%2 alignment=%3 projectedAdvance=%4 stockAdvance=%5 handlerWidth=%6 leading=%7 trailing=%8")
++                .arg(int(direction)).arg(width).arg(int(alignment)).arg(projectedAdvance).arg(stockLine.horizontalAdvance())
++                .arg(handler.size.width()).arg(position.value(QStringLiteral("leading")).toReal())
++                .arg(position.value(QStringLiteral("trailing")).toReal());
++            QVERIFY2(qAbs(position.value(QStringLiteral("lineAscent")).toReal() - stockLine.ascent()) < .1, qPrintable(context));
++            const QRectF queried = position.value(QStringLiteral("characterRect")).toRectF();
++            QVERIFY2(qAbs(queried.width() - handler.size.width()) < .1, qPrintable(context));
++            QVERIFY2(qAbs(queried.height() - handler.size.height()) < .1, qPrintable(context));
++            QVERIFY2(qAbs(projectedAdvance-stockLine.horizontalAdvance())<.1,qPrintable(context));
++            QCOMPARE(stock.toRawText(),source);
++            QImage image(700, 300, QImage::Format_ARGB32_Premultiplied);
++            image.fill(Qt::white);
++            QPainter painter(&image);
++            const int drawsBefore = handler.drawCalls;
++            native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{});
++            painter.end();
++            QCOMPARE(handler.drawCalls, drawsBefore + 1);
++            QVERIFY(handler.valid);
++            QCOMPARE(handler.painted.size(), handler.size);
++            QVERIFY2(qAbs(queried.left() - handler.painted.left()) < .1
++                && qAbs(queried.top() - handler.painted.top()) < .1
++                && qAbs(queried.width() - handler.painted.width()) < .1
++                && qAbs(queried.height() - handler.painted.height()) < .1, qPrintable(context));
++            if (alignment == QTextCharFormat::AlignNormal)
++                QVERIFY(qAbs(handler.painted.bottom()
++                             - position.value(QStringLiteral("lineBaseline")).toReal()) < .1);
++            const auto stockPosition = stockNative->wikidictLogicalPosition(objectPosition);
++            QVERIFY(!stockPosition.value(QStringLiteral("handled")).toBool());
++            const QRectF stockCharacter = stockPosition.value(QStringLiteral("inlineCharacterRect")).toRectF();
++            QImage stockImage(700, 300, QImage::Format_ARGB32_Premultiplied);
++            stockImage.fill(Qt::white);
++            QPainter stockPainter(&stockImage);
++            const int stockDrawsBefore = stockHandler.drawCalls;
++            stockNative->draw(&stockPainter, QAbstractTextDocumentLayout::PaintContext{});
++            stockPainter.end();
++            QCOMPARE(stockHandler.drawCalls, stockDrawsBefore + 1);
++            QVERIFY(stockHandler.valid);
++            QCOMPARE(stockHandler.painted.size(), stockHandler.size);
++            QVERIFY2(qAbs(stockCharacter.left() - stockHandler.painted.left()) < .1
++                && qAbs(stockCharacter.top() - stockHandler.painted.top()) < .1
++                && qAbs(stockCharacter.width() - stockHandler.painted.width()) < .1
++                && qAbs(stockCharacter.height() - stockHandler.painted.height()) < .1, qPrintable(context));
++            QCOMPARE(native->hitTest(queried.center(), Qt::ExactHit), objectPosition);
++            QCOMPARE(stockNative->hitTest(stockCharacter.center(), Qt::ExactHit), objectPosition);
++            QCOMPARE(document.toRawText(), source);
++            QCOMPARE(document.characterCount(), count);
++        }
++        // Exercise the itemizer's ownership boundary directly, with a projected
++        // index distinct from the handler's original document source position.
++        // Unowned, unmapped, and unregistered custom objects stay ordinary text.
++        for (int variant = 0; variant != 4; ++variant) {
++            if (variant == 3) native->unregisterHandler(handler.expectedType, &handler);
++            const int callsBefore = handler.sizeCalls;
++            QTextLayout layout(QString(QChar::ObjectReplacementCharacter), document.defaultFont());
++            layout.setCacheEnabled(true);
++            layout.setFormats({QTextLayout::FormatRange{0, 1, object}});
++            auto *engine = layout.engine();
++            if (variant != 1) engine->projectedDocument = &document;
++            engine->projectedSourcePositions = QList<int>{variant == 2 ? -1 : objectPosition};
++            layout.beginLayout();
++            auto line = layout.createLine();
++            QVERIFY(line.isValid());
++            line.setLineWidth(300);
++            layout.endLayout();
++            QVERIFY(engine->layoutData);
++            const int index = engine->findItem(0);
++            QVERIFY(index >= 0);
++            const auto &item = engine->layoutData->items.at(index);
++            if (variant == 0) {
++                QCOMPARE(int(item.analysis.flags), int(QScriptAnalysis::Object));
++                QCOMPARE(item.width, QFixed::fromReal(handler.size.width()));
++                if (alignment == QTextCharFormat::AlignNormal) {
++                    QCOMPARE(item.ascent, QFixed::fromReal(handler.size.height()));
++                    QCOMPARE(item.descent, QFixed());
++                }
++                QCOMPARE(item.height(), QFixed::fromReal(handler.size.height()));
++                QRectF objectCharacter;
++                QVERIFY(qt_textInlineCursorRect(&layout, 0, 0, &objectCharacter, true));
++                QCOMPARE(objectCharacter.size(), handler.size);
++                QVERIFY(line.height() + .01 >= handler.size.height());
++                QVERIFY(handler.sizeCalls > callsBefore);
++                QVERIFY(handler.valid);
++            } else {
++                QVERIFY(item.analysis.flags != QScriptAnalysis::Object);
++                QCOMPARE(handler.sizeCalls, callsBefore);
++                QRectF refusedCharacter;
++                QVERIFY(!qt_textInlineCursorRect(&layout, 0, 0, &refusedCharacter, true));
++            }
++        }
++        QCOMPARE(document.toRawText(), source);
++        QCOMPARE(document.characterCount(), count);
++    }
++}
++
 +void tst_QTextDocumentLayout::projectedRubyUsesResolvedBaseMetricsOnly()
 +{
 +    QTextDocument source;

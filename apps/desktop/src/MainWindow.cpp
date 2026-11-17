@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "InlineVectorImages.hpp"
+#include "InlineAudioControls.hpp"
 #include "SemanticHtml.hpp"
 #include "SemanticFigure.hpp"
 #include "CompiledContent.hpp"
@@ -653,12 +654,14 @@ class ReadingBrowser final : public QTextBrowser {
 public:
     explicit ReadingBrowser(QWidget *parent);
     using RubyMap = QTextRubyRangeMap;
+    QPointer<InlineAudioControls> audioControls;
     std::shared_ptr<const RubyMap> rubyProjection;
     QPointer<QTextDocument> rubyProjectionDocument;
     QVariantList inlineActionOwners;
     QPointer<QTextDocument> inlineActionDocument;
     int inlineActionRevision = -1;
     qint64 focusedInlineAction = -1;
+    bool inlineNavigationMoving = false;
     bool inlineActionsCurrent() const {
         return inlineActionOwners.isEmpty() || (inlineActionDocument == document()
             && inlineActionRevision == document()->revision());
@@ -726,8 +729,8 @@ public:
         requestMissingPaint(); requestLocalReveal(); notifyDisclosureFocus();
         return true;
     }
-    struct AnchorTarget { int first, last; qint64 identity; QString href; QVariant owner; };
-    QList<AnchorTarget> inlineNavigationTargets() const {
+    struct AnchorTarget { int first, last; qint64 identity; QString href; QVariant owner; QPointer<QWidget> widget; };
+    QList<AnchorTarget> inlineNavigationTargets(bool includeAudio = false) const {
         QList<AnchorTarget> result;
         if (!inlineActionsCurrent()) return result;
         for (const auto &value : inlineActionOwners) {
@@ -756,20 +759,33 @@ public:
                 }
             }
         }
+        if (includeAudio && audioControls && audioControls->current())
+            for (const auto &target : audioControls->focusTargets())
+                result.append({target.first, target.first + 1, -1, {}, {}, target.second});
         std::stable_sort(result.begin(), result.end(), [](const auto &a, const auto &b) {
             return a.first < b.first;
         });
         return result;
     }
     bool navigateInlineActions(bool next, bool entering = false) {
-        if (inlineActionOwners.isEmpty() || !inlineActionsCurrent()) return false;
-        const auto targets = inlineNavigationTargets();
+        const QPointer<InlineAudioControls> audio(audioControls);
+        const bool nativeAudio = audio && !audio->empty() && audio->current()
+            && (hasFocus() || audio->ownsFocusWidget(QApplication::focusWidget()));
+        if ((!nativeAudio && inlineActionOwners.isEmpty()) || !inlineActionsCurrent()) return false;
+        const QPointer<ReadingBrowser> self(this);
+        const QPointer<QTextDocument> doc(document());
+        const int revision = doc->revision();
+        const auto contextCurrent = [&] { return self && doc && document() == doc && doc->revision() == revision
+            && inlineActionsCurrent() && (!nativeAudio || (audioControls == audio && audio && audio->current())); };
+        const auto targets = inlineNavigationTargets(nativeAudio);
         const auto cursor = textCursor(); int current = -1;
         if (!entering) for (int i = 0; i < targets.size(); ++i) {
             const auto &target = targets[i];
-            if ((target.identity >= 0 && inlineActionFocused(target.identity))
-                || (target.identity < 0 && cursor.hasSelection()
-                    && cursor.selectionStart() == target.first && cursor.selectionEnd() == target.last)) {
+            if ((target.widget && target.widget->hasFocus())
+                || (!target.widget && (!nativeAudio || hasFocus())
+                    && ((target.identity >= 0 && inlineActionFocused(target.identity))
+                        || (target.identity < 0 && cursor.hasSelection()
+                            && cursor.selectionStart() == target.first && cursor.selectionEnd() == target.last)))) {
                 current = i; break;
             }
         }
@@ -783,18 +799,34 @@ public:
         }
         if (chosen < 0 || chosen >= targets.size()) { focusedInlineAction = -1; return false; }
         const auto target = targets[chosen];
-        if (target.identity >= 0) return focusInlineAction(target.identity);
+        const bool previousMoving = inlineNavigationMoving;
+        if (nativeAudio) inlineNavigationMoving = true;
+        const auto finish = qScopeGuard([self, previousMoving] { if (self) self->inlineNavigationMoving = previousMoving; });
+        if (target.widget) {
+            if (!contextCurrent() || !target.widget->isEnabled() || !target.widget->isVisible()
+                || !audio->ownsFocusWidget(target.widget)) return false;
+            target.widget->setFocus(next ? Qt::TabFocusReason : Qt::BacktabFocusReason);
+            return contextCurrent() && target.widget && audio->ownsFocusWidget(target.widget) && target.widget->hasFocus();
+        }
+        if (nativeAudio && !hasFocus()) {
+            setFocus(next ? Qt::TabFocusReason : Qt::BacktabFocusReason);
+            if (!contextCurrent() || !hasFocus()) return false;
+        }
+        if (target.identity >= 0) {
+            const bool focused = focusInlineAction(target.identity);
+            return focused && (!nativeAudio || contextCurrent());
+        }
         focusedInlineAction = -1; rubySelection.reset();
-        const QPointer<ReadingBrowser> self(this);
         QTextCursor selected(document()); selected.setPosition(target.first);
         selected.setPosition(target.last, QTextCursor::KeepAnchor); setTextCursor(selected);
         if (self) { notifyDisclosureFocus(); requestMissingPaint(); requestLocalReveal(); }
-        return true;
+        return !nativeAudio || contextCurrent();
     }
     struct LogicalSelection { int anchor, position, documentAnchor, documentPosition; };
     std::optional<LogicalSelection> rubySelection;
     bool rubyProjectionCurrent() const {
-        return !rubyProjection || (rubyProjectionDocument == document() && rubyProjection->current());
+        return (!rubyProjection || (rubyProjectionDocument == document() && rubyProjection->current()))
+            && (!audioControls || audioControls->empty() || audioControls->current());
     }
     void installRubyProjection(std::unique_ptr<RubyMap> projection) {
         if (projection && projection->sourceDocument() != document()) throw DictApiError("stale or foreign Ruby logical projection");
@@ -807,28 +839,31 @@ public:
         requestAccessibleLinks();
     }
     int semanticCount() const {
-        return !rubyProjection ? qMax(0, document()->characterCount() - 1)
-            : rubyProjectionCurrent() ? rubyProjection->logicalCount() : -1;
+        if (!rubyProjectionCurrent()) return -1;
+        const int base = rubyProjection ? rubyProjection->logicalCount() : qMax(0, document()->characterCount() - 1);
+        return audioControls ? audioControls->toSource(base) : base;
     }
     int semanticOffset(int offset, RubyMap::Bias bias = RubyMap::Bias::After) const {
         if (offset < 0 || offset >= document()->characterCount() || !rubyProjectionCurrent()) return -1;
-        return rubyProjection ? rubyProjection->toLogical(offset, bias) : offset;
+        const int base = rubyProjection ? rubyProjection->toLogical(offset, bias) : offset;
+        return base < 0 || !audioControls ? base : audioControls->toSource(base);
     }
     int documentOffset(int offset, RubyMap::Bias bias = RubyMap::Bias::After) const {
         if (offset < 0 || offset > semanticCount()) return -1;
-        return rubyProjection ? rubyProjection->toDocument(offset, bias) : offset;
+        const int base = audioControls ? audioControls->toBase(offset, bias == RubyMap::Bias::After) : offset;
+        return rubyProjection ? rubyProjection->toDocument(base, bias) : base;
     }
     QString semanticText(int first, int last) const {
         if (first < 0 || last < first || last > semanticCount()) return {};
-        QString result = rubyProjection ? rubyProjection->text(first, last)
-            : document()->toRawText().mid(first, last - first);
+        QString result = audioControls && !audioControls->empty() ? audioControls->text(first, last)
+            : rubyProjection ? rubyProjection->text(first, last) : document()->toRawText().mid(first, last - first);
         for (QChar &character : result)
             if (character == QChar::ParagraphSeparator || character.unicode() == 0xfdd0 || character.unicode() == 0xfdd1)
                 character = QChar('\n');
         return result;
     }
     bool hasLogicalSelection() const {
-        if (!rubySelection || !rubyProjection || !rubyProjectionCurrent()) return false;
+        if (!rubySelection || (!rubyProjection && (!audioControls || audioControls->empty())) || !rubyProjectionCurrent()) return false;
         const auto cursor = textCursor();
         return cursor.anchor() == rubySelection->documentAnchor
             && cursor.position() == rubySelection->documentPosition;
@@ -839,8 +874,10 @@ public:
     void selectSemanticRange(int anchor, int position) {
         const int first = qMin(anchor, position), last = qMax(anchor, position);
         if (first < 0 || last > semanticCount()) return;
-        const auto native = rubyProjection ? rubyProjection->selectionToDocument(first, last)
-            : RubyMap::Range{first, last};
+        const int baseFirst = audioControls ? audioControls->toBase(first, false) : first;
+        const int baseLast = audioControls ? audioControls->toBase(last, true) : last;
+        const auto native = rubyProjection ? rubyProjection->selectionToDocument(baseFirst, baseLast)
+            : RubyMap::Range{baseFirst, baseLast};
         const int start = native.first, end = native.last;
         if (start < 0 || end < start) return;
         const QPointer<ReadingBrowser> self(this);
@@ -853,7 +890,8 @@ public:
         setTextCursor(cursor);
         if (!self || !doc || self->document() != doc || self->rubyProjection != map
             || !self->rubyProjectionCurrent()) return;
-        if (map) self->rubySelection = LogicalSelection{anchor, position, cursor.anchor(), cursor.position()};
+        if (map || (audioControls && !audioControls->empty()))
+            self->rubySelection = LogicalSelection{anchor, position, cursor.anchor(), cursor.position()};
     }
     QList<std::pair<int,int>> semanticSelectionRanges() const {
         if (!rubyProjectionCurrent()) return {};
@@ -883,7 +921,12 @@ public:
         try {
             if (!current()) return data.release();
             const auto generated = SemanticHtml::generatedIsolatePositions(source);
-            if (map) {
+            bool selectedAudio = false;
+            if (audioControls && !audioControls->empty())
+                for (const auto &range : selectedDocumentRanges())
+                    for (const auto &row : audioControls->occurrences)
+                        selectedAudio |= row.cursor.position() >= range.first && row.cursor.position() < range.second;
+            if (map || selectedAudio) {
                 // Existing Ruby copy deliberately exports plain logical text only.
                 // Raw gaps can have no one-to-one document interval; do not infer
                 // ownership from a nearby control or invent rich HTML for them.
@@ -891,13 +934,13 @@ public:
                 // isolate must therefore map bijectively; refuse any violation.
                 QSet<int> omitted;
                 for (int position : generated) {
-                    const int first = map->toLogical(position, RubyMap::Bias::After);
-                    const int last = map->toLogical(position + 1, RubyMap::Bias::Before);
+                    const int first = semanticOffset(position, RubyMap::Bias::After);
+                    const int last = semanticOffset(position + 1, RubyMap::Bias::Before);
                     if (first < 0 || last != first + 1
-                        || map->toDocument(first, RubyMap::Bias::After) != position
-                        || map->toDocument(last, RubyMap::Bias::Before) != position + 1)
+                        || documentOffset(first, RubyMap::Bias::After) != position
+                        || documentOffset(last, RubyMap::Bias::Before) != position + 1)
                         throw std::runtime_error("generated isolate has no exact logical source mapping");
-                    if (map->text(first, last) != QString(source->characterAt(position)))
+                    if (semanticText(first, last) != QString(source->characterAt(position)))
                         throw std::runtime_error("generated isolate lost its logical source");
                     omitted.insert(first);
                 }
@@ -1149,6 +1192,22 @@ public:
         if (!current()) return;
         syncSourceTableFocus(values);
         if (!current()) return;
+        if (audioControls && !audioControls->empty()) {
+            audioControls->sync(rootDocumentOffset(), [this](int position, const QPainterPath &path) {
+                return clipLocalPath(position, path);
+            });
+            if (!current()) return;
+            QList<QPair<int, QPointer<QWidget>>> targets;
+            for (const auto &target : sourceTableFocus) if (target && target->focusPolicy() != Qt::NoFocus)
+                targets.append({target->owner.value("first").toInt(), target});
+            for (const auto &row : audioControls->occurrences) if (row.widget && row.bound)
+                targets.append({row.cursor.position(), row.widget});
+            std::sort(targets.begin(), targets.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+            QWidget *previous = this;
+            for (const auto &target : targets) if (target.second) {
+                QWidget::setTabOrder(previous, target.second); previous = target.second;
+            }
+        }
         QSet<int> live;
         for (const auto &value : values) {
             const auto owner = value.toMap();
@@ -1607,12 +1666,31 @@ protected:
         return QTextBrowser::viewportEvent(event);
     }
     bool focusNextPrevChild(bool next) override {
+        const QPointer<InlineAudioControls> audio(audioControls);
+        const bool nativeAudio = audio && !audio->empty() && audio->current()
+            && (hasFocus() || audio->ownsFocusWidget(QApplication::focusWidget()));
         const bool groups = !inlineActionOwners.isEmpty() && inlineActionsCurrent();
-        if (groups && navigateInlineActions(next)) return true;
         const QPointer<ReadingBrowser> guard(this);
-        // At an explicit occurrence boundary, leave through ordinary widget
-        // traversal. QTextBrowser's href search could merge or revisit equal URLs.
-        const bool moved = groups ? QWidget::focusNextPrevChild(next) : QTextBrowser::focusNextPrevChild(next);
+        const QPointer<QTextDocument> doc(document());
+        const int revision = doc->revision();
+        if ((groups || nativeAudio) && navigateInlineActions(next)) return true;
+        if (!guard || (nativeAudio && (!doc || document() != doc || doc->revision() != revision
+            || !audio || audioControls != audio || !audio->current()))) return true;
+        // At an occurrence boundary, retain ordinary QWidget traversal. Audio
+        // children already visited by the merged navigator must not restart it.
+        const bool previousMoving = inlineNavigationMoving;
+        if (nativeAudio) inlineNavigationMoving = true;
+        const auto finish = qScopeGuard([guard, previousMoving] { if (guard) guard->inlineNavigationMoving = previousMoving; });
+        bool moved = groups || nativeAudio ? QWidget::focusNextPrevChild(next) : QTextBrowser::focusNextPrevChild(next);
+        QSet<QWidget *> visited;
+        while (nativeAudio && moved && guard && doc && document() == doc && doc->revision() == revision
+            && audio && audioControls == audio && audio->current()) {
+            auto *focused = QApplication::focusWidget();
+            if (focused != this && !audio->ownsFocusWidget(focused)) break;
+            if (!focused || visited.contains(focused)) return false;
+            visited.insert(focused);
+            moved = QWidget::focusNextPrevChild(next);
+        }
         if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); guard->requestLocalReveal(); }
         return moved;
     }
@@ -1621,7 +1699,7 @@ protected:
             || event->reason() == Qt::BacktabFocusReason || event->reason() == Qt::ShortcutFocusReason;
         const QPointer<ReadingBrowser> guard(this);
         QTextBrowser::focusInEvent(event);
-        if (guard && (event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason))
+        if (guard && !guard->inlineNavigationMoving && (event->reason() == Qt::TabFocusReason || event->reason() == Qt::BacktabFocusReason))
             guard->navigateInlineActions(event->reason() == Qt::TabFocusReason, true);
         if (guard) { guard->notifyDisclosureFocus(); guard->requestMissingPaint(); }
     }
@@ -2356,7 +2434,9 @@ public:
         return result;
     }
     QString text(QAccessible::Text type) const override {
-        if (type == QAccessible::Value) return browser_->rubyProjection ? browser_->semanticText(0, browser_->semanticCount()) : browser_->toPlainText();
+        if (type == QAccessible::Value) return browser_->rubyProjection
+            || (browser_->audioControls && !browser_->audioControls->empty())
+            ? browser_->semanticText(0, browser_->semanticCount()) : browser_->toPlainText();
         return ReadingAccessibleBase::text(type);
     }
     int characterCount() const override { return qMax(0, browser_->semanticCount()); }
@@ -2412,8 +2492,9 @@ public:
         if (!browser) return {};
         const QPointer<QTextDocument> document(browser->document());
         if (browser->rubyProjection && browser->rubyProjectionCurrent()) {
-            const auto gap = browser->rubyProjection->logicalGap(offset);
-            if (gap.first >= 0 && browser->documentOffset(gap.first) == browser->documentOffset(gap.last)) return {};
+            const int base = browser->audioControls ? browser->audioControls->toBase(offset, false) : offset;
+            const auto gap = browser->rubyProjection->logicalGap(base);
+            if (gap.first >= 0 && browser->rubyProjection->toDocument(gap.first, ReadingBrowser::RubyMap::Bias::After) == browser->rubyProjection->toDocument(gap.last, ReadingBrowser::RubyMap::Bias::After)) return {};
         }
         offset = browser->documentOffset(offset, ReadingBrowser::RubyMap::Bias::Before);
         if (!browser || !document || browser->document() != document
@@ -2436,7 +2517,9 @@ public:
         if (!current() || projected.status == LogicalFlow::Status::Refused) return {};
         QRectF result;
         const auto media = InlineVectorImages::figureMediaPolicy(document, block.position() + start);
-        if (authoredRule) {
+        if (browser->audioControls && !browser->audioControls->rectangleAt(offset).isEmpty()) {
+            result = browser->audioControls->rectangleAt(offset);
+        } else if (authoredRule) {
             const QPointer<QAbstractTextDocumentLayout> layout(document->documentLayout());
             QVariantMap geometry;
             const bool queried = QMetaObject::invokeMethod(layout, "wikidictAuthoredRuleGeometry", Qt::DirectConnection,
@@ -2630,7 +2713,8 @@ public:
     void deleteText(int start, int end) override { replaceText(start, end, {}); }
     void insertText(int offset, const QString &value) override { replaceText(offset, offset, value); }
     void replaceText(int start, int end, const QString &value) override {
-        if (browser_->isReadOnly() || browser_->rubyProjection || !validRange(start, end)) return;
+        if (browser_->isReadOnly() || browser_->rubyProjection
+            || (browser_->audioControls && !browser_->audioControls->empty()) || !validRange(start, end)) return;
         QTextCursor cursor(browser_->document()); cursor.setPosition(start);
         cursor.setPosition(end, QTextCursor::KeepAnchor); cursor.insertText(value);
     }
@@ -4278,6 +4362,7 @@ bool MainWindow::clearReadingProjection() {
     if (inventory != LogicalFlow::Status::Stock
         && (!LogicalFlow::registerOwners(document, {}) || !unchanged())) return false;
     static_cast<ReadingBrowser *>(reading_)->installRubyProjection({});
+    if (readingAudio_) readingAudio_->retire();
     if (!unchanged()) return false;
     readingLogicalDocument_.clear(); readingLogicalOwners_.clear(); readingLogicalRevision_ = -1;
     return true;
@@ -4299,6 +4384,13 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     const auto inventory = LogicalFlow::inventory(document);
     if (!current() || inventory == LogicalFlow::Status::Refused) return false;
     const QPointer<ReadingBrowser> scrollReader(dynamic_cast<ReadingBrowser *>(widget.data()));
+    const bool refreshAudioBindings = scrollReader && scrollReader->audioControls
+        && !scrollReader->audioControls->empty() && scrollReader->audioControls->current();
+    QPointer<InlineAudioControls> heldAudio;
+    if (refreshAudioBindings) heldAudio = scrollReader->audioControls;
+    if (heldAudio && !heldAudio->holdFormats()) return false;
+    bool audioFormatsAccepted = false;
+    const auto releaseAudio = qScopeGuard([&] { if (heldAudio) heldAudio->releaseFormats(audioFormatsAccepted); });
     bool refreshSourceTableBindings = scrollReader && !scrollReader->sourceTableFocus.isEmpty();
     if (refreshSourceTableBindings) {
         const auto targets = scrollReader->sourceTableFocus;
@@ -4310,9 +4402,12 @@ bool MainWindow::editDocumentFormats(QTextBrowser *browser, const std::function<
     }
     const auto finishOwnedFormats = [&](int revision) {
         if (!current() || document->revision() != revision) return false;
+        if (refreshAudioBindings && (!scrollReader || !scrollReader->audioControls
+            || !scrollReader->audioControls->refreshRevision())) return false;
+        audioFormatsAccepted = true;
         // beginEditBlock advances even a no-op format transaction. Only refresh
         // bindings validated before this successful, source-preserving edit.
-        if (refreshSourceTableBindings && scrollReader) scrollReader->syncLocalScrollports();
+        if ((refreshSourceTableBindings || refreshAudioBindings) && scrollReader) scrollReader->syncLocalScrollports();
         return current() && document->revision() == revision;
     };
     if (inventory == LogicalFlow::Status::Handled) {
@@ -4552,6 +4647,7 @@ bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
     currentEntry_ = entries.first().toObject();
     // A new or failed display must never retain the previous entry's media or
     // bookmark action state. Successful composition binds the new entry below.
+    pendingAudioFocusOrdinal_ = -1; pendingAudioFocusSource_ = {}; pendingAudioFocusPart_.clear();
     media_->setEntry({});
     listen_->setEnabled(false);
     bookmark_->setEnabled(false);
@@ -4615,6 +4711,18 @@ void MainWindow::commitReadingEntry() {
     }
     const SavedWord word = savedWord(currentEntry_);
     media_->setEntry(currentEntry_, LibraryStorage::sourceHost(api_->root()));
+    if (readingAudio_ && !readingAudio_->empty()) CompiledContent::require(readingAudio_->bind());
+    if (readingAudio_ && pendingAudioFocusOrdinal_ >= 0) {
+        static_cast<ReadingBrowser *>(reading_)->syncLocalScrollports();
+        for (const auto &row : readingAudio_->occurrences) {
+            if (!row.widget || row.sourceOrdinal != pendingAudioFocusOrdinal_
+                || row.span != pendingAudioFocusSource_) continue;
+            auto *target = row.widget->findChild<QWidget *>(pendingAudioFocusPart_);
+            if (target && target->isEnabled()) target->setFocus(Qt::OtherFocusReason);
+            break;
+        }
+        pendingAudioFocusOrdinal_ = -1; pendingAudioFocusSource_ = {}; pendingAudioFocusPart_.clear();
+    }
     listen_->setEnabled(true);
     QSettings().setValue(QStringLiteral("reader/lastWord"), currentEntry_.value(QStringLiteral("title")).toString());
     QSettings().setValue(QStringLiteral("reader/lastKind"), api_->kind());
@@ -4941,6 +5049,7 @@ bool MainWindow::refreshReading() {
     document->setLayoutEnabled(false);
     CompiledContent::require(unchangedInitial());
     CompiledInlineAction::validateEntry(currentEntry_);
+    nextAudioOccurrence_ = 0;
     const QString html = entryHtml(currentEntry_, true);
     const bool bodyOrdinary = currentEntry_.value(QStringLiteral("body_adjoining")) == QJsonValue(QStringLiteral("ordinary"));
     const auto bodyTypography = CompiledContent::bodyTypography(currentEntry_.value(QStringLiteral("body_typography")));
@@ -4950,6 +5059,22 @@ bool MainWindow::refreshReading() {
     // source positions. Format callbacks only use the new authenticated list.
     const bool cleared = clearReadingProjection();
     CompiledContent::require(unchangedInitial() && cleared);
+    if (!readingAudio_) {
+        readingAudio_ = new InlineAudioControls(document, media_, browser->viewport());
+        const QPointer<ReadingBrowser> host(static_cast<ReadingBrowser *>(browser.data()));
+        readingAudio_->requestSync = [host] { if (host) host->requestLocalScrollSync(); };
+        readingAudio_->enterKeyboardFocus = [host](bool next) {
+            if (host && !host->inlineNavigationMoving) host->navigateInlineActions(next, true);
+        };
+        readingAudio_->reveal = [host](int position) {
+            if (!host) return;
+            QTextCursor cursor(host->document()); cursor.setPosition(position); host->setTextCursor(cursor);
+            if (!host) return;
+            host->ensureCursorVisible(); host->revealLocalPosition(position); host->requestLocalScrollSync();
+        };
+        host->audioControls = readingAudio_;
+    }
+    readingAudio_->setMedia(media_);
     QTextCursor transaction(document);
     bool editing = false;
     const auto beginEdit = [&] {
@@ -5057,6 +5182,8 @@ bool MainWindow::refreshReading() {
     CompiledContent::require(current());
     // Expand compiled Ruby only after all frame/source-run copies exist and
     // before any body boundary positions are bound. No import anchor is painted.
+    if (nextAudioOccurrence_ > 0) readingAudio_->expand(currentEntry_.value("media").toArray());
+    CompiledContent::require(current() && !document->isLayoutEnabled());
     auto boxExpansion = CompiledInlineBox::expand(document);
     CompiledContent::require(current() && !document->isLayoutEnabled());
     auto actionExpansion = CompiledInlineAction::expand(document);
@@ -5254,6 +5381,12 @@ bool MainWindow::refreshReading() {
     };
     CompiledContent::require(endEdit() && sameSource());
     static_cast<ReadingBrowser *>(browser.data())->installRubyProjection(std::move(rubyFinal.map));
+    const auto *audioHost = static_cast<ReadingBrowser *>(browser.data());
+    CompiledContent::require(readingAudio_->seal([audioHost](int position) {
+        return audioHost->rubyProjection ? audioHost->rubyProjection->toLogical(position, ReadingBrowser::RubyMap::Bias::After) : position;
+    }));
+    if (!readingAudio_->empty()) CompiledContent::require(readingAudio_->cacheText(audioHost->rubyProjection
+        ? audioHost->rubyProjection->text(0, audioHost->rubyProjection->logicalCount()) : document->toRawText()));
     static_cast<ReadingBrowser *>(browser.data())->installInlineActions(actionRegistry);
     CompiledContent::require(sameSource());
     if (!descriptors.isEmpty()) {
@@ -5306,6 +5439,7 @@ bool MainWindow::refreshReading() {
     // also need this request after their complete composition is registered.
     requestCurrentInlineImages(browser, figureResources);
     CompiledContent::require(sameSource());
+    if (!readingUncommitted_ && !readingAudio_->empty()) CompiledContent::require(readingAudio_->bind() && sameSource());
     committed = true;
     return true;
     } catch (const std::exception &error) {
@@ -5431,12 +5565,27 @@ void MainWindow::saveVisit() {
     visits_[visitIndex_].cursorPosition = cursor.position();
     visits_[visitIndex_].cursorAnchor = cursor.anchor();
     visits_[visitIndex_].readerFocused = reading_->hasFocus();
+    auto &visit = visits_[visitIndex_];
+    visit.audioFocusOrdinal = -1; visit.audioFocusSource = {}; visit.audioFocusPart.clear();
+    if (readingAudio_ && readingAudio_->current()) {
+        auto *focused = QApplication::focusWidget();
+        for (const auto &row : readingAudio_->occurrences) if (row.widget && focused && row.widget->isAncestorOf(focused)
+            && (focused->objectName() == "audioOccurrencePlay" || focused->objectName() == "audioOccurrencePosition")) {
+            visit.audioFocusOrdinal = row.sourceOrdinal;
+            visit.audioFocusSource = row.span; visit.audioFocusPart = focused->objectName();
+            visit.readerFocused = true;
+            break;
+        }
+    }
 }
 
 bool MainWindow::restoreVisitReading(const Visit &visit) {
     collapsedSections_ = visit.collapsed;
     if (!refreshReading()) return false;
     // Store offsets, never a cursor tied to the document replaced by setHtml.
+    pendingAudioFocusOrdinal_ = visit.audioFocusOrdinal;
+    pendingAudioFocusSource_ = visit.audioFocusSource;
+    pendingAudioFocusPart_ = visit.audioFocusPart;
     const int last = qMax(0, reading_->document()->characterCount() - 1);
     QTextCursor cursor(reading_->document());
     cursor.setPosition(qBound(0, visit.cursorAnchor, last));
@@ -5548,6 +5697,26 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
         QString out;
         for (const QJsonValue &value : parts) {
             const QJsonObject span = value.toObject();
+            for (const char *owner : {"ruby", "inline_box_group", "inline_action_group", "inline_padding_group"})
+                if (InlineAudioControls::nestedAudio(span.value(QLatin1String(owner))))
+                    throw DictApiError("audio inside another inline owner is not supported");
+            if (InlineAudioControls::present(span)) {
+                if (zeroFontContext || !linkPaint.isEmpty() || reading_->document()->isLayoutEnabled())
+                    throw DictApiError("audio outside owned ordinary Reading composition");
+                auto owner = span; owner.remove("audio_control"); owner.remove("link_paint");
+                // AUDIO direction owns the playback controls, not source-less text isolation.
+                owner.remove("direction");
+                owner.insert("kind", "text"); owner.insert("target", ""); owner.insert("trail", "");
+                owner.insert("text", QString(QChar::ObjectReplacementCharacter));
+                QString styled = spansHtml(QJsonArray{owner}, leftMargin, prefix, cellBackground, contextPointSize,
+                    inheritedInk, sourceRun, false, typedScopeOwnsIsolation, {}, computedCellTraits, contextFamily);
+                if (styled.count(QChar::ObjectReplacementCharacter) != 1) throw DictApiError("audio marker lost source font owner");
+                if (nextAudioOccurrence_ == std::numeric_limits<int>::max()) throw DictApiError("too many audio occurrences");
+                styled.replace(QString(QChar::ObjectReplacementCharacter),
+                    InlineAudioControls::marker(span, readingPointSize_, nextAudioOccurrence_++));
+                out += styled;
+                continue;
+            }
             if (CompiledContent::present(span.value(QStringLiteral("inline_box_group")))) {
                 if (zeroFontContext || !linkPaint.isEmpty())
                     throw DictApiError("inline box in zero-font or inherited link-paint context is not supported");

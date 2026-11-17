@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "8b5c87a905c7b8168cc2189357302533c1362b892a6b1d2d29b84ccd85ca366e",
-      "bytes": 1023526,
+      "sha256": "cde37b3d9fba64b7ce291274497c04ddbcccb0231cc181c1fd9fd0dfdb4500b4",
+      "bytes": 1027650,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "c4a366a4a585761bc69372fc0515175daf77380123deb9a177974b966b03f369",
-          "bytes": 812926
+          "qualified_sha256": "3b098777b57f6041b4289c4df304d465fdddf6c707463a229a815d607011a489",
+          "bytes": 813426
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,8 +68,8 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "d33d6b385ea36fa2dd4dfa65b5cda07ff4fe51c8c7beb57bb5a38aaef67c1ef2",
-          "bytes": 169882
+          "qualified_sha256": "0d90457a5ae7330efe53e5d89612c1777e777bde889faeb070f6a35fc673b498",
+          "bytes": 170307
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
@@ -89,8 +89,8 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "e157310d8c976eb7101c08dd936d07475cbf118b3cefd9f48e10649ebbe5051f",
-          "bytes": 144677
+          "qualified_sha256": "61965e7cd3440ec55a7f4a719b0d00a4e1e4e8440846d7942808f4378e95f0f8",
+          "bytes": 145404
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
@@ -208,8 +208,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "cd0c17ca9fdef86fc99090fe282ad236c0e01dc70ea64b562bb38e16bb2fe85e",
-      "bytes": 1283337,
+      "sha256": "0bfaa38cd03e745da4f51f90710b19cf149bd067fbc416a34188ab164cf06a1a",
+      "bytes": 1295595,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +222,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "d69672bfb40bc80b17df9fff4f1ce58b1eef801e826fafc54dc51092470b8ef5",
-          "bytes": 1287401
+          "qualified_sha256": "7cc47859edff0b490c7a733dfe6adddc15091fef4822bd461dd6be66bce4f728",
+          "bytes": 1299457
         }
       ]
     },
@@ -1749,6 +1749,239 @@
         "Internal link focus does not qualify a missing destination.",
         "Runtime checks use the recorded private product; minimal tracked-source composition has separate exact affected-function and test proofs."
       ]
+    },
+    "audio_occurrence_controls": {
+      "status": "scoped-native-app-and-existing-library-ui-qualified",
+      "source_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application191.json",
+        "bytes": 365714,
+        "sha256": "cd4e1c0919aba3bf0aff38777458171019e197df10959681f997a73de7afb603"
+      },
+      "product_source_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application191.json",
+        "bytes": 365714,
+        "sha256": "cd4e1c0919aba3bf0aff38777458171019e197df10959681f997a73de7afb603"
+      },
+      "engine_source_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application189.json",
+        "bytes": 363451,
+        "sha256": "dd4bd4b3849decabd5082456a566608305e936822df7c8a5292b35e6f72a0bfb"
+      },
+      "app_source_composition": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/audio-occurrence-focus01/canonical-applicability06/preparation06.json",
+        "bytes": 23208,
+        "sha256": "9f701bcbdbb1586cf0ffd537b4b55142d59fe1beb5584291c2266332ae8e5c0c"
+      },
+      "native_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold172/dispatch02/independent-closure01.json",
+        "bytes": 235575,
+        "sha256": "09b7b02982e6d3f493710a4ab6013eb8eaf47a76ed56630c957b607827597c0d"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold172/dispatch02/release01.json",
+        "bytes": 560,
+        "sha256": "10ad1fbb7b7bbebac824fa8fc00e585cf1806324de4fe641d613ba78461a2087"
+      },
+      "app_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/independent-closure01.json",
+        "bytes": 96925,
+        "sha256": "108d4cc88b14f5314d6b98e297fced127fe4fa17e19e8e8fd428041b02109214"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/release01.json",
+        "bytes": 483,
+        "sha256": "30b42a5a2666d489196b9289e1f7a8fc3e07bd2d81784b24930ee7c861c11749"
+      },
+      "selected_ui_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh193-sitelink-app24501/manual-review-reconciliation01.json",
+        "bytes": 3722,
+        "sha256": "7b7a56d97bd28778fe70d37924abe658d0910cc3f47b25a4f3f6d0b83a93db62"
+      },
+      "selected_ui_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh193-sitelink-app24501/release01.json",
+        "bytes": 521,
+        "sha256": "c2402ea69816cc75c22da03f33c7d7570649c0179fee4676884897c744c58eb4"
+      },
+      "complete_native_methods": [
+        "projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics",
+        "explicitInlineImagesShareOccurrenceMetricsPaintHitAndSelection",
+        "projectedRubyUsesResolvedBaseMetricsOnly"
+      ],
+      "selected_current_native_methods": [
+        "projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics",
+        "explicitInlineImagesShareOccurrenceMetricsPaintHitAndSelection",
+        "projectedRubyUsesResolvedBaseMetricsOnly"
+      ],
+      "retained_native_methods": [],
+      "private_qdoc_not_imported": true,
+      "scope": "Registered nonimage objects use original-source metrics and the native draw rectangle. The paired App includes both projected AlignNormal and stock RTL rectangle consumers, per-occurrence Play/seek and source-text mapping. Controlled widget observations and an existing no-AUDIO library GUI regression are separately scoped; no genuine AUDIO backend or corpus acceptance.",
+      "date": "2026-11-17",
+      "native_source_composition": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/audio-occurrence-focus01/native-canonical02/preparation02.json",
+        "bytes": 37373,
+        "sha256": "5378faa7d10ba048a7b972c2ee85a51a3c002764265028b9bc7fa80f073cf49d"
+      },
+      "app_current_methods": [
+        "readingAudioControlsBindAfterCommitAndKeepOccurrenceSource",
+        "readingAudioControlsUseNativeAutoSizeAndKeepEqualSourcesDistinct",
+        "readingAudioControlsRefuseForeignSourceAndUnsupportedAllocation",
+        "readingAudioStockRtlUsesNativeObjectRectangle"
+      ],
+      "app_retained_methods": [
+        "generatedDirectionCopyKeepsComplexCellsAndRubyLogicalText",
+        "audioOccurrenceControlsKeepSourceIdentityAndRetireOnNavigation"
+      ],
+      "retained_main_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile243/independent-closure01.json",
+        "bytes": 91328,
+        "sha256": "23a898260d7e7d37f6c79eb56932e3c0f1c845cb692a37db7407dd4d02cb77c3"
+      },
+      "retained_media_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile242/independent-closure01.json",
+        "bytes": 79177,
+        "sha256": "d65426293db195632136762630afc6a6feb7a2095767faef3e868ebcdc13812f"
+      },
+      "historical_app_methods_not_reexecuted": [
+        "generatedDirectionCopyPreservesAuthoredControlsAndRichSelection",
+        "generatedDirectionCopyKeepsComplexCellsAndRubyLogicalText",
+        "readerAccessibleLinksExposeExactRangesActionsAndLifetime",
+        "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+        "audioOccurrenceControlsKeepSourceIdentityAndRetireOnNavigation",
+        "audioOccurrenceRejectsWrongOwnerAndMalformedPolicy",
+        "requiresExplicitPermissionAndRequest",
+        "navigationCancelsRequestAndPermissionCancelsRequest"
+      ],
+      "historical_app_methods_without_current_carry": [
+        "generatedDirectionCopyPreservesAuthoredControlsAndRichSelection",
+        "readerAccessibleLinksExposeExactRangesActionsAndLifetime",
+        "typedInlineTableImageTopKeepsSvgAudioListAndReflow",
+        "audioOccurrenceRejectsWrongOwnerAndMalformedPolicy",
+        "requiresExplicitPermissionAndRequest",
+        "navigationCancelsRequestAndPermissionCancelsRequest"
+      ],
+      "historical_passes_promoted": false,
+      "app_product_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/independent-closure01.json",
+        "bytes": 96925,
+        "sha256": "108d4cc88b14f5314d6b98e297fced127fe4fa17e19e8e8fd428041b02109214"
+      },
+      "reader_test_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/independent-closure01.json",
+        "bytes": 96925,
+        "sha256": "108d4cc88b14f5314d6b98e297fced127fe4fa17e19e8e8fd428041b02109214"
+      },
+      "media_test_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile239/independent-closure01.json",
+        "bytes": 64240,
+        "sha256": "bea2041ace4cc500a87878bce54b4d3db2425ea94254bdb913be2cf088e697aa"
+      },
+      "native_product_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold172/dispatch02/independent-closure01.json",
+        "bytes": 235575,
+        "sha256": "09b7b02982e6d3f493710a4ab6013eb8eaf47a76ed56630c957b607827597c0d"
+      },
+      "source_composition_only": true,
+      "new_canonical_binary_build": false,
+      "gui_original_raw_failure_preserved": true,
+      "selected_ui_physical_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh193-sitelink-app24501/independent-closure01.json",
+        "bytes": 21164,
+        "sha256": "b8d66edf8cb723d1d552d721c0f5009922637350649ee1238614d86d2c675160"
+      },
+      "selected_ui_scope": "Existing genuine ZH193 library regression on the new App; no AUDIO occurrence in this record.",
+      "genuine_audio_occurrence_rendered": false,
+      "audio_backend_qualified": false,
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "full_frontend_acceptance": false,
+      "stock_rtl_host_fix_included": true,
+      "audio_carrier_direction_fix_included": true,
+      "audio_native_and_document_focus_traversal_included": true,
+      "controlled_widget_frames": [
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/commands/.tmp/ui-screenshots/audio-occurrence-focused-960.png",
+            "bytes": 71252,
+            "sha256": "0759ca947fa22aaae42707950053426a930fbb75e8f7a6232fc39174cc71973b"
+          },
+          "width": 960,
+          "height": 700
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/commands/.tmp/ui-screenshots/audio-occurrence-keyboard-return-960.png",
+            "bytes": 72879,
+            "sha256": "993b37e6d498885db9a82a1bdb2c5e5f9f12ba7bc467abc1ea121f2fe676b2d9"
+          },
+          "width": 960,
+          "height": 700
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/commands/.tmp/ui-screenshots/audio-occurrence-restored-640.png",
+            "bytes": 56345,
+            "sha256": "855863c29a5e21bb03766c1a47bb55e5978444744a599169c16b716a90139831"
+          },
+          "width": 640,
+          "height": 700
+        },
+        {
+          "file": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile245/commands/.tmp/ui-screenshots/audio-occurrence-restored-960.png",
+            "bytes": 71703,
+            "sha256": "89657bc3f861f077bed2f4a245e43ec7ac029de0e7acf5b30566062e9d042314"
+          },
+          "width": 960,
+          "height": 700
+        }
+      ],
+      "limitations": [
+        "Three current native methods and four affected Reading methods are qualified; the unchanged generic direction method carries from App243 and one unchanged Media method carries from App242 through exact source/domain or artifact/native proof. Other historical controls are not promoted.",
+        "Existing-library GUI observations do not qualify genuine AUDIO8192 producer/Reader/FFI or an authored audio occurrence.",
+        "Playback backend/network media and complete AUDIO equivalence are not claimed.",
+        "Percent allocation and complex audio owners remain refused.",
+        "Normal source reconstruction excludes unrelated private absolute/float and image-occurrence extensions; no newly built canonical binary is claimed."
+      ],
+      "historical_audio_compile_failure238": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile238/independent-closure01.json",
+        "bytes": 47003,
+        "sha256": "b8be5bb15fcbe55614637baf6b77ab9e8ed4508ee09d4038a8355cd6bf223e01"
+      },
+      "historical_audio_fixture_failure239": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile239/independent-closure01.json",
+        "bytes": 64240,
+        "sha256": "bea2041ace4cc500a87878bce54b4d3db2425ea94254bdb913be2cf088e697aa"
+      },
+      "historical_audio_native_metrics_failure240": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile240/independent-closure01.json",
+        "bytes": 76279,
+        "sha256": "d4d1364212a1bb9d1bdca98df094152c17e41c88040d1035ef186b1e422d90dc"
+      },
+      "historical_audio_character_geometry_failure241": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile241/independent-closure01.json",
+        "bytes": 76598,
+        "sha256": "114920fa3a902988511b76b4c22adb659310f46ff10f4e6533ea8e144b2eecf0"
+      },
+      "historical_audio_native_qualification171": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold171/independent-closure01.json",
+        "bytes": 232468,
+        "sha256": "c706a024ce19c0d4856589abf1388147eb66796c57c24c8bd3066a0d5e2b5afc"
+      },
+      "historical_audio_semantic_failure242": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile242/independent-closure01.json",
+        "bytes": 79177,
+        "sha256": "d65426293db195632136762630afc6a6feb7a2095767faef3e868ebcdc13812f"
+      },
+      "historical_audio_caption_oracle_failure243": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile243/independent-closure01.json",
+        "bytes": 91328,
+        "sha256": "23a898260d7e7d37f6c79eb56932e3c0f1c845cb692a37db7407dd4d02cb77c3"
+      },
+      "historical_audio_focus_failure244": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile244/independent-closure01.json",
+        "bytes": 110753,
+        "sha256": "82edca88336e1bb41a6d2f3eab1133129c4a817525560f54715385dd51446d0f"
+      }
     }
   },
   "packaged_distribution_source_equivalence": false,

@@ -921,3 +921,40 @@ proof excludes one reset of a private absolute-owner field absent from the norma
 source. Unrelated private absolute-container and relative-float features are not
 part of this delivery. This source-composition proof is separate from a newly
 built canonical binary.
+
+## Reading audio occurrence controls
+
+The source-mapped logical text engine recognizes registered custom inline
+objects before shaping. Their original document handler supplies advance and
+height, and character-rectangle queries use the same visual item interval and
+vertical alignment as native drawing. Insertion caret positions remain unchanged.
+Unowned, unmapped and unregistered custom formats retain their existing behavior.
+The controls compare actual allocation, drawing and character rectangles in
+projected and ordinary documents, including real RTL and vertical alignments.
+
+The paired existing desktop source keeps occurrence-specific native Play and
+seek views in Reading and reuses the media controller and resource lifetime.
+The projected normal-alignment host and the paired App stock RTL placement
+path consume the native rectangle. The App source composition includes the
+stock-host correction; its controlled qualification is recorded separately
+from the three native controls and the existing-library GUI observation.
+The recorded qualification includes three selected native controls and four
+affected Reading controls, including mixed document-link and native-control
+keyboard traversal. The unchanged generic direction control carries from
+App243 through exact source/domain proof; one unchanged Media control carries
+from App242 through exact source/artifact/native proof. Four controlled widget
+frames record direct focus, keyboard-return focus, narrow and restored widths.
+Other historical controls are not promoted. The GUI product and Reader test
+were built in App245. The product also has a recorded isolated GUI regression
+on an unchanged genuine ZH193 library. Its original worker exit1 is retained: an
+omitted manual-review root field was reconciled additively against the same
+frames and unchanged validator after successful normal Quit and cleanup. That record has no AUDIO occurrence:
+genuine AUDIO8192 data/Reader/FFI, rendered audio playback and backend
+acceptance remain unearned. No canonical binary rebuild, full suite or full
+frontend acceptance is claimed.
+
+The maintained 32-target patch recipe receives only the object classifier,
+rectangle repair and exact selected test/helper/slot. Unrelated private absolute
+containers and relative floats remain excluded. Relevant callback, drawing and
+logical-position functions match the private source exactly; ordinary line
+allocation matches after excluding its unrelated absolute-owner branch.

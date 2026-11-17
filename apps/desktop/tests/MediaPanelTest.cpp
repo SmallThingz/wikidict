@@ -27,6 +27,12 @@
 #include <QProgressBar>
 #include <QPointer>
 #include <QPushButton>
+#include <QProxyStyle>
+#include <QStyleFactory>
+#include <QStyleOptionFocusRect>
+#include <QStyleOptionButton>
+#include <QStyleOptionSlider>
+#include <QPainter>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QSettings>
@@ -182,6 +188,190 @@ bool settingsPathsAreIsolated(const QString &root) {
 class MediaPanelTest : public QObject {
     Q_OBJECT
 private slots:
+    void audioOccurrenceControlsKeepSourceIdentityAndRetireOnNavigation()
+    {
+        QSettings().setValue(QStringLiteral("media/allowAudio"), false);
+        Network network;
+        MediaPanel panel(nullptr, &network);
+        const auto span = [](const QString &mode) {
+            return QJsonObject{{"kind", "link"}, {"text", "zh-jiān.ogg"}, {"trail", ""},
+                {"target", "File:zh-jiān.ogg"}, {"direction", "rtl"},
+                {"classes", "wikidict-media wikidict-media-file-7a682d6a69c4816e2e6f6767"},
+                {"audio_control", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}},
+                    {"focus", QJsonObject{{"mode", mode}}}}}};
+        };
+        auto first = span("ua_auto"); auto second = span("authored_none");
+        auto focus = first.value("audio_control").toObject();
+        focus.insert("focus", QJsonObject{{"mode", "ua_auto"}, {"color", QJsonObject{{"kind", "rgb"}, {"value", "#3366cc"}}}});
+        first.insert("audio_control", focus);
+        auto transparent = first; auto transparentControl = focus;
+        transparentControl.insert("focus", QJsonObject{{"mode", "ua_auto"}, {"color", QJsonObject{{"kind", "transparent"}}}});
+        transparent.insert("audio_control", transparentControl);
+        const QJsonObject word{{"title", "間"}, {"language_code", "zh"},
+            {"media", QJsonArray{QJsonObject{{"kind", "audio"}, {"file", "zh-jiān.ogg"}}}},
+            {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{
+                QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{first, second, transparent}}}}}}}}};
+        QWidget reading;
+        auto *a = panel.createAudioOccurrence(first, &reading);
+        auto *b = panel.createAudioOccurrence(second, &reading);
+        auto *c = panel.createAudioOccurrence(transparent, &reading);
+        QVERIFY(a != b); QVERIFY(!panel.audioOccurrenceCurrent(a));
+        QCOMPARE(a->layoutDirection(), Qt::RightToLeft);
+        auto *playA = a->findChild<QPushButton *>(QStringLiteral("audioOccurrencePlay"));
+        auto *playB = b->findChild<QPushButton *>(QStringLiteral("audioOccurrencePlay"));
+        auto *seekA = a->findChild<QSlider *>(QStringLiteral("audioOccurrencePosition"));
+        QVERIFY(playA && playB && seekA); QVERIFY(!playA->isEnabled()); QVERIFY(!seekA->isEnabled());
+        QVERIFY(!panel.bindAudioOccurrence(a, first));
+        panel.setEntry(word, QStringLiteral("th.wiktionary.org"));
+        QVERIFY(panel.bindAudioOccurrence(a, first)); QVERIFY(panel.bindAudioOccurrence(b, second));
+        QVERIFY(panel.bindAudioOccurrence(c, transparent));
+        QVERIFY(panel.audioOccurrenceCurrent(a)); QVERIFY(panel.audioOccurrenceCurrent(b));
+        {
+            MediaPanel foreignPanel(nullptr, &network); foreignPanel.setEntry(word, QStringLiteral("th.wiktionary.org"));
+            QVERIFY(!foreignPanel.bindAudioOccurrence(a, first));
+            QVERIFY(panel.audioOccurrenceCurrent(a));
+        }
+        QCOMPARE(a->property("wikidict.audio.source").value<QJsonObject>(), first);
+        QCOMPARE(b->property("wikidict.audio.source").value<QJsonObject>(), second);
+        panel.retireAudioOccurrence(a); // Same-entry recomposition retires before DeferredDelete.
+        QVERIFY(!panel.audioOccurrenceCurrent(a)); QVERIFY(!playA->isEnabled());
+        QVERIFY(QAccessible::queryAccessibleInterface(playA)->state().disabled);
+        QVERIFY(panel.bindAudioOccurrence(a, first));
+        QCOMPARE(panel.findChildren<QPushButton *>(QStringLiteral("mediaLoad")).size(), 1);
+        QVERIFY(!playA->isEnabled()); QVERIFY(network.urls.isEmpty());
+        panel.findChild<QCheckBox *>(QStringLiteral("mediaAllowAudio"))->setChecked(true);
+        QVERIFY(playA->isEnabled()); QVERIFY(playB->isEnabled()); QVERIFY(!seekA->isEnabled());
+        auto *ax = QAccessible::queryAccessibleInterface(playA);
+        QVERIFY(ax && ax->actionInterface()); QCOMPARE(ax->role(), QAccessible::Button);
+        QVERIFY(ax->actionInterface()->actionNames().contains(QAccessibleActionInterface::pressAction()));
+        QCOMPARE(ax->text(QAccessible::Name), QStringLiteral("Play recording: zh-jiān.ogg"));
+        QVERIFY(a->sizeHint().width() > 0 && a->sizeHint().height() > 0);
+        QCOMPARE(a->sizeHint(), b->sizeHint());
+        // A real native style owns the geometry and decides its focus marks.
+        // Only the occurrence's source policy may change their paint.
+        auto *playC = c->findChild<QPushButton *>(QStringLiteral("audioOccurrencePlay")); QVERIFY(playC);
+        for (auto *button : {playA, playB, playC}) {
+            auto *proxy = dynamic_cast<QProxyStyle *>(button->style()); QVERIFY(proxy);
+            proxy->setBaseStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+        }
+        const auto paint = [](QPushButton *button, bool focused) {
+            QImage image(180, 36, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
+            QStyleOptionButton option; option.initFrom(button); option.rect = image.rect();
+            option.text = QStringLiteral("Play recording");
+            option.state = QStyle::State_Enabled | QStyle::State_Raised;
+            if (focused) option.state |= QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange;
+            QPainter painter(&image); button->style()->drawControl(QStyle::CE_PushButton, &option, &painter, button);
+            return image;
+        };
+        QCOMPARE(paint(playA, false), paint(playB, false));
+        QCOMPARE(paint(playB, true), paint(playB, false));
+        QCOMPARE(paint(playC, true), paint(playC, false));
+        QVERIFY(paint(playA, true) != paint(playA, false));
+        QVERIFY(paint(playA, true) != paint(playB, true));
+        const auto paintSeek = [](QSlider *slider, bool focused) {
+            QImage image(180, 36, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
+            QStyleOptionSlider option; option.initFrom(slider); option.rect = image.rect();
+            option.orientation = Qt::Horizontal; option.minimum = 0; option.maximum = 100;
+            option.sliderPosition = option.sliderValue = 50;
+            option.subControls = QStyle::SC_SliderGroove | QStyle::SC_SliderHandle;
+            option.state = QStyle::State_Enabled | QStyle::State_Horizontal;
+            if (focused) option.state |= QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange;
+            QPainter painter(&image); slider->style()->drawComplexControl(QStyle::CC_Slider, &option, &painter, slider);
+            return image;
+        };
+        auto *seekB = b->findChild<QSlider *>(QStringLiteral("audioOccurrencePosition")); QVERIFY(seekB);
+        QCOMPARE(paintSeek(seekA, false), paintSeek(seekB, false));
+        QCOMPARE(paintSeek(seekB, true), paintSeek(seekB, false));
+        QVERIFY(paintSeek(seekA, true) != paintSeek(seekB, true));
+        auto *seekC = c->findChild<QSlider *>(QStringLiteral("audioOccurrencePosition")); QVERIFY(seekC);
+        QCOMPARE(paintSeek(seekC, true), paintSeek(seekC, false));
+        const auto plainSeek = paintSeek(seekA, false), focusedSeek = paintSeek(seekA, true);
+        QStyleOptionSlider seekOption; seekOption.initFrom(seekA); seekOption.rect = plainSeek.rect();
+        seekOption.orientation = Qt::Horizontal; seekOption.minimum = 0; seekOption.maximum = 100;
+        seekOption.sliderPosition = seekOption.sliderValue = 50;
+        const QRect focusRect = seekA->style()->subElementRect(QStyle::SE_SliderFocusRect, &seekOption, seekA);
+        QImage nativeReference = plainSeek;
+        {
+            // The native focus primitive may shade inside its own rectangle.
+            // Compare that cue over unchanged content, not a guessed thin ring.
+            QStyleOptionFocusRect cue; cue.rect = focusRect;
+            cue.state = QStyle::State_Enabled | QStyle::State_Horizontal | QStyle::State_HasFocus | QStyle::State_KeyboardFocusChange;
+            cue.direction = seekOption.direction; cue.palette = seekOption.palette;
+            cue.fontMetrics = seekOption.fontMetrics; cue.styleObject = seekOption.styleObject;
+            for (const auto role : {QPalette::Highlight, QPalette::WindowText, QPalette::Text})
+                cue.palette.setColor(role, QColor("#3366cc"));
+            QPainter painter(&nativeReference);
+            dynamic_cast<QProxyStyle *>(seekA->style())->baseStyle()->drawPrimitive(QStyle::PE_FrameFocusRect, &cue, &painter, seekA);
+        }
+        QCOMPARE(focusedSeek, nativeReference); // No whole-control palette recoloring of the filled groove.
+        QVERIFY(network.urls.isEmpty()); // Focus policy and binding never request media.
+        panel.setEntry({});
+        QVERIFY(!panel.audioOccurrenceCurrent(a)); QVERIFY(!panel.audioOccurrenceCurrent(b));
+        QVERIFY(!playA->isEnabled()); QVERIFY(!playB->isEnabled()); QVERIFY(!seekA->isEnabled());
+        playA->click(); QCOMPARE(network.urls.size(), 0);
+        panel.setEntry(word, QStringLiteral("th.wiktionary.org"));
+        QVERIFY(!panel.audioOccurrenceCurrent(a)); // Back rebuild requires a fresh explicit bind.
+        QVERIFY(panel.bindAudioOccurrence(a, first));
+        auto foreign = first; foreign.insert("text", "foreign occurrence");
+        QVERIFY(!panel.bindAudioOccurrence(a, foreign)); QVERIFY(!panel.audioOccurrenceCurrent(a));
+        QVERIFY(network.urls.isEmpty());
+        QVERIFY(panel.bindAudioOccurrence(a, first)); QVERIFY(panel.bindAudioOccurrence(b, second));
+        auto *resourceSeek = panel.findChild<QSlider *>(); QVERIFY(resourceSeek);
+        resourceSeek->setRange(0, 100); resourceSeek->setValue(7);
+        seekA->setRange(0, 100); seekA->setSliderDown(true); seekA->setValue(42);
+        network.responses.append(Response{{}, -1, 0, true});
+        auto *action = QAccessible::queryAccessibleInterface(playA)->actionInterface(); QVERIFY(action);
+        action->doAction(QAccessibleActionInterface::pressAction());
+        QTRY_COMPARE(network.urls.size(), 1);
+        QCOMPARE(panel.findChildren<QMediaPlayer *>().size(), 1);
+        QVERIFY(!playA->isEnabled()); QVERIFY(!playB->isEnabled());
+        QCOMPARE(playA->text(), QStringLiteral("Loading..."));
+        QCOMPARE(playB->text(), playA->text());
+        QCOMPARE(seekA->value(), 42); // An asynchronous resource-state update must not move an active drag.
+        seekA->setSliderDown(false);
+        playB->click(); QCOMPARE(network.urls.size(), 1); // One resource request, two independent views.
+        panel.setEntry({});
+        QCOMPARE(network.cancelled, 1);
+        QVERIFY(!panel.audioOccurrenceCurrent(a)); QVERIFY(!panel.audioOccurrenceCurrent(b));
+        playA->click(); QCOMPARE(network.urls.size(), 1);
+    }
+
+    void audioOccurrenceRejectsWrongOwnerAndMalformedPolicy()
+    {
+        Network network; MediaPanel panel(nullptr, &network); QWidget parent;
+        const QJsonObject good{{"kind", "link"}, {"text", "sound.ogg"}, {"trail", ""},
+            {"target", "File:sound.ogg"}, {"classes", "wikidict-media wikidict-media-file-736f756e642e6f6767"},
+            {"audio_control", QJsonObject{{"focus", QJsonObject{{"mode", "ua_auto"}}}}}};
+        for (int variant = 0; variant < 8; ++variant) {
+            auto value = good; auto policy = good.value("audio_control").toObject();
+            if (variant == 0) value.insert("target", "sound.ogg");
+            if (variant == 1) value.insert("classes", "wikidict-media wikidict-media-file-00");
+            if (variant == 2) value.insert("target_fragment", "section");
+            if (variant == 3) policy.insert("focus", QJsonObject{{"mode", "authored_none"}, {"color", QJsonObject{{"kind", "native_theme"}}}});
+            if (variant == 4) policy.insert("focus", QJsonObject{{"mode", "ua_auto"}, {"offset", 2}});
+            if (variant == 5) policy.insert("focus", QJsonObject{{"mode", "ua_auto"}, {"color", QJsonObject{{"kind", "rgb"}, {"value", "#xyzxyz"}}}});
+            if (variant == 6) policy.insert("width", QJsonObject{{"unit", "px"}, {"value", -1}});
+            if (variant == 7) value.insert("image", QJsonObject{{"file", "sound.ogg"}});
+            value.insert("audio_control", policy);
+            QVERIFY_EXCEPTION_THROWN(panel.createAudioOccurrence(value, &parent), std::runtime_error);
+        }
+        auto *view = panel.createAudioOccurrence(good, &parent);
+        QJsonObject word{{"media", QJsonArray{QJsonObject{{"kind", "image"}, {"file", "sound.ogg"}}}},
+            {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{good}}}}}}}}};
+        QVERIFY_EXCEPTION_THROWN(panel.setEntry(word), std::runtime_error);
+        QVERIFY(!panel.bindAudioOccurrence(view, good)); QVERIFY(network.urls.isEmpty());
+        QJsonObject table{{"caption", QJsonArray{}}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+            QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "old nested content"}}}}}}}}}}};
+        for (int depth = 1; depth < 25; ++depth)
+            table = QJsonObject{{"caption", QJsonArray{}}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{
+                QJsonObject{{"spans", QJsonArray{}}, {"nested_table", table}}}}}}}};
+        const QJsonObject deep{{"title", "Existing table domain"}, {"sections", QJsonArray{QJsonObject{{"blocks", QJsonArray{
+            QJsonObject{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", table}}}}}}}};
+        try { panel.setEntry(deep); }
+        catch (const std::exception &error) { QFAIL(error.what()); }
+        QVERIFY(network.urls.isEmpty()); // Audio-free valid table depth retains its existing independent budget.
+    }
+
     void blockMediaPinsDensityPixelsAndCacheToCompiledRendition()
     {
         using State = MediaPanel::InlineImageState;

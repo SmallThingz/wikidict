@@ -11,6 +11,8 @@
 #include "MissingFigurePaint.hpp"
 #include <QTextBoundaryFinder>
 #include "InlineVectorImages.hpp"
+#include "InlineAudioControls.hpp"
+#include <QSlider>
 #include "CompiledContent.hpp"
 #include "LogicalFlow.hpp"
 #include "FlowConstruction.hpp"
@@ -12348,6 +12350,483 @@ private slots:
             QCOMPARE(browser->document()->toPlainText().count(text), 1);
             QCOMPARE(window.currentEntry_, directedEntry);
         }
+    }
+
+    void readingAudioControlsBindAfterCommitAndKeepOccurrenceSource() {
+        QSettings().setValue("media/allowAudio", false);
+        MainWindow window(fixture_, "dog");
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(960, 700); window.show();
+        const QString file = QStringLiteral("Controlled Reading sound.ogg");
+        const auto source = [&](QString text, QJsonObject focus) {
+            return QJsonObject{{"kind", "link"}, {"text", text}, {"trail", ""}, {"target", "File:" + file},
+                {"classes", "wikidict-media wikidict-media-file-" + QString::fromLatin1(file.toUtf8().toHex())},
+                {"audio_control", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}},
+                    {"height", QJsonObject{{"unit", "px"}, {"value", 30}}}, {"focus", focus}}}};
+        };
+        auto first = source("First recording", QJsonObject{{"mode", "ua_auto"},
+            {"color", QJsonObject{{"kind", "rgb"}, {"value", "#3366cc"}}}});
+        auto second = source("Second recording", QJsonObject{{"mode", "authored_none"}, {"color", QJsonValue::Null}});
+        first.insert("direction", "ltr"); second.insert("direction", "rtl");
+        const QString authoredControls = QString(QChar(0x2066)) + QStringLiteral("Authored left") + QChar(0x2069)
+            + QChar(0x2067) + QString::fromUtf8("אב") + QChar(0x2069);
+        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "text"}, {"text", "Before "}}, first,
+            QJsonObject{{"kind", "text"}, {"text", " between "}}, second,
+            QJsonObject{{"kind", "text"}, {"text", QStringLiteral(" after ") + authoredControls}}}}};
+        const QJsonObject inner{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"style", QJsonObject{}}, {"blocks", QJsonArray{paragraph}}}}};
+        const QJsonObject outer{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{{"style", QJsonObject{}}, {"blocks", QJsonArray{inner}}}}};
+        const QJsonObject entry{{"title", "Controlled Reading audio"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{QJsonObject{{"title", "Audio controls"}, {"level", 2}, {"blocks", QJsonArray{outer}}}}},
+            {"media", QJsonArray{QJsonObject{{"kind", "audio"}, {"file", file}, {"caption", "Controlled audio"}}}}};
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false, std::nullopt, true));
+        QVERIFY(window.readingAudio_); QVERIFY(window.readingAudio_->current());
+        QCOMPARE(window.readingAudio_->occurrences.size(), 2);
+        QPointer<QWidget> firstView = window.readingAudio_->occurrences[0].widget;
+        QPointer<QWidget> secondView = window.readingAudio_->occurrences[1].widget;
+        QVERIFY(firstView && secondView && firstView != secondView);
+        QCOMPARE(firstView->property("wikidict.audio.source").value<QJsonObject>(), first);
+        QCOMPARE(secondView->property("wikidict.audio.source").value<QJsonObject>(), second);
+        QVERIFY(firstView->property("wikidict.audio.sourceOrdinal") != secondView->property("wikidict.audio.sourceOrdinal"));
+        for (const auto &row : window.readingAudio_->occurrences) {
+            QVERIFY(!row.bound); QVERIFY(!row.widget->property("wikidict.audio.bound").toBool());
+            QVERIFY(!row.widget->findChild<QPushButton *>("audioOccurrencePlay")->isEnabled());
+        }
+        window.commitReadingEntry();
+        window.readingPaneAction_->trigger();
+        QTRY_VERIFY(firstView->isVisible() && secondView->isVisible());
+        QCoreApplication::processEvents();
+        for (const auto &row : window.readingAudio_->occurrences) {
+            QVERIFY(row.bound); QVERIFY(window.media_->audioOccurrenceCurrent(row.widget));
+            QVERIFY(row.widget->findChild<QPushButton *>("audioOccurrencePlay"));
+            auto *seek = row.widget->findChild<QSlider *>("audioOccurrencePosition"); QVERIFY(seek);
+            auto *playback = row.widget->findChild<QPushButton *>("audioOccurrencePlay");
+            QVERIFY(row.widget->rect().contains(playback->geometry()));
+            QVERIFY(row.widget->rect().contains(seek->geometry()));
+            QVERIFY(!playback->geometry().isEmpty() && !seek->geometry().isEmpty());
+            auto *controlAx = QAccessible::queryAccessibleInterface(playback); QVERIFY(controlAx);
+            QVERIFY(!controlAx->rect().isEmpty());
+            QVERIFY(!row.widget->findChild<QPushButton *>("mediaSource"));
+            const auto rect = window.readingAudio_->rectangle(row);
+            QVERIFY(!rect.isEmpty());
+            const qreal dpi = window.reading_->document()->documentLayout()->paintDevice()
+                ? window.reading_->document()->documentLayout()->paintDevice()->logicalDpiY() : 96;
+            QVERIFY(qAbs(rect.width() - 250 * dpi / 96) < .02);
+            const auto native = LogicalFlow::position(window.reading_->document(), row.cursor.position());
+            QVERIFY(native.status != LogicalFlow::Status::Refused);
+            if (native.status == LogicalFlow::Status::Handled) {
+                QCOMPARE(native.values.value("lineHeight").metaType().id(), QMetaType::Double);
+                QVERIFY(native.values.value("lineHeight").toDouble() + .1 >= row.size.height());
+                QVERIFY(native.values.value("characterRect").toRectF().width() + .1 >= row.size.width());
+            } else {
+                const auto block = window.reading_->document()->findBlock(row.cursor.position());
+                const int offset = row.cursor.position() - block.position();
+                const auto line = block.layout()->lineForTextPosition(offset); QVERIFY(line.isValid());
+                QVERIFY(line.height() + .1 >= row.size.height());
+                QVERIFY(qAbs(line.cursorToX(offset, QTextLine::Trailing) - line.cursorToX(offset, QTextLine::Leading)) + .1 >= row.size.width());
+            }
+        }
+        QCOMPARE(firstView->layoutDirection(), Qt::LeftToRight);
+        QCOMPARE(secondView->layoutDirection(), Qt::RightToLeft);
+        QCOMPARE(window.currentEntry_, entry);
+        for (auto block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it)
+                QVERIFY(!it.fragment().charFormat().anchorHref().startsWith("dict:File"));
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(accessible); auto *text = accessible->textInterface(); QVERIFY(text);
+        const QString semantic = text->text(0, text->characterCount());
+        QVERIFY(semantic.contains("Before First recording between Second recording after"));
+        QVERIFY(!semantic.contains(QChar::ObjectReplacementCharacter));
+        QVERIFY(semantic.contains(authoredControls));
+        for (const auto &row : window.readingAudio_->occurrences) {
+            const int firstOffset = semantic.indexOf(row.text); QVERIFY(firstOffset >= 0);
+            QCOMPARE(window.readingAudio_->toSource(row.basePosition), firstOffset);
+            QCOMPARE(window.readingAudio_->toSource(row.basePosition + 1), firstOffset + row.text.size());
+            QCOMPARE(text->text(firstOffset, firstOffset + row.text.size()), row.text);
+            QCOMPARE(window.readingAudio_->toBase(firstOffset, false), row.basePosition);
+            QCOMPARE(window.readingAudio_->toBase(firstOffset + row.text.size(), true), row.basePosition + 1);
+            for (int offset = 1; offset < row.text.size(); ++offset) {
+                QCOMPARE(window.readingAudio_->toBase(firstOffset + offset, false), row.basePosition);
+                QCOMPARE(window.readingAudio_->toBase(firstOffset + offset, true), row.basePosition + 1);
+            }
+        }
+        const int start = semantic.indexOf("First recording"), end = start + QStringLiteral("First recording").size();
+        text->addSelection(start, end); window.reading_->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("First recording"));
+        text->removeSelection(0);
+        const int ordinary = semantic.indexOf("Before");
+        text->addSelection(ordinary, ordinary + 6); window.reading_->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("Before"));
+        QVERIFY(QApplication::clipboard()->mimeData()->hasHtml());
+        text->removeSelection(0);
+        const int authoredStart = semantic.indexOf(authoredControls); QVERIFY(authoredStart >= 0);
+        const QString rawBeforeCopy = window.reading_->document()->toRawText();
+        const int revisionBeforeCopy = window.reading_->document()->revision();
+        text->addSelection(authoredStart, authoredStart + authoredControls.size()); window.reading_->copy();
+        QCOMPARE(QApplication::clipboard()->text(), authoredControls);
+        text->removeSelection(0);
+        QCOMPARE(text->text(0, text->characterCount()), semantic);
+        QCOMPARE(window.reading_->document()->toRawText(), rawBeforeCopy);
+        QCOMPARE(window.reading_->document()->revision(), revisionBeforeCopy);
+        auto *allow = window.media_->findChild<QCheckBox *>("mediaAllowAudio"); QVERIFY(allow); allow->setChecked(true);
+        auto *play = firstView->findChild<QPushButton *>("audioOccurrencePlay");
+        QTRY_VERIFY(play->isEnabled());
+        play->setFocus(Qt::OtherFocusReason); QTRY_VERIFY(play->hasFocus());
+        auto *playAx = QAccessible::queryAccessibleInterface(play); QVERIFY(playAx && playAx->actionInterface());
+        QVERIFY(playAx->actionInterface()->actionNames().contains(QAccessibleActionInterface::pressAction()));
+        QCOMPARE(playAx->text(QAccessible::Name), QStringLiteral("Play recording: ") + first.value("text").toString());
+        auto *secondPlay = secondView->findChild<QPushButton *>("audioOccurrencePlay");
+        QTRY_VERIFY(secondPlay->isEnabled());
+        auto *secondPlayAx = QAccessible::queryAccessibleInterface(secondPlay); QVERIFY(secondPlayAx);
+        QCOMPARE(secondPlayAx->text(QAccessible::Name), QStringLiteral("Play recording: ") + second.value("text").toString());
+        QVERIFY(playAx->text(QAccessible::Name) != secondPlayAx->text(QAccessible::Name));
+        const QString frameDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+        if (!frameDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(frameDirectory));
+            QVERIFY(window.grab().save(QDir(frameDirectory).filePath("audio-occurrence-focused-960.png")));
+        }
+        const auto focusDiagnostic = [&] {
+            const auto *focused = QApplication::focusWidget();
+            return QStringLiteral("focus=%1/%2 policy=%3 enabled=%4 visible=%5 reading=%6 selection=%7..%8 text=%9")
+                .arg(focused ? QLatin1String(focused->metaObject()->className()) : QStringLiteral("null"))
+                .arg(focused ? focused->objectName() : QString()).arg(focused ? int(focused->focusPolicy()) : -1)
+                .arg(focused && focused->isEnabled()).arg(focused && focused->isVisible())
+                .arg(window.reading_->hasFocus()).arg(window.reading_->textCursor().selectionStart())
+                .arg(window.reading_->textCursor().selectionEnd()).arg(window.reading_->textCursor().selectedText()).toUtf8();
+        };
+        QCOMPARE(firstView->focusProxy(), play); QCOMPARE(secondView->focusProxy(), secondPlay);
+        QCOMPARE(firstView->focusPolicy(), play->focusPolicy());
+        QCOMPARE(secondView->focusPolicy(), secondPlay->focusPolicy());
+        QVERIFY(!firstView->findChild<QSlider *>("audioOccurrencePosition")->isEnabled());
+        QVERIFY(!secondView->findChild<QSlider *>("audioOccurrencePosition")->isEnabled());
+        QTest::keyClick(play, Qt::Key_Tab); QTRY_VERIFY2(secondPlay->hasFocus(), focusDiagnostic().constData());
+        QTest::keyClick(secondPlay, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(play->hasFocus(), focusDiagnostic().constData());
+        if (!frameDirectory.isEmpty())
+            QVERIFY(window.grab().save(QDir(frameDirectory).filePath("audio-occurrence-keyboard-return-960.png")));
+
+        // Interleave genuine document links with the real native children. This
+        // controlled focus-only phase neither requests media nor opens a URL.
+        const auto link = [](const QString &label) {
+            return QJsonObject{{"kind", "external_link"}, {"text", label}, {"trail", ""},
+                {"target", QStringLiteral("https://example.invalid/") + label}};
+        };
+        auto mixedParagraph = paragraph;
+        mixedParagraph.insert("spans", QJsonArray{link("Before-link"), first,
+            link("Between-link"), second, link("After-link")});
+        auto mixedInner = inner; auto innerValue = inner.value("container").toObject();
+        innerValue.insert("blocks", QJsonArray{mixedParagraph}); mixedInner.insert("container", innerValue);
+        auto mixedOuter = outer; auto outerValue = outer.value("container").toObject();
+        outerValue.insert("blocks", QJsonArray{mixedInner}); mixedOuter.insert("container", outerValue);
+        auto mixed = entry; auto mixedSections = entry.value("sections").toArray();
+        auto mixedSection = mixedSections[0].toObject(); mixedSection.insert("blocks", QJsonArray{mixedOuter});
+        mixedSections[0] = mixedSection; mixed.insert("sections", mixedSections);
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{mixed}}}).toJson(), false));
+        QTRY_VERIFY(window.readingAudio_->current() && window.readingAudio_->occurrences.size() == 2);
+        auto *mixedFirst = window.readingAudio_->occurrences[0].widget->findChild<QPushButton *>("audioOccurrencePlay");
+        auto *mixedSecond = window.readingAudio_->occurrences[1].widget->findChild<QPushButton *>("audioOccurrencePlay");
+        auto *mixedSeek = window.readingAudio_->occurrences[0].widget->findChild<QSlider *>("audioOccurrencePosition");
+        QTRY_VERIFY(mixedFirst->isEnabled() && mixedSecond->isEnabled() && mixedFirst->isVisible() && mixedSecond->isVisible());
+        QVERIFY(!mixedSeek->isEnabled());
+        const QString mixedRaw = window.reading_->document()->toRawText();
+        const int mixedRevision = window.reading_->document()->revision();
+        QSignalSpy mixedActivation(window.reading_, &QTextBrowser::anchorClicked);
+        QList<QPair<int, int>> links;
+        QStringList labels, hrefs;
+        for (auto block = window.reading_->document()->begin(); block.isValid(); block = block.next())
+            for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment();
+                if (fragment.isValid() && fragment.charFormat().isAnchor() && !fragment.charFormat().anchorHref().isEmpty()) {
+                    const QString href = fragment.charFormat().anchorHref();
+                    if (!links.isEmpty() && links.last().second == fragment.position() && hrefs.last() == href) {
+                        links.last().second += fragment.length(); labels.last() += fragment.text();
+                    } else {
+                        links.append({fragment.position(), fragment.position() + fragment.length()});
+                        labels.append(fragment.text()); hrefs.append(href);
+                    }
+                }
+            }
+        QCOMPARE(labels.count("Before-link"), 1); QCOMPARE(labels.count("Between-link"), 1); QCOMPARE(labels.count("After-link"), 1);
+        const int beforeLink = labels.indexOf("Before-link"), betweenLink = labels.indexOf("Between-link"), afterLink = labels.indexOf("After-link");
+        QVERIFY(beforeLink >= 0); QCOMPARE(betweenLink, beforeLink + 1); QCOMPARE(afterLink, betweenLink + 1);
+        QVERIFY(links.size() > afterLink + 1); // The real generated Media links also remain reachable.
+        const auto atLink = [&](int index) {
+            const auto cursor = window.reading_->textCursor();
+            return window.reading_->hasFocus() && cursor.selectionStart() == links[index].first
+                && cursor.selectionEnd() == links[index].second;
+        };
+        const auto outsideReading = [&] {
+            auto *focused = QApplication::focusWidget();
+            return focused && focused != window.reading_ && !window.reading_->isAncestorOf(focused);
+        };
+        mixedFirst->setFocus(Qt::OtherFocusReason); QTRY_VERIFY2(mixedFirst->hasFocus(), focusDiagnostic().constData());
+        window.reading_->setFocus(Qt::TabFocusReason); QTRY_VERIFY2(atLink(0), focusDiagnostic().constData());
+        for (int i = 1; i <= beforeLink; ++i) {
+            QTest::keyClick(window.reading_, Qt::Key_Tab); QTRY_VERIFY2(atLink(i), focusDiagnostic().constData());
+        }
+        QTest::keyClick(window.reading_, Qt::Key_Tab); QTRY_VERIFY2(mixedFirst->hasFocus(), focusDiagnostic().constData());
+        // Enable only this native widget's focus state; no loaded/playing media is claimed.
+        mixedSeek->setEnabled(true);
+        QTest::keyClick(mixedFirst, Qt::Key_Tab); QTRY_VERIFY2(mixedSeek->hasFocus(), focusDiagnostic().constData());
+        QTest::keyClick(mixedSeek, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(mixedFirst->hasFocus(), focusDiagnostic().constData());
+        mixedSeek->setEnabled(false);
+        QTest::keyClick(mixedFirst, Qt::Key_Tab); QTRY_VERIFY2(atLink(betweenLink), focusDiagnostic().constData());
+        QTest::keyClick(window.reading_, Qt::Key_Tab); QTRY_VERIFY2(mixedSecond->hasFocus(), focusDiagnostic().constData());
+        QTest::keyClick(mixedSecond, Qt::Key_Tab); QTRY_VERIFY2(atLink(afterLink), focusDiagnostic().constData());
+        for (int i = afterLink + 1; i < links.size(); ++i) {
+            QTest::keyClick(window.reading_, Qt::Key_Tab); QTRY_VERIFY2(atLink(i), focusDiagnostic().constData());
+        }
+        QTest::keyClick(window.reading_, Qt::Key_Tab); QTRY_VERIFY2(outsideReading(), focusDiagnostic().constData());
+        const QPointer<QWidget> successor(QApplication::focusWidget()); QVERIFY(successor);
+        QTest::keyClick(successor, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(atLink(links.size() - 1), focusDiagnostic().constData());
+        for (int i = links.size() - 2; i >= afterLink; --i) {
+            QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(atLink(i), focusDiagnostic().constData());
+        }
+        QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(mixedSecond->hasFocus(), focusDiagnostic().constData());
+        QTest::keyClick(mixedSecond, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(atLink(betweenLink), focusDiagnostic().constData());
+        QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(mixedFirst->hasFocus(), focusDiagnostic().constData());
+        QTest::keyClick(mixedFirst, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(atLink(beforeLink), focusDiagnostic().constData());
+        for (int i = beforeLink - 1; i >= 0; --i) {
+            QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(atLink(i), focusDiagnostic().constData());
+        }
+        QTest::keyClick(window.reading_, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY2(outsideReading(), focusDiagnostic().constData());
+        const QPointer<QWidget> predecessor(QApplication::focusWidget()); QVERIFY(predecessor);
+        QTest::keyClick(predecessor, Qt::Key_Tab); QTRY_VERIFY2(atLink(0), focusDiagnostic().constData());
+        QCOMPARE(mixedActivation.count(), 0);
+        QCOMPARE(window.currentEntry_, mixed);
+        QCOMPARE(window.reading_->document()->toRawText(), mixedRaw);
+        QCOMPARE(window.reading_->document()->revision(), mixedRevision);
+        QCOMPARE(window.readingAudio_->occurrences[0].span, first);
+        QCOMPARE(window.readingAudio_->occurrences[1].span, second);
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false));
+        firstView = window.readingAudio_->occurrences[0].widget;
+        secondView = window.readingAudio_->occurrences[1].widget;
+        play = firstView->findChild<QPushButton *>("audioOccurrencePlay");
+        secondPlay = secondView->findChild<QPushButton *>("audioOccurrencePlay");
+        QTRY_VERIFY(play->isEnabled() && play->isVisible());
+        play->setFocus(Qt::OtherFocusReason); QTRY_VERIFY2(play->hasFocus(), focusDiagnostic().constData());
+        // Exercise the same deferred restore/commit seam used by Back, with a
+        // controlled entry rather than claiming a real corpus lookup.
+        MainWindow::Visit visit; visit.title = entry.value("title").toString();
+        window.visits_.append(visit); window.visitIndex_ = window.visits_.size() - 1;
+        window.saveVisit(); const auto saved = window.visits_.last();
+        QCOMPARE(saved.audioFocusSource, first);
+        QCOMPARE(saved.audioFocusPart, QStringLiteral("audioOccurrencePlay"));
+        QVERIFY(saved.audioFocusOrdinal >= 0);
+        window.readingUncommitted_ = true; window.media_->setEntry({});
+        QVERIFY(window.restoreVisitReading(saved));
+        QVERIFY(!window.readingAudio_->occurrences[0].bound);
+        window.commitReadingEntry();
+        QTRY_VERIFY(window.readingAudio_->occurrences[0].widget->findChild<QPushButton *>("audioOccurrencePlay")->hasFocus());
+        QVERIFY(!firstView || !window.media_->audioOccurrenceCurrent(firstView));
+        firstView = window.readingAudio_->occurrences[0].widget;
+        secondView = window.readingAudio_->occurrences[1].widget;
+        QSignalSpy accidentalNavigation(window.reading_, &QTextBrowser::anchorClicked);
+        for (int width : {640, 960}) {
+            window.resize(width, 700); QCoreApplication::processEvents();
+            QVERIFY(window.readingAudio_->current());
+            QCOMPARE(window.currentEntry_, entry);
+            for (const auto &row : window.readingAudio_->occurrences) {
+                QVERIFY(window.media_->audioOccurrenceCurrent(row.widget));
+                QVERIFY(!window.readingAudio_->rectangle(row).isEmpty());
+                QCOMPARE(row.widget->property("wikidict.audio.source").value<QJsonObject>(), row.span);
+            }
+            if (!frameDirectory.isEmpty())
+                QVERIFY(window.grab().save(QDir(frameDirectory).filePath(QStringLiteral("audio-occurrence-restored-%1.png").arg(width))));
+        }
+        QCOMPARE(accidentalNavigation.count(), 0);
+        QVERIFY(window.editDocumentFormats(window.reading_, [] {}));
+        QVERIFY(window.readingAudio_->current());
+        QCOMPARE(text->text(0, text->characterCount()), semantic);
+        allow->setChecked(false);
+        QVERIFY(window.openWord("dog"));
+        QTRY_VERIFY(!window.loading_);
+        QVERIFY(!firstView || !window.media_->audioOccurrenceCurrent(firstView));
+        QVERIFY(!secondView || !window.media_->audioOccurrenceCurrent(secondView));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(!firstView && !secondView);
+    }
+
+    void readingAudioControlsUseNativeAutoSizeAndKeepEqualSourcesDistinct() {
+        QSettings().setValue("media/allowAudio", false);
+        MainWindow window(fixture_, "dog");
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.resize(960, 700); window.show();
+        const QString file = QStringLiteral("Controlled duplicate sound.ogg");
+        const QJsonObject span{{"kind", "link"}, {"text", ""}, {"trail", ""}, {"target", "File:" + file},
+            {"classes", "wikidict-media wikidict-media-file-" + QString::fromLatin1(file.toUtf8().toHex())},
+            {"audio_control", QJsonObject{{"width", QJsonValue::Null}, {"height", QJsonValue::Null}, {"focus", QJsonValue::Null}}}};
+        const QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{span, span}}};
+        const QJsonObject entry{{"title", "Controlled equal audio sources"}, {"kind", "language"}, {"language", window.api_->language()},
+            {"sections", QJsonArray{QJsonObject{{"title", "Two occurrences"}, {"level", 2}, {"blocks", QJsonArray{block}}}}},
+            {"media", QJsonArray{QJsonObject{{"kind", "audio"}, {"file", file}, {"caption", ""}}}}};
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry}}}).toJson(), false));
+        QCOMPARE(window.readingAudio_->occurrences.size(), 2);
+        const auto rows = window.readingAudio_->occurrences;
+        QVERIFY(rows[0].widget != rows[1].widget);
+        QVERIFY(rows[0].cursor.position() < rows[1].cursor.position());
+        for (const auto &row : rows) {
+            QCOMPARE(row.size, QSizeF(row.widget->sizeHint()));
+            QCOMPARE(row.span, span);
+            QVERIFY(window.media_->audioOccurrenceCurrent(row.widget));
+        }
+        QCOMPARE(window.reading_->document()->rootFrame()->childFrames().size(), 0);
+        auto *text = QAccessible::queryAccessibleInterface(window.reading_)->textInterface(); QVERIFY(text);
+        QVERIFY(!text->text(0, text->characterCount()).contains(QChar::ObjectReplacementCharacter));
+        QVERIFY(window.refreshReading());
+        QCOMPARE(window.readingAudio_->occurrences.size(), 2);
+        for (const auto &old : rows) QVERIFY(!old.widget || !window.media_->audioOccurrenceCurrent(old.widget));
+        QCOMPARE(window.currentEntry_, entry);
+        const qreal dpi = window.reading_->document()->documentLayout()->paintDevice()
+            ? window.reading_->document()->documentLayout()->paintDevice()->logicalDpiY() : 96;
+        for (int points : {12, 18}) for (const QString &unit : {QStringLiteral("px"), QStringLiteral("em")}) {
+            window.readingPointSize_ = points;
+            auto sized = span; sized.insert("text", "Sized control");
+            sized.insert("font_scale", .5); sized.insert("font_scale_basis", "normal_body");
+            sized.insert("audio_control", QJsonObject{{"width", QJsonObject{{"unit", unit}, {"value", 20}}},
+                {"height", QJsonObject{{"unit", "px"}, {"value", 30}}}, {"focus", QJsonValue::Null}});
+            auto adjusted = entry; auto sections = adjusted.value("sections").toArray();
+            auto section = sections[0].toObject();
+            section.insert("blocks", QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{sized}}}});
+            sections[0] = section; adjusted.insert("sections", sections);
+            QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{adjusted}}}).toJson(), false));
+            QCOMPARE(window.readingAudio_->occurrences.size(), 1);
+            const auto row = window.readingAudio_->occurrences.front();
+            const qreal expected = 20 * (unit == "em" ? points * dpi / 72 : dpi / 96);
+            QVERIFY(qAbs(row.size.width() - expected) < .02);
+            QVERIFY(qAbs(row.size.height() - 30 * dpi / 96) < .02);
+            QTRY_VERIFY(row.widget->isVisible());
+            QVERIFY(qAbs(row.widget->width() - row.size.width()) <= 1.01);
+            QVERIFY(qAbs(row.widget->height() - row.size.height()) <= 1.01);
+            QCOMPARE(row.widget->font(), window.reading_->viewport()->font());
+            QCOMPARE(row.span, sized); QCOMPARE(window.currentEntry_, adjusted);
+        }
+    }
+
+    void readingAudioStockRtlUsesNativeObjectRectangle() {
+        QSettings().setValue("media/allowAudio", false);
+        MediaPanel media;
+        QTextBrowser browser;
+        browser.resize(720, 260); browser.show();
+        auto *document = browser.document();
+        document->setLayoutEnabled(false);
+        document->setDocumentMargin(0);
+        const QString file = QStringLiteral("Controlled stock RTL sound.ogg");
+        const QJsonObject span{{"kind", "link"}, {"text", "Recording"}, {"trail", ""},
+            {"target", "File:" + file}, {"direction", "rtl"},
+            {"classes", "wikidict-media wikidict-media-file-" + QString::fromLatin1(file.toUtf8().toHex())},
+            {"audio_control", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}},
+                {"height", QJsonObject{{"unit", "px"}, {"value", 30}}}, {"focus", QJsonValue::Null}}}};
+        const QJsonArray catalog{QJsonObject{{"kind", "audio"}, {"file", file}, {"caption", ""}}};
+        const QString prefix = QString::fromUtf8("אבג "), suffix = QString::fromUtf8(" דהו");
+        document->setHtml(QStringLiteral("<p dir=\"rtl\">%1%2%3</p>").arg(prefix,
+            InlineAudioControls::marker(span, 12, 0), suffix));
+        auto *host = new InlineAudioControls(document, &media, browser.viewport());
+        host->expand(catalog);
+        QVERIFY(host->seal([](int position) { return position; }));
+        QCOMPARE(host->occurrences.size(), 1);
+        const auto row = host->occurrences.front();
+        const QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{
+            QJsonObject{{"kind", "text"}, {"text", prefix}}, span,
+            QJsonObject{{"kind", "text"}, {"text", suffix}}}}};
+        const QJsonObject entry{{"title", "Controlled stock RTL audio"}, {"kind", "language"},
+            {"language", "Controlled"}, {"sections", QJsonArray{QJsonObject{{"title", "Audio"},
+                {"level", 2}, {"blocks", QJsonArray{block}}}}}, {"media", catalog}};
+        media.setEntry(entry); QVERIFY(host->bind());
+        document->setLayoutEnabled(true);
+        const QString source = document->toRawText();
+        const int revision = document->revision();
+        QVERIFY(source.contains(prefix + QString(QChar::ObjectReplacementCharacter) + suffix));
+        for (int width : {640, 400, 640}) {
+            document->setTextWidth(width); document->documentLayout()->documentSize();
+            QVERIFY(host->current());
+            const int position = row.cursor.position();
+            const auto queried = LogicalFlow::position(document, position);
+            QCOMPARE(queried.status, LogicalFlow::Status::Stock);
+            QVERIFY(LogicalFlow::finiteRect(queried.values.value("inlineCharacterRect")));
+            const QRectF nativeRect = queried.values.value("inlineCharacterRect").toRectF();
+            QVERIFY(!nativeRect.isEmpty());
+            const auto textBlock = document->findBlock(position);
+            const int offset = position - textBlock.position();
+            const auto line = textBlock.layout()->lineForTextPosition(offset); QVERIFY(line.isValid());
+            const auto *engine = textBlock.layout()->engine(); QVERIFY(engine && engine->layoutData);
+            const int item = engine->findItem(offset); QVERIFY(item >= 0);
+            QVERIFY(engine->layoutData->items.at(item).analysis.bidiLevel & 1);
+            QCOMPARE(int(engine->layoutData->items.at(item).analysis.flags), int(QScriptAnalysis::Object));
+            const auto origin = document->documentLayout()->blockBoundingRect(textBlock).topLeft();
+            const qreal oldCaretX = origin.x() + qMin(line.cursorToX(offset, QTextLine::Leading),
+                                                      line.cursorToX(offset, QTextLine::Trailing));
+            QVERIFY(qAbs(oldCaretX - nativeRect.right()) < .02);
+            QVERIFY(qAbs(oldCaretX - nativeRect.left()) > row.size.width() - .02);
+            QVERIFY(qAbs(nativeRect.width() - row.size.width()) <= qreal(1) / 64);
+            QVERIFY(qAbs(nativeRect.height() - row.size.height()) <= qreal(1) / 64);
+            QVERIFY(qAbs(nativeRect.bottom() - (origin.y() + line.y() + line.ascent())) < .02);
+            QCOMPARE(host->rectangle(row), nativeRect);
+            host->sync({}, [](int, const QPainterPath &path) { return path; });
+            QCOMPARE(row.widget->geometry(), nativeRect.toAlignedRect());
+            QVERIFY(row.widget->isVisible());
+            QCOMPARE(row.widget->layoutDirection(), Qt::RightToLeft);
+            QCOMPARE(row.widget->property("wikidict.audio.source").value<QJsonObject>(), span);
+            QVERIFY(media.audioOccurrenceCurrent(row.widget));
+            auto forged = row; forged.size.rwidth() += 1;
+            QVERIFY(host->rectangle(forged).isEmpty());
+            forged = row; forged.span.insert("text", "Different occurrence");
+            QVERIFY(host->rectangle(forged).isEmpty());
+            QCOMPARE(document->toRawText(), source); QCOMPARE(document->revision(), revision);
+        }
+        QTextCursor replace(document); replace.insertText("Changed source");
+        QVERIFY(!host->current()); QVERIFY(host->rectangle(row).isEmpty());
+        QVERIFY(!row.widget || !media.audioOccurrenceCurrent(row.widget));
+    }
+
+    void readingAudioControlsRefuseForeignSourceAndUnsupportedAllocation() {
+        QSettings().setValue("media/allowAudio", false);
+        MainWindow window(fixture_, "dog");
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const QString file = QStringLiteral("Controlled validation sound.ogg");
+        const QJsonObject good{{"kind", "link"}, {"text", "Recording"}, {"trail", ""}, {"target", "File:" + file},
+            {"classes", "wikidict-media wikidict-media-file-" + QString::fromLatin1(file.toUtf8().toHex())},
+            {"audio_control", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 250}}}, {"height", QJsonValue::Null}, {"focus", QJsonValue::Null}}}};
+        const auto entry = [&](const QJsonObject &span, bool catalog) {
+            return QJsonObject{{"title", "Controlled audio validation"}, {"kind", "language"}, {"language", window.api_->language()},
+                {"sections", QJsonArray{QJsonObject{{"title", "Audio"}, {"level", 2}, {"blocks", QJsonArray{
+                    QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{span}}}}}}}},
+                {"media", catalog ? QJsonArray{QJsonObject{{"kind", "audio"}, {"file", file}, {"caption", ""}}} : QJsonArray{}}};
+        };
+        const auto compose = [&](const QJsonObject &span, bool catalog = true) {
+            return window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{entry(span, catalog)}}}).toJson(), false);
+        };
+        QVERIFY(compose(good));
+        for (int variant = 0; variant < 6; ++variant) {
+            auto bad = good; auto control = bad.value("audio_control").toObject();
+            if (variant == 0) control.insert("width", QJsonObject{{"unit", "percent"}, {"value", 50}});
+            if (variant == 1) control.insert("width", QJsonObject{{"unit", "px"}, {"value", 0}});
+            if (variant == 2) bad.insert("classes", "wikidict-media wikidict-media-file-00");
+            if (variant == 3) bad.insert("trail", "suffix");
+            if (variant == 4) bad.insert("target_fragment", "Audio");
+            bad.insert("audio_control", control);
+            QVERIFY2(!compose(bad, variant != 5), qPrintable(QString::number(variant)));
+            QVERIFY(window.readingUncommitted_);
+            QVERIFY(!window.readingAudio_ || window.readingAudio_->empty());
+            QVERIFY(compose(good));
+            QCOMPARE(window.readingAudio_->occurrences.size(), 1);
+        }
+        auto tableEntry = entry(good, true); auto sections = tableEntry.value("sections").toArray();
+        auto section = sections[0].toObject();
+        const QJsonObject cell{{"rowspan", 1}, {"colspan", 1}, {"spans", QJsonArray{good}}};
+        const QJsonObject table{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+        section.insert("blocks", QJsonArray{QJsonObject{{"kind", "table"}, {"table", table}}});
+        sections[0] = section; tableEntry.insert("sections", sections);
+        QVERIFY(!window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{tableEntry}}}).toJson(), false));
+        QVERIFY(!window.readingAudio_ || window.readingAudio_->empty());
+        QVERIFY(compose(good));
+        auto *doc = window.reading_->document();
+        QPointer<QWidget> stale = window.readingAudio_->occurrences.front().widget;
+        QTextCursor edit(doc); edit.insertText("foreign source replacement");
+        QVERIFY(!stale || !window.media_->audioOccurrenceCurrent(stale));
+        QVERIFY(!stale || !stale->isEnabled());
+        QCoreApplication::processEvents();
+        QVERIFY(!window.readingAudio_->current() || window.readingAudio_->empty());
+        QVERIFY(!stale || !stale->isVisible());
     }
 
     void typedInlineTableImageTopKeepsSvgAudioListAndReflow() {

@@ -2035,7 +2035,7 @@
 
      QList<QCheckPoint> checkPoints;
 
-@@ -563,10 +1793,1396 @@
+@@ -563,10 +1793,1401 @@
      void layoutStep() const;
 
      QRectF frameBoundingRectInternal(QTextFrame *frame) const;
@@ -3023,7 +3023,12 @@
 +        const int imageItem = engine->findItem(projected);
 +        const bool explicitImage = imageItem >= 0 && imageItem < engine->layoutData->items.size()
 +            && QCompiledInline::imageAlignment(engine->format(&engine->layoutData->items[imageItem])) >= 0;
-+        if (explicitImage && hasAuthoredCharacter)
++        const bool registeredObject = imageItem >= 0 && imageItem < engine->layoutData->items.size()
++            && engine->layoutData->items[imageItem].analysis.flags == QScriptAnalysis::Object
++            && !engine->format(&engine->layoutData->items[imageItem]).isImageFormat()
++            && engine->hasDocumentObject(projected) && engine->docLayout()
++            && engine->docLayout()->handlerForObject(engine->format(&engine->layoutData->items[imageItem]).objectType());
++        if ((explicitImage || registeredObject) && hasAuthoredCharacter)
 +            result.insert(QStringLiteral("characterRect"), authoredCharacter.translated(origin));
 +        else result.insert(QStringLiteral("characterRect"), QRectF(origin.x() + left,
 +            origin.y() + (hasAuthoredCharacter ? authoredCharacter.y() : line.y()), right - left,
@@ -3432,7 +3437,7 @@
 
  QTextDocumentLayoutPrivate::QTextDocumentLayoutPrivate()
      : fixedColumnWidth(-1),
-@@ -636,22 +3252,82 @@
+@@ -636,22 +3257,82 @@
          return PointAfter;
      Q_ASSERT(!fd->layoutDirty);
      Q_ASSERT(!fd->sizeDirty);
@@ -3518,7 +3523,7 @@
      }
 
      if (isFrameFromInlineObject(frame)) {
-@@ -677,7 +3353,7 @@
+@@ -677,7 +3358,7 @@
 
                      const QList<QTextFrame *> childFrames = td->childFrameMap.values(r + c * rows);
                      for (int i = 0; i < childFrames.size(); ++i) {
@@ -3527,7 +3532,7 @@
                          if (isFrameFromInlineObject(child)
                              && child->frameFormat().position() != QTextFrameFormat::InFlow
                              && hitTest(child, pointInCell, position, l, accuracy) == PointExact)
-@@ -694,8 +3370,8 @@
+@@ -694,8 +3375,8 @@
 
      const QList<QTextFrame *> childFrames = frame->childFrames();
      for (int i = 0; i < childFrames.size(); ++i) {
@@ -3538,7 +3543,7 @@
              && child->frameFormat().position() != QTextFrameFormat::InFlow
              && hitTest(child, relativePoint, position, l, accuracy) == PointExact)
          {
-@@ -705,7 +3381,7 @@
+@@ -705,7 +3386,7 @@
 
      QTextFrame::Iterator it = frame->begin();
 
@@ -3547,7 +3552,7 @@
          it = frameIteratorForYPosition(relativePoint.y);
 
          Q_ASSERT(it.parentFrame() == frame);
-@@ -719,10 +3395,117 @@
+@@ -719,10 +3400,117 @@
      return hitTest(it, PointBefore, relativePoint, position, l, accuracy);
  }
 
@@ -3665,7 +3670,7 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
          HitPoint hp;
-@@ -757,6 +3540,28 @@
+@@ -757,6 +3545,28 @@
                                      int *position, QTextLayout **l, Qt::HitTestAccuracy accuracy) const
  {
      QTextTableData *td = static_cast<QTextTableData *>(data(table));
@@ -3694,7 +3699,7 @@
 
      auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), point.y);
      if (rowIt == td->rowPositions.constEnd()) {
-@@ -781,8 +3586,40 @@
+@@ -781,8 +3591,40 @@
 
      HitPoint hp = hitTest(cell.begin(), PointInside, point - td->cellPosition(table, cell), position, l, accuracy);
 
@@ -3736,7 +3741,7 @@
      if (hp == PointAfter)
          *position = cell.lastPosition();
      return PointInside;
-@@ -792,8 +3629,67 @@
+@@ -792,8 +3634,67 @@
  QTextDocumentLayoutPrivate::hitTest(const QTextBlock &bl, const QFixedPoint &point, int *position, QTextLayout **l,
                                      Qt::HitTestAccuracy accuracy) const
  {
@@ -3805,7 +3810,7 @@
      textrect.translate(tl->position());
      qCDebug(lcHit) << "    checking block" << bl.position() << "point=" << point.toPointF() << "    tlrect" << textrect;
      *position = bl.position();
-@@ -823,15 +3719,21 @@
+@@ -823,15 +3724,21 @@
          } else {
              if (lr.left() <= pos.x() && lr.right() >= pos.x())
                  hit = PointExact;
@@ -3832,7 +3837,7 @@
      *position += off;
 
      qCDebug(lcHit) << "    inside=" << hit << " pos=" << *position;
-@@ -932,16 +3834,99 @@
+@@ -932,16 +3839,99 @@
          painter->setRenderHint(QPainter::Antialiasing, false);
  }
 
@@ -3936,7 +3941,7 @@
 
          QRectF gradientRect; // invalid makes it default to bgRect
          QPointF origin = bgRect.topLeft();
-@@ -952,7 +3937,28 @@
+@@ -952,7 +3942,28 @@
          }
          fillBackground(painter, bgRect, bg, origin, gradientRect);
      }
@@ -3966,7 +3971,7 @@
          painter->save();
          painter->setBrush(Qt::lightGray);
          painter->setPen(Qt::NoPen);
-@@ -1042,8 +4048,9 @@
+@@ -1042,8 +4053,9 @@
 
  void QTextDocumentLayoutPrivate::drawFrame(const QPointF &offset, QPainter *painter,
                                             const QAbstractTextDocumentLayout::PaintContext &context,
@@ -3978,7 +3983,7 @@
      QTextFrameData *fd = data(frame);
      // #######
      if (fd->layoutDirty)
-@@ -1051,13 +4058,29 @@
+@@ -1051,13 +4063,29 @@
      Q_ASSERT(!fd->sizeDirty);
      Q_ASSERT(!fd->layoutDirty);
 
@@ -4012,7 +4017,7 @@
          return;
 
       qCDebug(lcDraw) << "drawFrame" << frame->firstPosition() << "--" << frame->lastPosition() << "at" << offset;
-@@ -1074,6 +4097,7 @@
+@@ -1074,6 +4102,7 @@
          const int rows = table->rows();
          const int columns = table->columns();
          QTextTableData *td = static_cast<QTextTableData *>(data(table));
@@ -4020,7 +4025,7 @@
 
          QVarLengthArray<int> selectedTableCells(context.selections.size() * 4);
          for (int i = 0; i < context.selections.size(); ++i) {
-@@ -1121,11 +4145,11 @@
+@@ -1121,11 +4150,11 @@
                      QRectF cellRect = td->cellRect(cell);
 
                      cellRect.translate(off.x(), headerOffset);
@@ -4034,7 +4039,7 @@
                  }
              }
              ++page;
-@@ -1134,7 +4158,7 @@
+@@ -1134,7 +4163,7 @@
          int firstRow = 0;
          int lastRow = rows;
 
@@ -4043,7 +4048,7 @@
              auto rowIt = std::lower_bound(td->rowPositions.constBegin(), td->rowPositions.constEnd(), QFixed::fromReal(context.clip.top() - off.y()));
              if (rowIt != td->rowPositions.constEnd() && rowIt != td->rowPositions.constBegin()) {
                  --rowIt;
-@@ -1161,11 +4185,11 @@
+@@ -1161,11 +4190,11 @@
                  QRectF cellRect = td->cellRect(cell);
 
                  cellRect.translate(off);
@@ -4057,7 +4062,7 @@
              }
          }
 
-@@ -1174,7 +4198,7 @@
+@@ -1174,7 +4203,7 @@
 
          QTextFrame::Iterator it = frame->begin();
 
@@ -4066,7 +4071,7 @@
              it = frameIteratorForYPosition(QFixed::fromReal(context.clip.top()));
 
          QList<QTextFrame *> floats;
-@@ -1183,9 +4207,65 @@
+@@ -1183,9 +4212,65 @@
          for (int i = 0; i < numFloats; ++i)
              floats.append(fd->floats.at(i));
 
@@ -4135,7 +4140,7 @@
      if (cursorBlockNeedingRepaint.isValid()) {
          const QPen oldPen = painter->pen();
          painter->setPen(context.palette.color(QPalette::Text));
-@@ -1338,13 +4418,55 @@
+@@ -1338,13 +4423,55 @@
          return EdgeData();
      }
 
@@ -4192,7 +4197,7 @@
      } else if (td->drawGrid) {
          const bool outermost =
                  (edge == QCss::LeftEdge && cell.column() == 0) ||
-@@ -1356,14 +4478,14 @@
+@@ -1356,14 +4483,14 @@
              qreal border = table->format().border();
              if (border > 1.0) {
                  // table border
@@ -4210,7 +4215,7 @@
      }
  }
 
-@@ -1577,7 +4699,14 @@
+@@ -1577,7 +4704,14 @@
      QTextFrameFormat::BorderStyle borderStyle = QTextFrameFormat::BorderStyle_None;
      QBrush brush;
 
@@ -4226,7 +4231,7 @@
          borderStyle = table->format().borderStyle();
          brush = table->format().borderBrush();
      }
-@@ -1792,7 +4921,8 @@
+@@ -1792,7 +4926,8 @@
 
  void QTextDocumentLayoutPrivate::drawTableCell(const QRectF &cellRect, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &cell_context,
                                                 QTextTable *table, QTextTableData *td, int r, int c,
@@ -4236,7 +4241,7 @@
  {
      QTextTableCell cell = table->cellAt(r, c);
      int rspan = cell.rowSpan();
-@@ -1905,7 +5035,7 @@
+@@ -1905,7 +5040,7 @@
      QTextBlock repaintBlock;
      drawFlow(cellPos, painter, cell_context, cell.begin(),
               td->childFrameMap.values(r + c * table->rows()),
@@ -4245,7 +4250,7 @@
      if (repaintBlock.isValid()) {
          *cursorBlockNeedingRepaint = repaintBlock;
          *cursorBlockOffset = cellPos;
-@@ -1916,13 +5046,14 @@
+@@ -1916,13 +5051,14 @@
  }
 
  void QTextDocumentLayoutPrivate::drawFlow(const QPointF &offset, QPainter *painter, const QAbstractTextDocumentLayout::PaintContext &context,
@@ -4262,7 +4267,7 @@
          lastVisibleCheckPoint = std::lower_bound(checkPoints.begin(), checkPoints.end(), QFixed::fromReal(context.clip.bottom()));
      }
 
-@@ -1932,7 +5063,7 @@
+@@ -1932,7 +5068,7 @@
      for (; !it.atEnd(); ++it) {
          QTextFrame *c = it.currentFrame();
 
@@ -4271,7 +4276,7 @@
              int currentPosInDoc;
              if (c)
                  currentPosInDoc = c->firstPosition();
-@@ -1952,7 +5083,7 @@
+@@ -1952,7 +5088,7 @@
          }
 
          if (c)
@@ -4280,7 +4285,7 @@
          else {
              QAbstractTextDocumentLayout::PaintContext pc = context;
              if (isEmptyBlockAfterTable(it.currentBlock(), previousFrame))
-@@ -1996,10 +5127,40 @@
+@@ -1996,10 +5132,40 @@
                                             const QAbstractTextDocumentLayout::PaintContext &context,
                                             const QTextBlock &bl, bool inRootFrame) const
  {
@@ -4322,7 +4327,7 @@
          return;
      qCDebug(lcDraw) << "drawBlock" << bl.position() << "at" << offset << "br" << tl->boundingRect();
 
-@@ -2061,7 +5222,18 @@
+@@ -2061,7 +5227,18 @@
      QPen oldPen = painter->pen();
      painter->setPen(context.palette.color(QPalette::Text));
 
@@ -4342,7 +4347,7 @@
 
      // if the block is empty and it precedes a table, do not draw the cursor.
      // the cursor is drawn later after the table has been drawn so no need
-@@ -2116,7 +5288,8 @@
+@@ -2116,7 +5293,8 @@
      if (blockFormat.hasProperty(QTextFormat::ListStyle))
          style = QTextListFormat::Style(blockFormat.intProperty(QTextFormat::ListStyle));
 
@@ -4352,7 +4357,7 @@
      if (layout->lineCount() == 0)
          return;
      QTextLine firstLine = layout->lineAt(0);
-@@ -2270,12 +5443,258 @@
+@@ -2270,12 +5448,258 @@
      return flowPosition(f->begin());
  }
 
@@ -4611,7 +4616,7 @@
      layoutStruct.frame = t;
      layoutStruct.minimumWidth = 0;
      layoutStruct.maximumWidth = QFIXED_MAX;
-@@ -2283,6 +5702,9 @@
+@@ -2283,6 +5707,9 @@
 
      const QFixed topPadding = td->topPadding(t, cell);
      if (withPageBreaks) {
@@ -4621,7 +4626,7 @@
          layoutStruct.frameY = absoluteTableY + td->rowPositions.at(cell.row()) + topPadding;
      }
      layoutStruct.x_left = 0;
-@@ -2319,16 +5741,57 @@
+@@ -2319,16 +5746,57 @@
 
      layoutStruct.fullLayout = true;
 
@@ -4689,7 +4694,7 @@
      layoutFlow(cell.begin(), &layoutStruct, layoutFrom, layoutTo, width);
 
      QFixed floatMinWidth;
-@@ -2341,10 +5804,37 @@
+@@ -2341,10 +5809,37 @@
          QTextFrame *frame = childFrames.at(i);
          QTextFrameData *cd = data(frame);
 
@@ -4729,7 +4734,7 @@
      }
 
      // constraint the maximum/minimumWidth by the minimum width of the fixed size floats,
-@@ -2374,6 +5864,25 @@
+@@ -2374,6 +5869,25 @@
 
  QRectF QTextDocumentLayoutPrivate::layoutTable(QTextTable *table, int layoutFrom, int layoutTo, QFixed parentY)
  {
@@ -4755,7 +4760,7 @@
      qCDebug(lcTable) << "layoutTable from" << layoutFrom << "to" << layoutTo << "parentY" << parentY;
      QTextTableData *td = static_cast<QTextTableData *>(data(table));
      Q_ASSERT(td->sizeDirty);
-@@ -2392,6 +5901,9 @@
+@@ -2392,6 +5906,9 @@
          }
      }
 
@@ -4765,7 +4770,7 @@
      QList<QTextLength> columnWidthConstraints = fmt.columnWidthConstraints();
      if (columnWidthConstraints.size() != columns)
          columnWidthConstraints.resize(columns);
-@@ -2408,6 +5920,16 @@
+@@ -2408,6 +5925,16 @@
      td->drawGrid = (td->borderCollapse && fmt.border() >= 1);
 
      td->effectiveTopBorder = td->effectiveBottomBorder = td->effectiveLeftBorder = td->effectiveRightBorder = td->border;
@@ -4782,7 +4787,7 @@
 
  #ifndef QT_NO_CSSPARSER
      if (td->borderCollapse) {
-@@ -2437,16 +5959,68 @@
+@@ -2437,16 +5964,68 @@
 
      td->deviceScale = scaleToDevice(qreal(1));
      td->cellPadding = QFixed::fromReal(scaleToDevice(fmt.cellPadding()));
@@ -4856,7 +4861,7 @@
      QFixed remainingWidth = td->contentsWidth;
      // two (vertical) borders per cell per column
      remainingWidth -= columns * 2 * td->borderCell;
-@@ -2470,7 +6044,19 @@
+@@ -2470,7 +6049,19 @@
      // start with a minimum width of 0. totally empty
      // cells of default created tables are invisible otherwise
      // and therefore hardly editable
@@ -4877,7 +4882,7 @@
 
      td->maxWidths.resize(columns);
      td->maxWidths.fill(QFIXED_MAX);
-@@ -2491,12 +6077,92 @@
+@@ -2491,12 +6082,92 @@
              // to figure out the min and the max width lay out the cell at
              // maximum width. otherwise the maxwidth calculation sometimes
              // returns wrong values
@@ -4976,7 +4981,7 @@
              for (int n = 0; n < cspan; ++n) {
                  const int col = i + n;
                  QFixed w = widthToDistribute / (cspan - n);
-@@ -2509,10 +6175,11 @@
+@@ -2509,10 +6180,11 @@
 
              QFixed maxW = td->maxWidths.at(i);
              if (layoutStruct.maximumWidth != QFIXED_MAX) {
@@ -4990,7 +4995,7 @@
              }
              if (maxW == QFIXED_MAX)
                  continue;
-@@ -2535,6 +6202,49 @@
+@@ -2535,6 +6207,49 @@
                      break;
              }
          }
@@ -5040,7 +5045,7 @@
      }
 
      // set fixed values, figure out total percentages used and number of
-@@ -2549,7 +6259,8 @@
+@@ -2549,7 +6264,8 @@
              remainingWidth -= td->widths.at(i);
              qCDebug(lcTable) << "column" << i << "has width constraint" << td->minWidths.at(i) << "px, remaining width now" << remainingWidth;
          } else if (length.type() == QTextLength::PercentageLength) {
@@ -5050,7 +5055,7 @@
          } else if (length.type() == QTextLength::VariableLength) {
              variableCols++;
 
-@@ -2557,19 +6268,23 @@
+@@ -2557,19 +6273,23 @@
              remainingWidth -= td->minWidths.at(i);
              qCDebug(lcTable) << "column" << i << "has variable width, min" << td->minWidths.at(i) << "remaining width now" << remainingWidth;
          }
@@ -5078,7 +5083,7 @@
                  QFixed maxWidth = remainingWidth - remainingMinWidths;
                  if (percentWidth >= td->minWidths.at(i) && maxWidth > td->minWidths.at(i)) {
                      td->widths[i] = qBound(td->minWidths.at(i), percentWidth, maxWidth);
-@@ -2583,6 +6298,9 @@
+@@ -2583,6 +6303,9 @@
          }
      }
 
@@ -5088,7 +5093,7 @@
      // for variable columns distribute the remaining space
      if (variableCols > 0 && remainingWidth > 0) {
          QVarLengthArray<int> columnsWithProperMaxSize;
-@@ -2607,12 +6325,53 @@
+@@ -2607,12 +6330,53 @@
 
          if (remainingWidth > 0
              // don't unnecessarily grow variable length sized tables
@@ -5145,7 +5150,7 @@
          }
      }
 
-@@ -2621,6 +6380,16 @@
+@@ -2621,6 +6385,16 @@
      // values here.
      // to minimize the total rounding error we propagate the rounding error for each width
      // to its successor.
@@ -5162,7 +5167,7 @@
      QFixed error = 0;
      for (int i = 0; i < columns; ++i) {
          QFixed orig = td->widths[i];
-@@ -2628,19 +6397,70 @@
+@@ -2628,19 +6402,70 @@
          error = td->widths[i] - orig;
      }
 
@@ -5236,7 +5241,7 @@
          docPrivate->defaultTextOption.setWrapMode(QTextOption::WrapAnywhere);
          // go back to the top of the function
          goto recalc_minmax_widths;
-@@ -2648,7 +6468,7 @@
+@@ -2648,7 +6473,7 @@
 
      td->contentsWidth = contentsWidth;
 
@@ -5245,7 +5250,7 @@
 
      td->heights.resize(rows);
      td->heights.fill(0);
-@@ -2679,7 +6499,12 @@
+@@ -2679,7 +6504,12 @@
      //
      // ### this could be made faster by iterating over the cells array of QTextTable
      for (int r = 0; r < rows; ++r) {
@@ -5258,7 +5263,7 @@
 
          const int tableStartPage = (absoluteTableY / pageHeight).truncate();
          const int currentPage = ((td->rowPositions.at(r) + absoluteTableY) / pageHeight).truncate();
-@@ -2687,10 +6512,17 @@
+@@ -2687,10 +6517,17 @@
          const QFixed pageTop = currentPage * pageHeight + td->effectiveTopMargin - absoluteTableY + cellSpacing + td->border;
          const QFixed nextPageTop = pageTop + pageHeight;
 
@@ -5280,7 +5285,7 @@
 
          bool dropRowToNextPage = true;
          int cellCountBeforeRow = cellHeights.size();
-@@ -2746,6 +6578,16 @@
+@@ -2746,6 +6583,16 @@
                                                         layoutFrom, layoutTo,
                                                         td, absoluteTableY,
                                                         /*withPageBreaks =*/true);
@@ -5297,7 +5302,7 @@
 
              const QFixed height = (layoutStruct.y + bottomPadding + topPadding).round();
 
-@@ -2756,7 +6598,14 @@
+@@ -2756,7 +6603,14 @@
 
              cellHeights.append(layoutStruct.y);
 
@@ -5313,7 +5318,7 @@
              if (childPos < pageBottom)
                  dropRowToNextPage = false;
          }
-@@ -2773,6 +6622,9 @@
+@@ -2773,6 +6627,9 @@
          }
 
          if (haveRowSpannedCells) {
@@ -5323,7 +5328,7 @@
              const QFixed effectiveHeight = td->heights.at(r) + td->borderCell + cellSpacing + td->borderCell;
              for (int c = 0; c < columns; ++c)
                  heightToDistribute[c] = qMax(heightToDistribute.at(c) - effectiveHeight - dropDistance, QFixed(0));
-@@ -2835,26 +6687,130 @@
+@@ -2835,26 +6692,130 @@
 
      td->minimumWidth = td->columnPositions.at(0);
      for (int i = 0; i < columns; ++i) {
@@ -5456,7 +5461,7 @@
      QTextFrameData *fd = data(frame);
 
      QTextFrame *parent = frame->parentFrame();
-@@ -2863,6 +6819,9 @@
+@@ -2863,6 +6824,9 @@
      Q_ASSERT(pd && pd->currentLayoutStruct);
 
      QTextLayoutStruct *layoutStruct = pd->currentLayoutStruct;
@@ -5466,7 +5471,7 @@
 
      if (!pd->floats.contains(frame))
          pd->floats.append(frame);
-@@ -2873,7 +6832,7 @@
+@@ -2873,7 +6837,7 @@
      QFixed y = layoutStruct->y;
      if (currentLine) {
          QFixed left, right;
@@ -5475,7 +5480,7 @@
  //         qDebug() << "have line: right=" << right << "left=" << left << "textWidth=" << currentLine->width();
          if (right - left < QFixed::fromReal(currentLine->naturalTextWidth()) + fd->size.width) {
              layoutStruct->pendingFloats.append(frame);
-@@ -2882,6 +6841,9 @@
+@@ -2882,6 +6846,9 @@
          }
      }
 
@@ -5485,7 +5490,7 @@
      bool frameSpansIntoNextPage = (y + layoutStruct->frameY + fd->size.height > layoutStruct->pageBottom);
      if (frameSpansIntoNextPage && fd->size.height <= layoutStruct->pageHeight) {
          layoutStruct->newPage();
-@@ -2890,12 +6852,17 @@
+@@ -2890,12 +6857,17 @@
          frameSpansIntoNextPage = false;
      }
 
@@ -5507,7 +5512,7 @@
          fd->position.x = left;
          fd->position.y = y;
      } else {
-@@ -2915,6 +6882,1356 @@
+@@ -2915,6 +6887,1356 @@
          fd->sizeDirty = frameSpansIntoNextPage;
  }
 
@@ -6864,7 +6869,7 @@
  QRectF QTextDocumentLayoutPrivate::layoutFrame(QTextFrame *f, int layoutFrom, int layoutTo, QFixed parentY)
  {
      qCDebug(lcLayout, "layoutFrame (%d--%d), parent=%p", f->firstPosition(), f->lastPosition(), f->parentFrame());
-@@ -2922,46 +8239,156 @@
+@@ -2922,46 +8244,156 @@
 
      QTextFrameFormat fformat = f->frameFormat();
 
@@ -7032,7 +7037,7 @@
          QFixed b = QFixed::fromReal(scaleToDevice(fformat.border())).round();
          if (b != fd->border) {
              fd->border = b;
-@@ -2973,13 +8400,42 @@
+@@ -2973,13 +8405,42 @@
              fullLayout = true;
          }
 
@@ -7077,7 +7082,7 @@
 
              if (qobject_cast<QTextTable *>(parent)) {
                  const QTextTableData *td = static_cast<const QTextTableData *>(pd);
-@@ -2987,16 +8443,102 @@
+@@ -2987,16 +8448,102 @@
                  fd->effectiveBottomMargin += td->cellSpacing + td->border + td->cellPadding;
              }
          } else {
@@ -7187,7 +7192,7 @@
          } else {
              fd->contentsHeight = frameHeight;
          }
-@@ -3018,15 +8560,74 @@
+@@ -3018,15 +8565,74 @@
      fd->contentsWidth = newContentsWidth;
 
      QTextLayoutStruct layoutStruct;
@@ -7265,7 +7270,7 @@
      layoutStruct.updateRect = QRectF(QPointF(0, 0), QSizeF(qreal(INT_MAX), qreal(INT_MAX)));
      qCDebug(lcLayout) << "layoutStruct: x_left" << layoutStruct.x_left << "x_right" << layoutStruct.x_right
                        << "fullLayout" << layoutStruct.fullLayout;
-@@ -3045,48 +8646,556 @@
+@@ -3045,48 +8651,556 @@
          idealWidth = 0; // reset
 
      QTextFrame::Iterator it = f->begin();
@@ -7829,7 +7834,7 @@
 
      QTextFrame::Iterator previousIt;
 
-@@ -3137,9 +9246,46 @@
+@@ -3137,9 +9251,46 @@
      }
 
      QTextBlockFormat previousBlockFormat = previousIt.currentBlock().blockFormat();
@@ -7878,7 +7883,7 @@
          QTextFrame *c = it.currentFrame();
 
          int docPos;
-@@ -3148,7 +9294,31 @@
+@@ -3148,7 +9299,31 @@
          else
              docPos = it.currentBlock().position();
 
@@ -7911,7 +7916,7 @@
              if (qAbs(layoutStruct->y - checkPoints.constLast().y) > 2000) {
                  QFixed left, right;
                  floatMargins(layoutStruct->y, layoutStruct, &left, &right);
-@@ -3171,26 +9341,272 @@
+@@ -3171,26 +9346,272 @@
          }
 
          if (c) {
@@ -8192,7 +8197,7 @@
 
                  Qt::Alignment align = Qt::AlignLeft;
 
-@@ -3198,6 +9614,10 @@
+@@ -3198,6 +9619,10 @@
 
                  if (table)
                      align = table->format().alignment() & Qt::AlignHorizontal_Mask;
@@ -8203,7 +8208,7 @@
 
                  // detect whether we have any alignment in the document that disallows optimizations,
                  // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3210,44 +9630,139 @@
+@@ -3210,44 +9635,139 @@
                      cd->sizeDirty = true;
 
                  if (cd->sizeDirty) {
@@ -8362,7 +8367,7 @@
 
                  if (c->frameFormat().pageBreakPolicy() & QTextFormat::PageBreak_AlwaysAfter)
                      layoutStruct->newPage();
-@@ -3255,14 +9770,36 @@
+@@ -3255,14 +9775,36 @@
                  QRectF oldFrameRect(cd->position.toPointF(), cd->size.toSizeF());
                  QRectF updateRect;
 
@@ -8401,7 +8406,7 @@
 
                  QRectF frameRect(cd->position.toPointF(), cd->size.toSizeF());
 
-@@ -3290,6 +9827,61 @@
+@@ -3290,6 +9832,61 @@
              ++it;
 
              const QTextBlockFormat blockFormat = block.blockFormat();
@@ -8463,7 +8468,7 @@
 
              if (blockFormat.pageBreakPolicy() & QTextFormat::PageBreak_AlwaysBefore)
                  layoutStruct->newPage();
-@@ -3300,11 +9892,95 @@
+@@ -3300,11 +9897,95 @@
              layoutStruct->maximumWidth = 0;
 
              const QTextBlockFormat *previousBlockFormatPtr = nullptr;
@@ -8560,7 +8565,7 @@
 
              // detect whether we have any alignment in the document that disallows optimizations,
              // such as not laying out the document again in a textedit with wrapping disabled.
-@@ -3313,14 +9989,14 @@
+@@ -3313,14 +9994,14 @@
 
              // if the block right before a table is empty 'hide' it by
              // positioning it into the table border
@@ -8577,7 +8582,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
 
-@@ -3333,7 +10009,7 @@
+@@ -3333,7 +10014,7 @@
                  }
 
                  // if the block right after a table starts with a line separator, shift it up by one line
@@ -8586,7 +8591,7 @@
                      QTextTableData *td = static_cast<QTextTableData *>(data(lastIt.currentFrame()));
                      QTextLayout *layout = block.layout();
 
-@@ -3364,8 +10040,27 @@
+@@ -3364,8 +10045,27 @@
              maximumBlockWidth = qMax(maximumBlockWidth, layoutStruct->maximumWidth);
              layoutStruct->maximumWidth = origMaximumWidth;
              previousBlockFormat = blockFormat;
@@ -8616,7 +8621,7 @@
      if (layoutStruct->maximumWidth == QFIXED_MAX && maximumBlockWidth > 0)
          layoutStruct->maximumWidth = maximumBlockWidth;
      else
-@@ -3374,12 +10069,37 @@
+@@ -3374,12 +10074,37 @@
      // a float at the bottom of a frame may make it taller, hence the qMax() for layoutStruct->y.
      // we don't need to do it for tables though because floats in tables are per table
      // and not per cell and layoutCell already takes care of doing the same as we do here
@@ -8660,7 +8665,7 @@
          }
      }
 
-@@ -3389,7 +10109,7 @@
+@@ -3389,7 +10114,7 @@
          if (!fd->floats.isEmpty())
              contentHasAlignment = true;
 
@@ -8669,7 +8674,7 @@
              //qDebug("layout done!");
              currentLazyLayoutPosition = -1;
              QCheckPoint cp;
-@@ -3411,10 +10131,443 @@
+@@ -3411,10 +10136,443 @@
      fd->currentLayoutStruct = nullptr;
  }
 
@@ -9116,7 +9121,7 @@
      const int lineHeightType = blockFormat.lineHeightType();
      qreal rawHeight = qCeil(line.ascent() + line.descent() + line.leading());
      *lineHeight = QFixed::fromReal(blockFormat.lineHeight(rawHeight, scaling));
-@@ -3431,32 +10584,501 @@
+@@ -3431,32 +10589,501 @@
          *lineBreakHeight = QFixed::fromReal(height);
          *lineAdjustment = 0;
      }
@@ -9625,7 +9630,7 @@
 
      QFixed extraMargin;
      if (docPrivate->defaultTextOption.flags() & QTextOption::AddSpaceForLineAndParagraphSeparators) {
-@@ -3465,9 +11087,24 @@
+@@ -3465,9 +11092,24 @@
      }
 
      const QFixed indent = this->blockIndent(blockFormat);
@@ -9650,7 +9655,7 @@
      const QPointF oldPosition = tl->position();
      tl->setPosition(QPointF(layoutStruct->x_left.toReal(), layoutStruct->y.toReal()));
 
-@@ -3486,7 +11123,9 @@
+@@ -3486,7 +11128,9 @@
              align = blockFormat.alignment();
          option.setAlignment(QGuiApplicationPrivate::visualAlignment(dir, align)); // for paragraph that are RTL, alignment is auto-reversed;
 
@@ -9661,7 +9666,7 @@
              option.setWrapMode(QTextOption::ManualWrap);
          }
 
-@@ -3498,9 +11137,12 @@
+@@ -3498,9 +11142,12 @@
          const QFixed cy = layoutStruct->y;
          const QFixed l = layoutStruct->x_left  + totalLeftMargin;
          const QFixed r = layoutStruct->x_right - totalRightMargin;
@@ -9674,7 +9679,7 @@
          bool firstLine = true;
          while (1) {
              QTextLine line = tl->createLine();
-@@ -3528,6 +11170,61 @@
+@@ -3528,6 +11175,61 @@
              else
                  line.setLineWidth((right - left).toReal());
 
@@ -9736,7 +9741,7 @@
  //        qDebug() << "layoutBlock; layouting line with width" << right - left << "->textWidth" << line.textWidth();
              floatMargins(layoutStruct->y, layoutStruct, &left, &right);
              left = qMax(left, l);
-@@ -3542,7 +11239,9 @@
+@@ -3542,7 +11244,9 @@
                  layoutStruct->pendingFloats.clear();
 
                  line.setLineWidth((right-left).toReal());
@@ -9747,7 +9752,7 @@
                      if (haveWordOrAnyWrapMode) {
                          option.setWrapMode(QTextOption::WrapAnywhere);
                          tl->setTextOption(option);
-@@ -3550,7 +11249,18 @@
+@@ -3550,7 +11254,18 @@
 
                      layoutStruct->pendingFloats.clear();
                      // lines min width more than what we have
@@ -9766,7 +9771,7 @@
                      floatMargins(layoutStruct->y, layoutStruct, &left, &right);
                      left = qMax(left, l);
                      right = qMin(right, r);
-@@ -3566,12 +11276,53 @@
+@@ -3566,12 +11281,53 @@
                      }
                  }
 
@@ -9821,7 +9826,7 @@
 
              while (layoutStruct->pageHeight > 0 && layoutStruct->absoluteY() + lineBreakHeight > layoutStruct->pageBottom &&
                  layoutStruct->contentHeight() >= lineBreakHeight) {
-@@ -3591,16 +11342,141 @@
+@@ -3591,16 +11347,141 @@
                      right -= text_indent;
              }
 
@@ -9963,7 +9968,7 @@
              }
              layoutStruct->pendingFloats.clear();
          }
-@@ -3618,12 +11494,34 @@
+@@ -3618,12 +11499,34 @@
              QFixed lineBreakHeight, lineHeight, lineAdjustment, lineBottom;
              qreal scaling = (q->paintDevice() && q->paintDevice()->logicalDpiY() != qt_defaultDpi()) ?
                              qreal(q->paintDevice()->logicalDpiY()) / qreal(qt_defaultDpi()) : 1;
@@ -9999,7 +10004,7 @@
              }
              bottom = layoutStruct->y + lineBottom;
              layoutStruct->y += lineHeight;
-@@ -3649,7 +11547,30 @@
+@@ -3649,7 +11552,30 @@
          }
      }
 
@@ -10030,7 +10035,7 @@
      const QFixed margins = totalLeftMargin + totalRightMargin;
      layoutStruct->minimumWidth = qMax(layoutStruct->minimumWidth, QFixed::fromReal(tl->minimumWidth()) + margins);
 
-@@ -3663,49 +11584,1523 @@
+@@ -3663,49 +11589,1523 @@
      }
  }
 
@@ -11582,7 +11587,7 @@
          }
          if (newY == QFIXED_MAX)
              break;
-@@ -3717,9 +13112,95 @@
+@@ -3717,9 +13117,95 @@
  QTextDocumentLayout::QTextDocumentLayout(QTextDocument *doc)
      : QAbstractTextDocumentLayout(*new QTextDocumentLayoutPrivate, doc)
  {
@@ -11681,7 +11686,7 @@
 
  void QTextDocumentLayout::draw(QPainter *painter, const PaintContext &context)
  {
-@@ -3745,7 +13226,35 @@
+@@ -3745,7 +13231,35 @@
 
      // Make sure we conform to the root frames bounds when drawing.
      d->clipRect = QRectF(fd->position.toPointF(), fd->size.toSizeF()).adjusted(fd->leftMargin.toReal(), 0, -fd->rightMargin.toReal(), 0);
@@ -11718,7 +11723,7 @@
      fd->size.width = width;
  }
 
-@@ -3778,6 +13287,14 @@
+@@ -3778,6 +13292,14 @@
  void QTextDocumentLayout::documentChanged(int from, int oldLength, int length)
  {
      Q_D(QTextDocumentLayout);
@@ -11733,7 +11738,7 @@
 
      QTextBlock blockIt = document()->findBlock(from);
      QTextBlock endIt = document()->findBlock(qMax(0, from + length - 1));
-@@ -3796,6 +13313,40 @@
+@@ -3796,6 +13318,40 @@
      d->insideDocumentChange = true;
 
      const int documentLength = d->docPrivate->length();
@@ -11774,7 +11779,7 @@
      const bool fullLayout = (oldLength == 0 && length == documentLength);
      const bool smallChange = documentLength > 0
                               && (qMax(length, oldLength) * 100 / documentLength) < 5;
-@@ -3847,6 +13398,126 @@
+@@ -3847,6 +13403,126 @@
 
  //     qDebug("documentChange: from=%d, oldLength=%d, length=%d", from, oldLength, length);
 
@@ -11901,7 +11906,7 @@
      // mark all frames between f_start and f_end as dirty
      markFrames(d->docPrivate->rootFrame(), from, oldLength, length);
 
-@@ -3862,6 +13533,9 @@
+@@ -3862,6 +13538,9 @@
      else if (d->showLayoutProgress)
          d->sizeChangedTimer.start(0, this);
 
@@ -11911,7 +11916,7 @@
      return updateRect;
  }
 
-@@ -3875,7 +13549,50 @@
+@@ -3875,7 +13554,50 @@
      QFixedPoint pointf;
      pointf.x = QFixed::fromReal(point.x());
      pointf.y = QFixed::fromReal(point.y());
@@ -11963,7 +11968,7 @@
      if (accuracy == Qt::ExactHit && p < QTextDocumentLayoutPrivate::PointExact)
          return -1;
 
-@@ -3913,6 +13630,47 @@
+@@ -3913,6 +13635,47 @@
      }
 
      QSizeF inlineSize = (pos == QTextFrameFormat::InFlow ? intrinsic : QSizeF(0, 0));
@@ -12011,7 +12016,7 @@
      item.setWidth(inlineSize.width());
 
      switch (f.verticalAlignment()) {
-@@ -3957,7 +13715,10 @@
+@@ -3957,7 +13720,10 @@
 
      QTextBlock b = d->document->findBlock(frame->firstPosition());
      QTextLine line;
@@ -12023,7 +12028,7 @@
          line = b.layout()->lineAt(b.layout()->lineCount()-1);
  //     qDebug() << "layoutObject: line.isValid" << line.isValid() << b.position() << b.length() <<
  //         frame->firstPosition() << frame->lastPosition();
-@@ -3990,7 +13751,14 @@
+@@ -3990,7 +13756,14 @@
  QSizeF QTextDocumentLayout::dynamicDocumentSize() const
  {
      Q_D(const QTextDocumentLayout);
@@ -12039,7 +12044,7 @@
  }
 
  int QTextDocumentLayout::pageCount() const
-@@ -4004,7 +13772,26 @@
+@@ -4004,7 +13777,26 @@
  {
      Q_D(const QTextDocumentLayout);
      d->ensureLayoutFinished();
@@ -12067,7 +12072,7 @@
  }
 
  void QTextDocumentLayoutPrivate::ensureLayouted(QFixed y) const
-@@ -4078,13 +13865,18 @@
+@@ -4078,13 +13870,18 @@
      if (!d->docPrivate->canLayout())
          return QRectF();
      d->ensureLayoutFinished();
@@ -12087,7 +12092,7 @@
 
          if (f != table) {
              if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
-@@ -4116,6 +13908,7 @@
+@@ -4116,6 +13913,7 @@
      while (f) {
          QTextFrameData *fd = data(f);
          pos += fd->position.toPointF();
@@ -12095,7 +12100,7 @@
 
          if (QTextTable *table = qobject_cast<QTextTable *>(f)) {
              QTextTableCell cell = table->cellAt(framePos);
-@@ -4140,7 +13933,7 @@
+@@ -4140,7 +13938,7 @@
 
      while (frame) {
          QTextFrameData *fd = data(frame);
@@ -12104,7 +12109,7 @@
 
          if (QTextTable *table = qobject_cast<QTextTable *>(frame)) {
              QTextTableCell cell = table->cellAt(blockPos);
-@@ -4151,7 +13944,12 @@
+@@ -4151,7 +13949,12 @@
          frame = frame->parentFrame();
      }
 
@@ -12440,7 +12445,7 @@
 
  void QTextEngine::itemize() const
  {
-@@ -2129,7 +2308,11 @@
+@@ -2129,19 +2308,28 @@
          case QChar::ObjectReplacementCharacter:
              {
                  const QTextDocumentPrivate *doc_p = QTextDocumentPrivate::get(block);
@@ -12453,7 +12458,27 @@
                          && doc_p->layout() != nullptr
                          && QAbstractTextDocumentLayoutPrivate::get(doc_p->layout()) != nullptr
                          && QAbstractTextDocumentLayoutPrivate::get(doc_p->layout())->hasHandlers()) {
-@@ -2206,6 +2389,73 @@
+                     analysis->flags = QScriptAnalysis::Object;
+                 } else if (specialData) {
+-                    // Standalone QTextLayout: check if a QTextImageFormat
+-                    // was set for this position via setFormats().
++                    // Standalone QTextLayout can also represent a source-mapped
++                    // document object. Its registered handler must participate in
++                    // itemization before shape() can request the original source
++                    // object's metrics. Unowned custom formats remain text.
+                     const int pos = uc - string;
+                     analysis->flags = QScriptAnalysis::None;
+                     for (const auto &range : std::as_const(specialData->formats)) {
+                         if (range.start <= pos && pos < range.start + range.length
+-                            && range.format.isImageFormat()) {
++                            && (range.format.isImageFormat()
++                                || (projectedDocument && hasDocumentObject(pos)
++                                    && projectedDocument->documentLayout()->handlerForObject(
++                                        range.format.objectType())))) {
+                             analysis->flags = QScriptAnalysis::Object;
+                             break;
+                         }
+@@ -2206,6 +2394,73 @@
 
      Itemizer itemizer(layoutData->string, scriptAnalysis.data(), layoutData->items);
 
@@ -12527,7 +12552,7 @@
      const QTextDocumentPrivate *p = QTextDocumentPrivate::get(block);
      if (p) {
          SpecialData *s = specialData;
-@@ -2219,7 +2469,9 @@
+@@ -2219,7 +2474,9 @@
          int position = prevPosition;
          while (1) {
              const QTextFragmentData * const frag = it.value();
@@ -12538,7 +12563,7 @@
                  if (s && position >= preeditPosition) {
                      position += s->preeditText.size();
                      preeditPosition = INT_MAX;
-@@ -2454,13 +2706,7 @@
+@@ -2454,13 +2711,7 @@
          } else {
              font = font.resolve(fnt);
          }
@@ -12553,7 +12578,7 @@
      }
 
      if (si.analysis.flags == QScriptAnalysis::SmallCaps)
-@@ -2545,11 +2791,8 @@
+@@ -2545,11 +2796,8 @@
                  engine->ref.ref();
 
                  QTextCharFormat::VerticalAlignment valign = f.verticalAlignment();
@@ -12567,7 +12592,7 @@
                      scaledEngine = font.d->engineForScript(script);
                      if (scaledEngine)
                          scaledEngine->ref.ref();
-@@ -3040,6 +3283,47 @@
+@@ -3040,6 +3288,47 @@
      if (const QTextFormatCollection *collection = formatCollection())
          return collection->charFormat(formatIndex(si));
      return QTextCharFormat();
@@ -12615,7 +12640,7 @@
  }
 
  void QTextEngine::addRequiredBoundaries() const
-@@ -3101,7 +3385,8 @@
+@@ -3101,7 +3390,8 @@
      if (preeditText.isEmpty()) {
          if (!specialData)
              return;
@@ -12625,7 +12650,7 @@
              delete specialData;
              specialData = nullptr;
          } else {
-@@ -3123,7 +3408,8 @@
+@@ -3123,7 +3413,8 @@
      if (formats.isEmpty()) {
          if (!specialData)
              return;
@@ -13001,10 +13026,32 @@
          br.setRight(QFIXED_MAX);
          if (!clip.isNull())
              br = br.intersected(clip);
-@@ -1295,6 +1421,79 @@
+@@ -1295,6 +1421,109 @@
      \a painter specified.
      The corresponding position within the text is specified by \a cursorPosition.
  */
++// Use the draw-time visual item interval, not two insertion caret edges.
++static QRectF inlineObjectRect(QFixed x, QFixed baseline, QFixed width,
++                              const QScriptItem &item, QFixed lineBase, QFixed lineHeight,
++                              QTextCharFormat::VerticalAlignment alignment)
++{
++    QFixed top = baseline - item.ascent;
++    switch (alignment) {
++    case QTextCharFormat::AlignTop:
++        top = baseline - lineBase;
++        break;
++    case QTextCharFormat::AlignMiddle:
++        top = baseline - lineBase + (lineHeight - item.height()) / 2;
++        break;
++    case QTextCharFormat::AlignBottom:
++        top = baseline - lineBase + lineHeight - item.height();
++        break;
++    default:
++        break;
++    }
++    return QRectF(x.toReal(), top.toReal(), width.toReal(), item.height().toReal());
++}
++
 +bool qt_textInlineCursorRect(const QTextLayout *layout, int cursorPosition, int width, QRectF *rect, bool character)
 +{
 +    auto *engine = layout->engine();
@@ -13034,14 +13081,22 @@
 +        if (neighbor != itemIndex && item->analysis.bidiLevel != engine->layoutData->items[neighbor].analysis.bidiLevel
 +            && rtl != item->analysis.bidiLevel % 2) item = &engine->layoutData->items[neighbor];
 +    }
++    const auto objectFormat = engine->format(item);
++    const bool registeredObject = !objectFormat.isImageFormat()
++        && engine->hasDocumentObject(item->position) && engine->docLayout()
++        && engine->docLayout()->handlerForObject(objectFormat.objectType());
 +    if (character && item->analysis.flags == QScriptAnalysis::Object
-+        && QCompiledInline::imageAlignment(engine->format(item)) >= 0) {
++        && (QCompiledInline::imageAlignment(objectFormat) >= 0 || registeredObject)) {
 +        QTextLineItemIterator iterator(engine, lineIndex, QPointF());
 +        while (!iterator.atEnd()) {
 +            const auto &current = iterator.next();
 +            if (current.position != item->position) continue;
-+            *rect = QRectF(iterator.x.toReal(), (lineData.y + lineData.base() - current.ascent).toReal(),
-+                iterator.itemWidth.toReal(), current.height().toReal());
++            if (registeredObject)
++                *rect = inlineObjectRect(iterator.x, lineData.y + lineData.base(), iterator.itemWidth,
++                    current, lineData.base(), lineData.height(), objectFormat.verticalAlignment());
++            else
++                *rect = QRectF(iterator.x.toReal(), (lineData.y + lineData.base() - current.ascent).toReal(),
++                    iterator.itemWidth.toReal(), current.height().toReal());
 +            return true;
 +        }
 +        return false;
@@ -13081,7 +13136,7 @@
  void QTextLayout::drawCursor(QPainter *p, const QPointF &pos, int cursorPosition, int width) const
  {
      if (d->lines.isEmpty())
-@@ -1357,6 +1556,11 @@
+@@ -1357,6 +1586,11 @@
          rightToLeft = si->analysis.bidiLevel % 2;
      }
      qreal y = position.y() + (sl.y + sl.base() - base).toReal();
@@ -13093,7 +13148,7 @@
      bool toggleAntialiasing = !(p->renderHints() & QPainter::Antialiasing)
                                && (p->transform().type() > QTransform::TxTranslate);
      if (toggleAntialiasing)
-@@ -1844,7 +2048,13 @@
+@@ -1844,7 +2078,13 @@
  // fill QScriptLine
  void QTextLine::layout_helper(int maxGlyphs)
  {
@@ -13107,7 +13162,7 @@
      line.length = 0;
      line.trailingSpaces = 0;
      line.textWidth = 0;
-@@ -1862,8 +2072,6 @@
+@@ -1862,8 +2102,6 @@
      lbh.maxGlyphs = maxGlyphs;
 
      QTextOption::WrapMode wrapMode = eng->option.wrapMode();
@@ -13116,7 +13171,7 @@
      lbh.manualWrap = (wrapMode == QTextOption::ManualWrap || wrapMode == QTextOption::NoWrap);
 
      int item = -1;
-@@ -1882,6 +2090,9 @@
+@@ -1882,6 +2120,9 @@
      lbh.logClusters = eng->layoutData->logClustersPtr;
      lbh.previousGlyph = 0;
 
@@ -13126,7 +13181,7 @@
      bool manuallyWrapped = false;
      bool hasInlineObject = false;
      bool reachedEndOfLine = false;
-@@ -1912,12 +2123,41 @@
+@@ -1912,12 +2153,41 @@
              }
          }
          const QScriptItem &current = eng->layoutData->items.at(item);
@@ -13174,7 +13229,7 @@
              // Objects with a QTextDocument may need special vertical alignment
              // or floating treatment handled later, so skip the ascent/descent
              // update for them here.  Standalone objects (no document) are
-@@ -1967,14 +2207,33 @@
+@@ -1967,14 +2237,33 @@
              line += lbh.tmpData;
              manuallyWrapped = true;
              goto found;
@@ -13210,7 +13265,7 @@
                  QTextCharFormat::VerticalAlignment valign = f.toCharFormat().verticalAlignment();
                  if (valign != QTextCharFormat::AlignTop && valign != QTextCharFormat::AlignBottom) {
                      lbh.tmpData.ascent = qMax(lbh.tmpData.ascent, current.ascent);
-@@ -2011,6 +2270,7 @@
+@@ -2011,6 +2300,7 @@
 
              lbh.whiteSpaceOrObject = false;
              bool sb_or_ws = false;
@@ -13218,7 +13273,7 @@
              // We save the previous glyph so we can use it for calculating the right bearing
              // later. If we are trimming trailing spaces, the previous glyph is whitespace
              // and we have already recorded a non-whitespace glyph, we keep that one instead.
-@@ -2020,10 +2280,32 @@
+@@ -2020,10 +2310,32 @@
                  || !attributes[lbh.currentPosition - 1].whiteSpace) {
                  lbh.saveCurrentGlyph();
              }
@@ -13253,7 +13308,7 @@
 
                  // This is a hack to fix a regression caused by the introduction of the
                  // whitespace flag to non-breakable spaces and will cause the non-breakable
-@@ -2034,22 +2316,27 @@
+@@ -2034,22 +2346,27 @@
                                          && attributes[lbh.currentPosition].whiteSpace
                                          && eng->layoutData->string.at(lbh.currentPosition).decompositionTag() != QChar::NoBreak;
 
@@ -13289,7 +13344,7 @@
 
              if (lbh.currentPosition > 0 && lbh.currentPosition <= end
                  && (lbh.currentPosition == end || attributes[lbh.currentPosition].lineBreak)
-@@ -2073,7 +2360,7 @@
+@@ -2073,7 +2390,7 @@
                  lbh.currentSoftHyphenWidth = lbh.glyphs.advances[lbh.logClusters[lbh.currentPosition - 1]];
              }
 
@@ -13298,7 +13353,7 @@
                  // To compute the final width of the text we need to take negative right bearing
                  // into account (negative right bearing means the glyph has pixel data past the
                  // advance length). Note that the negative right bearing is an absolute number,
-@@ -2137,13 +2424,23 @@
+@@ -2137,13 +2454,23 @@
          line += lbh.tmpData;
      }
 
@@ -13327,7 +13382,7 @@
          }
          int startItem = eng->findItem(line.from);
          int endItem = eng->findItem(line.from + line.length);
-@@ -2165,14 +2462,14 @@
+@@ -2165,14 +2492,14 @@
                      current.descent = height - line.ascent;
                      break;
                  case QTextCharFormat::AlignBottom:
@@ -13345,7 +13400,7 @@
              }
          }
      }
-@@ -2183,22 +2480,42 @@
+@@ -2183,22 +2510,42 @@
      LB_DEBUG("        : '%s'", eng->layoutData->string.mid(line.from, line.length).toUtf8().data());
 
      const QFixed trailingSpace = (includeTrailingSpaces ? lbh.spaceData.textWidth : QFixed(0));
@@ -13401,7 +13456,7 @@
 
          const QFixed actualTextWidth = manuallyWrapped || reachedEndOfLine
                                             ? line.textWidth
-@@ -2743,7 +3060,16 @@
+@@ -2743,7 +3090,16 @@
          }
      }
 
@@ -13418,7 +13473,7 @@
      {
          QTextLineItemIterator iterator(eng, index, pos, selection);
          while (!iterator.atEnd()) {
-@@ -2766,28 +3092,16 @@
+@@ -2766,48 +3122,22 @@
                  prepareFormat(format, &si);
                  setPen(p, pen, format);
 
@@ -13447,11 +13502,25 @@
                  if (eng->hasFormats()) {
                      p->save();
 -                    if (si.analysis.flags == QScriptAnalysis::Object && QTextDocumentPrivate::get(eng->block)) {
+-                        QFixed itemY = y - si.ascent;
+-                        switch (format.verticalAlignment()) {
+-                        case QTextCharFormat::AlignTop:
+-                            itemY = y - lineBase;
+-                            break;
+-                        case QTextCharFormat::AlignMiddle:
+-                            itemY = y - lineBase + (line.height() - si.height()) / 2;
+-                            break;
+-                        case QTextCharFormat::AlignBottom:
+-                            itemY = y - lineBase + line.height() - si.height();
+-                            break;
+-                        default:
+-                            break;
+-                        }
+-
+-                        QRectF itemRect(iterator.x.toReal(), itemY.toReal(), iterator.itemWidth.toReal(), si.height().toReal());
 +                    if (si.analysis.flags == QScriptAnalysis::Object && eng->hasDocumentObject(si.position)) {
-                         QFixed itemY = y - si.ascent;
-                         switch (format.verticalAlignment()) {
-                         case QTextCharFormat::AlignTop:
-@@ -2807,7 +3121,7 @@
++                        const QRectF itemRect = inlineObjectRect(iterator.x, y, iterator.itemWidth,
++                            si, lineBase, line.height(), format.verticalAlignment());
 
                          eng->docLayout()->drawInlineObject(p, itemRect,
                                                             QTextInlineObject(iterator.item, eng),
@@ -13460,7 +13529,7 @@
                                                             format);
                          if (selection) {
                              QBrush bg = format.brushProperty(ObjectSelectionBrush);
-@@ -2901,6 +3215,26 @@
+@@ -2901,6 +3231,26 @@
                  QPainterPrivate::get(p)->drawTextItem(pos, gf, eng);
              }
 
@@ -13487,7 +13556,7 @@
              if ((si.analysis.flags == QScriptAnalysis::Space
                   || si.analysis.flags == QScriptAnalysis::Nbsp)
                  && (eng->option.flags() & QTextOption::ShowTabsAndSpaces)) {
-@@ -2917,12 +3251,47 @@
+@@ -2917,12 +3267,47 @@
          }
      }
      eng->drawDecorations(p);
@@ -13535,7 +13604,7 @@
  }
 
  /*!
-@@ -2946,7 +3315,8 @@
+@@ -2946,7 +3331,8 @@
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
 
@@ -13545,7 +13614,7 @@
 
      if (!eng->layoutData)
          eng->itemize();
-@@ -2998,6 +3368,22 @@
+@@ -2998,6 +3384,22 @@
 
      const int l = eng->length(itm);
      pos = qBound(0, pos - scriptItem->position, l);
@@ -13568,7 +13637,7 @@
 
      QGlyphLayout glyphs = eng->shapedGlyphs(scriptItem);
      unsigned short *logClusters = eng->logClusters(scriptItem);
-@@ -3087,12 +3473,31 @@
+@@ -3087,12 +3489,31 @@
 
      if (eng->option.wrapMode() != QTextOption::NoWrap && x > line.x + line.width)
          x = line.x + line.width;
@@ -13602,7 +13671,7 @@
 
  /*!
      \fn int QTextLine::xToCursor(qreal x, CursorPosition cpos) const
-@@ -3103,8 +3508,26 @@
+@@ -3103,8 +3524,26 @@
 
      \sa cursorToX()
  */
@@ -13631,7 +13700,7 @@
      QFixed x = QFixed::fromReal(_x);
      const QScriptLine &line = eng->lines[index];
      bool lastLine = index >= eng->lines.size() - 1;
-@@ -3113,7 +3536,11 @@
+@@ -3113,7 +3552,11 @@
      if (!eng->layoutData)
          eng->itemize();
 
@@ -13644,7 +13713,7 @@
 
      if (!line_length)
          return line.from;
-@@ -3143,7 +3570,11 @@
+@@ -3143,7 +3586,11 @@
          return line.from;
      }   else if (x < line.textWidth || (line.justified && x < line.width)) {
          // has to be in one of the runs

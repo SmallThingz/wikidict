@@ -21,6 +21,13 @@ public:
     void sayWord(const QString &title, const QString &languageCode);
     void stopPlayback();
 
+    // The Reading host owns these widgets and source geometry. Creation is
+    // inert; binding occurs only after a successfully committed setEntry.
+    QWidget *createAudioOccurrence(const QJsonObject &span, QWidget *parent);
+    bool bindAudioOccurrence(QWidget *control, const QJsonObject &span);
+    bool audioOccurrenceCurrent(QWidget *control) const;
+    void retireAudioOccurrence(QWidget *control);
+
     enum class InlineImageState { Disabled, Loading, Ready, Error };
     struct InlineImageAsset { InlineImageState state; QImage image; QString message; QSizeF intrinsic; QString originalMime; std::shared_ptr<QSvgRenderer> vector; bool originalVerified = false; QJsonObject pinnedRendition; };
     InlineImageAsset requestInlineImage(const QString &file, QObject *owner, const QString &key,

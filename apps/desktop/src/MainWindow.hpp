@@ -20,6 +20,7 @@ class QToolBar;
 class QSplitter;
 class QComboBox;
 class MediaPanel;
+class InlineAudioControls;
 class QEvent;
 class QLabel;
 class QLineEdit;
@@ -43,6 +44,11 @@ public:
 private:
     friend class MainWindowTest;
     void bindInlineImages();
+    QPointer<InlineAudioControls> readingAudio_;
+    mutable int nextAudioOccurrence_ = 0;
+    int pendingAudioFocusOrdinal_ = -1;
+    QJsonObject pendingAudioFocusSource_;
+    QString pendingAudioFocusPart_;
     void updateInlineImageNotice();
     bool clearReadingProjection();
     bool editDocumentFormats(QTextBrowser *browser, const std::function<void()> &mutation);
@@ -64,6 +70,9 @@ private:
         int cursorPosition = 0;
         int cursorAnchor = 0;
         bool readerFocused = false;
+        int audioFocusOrdinal = -1;
+        QJsonObject audioFocusSource;
+        QString audioFocusPart;
     };
 
     void setupUi();
