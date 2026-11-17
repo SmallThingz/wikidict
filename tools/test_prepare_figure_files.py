@@ -11920,5 +11920,66 @@ def measure_figure_http_archive(baseline, candidate, selection):
         parity=True,input_after=True,semantic_provider_parity=True,census=census,error_parity=errors,rows=rows)
 
 
+
+
+class CompleteParentBatchSingleReadTests(unittest.TestCase):
+    fresh = CompleteSelectionDocumentTests.fresh
+
+    def test_replay_checks_parent_once_per_batch_without_repeating_cold_verification(self):
+        fixture, args, _, _ = self.fresh()
+        root = args.output
+        expected = list(figure.stream_values(root / figure.ROLES['figure-sizing-raw'], figure.RAW_STREAM_SCHEMA))[1:]
+        manifest = json.loads((root / figure.MANIFEST).read_bytes())
+        cache, inventory = {}, {}
+        original = figure.read_complete_capture
+        with patch.object(figure, 'read_complete_capture', wraps=original) as read, \
+                patch.object(figure, 'verify', wraps=figure.verify) as verify:
+            for number, batch in enumerate(expected):
+                reference = dict(kind='complete-stream', path=str(root / figure.MANIFEST),
+                                 sha256=figure.digest((root / figure.MANIFEST).read_bytes()), batch=number)
+                self.assertEqual(figure.replay_source(fixture.root / 'destination', reference, batch,
+                    fixture.wiki, fixture.date, fixture.namespace.read_bytes(), set(), cache,
+                    inventory_cache=inventory), {})
+            self.assertEqual(read.call_count, len(expected))
+            self.assertEqual(verify.call_count, 1)
+        self.assertTrue(cache and inventory)
+        self.assertEqual(manifest, json.loads((root / figure.MANIFEST).read_bytes()))
+        figure.check_prefix_cache(cache)
+        figure.check_inventory_replay_cache(inventory)
+
+    def test_replay_single_parent_read_retains_cached_mutation_and_context_refusals(self):
+        for mutation in ('member', 'manifest', 'marker', 'raw', 'raw-replacement'):
+            fixture, args, _, _ = self.fresh()
+            root = args.output
+            cache, inventory = {}, {}
+            complete = figure.read_complete_capture(root / figure.MANIFEST, cache,
+                inventory_cache=inventory, include_document=False)
+            reference = dict(kind='complete-stream', path=str(root / figure.MANIFEST),
+                             sha256=complete['manifest_sha256'], batch=0)
+            batch = figure.complete_stream_batch(reference, cache)
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(ValueError):
+                    figure.replay_source(fixture.root / 'destination', reference, batch,
+                        'foreignwiktionary', fixture.date, fixture.namespace.read_bytes(), set(), cache,
+                        inventory_cache=inventory)
+                if mutation == 'member':
+                    (root / 'unexpected.txt').write_bytes(b'new member')
+                elif mutation == 'raw-replacement':
+                    raw = root / figure.ROLES['figure-sizing-raw']
+                    replacement = fixture.root / 'same-byte-raw'
+                    replacement.write_bytes(raw.read_bytes())
+                    replacement.replace(raw)
+                else:
+                    name = {'manifest': figure.MANIFEST, 'marker': figure.COMPLETE,
+                            'raw': figure.ROLES['figure-sizing-raw']}[mutation]
+                    path = root / name
+                    data = path.read_bytes()
+                    path.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+                with patch.object(figure, 'verify', side_effect=AssertionError('Cached mutation reparsed')):
+                    with self.assertRaises(ValueError):
+                        figure.replay_source(fixture.root / 'destination', reference, batch,
+                            fixture.wiki, fixture.date, fixture.namespace.read_bytes(), set(), cache,
+                            inventory_cache=inventory)
+
 if __name__ == '__main__':
     unittest.main()

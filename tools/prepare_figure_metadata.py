@@ -2565,9 +2565,9 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         path = Path(source.get('path', ''))
         if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
             raise ValueError('Complete Figure source aliases output')
-        complete = read_complete_capture(path, prefix_cache, inventory_cache=inventory_cache, include_document=False)
+        complete, expected_batch = _complete_stream_batch(source, prefix_cache, inventory_cache=inventory_cache)
         if (complete['manifest']['wiki'] != wiki or complete['manifest']['date'] != date or
-                complete['namespace'] != namespace or complete_stream_batch(source, prefix_cache) != batch):
+                complete['namespace'] != namespace or expected_batch != batch):
             raise ValueError('Retained complete Figure batch identity differs')
         return {}
     if kind == 'closed-prefix':
@@ -3362,10 +3362,16 @@ def read_complete_capture(path, cache=None, *, inventory_cache=None, include_doc
 
 
 def complete_stream_batch(reference, cache):
+    return _complete_stream_batch(reference, cache)[1]
+
+
+def _complete_stream_batch(reference, cache, *, inventory_cache=None):
+    # The replay caller needs both context and batch from the same checked
+    # parent. Keep all cold replay, membership, indexed-byte and EOF guards.
     if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256', 'batch'} or
             reference['kind'] != 'complete-stream' or type(reference['batch']) is not int):
         raise ValueError('Invalid complete Figure batch reference')
-    complete = read_complete_capture(Path(reference['path']), cache, include_document=False)
+    complete = read_complete_capture(Path(reference['path']), cache, inventory_cache=inventory_cache, include_document=False)
     number = reference['batch']
     if complete['manifest_sha256'] != reference['sha256'] or not 0 <= number < len(complete['offsets']):
         raise ValueError('Complete Figure batch identity changed')
@@ -3386,7 +3392,7 @@ def complete_stream_batch(reference, cache):
             raise ValueError('Complete Figure raw source changed during read')
     if len(raw) != size or digest(raw) != sha:
         raise ValueError('Complete Figure batch bytes changed')
-    return raw_record_decode(raw, complete['raw_encoding'])
+    return complete, raw_record_decode(raw, complete['raw_encoding'])
 
 
 def _verified_contained_http_leaf(node, slot, batch, cache, namespace, source_stamps):
