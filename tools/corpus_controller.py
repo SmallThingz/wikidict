@@ -1969,6 +1969,45 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
     return argv
 
 
+def ordinary_command_record(*, argv, cwd, environment, output, roles, source_refs, scope):
+    """Build the direct-owner record from selected inputs, without donor state."""
+    output = Path(output)
+    require(output.is_absolute() and output.resolve() == output,
+            'Ordinary command output must be canonical and absolute')
+    require(isinstance(argv, list) and all(isinstance(value, str) for value in argv)
+            and argv.count('--output') == 1 and argv.count('--wikis') == 1,
+            'Ordinary command requires one selected output and edition')
+    require(argv.index('--output') + 1 < len(argv) and argv.index('--wikis') + 1 < len(argv)
+            and argv[argv.index('--output') + 1] == str(output / 'output'),
+            'Ordinary command output differs from its owned root')
+    require(isinstance(environment, dict) and all(isinstance(k, str) and isinstance(v, str)
+            for k, v in environment.items()), 'Invalid ordinary command environment')
+    require(isinstance(roles, dict) and set(roles) == {
+            'dict-blob-build', 'dict-blob-merge', 'dict-blob-verify', 'dict-bundle-build'}
+            and all(isinstance(row, dict) for row in roles.values()),
+            'Ordinary command requires its selected native roles')
+    require(argv.count('--retained-native-roles-json') == 1
+            and argv.index('--retained-native-roles-json') + 1 < len(argv),
+            'Ordinary command requires its selected role arguments')
+    require(json.loads(argv[argv.index('--retained-native-roles-json') + 1]) == roles,
+            'Ordinary command role arguments differ from selected provenance')
+    require(isinstance(source_refs, list) and isinstance(scope, str) and bool(scope),
+            'Ordinary command requires source custody and scope')
+    import copy
+    origins = {name: {key: copy.deepcopy(row[key]) for key in (
+        'actual_emission_result', 'qualification_closure', 'compilation_recipe', 'source')
+        if key in row} for name, row in roles.items()}
+    writer = roles['dict-blob-build']
+    require(isinstance(writer.get('qualification_closure'), dict),
+            'Ordinary command Writer lacks its actual closure')
+    env = dict(environment)
+    env['TMPDIR'] = str(output / 'runtime01' / 'tmp')
+    return dict(argv=list(argv), cwd=str(cwd), env=env,
+                qualification_root=str(output / 'runtime01'), source_refs=copy.deepcopy(source_refs),
+                independent_role_origins=origins,
+                current_production_closure=copy.deepcopy(writer['qualification_closure']), scope=scope)
+
+
 
 CONTEXT_KEYS = ('source', 'compiler', 'manifest', 'downloads', 'output', 'raw_shard_root',
                 'date', 'now_unix', 'expansion_timeout_ms')

@@ -5357,5 +5357,49 @@ class ReadonlyPreparedControllerTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError,'outside the original Git inventory'):
                         controller.prepared_git_source_authority(cfg)
 
+class OrdinaryCommandRecordTests(unittest.TestCase):
+    def selected(self, root):
+        def ref(name):
+            return dict(path=str(root/name), bytes=1, sha256='a'*64)
+        roles={name:dict(actual_emission_result=ref(name+'-result'),
+                        qualification_closure=ref(name+'-closure'),
+                        compilation_recipe=ref(name+'-recipe'), source=ref(name+'-source'))
+               for name in ('dict-blob-build','dict-blob-merge','dict-blob-verify','dict-bundle-build')}
+        return dict(argv=['python','builder','--output',str(root/'output'),'--wikis','thwiktionary','--retained-native-roles-json',json.dumps(roles)],
+                    cwd=str(root), environment=dict(TMPDIR='/foreign/old-sr/tmp', WIKIDICT_PHASE_TIMING='1'),
+                    output=root, roles=roles, source_refs=[ref('input')], scope='selected actual whole command')
+
+    def test_selected_whole_command_owns_temp_and_role_provenance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);selected=self.selected(root);before=copy.deepcopy(selected)
+            command=controller.ordinary_command_record(**selected)
+            self.assertEqual(selected,before)
+            self.assertEqual(command['env']['TMPDIR'],str(root/'runtime01/tmp'))
+            self.assertEqual(command['current_production_closure'],selected['roles']['dict-blob-build']['qualification_closure'])
+            self.assertEqual(command['independent_role_origins'],selected['roles'])
+            self.assertEqual(set(command),{'argv','cwd','env','qualification_root','source_refs','independent_role_origins','current_production_closure','scope'})
+            self.assertNotIn('previous_failed_whole',command)
+            self.assertNotIn('source_custody',command)
+
+    def test_foreign_and_incomplete_execution_inputs_are_refused(self):
+        for kind in ('foreign-output','missing-output-value','missing-edition-value','duplicate-output','foreign-role-arguments','missing-writer-closure'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                selected=self.selected(Path(tmp))
+                if kind=='foreign-output':selected['argv'][3]='/foreign/zh/output'
+                elif kind=='missing-output-value':selected['argv']=['python','--wikis','thwiktionary','--output']
+                elif kind=='missing-edition-value':selected['argv']=['python','--output',str(Path(tmp)/'output'),'--wikis']
+                elif kind=='duplicate-output':selected['argv']+=['--output',str(Path(tmp)/'output')]
+                elif kind=='foreign-role-arguments':selected['argv'][-1]='{}'
+                else:selected['roles']['dict-blob-build'].pop('qualification_closure')
+                with self.assertRaises(ValueError):controller.ordinary_command_record(**selected)
+
+    def test_later_role_or_readset_mutation_does_not_restamp_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            selected=self.selected(Path(tmp));command=controller.ordinary_command_record(**selected);before=copy.deepcopy(command)
+            selected['roles']['dict-blob-build']['qualification_closure']['sha256']='b'*64
+            selected['source_refs'][0]['sha256']='c'*64
+            selected['argv'][3]='/next/output'
+            self.assertEqual(command,before)
+
 if __name__ == '__main__':
     unittest.main()
