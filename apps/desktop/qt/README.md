@@ -880,3 +880,44 @@ Configure the desktop with `CMAKE_PREFIX_PATH="$qt_prefix"` so all Qt components
 come from this prefix. Packaging must retain the matching libraries, plugins and
 upstream notices together. The unified `wikidict` executable and relative
 `wikidict-gio` symlink continue to load the Qt component in the same process.
+
+## Independent table minimum width
+
+Typed table minima remain separate from preferred width and intrinsic content
+constraints. Pixel and em minima use the original NormalBody basis; percentage
+minima use the actual containing block. The native table solver applies the floor
+after ordinary allocation and track rounding, including caption intrinsic floors.
+Authored outer borders use the existing physical-edge path for nonrounded real
+tables, independently of cell borders. A typed table border does not invent a
+cell-border hint when legacy geometry is absent; explicit legacy hints and Cell
+CSS overrides remain distinct. Source-known zero cell widths are materialized
+when HTML import omits them, including validated empty ragged-grid cells, so
+collapsed outer borders remain continuous without inventing a cell grid. Rounded and empty border routes and wholly
+untyped legacy defaults are outside this repair. Empty tables and
+responsive-wrapper minima remain explicit refusals in this consumer subset.
+
+The native qualification combines one corrected caption-fixture method with eight
+unchanged passes on the same product. App qualification exercises four affected
+methods, including a border-policy paint/geometry matrix, ragged outer-edge
+continuity, minimum sizing, Flow and fractional-style controls. Two exact earlier
+passes are retained because their sources do not enter the typed outer-border
+normalization path. GUI and Reader are rebuilt for the header correction. The
+earlier overall Reader syntax failure and partial GUI/archive completion remain
+historical evidence, as does the subsequent collapsed-border paint failure. The
+original four-border consistency result is representation evidence, not CSS
+fidelity. These checks do not constitute either full suite.
+
+The matching normal ZH229 Writer, CLI and FFI supplied the retained cheng-khi
+one-cell table. Owned wide and narrow GUI observations cover its text, 70 percent
+minimum, half-em left cell padding, independent outer border and link focus,
+followed by restoration and
+normal Quit. The custom background variable remains unresolved. No missing-link
+destination, whole-edition or complete frontend acceptance is claimed.
+
+The existing patch series reproduces the minimal source change over the tracked
+Qt baseline. All 32 targets reconstruct forward and backward; affected native
+functions and controls match the recorded private qualification. The app source
+proof excludes one reset of a private absolute-owner field absent from the normal
+source. Unrelated private absolute-container and relative-float features are not
+part of this delivery. This source-composition proof is separate from a newly
+built canonical binary.

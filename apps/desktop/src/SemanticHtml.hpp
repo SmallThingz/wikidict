@@ -320,6 +320,7 @@ inline constexpr int tableBoxOwnerProperty = QTextFormat::UserProperty + 0x57d0;
 inline constexpr int tableBoxPaddingProperty = QTextFormat::UserProperty + 0x57d1;
 inline constexpr int tableBoxClearProperty = QTextFormat::UserProperty + 0x57d2;
 inline constexpr int tableBoxWidthProperty = QTextFormat::UserProperty + 0x57d3;
+inline constexpr int tableMinimumWidthProperty = QTextFormat::UserProperty + 0x5866;
 inline constexpr int tableAutoMarginsProperty = QTextFormat::UserProperty + 0x57f1;
 inline constexpr int tableCaptionBlockProperty = QTextFormat::UserProperty + 0x57f3;
 inline constexpr int emptyTableRoleProperty = QTextFormat::UserProperty + 0x57d4;
@@ -559,10 +560,12 @@ inline qreal tableComputedLineHeight(const QJsonValue &value, qreal normalPoints
     return height;
 }
 inline const QString tableBoxCapability = QStringLiteral("wikidict.table-box/1");
+inline const QString tableMinimumWidthCapability = QStringLiteral("wikidict.table-minimum-width/1");
 inline const QString emptyTableCapability = QStringLiteral("wikidict.empty-table/1");
 inline const QString emptyTableScheme = QStringLiteral("wikidict-empty-table");
 inline bool hasTableBoxStyle(const QJsonObject &style) {
-    return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("padding")))
+    return present(style.value(QStringLiteral("width"))) || present(style.value(QStringLiteral("min_width")))
+        || present(style.value(QStringLiteral("padding")))
         || present(style.value(QStringLiteral("clear"))) || present(style.value(QStringLiteral("margin_values")))
         || hasTableFlowStyle(style);
 }
@@ -607,6 +610,44 @@ inline void requireTableBoxLayout(QTextDocument *document, bool empty = false) {
     if (!current() || capability.metaType().id() != QMetaType::QString
         || capability.toString() != (empty ? emptyTableCapability : tableBoxCapability))
         throw std::runtime_error("missing paired table box layout");
+}
+inline QVariantMap tableMinimumWidthPolicy(const QJsonObject &table, qreal normalBodyPoints) {
+    const auto value = table.value(QStringLiteral("style")).toObject().value(QStringLiteral("min_width"));
+    if (!present(value)) return {};
+    if (present(table.value(QStringLiteral("block_viewport"))) || present(table.value(QStringLiteral("float_viewport"))))
+        throw std::runtime_error("unsupported responsive table minimum width");
+    bool hasCell = false;
+    for (const auto &row : table.value(QStringLiteral("rows")).toArray())
+        hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
+    if (!hasCell) throw std::runtime_error("unsupported empty table minimum width");
+    tableBoxLength(value, normalBodyPoints, true);
+    const double em = normalBodyPoints * QFontMetricsF(QFont()).fontDpi() / 72.0;
+    if (!std::isfinite(em) || em <= 0) throw std::runtime_error("invalid table minimum typography");
+    const auto width = value.toObject();
+    // Preserve the authored minimum independently of the preferred width. The
+    // native solver resolves percentages only when its containing width exists.
+    return {{QStringLiteral("capability"), tableMinimumWidthCapability},
+        {QStringLiteral("source"), QJsonDocument(table).toJson(QJsonDocument::Compact)},
+        {QStringLiteral("em"), em}, {QStringLiteral("unit"), width.value(QStringLiteral("unit")).toString()},
+        {QStringLiteral("value"), width.value(QStringLiteral("value")).toDouble()}};
+}
+inline void requireTableMinimumWidthLayout(QTextDocument *document) {
+    QPointer<QTextDocument> live(document);
+    if (!live) throw std::runtime_error("missing table minimum document");
+    const int revision = live->revision(), count = live->characterCount();
+    const QString source = live->toRawText();
+    QPointer<QAbstractTextDocumentLayout> layout(live->documentLayout());
+    const auto current = [&] {
+        if (!live || !layout) return false;
+        const auto *active = live->documentLayout();
+        return live && layout && active == layout && live->revision() == revision
+            && live->characterCount() == count && live->toRawText() == source;
+    };
+    if (!current()) throw std::runtime_error("replaced table minimum document");
+    const QVariant capability = layout->property("_wikidictTableMinimumWidthCapability");
+    if (!current() || capability.metaType().id() != QMetaType::QString
+        || capability.toString() != tableMinimumWidthCapability)
+        throw std::runtime_error("missing paired table minimum width layout");
 }
 inline void applyTableAutoMargins(QTextTableFormat &format, const QJsonObject &style, qreal normalBodyPoints, qreal indent) {
     const bool hasMargins = present(style.value(QStringLiteral("margin_values")));
@@ -933,10 +974,13 @@ inline QJsonObject tableBlockViewport(const QJsonObject &table) {
         || !direction.isString() || (direction != QStringLiteral("ltr") && direction != QStringLiteral("rtl")))
         throw std::runtime_error("invalid table viewport box or grid direction");
     const QStringList styleFields{"background", "border", "collapse", "margins", "margin_values", "containing_direction",
-        "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"};
+        "float_side", "width", "min_width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"};
     const auto wide = typedStyle(table.value(QStringLiteral("style")), styleFields);
     const auto box = typedStyle(policy.value(QStringLiteral("box_style")), styleFields);
     const auto grid = typedStyle(policy.value(QStringLiteral("grid_style")), styleFields);
+    if (present(wide.value(QStringLiteral("min_width"))) || present(box.value(QStringLiteral("min_width")))
+        || present(grid.value(QStringLiteral("min_width"))))
+        throw std::runtime_error("unsupported responsive table minimum width");
     tableCornerRadii(wide); tableCornerRadii(box, true);
     if (cornerSeparate) {
         if (paired || tableCornerRadii(wide).isEmpty()
@@ -1157,12 +1201,12 @@ inline QJsonObject tableFloatViewport(const QJsonObject &table) {
     if (!language.isString() || !sourceLanguageTag(language.toString()))
         throw std::runtime_error("unsupported table float viewport source language");
     const auto style = typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins",
-        "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
+        "margin_values", "containing_direction", "float_side", "width", "min_width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
     if (present(table.value(QStringLiteral("geometry")))
         || !table.value(QStringLiteral("caption")).toArray().isEmpty() || present(table.value(QStringLiteral("caption_blocks")))
         || style.value(QStringLiteral("float_side")) != QStringLiteral("right"))
         throw std::runtime_error("unsupported table float viewport owner");
-    for (const auto &key : {"padding", "margin_values", "containing_direction", "display", "vertical_align", "line_height"})
+    for (const auto &key : {"padding", "margin_values", "containing_direction", "display", "vertical_align", "line_height", "min_width"})
         if (present(style.value(QLatin1StringView(key)))) throw std::runtime_error("unsupported table float viewport style");
     if (present(style.value(QStringLiteral("width")))) tableBoxLength(style.value(QStringLiteral("width")), 12, false);
     const auto margins = style.value(QStringLiteral("margins"));
@@ -1305,6 +1349,7 @@ inline int compiledTableSpan(const QJsonValue &value, bool allowAbsent = true) {
 
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
                                 const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1) {
+    const auto minimum = tableMinimumWidthPolicy(table, containerPoints);
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
         hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
@@ -1343,6 +1388,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled && !hasCell) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    if (!minimum.isEmpty()) metadata.insert(QStringLiteral("minimum_source"), table);
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
     if (!viewport.isEmpty()) metadata.insert(QStringLiteral("block_viewport"), viewport);
     if (!floatViewport.isEmpty()) metadata.insert(QStringLiteral("float_viewport"), floatViewport);
@@ -1917,6 +1963,11 @@ inline void materializeTableBlockViewport(QTextDocument *document, QTextFrame *t
 
 inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &records, int expectedTables) {
     if (records.isEmpty()) return;
+    for (const TableInfo &record : records)
+        if (present(record.value.value(QStringLiteral("style")).toObject().value(QStringLiteral("min_width")))) {
+            requireTableMinimumWidthLayout(document);
+            break;
+        }
     bool needsTableBoxLayout = false;
     bool needsCellStyleLayout = false;
     bool needsCellMinimum = false;
@@ -2069,7 +2120,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         // its text. Cell align attributes carry the intended text inheritance;
         // restore the frame's default alignment independently of float position.
         if (resetAlignment.toBool()) format.clearProperty(QTextFormat::BlockAlignment);
-        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
+        const QJsonObject style = typedStyle(record.value.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "min_width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
         if (present(style.value(QStringLiteral("float_side")))) {
             const QJsonValue side = style.value(QStringLiteral("float_side"));
             if (!side.isString() || (side.toString() != QStringLiteral("left") && side.toString() != QStringLiteral("right")))
@@ -2090,7 +2141,22 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
             } else {
                 const Border b = border(style.value(QStringLiteral("border")));
-                format.setBorder(b.width); format.setBorderStyle(b.style); format.setBorderBrush(b.color);
+                if (table && !present(style.value(QStringLiteral("corner_radii")))) {
+                    // The ordinary Qt border also allocates legacy grid borders.
+                    // Typed TABLE CSS owns only the physical outer edges; imported
+                    // cell formats retain their independent hint or CellStyle policy.
+                    QJsonObject physical;
+                    for (const QString &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")})
+                        physical.insert(side, style.value(QStringLiteral("border")));
+                    format.setProperty(tablePhysicalEdgesProperty, QVariantMap{
+                        {QStringLiteral("padding"), QVariantList{0.0, 0.0, 0.0, 0.0}},
+                        {QStringLiteral("borders"), physicalBorder(physical)}});
+                    format.setProperty(cellStylePolicyProperty, cellStyleCapability);
+                    format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+                    format.setBorderBrush(b.color);
+                } else {
+                    format.setBorder(b.width); format.setBorderStyle(b.style); format.setBorderBrush(b.color);
+                }
             }
         }
         if (present(style.value(QStringLiteral("collapse")))) {
@@ -2112,6 +2178,14 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         }
         applyTableAutoMargins(format, style, points, indent);
         applyTableBoxStyle(format, style, points);
+        const auto minimumSource = record.value.value(QStringLiteral("minimum_source"));
+        if (present(style.value(QStringLiteral("min_width")))) {
+            if (!table || !minimumSource.isObject() || minimumSource.toObject().value(QStringLiteral("style")) != QJsonValue(style)
+                || present(record.value.value(QStringLiteral("block_viewport")))
+                || present(record.value.value(QStringLiteral("float_viewport"))))
+                throw std::runtime_error("invalid table minimum source ownership");
+            format.setProperty(tableMinimumWidthProperty, tableMinimumWidthPolicy(minimumSource.toObject(), points));
+        } else if (present(minimumSource)) throw std::runtime_error("unexpected table minimum source");
         if (hasTableFlowStyle(style)) {
             QPointer<QTextDocument> live(document);
             QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
@@ -2193,7 +2267,21 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             font.setFontPointSize(record.value.value(QStringLiteral("table_origin_points")).toDouble(points));
             before.setBlockCharFormat(font);
         }
+        const auto legacyCellBorder = record.value.value(QStringLiteral("empty_geometry")).toObject().value(QStringLiteral("border"));
+        const bool generatedZeroCellBorder = format.hasProperty(tablePhysicalEdgesProperty)
+            && (!present(legacyCellBorder) || (legacyCellBorder.isDouble() && legacyCellBorder.toDouble() == 0));
         bool cellFormatsChanged = false;
+        const auto materializeZeroCellBorder = [&](QTextTableCell cell) {
+            // HTML import omits zero widths while retaining border styles. Restore
+            // only missing widths; explicit CellStyle policy is applied afterward.
+            auto imported = cell.format().toTableCellFormat();
+            bool changed = false;
+            for (const int property : {QTextFormat::TableCellTopBorder, QTextFormat::TableCellRightBorder,
+                    QTextFormat::TableCellBottomBorder, QTextFormat::TableCellLeftBorder}) {
+                if (!imported.hasProperty(property)) { imported.setProperty(property, qreal(0)); changed = true; }
+            }
+            if (changed) { cell.setFormat(imported); cellFormatsChanged = true; }
+        };
         for (int row = 0; row < table->rows(); ++row) {
             if (!rows[row].isArray()) throw std::runtime_error("invalid table style row metadata");
             const QJsonArray cells = rows[row].toArray(); int index = 0;
@@ -2207,6 +2295,8 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                         cell.firstCursorPosition().position() != cell.lastCursorPosition().position() ||
                         !cell.firstCursorPosition().charFormat().anchorNames().isEmpty())
                         throw std::runtime_error("table style unexpected cell");
+                    // A validated implicit empty cell has no authored border.
+                    if (format.hasProperty(tablePhysicalEdgesProperty)) materializeZeroCellBorder(cell);
                     if (floatViewport || intrinsicViewport) {
                         auto filler = cell.format().toTableCellFormat();
                         filler.setPadding(0); filler.setBorder(0);
@@ -2260,6 +2350,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                     else cellFormat.clearBackground();
                     cell.setFormat(cellFormat);
                 }
+                if (generatedZeroCellBorder) materializeZeroCellBorder(cell);
                 const QJsonObject cellStyle = typedStyle(expected.value(QStringLiteral("style")), {"border", "padding", "text_align", "border_edges", "letter_spacing", "width", "min_width", "vertical_align", "line_height"});
                 if (cellStyle.isEmpty()) continue;
                 QTextTableCellFormat cellFormat = cell.format().toTableCellFormat();

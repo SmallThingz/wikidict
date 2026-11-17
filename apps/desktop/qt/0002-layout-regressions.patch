@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14460 @@
+@@ -3,24 +3,14635 @@
 
 
  #include <QTest>
@@ -823,6 +823,181 @@
      Q_OBJECT
 
  private slots:
++    void tableMinimumWidthKeepsAutoPreferredAndBorderBoxIndependent()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0, minimum = QTextFormat::UserProperty + 0x5866;
++        const QString capability = QStringLiteral("wikidict.table-minimum-width/1");
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++            for (auto side : {QTextFrameFormat::InFlow, QTextFrameFormat::FloatLeft, QTextFrameFormat::FloatRight})
++                for (bool longText : {false, true}) {
++            QImage device(1600, 800, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            QFont font(QStringLiteral("DejaVu Sans")); font.setPixelSize(14); doc.setDefaultFont(font);
++            auto option = doc.defaultTextOption(); option.setTextDirection(direction); option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native); native->setPaintDevice(&device);
++            QCOMPARE(native->property("_wikidictTableMinimumWidthCapability").toString(), capability);
++            const qreal scale = qreal(device.logicalDpiY()) / QFontMetricsF(QFont()).fontDpi();
++            const qreal marginWidth = QFixed::fromReal(scale).round().toReal() + QFixed::fromReal(3 * scale).round().toReal();
++            QTextTableFormat base; base.setMargin(0); base.setLeftMargin(1); base.setRightMargin(3); base.setBorder(1);
++            base.setBorderCollapse(false); base.setCellSpacing(2); base.setCellPadding(0); base.setPosition(side);
++            base.setProperty(owner, QStringLiteral("wikidict.table-box/1")); base.setProperty(owner + 2, 0);
++            base.setProperty(owner + 1, QVariantList{2.25, 4.5, 1.25, 3.5});
++            QTextCursor cursor(&doc); auto *table = cursor.insertTable(2, 2, base); QVERIFY(table);
++            table->mergeCells(0, 0, 2, 1); // Real rowspan remains part of the grid floor.
++            const QString text = longText ? QStringLiteral("word ").repeated(90) : QStringLiteral("Hi");
++            const auto sourceCell = [](const QString &text, int rowspan) { return QJsonObject{
++                {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}}}}, {"rowspan", rowspan}, {"colspan", 1}}; };
++            const QJsonArray sourceRows{QJsonObject{{"cells", QJsonArray{sourceCell(text, 2), sourceCell("x", 1)}}},
++                QJsonObject{{"cells", QJsonArray{sourceCell("y", 1)}}}};
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:minimum"));
++            cursor = table->cellAt(0, 0).firstCursorPosition(); cursor.insertText(text, link);
++            const auto firstBlock = cursor.block(); const int first = firstBlock.position();
++            cursor = table->cellAt(0, 1).firstCursorPosition(); cursor.insertText(QStringLiteral("x"));
++            cursor = table->cellAt(1, 1).firstCursorPosition(); cursor.insertText(QStringLiteral("y"));
++            auto cell = table->cellAt(0, 0); auto cellFormat = cell.format().toTableCellFormat(); cellFormat.setLeftPadding(8); cell.setFormat(cellFormat);
++            const auto raw = doc.toRawText(); QTextCursor selection(&doc); selection.select(QTextCursor::Document); const auto copied = selection.selectedText();
++            const auto layout = [&](const QTextTableFormat &format, qreal width) {
++                doc.setLayoutEnabled(false); doc.setTextWidth(width); table->setFormat(format); doc.setLayoutEnabled(true); native->documentSize();
++                return native->wikidictParagraphBoxLayoutError();
++            };
++            for (qreal width : {400.0, 280.0, 400.0}) for (qreal preferred : {-1.0, 100.0, 480.0}) {
++                auto ordinary = base;
++                if (preferred >= 0) ordinary.setProperty(owner + 3, QVariantMap{{"unit", "fixed"}, {"value", preferred}});
++                QCOMPARE(layout(ordinary, width), 0);
++                const qreal oldWidth = native->tableBoundingRect(table).width() - marginWidth;
++                for (const auto &request : QList<QPair<QString, qreal>>{{"percent", 70}, {"percent", 130}, {"px", 280.25}, {"em", 17.5}, {"px", 0}}) {
++                    const QJsonObject length{{"unit", request.first}, {"value", request.second}};
++                    const QJsonObject source{{"style", QJsonObject{{"min_width", length}}}, {"rows", sourceRows}};
++                    auto format = ordinary; const QVariantMap policy{{"capability", capability}, {"source", QJsonDocument(source).toJson(QJsonDocument::Compact)},
++                        {"em", 16.0}, {"unit", request.first}, {"value", request.second}};
++                    format.setProperty(minimum, policy); QCOMPARE(layout(format, width), 0);
++                    const qreal floor = qCeil(request.first == "percent" ? width * request.second / 100
++                        : request.second * (request.first == "em" ? 16 : 1) * scale);
++                    const auto box = native->tableBoundingRect(table); const qreal used = box.width() - marginWidth;
++                    const auto context = QStringLiteral("dpi=%1 dir=%2 float=%3 long=%4 width=%5 preferred=%6 unit=%7 value=%8 old=%9 used=%10 floor=%11")
++                        .arg(dpi).arg(int(direction)).arg(int(side)).arg(longText).arg(width).arg(preferred).arg(request.first).arg(request.second).arg(oldWidth).arg(used).arg(floor).toUtf8();
++                    QVERIFY2(used + .04 >= floor, context.constData());
++                    QVERIFY2(qAbs(used - qMax(oldWidth, floor)) <= 1.1, context.constData());
++                    if (longText && preferred < 0 && request.first == "percent" && request.second == 70)
++                        QVERIFY2(used > floor + 5, context.constData()); // Minimum is not a preferred width.
++                    QCOMPARE(table->format().property(minimum).toMap(), policy); QCOMPARE(doc.toRawText(), raw); QCOMPARE(selection.selectedText(), copied);
++                    QVERIFY(firstBlock.layout()->lineCount() > 0); const auto line = firstBlock.layout()->lineAt(0);
++                    const auto origin = native->blockBoundingRect(firstBlock).topLeft();
++                    const QPointF point = origin + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                    QCOMPARE(native->hitTest(point, Qt::ExactHit), first); QCOMPARE(native->anchorAt(point), QStringLiteral("dict:minimum"));
++                    QVERIFY(native->documentSize().width() + .1 >= box.right());
++                }
++                QCOMPARE(layout(ordinary, width), 0);
++                QVERIFY(qAbs(native->tableBoundingRect(table).width() - marginWidth - oldWidth) < .04);
++            }
++        }
++    }
++    void tableMinimumWidthUsesRealCellBasisAndCaptionIntrinsicFloor()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0, minimum = QTextFormat::UserProperty + 0x5866;
++        const auto policy = [](QString unit, double value) {
++            const QJsonObject source{{"style", QJsonObject{{"min_width", QJsonObject{{"unit", unit}, {"value", value}}}}},
++                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Nested"}}}}, {"rowspan", 1}, {"colspan", 1}}}}}}}};
++            return QVariantMap{{"capability", "wikidict.table-minimum-width/1"}, {"source", QJsonDocument(source).toJson(QJsonDocument::Compact)},
++                {"em", 16.0}, {"unit", unit}, {"value", value}};
++        };
++        for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool captioned : {false, true}) {
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(700);
++            auto option = doc.defaultTextOption(); option.setTextDirection(direction); option.setWrapMode(QTextOption::WordWrap); doc.setDefaultTextOption(option);
++            QTextCursor cursor(&doc); QTextTableFormat outerFormat; outerFormat.setMargin(0); outerFormat.setBorder(0);
++            outerFormat.setCellPadding(0); outerFormat.setCellSpacing(0); outerFormat.setWidth(400);
++            auto *outer = cursor.insertTable(1, 1, outerFormat); cursor = outer->cellAt(0, 0).firstCursorPosition();
++            QTextTable *inner = nullptr;
++            if (captioned) {
++                cursor.insertHtml(QStringLiteral("<table data-wikidict-table-auto-margins='1' border='0' cellspacing='0' cellpadding='0'>"
++                    "<caption>CaptionIntrinsicFloorMMMM</caption><tr><td><a href='dict:nested'>Nested</a></td></tr></table>"));
++                inner = doc.find(QStringLiteral("Nested")).currentTable();
++            } else {
++                inner = cursor.insertTable(1, 1, outerFormat); cursor.insertText(QStringLiteral("Nested"));
++            }
++            QVERIFY(inner); QCOMPARE(inner->parentFrame(), outer);
++            auto format = inner->format(); format.setMargin(0); format.setBorder(0); format.setCellPadding(0); format.setCellSpacing(0);
++            format.setWidth(QTextLength(QTextLength::VariableLength, 0)); format.setProperty(owner, "wikidict.table-box/1");
++            format.setProperty(owner + 2, 0); format.setProperty(owner + 3, QVariantMap{{"unit", "fixed"}, {"value", 40.0}});
++            if (captioned) format.setProperty(QTextFormat::UserProperty + 0x57f1, QVariantMap{{"capability", "wikidict.table-auto-margins/1"},
++                {"autos", QVariantList{false, true, false, true}}, {"direction", int(direction)}});
++            inner->setFormat(format); const auto raw = doc.toRawText();
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native); doc.setLayoutEnabled(true);
++            for (int width : {400, 300, 400}) {
++                const auto context = QStringLiteral("table minimum direction=%1 caption=%2 containing request=%3")
++                    .arg(int(direction)).arg(captioned).arg(width).toUtf8();
++                doc.setLayoutEnabled(false); auto resized = outerFormat; resized.setWidth(width); outer->setFormat(resized);
++                inner->setFormat(format); doc.setLayoutEnabled(true); native->documentSize();
++                QVERIFY2(native->wikidictParagraphBoxLayoutError() == 0,
++                    qPrintable(QString::fromUtf8(context) + QStringLiteral(" stage=baseline error=%1 position=%2")
++                        .arg(native->wikidictParagraphBoxLayoutError()).arg(native->wikidictParagraphBoxLayoutErrorPosition())));
++                const qreal baseline = native->tableBoundingRect(inner).width();
++                const qreal containing = native->tableCellBoundingRect(outer, outer->cellAt(0, 0)).width();
++                QVERIFY2(containing < doc.textWidth(), context.constData());
++                doc.setLayoutEnabled(false); auto changed = format; changed.setProperty(minimum, policy("percent", 70)); inner->setFormat(changed);
++                doc.setLayoutEnabled(true); native->documentSize();
++                QVERIFY2(native->wikidictParagraphBoxLayoutError() == 0,
++                    qPrintable(QString::fromUtf8(context) + QStringLiteral(" stage=percent error=%1 position=%2")
++                        .arg(native->wikidictParagraphBoxLayoutError()).arg(native->wikidictParagraphBoxLayoutErrorPosition())));
++                const qreal finalContaining = native->tableCellBoundingRect(outer, outer->cellAt(0, 0)).width();
++                QVERIFY2(qAbs(finalContaining - containing) < .04, context.constData()); // Intrinsic percentage must not invent a root basis or grow its parent.
++                QVERIFY2(qAbs(native->tableBoundingRect(inner).width() - qMax(baseline, qreal(qCeil(containing * .7)))) < 1.1, context.constData());
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(inner->parentFrame(), outer);
++            }
++            const auto absoluteContext = QStringLiteral("table minimum direction=%1 caption=%2 containing request=400 absolute minimum=760.25")
++                .arg(int(direction)).arg(captioned).toUtf8();
++            // Known absolute minima participate in the outer cell's intrinsic floor.
++            doc.setLayoutEnabled(false); auto changed = format; changed.setProperty(minimum, policy("px", 760.25)); inner->setFormat(changed);
++            doc.setLayoutEnabled(true); native->documentSize();
++            QVERIFY2(native->wikidictParagraphBoxLayoutError() == 0,
++                qPrintable(QString::fromUtf8(absoluteContext) + QStringLiteral(" error=%1 position=%2")
++                    .arg(native->wikidictParagraphBoxLayoutError()).arg(native->wikidictParagraphBoxLayoutErrorPosition())));
++            QVERIFY2(native->tableBoundingRect(inner).width() >= 761, absoluteContext.constData());
++            QVERIFY2(native->tableCellBoundingRect(outer, outer->cellAt(0, 0)).width() >= 761, absoluteContext.constData());
++            QVERIFY2(native->tableBoundingRect(outer).width() >= 761, absoluteContext.constData()); QCOMPARE(doc.toRawText(), raw);
++        }
++    }
++    void tableMinimumWidthRefusesForgedPolicyAndUnsupportedOwnersThenRecovers()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0, minimum = QTextFormat::UserProperty + 0x5866;
++        const QJsonObject source{{"style", QJsonObject{{"min_width", QJsonObject{{"unit", "percent"}, {"value", 70.0}}}}},
++            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Retained"}}}}, {"rowspan", 1}, {"colspan", 1}}}}}}}};
++        const QVariantMap valid{{"capability", "wikidict.table-minimum-width/1"}, {"source", QJsonDocument(source).toJson(QJsonDocument::Compact)},
++            {"em", 16.0}, {"unit", "percent"}, {"value", 70.0}};
++        QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0); doc.setTextWidth(400); QTextCursor cursor(&doc);
++        QTextTableFormat format; format.setMargin(0); format.setBorder(0); format.setCellPadding(0); format.setCellSpacing(0);
++        format.setProperty(owner, "wikidict.table-box/1"); format.setProperty(owner + 2, 0); format.setProperty(minimum, valid);
++        auto *table = cursor.insertTable(1, 1, format); cursor.insertText(QStringLiteral("Retained"));
++        auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native); const auto raw = doc.toRawText();
++        QList<QVariantMap> invalid;
++        auto bad = valid; bad.insert("extra", true); invalid.append(bad);
++        bad = valid; bad.insert("value", -1.0); invalid.append(bad);
++        bad = valid; bad.insert("value", 71.0); invalid.append(bad);
++        bad = valid; bad.insert("em", std::numeric_limits<double>::infinity()); invalid.append(bad);
++        bad = valid; bad.insert("source", QByteArray("{}")); invalid.append(bad);
++        auto emptySource = source; emptySource.insert("rows", QJsonArray{});
++        bad = valid; bad.insert("source", QJsonDocument(emptySource).toJson(QJsonDocument::Compact)); invalid.append(bad);
++        bad = valid; bad.insert("capability", "wrong"); invalid.append(bad);
++        auto responsive = source; responsive.insert("block_viewport", QJsonObject{});
++        bad = valid; bad.insert("source", QJsonDocument(responsive).toJson(QJsonDocument::Compact)); invalid.append(bad);
++        for (const auto &policy : invalid) {
++            doc.setLayoutEnabled(false); auto changed = format; changed.setProperty(minimum, policy); table->setFormat(changed);
++            doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0); QCOMPARE(doc.toRawText(), raw);
++            doc.setLayoutEnabled(false); table->setFormat(format); doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QVERIFY(native->tableBoundingRect(table).width() >= 280); QCOMPARE(doc.toRawText(), raw);
++        }
++        for (bool empty : {false, true}) {
++            QTextDocument other; other.setLayoutEnabled(false); other.setTextWidth(400); QTextCursor insertion(&other);
++            QTextFrameFormat unsupported; unsupported.setMargin(0); unsupported.setBorder(0);
++            unsupported.setProperty(minimum, valid);
++            if (empty) { unsupported.setProperty(owner, "wikidict.empty-table/1"); unsupported.setProperty(QTextFormat::UserProperty + 0x57d4, "wrapper"); }
++            auto *frame = insertion.insertFrame(unsupported); QVERIFY(frame);
++            auto *layout = qobject_cast<QTextDocumentLayout *>(other.documentLayout()); QVERIFY(layout); const auto text = other.toRawText();
++            other.setLayoutEnabled(true); layout->documentSize(); QVERIFY(layout->wikidictParagraphBoxLayoutError() != 0); QCOMPARE(other.toRawText(), text);
++        }
++    }
++
 +    void ownedTableOverflowKeepsClippedPaintHitAndMutation()
 +    {
 +        constexpr int owner = QTextFormat::UserProperty + 0x57d0;
@@ -14483,7 +14658,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15084,1560 @@
+@@ -648,5 +15259,1560 @@
      }
  }
 

@@ -8755,6 +8755,340 @@ private slots:
         QVERIFY(browser->findChildren<QScrollBar *>("readingLocalHorizontalScroll").isEmpty());
     }
 
+    void typedTableCssBorderKeepsCellPolicyIndependent() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        window.readingPointSize_ = 20 * 72 / QFontMetricsF(QFont()).fontDpi();
+        const auto length = [](double value, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const auto solid = [&](double width, const QString &color) { return QJsonObject{{"solid", QJsonObject{{"width", length(width)}, {"color", color}}}}; };
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject zero{{"top", length(0)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}};
+        auto padding = zero; padding.insert("left", length(.5, "em"));
+        for (bool collapsed : {false, true}) for (int legacy : {-1, 0, 2}) for (int cellPolicy = 0; cellPolicy < 3; ++cellPolicy)
+            for (bool outerBorder : {false, true}) for (bool minimum : {false, true}) {
+            QJsonObject cellStyle{{"padding", padding}};
+            if (cellPolicy) cellStyle.insert("border", cellPolicy == 1 ? none : solid(3, "#2020c0"));
+            const auto cell = [&](const QString &text) { return QJsonObject{{"style", cellStyle},
+                {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", text}, {"target", "BorderTarget"}}}}}; };
+            QJsonObject style{{"border", outerBorder ? solid(1, "#c02020") : none}, {"collapse", collapsed ? "collapse" : "separate"},
+                {"padding", zero}, {"margins", zero}, {"width", length(100)}};
+            if (minimum) style.insert("min_width", length(70, "percent"));
+            QJsonObject geometry{{"cell_spacing", 0}, {"cell_padding", 0}};
+            if (legacy >= 0) geometry.insert("border", legacy);
+            const QJsonObject table{{"style", style}, {"geometry", geometry},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell("A"), cell("B")}}}}}};
+            const auto source = QJsonDocument(table).toJson(QJsonDocument::Compact);
+            QImage device(480, 180, QImage::Format_ARGB32_Premultiplied); device.fill(Qt::white);
+            QTextDocument doc; doc.setDocumentMargin(8); doc.setTextWidth(416);
+            doc.documentLayout()->setPaintDevice(&device);
+            SemanticHtml::setHtml(&doc, window.tableHtml(table, 0));
+            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
+            native->documentSize();
+            const QString detail = QStringLiteral("css-border collapse=%1 legacy=%2 cell=%3 outer=%4 min=%5")
+                .arg(collapsed).arg(legacy).arg(cellPolicy).arg(outerBorder).arg(minimum);
+            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+            const auto selected = doc.find("A"); QVERIFY(!selected.isNull()); auto *actual = selected.currentTable(); QVERIFY(actual);
+            QCOMPARE(actual->rows(), 1); QCOMPARE(actual->columns(), 2);
+            const auto format = actual->format(); QCOMPARE(format.border(), qreal(0));
+            QCOMPARE(format.borderStyle(), QTextFrameFormat::BorderStyle_None); QCOMPARE(format.borderCollapse(), collapsed);
+            const auto physical = format.property(SemanticHtml::tablePhysicalEdgesProperty).toMap();
+            QCOMPARE(physical.value("padding").toList(), QVariantList({0.0, 0.0, 0.0, 0.0}));
+            const auto edges = physical.value("borders").toList(); QCOMPARE(edges.size(), 4);
+            for (const auto &edge : edges) {
+                QCOMPARE(edge.toMap().value("width").toDouble(), outerBorder ? 1.0 : 0.0);
+                QCOMPARE(edge.toMap().value("style").toInt(), outerBorder ? 2 : 0);
+                QCOMPARE(edge.toMap().value("color").value<QColor>(), outerBorder ? QColor("#c02020") : QColor(Qt::transparent));
+            }
+            const qreal expectedCellBorder = cellPolicy == 2 ? 3 : cellPolicy == 1 ? 0 : qMax(0, legacy);
+            for (int column = 0; column < 2; ++column) {
+                const auto cellFormat = actual->cellAt(0, column).format().toTableCellFormat();
+                QCOMPARE(cellFormat.leftBorder(), expectedCellBorder); QCOMPARE(cellFormat.rightBorder(), expectedCellBorder);
+                QCOMPARE(cellFormat.topBorder(), expectedCellBorder); QCOMPARE(cellFormat.bottomBorder(), expectedCellBorder);
+                for (const int property : {QTextFormat::TableCellTopBorder, QTextFormat::TableCellRightBorder,
+                        QTextFormat::TableCellBottomBorder, QTextFormat::TableCellLeftBorder})
+                    QVERIFY2(cellFormat.hasProperty(property), qPrintable(detail));
+                QCOMPARE(cellFormat.leftPadding(), qreal(10));
+                if (cellPolicy == 2) QCOMPARE(cellFormat.leftBorderBrush().color(), QColor("#2020c0"));
+            }
+            const auto box = native->tableBoundingRect(actual);
+            if (minimum) {
+                QVERIFY2(box.width() + .08 >= 280, qPrintable(detail));
+                QCOMPARE(format.property(SemanticHtml::tableMinimumWidthProperty).toMap().value("source").toByteArray(), source);
+            }
+            QPainter painter(&device); QAbstractTextDocumentLayout::PaintContext paint; native->draw(&painter, paint); painter.end();
+            int redPixels = 0, bluePixels = 0, interiorRedPixels = 0;
+            const QRect painted = box.adjusted(-2, -2, 2, 2).toAlignedRect().intersected(device.rect());
+            const QRectF interior = box.adjusted(4, 4, -4, -4);
+            for (int y = painted.top(); y <= painted.bottom(); ++y) for (int x = painted.left(); x <= painted.right(); ++x) {
+                const QColor color = device.pixelColor(x, y);
+                const bool red = color == QColor("#c02020");
+                redPixels += red; bluePixels += color == QColor("#2020c0");
+                interiorRedPixels += red && interior.contains(QPointF(x + .5, y + .5));
+            }
+            // Outer CSS must never become an interior grid border. Explicit Cell
+            // CSS paints independently, including at the shared edge of two cells.
+            QCOMPARE(interiorRedPixels, 0);
+            if (!outerBorder) QCOMPARE(redPixels, 0);
+            else if (cellPolicy != 2 && expectedCellBorder == 0) QVERIFY2(redPixels > 0, qPrintable(detail));
+            if (cellPolicy == 2) QVERIFY2(bluePixels > 0, qPrintable(detail));
+            else QCOMPARE(bluePixels, 0);
+            QCOMPARE(selected.charFormat().anchorHref(), QStringLiteral("dict:BorderTarget"));
+            const auto lines = paintedBlockLines(&doc, selected.block()); QVERIFY(!lines.isEmpty());
+            QCOMPARE(native->anchorAt(lines.first().center()), QStringLiteral("dict:BorderTarget"));
+            QCOMPARE(QJsonDocument(table).toJson(QJsonDocument::Compact), source);
+        }
+        // Qt rectangularizes this ragged row. Its empty filler must still paint
+        // the collapsed TABLE edge without gaining source content or a grid border.
+        const auto raggedCell = [](const QString &text) {
+            return QJsonObject{{"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}}}}};
+        };
+        const QJsonArray raggedRows{QJsonObject{{"cells", QJsonArray{raggedCell("A"), raggedCell("B")}}},
+            QJsonObject{{"cells", QJsonArray{raggedCell("C")}}}};
+        const QJsonObject raggedStyle{{"border", solid(1, "#c02020")}, {"collapse", "collapse"},
+            {"padding", zero}, {"margins", zero}, {"width", length(100)}};
+        const QJsonObject ragged{{"style", raggedStyle}, {"geometry", QJsonObject{{"border", 0}, {"cell_spacing", 0}, {"cell_padding", 0}}}, {"rows", raggedRows}};
+        const auto raggedSource = QJsonDocument(ragged).toJson(QJsonDocument::Compact);
+        QImage raggedPaint(480, 180, QImage::Format_ARGB32_Premultiplied); raggedPaint.fill(Qt::white);
+        QTextDocument raggedDocument; raggedDocument.setDocumentMargin(8); raggedDocument.setTextWidth(416);
+        raggedDocument.documentLayout()->setPaintDevice(&raggedPaint);
+        SemanticHtml::setHtml(&raggedDocument, window.tableHtml(ragged, 0));
+        auto *raggedLayout = qobject_cast<QTextDocumentLayout *>(raggedDocument.documentLayout()); QVERIFY(raggedLayout);
+        raggedLayout->documentSize(); QCOMPARE(raggedLayout->wikidictParagraphBoxLayoutError(), 0);
+        auto *raggedTable = raggedDocument.find("C").currentTable(); QVERIFY(raggedTable);
+        QCOMPARE(raggedTable->rows(), 2); QCOMPARE(raggedTable->columns(), 2);
+        const auto filler = raggedTable->cellAt(1, 1); const auto fillerFormat = filler.format().toTableCellFormat();
+        QCOMPARE(filler.firstCursorPosition().position(), filler.lastCursorPosition().position());
+        for (const int property : {QTextFormat::TableCellTopBorder, QTextFormat::TableCellRightBorder,
+                QTextFormat::TableCellBottomBorder, QTextFormat::TableCellLeftBorder}) {
+            QVERIFY(fillerFormat.hasProperty(property)); QCOMPARE(fillerFormat.doubleProperty(property), qreal(0));
+        }
+        const auto raggedBox = raggedLayout->tableBoundingRect(raggedTable);
+        const auto fillerBox = raggedLayout->tableCellBoundingRect(raggedTable, filler);
+        QVERIFY(fillerBox.height() > 8);
+        QPainter raggedPainter(&raggedPaint); QAbstractTextDocumentLayout::PaintContext raggedContext;
+        raggedLayout->draw(&raggedPainter, raggedContext); raggedPainter.end();
+        int fillerOuterRed = 0;
+        for (int y = qRound(fillerBox.center().y()) - 2; y <= qRound(fillerBox.center().y()) + 2; ++y)
+            for (int x = qFloor(raggedBox.right()) - 2; x <= qCeil(raggedBox.right()) + 2; ++x) {
+                QVERIFY(raggedPaint.rect().contains(x, y));
+                fillerOuterRed += raggedPaint.pixelColor(x, y) == QColor("#c02020");
+            }
+        QVERIFY(fillerOuterRed > 0);
+        QCOMPARE(QJsonDocument(ragged).toJson(QJsonDocument::Compact), raggedSource);
+        // The wholly untyped legacy route retains its existing default cell hint.
+        const QJsonObject legacy{{"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{
+            {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Legacy"}}}}}}}}}}};
+        QTextDocument plain; SemanticHtml::setHtml(&plain, window.tableHtml(legacy, 0));
+        auto *legacyTable = plain.find("Legacy").currentTable(); QVERIFY(legacyTable);
+        QVERIFY(!legacyTable->format().hasProperty(SemanticHtml::tablePhysicalEdgesProperty));
+        QCOMPARE(legacyTable->cellAt(0, 0).format().toTableCellFormat().leftBorder(), qreal(1));
+        // Actual ZH shape: no legacy geometry, one cell, authored minimum and
+        // outer border, and .5em cell padding. This is controlled source-shaped data.
+        auto margins = zero; margins.insert("left", length(1));
+        const QJsonObject zh{{"style", QJsonObject{{"border", solid(1, "#797979")}, {"min_width", length(70, "percent")}, {"margins", margins}}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"style", QJsonObject{{"padding", padding}}},
+                {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "cheng-khi"}, {"target", "ZhTarget"}}}}}}}}}}};
+        QTextDocument controlled; controlled.setDocumentMargin(0); controlled.setTextWidth(400);
+        SemanticHtml::setHtml(&controlled, window.tableHtml(zh, 0));
+        auto *native = qobject_cast<QTextDocumentLayout *>(controlled.documentLayout()); QVERIFY(native); native->documentSize();
+        QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+        auto *table = controlled.find("cheng-khi").currentTable(); QVERIFY(table);
+        QCOMPARE(table->cellAt(0, 0).format().toTableCellFormat().leftBorder(), qreal(0));
+        QCOMPARE(table->cellAt(0, 0).format().toTableCellFormat().leftPadding(), qreal(10));
+        QVERIFY(native->tableBoundingRect(table).width() + .08 >= 280);
+        QCOMPARE(controlled.find("cheng-khi").charFormat().anchorHref(), QStringLiteral("dict:ZhTarget"));
+    }
+
+    void typedTableMinimumKeepsAutoPreferredAndContainingWidthDistinct() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
+        window.readingPointSize_ = 20 * 72 / defaultDpi;
+        const auto length = [](double n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const QJsonObject zero{{"top", length(0)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}};
+        auto padding = zero; padding.insert("left", length(.5, "em"));
+        FlowConstruction::RenderContext context; context.pointSize = window.readingPointSize_ * .6;
+        for (int dpi : {96, 144}) for (int variant = 0; variant < 9; ++variant) {
+            QImage device(1800, 600, QImage::Format_ARGB32_Premultiplied);
+            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
+            QTextDocument doc; doc.setDocumentMargin(0); doc.documentLayout()->setPaintDevice(&device);
+            const qreal scale = QFontMetricsF(QFont(), &device).fontDpi() / defaultDpi;
+            const QString body = variant == 0 ? QStringLiteral("Auto contents remain naturally wide with many ordinary breakable words across the same containing line") : QStringLiteral("Minimum action");
+            const QJsonObject cell{{"rowspan", 1}, {"colspan", 1}, {"style", QJsonObject{{"padding", padding}}},
+                {"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", body}, {"target", "MinimumTarget"}}}}};
+            QJsonObject style{{"border", QJsonObject{{"solid", QJsonObject{{"width", length(1)}, {"color", "#797979"}}}}},
+                {"padding", zero}, {"collapse", "separate"}};
+            if (variant != 0) style.insert("width", length(variant == 2 ? 330 : 100));
+            QJsonObject table{{"style", style}, {"geometry", QJsonObject{{"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+            const QJsonObject minimum = variant < 3 ? length(70, "percent") : variant == 3 ? length(280.25)
+                : variant == 4 ? length(14.0125, "em") : variant == 5 ? length(125, "percent")
+                : length(0, variant == 6 ? "px" : variant == 7 ? "em" : "percent");
+            for (qreal containing : {400.0, 300.0, 400.0}) {
+                doc.setTextWidth(containing * scale);
+                SemanticHtml::setHtml(&doc, window.tableHtml(table, 0, 1, {}, {}, {}, {}, context));
+                auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
+                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const auto baseline = doc.find(body); QVERIFY(!baseline.isNull());
+                const qreal before = native->tableBoundingRect(baseline.currentTable()).width();
+                const auto raw = doc.toRawText();
+                auto constrained = table; auto constrainedStyle = style; constrainedStyle.insert("min_width", minimum); constrained.insert("style", constrainedStyle);
+                const auto source = QJsonDocument(constrained).toJson(QJsonDocument::Compact);
+                SemanticHtml::setHtml(&doc, window.tableHtml(constrained, 0, 1, {}, {}, {}, {}, context));
+                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+                const auto selected = doc.find(body); QVERIFY(!selected.isNull()); auto *grid = selected.currentTable(); QVERIFY(grid);
+                const auto policy = grid->format().property(SemanticHtml::tableMinimumWidthProperty).toMap();
+                QCOMPARE(policy.size(), 5); QCOMPARE(policy.value("source").toByteArray(), source);
+                QCOMPARE(policy.value("unit").toString(), minimum.value("unit").toString());
+                QCOMPARE(policy.value("value").toDouble(), minimum.value("value").toDouble());
+                QVERIFY(qAbs(policy.value("em").toDouble() - 20) < .00001);
+                QCOMPARE(grid->format().hasProperty(SemanticHtml::tableBoxWidthProperty), variant != 0);
+                QVERIFY(qAbs(grid->cellAt(0, 0).format().toTableCellFormat().leftPadding() - 10.0) < .00001);
+                const qreal requested = minimum.value("unit") == "percent" ? containing * scale * minimum.value("value").toDouble() / 100
+                    : minimum.value("value").toDouble() * scale * (minimum.value("unit") == "em" ? 20 : 1);
+                const qreal floor = qCeil(requested);
+                const auto actual = native->tableBoundingRect(grid);
+                const QString detail = QStringLiteral("minimum variant=%1 dpi=%2 containing=%3 baseline=%4 floor=%5 actual=%6")
+                    .arg(variant).arg(dpi).arg(containing).arg(before).arg(floor).arg(actual.width());
+                QVERIFY2(actual.width() + .02 >= qMax(before, floor), qPrintable(detail));
+                if (variant == 0) { QVERIFY2(before > requested, qPrintable(detail)); QVERIFY2(qAbs(actual.width() - before) < .08, qPrintable(detail)); }
+                if (variant >= 6) QCOMPARE(actual.width(), before);
+                // Typed TABLE CSS contributes two physical outer edges. The
+                // explicit legacy zero hint must not acquire any grid borders.
+                const auto format = grid->format();
+                QCOMPARE(format.border(), qreal(0)); QVERIFY(!format.borderCollapse());
+                QCOMPARE(format.borderStyle(), QTextFrameFormat::BorderStyle_None);
+                QCOMPARE(format.cellSpacing(), qreal(0)); QCOMPARE(format.cellPadding(), qreal(0));
+                const auto physical = format.property(SemanticHtml::tablePhysicalEdgesProperty).toMap();
+                const auto borders = physical.value("borders").toList(); QCOMPARE(borders.size(), 4);
+                for (const auto &edge : borders) { QCOMPARE(edge.toMap().value("style").toInt(), 2); QCOMPARE(edge.toMap().value("width").toDouble(), 1.0); }
+                QCOMPARE(grid->cellAt(0, 0).format().toTableCellFormat().leftBorder(), qreal(0));
+                QCOMPARE(grid->cellAt(0, 0).format().toTableCellFormat().rightBorder(), qreal(0));
+                QCOMPARE(format.property(SemanticHtml::tableBoxPaddingProperty).toList(), QVariantList({0.0, 0.0, 0.0, 0.0}));
+                const qreal borderOverhead = 2 * QFixed::fromReal(scale).round().toReal();
+                const auto cellBox = native->tableCellBoundingRect(grid, grid->cellAt(0, 0));
+                const QString gridDetail = detail + QStringLiteral(" cell=%1 borderOverhead=%2 actualOverhead=%3")
+                    .arg(cellBox.width()).arg(borderOverhead).arg(actual.width() - cellBox.width());
+                QVERIFY2(qAbs(actual.width() - cellBox.width() - borderOverhead) < .08, qPrintable(gridDetail));
+                // A wider outer box alone must not masquerade as an applied minimum.
+                QVERIFY2(cellBox.width() + borderOverhead + .08 >= floor, qPrintable(gridDetail));
+                QCOMPARE(selected.charFormat().anchorHref(), QStringLiteral("dict:MinimumTarget"));
+                const auto lines = paintedBlockLines(&doc, selected.block()); QVERIFY(!lines.isEmpty());
+                const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
+                const auto hitPoint = native->blockBoundingRect(selected.block()).topLeft()
+                    + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
+                QCOMPARE(native->anchorAt(hitPoint), QStringLiteral("dict:MinimumTarget"));
+                const int hit = native->hitTest(hitPoint, Qt::ExactHit); QVERIFY(hit >= selected.selectionStart() && hit < selected.selectionEnd());
+                QCOMPARE(doc.toRawText(), raw); QCOMPARE(QJsonDocument(constrained).toJson(QJsonDocument::Compact), source);
+            }
+        }
+    }
+
+    void typedTableMinimumSurvivesFlowPaddingResizeAndAccessibleActions() {
+        MainWindow window{QString()}; window.resize(960, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        const auto length = [](double n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const QJsonObject zero{{"top", length(0)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}};
+        auto margins = zero; margins.insert("left", length(1));
+        auto padding = zero; padding.insert("left", length(.5, "em"));
+        const QString label = QStringLiteral("cheng-khi action");
+        const QJsonObject cell{{"rowspan", 1}, {"colspan", 1},
+            {"style", QJsonObject{{"padding", padding}, {"text_align", "left"}}},
+            {"spans", QJsonArray{QJsonObject{{"kind", "external_link"}, {"text", label}, {"target", "https://example.test/minimum"}}}}};
+        const QJsonObject table{{"style", QJsonObject{{"min_width", length(70, "percent")}, {"margins", margins},
+                {"border", QJsonObject{{"solid", QJsonObject{{"width", length(1)}, {"color", "#797979"}}}}}}},
+            {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+        const QJsonObject tableBlock{{"kind", "table"}, {"table", table}};
+        // An ordinary Container forces the real temporary-document/fragment
+        // construction path. Its font changes text, never the normalized em basis.
+        const QJsonObject source{{"kind", "container"}, {"spans", QJsonArray{}}, {"container", QJsonObject{
+            {"style", QJsonObject{{"owner_font_scale", .75}}}, {"blocks", QJsonArray{tableBlock}}}}};
+        const QJsonObject following{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", "Following content"}}}}};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{source, following})); window.showCompactPane(false);
+        auto *browser = window.reading_; auto *doc = browser->document();
+        auto *native = qobject_cast<QTextDocumentLayout *>(doc->documentLayout()); QVERIFY(native);
+        const auto selected = doc->find(label); QVERIFY(!selected.isNull()); auto *grid = selected.currentTable(); QVERIFY(grid);
+        auto *owner = grid->parentFrame(); QVERIFY(owner && owner != doc->rootFrame());
+        const auto sourceBytes = QJsonDocument(table).toJson(QJsonDocument::Compact);
+        QCOMPARE(grid->format().property(SemanticHtml::tableMinimumWidthProperty).toMap().value("source").toByteArray(), sourceBytes);
+        QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), source);
+        const qreal em = window.readingPointSize_ * QFontMetricsF(QFont()).fontDpi() / 72;
+        QVERIFY(qAbs(grid->cellAt(0, 0).format().toTableCellFormat().leftPadding() - .5 * em) < .00001);
+        const auto raw = doc->toRawText(); const auto entry = window.currentEntry_; const int count = doc->characterCount();
+        const auto format = grid->format(); const int index = grid->objectIndex();
+        QObject::disconnect(browser, nullptr, &window, nullptr); QSignalSpy actions(browser, &QTextBrowser::anchorClicked);
+        QList<qreal> widths;
+        for (int width : {960, 640, 960}) {
+            window.resize(width, 700); QCoreApplication::processEvents(); window.showCompactPane(false);
+            QTRY_VERIFY(browser->isVisible()); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
+            const auto containing = native->frameBoundingRect(owner), box = native->tableBoundingRect(grid);
+            qInfo().nospace() << "controlled table minimum window=" << width << " viewport=" << browser->viewport()->size()
+                << " containing=" << containing << " table=" << box << " sourcePercent=70 cellLeftEm=0.5";
+            QVERIFY(box.width() + .08 >= .7 * containing.width());
+            QVERIFY(box.width() <= containing.width() + 2);
+            widths.append(box.width());
+            const auto lines = paintedBlockLines(doc, selected.block()); QVERIFY(!lines.isEmpty());
+            const auto line = selected.block().layout()->lineAt(0); QVERIFY(line.isValid());
+            const QPointF point = native->blockBoundingRect(selected.block()).topLeft()
+                + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
+            QCOMPARE(native->anchorAt(point), QStringLiteral("https://example.test/minimum"));
+            auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+            auto *text = accessible->textInterface(); QCOMPARE(text->text(0, -1).count(label), 1);
+            QVERIFY(text->characterRect(selected.selectionStart()).isValid());
+            text->setSelection(0, selected.selectionStart(), selected.selectionEnd()); QCOMPARE(browser->textCursor().selectedText(), label);
+            window.activateWindow(); browser->setFocus(Qt::TabFocusReason); QTRY_VERIFY(browser->hasFocus());
+            browser->setTextCursor(QTextCursor(doc)); QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier); QTest::keyClick(browser, Qt::Key_Tab);
+            QTRY_VERIFY(browser->textCursor().hasSelection()); QCOMPARE(browser->textCursor().selectedText(), label);
+            const auto prior = actions.size(); QTest::keyClick(browser, Qt::Key_Return); QTRY_COMPARE(actions.size(), prior + 1);
+            QCOMPARE(actions.last().first().toUrl(), QUrl(QStringLiteral("https://example.test/minimum")));
+            QCOMPARE(doc->toRawText(), raw); QCOMPARE(doc->characterCount(), count); QCOMPARE(window.currentEntry_, entry);
+            QCOMPARE(grid->format(), format); QCOMPARE(grid->objectIndex(), index);
+        }
+        QVERIFY(widths[1] < widths[0]); QCOMPARE(widths[2], widths[0]);
+    }
+
+    void typedTableMinimumRefusesMalformedMissingPairAndUnsupportedOwners() {
+        MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        const auto length = [](double n, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", n}}; };
+        const QJsonObject cell{{"spans", QJsonArray{QJsonObject{{"kind", "link"}, {"text", "Cell"}, {"target", "CellTarget"}}}}};
+        const QJsonObject base{{"style", QJsonObject{{"width", length(100)}}}, {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{cell}}}}}};
+        const auto withMinimum = [&](QJsonValue value) { auto table = base; auto style = table.value("style").toObject(); style.insert("min_width", value); table.insert("style", style); return table; };
+        const auto good = withMinimum(length(70, "percent"));
+        for (const auto &bad : QJsonArray{length(-1), length(1, "vw"), QJsonObject{{"unit", "px"}, {"value", "70"}},
+                QJsonObject{{"unit", "px"}, {"value", 70}, {"extra", true}}, QJsonObject{{"unit", "px"}}, true}) {
+            QVERIFY_EXCEPTION_THROWN(window.tableHtml(withMinimum(bad), 0), std::runtime_error);
+        }
+        for (const auto &key : {QStringLiteral("block_viewport"), QStringLiteral("float_viewport")}) {
+            auto table = good; table.insert(key, QJsonObject{});
+            QVERIFY_EXCEPTION_THROWN(window.tableHtml(table, 0), std::runtime_error);
+        }
+        for (const auto &key : {QStringLiteral("box_style"), QStringLiteral("grid_style")}) {
+            auto responsive = intrinsicTableViewportFixture("ltr", false, false);
+            auto viewport = responsive.value("block_viewport").toObject();
+            auto style = viewport.value(key).toObject(); style.insert("min_width", length(70, "percent"));
+            viewport.insert(key, style); responsive.insert("block_viewport", viewport);
+            QVERIFY_EXCEPTION_THROWN(window.tableHtml(responsive, 0), std::runtime_error);
+        }
+        auto empty = good; empty.insert("rows", QJsonArray{});
+        QVERIFY_EXCEPTION_THROWN(window.tableHtml(empty, 0), std::runtime_error);
+        QTextDocument missing; missing.documentLayout()->setProperty("_wikidictTableMinimumWidthCapability", QVariant());
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&missing, window.tableHtml(good, 0)), std::runtime_error);
+        QTextDocument legacy; legacy.documentLayout()->setProperty("_wikidictTableMinimumWidthCapability", QVariant()); legacy.setTextWidth(400);
+        SemanticHtml::setHtml(&legacy, window.tableHtml(base, 0)); legacy.documentLayout()->documentSize();
+        const auto before = legacy.find("Cell").currentTable()->format(); const auto raw = legacy.toRawText();
+        QVERIFY(!before.hasProperty(SemanticHtml::tableMinimumWidthProperty));
+        SemanticHtml::setHtml(&legacy, window.tableHtml(withMinimum(QJsonValue::Null), 0)); legacy.documentLayout()->documentSize();
+        const auto after = legacy.find("Cell").currentTable()->format();
+        QVERIFY(!after.hasProperty(SemanticHtml::tableMinimumWidthProperty)); QCOMPARE(legacy.toRawText(), raw);
+        QCOMPARE(after.width(), before.width()); QCOMPARE(after.property(SemanticHtml::tableBoxWidthProperty), before.property(SemanticHtml::tableBoxWidthProperty));
+        QVector<SemanticHtml::TableInfo> records; int count = 0;
+        const QString html = SemanticHtml::prepareTables(window.tableHtml(good, 0), records, count);
+        QCOMPARE(records.size(), 1); QCOMPARE(count, 1);
+        auto changed = records; auto source = good; auto forgedStyle = source.value("style").toObject();
+        forgedStyle.insert("min_width", length(71, "percent")); source.insert("style", forgedStyle);
+        changed[0].value.insert("minimum_source", source);
+        QTextDocument forged; forged.setHtml(html);
+        QVERIFY_EXCEPTION_THROWN(SemanticHtml::normalizeTables(&forged, changed, count), std::runtime_error);
+    }
+
     void typedCellPreferredWidthKeepsPercentAllocationSourceAndActions() {
         MainWindow window(fixture_); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         const auto length = [](double n, const QString &unit = QStringLiteral("percent")) { return QJsonObject{{"unit", unit}, {"value", n}}; };

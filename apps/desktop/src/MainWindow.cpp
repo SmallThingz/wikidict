@@ -5934,6 +5934,7 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
 }
 QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDepth, const QString &inheritedBackground, const QString &location, const QString &inheritedAlignment, const QString &listMarker, FlowConstruction::RenderContext context) const {
     if (tableDepth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
+    SemanticHtml::tableMinimumWidthPolicy(table, readingPointSize_);
     SemanticHtml::validateInlineTableDomain(table, tableDepth, context.contentDepth, context.inReference, context.inlineTableAudioOwners, context.inlineTableImageOwners);
     const auto viewport = SemanticHtml::tableBlockViewport(table);
     const auto floatViewport = SemanticHtml::tableFloatViewport(table);
@@ -5958,7 +5959,9 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             throw DictApiError("invalid table geometry");
         return value.toInt();
     };
-    const int border = dimension(QStringLiteral("border"), viewport.isEmpty() ? 1 : 0);
+    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "min_width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
+    // Authored TABLE CSS does not supply a legacy cell-border hint.
+    const int border = dimension(QStringLiteral("border"), viewport.isEmpty() && !SemanticHtml::present(tableStyle.value(QStringLiteral("border"))) ? 1 : 0);
     const int spacing = dimension(QStringLiteral("cell_spacing"), 0);
     const int padding = dimension(QStringLiteral("cell_padding"), viewport.isEmpty() ? 5 : 0);
     if (!geometry.isEmpty() || tableDepth > 1 || !viewport.isEmpty()) {
@@ -5979,7 +5982,6 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             .arg((!geometry.value(QStringLiteral("cell_spacing")).isUndefined() && !geometry.value(QStringLiteral("cell_spacing")).isNull()) ? QStringLiteral("separate") : QStringLiteral("collapse"))
             .arg(tableDepth > 1 ? 0 : 8).arg(indent);
     }
-    const QJsonObject tableStyle = SemanticHtml::typedStyle(table.value(QStringLiteral("style")), {"background", "border", "collapse", "margins", "margin_values", "containing_direction", "float_side", "width", "padding", "clear", "display", "vertical_align", "line_height", "corner_radii"});
     if (!viewport.isEmpty() || SemanticHtml::present(tableStyle.value(QStringLiteral("margin_values"))))
         out.insert(out.indexOf(QChar('>')), QStringLiteral(" data-wikidict-table-auto-margins='1'"));
     if (!ownerPolicy.isEmpty())
@@ -6368,6 +6370,7 @@ QString MainWindow::blockContentsHtml(const QJsonObject &block, const QString &c
     };
     if (kind == QStringLiteral("table") && table.isObject()
         && !SemanticHtml::present(table.toObject().value(QStringLiteral("style")).toObject().value(QStringLiteral("float_side")))
+        && !SemanticHtml::present(table.toObject().value(QStringLiteral("style")).toObject().value(QStringLiteral("min_width")))
         && feature.value(QStringLiteral("kind")).toString() == QStringLiteral("color_swatch") && canonicalColor
         && defaultField(QStringLiteral("language"), QString())
         && defaultField(QStringLiteral("tail_kind"), QStringLiteral("none"))

@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "0213ac7366b033d900aee9976dff7fc4bdc92afa3405fea8810c2f0d4e921f37",
-      "bytes": 1018149,
+      "sha256": "8b5c87a905c7b8168cc2189357302533c1362b892a6b1d2d29b84ccd85ca366e",
+      "bytes": 1023526,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "116a8dd14297c78181191be53a93ebf60ac8bd85f9bca9fc4e96f0c0b1219061",
-          "bytes": 807971
+          "qualified_sha256": "c4a366a4a585761bc69372fc0515175daf77380123deb9a177974b966b03f369",
+          "bytes": 812926
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -208,8 +208,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "c39fac3f571e6a761d759ba395369dbc55059e056b261b172193a7c973f3a24c",
-      "bytes": 1266309,
+      "sha256": "cd0c17ca9fdef86fc99090fe282ad236c0e01dc70ea64b562bb38e16bb2fe85e",
+      "bytes": 1283337,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +222,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "5d9d96ea47484c5a8116896a606a268485ca69f270fe9ab25359db0d13e83d3b",
-          "bytes": 1270548
+          "qualified_sha256": "d69672bfb40bc80b17df9fff4f1ce58b1eef801e826fafc54dc51092470b8ef5",
+          "bytes": 1287401
         }
       ]
     },
@@ -401,8 +401,8 @@
       "reader": 176,
       "ffi": 177,
       "app": 190,
-      "title": "\u305f\u3073\u3062",
-      "language": "\u65e5\u8a9e",
+      "title": "たびぢ",
+      "language": "日語",
       "wide": [
         900,
         700
@@ -411,7 +411,7 @@
         640,
         600
       ],
-      "internal_missing_target": "\u65c5\u8def#\u65e5\u8a9e",
+      "internal_missing_target": "旅路#日語",
       "successful_destination_record": false,
       "whole_frontend": false
     },
@@ -1589,6 +1589,166 @@
         ],
         "no_replay": true
       }
+    },
+    "table_minimum_width512": {
+      "date": "2026-11-17",
+      "scope": "Independent Table minimum width and nonrounded authored outer CSS borders, separate from imported or explicit cell borders; typed absent-geometry cell fallback, original body padding, Flow/action/accessibility controls, and the retained ZH229 table at wide and narrow viewports.",
+      "native_source_composition": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/table-minimum-width512/native-integration01/preparation01.json",
+        "bytes": 29208,
+        "sha256": "819f82cd7f444bff3d2410d46f27451e1674ae9630bcb6cbb6aaa2af877e98cf"
+      },
+      "native_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/logical-source-application188.json",
+        "bytes": 366957,
+        "sha256": "790063d70bfe4b966089a1275d8d478adb804d552893060b267bf9f4aaf3500d"
+      },
+      "native_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold169/independent-closure01.json",
+        "bytes": 235124,
+        "sha256": "c44c2183c55118e30e0afd52cd06abf36c2c74b4095e73fb08cc0bb10217fdf3"
+      },
+      "native_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold169/release01.json",
+        "bytes": 549,
+        "sha256": "295b7e7684640f5b9e7bad982abb61eeddb3178632c1b12aab5081ed2b15c58f"
+      },
+      "native_current_methods": [
+        "tableMinimumWidthUsesRealCellBasisAndCaptionIntrinsicFloor"
+      ],
+      "native_retained_methods": [
+        "tableMinimumWidthKeepsAutoPreferredAndBorderBoxIndependent",
+        "tableMinimumWidthRefusesForgedPolicyAndUnsupportedOwnersThenRecovers",
+        "nativeTableBoxKeepsCellsAndContainingFlow",
+        "typedCellConstraintsUseIntrinsicContentAndTablePercent",
+        "tableAutoMarginsMeasureActualCaptionBeforeSolvingOrigin",
+        "tableAutoMarginsShareNestedCellAndScrollportGeometry",
+        "pairedTableViewportUsesAssignedIntervalAndContainingPercentageBasis",
+        "tableIntrinsicFixedImagesMatchUncachedChanges"
+      ],
+      "native_complete_methods": [
+        "tableMinimumWidthKeepsAutoPreferredAndBorderBoxIndependent",
+        "tableMinimumWidthUsesRealCellBasisAndCaptionIntrinsicFloor",
+        "tableMinimumWidthRefusesForgedPolicyAndUnsupportedOwnersThenRecovers",
+        "nativeTableBoxKeepsCellsAndContainingFlow",
+        "typedCellConstraintsUseIntrinsicContentAndTablePercent",
+        "tableAutoMarginsMeasureActualCaptionBeforeSolvingOrigin",
+        "tableAutoMarginsShareNestedCellAndScrollportGeometry",
+        "pairedTableViewportUsesAssignedIntervalAndContainingPercentageBasis",
+        "tableIntrinsicFixedImagesMatchUncachedChanges"
+      ],
+      "native_product_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold168/dispatch02/independent-closure01.json",
+        "bytes": 236547,
+        "sha256": "05b8a84fd94e689016efb67be2c75c72c5e7e9bd96f02a4e710944cf60006f92"
+      },
+      "native_product_build_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/pt-embebido67-normal-reader106/block-geometry01/qt/native-qtgui01/cold168/dispatch02/release01.json",
+        "bytes": 561,
+        "sha256": "fc68e5709c5a43d9bdb7854e8372802b16d1d5874c1acd08aec23a22000b7489"
+      },
+      "app_source_composition": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/table-minimum-width512/canonical-minimum23701/preparation01.json",
+        "bytes": 12391,
+        "sha256": "10906347beb022fe9446c2e3df8200f212db7b8070850c490fc0902d15f1a270"
+      },
+      "app_source_application": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-source-application231.json",
+        "bytes": 109930,
+        "sha256": "e53bc7f45365ab3236dd58cf13aad56a769dd85ac820b013a1148115db27f6ee"
+      },
+      "app_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile237/independent-closure01.json",
+        "bytes": 53077,
+        "sha256": "37986cffdb7a67796b01f415d8d96a374a2b955f0591861ce7f668719cf0e0e1"
+      },
+      "app_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile237/release01.json",
+        "bytes": 482,
+        "sha256": "0b49de8119deee76f1d7543dec8698f4130dac2892f72aebe708af3baec77245"
+      },
+      "app_current_methods": [
+        "typedTableCssBorderKeepsCellPolicyIndependent",
+        "typedTableMinimumKeepsAutoPreferredAndContainingWidthDistinct",
+        "typedTableMinimumSurvivesFlowPaddingResizeAndAccessibleActions",
+        "typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit"
+      ],
+      "app_retained_methods": [
+        "typedTableMinimumRefusesMalformedMissingPairAndUnsupportedOwners",
+        "typedCellPreferredWidthUsesNormalBodyAndRequiresNativePair"
+      ],
+      "app_retained_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile236/independent-closure01.json",
+        "bytes": 61905,
+        "sha256": "669d67f91f5f02a997249845da6e464312e0d16f7dbd34739cd876fa28d77c5c"
+      },
+      "app_complete_methods": [
+        "typedTableCssBorderKeepsCellPolicyIndependent",
+        "typedTableMinimumKeepsAutoPreferredAndContainingWidthDistinct",
+        "typedTableMinimumSurvivesFlowPaddingResizeAndAccessibleActions",
+        "typedTableMinimumRefusesMalformedMissingPairAndUnsupportedOwners",
+        "typedCellPreferredWidthUsesNormalBodyAndRequiresNativePair",
+        "typedTableStylesKeepFractionalMetricsStructureAndDeviceLimit"
+      ],
+      "app_product_build_origin": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile237/independent-closure01.json",
+        "bytes": 53077,
+        "sha256": "37986cffdb7a67796b01f415d8d96a374a2b955f0591861ce7f668719cf0e0e1"
+      },
+      "app_product_build_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/app-compile237/release01.json",
+        "bytes": 482,
+        "sha256": "0b49de8119deee76f1d7543dec8698f4130dac2892f72aebe708af3baec77245"
+      },
+      "genuine_gui_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh229-app23703/independent-closure01.json",
+        "bytes": 46515,
+        "sha256": "f6b4fada437f10b97e999995a4cafa75f53dd04aa4fc425a1977e26d96e822da"
+      },
+      "genuine_gui_release": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh229-app23703/release01.json",
+        "bytes": 511,
+        "sha256": "de6e587b0a4f15947b4986b38a295dc7d800758ebd5909a6f7f4add94c4103c8"
+      },
+      "root_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-gui11/zh229-app23703/root-visual-review02.json",
+        "bytes": 4297,
+        "sha256": "26f48696ec0384a0c145a4df310927976f915df2e82e436e443fa69671bf3729"
+      },
+      "producer": {
+        "bytes": 80759,
+        "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/composite-current71-production-five-tools-independent229/direct-runtime01/independent-closure01.json",
+        "sha256": "228ab82ca5f015d8e5fc46041403d65898acd455d93ec2bc35519e74f6c606bb"
+      },
+      "reader": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/figure-normal-inputs01/shared-provider01/retained-bundle-driver01/zh-cheng-khi-ordinary229-reader01/direct-runtime01/independent-closure01.json",
+        "bytes": 5898,
+        "sha256": "aa98ff4ea21169fabe11e5771fc74f1fe2db1e044b01f187ff96937da55bda05"
+      },
+      "ffi_comparison": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/current-core229-zh229-interop01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 4782,
+        "sha256": "a201a67d09b2bbbaa0d016d05f732c77bfda50b8eb352355703e5a31eef02ca9"
+      },
+      "selected_scene": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/ordinary-launch-isolation01/zh229-app235-scene01.json",
+        "bytes": 16004,
+        "sha256": "c02518823a1954a28d2519a9c71c08bca9013051dd0c64fcd21729a892cf38d9"
+      },
+      "source_composition_only": true,
+      "new_canonical_binary_build": false,
+      "private_absolute_and_relative_float_features_excluded": true,
+      "full_native_suite": false,
+      "full_app_ctest": false,
+      "full_frontend_acceptance": false,
+      "whole_edition_acceptance": false,
+      "limitations": [
+        "Empty and responsive-wrapper minima remain refused.",
+        "Rounded and empty table CSS-border routes are outside this repair; wholly untyped legacy defaults remain separate.",
+        "The source custom background variable remains unresolved; no palette fidelity is claimed.",
+        "Internal link focus does not qualify a missing destination.",
+        "Runtime checks use the recorded private product; minimal tracked-source composition has separate exact affected-function and test proofs."
+      ]
     }
   },
   "packaged_distribution_source_equivalence": false,
