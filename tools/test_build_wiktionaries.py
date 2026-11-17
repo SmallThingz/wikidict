@@ -12213,6 +12213,49 @@ class InitialSealedSnapshotRefreshTests(unittest.TestCase):
                 self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes())
 
 
+class InitialSealedExtractionRefreshTests(unittest.TestCase):
+    def test_initial_extraction_refresh_binds_manifest_preserves_origin_and_rechecks_guards(self):
+        for change in ('allowed','missing','extra-stamp','native-origin','receipt-after','manifest-after','stale-selection'):
+            with self.subTest(change=change),ReadonlyPreparedRetainedTests().fixture()as f:
+                f.seal['runtime_stamps']=dict(assets={'compiler-inputs.ready':[1,2,33188,3,4,5]},plans=[],snapshot_links={})
+                InitialSealedGenerationTests().reseal_graph(f.f)
+                manifest=_initial_sealed_write(f.root/'cache-manifest.json',{'assets':[]})
+                receipt=dict(original_seal_sha256=f.f.seal_ref['sha256'],names=['compiler-inputs.ready'],cache_manifest=manifest)
+                authority=_initial_sealed_write(f.root/'snapshot-refresh.json',receipt)
+                selection=b.prepared_metadata(f.f.selection);selection['extraction_metadata_refresh']=authority
+                selection_ref=_initial_sealed_write(f.root/'refreshed-initial-selection.json',selection)
+                selected=copy.deepcopy(f.records);selected['dict-bundle-build']['initial_sealed_generation']=selection_ref
+                context=copy.deepcopy(f.seal);context['runtime_stamps']['assets']['compiler-inputs.ready']=[1,2,33188,3,4,6]
+                if change=='extra-stamp':context['runtime_stamps']['assets']['foreign']=[1,2,3,4,5,6]
+                elif change=='native-origin':context['identity']['producer']['abi'][0][1]='0'*64
+                elif change=='missing':Path(authority['path']).unlink()
+                calls=[]
+                def frozen(root,dump,sha,**options):
+                    self.assertEqual(sha,receipt['original_seal_sha256']);self.assertEqual(options,dict(extraction_metadata_refresh=receipt));calls.append(options);return copy.deepcopy(context)
+                raw=(f.expander/'.completed-expander.json').read_bytes()
+                with patch.object(f.native_cache,'frozen_runtime_context',side_effect=frozen):
+                    if change in ('missing','extra-stamp','native-origin'):
+                        with self.assertRaises((ValueError,OSError)):b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256'])
+                    else:
+                        roles=b.RetainedNativeToolRoles(selected,zig_sha256=f.identity['zig_sha256']);roles.require_unchanged()
+                        self.assertEqual(roles.closed_native_origin,context);self.assertIn(Path(authority['path']),roles.inputs)
+                        fresh=copy.copy(f.f);fresh.identity=copy.deepcopy(f.identity);fresh.identity['native_tool_roles']=roles.provenance()
+                        fresh.destination=f.root/'refreshed-output/viwiktionary/20261001.shards'
+                        fresh.selection=selection_ref if change!='stale-selection' else f.f.selection
+                        if change=='stale-selection':
+                            with self.assertRaises(ValueError):InitialSealedGenerationTests().adopt(fresh,native_roles=roles)
+                            self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes());continue
+                        self.assertEqual(InitialSealedGenerationTests().adopt(fresh,native_roles=roles),123)
+                        reopened=b.RetainedNativeToolRoles.from_prepared_dispatch(roles.prepared_dispatch(),_authenticated_origin=roles)
+                        self.assertEqual(reopened._closed_native_context_options,roles._closed_native_context_options);reopened.require_unchanged()
+                        if change in ('receipt-after','manifest-after'):
+                            altered=authority if change=='receipt-after' else manifest
+                            Path(altered['path']).write_bytes(Path(altered['path']).read_bytes()+b' ')
+                            with self.assertRaises(ValueError):roles.require_unchanged()
+                        self.assertTrue(calls)
+                self.assertEqual(raw,(f.expander/'.completed-expander.json').read_bytes())
+
+
 class InitialSealedProviderUpdateTests(unittest.TestCase):
     def updated(self,f,*,sitelinks=False):
         name='wikibase-sitelinks.tsv' if sitelinks else 'file-metadata.tsv';old=f.root/'old-provider.tsv';old.write_bytes(b'# source\nQ7850\tviwiki\tOld title\n' if sitelinks else b'original provider\n')

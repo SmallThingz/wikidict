@@ -4172,11 +4172,15 @@ def initial_sealed_context_options(selected, native_roles, *, root=None, seal_re
     """Retain the exact existing custody authorities selected for this worker."""
     options = {}
     references = []
-    for name in ('snapshot_metadata_refresh', 'metadata_custody_refresh'):
+    for name in ('snapshot_metadata_refresh', 'metadata_custody_refresh', 'extraction_metadata_refresh'):
         if name in selected:
             reference = selected[name]
             options[name] = prepared_metadata(reference)
             references.append(reference)
+    if 'extraction_metadata_refresh' in options:
+        if any(name in selected for name in ('file_metadata_provider_update', 'sitelinks_provider_update')):
+            raise ValueError('Initial extraction custody cannot mix Provider updates')
+        references.append(options['extraction_metadata_refresh']['cache_manifest'])
     if 'metadata_custody_refresh' in options:
         if any(name in selected for name in ('file_metadata_provider_update', 'sitelinks_provider_update')):
             raise ValueError('Initial metadata custody cannot mix Provider updates')
@@ -4250,7 +4254,7 @@ def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','file_metadata_provider_update','sitelinks_provider_update','restored_dump'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','extraction_metadata_refresh','file_metadata_provider_update','sitelinks_provider_update','restored_dump'}):
         raise ValueError('Invalid initial sealed generation selection')
     if 'file_metadata_provider_update' in selected and 'sitelinks_provider_update' in selected:
         raise ValueError('Mixed initial Provider update families')
@@ -5599,6 +5603,8 @@ class RetainedNativeToolRoles:
                 names.extend(member['name'] for member in refresh.get('snapshots', [refresh]))
             if 'metadata_custody_refresh' in options:
                 names.extend(options['metadata_custody_refresh']['names'])
+            if 'extraction_metadata_refresh' in options:
+                names.extend(options['extraction_metadata_refresh']['names'])
             for name in names:
                 comparable['runtime_stamps']['assets'][name] = ready_seal['runtime_stamps']['assets'][name]
         if seal.get('provenance')!='ordinary-linked-expander' or comparable != ready_seal:
