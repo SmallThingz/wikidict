@@ -130,9 +130,9 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
             sourceGeometry.border != null || sourceGeometry.width != null) return null
     }
     if (intrinsicTable) {
-        val sourceGeometry = table.geometry ?: return null
-        if (table.floatViewport != null || sourceGeometry.border == null || sourceGeometry.cellSpacing == null ||
-            sourceGeometry.cellPadding == null || sourceGeometry.width != null) return null
+        val sourceGeometry = table.geometry
+        if (table.floatViewport != null || sourceGeometry != null && (sourceGeometry.border == null ||
+            sourceGeometry.cellSpacing == null || sourceGeometry.cellPadding == null || sourceGeometry.width != null)) return null
     }
     if (anonymous && ((!separateCornerGrid && !intrinsicGrid && table.geometry != null) ||
             !supportedAnonymousTableStyle(checkNotNull(anonymousGridStyle), separateCornerGrid) || decorationScale != 1.0)) return null
@@ -150,7 +150,9 @@ internal fun tableRenderMetrics(table: Table, preferredColumnWidth: Int, default
     if (listOfNotNull(geometry?.border, geometry?.cellSpacing, geometry?.cellPadding).any { it !in 0..65535 }) return null
     val legacyBorder = geometry?.border?.let { pixels(it.toLong()) ?: return null } ?: 0
     val legacySpacing = geometry?.cellSpacing?.let { pixels(it.toLong()) ?: return null } ?: 0
-    val padding = if (anonymous && !separateCornerGrid && !intrinsicGrid) 0 else geometry?.cellPadding?.let { pixels(it.toLong()) ?: return null } ?: defaultPadding
+    // Absent intrinsic-table hints do not acquire the ordinary reader's cell-padding default.
+    val padding = if (anonymous && !separateCornerGrid && !intrinsicGrid || intrinsicTable && geometry == null) 0
+        else geometry?.cellPadding?.let { pixels(it.toLong()) ?: return null } ?: defaultPadding
     val grid = runCatching { tableGrid(table) }.getOrNull() ?: return null
     val style = if (anonymous || tableHasOwnStyle(table)) {
         val font = containerFontPixels ?: return null

@@ -195,4 +195,71 @@ class IntrinsicTableLayoutTest {
         assertNull(intrinsicTableSingleParagraph(cell.copy(blocks = listOf(paragraph.copy(spans = emptyList())))))
         assertSame(paragraph, cell.blocks!!.single())
     }
+
+    @Test fun cssOnlyIntrinsicMetricsUseCssEdgesWithoutReaderPaddingOrLegacyHints() {
+        val action = Span("link", "Source action", "Source target", targetFragment = "Section")
+        val rows = listOf(listOf(Cell(listOf(action), false, 1, 1),
+            Cell(emptyList(), false, 1, 1, background = "#abcdef", style = CellStyle(
+                border = StyleBorder.Solid(px(2f), "#112233"),
+                padding = StyleEdges(px(1f), px(3f), px(5f), px(7f)))),
+            Cell(listOf(Span("text", "Last body")), false, 1, 1,
+                style = CellStyle(border = StyleBorder.None, padding = all(0f)))))
+        val source = table(rows = rows).copy(geometry = null)
+        val wide = checkNotNull(tableRenderMetrics(source, 136, 99, 40, 1f, containerFontPixels = 20f))
+        assertEquals(wide, tableRenderMetrics(source, 136, 0, 40, 1f, containerFontPixels = 20f))
+        assertEquals(wide, tableRenderMetrics(source.copy(geometry = TableGeometry(0, 0, 0)),
+            136, 99, 40, 1f, containerFontPixels = 20f))
+        val narrow = checkNotNull(anonymousTableRenderMetrics(source, source.blockViewport!!.gridStyle, 1f, 20f, false))
+        for (metrics in listOf(wide, narrow)) {
+            assertEquals(0, metrics.cellPadding); assertEquals(0, metrics.cellSpacing); assertEquals(0, metrics.minRowHeight)
+            assertEquals(listOf(0f, 2f, 0f), metrics.style!!.cellBorders.map { it.width })
+            assertEquals(1.0, metrics.style!!.decorationScale, 0.0)
+        }
+        assertEquals(9f, wide.style!!.outerEdges.top.width, 0f)
+        assertEquals(0f, narrow.style!!.outerEdges.top.width, 0f)
+        assertEquals(TablePixelInsets(2, 4, 6, 8), narrow.style!!.cellInsets[1])
+        val unstyledCell = source.copy(rows = listOf(listOf(Cell(emptyList(), false, 1, 1))))
+        assertEquals(TablePixelInsets(0, 0, 0, 0), checkNotNull(anonymousTableRenderMetrics(
+            unstyledCell, source.blockViewport!!.gridStyle, 1f, 20f, false)).style!!.cellInsets.single())
+        val ordinary = source.copy(blockViewport = null)
+        assertEquals(99, checkNotNull(tableRenderMetrics(ordinary, 136, 99, 40, 1f, containerFontPixels = 20f)).cellPadding)
+        assertSame(rows, source.rows); assertSame(action, source.rows[0][0].spans.single())
+        assertEquals("Section", action.targetFragment); assertNull(source.geometry)
+        assertTrue(source.rows[0][1].spans.isEmpty()); assertEquals("#abcdef", source.rows[0][1].background)
+    }
+
+    @Test fun cssOnlyIntrinsicResponsiveSizingKeepsDirectionActionsAndEmptyHeight() {
+        for (direction in TableContainingDirection.entries) {
+            val source = table(policy(direction)).copy(geometry = null)
+            val policy = source.blockViewport!!
+            assertSame(policy, source.blockViewportAt(639.0))
+            assertNull(source.blockViewportAt(639.0001))
+            val grid = tableGrid(source)
+            val narrow = checkNotNull(anonymousTableRenderMetrics(source, policy.gridStyle, 1f, 20f,
+                policy.gridDirection == TableContainingDirection.Rtl))
+            // Controlled intrinsic inputs exercise allocation, not font measurement or rendered RU data.
+            fun used(available: Int) = checkNotNull(inlineTableMetrics(narrow, grid,
+                intArrayOf(80), intArrayOf(240), available))
+            assertEquals(100, used(100).width); assertEquals(80, used(60).width); assertEquals(240, used(400).width)
+            val box = resolveIntrinsicTableBlockBox(policy, 200f, 120f, ContainerWidths(80f, 240f), 1f, 20f)
+            assertEquals(102f, box.contentWidth, 0f); assertEquals(108f, box.borderWidth, 0f)
+            assertEquals(direction, box.containingDirection); assertEquals(TableContainingDirection.Rtl, policy.gridDirection)
+            val overflow = tableBlockScrollGeometry(box.contentWidth, 240, 0, direction == TableContainingDirection.Rtl)
+            assertEquals(138f, overflow.overflow, 0f)
+            assertEquals(if (direction == TableContainingDirection.Rtl) -138f else 0f, overflow.physicalTranslation, 0f)
+            assertEquals("Target", source.rows.single().single().spans.single().target)
+            assertEquals(TableScrollFocusPaint(TableScrollFocusMode.AuthoredNone), policy.focusPaint)
+            for (rows in listOf(emptyList<List<Cell>>(), listOf(emptyList<Cell>()), listOf(listOf(Cell(emptyList(), false, 1, 1))))) {
+                val empty = source.copy(rows = rows)
+                val emptyGrid = tableGrid(empty)
+                val metrics = checkNotNull(anonymousTableRenderMetrics(empty, policy.gridStyle, 1f, 20f, false))
+                val pixels = checkNotNull(tablePixelLayout(emptyGrid, metrics.columnWidth, 0,
+                    IntArray(emptyGrid.cells.size), metrics.cellSpacing, metrics.borderWidth, metrics.width,
+                    metrics.extraColumns, metrics.style!!.tablePadding, metrics.columnWidths, metrics.outerBorder,
+                    anonymousGrid = true, pairedGrid = true))
+                assertEquals(0, pixels.height); assertSame(rows, empty.rows); assertNull(empty.geometry)
+            }
+        }
+    }
+
 }

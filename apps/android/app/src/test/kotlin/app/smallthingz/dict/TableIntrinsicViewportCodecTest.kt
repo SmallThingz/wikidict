@@ -357,7 +357,7 @@ class TableIntrinsicViewportCodecTest {
         bad(Wire(focusMode = 0, focusColor = FigureColor.Rgb("#3366cc")).document())
         bad(Wire(threshold = 0).document()); bad(Wire(language = "").document())
         bad(Wire(gridDirection = 2).document()); bad(Wire(boxSizing = 2).document())
-        for (shape in listOf(null, TableGeometry(), TableGeometry(1, 0, null), TableGeometry(1, null, 4),
+        for (shape in listOf(TableGeometry(1, 0, null), TableGeometry(1, null, 4),
             TableGeometry(null, 0, 4), TableGeometry(1, 0, 4, TableWidth(TableWidthUnit.Px, 100))))
             bad(Wire(geometry = shape).document())
         for (maximum in listOf(StyleWidth(StyleWidthUnit.Percent, 99f), StyleWidth(StyleWidthUnit.Px, 100f),
@@ -385,4 +385,72 @@ class TableIntrinsicViewportCodecTest {
             TableGeometry(1, invalid, 4), TableGeometry(1, 0, invalid)))
             assertThrows(IllegalArgumentException::class.java) { table.copy(geometry = shape) }
     }
+
+    @Test fun cssOnlyIntrinsicNullHintsRetainCompleteBodiesAndLiteralWireLayout() {
+        for (owner in Owner.entries) for (rich in listOf(false, true)) {
+            val legacyWire = Wire(richBody = rich, cellOverride = true)
+            val legacyBytes = legacyWire.document(owner)
+            val nullWire = Wire(geometry = null, richBody = rich, cellOverride = true)
+            val nullBytes = nullWire.document(owner)
+            val geometryOffset = legacyWire.marks.getValue("mainGeometry")
+            assertEquals(7, legacyBytes[geometryOffset].toInt())
+            assertEquals(0, nullBytes[geometryOffset].toInt())
+            assertEquals(6, legacyBytes.size - nullBytes.size)
+            assertArrayEquals(legacyBytes.copyOfRange(0, geometryOffset) + byteArrayOf(0) +
+                legacyBytes.copyOfRange(geometryOffset + 7, legacyBytes.size), nullBytes)
+            val table = leaf(read(nullBytes), owner)
+            val legacy = leaf(read(legacyBytes), owner)
+            assertEquals(legacy.copy(geometry = null), table)
+            assertNull(table.geometry)
+            val cell = table.rows.single().single()
+            val body = if (rich) cell.blocks!!.single().spans.single() else cell.spans.single()
+            val caption = if (rich) table.captionBlocks!!.single().spans.single() else table.caption.single()
+            assertEquals("body-target-main", body.target)
+            assertEquals("caption-target-main", caption.target)
+            assertEquals("part", body.targetFragment)
+            assertEquals("s", body.trail)
+            assertEquals("full advice", body.tooltip)
+            assertEquals("#123456", body.foreground)
+            assertEquals(CellStyle(border = StyleBorder.None,
+                padding = StyleEdges(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f),
+                    StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f))), cell.style)
+            for (header in listOf(77, 80, 81)) bad(mutate(nullBytes, 3, header))
+            bad(nullBytes.copyOf(nullBytes.size - 1)); bad(nullBytes + byteArrayOf(0))
+        }
+        // A zero presence mask is null on the wire, including the all-absent fixture representation.
+        assertArrayEquals(Wire(geometry = null).document(), Wire(geometry = TableGeometry()).document())
+        val empty = leaf(read(Wire(geometry = null, emptyGrid = true, richBody = true).document()))
+        assertTrue(empty.rows.isEmpty()); assertEquals("caption-target-main", empty.captionBlocks!!.single().spans.single().target)
+    }
+
+    @Test fun cssOnlyIntrinsicNullDoesNotRelaxPartialHintsOrClosedPolicies() {
+        val source = leaf(read(Wire(geometry = null).document()))
+        val policy = source.blockViewport!!
+        for (geometry in listOf(TableGeometry(), TableGeometry(1, 0, null), TableGeometry(1, null, 4),
+            TableGeometry(null, 0, 4), TableGeometry(1, 0, 4, TableWidth(TableWidthUnit.Px, 0)),
+            TableGeometry(1, 0, 4, TableWidth(TableWidthUnit.Percent, 0)))) {
+            assertThrows(IllegalArgumentException::class.java) { source.copy(geometry = geometry) }
+            if (geometry != TableGeometry()) bad(Wire(geometry = geometry).document())
+        }
+        for (invalid in listOf(-1, 65536)) for (geometry in listOf(TableGeometry(invalid, 0, 4),
+            TableGeometry(1, invalid, 4), TableGeometry(1, 0, invalid)))
+            assertThrows(IllegalArgumentException::class.java) { source.copy(geometry = geometry) }
+        for (edge in listOf(0, 65535)) assertEquals(TableGeometry(edge, edge, edge),
+            source.copy(geometry = TableGeometry(edge, edge, edge)).geometry)
+        assertThrows(IllegalArgumentException::class.java) { policy.copy(focusPaint = null) }
+        assertThrows(IllegalArgumentException::class.java) { source.copy(blockViewport = policy.copy(intrinsicContainingDirection = null)) }
+        assertThrows(IllegalArgumentException::class.java) {
+            source.copy(floatViewport = TableFloatViewport(639, TableContainingDirection.Ltr, TableContainingDirection.Ltr, "ku"))
+        }
+        val wide = source.style!!
+        for (style in listOf(wide.copy(width = StyleWidth(StyleWidthUnit.Px, 0f)), wide.copy(margins = null),
+            wide.copy(collapse = TableCollapse.Separate), wide.copy(floatSide = TableFloatSide.Right)))
+            assertThrows(IllegalArgumentException::class.java) { source.copy(style = style) }
+        bad(Wire(geometry = null, writeFocus = false).document())
+        bad(Wire(geometry = null, focusMode = 0, focusColor = FigureColor.Rgb("#3366cc")).document())
+        bad(Wire(geometry = null, threshold = 0).document())
+        bad(Wire(geometry = null, grid = StyleWire(flags = 5)).document())
+        bad(Wire(geometry = null, maximum = StyleWidth(StyleWidthUnit.Percent, 99f)).document())
+    }
+
 }

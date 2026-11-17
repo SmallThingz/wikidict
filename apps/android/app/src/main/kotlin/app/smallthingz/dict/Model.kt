@@ -1008,10 +1008,10 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
             val border = geometry?.border
             val spacing = geometry?.cellSpacing
             val padding = geometry?.cellPadding
-            require(floatViewport == null && geometry != null && geometry.width == null &&
+            require(floatViewport == null && (geometry == null || geometry.width == null &&
                 border != null && border in 0..65535 && spacing != null && spacing in 0..65535 &&
-                padding != null && padding in 0..65535) {
-                "Intrinsic table viewport requires nonfloating explicit border spacing and padding geometry"
+                padding != null && padding in 0..65535)) {
+                "Intrinsic table viewport permits absent geometry or complete nonfloating legacy hints"
             }
             require(style != null && style.width == null && style.floatSide == null && style.display == null &&
                 style.verticalAlign == null && style.lineHeight == null && style.collapse == TableCollapse.Collapse &&
