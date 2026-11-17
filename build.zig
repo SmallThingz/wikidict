@@ -202,10 +202,12 @@ pub fn build(b: *std.Build) void {
 
     const prepare_captured_writer = b.step("prepare-captured-writer", "Prepare the existing blob tool for authenticated retained-page diagnostics");
     const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");
+    const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");
     for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {
         const install = b.addInstallArtifact(artifact, .{});
         prepare_blob_tools.dependOn(&install.step);
         if (artifact == blob_build_exe) prepare_captured_writer.dependOn(&install.step);
+        if (artifact == blob_verify_exe) prepare_blob_verify.dependOn(&install.step);
     }
 
     const llvm_obj = b.addObject(.{
