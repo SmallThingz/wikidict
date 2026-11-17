@@ -65,3 +65,33 @@ in the expected graph and is not a claim of full CSS fidelity.
 
 Content is by [Wiktionary contributors](https://zh.wiktionary.org/w/index.php?title=たびぢ&action=history),
 under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+# Genuine Chinese cross-reference table minimum
+
+`zh-cheng-khi-minimum229.wikblb` is the exact 880-byte ordinary Writer229
+`WIKBLB08` output for [chèng-khì, revision 8249000](https://zh.wiktionary.org/w/index.php?title=chèng-khì&oldid=8249000)
+(page ID 1500191, selected ordinal 190). It contains one `泉漳話` (`nan-hbl`)
+record with a `DPRZ` payload. No model or JSON was encoded to create the fixture.
+
+- Blob SHA-256: `8ace2c6c99c42a29e1fd49e78616873a9f107c58bd3782a58c2adea42dcea8e6`.
+- Ordinary Writer229 closure SHA-256: `6b1f618e13871bb13d157249d8ab03eb0cd1f6f89da568eb82e81e5372a32910`.
+- Independent complete Reader JSON SHA-256: `b3f6ed638e59e54d437d609f8b2fbd1f84d8b0b0af14184f2d5a018ebdb4df16`.
+- Source/body review SHA-256: `e579ba3f583cfc95f40fa7898fe916e1059a9e922b46e3df57ba8c27f3cef871`.
+- Original 949-byte expanded source SHA-256: `3906c6f1fda2ffbef248b70866aac3ebea22edc40321470a7655a5b67f90e14f`.
+
+The two `BlobDecoderTest.genuineChineseChengKhi229...` controls use the same
+`CountingInput` envelope and `BlobDecoder` validation used by import. The complete
+expected model preserves the owner, section anchors, one table, eleven spans,
+three links, 70% minimum width and 0.5em left cell padding. The sizing control
+feeds this decoded table into the production sizing helpers with explicitly
+controlled cell intrinsic inputs; it does not measure device fonts or execute
+Compose layout. Percentage width uses the actual containing width, while em
+padding uses the supplied body font size. Narrow content minima are retained.
+
+This is host decoder and sizing coverage, not SQLite installation, physical
+rendering, accessibility or navigation acceptance. The blob has no destination
+records for its links. The producer's `unresolved_table_style` warning remains:
+custom-property background is null, not an inferred palette value.
+
+Content is by [Wiktionary contributors](https://zh.wiktionary.org/w/index.php?title=chèng-khì&action=history),
+under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).

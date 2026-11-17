@@ -1020,4 +1020,122 @@ class BlobDecoderTest {
         }
     }
 
+    private fun genuineChineseChengKhiEntry(): Entry {
+        // Exact ordinary Writer229 output, not bytes encoded from this expected model.
+        val bytes = checkNotNull(javaClass.getResourceAsStream("/zh-cheng-khi-minimum229.wikblb"))
+            .use { it.readBytes() }
+        assertEquals(880, bytes.size)
+        assertEquals("8ace2c6c99c42a29e1fd49e78616873a9f107c58bd3782a58c2adea42dcea8e6", producerDigest(bytes))
+        return CountingInput(bytes.inputStream()).use { input ->
+            assertEquals("WIKBLB08", input.bytes(8).decodeToString())
+            val kind = blobKind(input.read())
+            val code = input.nul()
+            val language = input.nul()
+            val title = input.nul()
+            assertEquals("language", kind)
+            assertEquals("nan-hbl", code)
+            assertEquals("泉漳話", language)
+            assertEquals("chèng-khì", title)
+            val length = input.varuint()
+            assertEquals(839L, length)
+            require(length <= bytes.size - input.position)
+            val payload = input.bytes(length.toInt())
+            assertEquals("DPRZ", payload.copyOfRange(0, 4).decodeToString())
+            BlobDecoder.decode(payload, title, kind, language, code).also {
+                assertEquals(-1, input.read())
+                assertEquals(bytes.size.toLong(), input.position)
+            }
+        }
+    }
+
+    @Test fun genuineChineseChengKhi229PreservesCompleteProducerBodyAndTableMinimum() {
+        val entry = genuineChineseChengKhiEntry()
+        val spans = listOf(
+            Span("text", "關於「", bold = true),
+            Span("text", "chèng-khì", language = "nan-hbl", classes = "Latn selflink", bold = true),
+            Span("text", "」的發音和釋義，請見「", bold = true),
+            Span("link", "正氣", target = "正氣#漢語", language = "zh", classes = "Hant"),
+            Span("text", "」。", bold = true),
+            Span("line_break", "\n"),
+            Span("text", "（此詞是「"),
+            Span("link", "正氣", target = "正氣#漢語", language = "zh", classes = "Hant"),
+            Span("text", "」的"),
+            Span("link", "白話字", target = "白話字"),
+            Span("text", "。）"))
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val table = Table(emptyList(), listOf(listOf(Cell(spans, false, 1, 1,
+            style = CellStyle(padding = StyleEdges(zero, zero, zero, StyleLength(StyleLengthUnit.Em, .5f)),
+                textAlign = CellTextAlign.Left)))),
+            style = TableStyle(border = StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), "#797979"),
+                margins = StyleEdges(zero, zero, zero, StyleLength(StyleLengthUnit.Px, 1f)),
+                minWidth = StyleWidth(StyleWidthUnit.Percent, 70f)))
+        val expected = Entry("chèng-khì", emptyList(), "language", "泉漳話", "nan-hbl",
+            listOf(Section(2, "泉漳話", listOf(Block("table", 0, emptyList(), table = table)),
+                anchor = "泉漳話", anchorFallback = ".E6.B3.89.E6.BC.B3.E8.A9.B1")), emptyList(),
+            organization = PresentationOrganization(emptyList(), listOf(0)))
+        assertEquals(expected, entry)
+        assertEquals("關於「chèng-khì」的發音和釋義，請見「正氣」。\n（此詞是「正氣」的白話字。）",
+            entry.sections.single().blocks.single().table!!.rows.single().single().spans.joinToString("") { it.text + it.trail })
+        assertEquals(listOf("正氣#漢語", "正氣#漢語", "白話字"),
+            entry.sections.single().blocks.single().table!!.rows.single().single().spans.filter { it.kind == "link" }.map { it.target })
+        // The producer retained unresolved_table_style; null is not a guessed palette value.
+        assertNull(entry.sections.single().blocks.single().table!!.rows.single().single().background)
+    }
+
+    @Test fun genuineChineseChengKhi229FeedsContainingMinimumAndFontPaddingIntoTableSizing() {
+        val entry = genuineChineseChengKhiEntry()
+        val table = checkNotNull(entry.sections.single().blocks.single().table)
+        val originalRows = table.rows
+        val originalSpans = table.rows.single().single().spans
+        val grid = tableGrid(table)
+        assertEquals(1, grid.columns)
+        assertEquals(1, grid.rows)
+        assertTrue(tableUsesContentWidths(table))
+        val minimum = checkNotNull(table.style!!.minWidth)
+        assertThrows(UnsupportedFloatLayout::class.java) { tableMinimumWidthPixels(minimum, 1f, 20f) }
+        for (density in listOf(1f, 2f)) for (font in listOf(20f, 40f)) for (rtl in listOf(false, true)) {
+            val natural = checkNotNull(tableRenderMetrics(table, 90, 7, 1, density,
+                containerFontPixels = font, rtl = rtl))
+            val style = checkNotNull(natural.style)
+            val padding = (font / 2f).toInt()
+            val border = density.toInt()
+            assertEquals(TablePixelInsets(0, 0, 0, padding), style.cellInsets.single())
+            assertEquals(TablePixelInsets(0, 0, 0, border), style.margins)
+            assertEquals(TablePixelInsets(border, border, border, border), natural.outerBorder)
+            assertEquals(1.0, style.decorationScale, 0.0)
+            val preferences = tableCellWidthPreferences(grid, style.cellInsets,
+                2 * (natural.cellPadding + natural.borderWidth), density, font)
+            // Controlled cell intrinsic inputs include padding, as the real Compose cells do.
+            // These constants exercise the shared sizing algorithm, not device font measurement.
+            val cellMinimum = intArrayOf(20 + padding)
+            val cellMaximum = intArrayOf(40 + padding)
+            for ((containing, expectedWidth) in listOf(200 to 140, 401 to 281)) {
+                val floor = tableMinimumWidthPixels(minimum, density, font, containing)
+                assertEquals(containing * .7f, floor, .0001f)
+                val measured = checkNotNull(inlineTableMetrics(natural, grid, cellMinimum, cellMaximum,
+                    containing - style.margins.horizontal, cellPreferences = preferences, minimumWidth = floor))
+                assertEquals(expectedWidth, measured.width)
+                assertEquals(expectedWidth - 2 * border, measured.cellWidth(0, 1))
+                val pixels = checkNotNull(tablePixelLayout(grid, measured.columnWidth, measured.minRowHeight,
+                    intArrayOf(30), measured.cellSpacing, measured.borderWidth, measured.width,
+                    measured.extraColumns, style.tablePadding, measured.columnWidths, measured.outerBorder))
+                assertEquals(expectedWidth, pixels.width)
+                assertEquals(border, pixels.physicalCellLeft(0, 1, rtl))
+                assertEquals(30 + 2 * border, pixels.height)
+                assertEquals(border + padding, pixels.physicalCellLeft(0, 1, rtl) + style.cellInsets.single().left)
+            }
+            val narrow = checkNotNull(inlineTableMetrics(natural, grid, cellMinimum, cellMaximum,
+                20 - style.margins.horizontal, cellPreferences = preferences,
+                minimumWidth = tableMinimumWidthPixels(minimum, density, font, 20)))
+            assertEquals(20 + padding + 2 * border, narrow.width)
+            assertTrue(narrow.width > 20)
+        }
+        assertSame(originalRows, table.rows)
+        assertSame(originalSpans, table.rows.single().single().spans)
+        assertEquals(listOf("正氣#漢語", "正氣#漢語", "白話字"),
+            originalSpans.filter { it.kind == "link" }.map { it.target })
+        assertEquals(StyleWidth(StyleWidthUnit.Percent, 70f), table.style!!.minWidth)
+        assertEquals(StyleLength(StyleLengthUnit.Em, .5f), table.rows.single().single().style!!.padding!!.left)
+    }
+
 }
