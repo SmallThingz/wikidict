@@ -27,6 +27,11 @@ def file_stamp(value):
             value.st_nlink, value.st_blocks * 512]
 
 
+def file_identity(value):
+    """Immutable proof identity; allocated blocks are a separate observation."""
+    return file_stamp(value)[:8]
+
+
 def _directory_identity(value):
     return [value.st_dev, value.st_ino, value.st_mode, value.st_uid]
 
@@ -60,6 +65,54 @@ def _open_directory(parts, base_fd=None):
         raise
 
 
+def verify_source_proof(row):
+    """Hash a named source/helper proof without treating block settling as a write.
+
+    Use this at authentication boundaries. Between boundaries, the caller can
+    compare ``file_identity`` under its custody locks. This does not relax the
+    nine-field checks on selected files or protected recovery/artifact keepers.
+    The historical row is never rewritten.
+    """
+    wanted = row["stamp"]
+    _require(len(wanted) == 9 and row["bytes"] == wanted[4],
+             "invalid source proof identity")
+    parts = _components(row["path"])
+    parent_fd = _open_directory(parts[:-1])
+    fd = None
+    try:
+        parent_identity = _directory_identity(os.fstat(parent_fd))
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                     dir_fd=parent_fd)
+
+        def check():
+            value = os.fstat(fd)
+            _require(stat.S_ISREG(value.st_mode) and value.st_uid == os.getuid(),
+                     "source proof is not an owned regular file")
+            _require(file_identity(value) == wanted[:8], "source proof identity changed")
+            named = os.stat(parts[-1], dir_fd=parent_fd, follow_symlinks=False)
+            _require(file_identity(named) == wanted[:8], "source proof pathname changed")
+            fresh = _open_directory(parts[:-1])
+            try:
+                _require(_directory_identity(os.fstat(fresh)) == parent_identity,
+                         "source proof parent changed")
+            finally:
+                os.close(fresh)
+            return value
+
+        check()
+        digest = hashlib.sha256()
+        for block in iter(lambda: os.read(fd, 1024 * 1024), b""):
+            digest.update(block)
+        value = check()
+        _require(digest.hexdigest() == row["sha256"], "source proof hash changed")
+        return {"path": row["path"], "identity": file_identity(value),
+                "sha256": digest.hexdigest(), "observed_allocated_bytes": value.st_blocks * 512}
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(parent_fd)
+
+
 class ExactFileRetirement:
     """One-use selected-file transaction under externally held custody locks.
 
@@ -79,6 +132,8 @@ class ExactFileRetirement:
         rows = self.selected + self.protected
         _require(len({row["path"] for row in rows}) == len(rows), "duplicate path")
         self.removed = []
+        self.durability_failures = []
+        self.synced_parents = []
         self.parent_bindings = []
         self._root_fd = None
         self._parents = {}
@@ -192,29 +247,50 @@ class ExactFileRetirement:
         _require(self._prepared and not self._used, "transaction not prepared or already used")
         self._used = True
         removed_paths = set()
-        for bound in self._files:
-            if not bound["selected"]:
-                continue
+        dirty_parents = {}
+        failure = None
+        try:
+            for bound in self._files:
+                if not bound["selected"]:
+                    continue
+                verify_proofs()
+                self._check_parents()
+                for row in self.removed:
+                    self._check_absent(row)
+                for other in self._files:
+                    if other["row"]["path"] not in removed_paths:
+                        self._check_file(other)
+                observed = file_stamp(os.fstat(bound["fd"]))
+                _require(observed == bound["row"]["stamp"], "pre-unlink identity changed")
+                os.unlink(bound["name"], dir_fd=bound["parent"]["fd"])
+                self.removed.append(dict(bound["row"], allocated_bytes_before_unlink=observed[8]))
+                removed_paths.add(bound["row"]["path"])
+                dirty_parents[bound["parent"]["path"]] = bound["parent"]
+                self._check_absent(bound["row"])
             verify_proofs()
             self._check_parents()
             for row in self.removed:
                 self._check_absent(row)
-            for other in self._files:
-                if other["row"]["path"] not in removed_paths:
-                    self._check_file(other)
-            os.unlink(bound["name"], dir_fd=bound["parent"]["fd"])
-            self.removed.append(bound["row"])
-            removed_paths.add(bound["row"]["path"])
-            os.fsync(bound["parent"]["fd"])
-            self._check_absent(bound["row"])
-        verify_proofs()
-        self._check_parents()
-        for row in self.removed:
-            self._check_absent(row)
-        for bound in self._files:
-            if not bound["selected"]:
-                self._check_file(bound)
-        return list(self.removed)
+            for bound in self._files:
+                if not bound["selected"]:
+                    self._check_file(bound)
+            return list(self.removed)
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            # Persist every successful unlink, including a partial transaction.
+            # Attempt all dirty parents even if an earlier flush fails.
+            for parent in dirty_parents.values():
+                try:
+                    os.fsync(parent["fd"])
+                    self.synced_parents.append(parent["path"])
+                except BaseException as error:
+                    self.durability_failures.append({"path": parent["path"],
+                                                     "error": repr(error)})
+            if self.durability_failures:
+                raise RetirementError("directory durability failed: " +
+                                      repr(self.durability_failures)) from failure
 
     def close(self):
         for bound in self._files:

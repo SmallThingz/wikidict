@@ -8,7 +8,8 @@ from pathlib import Path
 from unittest import mock
 
 from owned_file_retirement import (ExactFileRetirement, RetirementError,
-                                   file_stamp, verify_retired_files)
+                                   file_identity, file_stamp, verify_retired_files,
+                                   verify_source_proof)
 
 
 class RetirementTests(unittest.TestCase):
@@ -224,13 +225,171 @@ class RetirementTests(unittest.TestCase):
         self.assertEqual(self.first.read_bytes(), b"new owner")
         self.assertEqual(self.second.read_bytes(), b"second original")
 
-    def test_fsync_failure_keeps_successful_unlink_in_receipt(self):
+    def test_final_fsync_failure_keeps_all_successful_unlinks_in_receipt(self):
         with self.transaction() as operation:
-            with mock.patch("os.fsync", side_effect=OSError("disk error")), self.assertRaises(OSError):
+            with mock.patch("os.fsync", side_effect=OSError("disk error")), \
+                 self.assertRaises(RetirementError):
                 operation.unlink(lambda: None)
-            self.assertEqual([r["path"] for r in operation.removed], [str(self.first)])
+            self.assertEqual([r["path"] for r in operation.removed],
+                             [str(self.first), str(self.second)])
+            self.assertEqual(len(operation.durability_failures), 1)
+            self.assertEqual(operation.synced_parents, [])
+        self.assertFalse(self.first.exists() or self.second.exists())
+
+    def test_one_flush_per_dirty_parent_and_actual_allocation(self):
+        expected = {str(p): p.stat().st_blocks * 512 for p in (self.first, self.second)}
+        actual_fsync = os.fsync
+        flushed = []
+
+        def flush(fd):
+            flushed.append(os.fstat(fd).st_ino)
+            actual_fsync(fd)
+
+        with self.transaction() as operation, mock.patch("os.fsync", side_effect=flush):
+            removed = operation.unlink(lambda: None)
+            self.assertEqual(operation.synced_parents, [str(self.parent)])
+            self.assertEqual(operation.durability_failures, [])
+        self.assertEqual(flushed, [self.parent.stat().st_ino])
+        self.assertEqual({r["path"]: r["allocated_bytes_before_unlink"] for r in removed}, expected)
+
+    def test_partial_proof_failure_flushes_the_successful_unlink(self):
+        actual_fsync = os.fsync
+        calls = 0
+        flushed = []
+
+        def guard():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("later proof failed")
+
+        def flush(fd):
+            flushed.append(os.fstat(fd).st_ino)
+            actual_fsync(fd)
+
+        with self.transaction() as operation, mock.patch("os.fsync", side_effect=flush):
+            with self.assertRaisesRegex(RuntimeError, "later proof failed"):
+                operation.unlink(guard)
+            self.assertEqual(len(operation.removed), 1)
+            self.assertEqual(operation.synced_parents, [str(self.parent)])
+        self.assertEqual(flushed, [self.parent.stat().st_ino])
         self.assertFalse(self.first.exists())
-        self.assertEqual(self.second.read_bytes(), b"second original")
+        self.assertTrue(self.second.exists())
+
+    def test_flush_failure_preserves_prior_error_and_attempts_other_parents(self):
+        other = self.root / "other"
+        other.mkdir()
+        third = other / "third.json"
+        third.write_bytes(b"third")
+        calls = 0
+        attempted = []
+        actual_fsync = os.fsync
+
+        def guard():
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise ValueError("final proof failed")
+
+        def flush(fd):
+            inode = os.fstat(fd).st_ino
+            attempted.append(inode)
+            if inode == self.parent.stat().st_ino:
+                raise OSError("first parent failed")
+            actual_fsync(fd)
+
+        with ExactFileRetirement(self.root, [self.row(self.first), self.row(third)]) as operation:
+            with mock.patch("os.fsync", side_effect=flush), self.assertRaises(RetirementError) as error:
+                operation.unlink(guard)
+            self.assertIsInstance(error.exception.__cause__, ValueError)
+            self.assertEqual(len(operation.removed), 2)
+            self.assertEqual(operation.synced_parents, [str(other)])
+            self.assertEqual(operation.durability_failures[0]["path"], str(self.parent))
+        self.assertEqual(attempted, [self.parent.stat().st_ino, other.stat().st_ino])
+
+    def test_proof_failure_before_any_unlink_does_not_flush(self):
+        def fail():
+            raise RuntimeError("initial proof failed")
+        with self.transaction() as operation, mock.patch("os.fsync") as flush:
+            with self.assertRaises(RuntimeError):
+                operation.unlink(fail)
+            flush.assert_not_called()
+            self.assertEqual(operation.removed, [])
+        self.assert_originals()
+
+    def test_source_proof_allocation_only_change_is_observational(self):
+        row = self.row(self.first)
+        actual = row["stamp"][8]
+        row["stamp"][8] += 4096
+        historical = list(row["stamp"])
+        result = verify_source_proof(row)
+        self.assertEqual(result["identity"], file_identity(self.first.stat()))
+        self.assertEqual(result["observed_allocated_bytes"], actual)
+        self.assertEqual(result["sha256"], row["sha256"])
+        self.assertEqual(row["stamp"], historical)
+        self.assert_originals()
+
+    def test_source_proof_rejects_each_immutable_identity_field(self):
+        for index in range(8):
+            row = self.row(self.first)
+            row["stamp"][index] += 1
+            with self.subTest(index=index), self.assertRaises(RetirementError):
+                verify_source_proof(row)
+        self.assert_originals()
+
+    def test_source_proof_rejects_actual_replacement_metadata_and_content_changes(self):
+        def replace(p):
+            p.rename(p.with_suffix(".original"))
+            p.write_bytes(b"unchanged bytes")
+
+        changes = [replace, lambda p: p.chmod(0o400),
+                   lambda p: os.link(p, p.with_suffix(".alias")),
+                   lambda p: os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 1)),
+                   lambda p: p.write_bytes(b"different bytes")]
+        for index, change in enumerate(changes):
+            p = self.parent / ("proof-%d" % index)
+            p.write_bytes(b"unchanged bytes")
+            row = self.row(p)
+            change(p)
+            with self.subTest(index=index), self.assertRaises(RetirementError):
+                verify_source_proof(row)
+            self.assertTrue(p.exists())
+
+    def test_source_proof_hash_rejects_changed_bytes_even_with_current_stat(self):
+        row = self.row(self.first)
+        self.first.write_bytes(b"other original")
+        row["stamp"] = file_stamp(self.first.stat())
+        row["bytes"] = self.first.stat().st_size
+        with self.assertRaisesRegex(RetirementError, "source proof hash changed"):
+            verify_source_proof(row)
+        self.assertEqual(self.first.read_bytes(), b"other original")
+
+    def test_source_proof_rejects_path_replacement_during_hash(self):
+        row = self.row(self.first)
+        real_read = os.read
+        replaced = False
+
+        def read(fd, size):
+            nonlocal replaced
+            data = real_read(fd, size)
+            if not replaced:
+                replaced = True
+                self.first.rename(self.parent / "moved-proof")
+                self.first.write_bytes(b"first original")
+            return data
+
+        with mock.patch("os.read", side_effect=read), self.assertRaises(RetirementError):
+            verify_source_proof(row)
+        self.assertEqual(self.first.read_bytes(), b"first original")
+
+    def test_selected_and_keeper_block_checks_remain_strict(self):
+        for change_keeper in (False, True):
+            selected, keeper = self.row(self.first), self.row(self.keeper)
+            (keeper if change_keeper else selected)["stamp"][8] += 4096
+            with self.subTest(keeper=change_keeper), self.assertRaises(RetirementError):
+                with ExactFileRetirement(self.root, [selected], [keeper]):
+                    self.fail("selected and keeper stamps must remain exact")
+        self.assert_originals()
 
     def finish(self):
         with self.transaction() as operation:
