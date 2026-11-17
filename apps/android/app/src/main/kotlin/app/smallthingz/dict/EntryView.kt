@@ -91,7 +91,8 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val computedCellTraits: Boolean = false, val cellBodyFamily: FontFamily? = null,
     val compiledTableDirection: TableContainingDirection? = null, val compiledTableLanguage: String? = null,
     val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
-    val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null)
+    val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null,
+    val columnDirection: BidiResolvedDirection? = null)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -914,13 +915,18 @@ internal val LocalTableDocumentViewportCssWidth = staticCompositionLocalOf<Doubl
 // Recursive owner guards use reference identity, including equal reconstructed Tables.
 private val LocalCompiledTableDirectionOwner = compositionLocalOf(referentialEqualityPolicy<Table?>()) { null }
 internal val LocalCompiledTableTextDirection = staticCompositionLocalOf<TableContainingDirection?> { null }
+internal val LocalNativeColumnTextDirection = staticCompositionLocalOf<BidiResolvedDirection?> { null }
 
-/** A typed table owns its paragraph direction; BODY is only the inherited fallback. */
+/** The nearest column owner precedes its outer Table/BODY; a nearer Table resets that local. */
 internal fun compiledBodyParagraphDirection(table: TableContainingDirection?,
-    body: BidiResolvedDirection?): TextDirection? = table?.paragraphDirection() ?: when (body) {
+    body: BidiResolvedDirection?, column: BidiResolvedDirection? = null): TextDirection? = when (column) {
     BidiResolvedDirection.Ltr -> TextDirection.Ltr
     BidiResolvedDirection.Rtl -> TextDirection.Rtl
-    null -> null
+    null -> table?.paragraphDirection() ?: when (body) {
+        BidiResolvedDirection.Ltr -> TextDirection.Ltr
+        BidiResolvedDirection.Rtl -> TextDirection.Rtl
+        null -> null
+    }
 }
 internal val LocalCompiledTableSourceLanguage = staticCompositionLocalOf<String?> { null }
 
@@ -976,6 +982,7 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
   if (ownerDirection != null && LocalCompiledTableDirectionOwner.current !== table) {
       CompositionLocalProvider(LocalCompiledTableDirectionOwner provides table,
           LocalCompiledTableTextDirection provides ownerDirection,
+          LocalNativeColumnTextDirection provides null,
           LocalCompiledTableSourceLanguage provides ownLanguage,
           LocalLayoutDirection provides if (ownerDirection == TableContainingDirection.Rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
           TableView(table, onLink, path, nested, semanticPath)
@@ -1091,6 +1098,7 @@ private fun UnavailableTableLanguage(table: Table, direction: TableContainingDir
         LocalEntryEdition.current, onLink, table)
     CompositionLocalProvider(LocalCompiledTableDirectionOwner provides table,
         LocalCompiledTableTextDirection provides direction,
+        LocalNativeColumnTextDirection provides null,
         LocalCompiledTableSourceLanguage provides null,
         LocalNativeContainerTextContext provides null, LocalTableLineHeightPixels provides null,
         LocalNativeDelegatedTable provides null, LocalNativeDelegatedCell provides null,
@@ -1904,7 +1912,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         return
     }
     val compiledDirection = compiledBodyParagraphDirection(LocalCompiledTableTextDirection.current,
-        LocalNativeContainerTextContext.current?.bodyDirection) ?: TextDirection.Content
+        LocalNativeContainerTextContext.current?.bodyDirection, LocalNativeColumnTextDirection.current) ?: TextDirection.Content
     val cellTextAlign = LocalCellTextAlign.current
     val lineHeightPixels = LocalTableLineHeightPixels.current
     val density = LocalDensity.current
@@ -2010,6 +2018,7 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val layoutDirection = LocalLayoutDirection.current
     val compiledTableDirection = LocalCompiledTableTextDirection.current
     val bodyDirection = LocalNativeContainerTextContext.current?.bodyDirection
+    val columnDirection = LocalNativeColumnTextDirection.current
     val compiledTableLanguage = LocalCompiledTableSourceLanguage.current
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedForeground = LocalFigureCaptionForeground.current
@@ -2022,8 +2031,8 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null || computedContainerTraits
     val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
         else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection) {
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
@@ -2100,7 +2109,7 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
                     }
                 }
             }
-            compiledBodyParagraphDirection(compiledTableDirection, bodyDirection)?.let {
+            compiledBodyParagraphDirection(compiledTableDirection, bodyDirection, columnDirection)?.let {
                 addStyle(ParagraphStyle(textDirection = it), 0, length)
             }
             poemParagraphs(toAnnotatedString().text, appendedSpans).forEach { paragraph ->
@@ -2546,6 +2555,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
         val ownDirection = if (ownerDirection == TableContainingDirection.Rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr
         CompositionLocalProvider(LocalCompiledTableDirectionOwner provides table,
             LocalCompiledTableTextDirection provides ownerDirection,
+            LocalNativeColumnTextDirection provides null,
             LocalCompiledTableSourceLanguage provides ownLanguage,
             LocalLayoutDirection provides if (ownDirection == BidiResolvedDirection.Rtl) LayoutDirection.Rtl else LayoutDirection.Ltr) {
             FigureCaptionTable(table, context.copy(direction = ownDirection, language = ownLanguage),

@@ -2,33 +2,69 @@ package app.smallthingz.dict
 
 import kotlin.math.max
 
-/** Computed pixels; gap has already been normalized to the normal-body font basis. */
-internal data class NativeColumnPolicy(val count: Int, val gap: Float, val rtl: Boolean) {
-    init { require(count in 1..65535 && gap.isFinite() && gap >= 0f) }
-    fun width(containingWidth: Float): Float {
-        require(containingWidth.isFinite() && containingWidth >= 0f)
-        return max(0.0, (containingWidth.toDouble() - (count - 1) * gap.toDouble()) / count).toFloat()
+/** Pixels are resolved once from the source's geometry units, before this policy is built. */
+internal data class NativeColumnPolicy(val count: Int?, val gap: Float, val rtl: Boolean,
+    val preferredWidth: Float? = null, val minimumWidthPixels: Float = 1f) {
+    init {
+        require(count == null || count in 1..65535)
+        require(count != null || preferredWidth != null)
+        require(gap.isFinite() && gap >= 0f)
+        require(preferredWidth == null || preferredWidth.isFinite() && preferredWidth >= 0f)
+        require(minimumWidthPixels.isFinite() && minimumWidthPixels > 0f)
     }
+    fun resolve(containingWidth: Float): NativeResolvedColumns {
+        require(containingWidth.isFinite() && containingWidth >= 0f)
+        val usedCount = if (preferredWidth == null) checkNotNull(count) else {
+            val effective = maxOf(preferredWidth, minimumWidthPixels).toDouble()
+            val automatic = maxOf(1.0, kotlin.math.floor((containingWidth.toDouble() + gap) / (effective + gap)))
+            val capped = count?.let { minOf(automatic, it.toDouble()) } ?: automatic
+            if (!capped.isFinite() || capped > Int.MAX_VALUE)
+                throw UnsupportedFloatLayout("Used column count exceeds native geometry")
+            capped.toInt()
+        }
+        val usedWidth = maxOf(0.0, (containingWidth.toDouble() - (usedCount - 1).toDouble() * gap) / usedCount)
+        if (!usedWidth.isFinite() || usedWidth > TablePixelLimit)
+            throw UnsupportedFloatLayout("Column width exceeds native geometry")
+        return NativeResolvedColumns(usedCount, usedWidth.toFloat(), gap, rtl)
+    }
+    fun width(containingWidth: Float): Float = resolve(containingWidth).width
+    fun left(column: Int, containingWidth: Float): Float = resolve(containingWidth).left(column, containingWidth)
+    /** Fixed-count callers keep their original scalar contribution. */
+    fun intrinsic(content: Float): Float {
+        check(preferredWidth == null) { "Width-driven columns require separate MIN and MAX inputs" }
+        return intrinsic(ContainerWidths(content, content)).maximum
+    }
+    /** Native intrinsic policy follows Blink 43ecd651 ComputeMinMaxSizes. The 1 CSS-pixel
+     * used-width floor belongs only to allocation; authored zero remains zero here. */
+    fun intrinsic(content: ContainerWidths): ContainerWidths {
+        val n = count ?: 1
+        fun repeated(value: Float): Float {
+            val result = n * value.toDouble() + (n - 1).toDouble() * gap
+            if (!result.isFinite() || result > TablePixelLimit)
+                throw UnsupportedFloatLayout("Column intrinsic width exceeds native geometry")
+            return result.toFloat()
+        }
+        val preferred = preferredWidth
+        return if (preferred == null) ContainerWidths(repeated(content.minimum), repeated(content.maximum))
+            else ContainerWidths(minOf(content.minimum, preferred), repeated(maxOf(content.maximum, preferred)))
+    }
+}
+
+/** Used count is not an authored u16 cap. Storage and balancing remain proportional to lines. */
+internal data class NativeResolvedColumns(val count: Int, val width: Float, val gap: Float, val rtl: Boolean) {
     fun left(column: Int, containingWidth: Float): Float {
         require(column in 0 until count)
-        val width = width(containingWidth)
         val value = if (rtl) containingWidth.toDouble() - width - column * (width.toDouble() + gap)
             else column * (width.toDouble() + gap)
         if (!value.isFinite() || kotlin.math.abs(value) > TablePixelLimit)
             throw UnsupportedFloatLayout("Column origin exceeds native geometry")
         return value.toFloat()
     }
-    fun intrinsic(content: Float): Float {
-        val result = count * content.toDouble() + (count - 1) * gap.toDouble()
-        if (!result.isFinite() || result > TablePixelLimit)
-            throw UnsupportedFloatLayout("Column intrinsic width exceeds native geometry")
-        return result.toFloat()
-    }
 }
 
 /** One actual native line, in source order. A paragraph is never re-created per column. */
 internal data class NativeColumnLine(val owner: Int, val line: Int, val height: Float,
-    val gapBefore: Float = 0f) {
+    val gapBefore: Float = 0f, val keepTogether: Boolean = false) {
     init { require(owner >= 0 && line >= 0 && height.isFinite() && height >= 0f &&
         gapBefore.isFinite() && gapBefore >= 0f) }
 }
@@ -40,7 +76,7 @@ internal data class NativeColumnBalance(val placements: List<NativeColumnPlaceme
  * Feasibility uses a sliding minimum over legal source boundaries, not block partitioning.
  * No shaping or child measurement occurs during balancing. Gaps at column breaks disappear. */
 internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): NativeColumnBalance {
-    require(count in 1..65535)
+    require(count > 0)
     if (lines.isEmpty()) return NativeColumnBalance(emptyList(), 0f, emptyList())
     val size = lines.size
     val tops = DoubleArray(size)
@@ -53,7 +89,7 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
         var end = start + 1
         require(lines[start].line == 0)
         while (end < size && lines[end].owner == lines[start].owner) {
-            require(lines[end].line == end - start)
+            require(lines[end].line == end - start && lines[end].keepTogether == lines[start].keepTogether)
             end++
         }
         for (i in start until end) {
@@ -70,7 +106,7 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
         throw UnsupportedFloatLayout("Column source extent exceeds native geometry")
     fun legalBoundary(index: Int): Boolean = index == 0 || index == size ||
         lines[index - 1].owner != lines[index].owner ||
-        index - first[index] >= 2 && last[index] - index >= 2
+        !lines[index].keepTogether && index - first[index] >= 2 && last[index] - index >= 2
     data class Partition(val previous: IntArray, val columns: Int)
     fun partition(limit: Double): Partition? {
         val unreachable = size + 1
@@ -87,7 +123,7 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
                 end - 2 else if (end - first[end - 1] > 1) end - 2 else end - 1
             while (inserted <= upper) {
                 val index = inserted++
-                if (legalBoundary(index) && used[index] < count) {
+                if (legalBoundary(index) && used[index] < unreachable && used[index] < count) {
                     while (tail > head && used[queue[tail - 1]] >= used[index]) tail--
                     queue[tail++] = index
                 }
@@ -97,7 +133,7 @@ internal fun balanceNativeColumns(lines: List<NativeColumnLine>, count: Int): Na
             used[end] = used[queue[head]] + 1
             previous[end] = queue[head]
         }
-        return if (used[size] <= count) Partition(previous, used[size]) else null
+        return if (used[size] < unreachable && used[size] <= count) Partition(previous, used[size]) else null
     }
     var low = 0.0
     var high = y

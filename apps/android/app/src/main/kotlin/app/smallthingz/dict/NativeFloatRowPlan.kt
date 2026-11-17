@@ -15,7 +15,6 @@ import kotlin.math.max
 
 private fun validateNativeFloatRowStructure(source: Spanned) {
     if (source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty() ||
-        source.getSpans(0, source.length, NativeRubyColumn::class.java).isNotEmpty() ||
         source.getSpans(0, source.length, NativeInlineBoxSpan::class.java).isNotEmpty())
         throw UnsupportedFloatLayout("Positioned inline images inside structural inline groups are unavailable")
     if (source.any { it == '\t' || it == '\r' || it == '\u000b' || it == '\u000c' ||
@@ -49,6 +48,9 @@ internal class NativeFloatRowPlan private constructor(
     val nativeLineMetrics: List<NativeUsedLineMetrics>,
     val alignment: Layout.Alignment,
     val availableWidth: Float = width.toFloat(),
+    val paragraphLeft: Float = 0f,
+    val paragraphRight: Float = availableWidth,
+    val rebuild: (Spanned) -> NativeFloatRowPlan,
 ) {
     fun lineAt(offset: Int): Int {
         require(offset in 0..source.length)
@@ -71,13 +73,30 @@ internal class NativeFloatRowPlan private constructor(
             direction: TextDirectionHeuristic, lineSpacingExtra: Float, lineSpacingMultiplier: Float,
             requireDrainedAtBoundary: Boolean, carriedExclusions: List<NativeFloatExclusion>,
             insets: NativeTextInsets, usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?,
-            includeFontPadding: Boolean, exactAvailableWidth: Float? = null): NativeFloatRowPlan {
+            includeFontPadding: Boolean, exactAvailableWidth: Float? = null,
+            exactParagraphInsets: Boolean = false): NativeFloatRowPlan {
             require(width >= 0 && width <= Int.MAX_VALUE / 4)
             val availableWidth = exactAvailableWidth ?: width.toFloat()
+            if (exactParagraphInsets && (exactAvailableWidth == null || occurrences.isNotEmpty() || carriedExclusions.isNotEmpty()))
+                throw UnsupportedFloatLayout("Exact paragraph gutters require an exact width without floats")
             if (exactAvailableWidth != null && (!availableWidth.isFinite() || availableWidth < 0f ||
                     availableWidth > TablePixelLimit || floor(availableWidth).toInt() != width ||
-                    occurrences.isNotEmpty() || insets != NativeTextInsets()))
+                    occurrences.isNotEmpty() || !exactParagraphInsets && insets != NativeTextInsets()))
                 throw UnsupportedFloatLayout("Exact Float text width requires a zero-inset paragraph without source floats")
+            // Constant list gutters belong to the original paragraph, outside its native
+            // fitting lane. Keep them in Float coordinates for both fitting and replay.
+            fun gutter(first: Float, extra: Float): Float {
+                val value = first.toDouble() + extra
+                if (!value.isFinite() || value > TablePixelLimit)
+                    throw UnsupportedFloatLayout("Exact paragraph gutter exceeds native geometry")
+                return value.toFloat()
+            }
+            val paragraphLeft = if (exactParagraphInsets) gutter(insets.left, insets.extraLeft) else 0f
+            val paragraphRightInset = if (exactParagraphInsets) gutter(insets.right, insets.extraRight) else 0f
+            val fittingWidth = if (exactParagraphInsets)
+                maxOf(0.0, availableWidth.toDouble() - paragraphLeft - paragraphRightInset).toFloat() else availableWidth
+            val paragraphRight = if (exactParagraphInsets) paragraphLeft + fittingWidth else availableWidth
+            val flowInsets = if (exactParagraphInsets) NativeTextInsets() else insets
             require(lineSpacingExtra.isFinite() && lineSpacingExtra >= 0f)
             require(lineSpacingMultiplier.isFinite() && lineSpacingMultiplier > 0f)
             require(occurrences.map { it.sourceId }.distinct().size == occurrences.size)
@@ -97,7 +116,7 @@ internal class NativeFloatRowPlan private constructor(
             repeat(64) {
                 if (!seen.add(left.toList() + listOf(-1) + right.toList()))
                     throw UnsupportedFloatLayout("Float image row exclusions cycle")
-                val rows = nativeFloatRows(source, paint, runs, availableWidth, left, right, wrap, alignment)
+                val rows = nativeFloatRows(source, paint, runs, fittingWidth, left, right, wrap, alignment)
                 val natural = rows.mapIndexed { index, row ->
                     var metric = row.natural
                     if (includeFontPadding) metric = NativeUsedLineMetrics(
@@ -117,7 +136,7 @@ internal class NativeFloatRowPlan private constructor(
                     metric
                 }
                 val flow = nativePositionFloatRows(source, width, rows.map { it.start }.toIntArray(),
-                    rows.map { it.end }.toIntArray(), natural, occurrences, carriedExclusions, insets,
+                    rows.map { it.end }.toIntArray(), natural, occurrences, carriedExclusions, flowInsets,
                     usedLineMetrics, wrap?.noWrap?.let { plan -> { start -> plan.hasLineAt(start) } },
                     exactAvailableWidth = exactAvailableWidth,
                     requiredLineWidths = if (exactAvailableWidth != null && wrap?.noWrap != null)
@@ -129,7 +148,12 @@ internal class NativeFloatRowPlan private constructor(
                     }
                     if (requireDrainedAtBoundary && flow.exclusions.any { it.outer.bottom > flow.bottom + 0.01f })
                         throw UnsupportedFloatLayout("Active float crosses an unsupported formatting boundary")
-                    return NativeFloatRowPlan(source, TextPaint().apply { set(paint) }, width, runs, rows, flow, natural, alignment, availableWidth)
+                    return NativeFloatRowPlan(source, TextPaint().apply { set(paint) }, width, runs, rows, flow, natural,
+                        alignment, availableWidth, paragraphLeft, paragraphRight) { next ->
+                        build(next, paint, width, occurrences, alignment, direction, lineSpacingExtra,
+                            lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions, insets,
+                            usedLineMetrics, includeFontPadding, exactAvailableWidth, exactParagraphInsets)
+                    }
                 }
                 left = flow.left; right = flow.right
             }
@@ -141,6 +165,9 @@ internal class NativeFloatRowPlan private constructor(
 private fun nativeFloatRows(source: Spanned, paint: TextPaint, runs: NativeFloatRowRuns,
     width: Float, left: IntArray, right: IntArray, wrap: NativeTextWrapPlan?,
     alignment: Layout.Alignment): List<NativeFloatPlannedRow> {
+    if (source.getSpans(0, source.length, NativeRubyLinePlan::class.java).isNotEmpty() ||
+        source.getSpans(0, source.length, NativeRubyBreaks::class.java).isNotEmpty())
+        return nativeRubyFloatRows(source, paint, runs, width, left, right, wrap, alignment)
     val result = mutableListOf<NativeFloatPlannedRow>()
     val indents = IntArray(maxOf(left.size, right.size)) { index ->
         val l = left[minOf(index, left.lastIndex)]
@@ -226,7 +253,7 @@ private fun nativeFloatDisplayEnd(source: CharSequence, start: Int, end: Int): I
     return at
 }
 
-private fun nativeFloatRowEmergencyEnds(runs: NativeFloatRowRuns): Set<Int> = buildSet {
+internal fun nativeFloatRowEmergencyEnds(runs: NativeFloatRowRuns): Set<Int> = buildSet {
     val breaker = LineBreaker.Builder().setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
         .setHyphenationFrequency(LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
     val constraints = LineBreaker.ParagraphConstraints().apply { setWidth(0f) }
@@ -244,6 +271,14 @@ internal data class NativeFloatRowIntrinsicWidths(val minimum: Float, val maximu
 /** Preserve native advances until a caller actually publishes an integer measurement. */
 internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
     breakWordMinimum: Boolean): NativeFloatRowIntrinsicWidths {
+    nativeRubyLayout(source, paint, direction, exactAdvances = true)?.let { unbroken ->
+        val maximum = nativeFloatRowIntrinsicWidths(unbroken.native, paint, direction, breakWordMinimum).maximum
+        val fragmented = checkNotNull(nativeRubyLayout(source, paint, direction,
+            NativeRubyBands(0f, allowEmergency = false), exactAdvances = true))
+        val minimum = nativeFloatRowIntrinsicWidths(fragmented.native, paint, direction, breakWordMinimum).minimum
+        if (minimum > maximum) throw UnsupportedFloatLayout("Exact ruby minimum exceeds its unbroken width")
+        return NativeFloatRowIntrinsicWidths(minimum, maximum)
+    }
     validateNativeFloatRowStructure(source)
     val runs = NativeFloatRowRuns(source, paint, direction)
     val wrap = NativeTextWrapPlan.create(source, paint)
@@ -252,7 +287,8 @@ internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, di
     var minimum = 0f
     var authoredMinimum = 0f
     val breaks = BreakIterator.getLineInstance(paint.textLocale).apply { setText(source.toString()) }
-    val boundaries = buildList { add(0); var at = breaks.next(); while (at != BreakIterator.DONE) { add(at); at = breaks.next() } }
+    val boundaries = source.getSpans(0, source.length, NativeRubyBreaks::class.java).singleOrNull()?.boundaries
+        ?: buildList { add(0); var at = breaks.next(); while (at != BreakIterator.DONE) { add(at); at = breaks.next() } }
     fun advance(start: Int, end: Int): Float {
         if (start == end) return 0f
         val paragraph = runs.paragraphs.firstOrNull { start >= it.start && end <= it.end }

@@ -18,7 +18,7 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
             // Only implemented Y low bits compose with Z; clipped-absolute remains unavailable.
-            require(it and 768 != 0 && it and 895 == it) { "Invalid extended presentation feature flags" }
+            require(it and 4864 != 0 && it and 4991 == it) { "Invalid extended presentation feature flags" }
         } else if (ownerGeometry) r.byte().also {
             require(it in 1..127) { "Invalid owner geometry feature flags" }
         } else 0
@@ -26,6 +26,7 @@ object BlobDecoder {
         r.ownerGeometry = ownerGeometry
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
+        r.columnLayouts = ownerGeometryFlags and 4096 != 0
         r.containerOwnerFonts = ownerGeometryFlags and 1 != 0
         r.inlineBoxGroups = ownerGeometryFlags and 4 != 0
         r.imageOccurrences = ownerGeometryFlags and 32 != 0
@@ -168,7 +169,7 @@ object BlobDecoder {
             (ownerGeometryFlags and 8 != 0) == styledReferences.any { it.bodyTypography != null } &&
             directions == (bodyTypography?.direction != null || styledReferences.any { it.bodyTypography?.direction != null }) &&
             r.imageOccurrences == r.hasImageOccurrence && positionedContainers == r.hasPositionedContainers &&
-            r.tableMinimumWidths == r.hasTableMinimumWidth) {
+            r.tableMinimumWidths == r.hasTableMinimumWidth && r.columnLayouts == r.hasColumnLayout) {
             "Y/Z features do not match owner geometry payload"
         }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
@@ -201,6 +202,8 @@ object BlobDecoder {
         var hasPositionedContainers = false
         var tableMinimumWidths = false
         var hasTableMinimumWidth = false
+        var columnLayouts = false
+        var hasColumnLayout = false
         var containerOwnerFonts = false
         var hasContainerOwnerFont = false
         var inlineBoxGroups = false
@@ -258,7 +261,7 @@ object BlobDecoder {
         var tableDepthLimit = LegacyMaxTableDepth
         var maximumTableDepth = 0
             private set
-        val minimumBlockBytes: Int get() = if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17
+        val minimumBlockBytes: Int get() = (if (imageMaps) 29 else if (blockStyles) 27 else if (blockLayouts) 26 else if (anchors) 25 else 17) + if (columnLayouts) 1 else 0
         fun byte(): Int { require(buffer.remaining() >= 1); return buffer.get().toInt() and 255 }
         fun u16(): Int { require(buffer.remaining() >= 2); return buffer.short.toInt() and 65535 }
         fun u32(): Long { require(buffer.remaining() >= 4); return buffer.int.toLong() and 0xffffffffL }
@@ -825,10 +828,13 @@ object BlobDecoder {
         }
         private fun containerStyle(): ContainerStyle {
             val flags = if (containerFonts) u32().also {
-                require(it and (if (ownerGeometry) {
+                val reserved = if (ownerGeometry) {
                     if (containerOwnerFonts) 0xfe800000L else 0xff800000L
-                } else if (absoluteText) 0xff000000L else 0xff800000L) == 0L) { "Unknown container style field" }
+                } else if (absoluteText) 0xff000000L else 0xff800000L
+                require(it and (if (columnLayouts) reserved and 0x02000000L.inv() else reserved) == 0L) { "Unknown container style field" }
             }.toInt() else u16()
+            require(flags and 0x02000000 == 0 || flags and 0x40000 != 0) { "Column extension requires its count and gap prefix" }
+            var extendedColumns: Pair<Int, StyleLength>? = null
             val base = ContainerStyle(if (flags and 1 != 0) containerMarginEdges() else null,
                 if (flags and 2 != 0) styleEdges() else null,
                 if (flags and 4 != 0) containerWidth() else null,
@@ -848,14 +854,18 @@ object BlobDecoder {
                     ?: error("Unknown container overflow") else null,
                 if (flags and 65536 != 0) buffer.float else null,
                 if (flags and 131072 != 0) styleLength() else null,
-                if (flags and 262144 != 0) ContainerColumns(u16(), styleLength()) else null,
+                if (flags and 262144 != 0) {
+                    val count = u16(); val gap = styleLength()
+                    if (flags and 0x02000000 != 0) { extendedColumns = count to gap; null }
+                    else ContainerColumns(count, gap)
+                } else null,
                 if (flags and 524288 != 0) containerPositioning() else null,
                 if (flags and 1048576 != 0) styleLength() else null,
                 if (flags and 2097152 != 0) containerMargins() else null,
                 if (flags and 4194304 != 0) containerFontFamily() else null,
                 if (flags and 8388608 != 0) positionedScope() else null,
                 if (flags and 16777216 != 0) containerOwnerFont() else null)
-            val style = if (positionedContainers) {
+            val oldStyle = if (positionedContainers) {
                 val extension = byte().also { require(it and 7 == it) { "Unknown positioned Container extension" } }
                 val position = if (extension and 1 != 0)
                     ContainerAbsolutePosition(containerMarginLength(), containerMarginLength()) else null
@@ -868,6 +878,14 @@ object BlobDecoder {
                     ContainerStaticDirection.entries.getOrNull(byte()) ?: error("Unknown static Container direction")) else null
                 base.copy(absolutePosition = position, textWrap = wrap, absoluteStatic = static)
             } else base
+            val style = extendedColumns?.let { (count, gap) ->
+                val extension = byte().also { require(it in 1..3) { "Unknown column extension fields" } }
+                val width = if (extension and 1 != 0) styleLength() else null
+                val direction = if (extension and 2 != 0) BidiResolvedDirection.entries.getOrNull(byte())
+                    ?: error("Unknown column direction") else null
+                oldStyle.copy(columns = ContainerColumns(count.takeIf { it != 0 }, gap, width, direction))
+                    .also { hasColumnLayout = true }
+            } ?: oldStyle
             if (style.requiresPositionedContainers()) {
                 require(positionedContainers) { "Positioned Container fields require Z" }
                 hasPositionedContainers = true
@@ -1116,8 +1134,15 @@ object BlobDecoder {
                     RuleStyle(height, fill, margins, clear)
                 }
             } else null
+            val columnBreakInside = if (columnLayouts) when (byte()) {
+                0 -> null
+                1 -> ColumnBreakInside.Auto
+                2 -> ColumnBreakInside.Avoid
+                else -> error("Unknown column break policy")
+            } else null
+            if (columnBreakInside != null) hasColumnLayout = true
             return Block(kind, depth, spans, path, number, table, feature, level, anchor, fallback, textAlign,
-                style, figure, flow, container, ruleStyle)
+                style, figure, flow, container, ruleStyle, columnBreakInside)
         }
     }
 }

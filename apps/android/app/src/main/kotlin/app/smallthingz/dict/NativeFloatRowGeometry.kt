@@ -5,6 +5,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.text.Layout
 import android.text.Spanned
+import android.text.SpannableString
 import android.text.SpannedString
 import android.text.TextDirectionHeuristic
 import android.text.TextPaint
@@ -30,8 +31,8 @@ internal class NativeFloatRowGeometry private constructor(
     private val baselines = plan.rows.indices.map { tops[it] + plan.flow.baselines[it] - plan.flow.tops[it] }
     private fun present(line: Int): Boolean = plan.flow.sourceLinePresent?.get(line) ?: true
     private val mappedRows = plan.rows.mapIndexed { line, row ->
-        val left = plan.flow.left[line].toFloat() + (origins?.get(line)?.first ?: 0f)
-        val right = plan.availableWidth - plan.flow.right[line].toFloat() + (origins?.get(line)?.first ?: 0f)
+        val left = plan.paragraphLeft + plan.flow.left[line] + (origins?.get(line)?.first ?: 0f)
+        val right = plan.paragraphRight - plan.flow.right[line] + (origins?.get(line)?.first ?: 0f)
         val physical = when (row.alignment) {
             Layout.Alignment.ALIGN_CENTER -> NativeFloatRowPhysicalAlignment.Center
             Layout.Alignment.ALIGN_NORMAL -> if (row.paragraph.rtl) NativeFloatRowPhysicalAlignment.Right else NativeFloatRowPhysicalAlignment.Left
@@ -77,7 +78,8 @@ internal class NativeFloatRowGeometry private constructor(
     override fun firstLineBand(): RectF {
         val line = plan.rows.indices.firstOrNull(::present) ?: return RectF()
         val x = origins?.get(line)?.first ?: 0f
-        return RectF(plan.flow.left[line] + x, tops[line], plan.availableWidth - plan.flow.right[line] + x, bottoms[line])
+        return RectF(plan.paragraphLeft + plan.flow.left[line] + x, tops[line],
+            plan.paragraphRight - plan.flow.right[line] + x, bottoms[line])
     }
     override fun headingOwnerContentTop(): Float? {
         if (text.isEmpty() || nodes.count { it.kind == FloatInteractionKind.HEADING && it.start == 0 && it.end == text.length } != 1) return null
@@ -132,7 +134,18 @@ internal class NativeFloatRowGeometry private constructor(
         } }
         row.glyphs.forEachIndexed { index, run ->
             val placed = map.placements[index]
-            if (run.image != null) {
+            if (run.column != null) {
+                val column = checkNotNull(run.column)
+                if (canvas is NativeRubyAtomicCanvas)
+                    canvas.paintRubyAtom(column, placed.left, baselines[line], column::paintContents)
+                else {
+                    val save = canvas.save()
+                    try {
+                        canvas.translate(placed.left, baselines[line])
+                        column.paintContents(canvas)
+                    } finally { canvas.restoreToCount(save) }
+                }
+            } else if (run.image != null) {
                 if (includePositioned || run.image!!.nativeImageOccurrence == null) {
                     val box = checkNotNull(placed.imageBounds)
                     run.image!!.drawNativeImage(canvas, RectF(box.left, box.top, box.right, box.bottom))
@@ -145,7 +158,9 @@ internal class NativeFloatRowGeometry private constructor(
     }
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
         plan.rows.flatMapIndexed { line, row -> if (!present(line)) emptyList() else row.glyphs.mapIndexedNotNull { index, run ->
-            if (run.image != null) {
+            if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
+                mappedRows[line].placements[index].left, baselines[line])
+            else if (run.image != null) {
                 if (run.image!!.nativeImageOccurrence == null) images.first { it.line == line && it.run === run }.let(::imageInk) else null
             } else if (run.start < row.visibleEnd) run.paintBounds(mappedRows[line].placements[index].left,
                 baselines[line], plan.nativeLineMetrics[line].top, plan.nativeLineMetrics[line].bottom) else null
@@ -291,6 +306,7 @@ internal class NativeFloatRowGeometry private constructor(
             throw UnsupportedFloatLayout("Float image columns require an unfragmented owner without exclusions")
         return NativeFloatRowGeometry(plan, nodeFactory, decoration, decorationBounds, origins)
     }
+    internal override val nativeRubyExactAdvances: Boolean get() = true
     internal override val nativeRubyShapingSource: Spanned get() = plan.source
     internal override val nativeRubyShapingPaint: TextPaint get() = TextPaint().apply { set(plan.paint) }
     internal override val nativeRubyParagraphDirection: Int get() = if (plan.rows.first().paragraph.rtl) -1 else 1
@@ -306,7 +322,9 @@ internal class NativeFloatRowGeometry private constructor(
     internal override fun nativeRubyLinePaintBounds(line: Int): List<NativeFloatBounds> {
         val row = plan.rows[line]
         return row.glyphs.mapIndexedNotNull { index, run ->
-            if (run.image != null) images.first { it.line == line && it.run === run }.let(::imageInk)
+            if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
+                mappedRows[line].placements[index].left, baselines[line])
+            else if (run.image != null) images.first { it.line == line && it.run === run }.let(::imageInk)
             else if (run.start < row.visibleEnd) run.paintBounds(mappedRows[line].placements[index].left,
                 baselines[line], plan.nativeLineMetrics[line].top, plan.nativeLineMetrics[line].bottom) else null
         }
@@ -342,8 +360,10 @@ internal class NativeFloatRowGeometry private constructor(
         val line = nativeLineAt(offset)
         val before = plan.measuredAdvance(plan.rows[line].start, offset)
         if (considerPreviousLine && line > 0 && before == 0f && plan.rows[line].start > 0 && text[plan.rows[line].start - 1] != '\n') {
+            val forced = plan.source.getSpans(plan.rows[line - 1].start, plan.rows[line].start,
+                NativeRubyColumn::class.java).any { it.continues }
             val remaining = nativeLineAvailableWidth(line - 1) - nativeLineAdvance(line - 1)
-            if (remaining > 0f) return remaining
+            if (!forced && remaining > 0f) return remaining
         }
         return (nativeLineAvailableWidth(line) - before).coerceAtLeast(0f)
     }
@@ -379,23 +399,46 @@ internal class NativeFloatRowGeometry private constructor(
             val start = mappedRows[line].originX + if (row.paragraph.rtl) row.advance - row.visibleAdvance else 0f
             RectF(start, tops[line], start + row.visibleAdvance, bottoms[line])
         }
-    internal override fun nativeLineAvailableWidth(line: Int): Float = plan.availableWidth - plan.flow.left[line].toFloat() - plan.flow.right[line]
+    internal override fun nativeLineAvailableWidth(line: Int): Float =
+        plan.paragraphRight - plan.paragraphLeft - plan.flow.left[line].toFloat() - plan.flow.right[line]
     internal override fun nativeSingleLineAdvance(): Float { check(shapedLineCount == 1); return nativeLineAdvance(0) }
     internal override fun nativeLineAdvance(line: Int): Float = plan.rows[line].advance
     internal override fun nativeUsedLineMetrics(line: Int): NativeUsedLineMetrics = NativeUsedLineMetrics(tops[line] - baselines[line], bottoms[line] - baselines[line])
-    internal override fun nativeContentLineMetrics(line: Int): NativeUsedLineMetrics = plan.nativeLineMetrics[line]
+    internal override fun nativeContentLineMetrics(line: Int): NativeUsedLineMetrics =
+        plan.rows[line].glyphs.mapNotNull { it.column }.fold(plan.nativeLineMetrics[line]) { metrics, column ->
+            metrics.including(column.container)
+        }
     internal override fun nativeReplacementOrigin(offset: Int): Pair<Float, Float> {
         val line = nativeLineAt(offset)
-        val placed = mappedRows[line].placements.singleOrNull { it.piece.start == offset && it.piece is NativeFloatRowPiece.Image }
+        val placed = mappedRows[line].placements.singleOrNull { it.piece.start == offset && (it.piece is NativeFloatRowPiece.Image ||
+            plan.rows[line].glyphs.any { run -> run.start == offset && run.column != null }) }
             ?: throw UnsupportedFloatLayout("Float image origin lost its original object range")
-        val box = checkNotNull(placed.imageBounds)
-        return box.left to baselines[line]
+        return (placed.imageBounds?.left ?: placed.left) to baselines[line]
     }
     internal override fun nativeInlineActionFragments(start: Int, end: Int): List<NativeInlineActionFragment> =
         plan.rows.indices.flatMap { line -> nativeRubyLineRects(line, start, end).map { rect ->
             val path = Path().apply { addRect(rect.left, 0f, rect.right, 1f, Path.Direction.CW) }
             NativeInlineActionFragment(line, maxOf(start, plan.rows[line].start), minOf(end, plan.rows[line].end), path, baselines[line])
         } }
+
+    internal fun rebuilding(source: Spanned): NativeFloatRowGeometry =
+        NativeFloatRowGeometry(plan.rebuild(source), { emptyList() }, { _, _ -> }, { null })
+
+    internal override fun nativeRubyReflow(ends: List<Int>, advances: List<Float>): NativeFloatGeometry {
+        val source = SpannableString(plan.source)
+        source.getSpans(0, source.length, NativeRubyLinePlan::class.java).forEach(source::removeSpan)
+        source.setSpan(NativeRubyLinePlan(ends, advances), 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return rebuilding(source)
+    }
+    internal override fun nativeRubyGapAllocations(start: Int, end: Int): List<NativeRubyGapAllocation> =
+        plan.rows.indices.flatMap { line -> nativeRubyLineRects(line, start, end).map {
+            NativeRubyGapAllocation(line, it.left, it.right, baselines[line])
+        } }
+    internal override fun withRubyProjection(compiled: NativeRubyLayout,
+        nodes: (NativeFloatGeometry) -> List<FloatInteractionNode>,
+        paintDecoration: (Canvas, NativeFloatGeometry) -> Unit,
+        paintBounds: (NativeFloatGeometry) -> NativeFloatBounds?): NativeFloatGeometry =
+        NativeRubyFloatGeometry(compiled, this, nodes, paintDecoration, paintBounds)
 
     companion object {
         fun build(source: Spanned, paint: TextPaint, width: Int, occurrences: List<NativeFloatOccurrence>,
@@ -405,10 +448,10 @@ internal class NativeFloatRowGeometry private constructor(
             insets: NativeTextInsets, usedLineMetrics: ((Int, Int) -> NativeUsedLineMetrics)?,
             decoration: (Canvas, NativeFloatGeometry) -> Unit,
             decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?, includeFontPadding: Boolean,
-            exactAvailableWidth: Float? = null): NativeFloatRowGeometry {
+            exactAvailableWidth: Float? = null, exactParagraphInsets: Boolean = false): NativeFloatRowGeometry {
             val plan = NativeFloatRowPlan.build(SpannedString(source), TextPaint().apply { set(paint) }, width, occurrences,
                 alignment, direction, lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary,
-                carriedExclusions, insets, usedLineMetrics, includeFontPadding, exactAvailableWidth)
+                carriedExclusions, insets, usedLineMetrics, includeFontPadding, exactAvailableWidth, exactParagraphInsets)
             return NativeFloatRowGeometry(plan, nodeFactory, decoration, decorationBounds)
         }
     }

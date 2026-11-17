@@ -172,8 +172,12 @@ data class ContainerScreenMaxWidth(val maxWidthPx: Long, val width: ContainerWid
         }
     }
 }
-data class ContainerColumns(val count: Int, val gap: StyleLength) {
-    init { require(count in 1..65535) { "Invalid container column count" } }
+data class ContainerColumns(val count: Int?, val gap: StyleLength, val width: StyleLength? = null,
+    val direction: BidiResolvedDirection? = null) {
+    init {
+        require(count == null || count in 1..65535) { "Invalid container column count" }
+        require(count != null || width != null) { "Columns require an authored count or width" }
+    }
 }
 enum class GenericFontFamily { SansSerif, Serif }
 sealed class ContainerFontFamily {
@@ -256,6 +260,12 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
                 floatSide == null && layout != ContainerLayout.FlexRow && flexItem == null && screenMaxWidth == null &&
                 (padding == null || padding.left.value == 0f && padding.right.value == 0f)) {
                 "Unsupported positioned containing scope"
+            }
+        }
+        if (columns?.width != null || columns?.direction != null) {
+            require(height == null && minHeight == null && layout != ContainerLayout.FlexRow &&
+                overflow != ContainerOverflow.Auto && positioning == null && absolutePosition == null) {
+                "Unsupported extended column fragmentation"
             }
         }
         require(margins == null || marginValues == null) { "Conflicting container margin representations" }

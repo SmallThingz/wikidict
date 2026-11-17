@@ -41,6 +41,8 @@ internal sealed interface NativeFloatContextPart {
         val box: ParagraphBox? = null,
         val emptyInlineOwner: Boolean = false,
         val buildAtWidth: ((Float, List<NativeFloatExclusion>) -> NativeFloatGeometry)? = null,
+        val buildInColumns: ((Float) -> NativeFloatGeometry)? = null,
+        val columnBreakInside: ColumnBreakInside? = null,
     ) : NativeFloatContextPart
     data class Rule(val id: Int, val metrics: NativeRuleMetrics,
         val containingWidth: Float? = null) : NativeFloatContextPart
@@ -69,6 +71,7 @@ internal sealed interface NativeFloatContextPart {
         val absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
         val absoluteStatic: NativeAbsoluteStaticPosition? = null,
         val staticInlineText: NativePreparedText? = null,
+        val columnClearEvent: Boolean = false,
     ) : NativeFloatContextPart {
         init { require(fixedContentHeight == null || fixedContentHeight.isFinite() && fixedContentHeight >= 0f) }
         fun contentHeight(natural: Float): Float = maxOf(0f, fixedContentHeight ?: natural, minimum.content)
@@ -405,9 +408,19 @@ internal class NativeFloatContextGeometry private constructor(
         internal fun buildPreparedColumns(width: Int, available: Float,
             parts: List<NativeFloatContextPart>, policy: NativeColumnPolicy,
             preparation: NativeOrdinaryPreparation): NativeFloatContextGeometry {
-            val columnWidth = policy.width(available)
-            val nativeWidth = kotlin.math.floor(columnWidth).toInt()
+            val resolved = policy.resolve(available)
             val shaped = parts.map { part ->
+                if (part is NativeFloatContextPart.Container && part.columnClearEvent) {
+                    // This event is authenticated by the source adapter. A multicol BFC has
+                    // no inherited floats, and this domain has no internal float children.
+                    if (!part.empty || part.clear == null || part.preparedParts?.isEmpty() != true ||
+                        part.floatSide != null || part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
+                        listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left).any { it != 0f } ||
+                        part.fixedContentHeight != null || part.minimum.content != 0f || part.columns != null || part.row != null ||
+                        part.absolute != null || part.absolutePosition != null || part.absoluteStatic != null)
+                        throw UnsupportedFloatLayout("Column clear event requires its empty zero-edge source box")
+                    return@map null
+                }
                 val item = part as? NativeFloatContextPart.Text
                     ?: throw UnsupportedFloatLayout("Column fragmentation for this child layout is unavailable")
                 val box = item.box
@@ -415,38 +428,60 @@ internal class NativeFloatContextGeometry private constructor(
                         box.before != 0f || box.margins.top != 0f || box.margins.bottom != 0f))
                     throw UnsupportedFloatLayout("Fragmented paragraph vertical edges are unavailable")
                 if (box != null && item.text.isEmpty() && !hasNativeInlineLayoutOwner(item.text)) return@map null
-                val contentWidth = kotlin.math.floor(maxOf(0f, nativeWidth -
-                    (box?.contentLeft ?: 0f) - (box?.contentRight ?: 0f))).toInt()
-                item.build(contentWidth, emptyList()).also {
+                val contentWidth = maxOf(0f, resolved.width - (box?.contentLeft ?: 0f) - (box?.contentRight ?: 0f))
+                val geometry = item.buildInColumns?.invoke(contentWidth) ?: run {
+                    // Existing directly prepared owners retain their unchanged integral lane.
+                    // A fractional lane requires the explicit Float preparation handoff.
+                    if (contentWidth != kotlin.math.floor(contentWidth))
+                        throw UnsupportedFloatLayout("Exact column text preparation is unavailable")
+                    item.build(contentWidth.toInt(), emptyList())
+                }
+                geometry.also {
                     check(it.text.toString() == item.text.toString()) { "Column shaping changed its logical source" }
                 }
             }
             val lines = buildList {
+                var previousText: NativeFloatContextPart.Text? = null
                 shaped.forEachIndexed { index, geometry ->
                     if (geometry == null) return@forEachIndexed
                     for (line in 0 until geometry.shapedLineCount) add(NativeColumnLine(index, line,
-                        geometry.usedLineHeight(line), if (line == 0 && index > 0)
-                            (parts[index - 1] as NativeFloatContextPart.Text).let { it.box?.after ?: it.gapAfter } else 0f))
+                        geometry.usedLineHeight(line), if (line == 0) previousText?.let { it.box?.after ?: it.gapAfter } ?: 0f else 0f,
+                        (parts[index] as NativeFloatContextPart.Text).columnBreakInside == ColumnBreakInside.Avoid))
+                    previousText = parts[index] as NativeFloatContextPart.Text
                 }
             }
-            val balance = balanceNativeColumns(lines, policy.count)
+            val balance = balanceNativeColumns(lines, resolved.count)
             val paragraphs = mutableListOf<Paragraph>()
             val offsets = mutableListOf<Int>()
+            val clearBounds = mutableMapOf<Int, RectF>()
+            val clearances = mutableMapOf<Int, Float>()
             val text = StringBuilder()
             val hardSeparators = mutableSetOf<Int>()
             var cursor = 0
             var seenLogical = false
+            var lastColumn = 0
+            var lastBottom = 0f
             shaped.forEachIndexed { index, geometry ->
-                val part = parts[index] as NativeFloatContextPart.Text
+                val sourcePart = parts[index]
+                if (sourcePart is NativeFloatContextPart.Container) {
+                    offsets += text.length
+                    val x = resolved.left(lastColumn, available)
+                    clearBounds[sourcePart.id] = RectF(x, lastBottom, x + resolved.width, lastBottom)
+                    clearances[sourcePart.id] = 0f
+                    return@forEachIndexed
+                }
+                val part = sourcePart as NativeFloatContextPart.Text
                 val sourceIndex = preparation.sourceIndex(part)
                 if (geometry != null && seenLogical) { hardSeparators += text.length; text.append('\n') }
                 if (geometry != null) seenLogical = true
                 offsets += text.length
                 if (geometry == null) return@forEachIndexed
                 val localLeft = part.box?.contentLeft ?: 0f
-                val origins = List(geometry.shapedLineCount) {
+                val origins = List(geometry.shapedLineCount) { line ->
                     val position = balance.placements[cursor++]
-                    (policy.left(position.column, available) + localLeft) to position.top
+                    lastColumn = position.column
+                    lastBottom = position.top + geometry.usedLineHeight(line)
+                    (resolved.left(position.column, available) + localLeft) to position.top
                 }
                 val fragmented = geometry.inColumns(origins)
                 paragraphs += Paragraph(sourceIndex, text.length, 0f, 0f, fragmented, balance.height)
@@ -454,7 +489,7 @@ internal class NativeFloatContextGeometry private constructor(
             }
             return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(balance.height).toInt(),
                 balance.height, paragraphs, emptyList(), offsets, emptyList(), balance.height, emptyList(),
-                NativeAdjoiningMargins(0f, 0f, false), emptyMap(), emptyMap(), emptyMap(), NativeAdjoiningMargins(0f, 0f, false),
+                NativeAdjoiningMargins(0f, 0f, false), emptyMap(), clearBounds, clearances, NativeAdjoiningMargins(0f, 0f, false),
                 hardSeparators = hardSeparators.toSet())
         }
 

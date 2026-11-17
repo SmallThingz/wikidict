@@ -303,8 +303,8 @@ internal class NativeRubyBands(val width: Float, val observed: Map<NativeRubyFra
 /** A private child retains its complete native paragraph and styles. Only the line
  * fitting indents vary; native endpoints must agree with the jointly selected cuts. */
 internal class NativeRubyLinePlan(ends: List<Int>, advances: List<Float>, allowEmptyTerminal: Boolean = false) {
-    private val ends = ends.toList()
-    private val advances = advances.toList()
+    internal val ends = ends.toList()
+    internal val advances = advances.toList()
     init {
         require(ends.isNotEmpty() && ends.size == advances.size && ends.first() > 0 &&
             ends.zipWithNext().withIndex().all { (index, pair) -> pair.first < pair.second ||
@@ -699,7 +699,8 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
             val removed = trim.filter { raw.nativeLineAt(it.nativeStart) == line }
                 .sumOf { raw.nativeRubyMeasuredAdvance(it.nativeStart, it.nativeEnd).toDouble() } +
                 columns.filter { raw.nativeLineAt(it.nativeStart) == line }.sumOf { piece ->
-                    trimmedColumns[piece.nativeStart]?.let { piece.column.reserved.toDouble() - it.reserved } ?: 0.0
+                    trimmedColumns[piece.nativeStart]?.let { if (raw.nativeRubyExactAdvances) piece.column.advance.toDouble() - it.advance
+                        else piece.column.reserved.toDouble() - it.reserved } ?: 0.0
                 }
             (raw.nativeLineAdvance(line).toDouble() - removed).coerceAtLeast(0.0).toFloat()
         }
@@ -1492,7 +1493,7 @@ internal class NativeRubyRowPlan(val row: NativeRubyRow) {
                     checkNotNull(geometry).nativeRubyMeasuredAdvance(at, at + 1).toDouble()
                 }
                 val advance = (originalAdvance.toDouble() - replaced +
-                    selected.values.sumOf { ceil(it.advance.toDouble()) }).toFloat()
+                    selected.values.sumOf { if (geometry?.nativeRubyExactAdvances == true) it.advance.toDouble() else ceil(it.advance.toDouble()) }).toFloat()
                 if (!advance.isFinite() || advance < 0f || advance > TablePixelLimit)
                     throw UnsupportedFloatLayout("Ruby recursive fragment exceeds native coordinates")
                 val progress = NativeRubyRowProgress(to,
@@ -1691,14 +1692,14 @@ private class NativeRubyMaterializer(selections: List<NativeRubyColumnSelection>
 /** The metadata compiler is local to this one immutable shape. It creates no Compose,
  * image, focus, action, or lifecycle owner and never changes the public source buffer. */
 internal fun nativeRubyLayout(source: Spanned, paint: TextPaint,
-    direction: TextDirectionHeuristic, bands: NativeRubyBands? = null): NativeRubyLayout? {
+    direction: TextDirectionHeuristic, bands: NativeRubyBands? = null, exactAdvances: Boolean = false): NativeRubyLayout? {
     val markers = nativeInlineRanges(source, NativeRubyPreparedSource::class.java).sortedBy { it.start }
     if (markers.isEmpty()) return null
     if (markers.any { it.start < 0 || it.end < it.start || it.end > source.length ||
             source.subSequence(it.start, it.end).toString() != it.value.projection.text } ||
         markers.zipWithNext().any { (a, b) -> a.end > b.start })
         throw UnsupportedFloatLayout("Ruby preparation lost its exact aggregate source range")
-    val compiler = NativeRubyCompiler(source, paint, direction, bands)
+    val compiler = NativeRubyCompiler(source, paint, direction, bands, exactAdvances)
     var cursor = 0
     markers.forEach { marker ->
         compiler.text(cursor, marker.start)
@@ -1710,7 +1711,8 @@ internal fun nativeRubyLayout(source: Spanned, paint: TextPaint,
 }
 
 private class NativeRubyCompiler(private val original: Spanned, private val paint: TextPaint,
-    private val direction: TextDirectionHeuristic, private val bands: NativeRubyBands?) {
+    private val direction: TextDirectionHeuristic, private val bands: NativeRubyBands?,
+    private val exactAdvances: Boolean) {
     private val native = SpannableStringBuilder()
     private val pieces = mutableListOf<NativeRubyPiece>()
     private val breakText = StringBuilder()
@@ -2063,7 +2065,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         if (widths.maximum > TablePixelLimit)
             throw UnsupportedFloatLayout("Ruby child exceeds native shaping width")
         val geometry = NativeFloatGeometry.build(slice, format.paint, widths.maximum, emptyList(),
-            textDirection = childDirection, includeFontPadding = false)
+            textDirection = childDirection, includeFontPadding = false,
+            exactAvailableWidth = if (exactAdvances) widths.maximum.toFloat() else null)
         if (geometry.nativeRubyShapingSource.isEmpty()) return NativeRubyRow(sourceStart + range.start, sourceStart + range.end,
             NativeRubyEmptyGeometry(slice.toString()), 0f, 0f, declaring, natural, format, placement.state, placement.local)
         if (geometry.shapedLineCount != 1)
@@ -2160,9 +2163,10 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val primary = NativePrimaryFontMetrics.from(normalizedPaint)
         shaped.setSpan(NativeRunLineMetrics(primary, policy), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         val advance = gapAdvance(prepared, range)
-        val raw = NativeFloatGeometry.build(shaped, format.paint, ceil(advance.toDouble()).toInt(), emptyList(),
+        val raw = NativeFloatGeometry.build(shaped, format.paint,
+            if (exactAdvances) kotlin.math.floor(advance).toInt() else ceil(advance.toDouble()).toInt(), emptyList(),
             textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
-            includeFontPadding = false)
+            includeFontPadding = false, exactAvailableWidth = if (exactAdvances) advance else null)
         val compiled = NativeRubyLayout(source, shaped,
             listOf(NativeRubyPiece.Text(0, source.length, 0, 1, collapsed = true, leafPaint = leafPaint)))
         val geometry = raw.withRubyProjection(compiled)

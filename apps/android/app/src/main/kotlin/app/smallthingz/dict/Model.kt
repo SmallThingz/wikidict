@@ -1318,6 +1318,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
 internal fun Block.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) = PresentationSpanVisitor(visit).block(this)
 internal fun Table.visitSpanRuns(visit: (List<Span>, Boolean) -> Unit) = PresentationSpanVisitor(visit).table(this)
 internal fun Table.visitSpans(visit: (List<Span>) -> Unit) = visitSpanRuns { spans, _ -> visit(spans) }
+enum class ColumnBreakInside { Auto, Avoid }
+
 data class Block(
     val kind: String,
     val depth: Int,
@@ -1335,8 +1337,14 @@ data class Block(
     val flow: List<FlowPart>? = null,
     val container: Container? = null,
     val ruleStyle: RuleStyle? = null,
+    val columnBreakInside: ColumnBreakInside? = null,
 ) {
     init {
+        require(columnBreakInside == null || kind in setOf("paragraph", "definition", "example", "quotation",
+            "list_item", "list_detail", "indent", "term") && table == null && feature == null &&
+            figure == null && flow == null && container == null && ruleStyle == null) {
+            "Column break policy requires an ordinary text block"
+        }
         require(ruleStyle == null || kind == "rule" && depth == 0 && level == 0 && spans.isEmpty() &&
             listPath.isEmpty() && number.isEmpty() && anchor.isEmpty() && anchorFallback.isEmpty() &&
             feature == null && table == null && figure == null && flow == null && container == null &&

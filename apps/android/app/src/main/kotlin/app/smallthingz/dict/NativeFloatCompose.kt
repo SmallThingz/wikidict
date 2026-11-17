@@ -636,6 +636,7 @@ internal fun prepareNativeFloatText(
     }
     val rubyTableTextDirection = LocalCompiledTableTextDirection.current
     val bodyTextDirection = LocalNativeContainerTextContext.current?.bodyDirection
+    val columnTextDirection = LocalNativeColumnTextDirection.current
     val boxDarkTheme = LocalReaderDarkTheme.current
     val rubyFormats = linkedMapOf<String, NativeRubyGroupFormat>()
     ruby?.groups?.forEach { (path, group) ->
@@ -696,7 +697,7 @@ internal fun prepareNativeFloatText(
                     ?: when (staticInlineParent?.direction ?: ownerDirection) {
                         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
                         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
+                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
                     }
             }
             val padding = range.span?.inlinePaddingGroup?.let { model ->
@@ -941,7 +942,7 @@ internal fun prepareNativeFloatText(
     val direction = when (staticInlineParent?.direction ?: ownerDirection) {
         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection)
+        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
     }
     val nativeSource: ((Int) -> Spanned)? =
         if (runs.isNotEmpty() && prepared.size != runs.size) null else { width ->
@@ -1224,12 +1225,12 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection) { Any() }
     val citationPreparation = rememberNativeCitationPreparation(revision,
         citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
         layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
-    val widthFactory: ((Int, List<NativeFloatExclusion>, Boolean, Float?) -> NativeFloatGeometry)? =
-        nativeSource?.let { source -> { width, carried, requireDrained, exactWidth ->
+    val widthFactory: ((Int, List<NativeFloatExclusion>, Boolean, Float?, Boolean) -> NativeFloatGeometry)? =
+        nativeSource?.let { source -> { width, carried, requireDrained, exactWidth, exactParagraphInsets ->
                 if (layoutUnavailable != null) throw UnsupportedFloatLayout(layoutUnavailable)
                 val native = source(width)
                 val floats = emptyList<NativeFloatOccurrence>()
@@ -1276,18 +1277,26 @@ internal fun prepareNativeFloatText(
                         }
                         bounds
                     },
-                    nodeFactory = nativeNodes, exactAvailableWidth = exactWidth)
+                    nodeFactory = nativeNodes, exactAvailableWidth = exactWidth,
+                    exactParagraphInsets = exactParagraphInsets)
 
 
         } }
     val factory: ((Int, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = widthFactory?.let { create ->
-        { width, carried, requireDrained -> create(width, carried, requireDrained, null) }
+        { width, carried, requireDrained -> create(width, carried, requireDrained, null, false) }
     }
     val geometryAtWidth: ((Float, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = widthFactory?.let { create ->
         { width, carried, requireDrained ->
             if (!width.isFinite() || width < 0f || width > TablePixelLimit)
                 throw UnsupportedFloatLayout("Absolute text width exceeds native geometry")
-            create(kotlin.math.floor(width).toInt(), carried, requireDrained, width)
+            create(kotlin.math.floor(width).toInt(), carried, requireDrained, width, false)
+        }
+    }
+    val geometryForColumns: ((Float) -> NativeFloatGeometry)? = widthFactory?.let { create ->
+        { width ->
+            if (!width.isFinite() || width < 0f || width > TablePixelLimit)
+                throw UnsupportedFloatLayout("Column text width exceeds native geometry")
+            create(kotlin.math.floor(width).toInt(), emptyList(), false, width, true)
         }
     }
     return PreparedNativeFloatText(annotated.text, layoutUnavailable ?: textState, revision, factory, {
@@ -1323,14 +1332,16 @@ internal fun prepareNativeFloatText(
             }
         }
     }, ordinaryLinkPaintRevision = ordinaryPaintRevision, emptyInlineOwner = emptyInlineOwner, geometryAtWidth = geometryAtWidth,
+        geometryForColumns = geometryForColumns,
         citationPreparation = citationPreparation)
 
 }
 
 /** Public native paragraph heuristic retains authored paragraph direction without inserting isolates. */
 private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean,
-    tableDirection: TableContainingDirection?, bodyDirection: BidiResolvedDirection? = null): TextDirectionHeuristic {
-    val fallback = when (compiledBodyParagraphDirection(tableDirection, bodyDirection)) {
+    tableDirection: TableContainingDirection?, bodyDirection: BidiResolvedDirection? = null,
+    columnDirection: BidiResolvedDirection? = null): TextDirectionHeuristic {
+    val fallback = when (compiledBodyParagraphDirection(tableDirection, bodyDirection, columnDirection)) {
         TextDirection.Ltr -> TextDirectionHeuristics.LTR
         TextDirection.Rtl -> TextDirectionHeuristics.RTL
         else -> if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
@@ -1385,6 +1396,7 @@ internal data class PreparedNativeFloatText(
     val emptyInlineOwner: Boolean = false,
     val geometryAtWidth: ((Float, List<NativeFloatExclusion>, Boolean) -> NativeFloatGeometry)? = null,
     val citationPreparation: NativeCitationPreparationStatus? = null,
+    val geometryForColumns: ((Float) -> NativeFloatGeometry)? = null,
 )
 
 /** Styled source and actions, before paragraph shaping. Anonymous owners shape this source once. */

@@ -23,6 +23,13 @@ internal interface NativeRubyAtomicCanvas {
         paintRubyAtom(x, y, draw)
 }
 
+/** Exact row replay supplies original source/context identity alongside retained glyphs. */
+internal interface NativeRubyGlyphCanvas {
+    fun paintRubyGlyphRun(source: CharSequence, start: Int, end: Int, contextStart: Int,
+        contextEnd: Int, x: Float, y: Float, rtl: Boolean, paint: Paint,
+        draw: (Canvas, Int, Int, NativeRubyGlyphRun, Float, Float) -> Unit)
+}
+
 internal interface NativeRubyPhysicalMap {
     val minimumShift: Float
     val maximumShift: Float
@@ -192,6 +199,7 @@ internal class NativeRubySpacingMap(val origin: Float, advance: Float, allocatio
 private data class RubyRun(val start: Int, val end: Int, val contextStart: Int, val contextEnd: Int,
     val x: Float, val rtl: Boolean, val paint: TextPaint, val shape: NativeRubyGlyphRun, val y: Float)
 private data class RubyRunPiece(val start: Int, val end: Int, val left: Float, val advance: Float,
+    val glyphs: NativeRubyGlyphRun,
     val contextStart: Int? = null, val contextEnd: Int? = null)
 private data class RubyRunPlan(val run: RubyRun, val pieces: List<RubyRunPiece>)
 
@@ -212,7 +220,7 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
     private val target: Canvas? = null, private val map: NativeRubyPhysicalMap? = null,
     private val plans: List<RubyRunPlan> = emptyList(), private val top: Float = 0f,
     private val nested: List<RubyNestedReplay> = emptyList(),
-    private val strictInlineEdges: Boolean = false, private val exactReplay: Boolean = false) : Canvas(), NativeRubyAtomicCanvas {
+    private val strictInlineEdges: Boolean = false, private val exactReplay: Boolean = false) : Canvas(), NativeRubyAtomicCanvas, NativeRubyGlyphCanvas {
     private var replayOrdinal = 0
     fun requireCompleteReplay() {
         if (exactReplay && replayOrdinal != plans.size)
@@ -301,7 +309,7 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
         finally { output.restoreToCount(save) }
     }
     private fun run(start: Int, end: Int, contextStart: Int, contextEnd: Int,
-        x: Float, y: Float, rtl: Boolean, paint: Paint, draw: (Int, Int, Int, Int, Float, Float) -> Unit) {
+        x: Float, y: Float, rtl: Boolean, paint: Paint, draw: (Int, Int, Int, Int, Float, Float, NativeRubyGlyphRun) -> Unit) {
         if (start == end) return
         if (start < contextStart || end > contextEnd || contextStart < 0 || contextEnd > source.length ||
             paint.textAlign != Paint.Align.LEFT || (paint.startHyphenEdit != 0 || paint.endHyphenEdit != 0))
@@ -333,15 +341,24 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
                 inlineCoordinate(left.toDouble() + shift)
             } else left + checkNotNull(map).shiftAt(left + piece.advance / 2f)
             draw(piece.start, piece.end, piece.contextStart ?: contextStart, piece.contextEnd ?: contextEnd,
-                translated, if (strictInlineEdges) inlineY(y) else this.y(y))
+                translated, if (strictInlineEdges) inlineY(y) else this.y(y), piece.glyphs)
         }
     }
     override fun drawTextRun(text: CharSequence, start: Int, end: Int, contextStart: Int,
         contextEnd: Int, x: Float, y: Float, isRtl: Boolean, paint: Paint) {
         if (contextStart < 0 || contextEnd > text.length || contextEnd > source.length ||
             (contextStart until contextEnd).any { text[it] != source[it] }) unsupported()
-        run(start, end, contextStart, contextEnd, x, y, isRtl, paint) { a, b, c, d, px, py ->
+        run(start, end, contextStart, contextEnd, x, y, isRtl, paint) { a, b, c, d, px, py, _ ->
             target?.drawTextRun(text, a, b, c, d, px, py, isRtl, paint)
+        }
+    }
+    override fun paintRubyGlyphRun(source: CharSequence, start: Int, end: Int, contextStart: Int,
+        contextEnd: Int, x: Float, y: Float, rtl: Boolean, paint: Paint,
+        draw: (Canvas, Int, Int, NativeRubyGlyphRun, Float, Float) -> Unit) {
+        if (contextStart < 0 || contextEnd > source.length || contextEnd > this.source.length ||
+            (contextStart until contextEnd).any { source[it] != this.source[it] }) unsupported()
+        run(start, end, contextStart, contextEnd, x, y, rtl, paint) { a, b, _, _, px, py, glyphs ->
+            target?.let { draw(it, a, b, glyphs, px, py) }
         }
     }
     override fun drawTextRun(text: CharArray, index: Int, count: Int, contextIndex: Int,
@@ -352,7 +369,7 @@ private class RubySpacingCanvas(private val source: CharSequence, private val li
             contextIndex + contextCount + lineStart > source.length ||
             (contextIndex until contextIndex + contextCount).any { text[it] != source[lineStart + it] }) unsupported()
         run(lineStart + index, lineStart + index + count, lineStart + contextIndex,
-            lineStart + contextIndex + contextCount, x, y, isRtl, paint) { a, b, c, d, px, py ->
+            lineStart + contextIndex + contextCount, x, y, isRtl, paint) { a, b, c, d, px, py, _ ->
             target?.drawTextRun(text, a - lineStart, b - a, c - lineStart, d - c, px, py, isRtl, paint)
         }
     }
@@ -426,7 +443,7 @@ private fun rubyRunPlans(source: CharSequence,
             if (selected.any { it.x > physicalLeft && it.x < physicalRight &&
                     !rubyClose(it.x, physicalLeft) && !rubyClose(it.x, physicalRight) })
                 throw UnsupportedFloatLayout("Ruby cut crosses an intact native run fragment")
-            RubyRunPiece(start, end, left, shape.advance)
+            RubyRunPiece(start, end, left, shape.advance, shape)
         }
         val whole = run.shape
         if (!rubyGlyphsEqual(whole.glyphs, composed, whole.advance))
@@ -692,7 +709,8 @@ private fun rubyHierarchySource(owner: NativeFloatGeometry, line: Int): RubyHier
         val start = ranges.firstOrNull()?.first ?: anchors.minOf { it.first }
         val end = ranges.lastOrNull()?.second ?: start
         RubyHierarchySlot(at, start, end, origin.first,
-            origin.first + column.reserved, profile, column, origin.second, view, ranges)
+            origin.first + if (raw.nativeRubyExactAdvances) column.advance else column.reserved.toFloat(),
+            profile, column, origin.second, view, ranges)
     }
     if (probe.atoms.any { atom -> columns.none { it === atom.column } })
         throw UnsupportedFloatLayout("Ruby hierarchy acquired an unowned nested draw")
@@ -1225,7 +1243,7 @@ internal class NativeInlineLineCapture private constructor(
             val left = if (run.rtl) run.shape.advance - prefix - bounded.advance else prefix
             assembled += bounded.glyphs.map { it.copy(x = it.x + left) }
             total += bounded.advance
-            RubyRunPiece(a, b, left, bounded.advance, contextStart, contextEnd)
+            RubyRunPiece(a, b, left, bounded.advance, bounded, contextStart, contextEnd)
         }
         if (!rubyClose(run.shape.advance, total.toFloat()) || !rubyGlyphsEqual(run.shape.glyphs, assembled, run.shape.advance))
             throw UnsupportedFloatLayout("Inline edge splits an intact native glyph cluster")

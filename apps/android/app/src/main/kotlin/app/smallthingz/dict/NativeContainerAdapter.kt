@@ -188,6 +188,33 @@ internal fun paintNativeTableBorder(canvas: Canvas, edge: TableBorderSegment, co
     canvas.restoreToCount(checkpoint)
 }
 
+/** Intrinsics are independent of eventual column count and containing width. Native list
+ * gutters and paragraph edges each enter once; an empty clear event owns no glyph or width. */
+internal fun nativeColumnContentWidths(parts: List<NativeFloatContextSpec>,
+    breakWordMinimum: Boolean = false): ContainerWidths {
+    var minimum = 0f
+    var maximum = 0f
+    parts.forEach { part ->
+        when (part) {
+            is NativeFloatContextSpec.Text -> {
+                val native = part.prepared.native
+                    ?: throw UnsupportedFloatLayout(part.prepared.stateDescription ?: "Column text preparation is unavailable")
+                val widths = nativeFloatRowIntrinsicWidths(native.source(TablePixelLimit), native.paint,
+                    native.direction, breakWordMinimum || native.breakWordMinimum)
+                val inset = native.horizontalInsets + (part.box?.contentLeft ?: 0f) + (part.box?.contentRight ?: 0f)
+                minimum = maxOf(minimum, widths.minimum + inset)
+                maximum = maxOf(maximum, widths.maximum + inset)
+            }
+            is NativeFloatContextSpec.Container -> if (!part.columnClearEvent)
+                throw UnsupportedFloatLayout("Column fragmentation for this child layout is unavailable")
+            else -> throw UnsupportedFloatLayout("Column fragmentation for this child layout is unavailable")
+        }
+    }
+    if (!minimum.isFinite() || !maximum.isFinite() || maximum > TablePixelLimit)
+        throw UnsupportedFloatLayout("Column content intrinsic width exceeds native geometry")
+    return ContainerWidths(minimum, maximum)
+}
+
 /** This is the adapter for the existing prepared owner, not another measurement subtree. */
 internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     children: List<NativeFloatContextSpec>, density: Float, normalBodyFont: Float,
@@ -195,9 +222,10 @@ internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     positioned: NativePositionedScrollportPolicy? = null, absolute: NativeAbsoluteTextPlacement? = null,
     absolutePosition: NativeAbsolutePosition? = null,
     absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
-    absoluteStatic: NativeAbsoluteStaticPosition? = null): NativeFloatContextSpec.Container = try {
+    absoluteStatic: NativeAbsoluteStaticPosition? = null,
+    columnBreakWordMinimum: Boolean = false): NativeFloatContextSpec.Container = try {
     supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem, positioned, absolute,
-        absolutePosition, absoluteContainingBlock, absoluteStatic)
+        absolutePosition, absoluteContainingBlock, absoluteStatic, columnBreakWordMinimum)
 } catch (error: UnsupportedFloatLayout) {
     // Keep the real leaves available to the existing visible fallback. Geometry
     // limits must not discard the body by throwing out of composition.
@@ -217,7 +245,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     rtl: Boolean, dark: Boolean, flexItem: Boolean,
     positioned: NativePositionedScrollportPolicy?, absolute: NativeAbsoluteTextPlacement?,
     absolutePosition: NativeAbsolutePosition?, absoluteContainingBlock: NativeAbsoluteContainingBlock?,
-    absoluteStatic: NativeAbsoluteStaticPosition?): NativeFloatContextSpec.Container {
+    absoluteStatic: NativeAbsoluteStaticPosition?, columnBreakWordMinimum: Boolean): NativeFloatContextSpec.Container {
     val style = resolved.box
     if ((style.positionedScope != null) != (positioned != null) ||
         (style.positioning is ContainerPositioning.Absolute) != (absolute != null))
@@ -293,14 +321,17 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         throw UnsupportedFloatLayout("Absolute positioned content requires ordinary paragraph owners")
     if (absoluteStatic != null && (children.size != 1 || children.single() !is NativeFloatContextSpec.Text))
         throw UnsupportedFloatLayout("Static inline content requires its one original ordinary paragraph")
-    val columns = style.columns?.let { NativeColumnPolicy(it.count, length(it.gap), rtl) }
+    val columns = style.columns?.let {
+        NativeColumnPolicy(it.count, length(it.gap), rtl, it.width?.let(::length), density)
+    }
     if (columns != null && (style.height != null || style.layout == ContainerLayout.FlexRow ||
             style.overflow == ContainerOverflow.Auto))
         throw UnsupportedFloatLayout("Columns require an auto-height ordinary formatting context")
-    if (columns != null && children.any { it !is NativeFloatContextSpec.Text })
+    if (columns != null && children.any { it !is NativeFloatContextSpec.Text &&
+            (it !is NativeFloatContextSpec.Container || !it.columnClearEvent) })
         throw UnsupportedFloatLayout("Column fragmentation for this child layout is unavailable")
-    fun columnIntrinsic(intrinsic: ContainerWidths) = if (columns == null) intrinsic else
-        ContainerWidths(columns.intrinsic(intrinsic.minimum), columns.intrinsic(intrinsic.maximum))
+    val columnWidths = columns?.let { lazy { nativeColumnContentWidths(children, columnBreakWordMinimum) } }
+    fun columnIntrinsic(intrinsic: ContainerWidths) = columns?.intrinsic(columnWidths!!.value) ?: intrinsic
     fun childIntrinsic(intrinsic: ContainerWidths) = if (!scrolling) intrinsic else ContainerWidths(
         (intrinsic.minimum - scrollHorizontalPadding).coerceAtLeast(0f),
         (intrinsic.maximum - scrollHorizontalPadding).coerceAtLeast(0f))
@@ -349,6 +380,8 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         minimum = containerMinimumHeight(style, padding.top + padding.bottom, density, normalBodyFont),
         absolute = absolute, absolutePosition = absolutePosition, absoluteContainingBlock = absoluteContainingBlock,
         absoluteStatic = absoluteStatic,
+        columnClearEvent = children.isEmpty() && style.clear != null && style.copy(clear = null) == ContainerStyle(),
+        columnContentWidths = columnWidths?.let { measured -> { measured.value } },
         scrollport = positioned?.let { NativeScrollportSpec(children, scrollPadding, it) },
         content = {})
 }
@@ -435,6 +468,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
 ): List<NativeFloatContextSpec> {
     val inheritedWrap = LocalNativeContainerTextWrap.current
     val tableDirection = LocalCompiledTableTextDirection.current
+    val columnBreakWordMinimum = LocalCaptionBreakWord.current
     val parentTextStyle = androidx.compose.material3.LocalTextStyle.current
     val bodyPixels = normalBodySize.value * density.density * density.fontScale
     val positionedBodyPixels = with(density) { normalBodySize.toPx() }
@@ -502,6 +536,14 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     inheritedContext
                 }
                 val nextAlign = resolved.box.textAlign ?: align
+                // Source paragraph direction controls column progression and list markers.
+                // Directional spans still retain their own native bidi/isolation policies.
+                val columnRtl = if (resolved.box.columns == null) rtl else
+                    resolved.box.columns.direction?.let { it == BidiResolvedDirection.Rtl } ?: when (tableDirection) {
+                        TableContainingDirection.Ltr -> false
+                        TableContainingDirection.Rtl -> true
+                        null -> next.bodyDirection?.let { it == BidiResolvedDirection.Rtl } ?: rtl
+                    }
                 val background = when (val value = resolved.box.background) {
                     is ContainerColor.Rgb -> value.value
                     is ContainerColor.LightDark -> if (dark) value.dark else value.light
@@ -530,7 +572,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     textFailure = error.message ?: "Static inline parent typography is unavailable"
                     null
                 }
-                CompositionLocalProvider(LocalAuthoredBackground provides background) {
+                val prepareChildren: @Composable () -> Unit = {
                     children += visit(container.blocks,
                         container.blocks.indices.map { "${paths[first]}/container/block-$it" },
                         container.blocks.indices.map { "${grids[first]}/container/block-$it" },
@@ -539,6 +581,14 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
                         nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign)
+                }
+                CompositionLocalProvider(LocalAuthoredBackground provides background) {
+                    if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
+                        androidx.compose.ui.platform.LocalLayoutDirection provides
+                            if (columnRtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr,
+                        LocalNativeColumnTextDirection provides
+                            (resolved.box.columns.direction ?: LocalNativeColumnTextDirection.current),
+                        content = prepareChildren)
                 }
                 val placement = if (absolute == null || positionedParent == null) null else
                     NativeAbsoluteTextPlacement(absolute.left.value * density.density,
@@ -572,8 +622,9 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 }
                 val prepared = nativeContainerSpec(id(paths[first]), resolved, children,
                     density.density, if (absolute != null || scope != null) positionedBodyPixels else bodyPixels,
-                    rtl, dark, row, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor,
-                    immediateStatic?.let { NativeAbsoluteStaticPosition(it.containingBlockId) })
+                    columnRtl, dark, row, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor,
+                    immediateStatic?.let { NativeAbsoluteStaticPosition(it.containingBlockId) },
+                    columnBreakWordMinimum = columnBreakWordMinimum)
                 val failure = textFailure ?: (if (scope == null && absolute == null)
                     nativeScrollportUnavailable(container.style, row) else null)
                 val domainFailure = failure ?: when {
@@ -613,13 +664,19 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
                         inside, inScrollport, ownerWrap.takeUnless { rendered.kind == "heading" }, bodyTypographyExcluded = excludesBody,
                         staticInlineParent = staticInlineParent)
+                    fun bindColumnPolicy(prepared: NativeFloatContextSpec): NativeFloatContextSpec {
+                        val policy = original.columnBreakInside ?: return prepared
+                        // A non-Text fallback keeps its original body. The column adapter
+                        // rejects that represented child before fragmentation is attempted.
+                        return (prepared as? NativeFloatContextSpec.Text)?.copy(columnBreakInside = policy) ?: prepared
+                    }
                     if (excludesBody) {
-                        CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child) }
-                    } else if (format?.ownerFont == null) children += leaf(child) else {
+                        CompositionLocalProvider(LocalNativeContainerTextContext provides textContext) { children += leaf(child).map(::bindColumnPolicy) }
+                    } else if (format?.ownerFont == null) children += leaf(child).map(::bindColumnPolicy) else {
                         CompositionLocalProvider(LocalCellWeight provides null,
                             LocalTableLineHeightPixels provides null,
                             LocalNativeContainerTextContext provides context.copy(cellText = null, fontFamily = format.sourceFamily)) {
-                            children += leaf(child)
+                            children += leaf(child).map(::bindColumnPolicy)
                         }
                     }
                 }

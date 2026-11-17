@@ -282,7 +282,8 @@ class RubyModelCodecTest {
         fun ownedParagraph(owner: InlineFontSnapshot, empty: Boolean = false) {
             prefix(13); byte(0); tail(); containerOwnerStyle(owner)
             u32(if (empty) 0 else 1)
-            if (!empty) { prefix(0, true); byte(0); tail() }
+            if (!empty) { prefix(0, true); byte(0); tail(); columnLayoutTail() }
+            columnLayoutTail()
         }
         /** Repeated records share no test offset map; the wire still contains each real owner. */
         fun ownerBudget(count: Int, owner: InlineFontSnapshot) {
@@ -291,19 +292,21 @@ class RubyModelCodecTest {
             u32(count.toLong())
             val record = Wire(version, yFlags).apply { ownedParagraph(owner, empty = true) }.out.toByteArray()
             repeat(count) { out.write(record) }
+            columnLayoutTail()
         }
         /** Literal Z Container subset; existing primitives retain every ordinary span field. */
         fun positionedStyle(value: ContainerStyle, label: String) {
             require(value == ContainerStyle(width = value.width, lineHeight = value.lineHeight,
                 textAlign = value.textAlign, overflow = value.overflow, ownerFontScale = value.ownerFontScale,
-                height = value.height, positioning = value.positioning, fontFamily = value.fontFamily,
+                height = value.height, columns = value.columns, positioning = value.positioning, fontFamily = value.fontFamily,
                 ownerFont = value.ownerFont, absolutePosition = value.absolutePosition, textWrap = value.textWrap, absoluteStatic = value.absoluteStatic))
             mark("$label.flags")
             val flags = (if (value.width != null) 4 else 0) or (if (value.lineHeight != null) 4096 else 0) or
                 (if (value.textAlign != null) 8192 else 0) or (if (value.overflow != null) 32768 else 0) or
                 (if (value.ownerFontScale != null) 65536 else 0) or (if (value.height != null) 131072 else 0) or
                 (if (value.positioning != null) 524288 else 0) or (if (value.fontFamily != null) 4194304 else 0) or
-                (if (value.ownerFont != null) 16777216 else 0)
+                (if (value.ownerFont != null) 16777216 else 0) or (if (value.columns != null) 262144 else 0) or
+                (if (value.columns?.width != null || value.columns?.direction != null) 0x02000000 else 0)
             u32(flags.toLong())
             value.width?.let { width ->
                 mark("$label.width")
@@ -326,6 +329,10 @@ class RubyModelCodecTest {
             value.overflow?.let { byte(it.ordinal) }
             value.ownerFontScale?.let(::f32)
             value.height?.let { positionedLength(it, "$label.height") }
+            value.columns?.let { columns ->
+                mark("$label.columnCount"); u16(columns.count ?: 0)
+                positionedLength(columns.gap, "$label.columnGap")
+            }
             value.positioning?.let { require(it == ContainerPositioning.RelativeAuto); byte(0) }
             value.fontFamily?.let(::fontFamily)
             value.ownerFont?.let { fontSnapshot(it, "$label.owner") }
@@ -341,6 +348,11 @@ class RubyModelCodecTest {
                 }
                 value.absoluteStatic?.let { mark("$label.static"); byte(it.direction.ordinal) }
             } else require(value.absolutePosition == null && value.textWrap == null && value.absoluteStatic == null)
+            value.columns?.takeIf { it.width != null || it.direction != null }?.let { columns ->
+                mark("$label.columnExtension"); byte((if (columns.width != null) 1 else 0) or (if (columns.direction != null) 2 else 0))
+                columns.width?.let { positionedLength(it, "$label.columnWidth") }
+                columns.direction?.let { mark("$label.columnDirection"); byte(it.ordinal) }
+            }
             mark("$label.end")
         }
         fun isolatedPositionedStyle(value: ContainerStyle): ByteArray {
@@ -366,12 +378,16 @@ class RubyModelCodecTest {
                     prefix(12); positionedTable(table, "$label.table"); tail()
                 }
                 else -> {
-                    require(value == Block("paragraph", 0, value.spans, textAlign = value.textAlign))
-                    byte(0); byte(0); byte(0); spans(value.spans, "$label.spans")
-                    byte(0); string(""); string(""); byte(0)
+                    require(value == Block(value.kind, value.depth, value.spans, listPath = value.listPath,
+                        number = value.number, textAlign = value.textAlign, columnBreakInside = value.columnBreakInside))
+                    val tag = when (value.kind) { "paragraph" -> 0; "definition" -> 2; "example" -> 3; "quotation" -> 4
+                        "list_item" -> 5; "list_detail" -> 6; "indent" -> 7; "term" -> 8; else -> error("Unsupported fixture block") }
+                    byte(tag); byte(value.depth); byte(0); spans(value.spans, "$label.spans")
+                    byte(0); string(value.listPath); string(value.number); byte(0)
                     tail(alignment = value.textAlign, alignmentLabel = "$label.alignment")
                 }
             }
+            columnLayoutTail(value.columnBreakInside, "$label.columnBreakInside")
         }
         private fun minimumTableStyle(value: TableStyle?, label: String) {
             mark("$label.presence"); byte(if (value == null) 0 else 1)
@@ -430,7 +446,7 @@ class RubyModelCodecTest {
             u32(100); minimumTableStyle(box, "responsive.box"); byte(ContainerBoxSizing.ContentBox.ordinal)
             byte(StyleWidthUnit.Percent.ordinal); f32(100f)
             minimumTableStyle(grid, "responsive.grid"); byte(TableContainingDirection.Ltr.ordinal); string("ja")
-            tail()
+            tail(); columnLayoutTail()
         }
         private fun positionedTable(value: Table, label: String) {
             require(value.geometry == null && value.blockViewport == null && value.floatViewport == null)
@@ -539,12 +555,18 @@ class RubyModelCodecTest {
             alignment?.let { alignmentLabel?.let { name -> mark("$name.value") }; byte(it.ordinal) }
             repeat(3) { byte(0) } // paragraph style, Figure, anonymous flow
         }
+        private fun columnLayoutTail(value: ColumnBreakInside? = null, label: String? = null) {
+            if (version == 'Z' && yFlags and 4096 != 0) {
+                label?.let { mark(it) }
+                byte(when (value) { null -> 0; ColumnBreakInside.Auto -> 1; ColumnBreakInside.Avoid -> 2 })
+            } else require(value == null)
+        }
         private fun paragraph(body: Boolean = true, literal: List<Span> = emptyList()) {
             if (body && paragraphOverride != null) { checkNotNull(paragraphOverride).invoke(); return }
             if (body) prefix(0, true) else {
                 byte(0); byte(0); byte(0); spans(literal, "sibling-${out.size()}"); byte(0); string(""); string("")
             }
-            byte(0); tail()
+            byte(0); tail(); columnLayoutTail()
         }
         private fun table(sink: Sink) {
             byte(1); byte(0)
@@ -577,7 +599,7 @@ class RubyModelCodecTest {
         private fun body(sink: Sink, containers: Int) {
             when (sink) {
                 Sink.Body, Sink.ReferenceBlocks -> paragraph()
-                Sink.Heading -> { prefix(9, true, 2); byte(0); tail(true) }
+                Sink.Heading -> { prefix(9, true, 2); byte(0); tail(true); columnLayoutTail() }
                 Sink.Container -> {
                     repeat(containers) { index ->
                         prefix(13); byte(0); tail()
@@ -588,9 +610,10 @@ class RubyModelCodecTest {
                         u32(1)
                     }
                     paragraph()
+                    repeat(containers) { columnLayoutTail() }
                 }
                 Sink.FigureCaption, Sink.FigureRichCaption -> {
-                    prefix(0); byte(0); string(""); string(""); byte(0); byte(0); figure(sink); byte(0)
+                    prefix(0); byte(0); string(""); string(""); byte(0); byte(0); figure(sink); byte(0); columnLayoutTail()
                 }
                 Sink.FlowInline, Sink.FlowFigure, Sink.ScopeInline, Sink.ScopeFigure -> {
                     prefix(0); byte(0); string(""); string(""); byte(0); byte(0); byte(0); byte(1); u32(1)
@@ -599,12 +622,13 @@ class RubyModelCodecTest {
                     }
                     if (sink == Sink.FlowFigure || sink == Sink.ScopeFigure) { byte(1); figure(Sink.FigureRichCaption) }
                     else { byte(0); root("root") }
+                    columnLayoutTail()
                 }
-                else -> { prefix(12); table(sink); tail() }
+                else -> { prefix(12); table(sink); tail(); columnLayoutTail() }
             }
         }
         private fun clearRule() {
-            prefix(11); byte(0); tail(); byte(2); length(1f); byte(0); repeat(4) { length() }; byte(0)
+            prefix(11); byte(0); tail(); byte(2); length(1f); byte(0); repeat(4) { length() }; byte(0); columnLayoutTail()
         }
         private fun headingStyle(extensions: Boolean) {
             u32((1 or 2 or 16 or 2048 or 4096 or 65536 or 4194304).toLong())
@@ -703,7 +727,7 @@ class RubyModelCodecTest {
                 byte(0) // table style
                 byte(if (caption) 1 else 0)
                 if (caption) { u32(1); emit(level + 1, true) }
-                if (block) tail()
+                if (block) { tail(); columnLayoutTail() }
             }
             emit(1, true)
         }
@@ -3521,6 +3545,228 @@ class RubyModelCodecTest {
             reject("Literal parent cannot lend child alignment", replace(withoutFlag, offset, offset + 1, byteArrayOf()))
             assertEquals(provedParent, read(parentBytes).sections.single().blocks.single())
         }
+    }
+
+    @Test fun columnExtension4096KeepsAutoCountCapZeroAndSourceGraphAcrossEveryContainerSink() {
+        val gap = StyleLength(StyleLengthUnit.Em, 1.25f)
+        val leaf = Span("link", "kept", "Target", targetFragment = "anchor", tooltip = "tip", explanation = "meaning",
+            fontScale = 0.5f, fontScaleBasis = FontScaleBasis.NormalBody, bold = true)
+        val owner = InlineFontSnapshot(fontScale = 1.5f, fontScaleBasis = FontScaleBasis.NormalBody, fontNormalized = true)
+        for (count in listOf<Int?>(null, 1, 65535)) for (width in listOf(StyleLength(StyleLengthUnit.Px, 0f),
+                StyleLength(StyleLengthUnit.Px, 3.25f), StyleLength(StyleLengthUnit.Em, 26f))) for (direction in listOf(null, BidiResolvedDirection.Ltr, BidiResolvedDirection.Rtl)) {
+            val columns = ContainerColumns(count, gap, width, direction)
+            val style = ContainerStyle(columns = columns, ownerFont = owner)
+            val block = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(leaf))), style))
+            assertSame(columns, style.copy(textAlign = CellTextAlign.Right).columns)
+            assertSame(width, columns.width); assertSame(gap, columns.gap)
+            assertEquals(count, columns.count); assertEquals(direction, columns.direction); assertEquals(1.5f, owner.fontScale)
+            assertEquals(0.5f, leaf.fontScale); assertSame(leaf, block.container!!.blocks.single().spans.single())
+            for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                    Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+                val wire = Wire('Z', 4097).apply { paragraphOverride = { positionedBlock(block, "columns") } }
+                val bytes = wire.document(emptyList(), sink)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 90, 1, 16), bytes.copyOf(6))
+                val decoded = read(bytes)
+                val found = mutableListOf<Container>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply {
+                    onContainer = { if (it.style.columns?.width != null) found.add(it) }
+                }
+                decoded.sections.forEach { visitor.blocks(it.blocks) }
+                decoded.references.forEach { it.blocks?.let { blocks -> visitor.blocks(blocks) } }
+                assertEquals(listOf(block.container), found)
+                assertEquals(listOf(leaf), found.single().blocks.single().spans)
+                if (sink == Sink.Body) assertEquals(Entry("Ruby", emptyList(), "language", "Japanese", "ja",
+                    listOf(Section(2, "Body", listOf(block))), emptyList(), organization = PresentationOrganization(emptyList(), emptyList())), decoded)
+            }
+        }
+        val columns = ContainerColumns(null, gap, StyleLength(StyleLengthUnit.Em, 26f))
+        val style = ContainerStyle(columns = columns, textWrap = TextWrap.Normal)
+        val block = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(leaf))), style))
+        val wire = Wire('Z', 4352).apply { paragraphOverride = { positionedBlock(block, "mixed") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        assertEquals(block, read(bytes).sections.single().blocks.single())
+        assertEquals(wire.at.getValue("mixed.style.wrap") + 1, wire.at.getValue("mixed.style.columnExtension"))
+        reject("Positioned debt remains independent", changed(bytes, 5, 16))
+        reject("Width debt remains independent", changed(bytes, 5, 1))
+        for (direction in BidiResolvedDirection.entries) {
+            val directionOnly = block.copy(container = block.container!!.copy(style = ContainerStyle(columns = ContainerColumns(2, gap, direction = direction))))
+            val directionWire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(directionOnly, "direction") } }
+            val directionBytes = directionWire.document(emptyList(), Sink.Body)
+            assertEquals(directionOnly, read(directionBytes).sections.single().blocks.single())
+            assertEquals(2, directionBytes[directionWire.at.getValue("direction.style.columnExtension")].toInt())
+            assertEquals(direction.ordinal, directionBytes[directionWire.at.getValue("direction.style.columnDirection")].toInt())
+            assertNull(read(directionBytes).sections.single().blocks.single().container!!.style.columns!!.width)
+            for (tag in listOf(2, 255)) reject("Invalid direction $tag", changed(directionBytes, directionWire.at.getValue("direction.style.columnDirection"), tag))
+            val countAt = directionWire.at.getValue("direction.style.columnCount")
+            reject("Direction alone cannot earn auto count", changed(changed(directionBytes, countAt, 0), countAt + 1, 0))
+        }
+        val empty = block.copy(container = Container(emptyList(), ContainerStyle(columns = columns)))
+        val emptyWire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(empty) } }
+        assertEquals(empty, read(emptyWire.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+    }
+
+    @Test fun columnExtension4096RejectsMalformedTailAndDebtWhileFixedCountBytesStayExact() {
+        val gap = StyleLength(StyleLengthUnit.Em, 1f)
+        val fixed = ContainerStyle(columns = ContainerColumns(2, gap))
+        val old = Wire('M').isolatedPositionedStyle(fixed)
+        assertArrayEquals(byteArrayOf(0, 0, 4, 0, 2, 0, 1, 0, 0, -128, 63), old)
+        assertArrayEquals(old, Wire('Z', 4096).isolatedPositionedStyle(fixed))
+        val widthStyle = fixed.copy(columns = fixed.columns!!.copy(width = StyleLength(StyleLengthUnit.Px, 0f)))
+        val new = Wire('Z', 4096).isolatedPositionedStyle(widthStyle)
+        assertArrayEquals(byteArrayOf(0, 0, 4, 2), new.copyOf(4))
+        assertArrayEquals(old.copyOfRange(4, old.size), new.copyOfRange(4, old.size))
+        assertArrayEquals(byteArrayOf(1, 0, 0, 0, 0, 0), new.copyOfRange(old.size, new.size))
+        invalid("Auto count requires width") { ContainerColumns(null, gap) }
+        invalid("Direction does not supply an authored count or width") { ContainerColumns(null, gap, direction = BidiResolvedDirection.Rtl) }
+        for (count in listOf(0, -1, 65536)) invalid("Invalid authored cap $count") { ContainerColumns(count, gap, StyleLength(StyleLengthUnit.Px, 0f)) }
+        val block = Block("container", 0, emptyList(), container = Container(listOf(Block("paragraph", 0, listOf(text("kept")))), widthStyle))
+        val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(block, "columns") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val key = "columns.style"
+        for (flags in listOf(0, 127, 256, 512, 4096 or 128, 4096 or 1024, 4096 or 2048, 65535)) {
+            reject("Width header $flags", bytes.copyOf().also { it[4] = flags.toByte(); it[5] = (flags ushr 8).toByte() })
+        }
+        reject("Width requires columns prefix", changed32(bytes, wire.at.getValue("$key.flags"), 0x02000000))
+        reject("Unknown style bit", changed32(bytes, wire.at.getValue("$key.flags"), 0x06040000))
+        for (mask in listOf(0, 4, 255)) reject("Invalid column extension mask $mask", changed(bytes, wire.at.getValue("$key.columnExtension"), mask))
+        for (unit in listOf(2, 255)) reject("Width is not percent or unknown $unit", changed(bytes, wire.at.getValue("$key.columnWidth.unit"), unit))
+        for (bad in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            invalid("Direct width $bad") { ContainerColumns(null, gap, StyleLength(StyleLengthUnit.Px, bad)) }
+            reject("Literal width $bad", changed32(bytes, wire.at.getValue("$key.columnWidth.value"), bad.toRawBits().toLong()))
+        }
+        for (end in bytes.indices) reject("Truncated width $end", bytes.copyOf(end))
+        reject("Trailing width bytes", bytes + byteArrayOf(0))
+        reject("Width earns no unrelated P feature", changed(bytes, wire.at.getValue("features"), 32))
+        val debt = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(block.copy(container = block.container!!.copy(style = fixed))) } }
+        reject("Width flag requires actual width", debt.document(emptyList(), Sink.Body))
+        val fixedZ = Wire('Z', 256).apply {
+            paragraphOverride = { positionedBlock(block.copy(container = block.container!!.copy(style = fixed.copy(textWrap = TextWrap.Normal))), "fixed") }
+        }
+        val fixedBytes = fixedZ.document(emptyList(), Sink.Body)
+        val countAt = fixedZ.at.getValue("fixed.style.columnCount")
+        reject("Old count zero stays invalid", changed(changed(fixedBytes, countAt, 0), countAt + 1, 0))
+        val autoBytes = changed(changed(bytes, wire.at.getValue("$key.columnCount"), 0), wire.at.getValue("$key.columnCount") + 1, 0)
+        assertNull(read(autoBytes).sections.single().blocks.single().container!!.style.columns!!.count)
+        for (style in listOf(ContainerStyle(height = StyleLength(StyleLengthUnit.Px, 1f)),
+                ContainerStyle(minHeight = StyleLength(StyleLengthUnit.Px, 0f)), ContainerStyle(layout = ContainerLayout.FlexRow),
+                ContainerStyle(overflow = ContainerOverflow.Auto), ContainerStyle(positioning = ContainerPositioning.RelativeAuto))) {
+            invalid("Width keeps shared fragmentation guard $style") { style.copy(columns = widthStyle.columns) }
+        }
+        assertEquals(block, read(bytes).sections.single().blocks.single())
+    }
+
+    @Test fun columnExtension4096SharesOriginalDepthAndExactItemBudgetWithoutScalarOwners() {
+        val source = Span("link", "budget", "Kept")
+        val style = ContainerStyle(columns = ContainerColumns(null, StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Em, 26f)))
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('Z', 4096).apply { containerStyleOverride = { positionedStyle(style, it) } }
+            val bytes = wire.document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 17) reject("Width does not reset content depth", bytes) else {
+                val found = mutableListOf<Span>()
+                PresentationSpanVisitor { spans, _ -> found.addAll(spans) }.blocks(read(bytes).sections.single().blocks)
+                assertEquals(listOf(source), found)
+            }
+        }
+        for (depth in listOf(32, 33)) {
+            var table = Table(listOf(source), emptyList())
+            repeat(depth - 1) { table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = table)))) }
+            val root = Block("container", 0, emptyList(), container = Container(listOf(Block("table", 0, emptyList(), table = table)), style))
+            val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(root) } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            if (depth == 33) reject("Width does not reset table depth", bytes) else assertEquals(root, read(bytes).sections.single().blocks.single())
+        }
+        // Section1 + Container block1 + Table block1 + real caption Span1. Width/gap/count add no owner item.
+        val rows = (1 shl 20) - 4
+        fun literal(count: Int): ByteArray {
+            val table = Table(listOf(source), java.util.Collections.nCopies(count, emptyList<Cell>()))
+            val root = Block("container", 0, emptyList(), container = Container(listOf(Block("table", 0, emptyList(), table = table)), style))
+            val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(root) } }
+            return wire.document(emptyList(), Sink.Body)
+        }
+        val exact = checkNotNull(read(literal(rows)).sections.single().blocks.single().container)
+        assertEquals(style, exact.style)
+        val table = checkNotNull(exact.blocks.single().table)
+        assertEquals(rows, table.rows.size); assertTrue(table.rows.all { it.isEmpty() })
+        assertEquals(listOf(source), table.caption); assertEquals(TableGrid(emptyList(), rows, 0), tableGrid(table))
+        reject("Width shares exact item M plus one refusal", literal(rows + 1))
+    }
+
+    @Test fun columnLayout4096RetainsPerBlockBreakPolicyAndRejectsBorrowedOwnersWithoutNewBudget() {
+        val source = Span("link", "same original item", "Kept", targetFragment = "part", tooltip = "tip", explanation = "meaning")
+        val kinds = listOf("paragraph", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term")
+        for (kind in kinds) for (policy in ColumnBreakInside.entries) {
+            val path = when (kind) { "list_item" -> "#"; "list_detail" -> "*:"; "indent" -> ":"; "term" -> ";"; else -> "" }
+            val depth = if (kind == "paragraph") 0 else if (kind == "list_detail") 2 else 1
+            val block = Block(kind, depth, listOf(source), listPath = path, number = if (kind == "list_item") "3" else "", columnBreakInside = policy)
+            assertSame(source, block.spans.single()); assertEquals(policy, block.copy(textAlign = CellTextAlign.Right).columnBreakInside)
+            for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                    Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+                val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(block, "policy") } }
+                val bytes = wire.document(emptyList(), sink)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 90, 0, 16), bytes.copyOf(6))
+                assertEquals(if (policy == ColumnBreakInside.Auto) 1 else 2, bytes[wire.at.getValue("policy.columnBreakInside")].toInt())
+                val decoded = read(bytes)
+                val found = mutableListOf<Block>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply { onBlock = { if (it.columnBreakInside != null) found.add(it) } }
+                decoded.sections.forEach { visitor.blocks(it.blocks) }
+                decoded.references.forEach { it.blocks?.let { blocks -> visitor.blocks(blocks) } }
+                assertEquals(listOf(block), found); assertEquals(listOf(source), found.single().spans)
+                if (sink == Sink.Body) {
+                    assertEquals(Entry("Ruby", emptyList(), "language", "Japanese", "ja", listOf(Section(2, "Body", listOf(block))),
+                        emptyList(), organization = PresentationOrganization(emptyList(), emptyList())), decoded)
+                    for (tag in listOf(3, 255)) reject("Unknown break policy $tag", changed(bytes, wire.at.getValue("policy.columnBreakInside"), tag))
+                    reject("4096 must have actual column layout", changed(bytes, wire.at.getValue("policy.columnBreakInside"), 0))
+                    reject("Final block policy is mandatory in4096", replace(bytes, wire.at.getValue("policy.columnBreakInside"),
+                        wire.at.getValue("policy.columnBreakInside") + 1, byteArrayOf()))
+                }
+            }
+        }
+        for (kind in listOf("blank", "heading", "preformatted", "rule", "table")) {
+            invalid("Break policy kind $kind") { Block(kind, 0, emptyList(), columnBreakInside = ColumnBreakInside.Avoid) }
+        }
+        invalid("Break policy cannot lend itself to Container") {
+            Block("container", 0, emptyList(), container = Container(emptyList()), columnBreakInside = ColumnBreakInside.Avoid)
+        }
+        invalid("Break policy cannot own a Table payload") {
+            Block("paragraph", 0, emptyList(), table = Table(emptyList(), emptyList()), columnBreakInside = ColumnBreakInside.Auto)
+        }
+        invalid("Break policy cannot own a feature payload") {
+            Block("paragraph", 0, emptyList(), feature = Feature("IPA", "ja", "x", "", ""), columnBreakInside = ColumnBreakInside.Auto)
+        }
+        invalid("Break policy cannot own anonymous flow") {
+            Block("paragraph", 0, emptyList(), flow = emptyList(), columnBreakInside = ColumnBreakInside.Auto)
+        }
+        val paragraph = Block("paragraph", 0, listOf(source), columnBreakInside = ColumnBreakInside.Avoid)
+        val nullBlock = paragraph.copy(columnBreakInside = null)
+        val oldWire = Wire('V').apply { paragraphOverride = { positionedBlock(nullBlock, "plain") } }
+        val oldBytes = oldWire.document(emptyList(), Sink.Body)
+        val newWire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(paragraph, "policy") } }
+        val newBytes = newWire.document(emptyList(), Sink.Body)
+        val end = newWire.at.getValue("policy.columnBreakInside")
+        assertArrayEquals(oldBytes, replace(newBytes.copyOfRange(0, 4).also { it[3] = 'V'.code.toByte() } +
+            newBytes.copyOfRange(6, newBytes.size), end - 2, end - 1, byteArrayOf()))
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(paragraph) } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 17) reject("Break policy preserves content17 refusal", bytes) else {
+                val found = mutableListOf<Block>()
+                PresentationSpanVisitor { _, _ -> }.apply { onBlock = { if (it.columnBreakInside != null) found.add(it) } }
+                    .blocks(read(bytes).sections.single().blocks)
+                assertEquals(listOf(paragraph), found)
+            }
+        }
+        // Section1 + Container block1 + policy paragraph1 + original Span1 + Table block1.
+        val rows = (1 shl 20) - 5
+        fun literal(count: Int): ByteArray {
+            val table = Table(emptyList(), java.util.Collections.nCopies(count, emptyList<Cell>()))
+            val root = Block("container", 0, emptyList(), container = Container(listOf(paragraph, Block("table", 0, emptyList(), table = table))))
+            val wire = Wire('Z', 4096).apply { paragraphOverride = { positionedBlock(root) } }
+            return wire.document(emptyList(), Sink.Body)
+        }
+        val exact = checkNotNull(read(literal(rows)).sections.single().blocks.single().container)
+        assertEquals(paragraph, exact.blocks.first()); assertNull(exact.style.columns)
+        assertEquals(rows, exact.blocks.last().table!!.rows.size)
+        reject("Break policy has no extra scalar item at M plus one", literal(rows + 1))
     }
 
 }

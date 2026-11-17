@@ -114,6 +114,7 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
     internal abstract fun nativeReplacementOrigin(offset: Int): Pair<Float, Float>
     internal abstract fun nativeInlineActionFragments(start: Int, end: Int): List<NativeInlineActionFragment>
 
+    internal open val nativeRubyExactAdvances: Boolean get() = false
     internal open val nativeRubyRaw: NativeFloatGeometry get() = this
     internal open val nativeRubyColumns: List<NativeRubyPiece.Column> get() = emptyList()
     internal open val nativeRubyCollapsedText: List<NativeRubyPiece.Text> get() = emptyList()
@@ -164,17 +165,51 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
             rubyProbe: Boolean = false,
             inlineBoxProbe: Boolean = false,
             exactAvailableWidth: Float? = null,
-        ): NativeFloatGeometry = if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source)) {
+            exactParagraphInsets: Boolean = false,
+        ): NativeFloatGeometry = if (exactParagraphInsets && exactAvailableWidth == null) {
+            throw UnsupportedFloatLayout("Exact paragraph gutters require an exact width without floats")
+        } else if (exactParagraphInsets && source.isEmpty() &&
+            source.getSpans(0, 0, NativeRubyPreparedSource::class.java).isNotEmpty()) {
+            // A real source-empty rich owner has no fitting decisions. Keep its original
+            // compiler/metrics and move its native zero-advance row to the exact lane.
+            val exact = checkNotNull(exactAvailableWidth)
+            if (!exact.isFinite() || exact < 0f || exact > TablePixelLimit || floor(exact).toInt() != width ||
+                occurrences.isNotEmpty() || carriedExclusions.isNotEmpty())
+                throw UnsupportedFloatLayout("Exact empty column lane requires an exact width without floats")
+            fun gutter(first: Float, extra: Float): Float {
+                val value = first.toDouble() + extra
+                if (!value.isFinite() || value > TablePixelLimit)
+                    throw UnsupportedFloatLayout("Exact paragraph gutter exceeds native geometry")
+                return value.toFloat()
+            }
+            val left = gutter(insets.left, insets.extraLeft)
+            val right = left + maxOf(0.0, exact.toDouble() - left - gutter(insets.right, insets.extraRight)).toFloat()
+            val shaped = NativeStaticFloatGeometry.build(source, paint, width, emptyList(), alignment, textDirection,
+                lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary,
+                usedLineMetrics = usedLineMetrics, includeFontPadding = includeFontPadding,
+                rubyProbe = rubyProbe, inlineBoxProbe = inlineBoxProbe)
+            shaped.withEmptyColumnLane(left, right, nodeFactory, decoration, decorationBounds)
+        } else if (exactAvailableWidth != null &&
+            source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty()) {
+            if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() || usedLineMetrics != null ||
+                nativeHasPositionedInlineImages(source))
+                throw UnsupportedFloatLayout("Exact rich rows require source-owned metrics without floats or positioned images")
+            nativeRubyFloatGeometry(source, paint, width, exactAvailableWidth, alignment, textDirection,
+                lineSpacingExtra, lineSpacingMultiplier, insets, includeFontPadding, exactParagraphInsets,
+                nodeFactory, decoration, decorationBounds)
+        } else if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source)) {
             NativeFloatRowGeometry.build(source, paint, width, occurrences, alignment, textDirection,
                 lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
                 nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
-                exactAvailableWidth)
+                exactAvailableWidth, exactParagraphInsets)
         } else NativeStaticFloatGeometry.build(source, paint, width, occurrences, alignment, textDirection,
             lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
             nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,
             rubyProbe, inlineBoxProbe)
     }
 }
+
+private data class NativeEmptyColumnLane(val left: Float, val right: Float, val anchor: Float, val shift: Float)
 
 private class NativeStaticFloatGeometry private constructor(
     override val text: CharSequence,
@@ -187,6 +222,7 @@ private class NativeStaticFloatGeometry private constructor(
     private val lineOrigins: FloatArray? = null,
     private val ruby: NativeRubyPlacedProjection? = null,
     private val inlineBox: NativeInlineBoxGeometry? = null,
+    private val emptyColumnLane: NativeEmptyColumnLane? = null,
 ) : NativeFloatGeometry() {
     override val floats: List<PlacedNativeFloat> get() = ruby?.floats ?: flow.floats
     /** Includes inherited margin boxes; only [floats] belong to this segment's paint/nodes. */
@@ -216,6 +252,10 @@ private class NativeStaticFloatGeometry private constructor(
     }
     override fun firstLineBand(): RectF {
         val line = flow.baselines.indices.firstOrNull(::linePresent) ?: return RectF()
+        emptyColumnLane?.let { lane ->
+            val column = lineOrigins?.get(line) ?: 0f
+            return RectF(lane.left + column, flow.tops[line], lane.right + column, flow.bottoms[line])
+        }
         return RectF(flow.left[line] + originX(line), flow.tops[line], width - flow.right[line] + originX(line), flow.bottoms[line])
     }
 
@@ -341,7 +381,7 @@ private class NativeStaticFloatGeometry private constructor(
         inlineBox?.let { return it.caretRect(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
-        val x = if (!citationFit) layout.getPrimaryHorizontal(offset) + originX(line) else
+        val x = if (!citationFit && emptyColumnLane == null) layout.getPrimaryHorizontal(offset) + originX(line) else
             linePainter.caretHorizontalOnLine(line, offset, NativeLinePaintPlacement(line,
                 flow.baselines[line], flow.left[line], flow.right[line], originX(line)))
         if (!linePresent(line)) return RectF(x, flow.tops[line], x, flow.tops[line])
@@ -594,7 +634,7 @@ private class NativeStaticFloatGeometry private constructor(
         return low
     }
 
-    private fun originX(line: Int): Float = lineOrigins?.get(line) ?: 0f
+    private fun originX(line: Int): Float = (lineOrigins?.get(line) ?: 0f) + (emptyColumnLane?.shift ?: 0f)
     internal override val hasColumnFragments: Boolean get() = lineOrigins != null
     internal override fun distanceForPosition(x: Float, y: Float): Double = ruby?.distance(x, y) ?: (0 until layout.lineCount).filter(::linePresent).minOfOrNull { line ->
         val box = selectableLineBounds[line] ?: RectF(originX(line), flow.tops[line],
@@ -629,7 +669,8 @@ private class NativeStaticFloatGeometry private constructor(
         }
         return NativeStaticFloatGeometry(text, width, layout,
             flow.copy(tops = tops, bottoms = bottoms, baselines = baselines,
-                bottom = bottoms.maxOrNull() ?: 0f), nodeFactory, decoration, decorationBounds, xs)
+                bottom = bottoms.maxOrNull() ?: 0f), nodeFactory, decoration, decorationBounds, xs,
+            emptyColumnLane = emptyColumnLane)
     }
 
     /** Ruby keeps this native view private; all public owner queries use original UTF-16. */
@@ -852,7 +893,8 @@ private class NativeStaticFloatGeometry private constructor(
                 flow.baselines[line] - layout.getLineBaseline(line))
         }
     }
-    internal override fun nativeLineAvailableWidth(line: Int): Float = width - flow.left[line].toFloat() - flow.right[line]
+    internal override fun nativeLineAvailableWidth(line: Int): Float = emptyColumnLane?.let { it.right - it.left }
+        ?: (width - flow.left[line].toFloat() - flow.right[line])
     internal override fun nativeSingleLineAdvance(): Float {
         check(layout.lineCount == 1)
         return nativeLineAdvance(0)
@@ -871,6 +913,7 @@ private class NativeStaticFloatGeometry private constructor(
     }
     internal override fun nativeReplacementOrigin(offset: Int): Pair<Float, Float> {
         val line = layout.getLineForOffset(offset)
+        emptyColumnLane?.let { return (it.anchor + (lineOrigins?.get(line) ?: 0f)) to flow.baselines[line] }
         val path = linePainter.selectionPathForRange(line, offset, offset + 1)
         val bounds = RectF().also { path.computeBounds(it, true) }
         return (bounds.left + linePainter.horizontalShift(NativeLinePaintPlacement(line,
@@ -882,7 +925,39 @@ private class NativeStaticFloatGeometry private constructor(
         paintBounds: (NativeFloatGeometry) -> NativeFloatBounds?): NativeFloatGeometry {
         check(ruby == null && text.toString() == compiled.native.toString())
         return NativeStaticFloatGeometry(compiled.source, width, layout, flow, nodes, paintDecoration,
-            paintBounds, lineOrigins, compiled.placed(this))
+            paintBounds, lineOrigins, compiled.placed(this), emptyColumnLane = emptyColumnLane)
+    }
+
+    /** Only a genuine public-empty owner may adjust a zero-advance native row.
+     * The original compiled source, declaring metrics and native Y remain intact. */
+    internal fun withEmptyColumnLane(left: Float, right: Float,
+        nodes: (NativeFloatGeometry) -> List<FloatInteractionNode>,
+        paintDecoration: (Canvas, NativeFloatGeometry) -> Unit,
+        paintBounds: (NativeFloatGeometry) -> NativeFloatBounds?): NativeStaticFloatGeometry {
+        val projected = ruby
+        val owners = (text as Spanned).getSpans(0, text.length, NativeRubyPreparedSource::class.java)
+        val actualOwner = owners.any { owner -> owner.projection.ranges.any {
+            it.start == 0 && it.end == 0 && it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup)
+        } }
+        val raw = projected?.raw as? NativeStaticFloatGeometry
+        if (text.isNotEmpty() || !actualOwner || raw == null || layout.lineCount != 1 || !linePresent(0) ||
+            floats.isNotEmpty() || exclusions.isNotEmpty() || lineOrigins != null || emptyColumnLane != null ||
+            inlineBox != null || raw.inlineBox != null || layout.getLineWidth(0) != 0f || layout.getLineMax(0) != 0f ||
+            nativeRubyColumns.any { it.column.advance != 0f } ||
+            !left.isFinite() || !right.isFinite() || left < 0f || right < left || right > TablePixelLimit)
+            throw UnsupportedFloatLayout("Exact empty column lane requires a source-empty zero-advance owner")
+        val ltr = layout.getParagraphDirection(0) == 1
+        val anchor = when (layout.getParagraphAlignment(0)) {
+            Layout.Alignment.ALIGN_NORMAL -> if (ltr) left else right
+            Layout.Alignment.ALIGN_OPPOSITE -> if (ltr) right else left
+            Layout.Alignment.ALIGN_CENTER -> left + (right - left) / 2f
+            else -> throw UnsupportedFloatLayout("Exact empty column alignment is unavailable")
+        }
+        val oldAnchor = raw.linePainter.caretHorizontalOnLine(0, layout.getLineStart(0), raw.linePaintPositions[0])
+        val lane = NativeEmptyColumnLane(left, right, anchor, anchor - oldAnchor)
+        val placedRaw = NativeStaticFloatGeometry(raw.text, raw.width, raw.layout, raw.flow,
+            { emptyList() }, { _, _ -> }, { null }, emptyColumnLane = lane)
+        return placedRaw.withRubyProjection(checkNotNull(projected).compiled, nodes, paintDecoration, paintBounds) as NativeStaticFloatGeometry
     }
 
     companion object {

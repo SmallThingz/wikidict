@@ -91,7 +91,8 @@ internal fun rememberNativeTableCoordinateBinding(): NativeTableCoordinateBindin
 
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
-        val box: ParagraphBox? = null) : NativeFloatContextSpec
+        val box: ParagraphBox? = null,
+        val columnBreakInside: ColumnBreakInside? = null) : NativeFloatContextSpec
     data class Rule(val id: Int, val metrics: NativeRuleMetrics) : NativeFloatContextSpec
     data class Flow(val id: Int, val gapAfter: Float, val path: String?, val box: ParagraphBox?,
         val empty: Boolean,
@@ -123,6 +124,8 @@ internal sealed interface NativeFloatContextSpec {
         val absolutePosition: NativeAbsolutePosition? = null,
         val absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
         val absoluteStatic: NativeAbsoluteStaticPosition? = null,
+        val columnClearEvent: Boolean = false,
+        val columnContentWidths: (() -> ContainerWidths)? = null,
         val content: @Composable () -> Unit,
     ) : NativeFloatContextSpec
     /** width is the existing renderer's actual viewport allocation at the ORIGINAL parent width. */
@@ -424,6 +427,7 @@ internal fun NativeFloatContextLayout(
                             }
                             is NativeFloatContextSpec.Rule -> part.metrics.intrinsic().let { if (maximum) it.maximum else it.minimum }
                             is NativeFloatContextSpec.Container -> part.intrinsicWidth(
+                                if (part.columnContentWidths != null) 0 else
                                 (part.preparedParts ?: part.scrollport?.takeIf { it.positioned != null }?.parts)?.let {
                                     intrinsicWidthOf(measurables, maximum, it, part.row != null, structural || part.scrollport != null)
                                 } ?: childWidths[index] ?: throw UnsupportedFloatLayout("Positioned scope intrinsic child is unavailable"), maximum)
@@ -561,7 +565,8 @@ internal fun NativeFloatContextLayout(
                                 NativeFloatContextPart.Text(source,
                                     { available, carried -> part.prepared.geometry!!(available, carried, false) },
                                     part.gapAfter, part.box, part.prepared.emptyInlineOwner,
-                                    part.prepared.geometryAtWidth?.let { exact -> { available, carried -> exact(available, carried, false) } })
+                                    part.prepared.geometryAtWidth?.let { exact -> { available, carried -> exact(available, carried, false) } },
+                                    part.prepared.geometryForColumns, part.columnBreakInside)
                             }
                             is NativeFloatContextSpec.Rule -> NativeFloatContextPart.Rule(part.id, part.metrics, available)
                             is NativeFloatContextSpec.Flow -> NativeFloatContextPart.Flow(part.id, { available, carried ->
@@ -584,15 +589,16 @@ internal fun NativeFloatContextLayout(
                                 val nested = part.preparedParts
                                 val measurable = if (nested == null) childMeasurables.getValue(index) else null
                                 val scopeParts = part.scrollport?.takeIf { it.positioned != null }?.parts
-                                val minimum = if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, false, scopeParts, structural = true)
+                                val exactColumnWidths = part.columnContentWidths?.invoke()
+                                val minimum = if (exactColumnWidths != null) 0 else if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, false, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.minIntrinsicWidth(Constraints.Infinity)
                                     else intrinsicWidthOf(measurables, false, nested, part.row != null)
-                                val maximum = if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, true, scopeParts, structural = true)
+                                val maximum = if (exactColumnWidths != null) 0 else if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, true, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.maxIntrinsicWidth(Constraints.Infinity)
                                     else intrinsicWidthOf(measurables, true, nested, part.row != null)
                                 if (minimum > TablePixelLimit || maximum < minimum || maximum > TablePixelLimit)
                                     throw UnsupportedFloatLayout("Container intrinsic width exceeds the native range")
-                                val intrinsic = ContainerWidths(minimum.toFloat(), maximum.toFloat())
+                                val intrinsic = exactColumnWidths ?: ContainerWidths(minimum.toFloat(), maximum.toFloat())
                                 val forced = allocations?.get(itemIndex)
                                 val allocated = if (part.absoluteStatic != null) floor(available).toInt()
                                     else forced?.let { floor(it.width).toInt() } ?: part.contentWidth(containingWidth, intrinsic)
@@ -645,7 +651,8 @@ internal fun NativeFloatContextLayout(
                                     part.fixedContentHeight, part.columns, part.minimum, part.headingAllocation,
                                     part.absolute, part.scrollport?.positioned != null, part.absolutePosition, part.absoluteContainingBlock,
                                     part.absoluteStatic, if (part.absoluteStatic == null) null else
-                                        (nested?.singleOrNull() as? NativeFloatContextSpec.Text)?.prepared?.native)
+                                        (nested?.singleOrNull() as? NativeFloatContextSpec.Text)?.prepared?.native,
+                                    part.columnClearEvent)
                             }
                             is NativeFloatContextSpec.Child -> {
                                 val minimumFloor = part.minimumWidth(containingWidth)?.let { value ->

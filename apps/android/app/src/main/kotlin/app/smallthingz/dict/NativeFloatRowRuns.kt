@@ -50,6 +50,7 @@ internal data class NativeFloatRunMetric(
     val paint: TextPaint,
     val shift: Float,
     val image: NativeFloatInlineImage?,
+    val column: NativeRubyColumn? = null,
 )
 
 internal data class NativeFloatRunPaintSlice(
@@ -76,7 +77,8 @@ internal class NativeFloatGlyphRun internal constructor(
     val natural: NativeUsedLineMetrics,
     val paddedNatural: NativeUsedLineMetrics,
 ) {
-    private val slices = if (image == null) owner.paintSlices(start, end) else emptyList()
+    val column: NativeRubyColumn? get() = metric.column
+    private val slices = if (image == null && column == null) owner.paintSlices(start, end) else emptyList()
     private val glyphBatches: List<GlyphBatch> = buildList {
         val value = glyphs ?: return@buildList
         var first = 0
@@ -111,14 +113,14 @@ internal class NativeFloatGlyphRun internal constructor(
     /** Logical advance from start; the caller mirrors this for a physical RTL run. */
     fun advanceTo(offset: Int): Float {
         require(offset in start..end)
-        if (image != null) return if (offset == start) 0f else advance
+        if (image != null || column != null) return if (offset == start) 0f else advance
         return floatRunCoordinate(metric.paint.getRunAdvance(owner.source, start, end,
             contextStart, contextEnd, rtl, offset).toDouble())
     }
 
     fun offsetForAdvance(value: Float): Int {
         require(value.isFinite())
-        if (image != null) return if (value <= advance / 2f) start else end
+        if (image != null || column != null) return if (value <= advance / 2f) start else end
         return metric.paint.getOffsetForAdvance(owner.source, start, end, contextStart, contextEnd,
             rtl, value.coerceIn(0f, advance)).coerceIn(start, end)
     }
@@ -126,7 +128,7 @@ internal class NativeFloatGlyphRun internal constructor(
     /** Logical before/after, independent of physical run direction. */
     fun cursor(offset: Int, after: Boolean): Int {
         require(offset in start..end)
-        if (image != null) return if (after) end else start
+        if (image != null || column != null) return if (after) end else start
         val next = metric.paint.getTextRunCursor(owner.source, contextStart, contextEnd, rtl, offset,
             if (after) Paint.CURSOR_AFTER else Paint.CURSOR_BEFORE)
         return if (next < 0) { if (after) end else start } else next.coerceIn(start, end)
@@ -143,7 +145,7 @@ internal class NativeFloatGlyphRun internal constructor(
     /** naturalTop/naturalBottom are relative to the supplied flow baseline.
      * Android character backgrounds stay on that unshifted line band. */
     fun paintBackground(canvas: Canvas, x: Float, baseline: Float, naturalTop: Float, naturalBottom: Float) {
-        if (!visible || image != null) return
+        if (!visible || image != null || column != null) return
         data class Background(val left: Float, val right: Float, val color: Int, val antiAlias: Boolean, val dither: Boolean)
         val fragments = mutableListOf<Background>()
         for (slice in slices) {
@@ -169,11 +171,45 @@ internal class NativeFloatGlyphRun internal constructor(
     }
 
     fun paintGlyphs(canvas: Canvas, x: Float, baseline: Float) {
-        if (!visible || image != null) return
+        if (!visible || image != null || column != null) return
         for (slice in slices) {
             val paint = owner.livePaint(slice.start, slice.end, metric)
             val (left, right) = sliceBounds(slice)
             if (right <= left) continue
+            paint.isUnderlineText = false
+            paint.isStrikeThruText = false
+            if (canvas is NativeRubyGlyphCanvas) {
+                canvas.paintRubyGlyphRun(owner.source, slice.start, slice.end, contextStart, contextEnd,
+                    x + left, baseline + metric.shift, rtl, paint) { target, a, b, shape, px, py ->
+                    val save = target.save()
+                    try {
+                        // Keep only the original foreground-slice clips. Distribution
+                        // boundaries retain each certified glyph's outside ink.
+                        val clipLeft = (if (rtl) b == slice.end else a == slice.start) && left != 0f
+                        val clipRight = (if (rtl) a == slice.start else b == slice.end) && right != advance
+                        target.clipRect(if (clipLeft) px else -TablePixelLimit.toFloat(),
+                            -TablePixelLimit.toFloat(),
+                            if (clipRight) px + shape.advance else TablePixelLimit.toFloat(),
+                            TablePixelLimit.toFloat())
+                        target.translate(px, py)
+                        var first = 0
+                        while (first < shape.glyphs.size) {
+                            val font = shape.glyphs[first].font as? Font
+                                ?: throw UnsupportedFloatLayout("Ruby piece lost its actual native font")
+                            var last = first + 1
+                            while (last < shape.glyphs.size && shape.glyphs[last].font == font) last++
+                            val ids = IntArray(last - first) { shape.glyphs[first + it].id }
+                            val positions = FloatArray((last - first) * 2) { index ->
+                                val glyph = shape.glyphs[first + index / 2]
+                                if (index % 2 == 0) glyph.x else glyph.y
+                            }
+                            target.drawGlyphs(ids, 0, positions, 0, ids.size, font, paint)
+                            first = last
+                        }
+                    } finally { target.restoreToCount(save) }
+                }
+                continue
+            }
             // Do not clip the actual outside overhang of the first/last glyph.
             val clipLeft = if (left == 0f) -TablePixelLimit.toFloat() else x + left
             val clipRight = if (right == advance) TablePixelLimit.toFloat() else x + right
@@ -190,7 +226,7 @@ internal class NativeFloatGlyphRun internal constructor(
     }
 
     fun paintDecorations(canvas: Canvas, x: Float, baseline: Float) {
-        if (!visible || image != null) return
+        if (!visible || image != null || column != null) return
         for (slice in slices) {
             val paint = owner.livePaint(slice.start, slice.end, metric)
             decorations(slice, paint, x, baseline, reserve = false).forEach { it.paint(canvas) }
@@ -221,7 +257,7 @@ internal class NativeFloatGlyphRun internal constructor(
     /** Potential ordinary ink, including a live state's possible native underline.
      * The positioned image has a separate caller-owned phase and bounds. */
     fun paintBounds(x: Float, baseline: Float, naturalTop: Float, naturalBottom: Float): NativeFloatBounds? {
-        if (!visible || image != null) return null
+        if (!visible || image != null || column != null) return null
         var result: NativeFloatBounds? = null
         fun include(rect: RectF) {
             if (rect.isEmpty) return
@@ -274,7 +310,7 @@ internal class NativeFloatRowRuns(source: Spanned, paint: TextPaint, private val
             throw UnsupportedFloatLayout("Float row custom paragraph effects are unavailable")
         }
         val replacements = nativeInlineRanges(this.source, ReplacementSpan::class.java)
-        if (replacements.any { it.value !is NativeFloatInlineImage || it.end != it.start + 1 ||
+        if (replacements.any { (it.value !is NativeFloatInlineImage && it.value !is NativeRubyColumn) || it.end != it.start + 1 ||
                 it.start !in this.source.indices || this.source[it.start] != '\uFFFC' } ||
             replacements.sortedBy { it.start }.zipWithNext().any { (a, b) -> a.end > b.start })
             throw UnsupportedFloatLayout("Float row replacement is not an owned inline image")
@@ -295,7 +331,8 @@ internal class NativeFloatRowRuns(source: Spanned, paint: TextPaint, private val
             validatePaint(metricPaint)
             val shift = authoredShift(start, end) ?: metricPaint.baselineShift.toFloat()
             val image = replacements.singleOrNull { it.start == start && it.end == end }?.value as? NativeFloatInlineImage
-            val next = NativeFloatRunMetric(start, end, metricPaint, shift, image)
+            val column = replacements.singleOrNull { it.start == start && it.end == end }?.value as? NativeRubyColumn
+            val next = NativeFloatRunMetric(start, end, metricPaint, shift, image, column)
             // Even equal paints retain an original metric-span boundary: it is a
             // native shaping-context cut. Only draw-only styles remain unsplit.
             resolved += next
@@ -332,7 +369,11 @@ internal class NativeFloatRowRuns(source: Spanned, paint: TextPaint, private val
                 if (bidi.getLevelAt(probe - start) != level) { last = probe; break }
                 probe++
             }
-            if (metric.image != null) {
+            if (metric.column != null) {
+                if (first != metric.start || last != metric.end)
+                    throw UnsupportedFloatLayout("Float row bidi split a ruby column")
+                builder.appendReplacementRun(metric.paint, last - first, metric.column.advance)
+            } else if (metric.image != null) {
                 if (first != metric.start || last != metric.end)
                     throw UnsupportedFloatLayout("Float row bidi split an inline image")
                 builder.appendReplacementRun(metric.paint, last - first, imageRow(metric.image).advance)
@@ -381,6 +422,13 @@ internal class NativeFloatRowRuns(source: Spanned, paint: TextPaint, private val
 
     private fun shape(start: Int, end: Int, contextStart: Int, contextEnd: Int, rtl: Boolean,
         visible: Boolean, metric: NativeFloatRunMetric): NativeFloatGlyphRun {
+        if (metric.column != null) {
+            if (start != metric.start || end != metric.end)
+                throw UnsupportedFloatLayout("Float row cut a ruby column")
+            val natural = metric.column.base
+            return NativeFloatGlyphRun(this, start, end, contextStart, contextEnd, rtl, visible, metric,
+                null, null, metric.column.advance, natural, natural)
+        }
         val image = metric.image
         if (image != null) {
             val fm = metric.paint.fontMetrics

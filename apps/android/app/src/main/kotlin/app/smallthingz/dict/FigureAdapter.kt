@@ -556,6 +556,7 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
                 inheritedCellContext.resolvedLineHeight != null }) ?: inheritedCellContext
         FigureChildLayout(natural, sink, metricsInput = selectedMetrics, tableMetrics = tablePrepared.getOrThrow(), caption = { captionSink ->
           CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
+              LocalNativeColumnTextDirection provides null,
               LocalNativeContainerTextContext provides captionCellContext,
               LocalCellWeight provides (if (inheritedCellContext?.cellText != null) style.fontWeight else LocalCellWeight.current),
               LocalFigureCaptionLinkScope provides captionLinkScope,

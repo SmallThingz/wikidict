@@ -1612,7 +1612,12 @@ class NativeRubyGeometryDeviceTest {
             val part = NativeFloatContextPart.Text(source, { width, exclusions ->
                 builds++
                 shape(source, width, exclusions)
-            }, box = emptyBox)
+            }, box = emptyBox, buildInColumns = { exact ->
+                builds++
+                NativeFloatGeometry.build(source, root, kotlin.math.floor(exact).toInt(), emptyList(),
+                    textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = exact,
+                    exactParagraphInsets = true)
+            })
             assertSame(source, part.text)
             assertFalse(checkNotNull(NativeFloatContextGeometry.adjoiningProfile(part)).through)
             for (adjoining in listOf(false, true)) {
@@ -1641,6 +1646,64 @@ class NativeRubyGeometryDeviceTest {
             assertEquals(expectedHeight, columnChild.geometry.extents.usedHeight, .001f)
             assertEquals(3, builds)
         }
+
+        // Column width and fixed gutters stay fractional even for a genuine empty
+        // owner. A native zero-advance row has an alignment point, not a fake glyph.
+        val exactWidth = 160.875f
+        val exactInsets = NativeTextInsets(3.125f, 1.25f, .25f, .125f)
+        val laneLeft = 3.375f
+        val laneRight = 159.5f
+        for (source in listOf(rubySource, metricSource)) for (rtl in listOf(false, true))
+            for (alignment in listOf(android.text.Layout.Alignment.ALIGN_NORMAL, android.text.Layout.Alignment.ALIGN_CENTER,
+                android.text.Layout.Alignment.ALIGN_OPPOSITE)) {
+                val expectedX = when (alignment) {
+                    android.text.Layout.Alignment.ALIGN_NORMAL -> if (rtl) laneRight else laneLeft
+                    android.text.Layout.Alignment.ALIGN_OPPOSITE -> if (rtl) laneLeft else laneRight
+                    else -> 81.4375f
+                }
+                val expectedHeight = if (source === rubySource) rubyHeight else usedHeight
+                var nodeBuilds = 0
+                var paints = 0
+                val exact = NativeFloatGeometry.build(source, root, 160, emptyList(), alignment = alignment,
+                    textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                    insets = exactInsets, exactAvailableWidth = exactWidth, exactParagraphInsets = true,
+                    nodeFactory = { nodeBuilds++; emptyList() }, decoration = { _, _ -> paints++ })
+                assertEquals(1, nodeBuilds)
+                emptyPublicGeometry(exact)
+                assertEquals(1, exact.shapedLineCount)
+                assertEquals(expectedHeight, exact.usedLineHeight(0), .001f)
+                assertEquals(shape(source).textBaselines, exact.textBaselines)
+                assertEquals(expectedX, exact.caretRect(0).left, .001f)
+                assertEquals(expectedX, checkNotNull(exact.nativeRubyLineCaret(0, 0)).left, .001f)
+                assertEquals(laneLeft, exact.firstLineBand().left, 0f)
+                assertEquals(laneRight, exact.firstLineBand().right, 0f)
+                assertEquals(laneRight - laneLeft, exact.nativeLineAvailableWidth(0), 0f)
+                if (source === rubySource) {
+                    assertEquals(0f, exact.nativeRubyColumns.single().column.advance, 0f)
+                    assertEquals(usedHeight, exact.nativeRubyColumns.single().column.base.height, .001f)
+                }
+                val origin = 17.375f to 9.625f
+                val mapped = exact.inColumns(listOf(origin))
+                assertEquals(2, nodeBuilds)
+                emptyPublicGeometry(mapped)
+                assertEquals(expectedX + origin.first, mapped.caretRect(0).left, .001f)
+                assertEquals(laneLeft + origin.first, mapped.firstLineBand().left, .001f)
+                assertEquals(laneRight + origin.first, mapped.firstLineBand().right, .001f)
+                assertEquals(expectedHeight, mapped.usedLineHeight(0), .001f)
+                assertEquals(exact.nativeRubyLineBaseline(0) + origin.second - exact.nativeRubyLineTop(0),
+                    mapped.nativeRubyLineBaseline(0), .001f)
+                assertEquals(0, mapped.offsetForPosition(expectedX + origin.first, mapped.caretRect(0).centerY()))
+                val bitmap = Bitmap.createBitmap(200, ceil(expectedHeight.toDouble()).toInt() + 24, Bitmap.Config.ARGB_8888)
+                try {
+                    mapped.paint(Canvas(bitmap))
+                    assertEquals(1, paints)
+                    for (y in 0 until bitmap.height) for (x in 0 until bitmap.width)
+                        assertEquals(0, Color.alpha(bitmap.getPixel(x, y)))
+                } finally { bitmap.recycle() }
+                assertEquals("", source.toString())
+            }
+        assertSame(originalRuby, prepared.projection.ranges.single { it.role == RubyTextRole.Owner }.span)
+        assertSame(originalBase, prepared.projection.ranges.single { it.role == RubyTextRole.Base }.base)
         // Plain empty boxes still skip shaping; no invented default strut is admitted.
         var plainBuilds = 0
         val plain = NativeFloatContextPart.Text(plainSource, { width, exclusions ->
@@ -2524,6 +2587,56 @@ class NativeRubyGeometryDeviceTest {
             val bitmap = image(geometry)
             try { assertEquals(0, owned(bitmap, blue = true)); assertEquals(0, owned(bitmap, green = true)) }
             finally { bitmap.recycle() }
+
+            // The original action occurrence's empty band follows the fractional
+            // paragraph lane, including after column redistribution. Its source and
+            // callback stay the same, and it never becomes positive hit geometry.
+            for (rtl in listOf(false, true)) for (alignment in listOf(android.text.Layout.Alignment.ALIGN_NORMAL,
+                android.text.Layout.Alignment.ALIGN_CENTER, android.text.Layout.Alignment.ALIGN_OPPOSITE)) {
+                val exactCase = make(owner, rtl = rtl, noWrap = noWrap)
+                var nodeBuilds = 0
+                val exact = NativeFloatGeometry.build(exactCase.source, exactCase.root, 80, emptyList(),
+                    alignment = alignment, textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+                    insets = NativeTextInsets(3.125f, 1.25f, .25f, .125f),
+                    exactAvailableWidth = 80.875f, exactParagraphInsets = true,
+                    nodeFactory = { actual ->
+                        nodeBuilds++
+                        val boxes = checkNotNull(actual.inlineActionGroupRects(exactCase.key, 0, 0))
+                        listOf(FloatInteractionNode(19, FloatInteractionKind.LINK, 0, 0, boxes, "", null,
+                            exactCase.callback, missingLinkPaint = exactCase.state))
+                    })
+                val expectedX = when (alignment) {
+                    android.text.Layout.Alignment.ALIGN_NORMAL -> if (rtl) 79.5f else 3.375f
+                    android.text.Layout.Alignment.ALIGN_OPPOSITE -> if (rtl) 3.375f else 79.5f
+                    else -> 41.4375f
+                }
+                assertEquals(1, nodeBuilds)
+                val exactBand = verify(exactCase, exact).single()
+                assertEquals(expectedX, exactBand.left, .001f)
+                assertEquals(expectedX, exactBand.right, .001f)
+                assertEquals(expectedX, exact.caretRect(0).left, .001f)
+                assertEquals(3.375f, exact.firstLineBand().left, 0f)
+                assertEquals(79.5f, exact.firstLineBand().right, 0f)
+                assertEquals(geometry.nativeUsedLineMetrics(0), exact.nativeUsedLineMetrics(0))
+                assertEquals(band.top, exactBand.top, .001f)
+                assertEquals(band.bottom, exactBand.bottom, .001f)
+                assertFalse(exact.containsInteraction(exactBand.left, exactBand.centerY()))
+                assertNull(exact.cursorAt(exactBand.left, exactBand.centerY()))
+                val origin = 11.375f to 6.625f
+                val mapped = exact.inColumns(listOf(origin))
+                assertEquals(2, nodeBuilds)
+                val placed = verify(exactCase, mapped).single()
+                assertEquals(expectedX + origin.first, placed.left, .001f)
+                assertEquals(placed.left, placed.right, 0f)
+                assertEquals(exactBand.top + origin.second - exact.nativeRubyLineTop(0), placed.top, .001f)
+                assertEquals(exactBand.bottom + origin.second - exact.nativeRubyLineTop(0), placed.bottom, .001f)
+                assertFalse(mapped.nodes.single().contains(placed.left, placed.centerY()))
+                assertNull(mapped.cursorAt(placed.left, placed.centerY()))
+                assertTrue(mapped.rectsForRange(0, 0).isEmpty())
+                assertTrue(mapped.characterRects(0, 0).isEmpty())
+                assertSame(owner, exactCase.key.span)
+                assertEquals("", exactCase.prepared.source.toString())
+            }
         }
 
         // An empty child's numeric baseline affects its own point metrics, never the
@@ -3984,5 +4097,278 @@ class NativeRubyGeometryDeviceTest {
         val recovered = normalWord.build(512.5f, emptyList(), false, android.text.Layout.Alignment.ALIGN_NORMAL)
         ownSource(normalWord, recovered)
         assertEquals(1, recovered.shapedLineCount)
+    }
+
+    @Test fun exactFloatRubyColumnsRetainNativeAdvancesReadingsAndOriginalQueries() {
+        var calls = 0
+        fun fixture(scale: Float): Fixture {
+            fun one(target: String) = ruby(listOf(base(listOf(leaf("漢", target, scale = scale)),
+                context(scale))), listOf(reading(listOf(leaf("かん", scale = scale * .5f, color = "#ff0000")),
+                owner = context(scale * .5f))))
+            return prepare(listOf(one("first"), one("second")), onAction = { calls++ })
+        }
+        val values = listOf(.731f, .817f, .923f, 1.013f).map(::fixture)
+        val pair = values.map { value -> value to checkNotNull(nativeRubyLayout(value.source, value.body,
+            TextDirectionHeuristics.LTR, exactAdvances = true)) }.first { (_, compiled) ->
+            val columns = compiled.pieces.filterIsInstance<NativeRubyPiece.Column>()
+            columns.size == 2 && columns.sumOf { it.column.reserved.toDouble() - it.column.advance } > .2
+        }
+        val fixture = pair.first
+        val compiled = pair.second
+        val columns = compiled.pieces.filterIsInstance<NativeRubyPiece.Column>()
+        val sum = columns.sumOf { it.column.advance.toDouble() }.toFloat()
+        val rounded = columns.sumOf { it.column.reserved }.toFloat()
+        val threshold = sum + (rounded - sum) / 2f
+        assertTrue(sum < threshold && threshold < rounded)
+        fun build(width: Float, source: Spanned = fixture.source, rtl: Boolean = false) = NativeFloatGeometry.build(
+            source, fixture.body, kotlin.math.floor(width).toInt(), emptyList(),
+            textDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR,
+            exactAvailableWidth = width, exactParagraphInsets = true, includeFontPadding = false,
+            nodeFactory = { geometry -> fixture.actions.mapIndexed { id, action ->
+                FloatInteractionNode(id, FloatInteractionKind.LINK, action.range.start, action.range.end,
+                    geometry.rectsForRange(action.range.start, action.range.end), action.source.text,
+                    null, action.invoke)
+            } })
+        val fitted = build(threshold)
+        assertTrue(fitted.nativeRubyExactAdvances)
+        assertTrue(fitted.nativeRubyRaw is NativeFloatRowGeometry)
+        assertEquals(1, fitted.shapedLineCount)
+        assertEquals(sum, fitted.nativeSingleLineAdvance(), .0001f)
+        fitted.nativeRubyColumns.forEach { piece ->
+            assertEquals(piece.column.advance, fitted.nativeRubyMeasuredAdvance(piece.nativeStart, piece.nativeEnd), 0f)
+        }
+        val first = fitted.nativeRubyColumns[0]
+        val second = fitted.nativeRubyColumns[1]
+        assertEquals(first.column.advance,
+            fitted.nativeReplacementOrigin(second.nativeStart).first - fitted.nativeReplacementOrigin(first.nativeStart).first, .0001f)
+        val narrower = build(sum - .125f)
+        assertTrue(narrower.shapedLineCount > fitted.shapedLineCount)
+        for (geometry in listOf(fitted, narrower, build(512f), build(threshold))) {
+            assertEquals(fixture.projection.text, geometry.text.toString())
+            assertActions(fixture, geometry)
+            val ink = raster(geometry)
+            assertTrue(ink.getValue(Color.BLUE).count > 0)
+            assertTrue(ink.getValue(Color.RED).count > 0)
+            fixture.actions.forEach { action ->
+                val rect = geometry.rectsForRange(action.range.start, action.range.end).first()
+                assertTrue(geometry.offsetForPosition(rect.centerX(), rect.centerY()) in action.range.start..action.range.end)
+                assertEquals(action.range.end - action.range.start,
+                    geometry.characterRects(action.range.start, action.range.end - action.range.start).size)
+            }
+        }
+        val moved = narrower.inColumns((0 until narrower.shapedLineCount).map { line ->
+            (if (line % 2 == 0) .25f else 70.75f) to (line / 2 * 80f + 2.125f)
+        })
+        assertEquals(narrower.text.toString(), moved.text.toString())
+        assertActions(fixture, moved)
+        for (line in 0 until moved.shapedLineCount) {
+            assertEquals(narrower.nativeRubyLineRanges(line), moved.nativeRubyLineRanges(line))
+            assertEquals(narrower.nativeLineAdvance(line), moved.nativeLineAdvance(line), 0f)
+        }
+        moved.nodes.forEach { checkNotNull(it.onClick).invoke() }
+        assertEquals(fixture.actions.size, calls)
+        val legacy = fixture.build(512)
+        assertEquals(legacy.text.toString(), fitted.text.toString())
+        assertEquals(1, legacy.shapedLineCount)
+        assertEquals(rounded, legacy.nativeSingleLineAdvance(), .001f)
+        assertEquals(0, calls - fixture.actions.size)
+        val heading = NativeFloatGeometry.build(fixture.source, fixture.body, 512, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 512.5f,
+            nodeFactory = { geometry -> listOf(FloatInteractionNode(91, FloatInteractionKind.HEADING,
+                0, geometry.text.length, geometry.rectsForRange(0, geometry.text.length), "Heading", null, null)) })
+        val primary = NativePrimaryFontMetrics.from(fixture.body)
+        assertEquals(heading.nativeRubyLineBaseline(0) + primary.ascent + primary.baselineShift,
+            checkNotNull(heading.headingOwnerContentTop()), .0001f)
+        assertNull(fitted.headingOwnerContentTop())
+        val retained = NativeFloatGeometry.build(fixture.source, fixture.body, 512, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 512.5f,
+            includeFontPadding = false)
+        val distributed = nativeRubyDistribute(retained, retained.nativeSingleLineAdvance(), sum + 40.25f)
+        assertEquals(retained.text.toString(), distributed.text.toString())
+        assertTrue(raster(distributed).getValue(Color.BLUE).count > 0)
+        assertTrue(raster(distributed).getValue(Color.RED).count > 0)
+        val grown = first.column.reallocated(NativeRubySpacingIncrement(.25f, .5f, 0f))
+        assertNotSame(first.column, grown)
+        assertEquals(fitted.text.toString(), fitted.nativeRubyColumnView(first.nativeStart, grown).text.toString())
+
+        // Compare distributed italic ink with independent full-context native text
+        // draws. An advance-box clipping implementation must fail this contrast.
+        val italic = paint().apply { typeface = Typeface.SERIF; textSize = 31.375f; textSkewX = -.65f }
+        val letters = SpannedString("漢字")
+        val native = NativeFloatGeometry.build(letters, italic, 240, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 240.5f,
+            includeFontPadding = false)
+        val whole = native.nativeSingleLineAdvance()
+        val cut = italic.getRunAdvance(letters, 0, 2, 0, 2, false, 1)
+        val allocation = whole + 42.5f
+        val spacing = NativeRubySpacingMap(0f, whole, allocation, listOf(NativeRubyPhysicalCut(1, cut)))
+        val actual = nativeRubyDistribute(native, whole, allocation)
+        val bitmaps = List(3) { Bitmap.createBitmap(256, 160, Bitmap.Config.ARGB_8888) }
+        try {
+            Canvas(bitmaps[0]).apply { translate(40f, 40f); actual.paint(this) }
+            for (index in 1..2) {
+                val canvas = Canvas(bitmaps[index]).apply { translate(40f, 40f) }
+                for ((a, b) in listOf(0 to 1, 1 to 2)) {
+                    val left = if (a == 0) 0f else cut
+                    val advance = if (a == 0) cut else whole - cut
+                    val x = left + spacing.shiftAt(left + advance / 2f)
+                    val save = canvas.save()
+                    try {
+                        if (index == 2) canvas.clipRect(if (a == 0) -100f else x, -100f,
+                            if (b == 2) 250f else x + advance, 200f)
+                        canvas.drawTextRun(letters, a, b, 0, 2, x,
+                            checkNotNull(actual.textBaselines?.first), false, italic)
+                    } finally { canvas.restoreToCount(save) }
+                }
+            }
+            fun pixels(bitmap: Bitmap) = IntArray(bitmap.width * bitmap.height).also {
+                bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            }
+            val expected = pixels(bitmaps[1])
+            assertArrayEquals(expected, pixels(bitmaps[0]))
+            assertFalse("The actual italic font must discriminate advance-edge clipping", expected.contentEquals(pixels(bitmaps[2])))
+        } finally { bitmaps.forEach(Bitmap::recycle) }
+        val rtlLetters = SpannableString("\u202e漢字\u202c").apply {
+            setSpan(android.text.style.ForegroundColorSpan(Color.RED), 1, 2, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            setSpan(android.text.style.ForegroundColorSpan(Color.BLUE), 2, 3, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        val rtlNative = NativeFloatGeometry.build(rtlLetters, italic, 240, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 240.5f,
+            includeFontPadding = false)
+        val rtlAdvance = rtlNative.nativeSingleLineAdvance()
+        val firstAdvance = italic.getRunAdvance(rtlLetters, 1, 3, 1, 3, true, 2)
+        val secondAdvance = rtlAdvance - firstAdvance
+        val rtlMap = NativeRubySpacingMap(0f, rtlAdvance, rtlAdvance + 42.5f,
+            listOf(NativeRubyPhysicalCut(2, secondAdvance)))
+        val rtlDistributed = nativeRubyDistribute(rtlNative, rtlAdvance, rtlAdvance + 42.5f)
+        val rtlBitmaps = List(3) { Bitmap.createBitmap(256, 160, Bitmap.Config.ARGB_8888) }
+        try {
+            Canvas(rtlBitmaps[0]).apply { translate(40f, 40f); rtlDistributed.paint(this) }
+            for (index in 1..2) {
+                val canvas = Canvas(rtlBitmaps[index]).apply { translate(40f, 40f) }
+                for ((a, b) in listOf(1 to 2, 2 to 3)) {
+                    val left = if (a == 1) secondAdvance else 0f
+                    val advance = if (a == 1) firstAdvance else secondAdvance
+                    val x = left + rtlMap.shiftAt(left + advance / 2f)
+                    val colored = TextPaint(italic).apply { color = if (a == 1) Color.RED else Color.BLUE }
+                    val save = canvas.save()
+                    try {
+                        // First logical slice is physically right. Only the original
+                        // inside color edge clips; the outside italic ink survives.
+                        val clipLeft = if (index == 1) a == 1 else a == 2
+                        val clipRight = if (index == 1) a == 2 else a == 1
+                        canvas.clipRect(if (clipLeft) x else -100f, -100f,
+                            if (clipRight) x + advance else 250f, 200f)
+                        canvas.drawTextRun(rtlLetters, a, b, 1, 3, x,
+                            checkNotNull(rtlDistributed.textBaselines?.first), true, colored)
+                    } finally { canvas.restoreToCount(save) }
+                }
+            }
+            fun pixels(bitmap: Bitmap) = IntArray(bitmap.width * bitmap.height).also {
+                bitmap.getPixels(it, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            }
+            val expected = pixels(rtlBitmaps[1])
+            assertArrayEquals(expected, pixels(rtlBitmaps[0]))
+            assertFalse("RTL outside/inside edges must differ", expected.contentEquals(pixels(rtlBitmaps[2])))
+        } finally { rtlBitmaps.forEach(Bitmap::recycle) }
+    }
+
+    @Test fun exactFloatActionRowsKeepRtlFragmentsOriginalOwnerAndFractionalGutters() {
+        val child = Span("text", "אבג def ghi jkl", direction = "rtl", foreground = "#0000ff",
+            inlineStyle = InlineTextStyle(fontNormalized = true))
+        val owner = Span("link", "", "original-owner", targetFragment = "Original-Fragment",
+            inlineStyle = InlineTextStyle(fontNormalized = true), inlineActionGroup = InlineActionGroup(listOf(child)))
+        val projection = rubyGraphicalProjection(listOf(owner))
+        val range = projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+        val key = NativeInlineActionOwner(owner, range.path)
+        val root = paint().apply { textSize = 17.375f; textLocale = Locale.forLanguageTag("he") }
+        val source = SpannableString(projection.text)
+        source.setSpan(SourcePaint(root), 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        source.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root),
+            NativeLineHeightPolicy.Pixels(31.5f), strut = true), 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val groups = mapOf(range.path to NativeRubyGroupFormat(root, TextDirectionHeuristics.RTL,
+            NativeLineHeightPolicy.Pixels(31.5f), sourceDirection = "rtl", cursor = InlineCursor.Help, actionOwner = key))
+        val prepared = NativeRubyPreparedSource(projection, SpannedString(source), root, TextDirectionHeuristics.RTL, groups)
+        source.setSpan(prepared, 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        var calls = 0
+        val callback: () -> Unit = { calls++ }
+        fun build(width: Float) = NativeFloatGeometry.build(source, root, kotlin.math.floor(width).toInt(), emptyList(),
+            textDirection = TextDirectionHeuristics.RTL, exactAvailableWidth = width, exactParagraphInsets = true,
+            insets = NativeTextInsets(left = 3.125f, right = 7.375f), includeFontPadding = false,
+            nodeFactory = { geometry -> listOf(FloatInteractionNode(71, FloatInteractionKind.LINK, range.start, range.end,
+                checkNotNull(geometry.inlineActionGroupRects(key, range.start, range.end)), projection.text, null, callback)) })
+        val narrow = build(76.625f)
+        assertTrue(narrow.shapedLineCount > 1)
+        assertSame(owner, key.span)
+        assertEquals("Original-Fragment", key.span.targetFragment)
+        for ((available, geometry) in listOf(76.625f to narrow, 280.875f to build(280.875f),
+                76.625f to build(76.625f))) {
+            assertEquals(projection.text, geometry.text.toString())
+            assertSame(callback, geometry.nodes.single().onClick)
+            val rects = checkNotNull(geometry.inlineActionGroupRects(key, range.start, range.end))
+            assertEquals(geometry.nodes.single().bounds, rects)
+            assertNull(geometry.inlineActionGroupRects(NativeInlineActionOwner(owner, range.path), range.start, range.end))
+            for (line in 0 until geometry.shapedLineCount) {
+                assertEquals(-1, geometry.nativeRubyLineDirection(line))
+                assertEquals(31.5f, geometry.usedLineHeight(line), .001f)
+                assertEquals(available - 3.125f - 7.375f, geometry.nativeLineAvailableWidth(line), 0f)
+                val band = geometry.firstLineBand()
+                assertEquals(3.125f, band.left, 0f)
+                val advance = checkNotNull(geometry.nativeRubyLineAdvanceBounds(line))
+                assertEquals(available - 7.375f, advance.right, .001f)
+            }
+            val first = rects.first()
+            assertEquals(InlineCursor.Help, geometry.cursorAt(first.centerX(), first.centerY()))
+            assertTrue(raster(geometry).getValue(Color.BLUE).count > 0)
+            for (offset in 0..geometry.text.length) {
+                val caret = geometry.caretRect(offset)
+                assertTrue(caret.left.isFinite() && caret.top.isFinite())
+                assertTrue(geometry.visualOffset(offset, -1) in 0..geometry.text.length)
+                assertTrue(geometry.visualOffset(offset, 1) in 0..geometry.text.length)
+            }
+        }
+        checkNotNull(narrow.nodes.single().onClick).invoke()
+        assertEquals(1, calls)
+        val moved = narrow.inColumns((0 until narrow.shapedLineCount).map { line ->
+            (120.25f - line * 40.5f) to 4.75f
+        })
+        assertEquals(projection.text, moved.text.toString())
+        assertEquals(narrow.nodes.single().start, moved.nodes.single().start)
+        assertEquals(narrow.nodes.single().end, moved.nodes.single().end)
+        assertSame(callback, moved.nodes.single().onClick)
+        assertTrue(raster(moved).getValue(Color.BLUE).count > 0)
+        val legacyRtl = NativeFloatGeometry.build(source, root, 96, emptyList(),
+            textDirection = TextDirectionHeuristics.RTL, includeFontPadding = false)
+        val exactRtl = NativeFloatGeometry.build(source, root, 96, emptyList(),
+            textDirection = TextDirectionHeuristics.RTL, includeFontPadding = false,
+            exactAvailableWidth = 96f)
+        assertEquals(legacyRtl.shapedLineCount, exactRtl.shapedLineCount)
+        for (line in 0 until legacyRtl.shapedLineCount) {
+            assertEquals(legacyRtl.nativeRubyLineRanges(line), exactRtl.nativeRubyLineRanges(line))
+            assertEquals(legacyRtl.nativeLineAdvance(line), exactRtl.nativeLineAdvance(line), .001f)
+        }
+        for (offset in 0..source.length) {
+            assertEquals(legacyRtl.caretRect(offset).left, exactRtl.caretRect(offset).left, .001f)
+            assertEquals(legacyRtl.visualOffset(offset, -1), exactRtl.visualOffset(offset, -1))
+            assertEquals(legacyRtl.visualOffset(offset, 1), exactRtl.visualOffset(offset, 1))
+        }
+        val trailing = prepare(listOf(leaf("A B ")))
+        val rawSource = SpannableString(trailing.source).apply {
+            getSpans(0, length, NativeRubyPreparedSource::class.java).forEach(::removeSpan)
+        }
+        val content = trailing.body.getRunAdvance(rawSource, 0, 3, 0, 4, false, 3)
+        val total = trailing.body.getRunAdvance(rawSource, 0, 4, 0, 4, false, 4)
+        val width = content + (total - content) / 2f
+        fun suffix(source: Spanned) = NativeFloatGeometry.build(source, trailing.body, kotlin.math.floor(width).toInt(),
+            emptyList(), textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = width,
+            includeFontPadding = false)
+        val nativeSuffix = suffix(rawSource)
+        val richSuffix = suffix(trailing.source)
+        assertEquals(1, nativeSuffix.shapedLineCount)
+        assertEquals(nativeSuffix.shapedLineCount, richSuffix.shapedLineCount)
+        assertEquals(rawSource.toString(), richSuffix.text.toString())
+        assertEquals(nativeSuffix.nativeRubyLineRanges(0), richSuffix.nativeRubyLineRanges(0))
+        assertEquals(nativeSuffix.nativeSingleLineAdvance(), richSuffix.nativeSingleLineAdvance(), .0001f)
+        sameRect(nativeSuffix.caretRect(4), richSuffix.caretRect(4), .001f)
     }
 }
