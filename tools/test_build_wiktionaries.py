@@ -14638,7 +14638,9 @@ class CompositeProducerSourceTests(unittest.TestCase):
                  (['ffi', 'cli'], False), (['cli', 'ffi', 'ffi'], False),
                  (['cli', 'ffi', 'foreign'], False),
                  (['cli', 'prepare-blob-tools'], False),
-                 (['prepare-blob-tools', 'cli', 'ffi'], False),
+                 (['prepare-blob-tools', 'cli', 'ffi'], True),
+                 (['prepare-blob-tools', 'ffi', 'cli'], False),
+                 (['prepare-blob-tools', 'cli', 'ffi', 'test'], False),
                  (['prepare-blob-tools', 'cli', 'cli'], False),
                  (['prepare-captured-writer', 'cli'], False),
                  (['prepare-blob-tools', 'foreign'], False)]
