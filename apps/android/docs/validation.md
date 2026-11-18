@@ -1,6 +1,88 @@
 # Android validation
 
-## Current baseline and qualification — 2026-11-16
+## Current canonical source and host qualification — 2026-11-18
+
+The canonical Android implementation includes commit
+`86f83199d63ecc5b24f54d5f71534113bd71bbdb`, **Support scoped MG inline decorations
+and cell opacity**. Its 31 files comprise 18 main, seven JVM-test and six
+instrumentation-test files, including 11 new files. The integration includes the
+RectF API correction and both later fixture corrections. The exact file list and
+qualified private-to-canonical byte comparison are in the [commit bridge][mg-bridge].
+The retained `mg-tooltip-circle01/private-host01/application03.json` is the
+qualification input for this completed integration, not an unmerged product.
+All 953 files in Package142's canonical source manifest matched the worktree
+before this documentation-only update; no build input changed for this update.
+
+The current JVM qualification covers **1,139 cases**: 1,137 correctness cases
+and two benchmark-named cases, with no performance claim. Host140 ran all 1,139:
+1,137 passed and two test fixtures failed. Host141 then ran and passed the two
+corrected methods, carrying the exact 1,137 unchanged passing cases and their
+source/helper evidence. This is **1,137 carried passes plus two fresh passes**,
+not a fresh full-suite pass on the corrected files. The [Host141 audit][host141]
+preserves Host140's original failures and identifies every carried case.
+Host139's earlier main-compilation failure is also retained.
+
+Host140 compiled all three Kotlin routes: 157 main, 144 unit-test and 93
+instrumentation inputs. Host141 recompiled the changed unit tests; main was up
+to date and instrumentation evidence was carried on identical inputs. The eight
+new MG device controls were **compiled only**, not executed on a phone.
+
+**Package142 is the current verified unsigned host artifact.** Ordinary
+`assembleRelease`, R8 and release vital checks passed on the canonical source.
+The existing native libraries were verified and reused; no JNI build, JVM test
+or instrumentation run was repeated. Release vital checks do not constitute a
+new full-lint result. The [saved package audit][package142] records:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, non-debuggable;
+  **minimum API 31, target API 37**.
+- **10,849,249 bytes (10.35 MiB)**, 32,768 bytes larger than unsigned Package138.
+  SHA-256: `cf774f1cb7df33402e2dd4fecfbb7549f94c43c318a9a39a75726c94ae7e3ae4`.
+- No APK signing block or JAR signatures. Signature verification reports
+  `DOES NOT VERIFY`; this artifact is **not installable as-is**. No production
+  signer qualification, signing, installation or publication is claimed.
+- Four Egyptian JNI libraries, fonts and licences match the preserved inputs.
+  No dictionary or executable corpus payload was added. The VCS metadata reports
+  `NO_SUPPORTED_VCS_FOUND`; the source manifest and commit bridge establish
+  provenance, not an embedded revision.
+
+The retained APK is [Package142's release-unsigned.apk][apk142]. Earlier signed
+artifacts, the installed62 pair and user data remain preserved. A passive host
+network-namespace read returned `EACCES` before any ADB command; no newer access
+recovery is established. Current-source phone rendering, hover/tooltips,
+keyboard/IME, spoken accessibility, media and lifecycle validation still need
+permitted physical access and an authorized compatible signed installation.
+
+Historical rendered screens retain their original scope. The retained image
+border failure from device run266 was followed by test-only ripple/focus
+synchronization and a passing run275 of the same Compose method, including its
+exact pixel assertions. Run275 emitted no success screenshot and is not current
+whole-app rendering evidence. The [saved-screen disposition][screens142] also
+records the reviewed search/Clear-focus frames and prior link/Learn dispositions.
+There are no retained current Android rendered frames for the new MG circles,
+nested decorations, NBSP or cell-opacity controls. Genuine producer/Writer/reader
+interoperability and whole-page fidelity remain separate from host qualification.
+
+The separate French positioned-overlay packet
+`android-pending-y01/inline-overlay40-01/coherent01/preparation01.json`
+(`cf93be81`) remains **private, source-reviewed and unrun**. It is not part of
+Package142 or its test counts; it requires a current sparse source reconciliation
+and its selected host qualification before integration. No additional integration
+dependency remains for the qualified MG31 changes above.
+
+The evidence links below refer to retained local `.tmp` records, not published
+assets.
+
+[mg-bridge]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/android-mg-canonical-commit-bridge01.json
+[host141]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host141/saved-result-peer-reader01.json
+[package142]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package142/saved-result-peer-reader01.json
+[apk142]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package142/artifacts/release-unsigned.apk
+[screens142]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package142/retained-rendered-screen-disposition01.json
+
+## Historical Host78–Package82 qualification — 2026-11-16
+
+This section preserves the earlier source20 qualification. Its references to
+“current” apply to that dated baseline, not the canonical source and Package142
+above. No earlier test, lint, signer or device result is restamped as current.
 
 The current [build target](../app/build.gradle) is **Android 12+ (minimum API 31),
 target API 37**. Required guards for later APIs remain. The qualified APKs were
