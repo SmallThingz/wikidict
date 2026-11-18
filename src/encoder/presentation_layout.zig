@@ -36,6 +36,8 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // KL Ilisserut:-noun- emits Taggit; Tulu p994/r4430 pairs ನಾಮಪದೊ with Noun.
+    if (std.mem.eql(u8, title, "Taggit") or std.mem.eql(u8, title, "ನಾಮಪದೊ")) return "Noun";
     // Hungarian hunfn and főnév both emit this heading, including on pages
     // whose record language was independently identified as another language.
     if (std.mem.eql(u8, title, "Főnév")) return "Noun";
@@ -13276,4 +13278,25 @@ test "actual SR210 Japanese ji Affix organization retains seven senses and entir
     var restored = decoded;
     restored.entry.organization = before.organization;
     try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+}
+
+test "KL noun heading exactness never supplies a language owner" {
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Taggit").?);
+    for ([_][]const u8{ "taggit", "TAGGIT", "Taggit ", " Taggit", "Taggit 2", "Taggits", "Unknown Taggit", "Nutsigaq" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const sections = [_]Section{
+        .{ .title = "Taggit", .level = 2 },
+        .{ .title = "Unknown region", .level = 2 },
+        .{ .title = "Taggit", .level = 3, .blocks = &.{.{ .kind = .definition, .depth = 1, .list_path = "#" }} },
+    };
+    const actual = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", actual.lexemes[0].kind);
+    try std.testing.expectEqualStrings("", actual.lexemes[0].language);
+    try std.testing.expectEqual(@as(usize, 2), actual.lexemes[0].section);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes[0].definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, actual.other_sections);
 }

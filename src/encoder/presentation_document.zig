@@ -16136,3 +16136,92 @@ test "normal body preparation carries crossing action and numbered source identi
     try std.testing.expectEqual(@as(usize, 1), proof.calls);
     try std.testing.expect(!report.literal_markup);
 }
+
+test "retained KL puisi noun organization preserves complete source entry and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Exact puisi p1947/r22468 raw84B/f687f777; no template expansion needed.
+    const source = @embedFile("testdata/kl-puisi/page.raw.wikitext");
+    var namespaces = try NamespaceRegistry.init(a, @embedFile("testdata/kl-puisi/namespace-registry.tsv"));
+    defer namespaces.deinit();
+    const title = "puisi";
+    const owner = "kalaallisut";
+    const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner, "kl", MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner, .code = "kl" });
+    const actual = try codec.decodeAlloc(a, bytes, title, .language, .{ .heading = owner, .code = "kl" });
+    // Independent canonical POS reference changes only the authored H3 label.
+    // Restore that exact original title/anchor before comparing the whole graph.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, source, "=== Taggit ==="));
+    const reference_source = try std.mem.replaceOwned(u8, a, source, "=== Taggit ===", "=== Noun ===");
+    const reference_bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner, "kl", MissingText.untracked(reference_source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner, .code = "kl" });
+    var expected = try codec.decodeAlloc(a, reference_bytes, title, .language, .{ .heading = owner, .code = "kl" });
+    const sections = try a.dupe(types.Section, expected.entry.sections);
+    try std.testing.expectEqual(@as(usize, 2), sections.len);
+    try std.testing.expectEqualStrings("Noun", sections[1].title);
+    try std.testing.expectEqualStrings("Noun", sections[1].anchor);
+    sections[1].title = "Taggit";
+    sections[1].anchor = "Taggit";
+    expected.entry.sections = sections;
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected), bytes);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.organization.lexemes.len);
+    const noun = actual.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings(owner, noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{0}, actual.entry.organization.other_sections);
+    const definition = actual.entry.sections[1].blocks[0];
+    try std.testing.expectEqualStrings("Uumasut.", definition.spans[0].text);
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("1", definition.number);
+    try std.testing.expectEqual(@as(usize, 1), definition.depth);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.references.len);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.media.len);
+    // The category declaration is metadata; neither mapping nor canonical POS
+    // reference introduces a dictionary action or changes any original field.
+    for (actual.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span|
+        try std.testing.expect(span.kind == .text and span.target.len == 0);
+}
+
+
+test "Tulu noun section retains the five authored links in their original senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Complete language and noun sections from tcy p305/r914, before translations.
+    const source =
+        \\== ತುಳು ==
+        \\=== ನಾಮಪದೊ ===
+        \\'''ಅಂಕ್‍ಡೊಂಕು'''
+        \\# [[ವಕ್ರೊ]]
+        \\# [[ಅಡ್ಡೊನೀಟೊ]]
+        \\# [[ಕೊಂಕ್]]
+        \\# [[ಡೊಂಕು]]
+        \\# [[ಚೊಟ್ಟೆ]]
+        \\# ________________
+    ;
+    const owner: ClassifiedLanguage = .{ .heading = "Tulu", .code = "tcy" };
+    const title = "ಅಂಕ್‍ಡೊಂಕು";
+    const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner.heading, owner.code,
+        MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, owner);
+    const stored = try codec.decodeAlloc(a, bytes, title, .language, .{ .heading = owner.heading, .code = owner.code });
+    const entry = stored.entry;
+    try std.testing.expectEqual(@as(usize, 1), entry.organization.lexemes.len);
+    const noun = entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings(owner.heading, noun.language);
+    try std.testing.expectEqualStrings("ನಾಮಪದೊ", entry.sections[noun.section].title);
+    try std.testing.expectEqual(@as(usize, 6), noun.definitions.len);
+    const blocks = entry.sections[noun.section].blocks;
+    for ([_][]const u8{ "ವಕ್ರೊ", "ಅಡ್ಡೊನೀಟೊ", "ಕೊಂಕ್", "ಡೊಂಕು", "ಚೊಟ್ಟೆ" }, noun.definitions[0..5]) |original_target, sense| {
+        const spans = blocks[sense.block].spans;
+        try std.testing.expectEqual(@as(usize, 1), spans.len);
+        try std.testing.expect(spans[0].kind == .link);
+        try std.testing.expectEqualStrings(original_target, spans[0].text);
+        try std.testing.expectEqualStrings(original_target, spans[0].target);
+    }
+    try std.testing.expectEqualStrings("________________", blocks[noun.definitions[5].block].spans[0].text);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
