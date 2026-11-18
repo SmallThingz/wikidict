@@ -54,6 +54,7 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QPointer>
+#include <QInputDialog>
 #include <QRandomGenerator>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -1928,6 +1929,8 @@ public:
 };
 
 static QVariant accessibleAnchorOwner(const QTextCharFormat &format) {
+    const auto box = CompiledInlineBox::actionIdentity(format);
+    if (box.isValid()) return box;
     const auto action = QCompiledInline::actionOwner(format);
     if (action.isValid()) return action;
     const auto ruby = QCompiledInline::rubyAnchorOwner(format);
@@ -2073,7 +2076,13 @@ public:
         if (position.values.contains(QStringLiteral("actionRect"))) {
             // The action box may own semantic padding, while character/copy
             // ranges continue to refer only to the real native text.
-            auto action = browser->clipLocalCharacter(link->start, position.values.value(QStringLiteral("actionRect")).toRectF());
+            const auto curved = position.values.value(QStringLiteral("inlineBoxActionPath"));
+            if (curved.isValid() && (position.values.value(QStringLiteral("inlineBoxActionFirst")).toInt() != link->start
+                || position.values.value(QStringLiteral("inlineBoxActionLast")).toInt() != link->end
+                || position.values.value(QStringLiteral("inlineBoxActionHref")).toString() != link->href)) return {};
+            auto action = curved.isValid()
+                ? browser->clipLocalPath(link->start, curved.value<QPainterPath>()).boundingRect()
+                : browser->clipLocalCharacter(link->start, position.values.value(QStringLiteral("actionRect")).toRectF());
             if (!browser || !document || !link || !link->current() || browser->document() != document) return {};
             const int horizontal = browser->isRightToLeft()
                 ? int(qint64(browser->horizontalScrollBar()->minimum()) + browser->horizontalScrollBar()->maximum() - browser->horizontalScrollBar()->value())
@@ -3155,6 +3164,7 @@ struct LoadedDataset {
     QString originEdition;
     QString error;
     QString missingWord;
+    QStringList matchingLanguages;
     bool emptyLibrary = false;
 };
 
@@ -3180,6 +3190,20 @@ void registerKanaFallback() {
             throw DictApiError("unable to register bundled kana fallback font");
         QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Hiragana, families.first());
         QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Katakana, families.first());
+        return true;
+    }();
+    Q_UNUSED(registered);
+}
+
+// The unchanged upstream face supplies supplementary Han and its small
+// ancillary repertoire; primary reader/UI font selection stays intact.
+void registerHanFallback() {
+    static const bool registered = [] {
+        const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/HanaMinB.ttf"));
+        const auto families = QFontDatabase::applicationFontFamilies(id);
+        if (id < 0 || families != QStringList{QStringLiteral("HanaMinB")})
+            throw DictApiError("unable to register bundled supplementary Han fallback font");
+        QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Han, families.first());
         return true;
     }();
     Q_UNUSED(registered);
@@ -3238,6 +3262,7 @@ QString egyptianFamily() {
 MainWindow::MainWindow(const QString &root, const QString &initialWord)
     : QMainWindow() {
     registerKanaFallback();
+    registerHanFallback();
     setupUi();
     restoreGeometry(QSettings().value(QStringLiteral("reader/windowGeometry")).toByteArray());
     const QByteArray storedSplitter = QSettings().value(QStringLiteral("reader/splitter")).toByteArray();
@@ -3290,25 +3315,59 @@ void MainWindow::openRoot(const QString &root, const QString &word) {
     loadDataset(root, QSettings().value(QStringLiteral("reader/language"), QStringLiteral("English")).toString(), QStringLiteral("language"), true, word);
 }
 
-void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition, const std::optional<QString> &fragment, bool requireExactWord) {
+void MainWindow::loadDataset(const QString &root, const QString &language, const QString &kind, bool resetVisits, const QString &word, int restoreVisit, const QString &expectedRoot, const QString &expectedEdition, const std::optional<QString> &fragment, bool requireExactWord, bool findExactOwner) {
     if (cancelLoad_) cancelLoad_->store(true);
     const auto cancelled = std::make_shared<std::atomic_bool>(false);
     cancelLoad_ = cancelled;
     const unsigned serial = ++loadSerial_;
     saveVisit();
+    const QString previousSearchStatus = resultStatus_->text();
+    const bool searchWasPending = searchTimer_->isActive();
     searchTimer_->stop();
     setLoading(true);
     resultStatus_->setText(QStringLiteral("Opening dictionaries and preparing search..."));
     auto *watcher = new QFutureWatcher<std::shared_ptr<LoadedDataset>>(this);
-    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord] {
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending] {
         const auto loaded = watcher->result();
         watcher->deleteLater();
         if (serial != loadSerial_ || cancelled->load()) return;
-        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord] {
+        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending] {
             if (serial != loadSerial_ || cancelled->load()) return;
             if (!loaded->missingWord.isEmpty()) {
                 // A fallback miss must not replace a readable current owner or entry.
                 setLoading(false);
+                if (!loaded->matchingLanguages.isEmpty()) {
+                    // An in-entry link is still only a navigation proposal. Keep
+                    // the user's query, filters and paged suggestions until an
+                    // owner is accepted; cancellation must not reconstruct them.
+                    resultStatus_->setText(QStringLiteral("“%1” is available in several collections. Choose a language.").arg(loaded->missingWord));
+                    auto *choice = new QInputDialog(this);
+                    choice->setObjectName(QStringLiteral("dictionaryOwnerChoice"));
+                    choice->setAttribute(Qt::WA_DeleteOnClose);
+                    choice->setWindowModality(Qt::WindowModal);
+                    choice->setWindowTitle(QStringLiteral("Choose a language"));
+                    choice->setLabelText(QStringLiteral("This word is available in more than one language collection."));
+                    choice->setComboBoxEditable(false);
+                    choice->setComboBoxItems(loaded->matchingLanguages);
+                    const QPointer<QInputDialog> guardedChoice(choice);
+                    connect(choice, &QInputDialog::finished, this,
+                        [this, guardedChoice, loaded, cancelled, serial, root, word, fragment, previousSearchStatus, searchWasPending](int result) {
+                            if (!guardedChoice || cancelled->load() || serial != loadSerial_ || !api_
+                                || originRoot_ != loaded->originRoot || originEdition_ != loaded->originEdition) return;
+                            if (result != QDialog::Accepted) {
+                                resultStatus_->setText(previousSearchStatus);
+                                if (searchWasPending) searchTimer_->start();
+                                reading_->setFocus();
+                                return;
+                            }
+                            const QString owner = guardedChoice->textValue();
+                            if (!loaded->matchingLanguages.contains(owner)) return;
+                            loadDataset(root, owner, QStringLiteral("language"), false, word, -1,
+                                loaded->originRoot, loaded->originEdition, fragment, true);
+                        });
+                    choice->open();
+                    return;
+                }
                 if (api_) {
                     QSignalBlocker kindBlocker(kind_);
                     QSignalBlocker languageBlocker(language_);
@@ -3317,7 +3376,9 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 }
                 search_->setText(loaded->missingWord);
                 refreshSearch();
-                resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(loaded->missingWord));
+                resultStatus_->setText((results_->count() > 0
+                    ? QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.")
+                    : QStringLiteral("No exact entry for “%1”. Check the spelling or choose another collection.")).arg(loaded->missingWord));
                 focusSearch();
                 return;
             }
@@ -3415,7 +3476,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
         if (libraryDialogActive_) deferredDatasetPublication_ = std::move(publish);
         else publish();
     });
-    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition, word, requireExactWord] {
+    watcher->setFuture(QtConcurrent::run([root, language, kind, resetVisits, cancelled, expectedRoot, expectedEdition, word, requireExactWord, findExactOwner] {
         auto loaded = std::make_shared<LoadedDataset>();
         try {
             if (root.isEmpty()) {
@@ -3477,20 +3538,43 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             }
             if (!selectedCollection) throw DictApiError("No readable dictionary was found for this collection. Import a dictionary in Library.");
             if (requireExactWord) {
-                QJsonParseError parseError{};
-                const QJsonDocument response = QJsonDocument::fromJson(loaded->api->lookup(word), &parseError);
-                if (parseError.error != QJsonParseError::NoError || !response.isObject() ||
-                    !response.object().value(QStringLiteral("entries")).isArray())
-                    throw DictApiError("invalid JSON returned by dictionary core");
-                const QJsonArray entries = response.object().value(QStringLiteral("entries")).toArray();
-                const bool exactOrdinary = entries.size() == 1 && std::all_of(entries.begin(), entries.end(), [&](const QJsonValue &value) {
-                    const QJsonObject entry = value.toObject();
+                const auto exactOrdinary = [&](const QString &owner) {
+                    QJsonParseError parseError{};
+                    const QJsonDocument response = QJsonDocument::fromJson(loaded->api->lookup(word), &parseError);
+                    if (parseError.error != QJsonParseError::NoError || !response.isObject() ||
+                        !response.object().value(QStringLiteral("entries")).isArray())
+                        throw DictApiError("invalid JSON returned by dictionary core");
+                    const QJsonArray entries = response.object().value(QStringLiteral("entries")).toArray();
+                    if (entries.size() != 1) return false;
+                    const QJsonObject entry = entries.first().toObject();
                     return entry.value(QStringLiteral("title")).toString() == word &&
                         entry.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
-                        entry.value(QStringLiteral("language")).toString() == QStringLiteral("Unclassified") &&
+                        entry.value(QStringLiteral("language")).toString() == owner &&
                         entry.value(QStringLiteral("redirect")).toObject().isEmpty();
-                });
-                if (!exactOrdinary) {
+                };
+                if (findExactOwner) {
+                    // Resolve only this exact title in the installed catalogue, off the GUI thread.
+                    // Do not choose a first match: every other owner participates in ambiguity.
+                    for (const QString &owner : loaded->languages) {
+                        if (cancelled->load()) return loaded;
+                        if (owner == language || loaded->matchingLanguages.contains(owner)) continue;
+                        loaded->api->select(owner, QStringLiteral("language"));
+                        if (cancelled->load()) return loaded;
+                        if (exactOrdinary(owner)) loaded->matchingLanguages.append(owner);
+                    }
+                    if (loaded->matchingLanguages.size() == 1) {
+                        selected = loaded->matchingLanguages.first();
+                        loaded->matchingLanguages.clear();
+                        loaded->api->select(selected, QStringLiteral("language"));
+                    } else {
+                        if (QFileInfo(root).canonicalFilePath() != loaded->originRoot || LibraryStorage::editionIdentity(root) != loaded->originEdition)
+                            throw DictApiError("The dictionary changed while opening. Open it again.");
+                        loaded->missingWord = word;
+                        return loaded;
+                    }
+                }
+                if (cancelled->load()) return loaded;
+                if (!exactOrdinary(selected)) {
                     if (QFileInfo(root).canonicalFilePath() != loaded->originRoot || LibraryStorage::editionIdentity(root) != loaded->originEdition)
                         throw DictApiError("The dictionary changed while opening. Open it again.");
                     loaded->missingWord = word;
@@ -4045,9 +4129,15 @@ void MainWindow::loadMoreResults() {
         }
         if (firstPage && results_->count() > 0) results_->setCurrentRow(0);
         moreResults_->setEnabled(moreAvailable_);
-        resultStatus_->setText(results_->count() == 0
-            ? (resultsQuery_.isEmpty() ? QStringLiteral("This collection is empty.") : QStringLiteral("No suggestions. Check the spelling or choose another collection."))
-            : QStringLiteral("%1 of %2 suggestions").arg(results_->count()).arg(searchLast_ - searchFirst_));
+        const qsizetype total = searchLast_ - searchFirst_;
+        if (results_->count() == 0) {
+            resultStatus_->setText(resultsQuery_.isEmpty() ? QStringLiteral("This collection is empty.")
+                : QStringLiteral("No suggestions. Check the spelling or choose another collection."));
+        } else if (total == 1) {
+            resultStatus_->setText(QStringLiteral("1 suggestion"));
+        } else {
+            resultStatus_->setText(QStringLiteral("%1 of %2 suggestions").arg(results_->count()).arg(total));
+        }
     }
 }
 
@@ -4306,7 +4396,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
     return QMainWindow::eventFilter(watched, event);
 }
 
-bool MainWindow::openWord(const QString &word, const std::optional<QString> &fragment, bool allowUnclassifiedFallback) {
+bool MainWindow::openWord(const QString &word, const std::optional<QString> &fragment, bool allowOwnerFallback) {
     if (!api_ || loading_ || word.trimmed().isEmpty()) return false;
     try {
         QString exact = word.trimmed();
@@ -4329,19 +4419,19 @@ bool MainWindow::openWord(const QString &word, const std::optional<QString> &fra
         }
         if (document.object().value(QStringLiteral("entries")).toArray().isEmpty()) {
             // Only compiled ordinary links opt in: searches, aliases and history do not.
-            if (allowUnclassifiedFallback && api_->kind() == QStringLiteral("language") &&
+            if (allowOwnerFallback && api_->kind() == QStringLiteral("language") &&
                 currentEntry_.value(QStringLiteral("kind")).toString() == QStringLiteral("language") &&
                 currentEntry_.value(QStringLiteral("redirect")).toObject().isEmpty() &&
-                !originRoot_.isEmpty() && !originEdition_.isEmpty() &&
-                api_->language() != QStringLiteral("Unclassified") &&
-                language_->findText(QStringLiteral("Unclassified"), Qt::MatchExactly | Qt::MatchCaseSensitive) >= 0) {
-                loadDataset(api_->root(), QStringLiteral("Unclassified"), api_->kind(), false,
-                    word.trimmed(), -1, originRoot_, originEdition_, fragment, true);
+                !originRoot_.isEmpty() && !originEdition_.isEmpty() && language_->count() > 1) {
+                loadDataset(api_->root(), api_->language(), api_->kind(), false,
+                    word.trimmed(), -1, originRoot_, originEdition_, fragment, true, true);
                 return true;
             }
             search_->setText(word);
             refreshSearch();
-            resultStatus_->setText(QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.").arg(word));
+            resultStatus_->setText((results_->count() > 0
+                ? QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.")
+                : QStringLiteral("No exact entry for “%1”. Check the spelling or choose another collection.")).arg(word));
             if (compactNavigation_) focusSearch();
             return false;
         }
@@ -4719,7 +4809,7 @@ bool MainWindow::renderResponse(const QByteArray &bytes, bool addVisit, const st
 void MainWindow::commitReadingEntry() {
     if (readingUncommitted_) {
         const QString failure = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
-        if (statusBar()->currentMessage() == failure) statusBar()->clearMessage();
+        if (statusBar()->currentMessage() == QStringLiteral("This entry could not be displayed.")) statusBar()->clearMessage();
         if (resultStatus_->text() == failure) resultStatus_->clear();
     }
     const SavedWord word = savedWord(currentEntry_);
@@ -5468,7 +5558,7 @@ bool MainWindow::refreshReading() {
             const QString message = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
             resultStatus_->setText(message);
             if (!current()) return false;
-            statusBar()->showMessage(message);
+            statusBar()->showMessage(QStringLiteral("This entry could not be displayed."));
             if (!current()) return false;
             sections_->setEnabled(false);
             if (!current()) return false;
@@ -5762,20 +5852,24 @@ QString MainWindow::spansHtml(const QJsonArray &spans, qreal leftMargin, const Q
             if (CompiledContent::present(span.value(QStringLiteral("inline_box_group")))) {
                 if (zeroFontContext || !linkPaint.isEmpty())
                     throw DictApiError("inline box in zero-font or inherited link-paint context is not supported");
-                CompiledInlineBox::requireCapability(reading_->document());
+                CompiledInlineBox::requireExtendedCapability(reading_->document(), span);
                 const auto group = CompiledContent::inlineBoxGroup(span);
                 auto owner = span; owner.remove(QStringLiteral("inline_box_group"));
                 owner.insert("text", "X");
-                const QString ownerHtml = spansHtml(QJsonArray{owner}, 0, {}, {}, basePoints,
-                    inheritedInk, -1, false, true, {}, true, contextFamily);
+                const QString ownerHtml = QStringLiteral("<style>a{color:%1;text-decoration:none;}</style>")
+                    .arg(palette().color(QPalette::Link).name())
+                    + spansHtml(QJsonArray{owner}, 0, {}, cellBackground, basePoints,
+                        inheritedInk, -1, false, true, {}, true, contextFamily);
                 // Children retain the original Context/NormalBody/CssPx basis;
                 // the declaring owner's font is not multiplied into them.
                 // Temporary child imports need the same renderer-owned anchor
                 // rule as entryHtml; source child decorations remain inner.
+                const QString boxBackground = CompiledContent::present(span.value("background"))
+                    ? span.value("background").toString() : cellBackground;
                 const QString children = QStringLiteral("<style>a{color:%1;text-decoration:none;}</style>")
                     .arg(palette().color(QPalette::Link).name())
                     + spansHtml(group.value("spans").toArray(), leftMargin,
-                        prefix, cellBackground, basePoints, inheritedInk, sourceRun, false,
+                        prefix, boxBackground, basePoints, inheritedInk, sourceRun, false,
                         typedScopeOwnsIsolation, {}, computedCellTraits, contextFamily);
                 out += CompiledInlineBox::marker(span, children, ownerHtml, basePoints, sourceRun);
                 continue;

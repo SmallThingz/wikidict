@@ -999,3 +999,246 @@ only the five reference/citation native leaves; relevant functions and all nine
 selected control bodies match private193. Source positions remain document UTF-16
 ranges, independent of source-file line numbers. Unrelated private absolute,
 relative-float, image-occurrence and static-label changes remain excluded. This source composition does not include a new canonical binary build.
+
+## Rounded whole-link inline boxes (candidate)
+
+The known AF box keeps one original wiki-link owner and one plain text child.
+Its italic declaring font supplies the existing em-padding basis; radius uses CSS
+pixels without another font multiplier. Null radius keeps the square form, while
+explicit zero remains distinct source. Non-null radius requires equal solid RGB
+edges and no overlays. The native layout rounds the unbroken composite decoration
+before slicing it across visual lines, without adding wrap-edge padding or new
+intermediate corners. Background and border follow that shape; visible glyph
+overflow is not clipped merely because the box is rounded.
+
+The whole curved border area supplies action geometry through the original source
+range. Padding adds no synthetic character or caret. Cut-away corners are excluded
+from pointer hits. Existing native anchor navigation distinguishes adjacent owners
+with the same href, and its ordinary style-provided focus pen follows the curved
+owner path. No authored LinkPaint or focus-outline policy is fabricated. Static
+Unicode/background support uses real shaped clusters under the existing LTR and
+same-font admission rules, with ordinary selection paint preserved.
+
+Native183 passed two repaired controls with eight explicitly retained passes
+(native182 four,176 two,177 one,179 one), following a Gui/Test build with
+Widgets182 bytes unchanged. App251 completed configure and the GUI/product
+targets, then failed Test MOC parsing. App252 corrected the constructor token but exposed a second MOC lexer failure
+and did not run tests. App253 changed only the identical JSON fixture to an
+ordinary escaped literal; its targeted MOC check and Reader build passed, followed
+by eleven passes and one invalid pre-focus selection expectation. App254 verified
+the corrected ordinary-focus activation baseline in that single method while
+retaining those eleven passes and five earlier passes. Controlled
+frames and the ordinary ZA cancellation/MG pitch repair session were reviewed
+separately. Raw prior failures, full-suite gaps and canonical-build limits remain.
+
+The maintained 32-target recipe verifies forward and reverse reconstruction.
+Eight native leaves differ from the delivered reference recipe. All pre-AF
+canonical Test bytes remain exact after removing the five new methods, helpers,
+include and slots with their later corrected bodies. The current glyph helper
+endpoint equals private198; six other endpoints remain exact to predecessor08.
+The qdoc/Test private exclusions
+remain byte-identical before and after: the new AF focus edits in
+QTextDocumentLayout::draw are exact, but its excluded absolute-container branches
+prevent claiming whole-function equivalence. No private absolute, relative-float
+or image-occurrence implementation is imported or admitted by this change.
+
+The same-path QTextLayout header changes the private draw_internal signature and
+its exported private symbol. Normal Gui and Widgets dependency rebuilds are
+required; public callable API and class member layout remain unchanged. This is
+recipe composition only, with no canonical binary rebuild or current source edit.
+
+### AF fixture syntax correction (historical source stage)
+
+Native175 built the source194 Gui/Widgets outputs but failed while compiling the
+Test fixture, before any of its eight selected tests ran. Source195 adds one
+missing closing brace to the RoundedLinkControl border initializer. Every test
+method and assertion remains exact; the six product source endpoints are unchanged.
+The canonical recipe carries only that one-byte Test correction in addition to the
+AF/static source splice above. Actual qualification is now pending native176,
+with product source194/build175 recorded separately as an original failed run.
+No prior test or LTO-stage pass is inferred from the completed library outputs.
+
+### AF source and caret-oracle correction (historical source stage)
+
+Native176 compiled the corrected Test and executed eight methods: four passed
+and four failed. Source196 changes only the four failed methods. Its invalid
+Unicode fixture constructs FEFF literally instead of losing it through UTF-32
+BOM decoding. Its cursor inverse compares the same shaped position with ordinary
+Qt, retaining exact offsets when the ordinary inverse returns them.
+
+The focus raster equality and foreign-policy refusal assertions remain unchanged.
+Failure-only actual/expected/difference PNGs and variant/policy observations help
+diagnose them; they confer no rendered acceptance or anticipated-failure waiver.
+The prospective scope is now native177 current4 plus four exact native176 passes,
+not an eight-method replay. Six product endpoints, the shared fixture and all
+prior canonical Test bytes outside these four bodies remain exact. Product
+source194/build175 remains separate, and all actual qualification pins stay unset.
+
+### AF typed-policy and focus-only paint repair (historical source stage)
+
+Source197 adds two narrow product fixes to the preceding immutable AF recipe.
+InlineBox property 0x5831 uses the existing recursive exact-metatype comparator,
+so a malformed string radius cannot be interned as a previously valid numeric
+radius. An authenticated whole-box selection containing only OutlinePen queues
+the native focus contour and leaves normal text on its ordinary paint path,
+preserving italic overhang outside the layout bounds. Other selection formats
+retain the existing selection/background/foreground behavior.
+
+All Test bytes, strict raster/refusal assertions and eight method bodies remain
+exact to source196. The prospective cold178 scope is a Gui-only build and two
+current affected methods, with four native176 and two native177 passes retained
+under explicit changed-source-domain proofs. This is not a claim that the Gui
+binary is unchanged. Test retains its native177 binary; Widgets retains
+its source194/build175 origin unchanged. Earlier failure and fixture-correction stages
+remain immutable history. All actual qualification pins remain unset here.
+
+Only qtextformat.cpp and qtextlayout.cpp change from the preceding normal-source
+packet. The six other AF endpoints, including qdoc/Test private exclusions, are
+exact. No unrelated absolute, float, image, overlay or bidi domain is imported.
+A fresh canonical build still uses the cumulative AF header/Widgets dependencies;
+this source-only reconstruction does not perform that build or claim full suites,
+paired App frames, genuine producer/Reader or rendered AF acceptance.
+
+### Fallback glyph source-index repair (historical source stage)
+
+Source198 corrects the source-index walk when Qt emits a fallback-font subrun
+beginning after glyph zero. It bounds cluster lookup and retains the existing
+private rangeStart/rangeEnd convention, shaped positions, skipped glyph handling
+and RTL output order. The existing Unicode control adds exact source-index and
+hit checks; its ordinary shaping, selection and source assertions remain intact.
+Only qtextlayout.cpp and that one Test method differ from predecessor08.
+
+App248's original AX assertion remains failed history. Its read-only capture
+identified the source-index mismatch without converting the failed test into a
+pass. The candidate Test subsequently passed the retained native176 compiler's
+single-TU syntax command using unchanged native197 headers and MOC; that is not
+runtime or library qualification. Native175's original Test compile failure and
+all subsequent native176/177 failures remain linked through immutable stages.
+
+The pending native179 scope builds Gui and Test, runs three affected controls,
+and carries five source-domain-proved passes from176/177/178. Widgets retains
+source194/build175. Actual native179, App and frame pins remain unset. The normal
+32-target patch recipe is reconstructed and reversed exactly, without a canonical
+build, current-source change, or unrelated private feature import.
+
+### Glyph-cache fixture setup correction (historical source stage)
+
+The first native179 Unicode assertion inspected private shaping data immediately
+after document layout. Qt may free that cache at endLayout while retaining its
+lines. Source199 moves the same full-source glyphRuns call before the independent
+cluster inspection, allowing Qt's public retrieval path to reconstruct the data.
+Every returned-run, source-index, position, selection and caret assertion remains
+unchanged, as does the default cache setting. No product source changes.
+
+Native179's original two PASS/one FAIL rows and both failed final source guards
+remain intact. The generated Test MOC bytes were unchanged; independent current
+source stat/membership and selected-byte checks reconciled custody. The previous
+cached state was not persisted, so no inode/time-only explanation is asserted.
+That physical handback does not turn the raw qualification into a pass.
+
+The pending native180 scope rebuilds Test only, runs the corrected Unicode method
+and carries seven explicitly joined passes. Gui remains source198/build179 and
+Widgets remains source194/build175. All seven normal product endpoints and private
+exclusions are exact to predecessor09. Actual native180/App/UI pins remain unset.
+
+### Hidden-glyph fixture correction (historical source200 stage)
+
+Native180 progressed through cache reconstruction and strict glyph/source-index
+checks, then failed the sawHiddenGlyph coverage assertion. ZWJ/ZWNJ/variation
+selectors may become zero-advance HarfBuzz glyphs without Qt's dontPrint flag.
+The source200 candidate adds one ordinary-layout retrieval case containing literal
+U+00AD followed by visible AB. Qt explicitly hides the soft-hyphen cluster, while
+AB prevents the line-end soft-hyphen reveal. This supplies the required witness
+without changing the InlineBox text domain or removing any coverage assertion.
+Existing fixture sources and exact source-index, position, geometry and caret
+comparisons remain intact. Failure-only diagnostics report all coverage flags.
+
+All seven product endpoints and prior canonical/private exclusions equal packet10.
+Only the existing Unicode Test method changes. Source200 is not applied by this
+packet; the planned native181 scope is Test-only current1 plus seven explicitly
+joined historical passes. Product source198/build179 and Widgets175 stay distinct.
+The original179 failed guards/reconciliation and original180 failure rows/XML are
+preserved, without turning either attempt into a passing qualification. All actual
+native181/App/UI qualification pins remain null. No build or runtime was invoked.
+
+### Source-owned empty border overlays (historical source201 stage)
+
+The actual MG source has a top-bordered, padded inline owner around original
+Japanese text, with one empty absolutely positioned right-border descendant.
+The existing box carrier now authenticates the original owner source, typed inset
+and edge data, and the currentColor ownership. The inherited declaring brush is
+resolved during normal paint, including palette and selection foreground changes.
+The overlay uses the first/last inline padding-box containing geometry, paints once
+after its owner, and participates in repaint traversal without adding text,
+advance, or a line strut. This is the empty border-only domain; detached textual
+content, nested circles, atomic/float boxes and unrelated private layout are not
+included. Root paragraphs and validated ordinary root-owned table cells are
+admitted; unsupported frame and foreign/malformed policy ownership still refuse.
+
+Canonical projection changes five native leaves and preserves all prior exclusions.
+The private-only absolute policy symbol at one refusal is represented by the same
+property ID0x5861. This does not import absolute layout support. The two new controls
+and all eight prior method bodies match private source201 exactly; all other
+canonical Test bytes remain unchanged. The maintained32-target recipe is checked
+forward and in reverse, with no canonical checkout or native build mutation.
+
+Native182 built Gui, Widgets and Test; four controls passed and two failed.
+Its generated MOC reached the exact syntax-derived endpoint, while stale cache
+bookkeeping caused both raw final guards to fail. Independent closure reconciled
+source custody without converting those failures into passes. Native183 repaired
+the two selected controls with eight exact-body/domain passes retained and
+Widgets182 bytes unchanged. App254 and the retained App251 GUI in the ordinary MG session separately
+validated the genuine pitch owner. Full suites and whole-edition acceptance remain
+separate.
+
+The cumulative AF portion of this normal patch still includes its original
+QTextLayout header/private exported signature change. Those cumulative package
+facts remain distinct from source201: the latest five-leaf repair changes the
+private inline-box header and renderer implementation but does not change public
+header text, callable API, exported symbols or class member layout. Historical
+fixture/retention and syntax198 metadata is archived under explicit historical
+keys; that historical source201 scope was ten methods, six current plus four retained.
+The manifest binds Native183, App254, the retained App251 GUI, controlled frames and the ordinary
+ZA/MG repair session. These scoped qualifications do not authorize publication.
+
+### Inline-box frame recovery and fixture correction
+
+The source202 product change adds authenticated inline-box policy presence to
+existing full layout invalidation. Ordinary FloatRight-to-InFlow table format
+restoration therefore clears the earlier refusal through the maintained complete
+revalidation path. No header, Widgets source, API or object layout changes.
+The same strict two controls remain selected. The paint fixture now disables
+layout before installing its paint device and enables it before measuring; its
+three-row repaint stripe is cropped in the original overlay rectangle before
+intersecting the image. Raster equality, nonempty stripe, top stroke, metric,
+source and recovery assertions remain, with contextual failure diagnostics.
+
+Only two of the eight cumulative native endpoints change. All prior private
+exclusions and the refusal-only0x5861 projection remain identical. The saved
+32-target recipe and four-file package are checked forward and backward without
+reading or changing native working source, canonical files or the index.
+
+Native182's build and LTO audit passed; its selected tests were four PASS/two FAIL.
+Both raw source-after guards failed because an obsolete generated-MOC cache key
+remained active after the exact new endpoint was installed. Independent physical
+closure verified source custody and that endpoint without converting those raw
+failures into passes. Native183 earned the two repaired controls and current Gui/Test products.
+Eight exact-body/domain passes are retained separately; Widgets stays at182,
+and unchanged Test MOC bytes use the existing same-byte transition. The manifest
+binds the separate App and ordinary GUI evidence; no whole-corpus acceptance
+is inferred.
+
+### Cancelled owner choice and supplementary Han fallback
+
+Cancelling an in-entry language choice preserves the existing query, result pages,
+selection, filters and status; a pending ordinary search debounce resumes without
+rewriting the query. Entry and Back history stay unchanged. Typed search retains
+its separate exact-query behavior. The status bar shows a concise failure summary;
+full recovery instructions remain in Reading and the results status.
+
+The full unmodified HanaMinB font and its upstream dual license live once under
+apps/shared/fonts. The GUI and Reader test resource reference that shared source.
+Script_Han fallback preserves existing primary and kana font choices; U+20000 is
+verified as the real glyph104 with an outline and raster, alongside exact source,
+copy and accessibility offsets. First-use observations include ordinary UI
+construction and explicitly make no cold-cache or matched performance claim.

@@ -17,6 +17,13 @@ add_library(wikidict-product STATIC
     InlineAudioControls.hpp
 )
 add_library(wikidict-gui SHARED main.cpp)
+# One unchanged source asset is shared by native consumers. Each executable
+# embeds it once; wikidict-product itself contains no font resource copy.
+set(WIKIDICT_SHARED_FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/fonts")
+qt_add_resources(wikidict-gui supplementary_han_font PREFIX "/fonts"
+    BASE "${WIKIDICT_SHARED_FONT_DIR}"
+    FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
+          "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
 qt_add_resources(wikidict-gui reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
@@ -76,6 +83,7 @@ wikidict_select_install_core("${WIKIDICT_EXECUTABLE}" "${DICT_FFI_LIBRARY}"
     "${WIKIDICT_CORE}/src/ffi/dict.h")
 install(TARGETS wikidict-gui LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt"
+    "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt"
     DESTINATION share/licenses/wikidict)
 install(FILES "${wikidict_install_ffi}" DESTINATION lib)
 install(PROGRAMS "${wikidict_install_executable}" DESTINATION bin RENAME wikidict)
@@ -135,6 +143,11 @@ if(BUILD_TESTING)
         set_property(SOURCE ../tests/MainWindowTest.cpp ../tests/MainWindowInlineActionTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
+    qt_add_resources(dict-qt-tests test_supplementary_han_font PREFIX "/fonts"
+        BASE "${WIKIDICT_SHARED_FONT_DIR}"
+        FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
+              "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
+
     qt_add_resources(dict-qt-tests test_kana_font PREFIX "/fonts"
         BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
         FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"

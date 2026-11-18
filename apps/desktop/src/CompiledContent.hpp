@@ -68,28 +68,41 @@ inline void containerEdges(const QJsonValue &value) {
     const auto edges = containerObject(value, keys, keys);
     for (const auto &key : keys) containerLength(edges.value(key));
 }
-inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
-    // This first native domain keeps ordinary child runs and their actions.
-    // More complex owners are rejected before an empty owner can render away.
-    require(span.value("kind") == QStringLiteral("text")
-        && span.value("text").isString() && span.value("text").toString().isEmpty()
-        && span.value("trail").isString() && span.value("trail").toString().isEmpty()
-        && span.value("target").toString().isEmpty());
-    for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group",
-                           "inline_style", "background", "link_paint", "target_fragment"})
-        require(!present(span.value(key)));
-    require(!span.value("superscript").toBool() && !span.value("subscript").toBool()
-        && (!present(span.value("direction")) || span.value("direction").toString().isEmpty()));
-    const auto group = containerObject(span.value("inline_box_group"),
-        {"padding", "border", "overlays", "spans"}, {"padding", "border", "overlays", "spans"});
-    containerEdges(group.value("padding"));
-    require(group.value("overlays").isArray() && group.value("overlays").toArray().isEmpty());
-    const auto border = containerObject(group.value("border"), {"top", "right", "bottom", "left"},
+inline void inlineBoxText(const QString &text) {
+    require(text.isValidUtf16());
+    for (char32_t scalar : text.toUcs4()) {
+        const auto direction = QChar::direction(scalar);
+        // Same finite scalar exclusions as the source issuer and native parser.
+        // Private-use/unassigned characters keep ordinary Qt fallback shaping.
+        require(!(scalar <= 0x1f || (scalar >= 0x7f && scalar <= 0x9f)
+            || scalar == 0xfffc || scalar == 0x2028 || scalar == 0x2029
+            || scalar == 0x061c || scalar == 0x200e || scalar == 0x200f
+            || (scalar >= 0x202a && scalar <= 0x202e)
+            || (scalar >= 0x2066 && scalar <= 0x2069)
+            || scalar == 0x00ad || scalar == 0x200b || scalar == 0x2060 || scalar == 0xfeff
+            || direction == QChar::DirR || direction == QChar::DirAL));
+    }
+    // The native shaper still proves source custody, LTR runs and real cluster
+    // boundaries. Scalar admission does not grant a new layout owner.
+}
+// A source-bound border owner keeps inherited currentColor unresolved until
+// native drawing. Empty overlays contribute paint, never text or advance.
+inline bool inlineBoxUsesBorderSource(const QJsonObject &span) {
+    const auto group = span.value("inline_box_group").toObject();
+    if (!group.value("overlays").toArray().isEmpty()) return true;
+    if (present(span.value("foreground"))) return false;
+    const auto border = group.value("border").toObject();
+    for (const auto key : {"top", "right", "bottom", "left"})
+        if (border.value(key).toObject().value("solid").toObject().value("color").toObject().contains("current_color")) return true;
+    return false;
+}
+inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound) {
+    const auto border = containerObject(value, {"top", "right", "bottom", "left"},
         {"top", "right", "bottom", "left"});
     for (const auto key : {"top", "right", "bottom", "left"}) {
         const auto edge = object(border.value(key)); require(edge.size() == 1);
         const auto tag = edge.keys().first();
-        require((tag == "none" || tag == "hidden" || tag == "solid") && edge.value(tag).isObject());
+        require((tag == "none" || (!sourceBound && tag == "hidden") || tag == "solid") && edge.value(tag).isObject());
         if (tag == "solid") {
             const auto solid = containerObject(edge.value(tag), {"width", "color"}, {"width", "color"});
             containerLength(solid.value("width"));
@@ -102,25 +115,113 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
             } else {
                 require((colorTag == "transparent" || colorTag == "current_color")
                     && color.value(colorTag).isObject() && color.value(colorTag).toObject().isEmpty());
-                if (colorTag == "current_color") require(span.value("foreground").isString());
+                if (colorTag == "current_color" && !sourceBound) require(span.value("foreground").isString());
             }
         } else require(edge.value(tag).toObject().isEmpty());
+    }
+}
+inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
+    // This first native domain keeps ordinary child runs and their actions.
+    // More complex owners are rejected before an empty owner can render away.
+    const bool wholeLink = span.value("kind") == QStringLiteral("link");
+    require((span.value("kind") == QStringLiteral("text") || wholeLink)
+        && span.value("text").isString() && span.value("text").toString().isEmpty()
+        && span.value("trail").isString() && span.value("trail").toString().isEmpty()
+        && (wholeLink ? span.value("target").isString() && !span.value("target").toString().isEmpty()
+                      : span.value("target").toString().isEmpty()));
+    for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group",
+                           "inline_style", "link_paint", "target_fragment", "audio_control", "citation_marker"})
+        require(!present(span.value(key)));
+    require(!span.value("superscript").toBool() && !span.value("subscript").toBool()
+        && (!present(span.value("direction")) || span.value("direction").toString().isEmpty()));
+    if (present(span.value("background"))) {
+        const auto value = span.value("background"); const QString rgb = value.toString();
+        require(value.isString() && rgb.size() == 7 && rgb.front() == '#');
+        for (QChar c : rgb.mid(1)) require((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+    }
+    const auto group = containerObject(span.value("inline_box_group"),
+        {"padding", "border", "overlays", "spans", "radius"}, {"padding", "border", "overlays", "spans"});
+    const bool rounded = present(group.value("radius"));
+    if (rounded) {
+        const auto radius = containerObject(group.value("radius"), {"unit", "value"}, {"unit", "value"});
+        require(radius.value("unit") == QStringLiteral("px") && radius.value("value").isDouble()
+            && std::isfinite(radius.value("value").toDouble()) && radius.value("value").toDouble() >= 0
+            && radius.value("value").toDouble() <= std::numeric_limits<float>::max());
+    }
+    containerEdges(group.value("padding"));
+    require(group.value("overlays").isArray());
+    const bool sourceBound = inlineBoxUsesBorderSource(span);
+    const auto border = group.value("border").toObject();
+    inlineBoxBorder(group.value("border"), span, sourceBound);
+    if (sourceBound) {
+        require(!rounded && !wholeLink && span.value("target") == QJsonValue(QString())
+            && span.value("direction") == QJsonValue(QString()));
+        for (const auto key : {"inline_box", "audio"}) require(!present(span.value(key)));
+        if (present(span.value("foreground"))) {
+            const auto value = span.value("foreground"); const QString rgb = value.toString();
+            require(value.isString() && rgb.size() == 7 && rgb.front() == '#');
+            for (QChar c : rgb.mid(1)) require((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+        }
+        const auto overlays = group.value("overlays").toArray(); require(overlays.size() <= 64);
+        for (const auto &raw : overlays) {
+            const auto overlay = containerObject(raw, {"insets", "border"}, {"insets", "border"});
+            inlineBoxBorder(overlay.value("border"), span, true);
+            const auto insets = containerObject(overlay.value("insets"), {"top", "right", "bottom", "left"},
+                {"top", "right", "bottom", "left"});
+            for (const auto key : {"top", "right", "bottom", "left"}) {
+                const auto value = insets.value(key); if (value.isNull()) continue;
+                const auto length = containerObject(value, {"unit", "value"}, {"unit", "value"});
+                require((length.value("unit") == QStringLiteral("px") || length.value("unit") == QStringLiteral("percent"))
+                    && length.value("value").isDouble() && std::isfinite(length.value("value").toDouble())
+                    && std::abs(length.value("value").toDouble()) <= std::numeric_limits<float>::max());
+            }
+            require((!insets.value("top").isNull() || !insets.value("bottom").isNull())
+                && (!insets.value("left").isNull() || !insets.value("right").isNull()));
+        }
+    }
+    if (rounded || wholeLink) {
+        const auto edge = border.value("top").toObject();
+        require(edge.contains("solid") && edge.value("solid").toObject().value("color").toObject().contains("rgb"));
+        for (const auto key : {"right", "bottom", "left"}) require(border.value(key) == border.value("top"));
     }
     require(group.value("spans").isArray());
     const auto children = group.value("spans").toArray();
     require(!children.isEmpty() && children.size() <= (1 << 20));
+    if (wholeLink || sourceBound) require(children.size() == 1);
     QString source;
     for (const auto &raw : children) {
         const auto child = object(raw); const auto kind = child.value("kind").toString();
         require(kind == "text" || kind == "link" || kind == "external_link");
+        if (sourceBound) {
+            require(kind == "text" && child.value("target") == QJsonValue(QString())
+                && child.value("direction") == QJsonValue(QString()));
+            for (const auto key : {"inline_box", "audio", "target_fragment"}) require(!present(child.value(key)));
+            require(!present(child.value("foreground")) || child.value("foreground") == span.value("foreground"));
+        }
+        if (wholeLink) {
+            require(kind == "text" && child.value("target") == QJsonValue(QString())
+                && !present(child.value("target_fragment")));
+            // This branch materializes one owner over its original plain text.
+            // It cannot flatten a separately styled or actionable descendant.
+            const auto effectiveStyle = [](QJsonObject value) {
+                for (const auto key : {"kind", "text", "trail", "target", "inline_box_group"}) value.remove(key);
+                for (const auto &key : value.keys()) if (value.value(key).isNull()) value.remove(key);
+                return value;
+            };
+            require(effectiveStyle(child) == effectiveStyle(span));
+        }
         require(child.value("text").isString() && child.value("trail").isString());
         for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group", "inline_box_group",
-                               "inline_style", "background", "link_paint"}) require(!present(child.value(key)));
+                               "inline_style", "link_paint", "audio_control", "citation_marker"}) require(!present(child.value(key)));
+        // Effective child style may repeat its declaring owner's background.
+        // Different child paint remains outside this single static box domain.
+        if (present(child.value("background")))
+            require(present(span.value("background")) && child.value("background") == span.value("background"));
         require(!child.value("superscript").toBool() && !child.value("subscript").toBool()
             && (!present(child.value("direction")) || child.value("direction").toString().isEmpty()));
         const QString text = child.value("text").toString() + child.value("trail").toString();
         require(!text.isEmpty() && text.size() <= (1 << 20) - source.size());
-        for (QChar c : text) require(c.unicode() >= 0x20 && c.unicode() <= 0x7e);
+        inlineBoxText(text);
         source += text;
     }
     require(children.first().toObject().value("kind") == "text"

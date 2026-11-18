@@ -8,6 +8,7 @@
 #include <QTextFrame>
 #include <QScopeGuard>
 #include <QVariant>
+#include <QPainterPath>
 #include <cmath>
 #include <optional>
 
@@ -49,6 +50,24 @@ inline Position position(QTextDocument *document, int originalOffset) {
     if (values.contains(QStringLiteral("lineBaseline"))
         && (values.value(QStringLiteral("lineBaseline")).metaType().id() != QMetaType::Double
             || !std::isfinite(values.value(QStringLiteral("lineBaseline")).toDouble()))) return {};
+    // Optional whole-link geometry is valid on stock and projected paragraphs.
+    // It never replaces the original character/caret rectangle.
+    if (values.contains(QStringLiteral("actionRect")) && !finiteRect(values.value(QStringLiteral("actionRect")))) return {};
+    if (values.contains(QStringLiteral("inlineBoxActionPath"))) {
+        const auto value = values.value(QStringLiteral("inlineBoxActionPath"));
+        if (value.metaType().id() != qMetaTypeId<QPainterPath>() || !values.contains(QStringLiteral("actionRect"))) return {};
+        const auto first = values.value(QStringLiteral("inlineBoxActionFirst"));
+        const auto last = values.value(QStringLiteral("inlineBoxActionLast"));
+        const auto href = values.value(QStringLiteral("inlineBoxActionHref"));
+        if (first.metaType().id() != QMetaType::Int || last.metaType().id() != QMetaType::Int
+            || href.metaType().id() != QMetaType::QString || href.toString().isEmpty()
+            || first.toInt() < 0 || first.toInt() > originalOffset || last.toInt() <= originalOffset
+            || last.toInt() >= document->characterCount()) return {};
+        const auto path = value.value<QPainterPath>();
+        for (int i = 0; i < path.elementCount(); ++i)
+            if (!std::isfinite(path.elementAt(i).x) || !std::isfinite(path.elementAt(i).y)) return {};
+        if (path.isEmpty() || path.boundingRect() != values.value(QStringLiteral("actionRect")).toRectF()) return {};
+    }
     if (!values.value(QStringLiteral("handled")).toBool()) return {Status::Stock, 0, values};
     for (const QString &key : {QStringLiteral("first"), QStringLiteral("last"), QStringLiteral("position")})
         if (values.value(key).metaType().id() != QMetaType::Int) return {};
@@ -59,7 +78,6 @@ inline Position position(QTextDocument *document, int originalOffset) {
         || values.value(QStringLiteral("last")).toInt() >= document->characterCount()
         || !finiteRect(values.value(QStringLiteral("cursorRect")))) return {};
     if (values.contains(QStringLiteral("characterRect")) && !finiteRect(values.value(QStringLiteral("characterRect")))) return {};
-    if (values.contains(QStringLiteral("actionRect")) && !finiteRect(values.value(QStringLiteral("actionRect")))) return {};
     return {Status::Handled, 0, values};
 }
 

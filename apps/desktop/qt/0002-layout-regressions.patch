@@ -22,12 +22,13 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14669 @@
+@@ -3,24 +3,14912 @@
 
 
  #include <QTest>
 +#include <QtGui/private/qtextdocumentlayout_p.h>
 +#include <QtGui/private/qtextengine_p.h>
++#include <QtGui/private/qtextinlinebox_p.h>
 +#include <QtGui/private/qtextrubylayout_p.h>
 +#include <QtGui/private/qtextrubyrangemap_p.h>
 +#include <QtGui/private/qtextlogicalflow_p.h>
@@ -847,12 +848,249 @@
 +    }
 +    void layout(qreal width) { document.setTextWidth(width * scale); native->documentSize(); }
 +};
++
++struct BorderOverlayControl
++{
++    QTextDocument document;
++    QTextTable *table = nullptr;
++    QTextCursor range;
++    QFont font;
++    QJsonObject source;
++    QVariantMap policy;
++    BorderOverlayControl(bool cell, qreal width, const QString &text, bool overlay, bool explicitInk)
++    {
++        document.setLayoutEnabled(false); document.setDocumentMargin(0); document.setTextWidth(width);
++        font = QFont(QStringLiteral("DejaVu Sans")); font.setPointSizeF(12); document.setDefaultFont(font);
++        auto option = document.defaultTextOption(); option.setTextDirection(Qt::LeftToRight); document.setDefaultTextOption(option);
++        QTextCursor cursor(&document);
++        if (cell) {
++            QTextTableFormat format; format.setBorder(0); format.setMargin(11); format.setCellPadding(7); format.setCellSpacing(3);
++            format.setWidth(QTextLength(QTextLength::FixedLength, width - 30));
++            table = cursor.insertTable(1, 1, format); cursor = table->cellAt(0, 0).firstCursorPosition();
++        }
++        cursor.insertText(QStringLiteral("\u30df"));
++        const int first = cursor.position(); cursor.insertText(text); const int last = cursor.position(); cursor.insertText(QStringLiteral("\u308b"));
++        range = QTextCursor(&document); range.setPosition(first); range.setPosition(last, QTextCursor::KeepAnchor);
++        const auto length = [](qreal number, const char *unit = "px") { return QJsonObject{{"unit", QString::fromLatin1(unit)}, {"value", number}}; };
++        const QJsonObject none{{"none", QJsonObject()}}, dynamic{{"current_color", QJsonObject()}};
++        const QJsonObject solid{{"solid", QJsonObject{{"width", length(1)}, {"color", dynamic}}}};
++        const QJsonObject border{{"top", solid}, {"right", none}, {"bottom", none}, {"left", none}};
++        const QJsonObject overlayBorder{{"top", none}, {"right", solid}, {"bottom", none}, {"left", none}};
++        const QJsonObject overlaySource{{"insets", QJsonObject{{"top", length(0)}, {"right", length(0, "percent")},
++            {"bottom", length(67, "percent")}, {"left", QJsonValue(QJsonValue::Null)}}}, {"border", overlayBorder}};
++        QJsonObject child{{"kind", "text"}, {"text", text}, {"trail", ""}, {"target", ""}, {"direction", ""}, {"foreground", QJsonValue(QJsonValue::Null)}};
++        source = QJsonObject{{"kind", "text"}, {"text", ""}, {"trail", ""}, {"target", ""}, {"direction", ""}, {"foreground", QJsonValue(QJsonValue::Null)}};
++        if (explicitInk) { child["foreground"] = QStringLiteral("#197531"); source["foreground"] = QStringLiteral("#197531"); }
++        source["inline_box_group"] = QJsonObject{{"padding", QJsonObject{{"top", length(1)}, {"right", length(1)}, {"bottom", length(1)}, {"left", length(1)}}},
++            {"border", border}, {"overlays", overlay ? QJsonArray{overlaySource} : QJsonArray()}, {"spans", QJsonArray{child}}};
++        const QVariantList clear{QColor(Qt::transparent), QColor(Qt::transparent), QColor(Qt::transparent), QColor(Qt::transparent)};
++        const QVariantMap overlayPolicy{{"insets", QVariantList{QVariantMap{{"unit", "px"}, {"value", 0.0}},
++            QVariantMap{{"unit", "percent"}, {"value", 0.0}}, QVariantMap{{"unit", "percent"}, {"value", 67.0}}, QVariant()}},
++            {"widths", QVariantList{0.0, 1.0, 0.0, 0.0}}, {"colors", clear}, {"currentColors", QVariantList{false, true, false, false}}};
++        policy = QVariantMap{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))}, {"first", first}, {"last", last}, {"source", text}, {"font", font},
++            {"padding", QVariantList{1.0, 1.0, 1.0, 1.0}}, {"widths", QVariantList{1.0, 0.0, 0.0, 0.0}}, {"colors", clear},
++            {"borderSource", QJsonDocument(source).toJson(QJsonDocument::Compact)}, {"currentColors", QVariantList{true, false, false, false}},
++            {"overlays", overlay ? QVariantList{overlayPolicy} : QVariantList()}};
++        auto format = range.charFormat(); format.setFont(font);
++        if (explicitInk) format.setForeground(QColor(QStringLiteral("#197531"))); else format.clearForeground();
++        format.setProperty(QCompiledInlineBox::Property, policy); range.setCharFormat(format);
++        document.setLayoutEnabled(true);
++    }
++    QTextDocumentLayout *layout() { return qobject_cast<QTextDocumentLayout *>(document.documentLayout()); }
++    void install(const QVariantMap &value) {
++        document.setLayoutEnabled(false); auto format = range.charFormat(); format.setProperty(QCompiledInlineBox::Property, value);
++        range.setCharFormat(format); document.markContentsDirty(0, document.characterCount()); document.setLayoutEnabled(true);
++    }
++};
 
  class tst_QTextDocumentLayout : public QObject
  {
      Q_OBJECT
 
  private slots:
++    void borderOnlyOverlaysKeepSourceMetricsBrushAndCellCoordinates()
++    {
++        for (bool cell : {false, true}) for (bool wrapped : {false, true}) for (bool explicitInk : {false, true}) for (int dpi : {96, 144}) {
++            const QString text = wrapped ? QString(18, QChar(0x30b9)) : QString(QChar(0x30b9));
++            const qreal width = wrapped ? 95 : 420;
++            BorderOverlayControl actual(cell, width, text, true, explicitInk), ordinary(cell, width, text, false, explicitInk);
++            QImage device(1000, 900, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            // setPaintDevice only stores the device pointer. The fixture was
++            // already laid out when its constructor enabled layout, so recompute
++            // both real layouts at this device DPI before measuring or painting.
++            actual.document.setLayoutEnabled(false); ordinary.document.setLayoutEnabled(false);
++            actual.layout()->setPaintDevice(&device); ordinary.layout()->setPaintDevice(&device);
++            actual.document.setLayoutEnabled(true); ordinary.document.setLayoutEnabled(true);
++            const auto raw = actual.document.toRawText(); const int first = actual.range.selectionStart(), last = actual.range.selectionEnd();
++            const auto actualSize = actual.layout()->documentSize(); const auto ordinarySize = ordinary.layout()->documentSize();
++            const QByteArray variant = QStringLiteral("cell=%1 wrapped=%2 explicitInk=%3 dpi=%4 error=%5")
++                .arg(cell).arg(wrapped).arg(explicitInk).arg(dpi).arg(actual.layout()->wikidictParagraphBoxLayoutError()).toUtf8();
++            QVERIFY2(actual.layout()->wikidictParagraphBoxLayoutError() == 0, variant.constData());
++            QCOMPARE(ordinary.layout()->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(actualSize, ordinarySize);
++            auto *layout = actual.range.block().layout(), *reference = ordinary.range.block().layout();
++            QCOMPARE(layout->lineCount(), reference->lineCount()); QVERIFY(wrapped ? layout->lineCount() > 1 : layout->lineCount() == 1);
++            for (int i = 0; i < layout->lineCount(); ++i) {
++                const auto a = layout->lineAt(i), b = reference->lineAt(i);
++                QCOMPARE(a.height(), b.height()); QCOMPARE(a.ascent(), b.ascent()); QCOMPARE(a.naturalTextWidth(), b.naturalTextWidth());
++                for (int p = a.textStart(); p <= a.textStart() + a.textLength(); ++p) QCOMPARE(a.cursorToX(p), b.cursorToX(p));
++            }
++            const auto pieces = QCompiledInlineBox::slices(layout); QVERIFY2(!pieces.isEmpty(), variant.constData());
++            const auto origin = actual.layout()->blockBoundingRect(actual.range.block()).topLeft();
++            if (cell) {
++                const auto bounds = actual.layout()->tableCellBoundingRect(actual.table, actual.table->cellAt(0, 0));
++                QVERIFY(bounds.left() > 0); QVERIFY(bounds.top() > 0); QVERIFY(origin.x() >= bounds.left());
++                QCOMPARE(bounds, ordinary.layout()->tableCellBoundingRect(ordinary.table, ordinary.table->cellAt(0, 0)));
++            }
++            const QRectF containing = pieces.first().geometry.padding.united(pieces.last().geometry.padding).translated(origin);
++            const qreal scale = QCompiledInline::deviceScale(QFont(actual.font, &device));
++            const QRectF expectedOverlay(containing.right() - scale, containing.top(), scale, containing.height() * .33);
++            QList<qreal> scales; for (const auto &part : pieces) { Q_UNUSED(part); scales.append(scale); }
++            QList<QCompiledInlineBox::OverlayPaint> overlays;
++            QVERIFY(QCompiledInlineBox::overlayPaints(pieces, scales, &overlays)); QCOMPARE(overlays.size(), 1);
++            const auto observed = overlays.first().geometry.border.translated(origin);
++            QVERIFY2(qAbs(observed.left() - expectedOverlay.left()) < .0001 && qAbs(observed.top() - expectedOverlay.top()) < .0001
++                && qAbs(observed.width() - expectedOverlay.width()) < .0001 && qAbs(observed.height() - expectedOverlay.height()) < .0001, variant.constData());
++            QCOMPARE(overlays.first().line, pieces.last().line);
++            for (const QColor theme : {QColor(31, 71, 181), QColor(211, 137, 41)}) for (int selectionMode : {0, 1, 2}) {
++                QAbstractTextDocumentLayout::PaintContext context; context.palette.setColor(QPalette::Text, theme);
++                QPainterPath selectedRegion;
++                if (selectionMode) {
++                    QAbstractTextDocumentLayout::Selection selection; selection.cursor = actual.range;
++                    if (selectionMode == 2) {
++                        selection.cursor.setPosition(first); selection.cursor.setPosition(first + 1, QTextCursor::KeepAnchor);
++                    }
++                    selection.format.setForeground(QColor(191, 17, 139)); context.selections.append(selection);
++                    // The ordinary native partial-character selection owns this
++                    // actual shaped source interval and its original line band.
++                    const int local = first - actual.range.block().position();
++                    const int end = local + (selectionMode == 2 ? 1 : last - first);
++                    for (int lineIndex = 0; lineIndex < layout->lineCount(); ++lineIndex) {
++                        const auto line = layout->lineAt(lineIndex);
++                        const int start = qMax(local, line.textStart()), finish = qMin(end, line.textStart() + line.textLength());
++                        if (finish <= start) continue;
++                        const qreal x1 = line.cursorToX(start), x2 = line.cursorToX(finish);
++                        selectedRegion.addRect(QRectF(origin.x() + qMin(x1, x2), origin.y() + line.naturalTextRect().top(),
++                            qAbs(x2 - x1), qCeil(origin.y() + line.naturalTextRect().bottom()) - origin.y() - line.naturalTextRect().top()));
++                    }
++                }
++                QImage rendered = device.copy(), expected = device.copy(); rendered.fill(Qt::white); expected.fill(Qt::white);
++                { QPainter painter(&rendered); actual.layout()->draw(&painter, context); }
++                auto referenceContext = context;
++                if (selectionMode) {
++                    auto cursor = ordinary.range;
++                    if (selectionMode == 2) { cursor.setPosition(first); cursor.setPosition(first + 1, QTextCursor::KeepAnchor); }
++                    referenceContext.selections[0].cursor = cursor;
++                }
++                { QPainter painter(&expected); ordinary.layout()->draw(&painter, referenceContext);
++                    const QColor ink = explicitInk ? QColor(QStringLiteral("#197531")) : theme;
++                    painter.fillRect(expectedOverlay, ink);
++                    if (selectionMode) { painter.setClipPath(selectedRegion); painter.fillRect(expectedOverlay, QColor(191, 17, 139)); }
++                }
++                QVERIFY2(rendered == expected, qPrintable(QString::fromUtf8(variant) + QStringLiteral(" theme=%1 selection=%2")
++                    .arg(theme.name()).arg(selectionMode)));
++                if (dpi == 96 && selectionMode == 0) {
++                    // Independent top-stroke oracle: both comparison fixtures
++                    // use currentColor, so their equality alone cannot prove
++                    // that the declaring top edge was painted at all.
++                    const auto edge = pieces.first().geometry.border.translated(origin);
++                    const QRect topBand = QRectF(edge.left() + scale, edge.top(), edge.width() - 2 * scale, scale).toAlignedRect().intersected(rendered.rect());
++                    const QColor ink = explicitInk ? QColor(QStringLiteral("#197531")) : theme;
++                    int topInk = 0;
++                    for (int y = topBand.top(); y <= topBand.bottom(); ++y)
++                        for (int x = topBand.left(); x <= topBand.right(); ++x) topInk += rendered.pixelColor(x, y) == ink;
++                    QVERIFY2(topInk > 0, qPrintable(QString::fromUtf8(variant) + QStringLiteral(" missing declaring top currentColor=%1").arg(ink.name())));
++                }
++                // Clip only the first three rows of overlay ink. For a wrapped
++                // owner its paint call is on the last line, so traversal must
++                // include that call even when the last text line is outside.
++                const QRect overlayPixels = expectedOverlay.toAlignedRect();
++                const QRect stripe = overlayPixels.adjusted(0, 0, 0,
++                    -qMax(0, overlayPixels.height() - 3)).intersected(rendered.rect());
++                QVERIFY2(!stripe.isEmpty(), qPrintable(QString::fromUtf8(variant)
++                    + QStringLiteral(" theme=%1 selection=%2 overlay=(%3,%4 %5x%6) stripe=(%7,%8 %9x%10) image=%11x%12")
++                        .arg(theme.name()).arg(selectionMode).arg(expectedOverlay.x()).arg(expectedOverlay.y())
++                        .arg(expectedOverlay.width()).arg(expectedOverlay.height()).arg(stripe.x()).arg(stripe.y())
++                        .arg(stripe.width()).arg(stripe.height()).arg(rendered.width()).arg(rendered.height())));
++                QImage clipped = device.copy(); clipped.fill(Qt::white);
++                context.clip = stripe;
++                { QPainter painter(&clipped); painter.setClipRect(stripe); actual.layout()->draw(&painter, context); }
++                QCOMPARE(clipped.copy(stripe), rendered.copy(stripe));
++                if (selectionMode == 0) {
++                    // Document painting clips externally for glyph overflow.
++                    // Also exercise QTextLayout's own clip-to-lines pruning on
++                    // this same real completed layout and overlay owner.
++                    QImage fullLinePaint = device.copy(), clippedLinePaint = device.copy();
++                    fullLinePaint.fill(Qt::white); clippedLinePaint.fill(Qt::white);
++                    const auto placement = origin - layout->position();
++                    { QPainter painter(&fullLinePaint); painter.setPen(theme); layout->draw(&painter, placement); }
++                    { QPainter painter(&clippedLinePaint); painter.setPen(theme); painter.setClipRect(stripe);
++                        layout->draw(&painter, placement, {}, stripe); }
++                    QCOMPARE(clippedLinePaint.copy(stripe), fullLinePaint.copy(stripe));
++                }
++                QCOMPARE(actual.layout()->wikidictParagraphBoxLayoutError(), 0);
++            }
++            QCOMPARE(actual.document.toRawText(), raw); QCOMPARE(actual.range.selectedText(), text);
++            QCOMPARE(actual.range.selectionStart(), first); QCOMPARE(actual.range.selectionEnd(), last);
++            for (int position = first; position < last; ++position) {
++                const auto geometry = actual.layout()->wikidictLogicalPosition(position);
++                QCOMPARE(geometry.value("characterRect").toRectF(), ordinary.layout()->wikidictLogicalPosition(position).value("characterRect").toRectF());
++            }
++        }
++    }
++
++    void borderOnlyOverlayPolicyRejectsForeignGeometryAndRecovers()
++    {
++        BorderOverlayControl fixture(true, 360, QString(QChar(0x30b9)), true, false);
++        fixture.layout()->documentSize(); QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 0);
++        const auto good = fixture.policy; const auto raw = fixture.document.toRawText(); QTextDocument foreign;
++        for (int which = 0; which < 10; ++which) {
++            auto bad = good;
++            if (which == 0) bad["document"] = QVariant::fromValue(static_cast<QObject *>(&foreign));
++            if (which == 1) { auto flags = bad.value("currentColors").toList(); flags[0] = 1; bad["currentColors"] = flags; }
++            if (which == 2) { auto overlays = bad.value("overlays").toList(); auto overlay = overlays.first().toMap();
++                auto insets = overlay.value("insets").toList(); auto value = insets[2].toMap(); value["value"] = QStringLiteral("67"); insets[2] = value;
++                overlay["insets"] = insets; overlays[0] = overlay; bad["overlays"] = overlays; }
++            if (which == 3) bad.remove("borderSource");
++            if (which == 4) bad["radius"] = 0.0;
++            if (which == 5) { auto source = fixture.source; auto group = source.value("inline_box_group").toObject(); group["overlays"] = QJsonArray();
++                source["inline_box_group"] = group; bad["borderSource"] = QJsonDocument(source).toJson(QJsonDocument::Compact); }
++            if (which == 6) { auto source = fixture.source; source["foreground"] = QStringLiteral("#ff0000");
++                bad["borderSource"] = QJsonDocument(source).toJson(QJsonDocument::Compact); }
++            if (which == 7) { auto overlays = bad.value("overlays").toList(); auto overlay = overlays.first().toMap(); auto insets = overlay.value("insets").toList();
++                insets[0] = QVariant(); insets[2] = QVariant(); overlay["insets"] = insets; overlays[0] = overlay; bad["overlays"] = overlays; }
++            if (which == 8) { auto source = fixture.source; auto group = source.value("inline_box_group").toObject(); auto overlays = group.value("overlays").toArray();
++                auto overlay = overlays.first().toObject(); overlay["content"] = QJsonObject{{"spans", QJsonArray()}}; overlays[0] = overlay; group["overlays"] = overlays;
++                source["inline_box_group"] = group; bad["borderSource"] = QJsonDocument(source).toJson(QJsonDocument::Compact); }
++            if (which == 9) bad["extra"] = true;
++            fixture.install(bad); fixture.layout()->documentSize();
++            QVERIFY2(fixture.layout()->wikidictParagraphBoxLayoutError() == 1, qPrintable(QStringLiteral("overlay refusal case=%1 error=%2")
++                .arg(which).arg(fixture.layout()->wikidictParagraphBoxLayoutError())));
++            QCOMPARE(fixture.range.charFormat().property(QCompiledInlineBox::Property), QVariant(bad));
++            fixture.install(good); fixture.layout()->documentSize(); QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(fixture.document.toRawText(), raw);
++        }
++        // A bounded metrics read does not grant malformed overlay source any
++        // layout/paint admission. The full census still fails before drawing.
++        auto brokenSource = good; brokenSource["borderSource"] = QByteArray("{");
++        QCompiledInlineBox::Box metrics;
++        QVERIFY(QCompiledInlineBox::parseMetrics(brokenSource, &metrics));
++        QVERIFY(!QCompiledInlineBox::parse(brokenSource, nullptr));
++        fixture.install(brokenSource); fixture.layout()->documentSize();
++        QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 1);
++        QImage refused(480, 240, QImage::Format_ARGB32_Premultiplied); refused.fill(Qt::white);
++        { QPainter painter(&refused); fixture.layout()->draw(&painter, {}); }
++        QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 1);
++        QImage blank(refused.size(), refused.format()); blank.fill(Qt::white); QCOMPARE(refused, blank);
++        fixture.install(good); fixture.layout()->documentSize(); QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(fixture.document.toRawText(), raw);
++        auto frameFormat = fixture.table->format(); frameFormat.setPosition(QTextFrameFormat::FloatRight); fixture.table->setFormat(frameFormat);
++        fixture.layout()->documentSize(); QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 1);
++        frameFormat.setPosition(QTextFrameFormat::InFlow); fixture.table->setFormat(frameFormat); fixture.layout()->documentSize();
++        QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(), 0);
++    }
++
 +    void tableMinimumWidthKeepsAutoPreferredAndBorderBoxIndependent()
 +    {
 +        constexpr int owner = QTextFormat::UserProperty + 0x57d0, minimum = QTextFormat::UserProperty + 0x5866;
@@ -1620,6 +1858,11 @@
 +    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
 +    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
 +    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
++    void roundedInlineBoxesSliceOneDecorationAndKeepSelection();
++    void roundedWholeLinksKeepCurvedHitsNativeFocusAndSource();
++    void roundedWholeLinksRefuseForeignPolicyAndRecover();
++    void inlineBoxesKeepUnicodeClustersAndDeclaringBackground();
++    void inlineBoxesRefuseInvalidUnicodeBackgroundAndRecover();
 +    void referenceDecimalMarkerUsesOwnerRunAndPrincipalBaseline();
 +    void citationNoWrapKeepsSourceClustersAndNeighborBreaks();
 +    void citationTargetOutlineSharesPaintTraversalAndEpoch();
@@ -14692,7 +14935,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15293,2013 @@
+@@ -648,5 +15536,2672 @@
      }
  }
 
@@ -15131,6 +15374,665 @@
 +// Source-only test slots for the existing native QTextDocumentLayout test class.
 +// Requires existing private qtextengine_p.h include. Not inserted or compiled.
 +// These are engine metric/boundary controls, not Ruby paint/copy/AX acceptance.
++struct RoundedLinkControl {
++    QImage image{960, 560, QImage::Format_ARGB32_Premultiplied};
++    QTextDocument document;
++    QTextDocumentLayout *native = nullptr;
++    QFont font{QStringLiteral("DejaVu Sans"), 18};
++    QString label = QStringLiteral("Oorganklik"), prefix = QStringLiteral("pre"), suffix = QStringLiteral("post");
++    QString target = QStringLiteral("Wiktionary:Oorganklik en onoorganklik"), href;
++    QVariantMap policy;
++    QTextCharFormat format;
++    int first = 0, last = 0;
++    bool projected = false;
++    RoundedLinkControl(int dpi, qreal radius, bool useProjection = false) : projected(useProjection)
++    {
++        image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++        font.setItalic(true); document.setLayoutEnabled(false); document.setDefaultFont(font);
++        document.setDocumentMargin(24);
++        QTextOption option; option.setTextDirection(Qt::LeftToRight); option.setWrapMode(QTextOption::WrapAnywhere);
++        document.setDefaultTextOption(option);
++        native = qobject_cast<QTextDocumentLayout *>(document.documentLayout());
++        native->setPaintDevice(&image);
++        href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target));
++        format.setFont(font); format.setAnchor(true); format.setAnchorHref(href); format.setForeground(Qt::blue); format.setFontUnderline(true);
++        QTextCursor cursor(&document); cursor.insertText(prefix + label + suffix, format);
++        first = prefix.size(); last = first + label.size();
++        const auto length = [](qreal value, const char *unit) { return QJsonObject{{"unit", QString::fromLatin1(unit)}, {"value", value}}; };
++        QJsonObject edge{{"solid", QJsonObject{{"width", length(1, "px")}, {"color", QJsonObject{{"rgb", "#c8ccd1"}}}}}};
++        QJsonObject child{{"kind", "text"}, {"text", label}, {"trail", ""}, {"target", ""}, {"italic", true}, {"background", "#f8f9fa"}};
++        QJsonObject group{{"padding", QJsonObject{{"top", length(0, "px")}, {"right", length(.2, "em")},
++            {"bottom", length(0, "px")}, {"left", length(.1, "em")}}},
++            {"border", QJsonObject{{"top", edge}, {"right", edge}, {"bottom", edge}, {"left", edge}}},
++            {"overlays", QJsonArray{}}, {"spans", QJsonArray{child}}};
++        if (radius >= 0) group.insert("radius", length(radius, "px"));
++        QJsonObject owner{{"kind", "link"}, {"text", ""}, {"trail", ""}, {"target", target},
++            {"italic", true}, {"background", "#f8f9fa"}, {"inline_box_group", group}};
++        const qreal em = font.pointSizeF() * qt_defaultDpi() / 72;
++        policy = {{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))}, {"first", first}, {"last", last},
++            {"source", label}, {"font", font}, {"padding", QVariantList{0.0, .2 * em, 0.0, .1 * em}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor("#c8ccd1"), QColor("#c8ccd1"), QColor("#c8ccd1"), QColor("#c8ccd1")}},
++            {"background", QColor("#f8f9fa")}, {"action", QVariantMap{{"source", QJsonDocument(owner).toJson(QJsonDocument::Compact)}, {"href", href}}}};
++        if (radius >= 0) policy.insert("radius", radius);
++        install(policy);
++    }
++    bool install(const QVariantMap &value, const QString &actualHref = QString())
++    {
++        document.setLayoutEnabled(false);
++        QTextCursor range(&document); range.setPosition(first); range.setPosition(last, QTextCursor::KeepAnchor);
++        auto owned = format; owned.setProperty(QCompiledInlineBox::Property, value);
++        if (!actualHref.isNull()) owned.setAnchorHref(actualHref);
++        range.setCharFormat(owned);
++        bool accepted = true;
++        if (projected) accepted = native->wikidictSetLogicalFlows({QVariantMap{{"first", 0}, {"last", document.characterCount() - 1},
++            {"direction", int(Qt::LeftToRight)}, {"joins", QVariantList{}},
++            {"parts", QVariantList{QVariantMap{{"kind", "text"}, {"first", 0}, {"last", document.characterCount() - 1}}}}}});
++        document.setLayoutEnabled(true);
++        return accepted;
++    }
++    bool layout(qreal width)
++    {
++        document.setTextWidth(width); native->documentSize();
++        return native->wikidictParagraphBoxLayoutError() == 0;
++    }
++};
++
++void tst_QTextDocumentLayout::roundedInlineBoxesSliceOneDecorationAndKeepSelection()
++{
++    const QString source = QStringLiteral("Oorganklik Oorganklik Oorganklik");
++    for (int dpi : {96, 144}) for (qreal radius : {0.0, 2.0, 40.0}) {
++        QImage image(960, 560, QImage::Format_ARGB32_Premultiplied);
++        image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++        QTextDocument document;
++        document.setLayoutEnabled(false);
++        QFont font(QStringLiteral("DejaVu Sans"), 18); font.setItalic(true);
++        document.setDefaultFont(font); document.setDocumentMargin(24);
++        auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++        native->setPaintDevice(&image);
++        QTextOption option; option.setTextDirection(Qt::LeftToRight); option.setWrapMode(QTextOption::WrapAnywhere);
++        document.setDefaultTextOption(option);
++        QTextCursor cursor(&document); QTextCharFormat format; format.setFont(font);
++        cursor.insertText(source, format);
++        const qreal bodyEm = 24;
++        QVariantMap map{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))},
++            {"first", 0}, {"last", int(source.size())}, {"source", source}, {"font", font},
++            {"padding", QVariantList{0.0, .2 * bodyEm, 0.0, .1 * bodyEm}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor("#c8ccd1"), QColor("#c8ccd1"), QColor("#c8ccd1"), QColor("#c8ccd1")}},
++            {"background", QColor("#f8f9fa")}, {"radius", radius}};
++        // The source-sized px radius is independent of the italic owner font.
++        QVERIFY(QCompiledInlineBox::parse(map, nullptr));
++        cursor.select(QTextCursor::Document); format.setProperty(QCompiledInlineBox::Property, map); cursor.setCharFormat(format);
++        document.setLayoutEnabled(true);
++        for (qreal width : {800.0, 125.0, 800.0}) {
++            document.setTextWidth(width); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const auto *layout = document.begin().layout();
++            const auto parts = QCompiledInlineBox::slices(layout);
++            QVERIFY(!parts.isEmpty());
++            if (width == 125) QVERIFY(parts.size() > 2);
++            else QCOMPARE(parts.size(), 1);
++            const qreal scale = QCompiledInline::deviceScale(QFont(font, &image));
++            qreal compositeWidth = 0;
++            for (const auto &part : parts) compositeWidth += part.geometry.border.width();
++            const qreal height = parts.first().geometry.border.height();
++            const qreal clamped = qMin(radius * scale, qMin(compositeWidth, height) / 2);
++            const QRectF composite(0, 0, compositeWidth, height);
++            QPainterPath expectedOuter, expectedInner;
++            expectedOuter.addRoundedRect(composite, clamped, clamped, Qt::AbsoluteSize);
++            expectedInner.addRoundedRect(composite.adjusted(scale, scale, -scale, -scale),
++                qMax(qreal(0), clamped - scale), qMax(qreal(0), clamped - scale), Qt::AbsoluteSize);
++            const auto expectedBorder = expectedOuter.subtracted(expectedInner);
++            QImage expected = image; expected.fill(Qt::white);
++            QPainter expectedPainter(&expected); expectedPainter.setPen(Qt::NoPen);
++            qreal used = 0;
++            for (int i = 0; i < parts.size(); ++i) {
++                const auto &part = parts.at(i);
++                const QPointF origin = layout->position() + part.geometry.border.topLeft();
++                expectedPainter.save(); expectedPainter.setClipRect(part.geometry.border.translated(layout->position()));
++                expectedPainter.translate(origin - QPointF(used, 0));
++                expectedPainter.setBrush(QColor("#f8f9fa")); expectedPainter.drawPath(expectedOuter);
++                expectedPainter.setBrush(QColor("#c8ccd1")); expectedPainter.drawPath(expectedBorder);
++                expectedPainter.restore();
++                QCOMPARE(part.geometry.first, i == 0); QCOMPARE(part.geometry.last, i + 1 == parts.size());
++                QVERIFY(qAbs(part.geometry.border.width() - part.geometry.content.width()
++                    - (i == 0 ? (.1 * bodyEm + 1) * scale : 0)
++                    - (i + 1 == parts.size() ? (.2 * bodyEm + 1) * scale : 0)) < .08);
++                used += part.geometry.border.width();
++            }
++            expectedPainter.end();
++            image.fill(Qt::white); QPainter painter(&image);
++            native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{}); painter.end();
++            int decoratedPixels = 0;
++            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
++                bool glyphBand = false;
++                for (const auto &part : parts) {
++                    const QRectF content = part.geometry.content.translated(layout->position());
++                    glyphBand |= y + .5 >= content.top() && y + .5 <= content.bottom();
++                }
++                if (glyphBand) continue; // Ordinary italic glyph overflow is not decoration-clipped.
++                QCOMPARE(image.pixel(x,y), expected.pixel(x,y));
++                decoratedPixels += expected.pixelColor(x,y) != QColor(Qt::white);
++            }
++            QVERIFY(decoratedPixels > 0);
++            // The real full draw also preserves native selection on top of the owner fill.
++            QAbstractTextDocumentLayout::Selection selection;
++            selection.cursor = QTextCursor(&document); selection.cursor.select(QTextCursor::Document);
++            selection.format.setBackground(QColor("#336699"));
++            QAbstractTextDocumentLayout::PaintContext context; context.selections.append(selection);
++            image.fill(Qt::white); QPainter selected(&image); native->draw(&selected, context); selected.end();
++            int selectedPixels = 0;
++            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
++                selectedPixels += image.pixelColor(x,y) == QColor("#336699");
++            QVERIFY(selectedPixels > 0);
++            QCOMPARE(document.toRawText(), source);
++        }
++    }
++}
++
++void tst_QTextDocumentLayout::roundedWholeLinksKeepCurvedHitsNativeFocusAndSource()
++{
++    for (int dpi : {96, 144}) for (qreal radius : {-1.0, 0.0, 2.0}) {
++        RoundedLinkControl stock(dpi, radius), projected(dpi, radius, true);
++        QVERIFY(stock.native); QVERIFY(projected.native);
++        const QString source = stock.document.toRawText();
++        for (qreal width : {800.0, 110.0, 800.0}) {
++            QVERIFY(stock.layout(width)); QVERIFY(projected.layout(width));
++            const auto stockValues = stock.native->wikidictLogicalPosition(stock.first);
++            const auto projectedValues = projected.native->wikidictLogicalPosition(projected.first);
++            QCOMPARE(stockValues.value("inlineBoxActionFirst").toInt(), stock.first);
++            QCOMPARE(stockValues.value("inlineBoxActionLast").toInt(), stock.last);
++            QCOMPARE(stockValues.value("inlineBoxActionHref").toString(), stock.href);
++            QVERIFY(!stockValues.value("handled").toBool()); QVERIFY(projectedValues.value("handled").toBool());
++            const auto path = stockValues.value("inlineBoxActionPath").value<QPainterPath>();
++            const auto projectedPath = projectedValues.value("inlineBoxActionPath").value<QPainterPath>();
++            QVERIFY(!path.isEmpty()); QCOMPARE(projectedPath, path);
++            QCOMPARE(stockValues.value("actionRect").toRectF(), path.boundingRect());
++            QCOMPARE(projectedValues.value("actionRect").toRectF(), path.boundingRect());
++            QVERIFY(!stock.native->wikidictLogicalPosition(stock.first + 1).contains("actionRect"));
++            QVERIFY(!projected.native->wikidictLogicalPosition(projected.first + 1).contains("actionRect"));
++            const auto *layout = stock.document.begin().layout();
++            const auto parts = QCompiledInlineBox::slices(layout); QVERIFY(!parts.isEmpty());
++            const QPointF origin = layout->position();
++            if (width == 110) QVERIFY(parts.size() > 1);
++            for (int i = 0; i < parts.size(); ++i) {
++                const auto &part = parts.at(i);
++                const QRectF border = part.geometry.border.translated(origin);
++                const QRectF content = part.geometry.content.translated(origin);
++                QList<QPointF> inside{border.center()};
++                if (part.geometry.first) inside.append(QPointF((border.left() + content.left()) / 2, border.center().y()));
++                if (part.geometry.last) inside.append(QPointF((border.right() + content.right()) / 2, border.center().y()));
++                for (const auto &point : inside) {
++                    QVERIFY(path.contains(point));
++                    for (auto *fixture : {&stock, &projected}) {
++                        const int hit = fixture->native->hitTest(point, Qt::ExactHit);
++                        QVERIFY(hit >= fixture->first && hit < fixture->last);
++                        QTextCursor selected(&fixture->document); selected.setPosition(hit);
++                        selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                        QCOMPARE(selected.charFormat().anchorHref(), fixture->href);
++                    }
++                }
++                if (radius == 2 && part.geometry.first) {
++                    const QPointF corner = border.topLeft() + QPointF(.05, .05);
++                    QVERIFY(!path.contains(corner));
++                    QCOMPARE(stock.native->hitTest(corner, Qt::ExactHit), -1);
++                    QCOMPARE(projected.native->hitTest(corner, Qt::ExactHit), -1);
++                }
++                if (i > 0 && i + 1 < parts.size()) {
++                    QVERIFY(path.contains(border.topLeft() + QPointF(.05, .05)));
++                    QVERIFY(path.contains(border.topRight() + QPointF(-.05, .05)));
++                }
++            }
++            const int revision = stock.document.revision();
++            stock.image.fill(Qt::white);
++            { QPainter p(&stock.image); stock.native->draw(&p, {}); }
++            const QImage ordinary = stock.image;
++            QAbstractTextDocumentLayout::PaintContext focus;
++            QAbstractTextDocumentLayout::Selection selected;
++            selected.cursor = QTextCursor(&stock.document); selected.cursor.setPosition(stock.first);
++            selected.cursor.setPosition(stock.last, QTextCursor::KeepAnchor);
++            const QPen nativePen(Qt::magenta, 3, Qt::DotLine);
++            selected.format.setProperty(QTextFormat::OutlinePen, nativePen); focus.selections.append(selected);
++            QImage expected = ordinary;
++            { QPainter p(&expected); p.setPen(nativePen); p.setBrush(Qt::NoBrush); p.drawPath(path); }
++            stock.image.fill(Qt::white);
++            { QPainter p(&stock.image); stock.native->draw(&p, focus); }
++            if (stock.image != expected) {
++                QImage difference(stock.image.size(), QImage::Format_ARGB32_Premultiplied);
++                difference.fill(Qt::transparent);
++                QRect changed; int changedPixels = 0;
++                for (int y = 0; y < stock.image.height(); ++y) for (int x = 0; x < stock.image.width(); ++x) {
++                    if (stock.image.pixel(x, y) == expected.pixel(x, y)) continue;
++                    ++changedPixels; changed |= QRect(x, y, 1, 1);
++                    difference.setPixelColor(x, y, QColor(Qt::red));
++                }
++                const QString diagnosticDirectory = QDir::current().filePath(QStringLiteral(".tmp/rounded-link-diagnostic"));
++                const bool directoryReady = QDir().mkpath(diagnosticDirectory);
++                const QString actualPath = QDir(diagnosticDirectory).filePath(QStringLiteral("focus-actual.png"));
++                const QString expectedPath = QDir(diagnosticDirectory).filePath(QStringLiteral("focus-expected.png"));
++                const QString differencePath = QDir(diagnosticDirectory).filePath(QStringLiteral("focus-difference.png"));
++                const bool actualSaved = stock.image.save(actualPath);
++                const bool expectedSaved = expected.save(expectedPath);
++                const bool differenceSaved = difference.save(differencePath);
++                const QRectF bounds = path.boundingRect();
++                const QJsonObject observation{{"dpi", dpi}, {"radius", radius}, {"width", width},
++                    {"image_width", stock.image.width()}, {"image_height", stock.image.height()},
++                    {"different_pixels", changedPixels}, {"difference_x", changed.x()}, {"difference_y", changed.y()},
++                    {"difference_width", changed.width()}, {"difference_height", changed.height()},
++                    {"path_x", bounds.x()}, {"path_y", bounds.y()}, {"path_width", bounds.width()}, {"path_height", bounds.height()},
++                    {"actual", actualPath}, {"expected", expectedPath}, {"difference", differencePath},
++                    {"directory_ready", directoryReady}, {"actual_saved", actualSaved}, {"expected_saved", expectedSaved}, {"difference_saved", differenceSaved}};
++                qWarning().noquote() << "WIKIDICT_ROUNDED_FOCUS_DIAGNOSTIC"
++                    << QJsonDocument(observation).toJson(QJsonDocument::Compact);
++            }
++            QCOMPARE(stock.image, expected);
++            QRect ink;
++            for (int y = 0; y < stock.image.height(); ++y) for (int x = 0; x < stock.image.width(); ++x)
++                if (stock.image.pixelColor(x,y) == QColor(Qt::magenta)) ink |= QRect(x,y,1,1);
++            QVERIFY(!ink.isEmpty());
++            const QRect stripe(ink.left(), ink.top(), ink.width(), 1);
++            QImage clipped = stock.image; clipped.fill(Qt::white); focus.clip = stripe;
++            { QPainter p(&clipped); p.setClipRect(stripe); stock.native->draw(&p, focus); }
++            QCOMPARE(clipped.copy(stripe), stock.image.copy(stripe));
++            QCOMPARE(stock.document.revision(), revision);
++            QCOMPARE(stock.document.toRawText(), source); QCOMPARE(projected.document.toRawText(), source);
++            QTextCursor copy(&stock.document); copy.setPosition(stock.first); copy.setPosition(stock.last, QTextCursor::KeepAnchor);
++            QCOMPARE(copy.selectedText(), stock.label);
++            QCOMPARE(stock.document.characterCount(), projected.document.characterCount());
++        }
++    }
++#ifndef QT_NO_WIDGETS
++    RoundedLinkControl fixture(96, 2);
++    struct Browser : QTextBrowser { using QTextBrowser::focusNextPrevChild; };
++    Browser browser; browser.setDocument(&fixture.document); browser.setOpenLinks(false); browser.setOpenExternalLinks(false);
++    QVERIFY(fixture.layout(800));
++    browser.setTextCursor(QTextCursor(&fixture.document));
++    const QList<QPair<int,int>> ranges{{0, fixture.first}, {fixture.first, fixture.last}, {fixture.last, fixture.document.characterCount() - 1}};
++    for (const auto &range : ranges) {
++        QVERIFY(browser.focusNextPrevChild(true));
++        QCOMPARE(browser.textCursor().selectionStart(), range.first); QCOMPARE(browser.textCursor().selectionEnd(), range.second);
++    }
++    for (int i = ranges.size() - 2; i >= 0; --i) {
++        QVERIFY(browser.focusNextPrevChild(false));
++        QCOMPARE(browser.textCursor().selectionStart(), ranges[i].first); QCOMPARE(browser.textCursor().selectionEnd(), ranges[i].second);
++    }
++#endif
++}
++
++void tst_QTextDocumentLayout::roundedWholeLinksRefuseForeignPolicyAndRecover()
++{
++    RoundedLinkControl fixture(96, 2);
++    QVERIFY(fixture.layout(800));
++    const QString source = fixture.document.toRawText();
++    const auto good = fixture.policy;
++    QTextDocument foreign;
++    QList<QVariantMap> invalid;
++    auto bad = good; bad["radius"] = -1.0; invalid.append(bad);
++    bad = good; bad["radius"] = std::numeric_limits<double>::infinity(); invalid.append(bad);
++    bad = good; bad["radius"] = QStringLiteral("2"); invalid.append(bad);
++    bad = good; bad["radius"] = 3.0; invalid.append(bad); // Source radius remains 2px.
++    bad = good; bad["document"] = QVariant::fromValue(static_cast<QObject *>(&foreign)); invalid.append(bad);
++    bad = good; auto widths = good.value("widths").toList(); widths[1] = 2.0; bad["widths"] = widths; invalid.append(bad);
++    bad = good; auto colors = good.value("colors").toList(); colors[2] = QColor(Qt::red); bad["colors"] = colors; invalid.append(bad);
++    bad = good; auto action = good.value("action").toMap(); action["href"] = QStringLiteral("dict:foreign"); bad["action"] = action; invalid.append(bad);
++    bad = good; action = good.value("action").toMap();
++    auto raw = QJsonDocument::fromJson(action.value("source").toByteArray()).object();
++    raw["target"] = QStringLiteral("Foreign"); action["source"] = QJsonDocument(raw).toJson(QJsonDocument::Compact); bad["action"] = action; invalid.append(bad);
++    bad = good; bad.remove("action"); invalid.append(bad); // Legacy edge-link refusal stays strict.
++    for (int caseIndex = 0; caseIndex < invalid.size(); ++caseIndex) {
++        const auto &value = invalid.at(caseIndex);
++        QVERIFY(fixture.install(value)); fixture.native->documentSize();
++        const int observedError = fixture.native->wikidictParagraphBoxLayoutError();
++        if (observedError != 1) {
++            QVariant installed; QString actualHref; int fragmentFirst = -1, fragmentLength = -1;
++            for (auto it = fixture.document.findBlock(fixture.first).begin(); !it.atEnd(); ++it) {
++                const auto fragment = it.fragment();
++                if (!fragment.isValid() || fragment.position() > fixture.first
++                    || fragment.position() + fragment.length() <= fixture.first) continue;
++                installed = fragment.charFormat().property(QCompiledInlineBox::Property);
++                actualHref = fragment.charFormat().anchorHref();
++                fragmentFirst = fragment.position(); fragmentLength = fragment.length(); break;
++            }
++            const QJsonObject observation{{"case", caseIndex}, {"error", observedError},
++                {"parse", QCompiledInlineBox::parse(value, nullptr)},
++                {"installed_parse", QCompiledInlineBox::parse(installed, nullptr)},
++                {"installed_equal", installed == QVariant(value)},
++                {"document_matches", value.value("document").value<QObject *>() == &fixture.document},
++                {"first", fixture.first}, {"last", fixture.last}, {"fragment_first", fragmentFirst},
++                {"fragment_length", fragmentLength}, {"actual_href", actualHref}, {"expected_href", fixture.href},
++                {"source", source}, {"policy", QJsonObject::fromVariantMap(value)},
++                {"installed_policy", QJsonObject::fromVariantMap(installed.toMap())}};
++            qWarning().noquote() << "WIKIDICT_ROUNDED_REFUSAL_DIAGNOSTIC"
++                << QJsonDocument(observation).toJson(QJsonDocument::Compact);
++        }
++        QCOMPARE(fixture.native->wikidictParagraphBoxLayoutError(), 1);
++        QCOMPARE(fixture.document.toRawText(), source);
++        QVERIFY(fixture.install(good)); QVERIFY(fixture.layout(800));
++        QVERIFY(!fixture.native->wikidictLogicalPosition(fixture.first).value("inlineBoxActionPath").value<QPainterPath>().isEmpty());
++    }
++    QVERIFY(fixture.install(good, QStringLiteral("dict:forged-actual-anchor")));
++    fixture.native->documentSize(); QCOMPARE(fixture.native->wikidictParagraphBoxLayoutError(), 1);
++    QVERIFY(fixture.install(good)); QVERIFY(fixture.layout(800));
++    QCOMPARE(fixture.document.toRawText(), source);
++}
++
++void tst_QTextDocumentLayout::inlineBoxesKeepUnicodeClustersAndDeclaringBackground()
++{
++    bool sawFallbackSubrun = false, sawMultiUnitCluster = false;
++    bool sawHiddenGlyph = false, sawOddBidi = false, sawNonzeroSource = false;
++    const auto verifyStringIndexes = [&](QTextLayout *layout, const QString &source) {
++        // endLayout() may discard shaping data while retaining the lines.
++        // Retrieve this same layout's runs through its public lazy-shaping path
++        // before inspecting the resulting source clusters independently.
++        const auto flags = QTextLayout::RetrieveGlyphIndexes | QTextLayout::RetrieveGlyphPositions
++            | QTextLayout::RetrieveStringIndexes;
++        const auto runs = layout->glyphRuns(0, source.size(), flags);
++        auto *engine = layout->engine();
++        QVERIFY(engine && engine->layoutData);
++        // This oracle walks source cluster intervals, independently of the
++        // per-font glyph subruns returned by glyphRuns().
++        QList<QPair<quint32, qsizetype>> expected;
++        for (int itemIndex = 0; itemIndex < engine->layoutData->items.size(); ++itemIndex) {
++            const auto &item = engine->layoutData->items.at(itemIndex);
++            if (item.analysis.flags >= QScriptAnalysis::TabOrObject) continue;
++            const int length = engine->length(itemIndex);
++            const auto *clusters = engine->logClusters(&item);
++            const auto glyphs = engine->shapedGlyphs(&item);
++            sawOddBidi |= (item.analysis.bidiLevel & 1) != 0;
++            for (int c = 0; c < length;) {
++                int next = c + 1;
++                while (next < length && clusters[next] == clusters[c]) ++next;
++                sawMultiUnitCluster |= next > c + 1;
++                const int end = next < length ? clusters[next] : item.num_glyphs;
++                for (int glyph = clusters[c]; glyph < end; ++glyph) {
++                    if (glyph > 0 && (glyphs.glyphs[glyph] >> 24) != (glyphs.glyphs[glyph - 1] >> 24))
++                        sawFallbackSubrun = true;
++                    sawHiddenGlyph |= glyphs.attributes[glyph].dontPrint;
++                    if (glyphs.attributes[glyph].dontPrint) continue;
++                    QCOMPARE(uint(glyphs.justifications[glyph].nKashidas), uint(0));
++                    expected.append({glyphs.glyphs[glyph] & 0xffffff, item.position + c});
++                }
++                c = next;
++            }
++        }
++        const auto ordinary = layout->glyphRuns(0, source.size(),
++            QTextLayout::RetrieveGlyphIndexes | QTextLayout::RetrieveGlyphPositions);
++        QCOMPARE(runs.size(), ordinary.size());
++        QList<QPair<quint32, qsizetype>> observed;
++        for (int r = 0; r < runs.size(); ++r) {
++            const auto &run = runs[r];
++            QCOMPARE(run.rawFont(), ordinary[r].rawFont());
++            QCOMPARE(run.glyphIndexes(), ordinary[r].glyphIndexes());
++            QCOMPARE(run.positions(), ordinary[r].positions());
++            QCOMPARE(run.isRightToLeft(), ordinary[r].isRightToLeft());
++            QCOMPARE(run.stringIndexes().size(), run.glyphIndexes().size());
++            for (int g = 0; g < run.glyphIndexes().size(); ++g) {
++                const auto at = run.stringIndexes()[g];
++                QVERIFY2(at >= 0 && at < source.size(), qPrintable(source));
++                sawNonzeroSource |= at > 0;
++                observed.append({run.glyphIndexes()[g], at});
++            }
++        }
++        std::sort(expected.begin(), expected.end());
++        std::sort(observed.begin(), observed.end());
++        if (observed != expected) {
++            QJsonArray codepoints; for (char32_t c : source.toUcs4()) codepoints.append(double(c));
++            qWarning().noquote() << "WIKIDICT_GLYPH_SOURCE_INDEX" << source
++                << QJsonDocument(codepoints).toJson(QJsonDocument::Compact)
++                << "expected" << expected << "observed" << observed;
++        }
++        QCOMPARE(observed, expected);
++        // Cropped retrieval passes a source subrange even inside a ligature,
++        // combining cluster or surrogate pair. Every returned glyph belongs to
++        // that one requested UTF-16 source unit; zero-length ranges stay empty.
++        for (int at = 0; at < source.size(); ++at) {
++            for (const auto &run : layout->glyphRuns(at, 1, flags)) {
++                QCOMPARE(run.stringIndexes().size(), run.glyphIndexes().size());
++                for (auto index : run.stringIndexes()) QCOMPARE(index, qsizetype(at));
++            }
++            QVERIFY(layout->glyphRuns(at, 0, flags).isEmpty());
++        }
++        QVERIFY(layout->glyphRuns(source.size(), 0, flags).isEmpty());
++    };
++    const QList<QString> sources{QString::fromUtf8("閩南"), QString::fromUtf8("漢 Latin e\xcc\x81"),
++        QString::fromUtf8("e\xcc\x81漢e\xcc\x81"), QString::fromUcs4(U"\U00020000漢\U00020000"),
++        QStringLiteral("office affine"),
++        QString(QChar(0xe000)) + QStringLiteral(" fallback ") + QChar(0x0378),
++        QStringLiteral("A\u200dB\u200cC\ufe0f D")};
++    for (const QString &source : sources) {
++        for (bool background : {false, true}) {
++            QTextDocument ordinary, boxed;
++            for (QTextDocument *document : {&ordinary, &boxed}) {
++                document->setLayoutEnabled(false);
++                document->setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 18));
++                document->setDocumentMargin(16);
++                QTextOption option; option.setTextDirection(Qt::LeftToRight);
++                option.setAlignment(Qt::AlignLeft); document->setDefaultTextOption(option);
++                QTextCursor cursor(document);
++                QTextCharFormat format; format.setFont(document->defaultFont());
++                cursor.insertText(source, format);
++                document->setTextWidth(800);
++            }
++            QVariantMap metadata{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++                {"document", QVariant::fromValue(static_cast<QObject *>(&boxed))},
++                {"first", 0}, {"last", int(source.size())}, {"source", source},
++                {"font", boxed.defaultFont()}, {"padding", QVariantList{5.0, 7.0, 5.0, 3.0}},
++                {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++                {"colors", QVariantList{QColor("#cedff2"), QColor("#cedff2"), QColor("#cedff2"), QColor("#cedff2")}}};
++            if (background) metadata.insert("background", QColor("#f5faff"));
++            QCOMPARE(metadata.size(), background ? 10 : 9);
++            QVERIFY(QCompiledInlineBox::parse(metadata, nullptr));
++            QTextCursor range(&boxed); range.select(QTextCursor::Document);
++            QTextCharFormat boxFormat; boxFormat.setProperty(QCompiledInlineBox::Property, metadata);
++            range.mergeCharFormat(boxFormat);
++            ordinary.setLayoutEnabled(true); boxed.setLayoutEnabled(true);
++            auto *native = qobject_cast<QTextDocumentLayout *>(boxed.documentLayout());
++            QVERIFY(native);
++            ordinary.documentLayout()->documentSize(); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            auto *plainLayout = ordinary.begin().layout(); auto *boxLayout = boxed.begin().layout();
++            QCOMPARE(plainLayout->lineCount(), 1); QCOMPARE(boxLayout->lineCount(), 1);
++            verifyStringIndexes(plainLayout, source);
++            if (QTest::currentTestFailed()) return;
++            verifyStringIndexes(boxLayout, source);
++            if (QTest::currentTestFailed()) return;
++            const auto plainLine = plainLayout->lineAt(0), boxLine = boxLayout->lineAt(0);
++            QCOMPARE(boxLine.height(), plainLine.height());
++            QCOMPARE(boxLine.ascent(), plainLine.ascent());
++            QCOMPARE(boxLine.descent(), plainLine.descent());
++            const qreal scale = QCompiledInline::deviceScale(boxed.defaultFont());
++            QVERIFY(qAbs(boxLine.horizontalAdvance() - plainLine.horizontalAdvance() - 12 * scale) < .08);
++            const auto ordinaryRuns = plainLine.glyphRuns(), boxRuns = boxLine.glyphRuns();
++            QCOMPARE(boxRuns.size(), ordinaryRuns.size());
++            for (int run = 0; run < boxRuns.size(); ++run) {
++                QCOMPARE(boxRuns[run].rawFont(), ordinaryRuns[run].rawFont());
++                QCOMPARE(boxRuns[run].glyphIndexes(), ordinaryRuns[run].glyphIndexes());
++                const auto plainPositions = ordinaryRuns[run].positions(), boxPositions = boxRuns[run].positions();
++                QCOMPARE(boxPositions.size(), plainPositions.size());
++                for (int glyph = 0; glyph < boxPositions.size(); ++glyph) {
++                    QVERIFY(qAbs(boxPositions[glyph].x() - plainPositions[glyph].x() - 4 * scale) < .08);
++                    QCOMPARE(boxPositions[glyph].y(), plainPositions[glyph].y());
++                }
++            }
++            QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, source);
++            while (boundaries.toNextBoundary() >= 0) {
++                const int at = boundaries.position();
++                if (at == source.size()) break;
++                QVERIFY(qAbs(boxLine.cursorToX(at) - plainLine.cursorToX(at) - 4 * scale) < .08);
++                // xToCursor returns the nearest available caret, which need not
++                // uniquely invert zero-advance or shared shaped cluster edges.
++                const int plainInverse = plainLine.xToCursor(plainLine.cursorToX(at));
++                const int boxInverse = boxLine.xToCursor(boxLine.cursorToX(at));
++                if (boxInverse != plainInverse) {
++                    QJsonArray codepoints; for (char32_t scalar : source.toUcs4()) codepoints.append(double(scalar));
++                    const QJsonObject observation{{"source", source}, {"codepoints", codepoints},
++                        {"background", background}, {"offset", at}, {"plain_inverse", plainInverse},
++                        {"box_inverse", boxInverse}, {"plain_x", plainLine.cursorToX(at)},
++                        {"box_x", boxLine.cursorToX(at)}, {"scale", scale}};
++                    qWarning().noquote() << "WIKIDICT_INLINE_BOX_CURSOR_DIAGNOSTIC"
++                        << QJsonDocument(observation).toJson(QJsonDocument::Compact);
++                }
++                QCOMPARE(boxInverse, plainInverse);
++                if (plainInverse == at) QCOMPARE(boxInverse, at);
++            }
++            const auto slices = QCompiledInlineBox::slices(boxLayout);
++            QCOMPARE(slices.size(), 1);
++            QVERIFY(slices[0].geometry.first && slices[0].geometry.last);
++            QVERIFY(qAbs(slices[0].geometry.border.width() - boxLine.horizontalAdvance()) < .08);
++            QImage image(850, 180, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
++            QPainter painter(&image); native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{}); painter.end();
++            int fillPixels = 0, borderPixels = 0;
++            for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
++                fillPixels += image.pixelColor(x,y) == QColor("#f5faff");
++                borderPixels += image.pixelColor(x,y) == QColor("#cedff2");
++            }
++            QCOMPARE(fillPixels > 0, background);
++            QVERIFY(borderPixels > 0);
++            if (background) for (int selectionMode : {0, 1, 2}) {
++                QAbstractTextDocumentLayout::Selection selection;
++                selection.cursor=QTextCursor(&boxed); selection.cursor.select(QTextCursor::Document);
++                if (selectionMode != 0) {
++                    QTextBoundaryFinder boundary(QTextBoundaryFinder::Grapheme, source);
++                    const int firstBoundary=boundary.toNextBoundary();
++                    QVERIFY(firstBoundary>0 && firstBoundary<source.size());
++                    selection.cursor.setPosition(firstBoundary);
++                    selection.cursor.setPosition(source.size(),QTextCursor::KeepAnchor);
++                }
++                if (selectionMode != 2) selection.format.setBackground(QColor("#336699"));
++                if (selectionMode != 1) selection.format.setForeground(Qt::white);
++                // Mode1 exercises the outer background-only selection followed
++                // by its SuppressBackground text pass. Mode2 retains the native
++                // source background underneath a foreground-only selection.
++                QAbstractTextDocumentLayout::PaintContext context; context.selections.append(selection);
++                image.fill(Qt::white); QPainter selectedPainter(&image);
++                native->draw(&selectedPainter, context); selectedPainter.end();
++                const QRect content=slices[0].geometry.content.translated(boxLayout->position()).toAlignedRect().intersected(image.rect());
++                int selectedPixels=0, contentFillPixels=0, paddingFillPixels=0;
++                for(int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) {
++                    if(content.contains(x,y)) {
++                        selectedPixels+=image.pixelColor(x,y)==QColor("#336699");
++                        contentFillPixels+=image.pixelColor(x,y)==QColor("#f5faff");
++                    } else paddingFillPixels+=image.pixelColor(x,y)==QColor("#f5faff");
++                }
++                if(selectionMode==2) { QCOMPARE(selectedPixels,0); QVERIFY(contentFillPixels>0); }
++                else QVERIFY(selectedPixels>0);
++                QVERIFY(paddingFillPixels>0);
++            }
++            QCOMPARE(boxed.toRawText(), source);
++            QCOMPARE(boxed.characterCount(), ordinary.characterCount());
++            if (source.size() > 10) {
++                boxed.setTextWidth(90); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QVERIFY(boxLayout->lineCount() > 1);
++                const auto wrapped = QCompiledInlineBox::slices(boxLayout);
++                QCOMPARE(wrapped.size(), boxLayout->lineCount());
++                int firstSlices = 0, lastSlices = 0;
++                for (const auto &part : wrapped) {
++                    firstSlices += part.geometry.first; lastSlices += part.geometry.last;
++                    QVERIFY(qAbs(part.geometry.border.width() - part.geometry.content.width()
++                        - (part.geometry.first ? 4 * scale : 0)
++                        - (part.geometry.last ? 8 * scale : 0)) < .08);
++                }
++                QCOMPARE(firstSlices, 1); QCOMPARE(lastSlices, 1);
++                QCOMPARE(boxed.toRawText(), source);
++            }
++        }
++    }
++    // Ordinary RTL remains outside the inline-box LTR domain, but uses the
++    // same glyph retrieval helper. Common-script symbols exercise fallback
++    // within one script item rather than only at a script-item boundary.
++    const QList<QString> retrievalSources{
++        // HarfBuzz can retain joiners/selectors as zero-advance glyphs without
++        // Qt's dontPrint flag. A leading soft hyphen explicitly exercises that
++        // flag; the visible suffix prevents line-end soft-hyphen unhiding.
++        QStringLiteral("\u00adAB"),
++        QStringLiteral("A\u23f0B\u2318C\u25f0D\u2708E"),
++        QString::fromUcs4(U"A\U0001f600B\U0001f9edC"),
++        QString::fromUtf8("אבג שָׁלוֹם العربية"),
++        QStringLiteral("office e\u0301 A\u200dB\u200cC\ufe0f")};
++    for (const QString &family : {QStringLiteral("DejaVu Sans"), QStringLiteral("Liberation Sans")}) {
++        for (const QString &source : retrievalSources) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QTextLayout layout(source, QFont(family, 18));
++            layout.setCacheEnabled(true);
++            QTextOption option; option.setTextDirection(direction); option.setAlignment(Qt::AlignLeft);
++            layout.setTextOption(option);
++            layout.beginLayout(); auto line = layout.createLine();
++            QVERIFY(line.isValid()); line.setLineWidth(1000); layout.endLayout();
++            verifyStringIndexes(&layout, source);
++            if (QTest::currentTestFailed()) return;
++        }
++    }
++    if (!sawFallbackSubrun || !sawMultiUnitCluster || !sawHiddenGlyph || !sawOddBidi || !sawNonzeroSource)
++        qWarning() << "WIKIDICT_GLYPH_COVERAGE" << "fallback" << sawFallbackSubrun
++                   << "multiUnit" << sawMultiUnitCluster << "hidden" << sawHiddenGlyph
++                   << "oddBidi" << sawOddBidi << "nonzeroSource" << sawNonzeroSource;
++    QVERIFY2(sawFallbackSubrun, "The controlled fonts must produce a nonzero-start fallback subrun");
++    QVERIFY(sawMultiUnitCluster);
++    QVERIFY(sawHiddenGlyph);
++    QVERIFY(sawOddBidi);
++    QVERIFY(sawNonzeroSource);
++}
++
++void tst_QTextDocumentLayout::inlineBoxesRefuseInvalidUnicodeBackgroundAndRecover()
++{
++    const auto metadata = [](QTextDocument *document, const QString &source) {
++        return QVariantMap{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(document))},
++            {"first", 0}, {"last", int(source.size())}, {"source", source},
++            {"font", document->defaultFont()}, {"padding", QVariantList{0.0, 2.0, 0.0, 2.0}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor(Qt::black), QColor(Qt::black), QColor(Qt::black), QColor(Qt::black)}}};
++    };
++    QStringList badSources{QString::fromUtf8("Aא"), QString(QChar(0xd800))};
++    for (char32_t scalar : {char32_t(0), char32_t(0x1f), char32_t(0x7f), char32_t(0x9f),
++                           char32_t(0xfffc), char32_t(0x2028), char32_t(0x2029), char32_t(0x061c),
++                           char32_t(0x200e), char32_t(0x200f), char32_t(0x202a), char32_t(0x202e),
++                           char32_t(0x2066), char32_t(0x2069), char32_t(0xad), char32_t(0x200b),
++                           char32_t(0x2060), char32_t(0xfeff)})
++    {
++        // QString::fromUcs4 decodes an initial FEFF as a BOM. These BMP
++        // codepoints must be installed literally, including the FEFF refusal.
++        QVERIFY(scalar <= 0xffff);
++        const QString value = QStringLiteral("A") + QChar(ushort(scalar)) + QStringLiteral("B");
++        QCOMPARE(value.size(), 3); QCOMPARE(value.at(1).unicode(), ushort(scalar));
++        badSources.append(value);
++    }
++    for (const QString &source : badSources) {
++        QTextDocument document; document.setLayoutEnabled(false);
++        document.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 18));
++        QStringList units;
++        for (QChar unit : source) units.append(QString::number(unit.unicode(), 16));
++        const QString context = QStringLiteral("refusal UTF16=[%1]").arg(units.join(QLatin1Char(',')));
++        QVERIFY2(!QCompiledInlineBox::parse(metadata(&document, source), nullptr), qPrintable(context));
++    }
++    QTextDocument document; document.setLayoutEnabled(false);
++    document.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 18));
++    QTextOption option; option.setTextDirection(Qt::LeftToRight); document.setDefaultTextOption(option);
++    const QString source = QString::fromUtf8("閩南");
++    QTextCursor cursor(&document); QTextCharFormat font; font.setFont(document.defaultFont()); cursor.insertText(source, font);
++    auto good = metadata(&document, source); good.insert("background", QColor("#f5faff"));
++    QVERIFY(QCompiledInlineBox::parse(good, nullptr));
++    const QList<QVariant> invalid{QStringLiteral("#f5faff"), QColor(), QColor(245,250,255,0), QColor(245,250,255,128)};
++    auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++    for (const auto &value : invalid) {
++        auto bad = good; bad.insert("background", value);
++        QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        const auto install = [&](const QVariantMap &map) {
++            document.setLayoutEnabled(false);
++            QTextCursor range(&document); range.select(QTextCursor::Document);
++            QTextCharFormat format; format.setFont(document.defaultFont()); format.setProperty(QCompiledInlineBox::Property, map);
++            range.setCharFormat(format); document.setLayoutEnabled(true); native->documentSize();
++        };
++        install(bad); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++        QCOMPARE(document.toRawText(), source);
++        install(good); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++        QCOMPARE(document.toRawText(), source);
++    }
++}
++
 +void tst_QTextDocumentLayout::projectedRegisteredObjectsKeepOriginalSourceAndLineMetrics()
 +{
 +    for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft})

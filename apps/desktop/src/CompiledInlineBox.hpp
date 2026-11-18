@@ -3,6 +3,8 @@
 #include "CompiledRubyFont.hpp"
 #include "SemanticHtml.hpp"
 #include <QtGui/private/qtextinlinebox_p.h>
+#include <QtGui/private/qtextlogicalflow_p.h>
+#include <QTextTable>
 #include <QJsonDocument>
 #include <QPointer>
 #include <QTextDocumentFragment>
@@ -12,6 +14,8 @@
 // installed document contains the original ordinary child characters and links.
 namespace CompiledInlineBox {
 inline constexpr auto scheme = "wikidict-inline-box:";
+inline constexpr auto roundedCapability = "wikidict.inline-box-rounded-link/1";
+inline constexpr auto overlayCapability = "wikidict.inline-box-overlay/1";
 inline void require(bool yes) {
     if (!yes) throw std::runtime_error("unsupported or stale compiled inline-box geometry");
 }
@@ -19,6 +23,22 @@ inline void requireCapability(QTextDocument *document) {
     require(document && !document->isLayoutEnabled()
         && document->documentLayout()->property("_wikidictInlineBoxCapability").toString()
             == QString::fromLatin1(QCompiledInlineBox::Capability));
+}
+inline void requireExtendedCapability(QTextDocument *document, const QJsonObject &span) {
+    requireCapability(document);
+    const auto group = CompiledContent::inlineBoxGroup(span);
+    if (CompiledContent::inlineBoxUsesBorderSource(span))
+        require(document->documentLayout()->property("_wikidictInlineBoxOverlayCapability").toString()
+            == QString::fromLatin1(overlayCapability));
+    if (span.value("kind") == QStringLiteral("link") || CompiledContent::present(group.value("radius")))
+        require(document->documentLayout()->property("_wikidictInlineBoxRoundedLinkCapability").toString()
+            == QString::fromLatin1(roundedCapability));
+}
+inline QVariant actionIdentity(const QTextCharFormat &format) {
+    const auto raw = format.property(QCompiledInlineBox::Property);
+    QCompiledInlineBox::Box box;
+    if (!QCompiledInlineBox::parse(raw, &box) || !box.identity.contains("action")) return {};
+    return raw;
 }
 inline QString marker(const QJsonObject &span, const QString &childrenHtml,
                       const QString &ownerHtml, qreal basePoints, int sourceRun) {
@@ -34,23 +54,28 @@ inline QString marker(const QJsonObject &span, const QString &childrenHtml,
 struct Owner {
     QTextCursor first, last;
     QFont font;
+    QColor background;
     QString source;
     QVariantList padding, widths, colors;
+    QVariant radius;
+    QVariantMap action;
+    QByteArray borderSource;
+    QVariantList currentColors, overlays;
 };
 struct Expansion {
     QPointer<QTextDocument> document;
     QPointer<QAbstractTextDocumentLayout> layout;
     QList<Owner> owners;
 };
-inline QColor borderColor(const QJsonValue &value, const QJsonObject &owner, const QTextCharFormat &declaring) {
+inline QColor borderColor(const QJsonValue &value, const QJsonObject &owner, const QTextCharFormat &declaring, bool sourceBound = false) {
     const auto color = CompiledContent::object(value); require(color.size() == 1);
     if (color.contains("rgb")) return SemanticHtml::styleColor(color.value("rgb"));
     const QString tag = color.keys().first();
     require((tag == "transparent" || tag == "current_color") && color.value(tag).isObject()
         && color.value(tag).toObject().isEmpty());
-    if (tag == "transparent") return QColor(Qt::transparent);
+    if (tag == "transparent" || sourceBound) return QColor(Qt::transparent);
     // A fixed explicit declaring color has no palette or action-state dependency.
-    // Inherited/theme/state-dependent currentColor remains an explicit refusal.
+    // Source-bound currentColor was retained above for native draw-time resolution.
     const QColor explicitInk = SemanticHtml::styleColor(owner.value("foreground"));
     require(declaring.foreground().style() == Qt::SolidPattern && declaring.foreground().color() == explicitInk);
     return explicitInk;
@@ -92,6 +117,9 @@ inline Expansion expand(QTextDocument *document) {
         current();
         const auto span = item.data.value("span").toObject();
         const auto group = CompiledContent::inlineBoxGroup(span);
+        requireExtendedCapability(document, span);
+        const bool wholeLink = span.value("kind") == QStringLiteral("link");
+        const bool sourceBound = CompiledContent::inlineBoxUsesBorderSource(span);
         QString source;
         for (const auto &raw : group.value("spans").toArray())
             source += raw.toObject().value("text").toString() + raw.toObject().value("trail").toString();
@@ -108,7 +136,17 @@ inline Expansion expand(QTextDocument *document) {
         ownerContext.setDefaultStyleSheet(document->defaultStyleSheet());
         ownerContext.setDefaultTextOption(document->defaultTextOption());
         ownerContext.documentLayout()->setPaintDevice(result.layout->paintDevice());
-        const auto declaring = SemanticHtml::inlineSnapshotFormat(&ownerContext, CompiledRuby::spanFont(span),
+        QTextCharFormat declaring;
+        if (wholeLink) {
+            SemanticHtml::inlineFontSnapshot(CompiledRuby::spanFont(span));
+            SemanticHtml::setHtml(&ownerContext, item.data.value("owner_html").toString());
+            current();
+            require(ownerContext.blockCount() == 1 && ownerContext.toPlainText() == QStringLiteral("X"));
+            declaring = ownerContext.find(QStringLiteral("X")).charFormat();
+            declaring.setFont(declaring.font().resolve(base));
+            const QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(span.value("target").toString()));
+            require(declaring.isAnchor() && declaring.anchorHref() == href && declaring.anchorNames().isEmpty());
+        } else declaring = SemanticHtml::inlineSnapshotFormat(&ownerContext, CompiledRuby::spanFont(span),
             item.data.value("owner_html").toString(), points);
         current();
         require(declaring.verticalAlignment() == QTextCharFormat::AlignNormal
@@ -138,8 +176,25 @@ inline Expansion expand(QTextDocument *document) {
                 && format.verticalAlignment() == QTextCharFormat::AlignNormal
                 && !format.hasProperty(QCompiledInline::Property)
                 && QCompiledInlineBox::sameMetricFont(format.font(), font));
+            // Keep the ordinary link renderer's resolved ink/decoration/focus
+            // authority. The child contributes its unchanged original characters.
+            if (wholeLink) format = declaring;
+            if (sourceBound && CompiledContent::present(span.value("foreground")))
+                format.setForeground(declaring.foreground());
+            if (sourceBound) require(QCompiledInlineBox::borderFormat(span, format));
             if (item.provenance.hasProperty(SemanticHtml::sourceRunProperty))
                 format.setProperty(SemanticHtml::sourceRunProperty, item.provenance.property(SemanticHtml::sourceRunProperty));
+            if (format.hasProperty(QTextFormat::BackgroundBrush)) {
+                require(CompiledContent::present(span.value("background"))
+                    && format.background().style() == Qt::SolidPattern
+                    && format.background().color() == SemanticHtml::styleColor(span.value("background")));
+                // The exact duplicate effective paint belongs to the full box,
+                // not a second glyph-run rectangle over its sliced border.
+                format.clearProperty(QTextFormat::BackgroundBrush);
+            }
+            if (!format.hasProperty(QTextFormat::TextToolTip)
+                && declaring.hasProperty(QTextFormat::TextToolTip))
+                format.setToolTip(declaring.toolTip());
             runs.append({fragment.position(), fragment.length(), format});
         }
         for (const auto &run : runs) {
@@ -153,6 +208,16 @@ inline Expansion expand(QTextDocument *document) {
             format.setAnchor(true); format.setAnchorNames(names); first.setCharFormat(format);
         }
         Owner owner; owner.font = font; owner.source = source;
+        if (sourceBound) owner.borderSource = QJsonDocument(span).toJson(QJsonDocument::Compact);
+        if (wholeLink) owner.action = QVariantMap{{"source", QJsonDocument(span).toJson(QJsonDocument::Compact)},
+            {"href", declaring.anchorHref()}};
+        if (CompiledContent::present(group.value("radius")))
+            owner.radius = group.value("radius").toObject().value("value").toDouble();
+        if (CompiledContent::present(span.value("background"))) {
+            owner.background = SemanticHtml::styleColor(span.value("background"));
+            require(declaring.background().style() == Qt::SolidPattern
+                && declaring.background().color() == owner.background);
+        }
         const auto padding = group.value("padding").toObject(), border = group.value("border").toObject();
         for (const auto key : {"top", "right", "bottom", "left"}) {
             const qreal p = SemanticHtml::styleLengthUnits(padding.value(key), document, font.pointSizeF());
@@ -160,11 +225,32 @@ inline Expansion expand(QTextDocument *document) {
             qreal width = 0; QColor color(Qt::transparent);
             if (mode == "solid") {
                 width = SemanticHtml::styleLengthUnits(edge.value(mode).toObject().value("width"), document, font.pointSizeF());
-                color = borderColor(edge.value(mode).toObject().value("color"), span, declaring);
+                color = borderColor(edge.value(mode).toObject().value("color"), span, declaring, sourceBound);
             }
             require(QCompiledInlineBox::finite(p) && QCompiledInlineBox::finite(width)
                 && QCompiledInlineBox::finite(p + width));
             owner.padding.append(double(p)); owner.widths.append(double(width)); owner.colors.append(color);
+            if (sourceBound) owner.currentColors.append(mode == "solid"
+                && edge.value(mode).toObject().value("color").toObject().contains("current_color"));
+        }
+        if (sourceBound) for (const auto &raw : group.value("overlays").toArray()) {
+            const auto overlay = raw.toObject();
+            QVariantList insets, widths, colors, currentColors;
+            for (const auto key : {"top", "right", "bottom", "left"}) {
+                const auto inset = overlay.value("insets").toObject().value(key);
+                if (inset.isNull()) insets.append(QVariant{});
+                else insets.append(QVariantMap{{"unit", inset.toObject().value("unit").toString()},
+                    {"value", inset.toObject().value("value").toDouble()}});
+                const auto edge = overlay.value("border").toObject().value(key).toObject();
+                const auto solid = edge.value("solid").toObject();
+                const qreal width = edge.contains("solid")
+                    ? SemanticHtml::styleLengthUnits(solid.value("width"), document, font.pointSizeF()) : 0;
+                require(QCompiledInlineBox::finite(width));
+                widths.append(double(width));
+                colors.append(edge.contains("solid") ? borderColor(solid.value("color"), span, declaring, true) : QColor(Qt::transparent));
+                currentColors.append(edge.contains("solid") && solid.value("color").toObject().contains("current_color"));
+            }
+            owner.overlays.append(QVariantMap{{"insets", insets}, {"widths", widths}, {"colors", colors}, {"currentColors", currentColors}});
         }
         current();
         require(item.range.selectedText() == QString(QChar::ObjectReplacementCharacter));
@@ -189,12 +275,33 @@ inline void finalize(const Expansion &result) {
         current();
         QTextCursor range(result.document); range.setPosition(owner.first.position());
         range.setPosition(owner.last.position(), QTextCursor::KeepAnchor);
-        require(range.selectedText() == owner.source && range.block() == owner.first.block()
-            && range.currentFrame() == result.document->rootFrame());
+        require(range.selectedText() == owner.source && range.block() == owner.first.block());
+        if (range.currentFrame() != result.document->rootFrame()) {
+            // Bind the actual final table/cell, after all imports and Flow moves.
+            // No root-coordinate waiver or arbitrary nested frame is admitted.
+            auto *table = qobject_cast<QTextTable *>(range.currentFrame());
+            require(!owner.borderSource.isEmpty() && table && table->parentFrame() == result.document->rootFrame()
+                && table->frameFormat().position() == QTextFrameFormat::InFlow
+                && !QTextLogicalFlowProjection::inlineTable(table)
+                && !table->format().hasProperty(SemanticHtml::tableViewportProperty)
+                && !table->format().hasProperty(SemanticHtml::tableViewportGridProperty)
+                && !table->format().hasProperty(SemanticHtml::tableFloatViewportProperty));
+            const auto first = table->cellAt(owner.first.position()), last = table->cellAt(owner.last.position() - 1);
+            require(first.isValid() && last.isValid() && first == last
+                && owner.first.position() >= first.firstPosition() && owner.last.position() <= first.lastPosition());
+        }
         QVariantMap metadata{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
             {"document", QVariant::fromValue(static_cast<QObject *>(result.document.data()))},
             {"first", owner.first.position()}, {"last", owner.last.position()}, {"source", owner.source},
             {"font", owner.font}, {"padding", owner.padding}, {"widths", owner.widths}, {"colors", owner.colors}};
+        if (owner.background.isValid()) metadata.insert("background", owner.background);
+        if (owner.radius.isValid()) metadata.insert("radius", owner.radius);
+        if (!owner.action.isEmpty()) metadata.insert("action", owner.action);
+        if (!owner.borderSource.isEmpty()) {
+            metadata.insert("borderSource", owner.borderSource);
+            metadata.insert("currentColors", owner.currentColors);
+            metadata.insert("overlays", owner.overlays);
+        }
         require(QCompiledInlineBox::parse(metadata, nullptr));
         QTextCharFormat property; property.setProperty(QCompiledInlineBox::Property, metadata);
         range.mergeCharFormat(property); current();

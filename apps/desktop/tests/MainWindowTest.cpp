@@ -42,11 +42,13 @@
 #include <QProxyStyle>
 #include <QStyleOption>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QWheelEvent>
 #include <QGestureEvent>
 #include <QPanGesture>
 #include <QToolTip>
 #include <QDialog>
+#include <QInputDialog>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QDir>
@@ -11188,6 +11190,707 @@ private slots:
         QCOMPARE(owner.value("inline_box_group").toObject().value("spans").toArray(), children);
     }
 
+    void roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus() {
+        MainWindow window{QString()}; window.resize(960, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *browser = window.reading_; auto *document = browser->document();
+        QObject::disconnect(browser, nullptr, &window, nullptr);
+        QSignalSpy activated(browser, &QTextBrowser::anchorClicked);
+        const auto leaf = [](const QString &text) { return QJsonObject{{"kind", "text"},
+            {"text", text}, {"target", ""}, {"trail", ""}}; };
+        const QString target = QStringLiteral("Wiktionary:Oorganklik en onoorganklik");
+        const QString href = QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target));
+        const auto length = [](const QString &unit, double value) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const QJsonObject solid{{"solid", QJsonObject{{"width", length("px", 1)},
+            {"color", QJsonObject{{"rgb", "#c8ccd1"}}}}}};
+        const auto makeBox = [&](const QString &label, const QJsonValue &radius) {
+            auto child = leaf(label); child.insert("italic", true); child.insert("background", "#f8f9fa");
+            auto owner = child; owner.insert("kind", "link"); owner.insert("target", target); owner.insert("text", "");
+            QJsonObject group{{"padding", QJsonObject{{"top", length("px", 0)}, {"right", length("em", .2)},
+                {"bottom", length("px", 0)}, {"left", length("em", .1)}}},
+                {"border", QJsonObject{{"top", solid}, {"right", solid}, {"bottom", solid}, {"left", solid}}},
+                {"overlays", QJsonArray{}}, {"spans", QJsonArray{child}}};
+            if (!radius.isUndefined()) group.insert("radius", radius);
+            owner.insert("inline_box_group", group); return owner;
+        };
+        const auto original = makeBox("Oorganklik", length("px", 2));
+        const QByteArray originalBytes = QJsonDocument(original).toJson(QJsonDocument::Compact);
+        const auto install = [&](const QJsonArray &spans) {
+            document->setLayoutEnabled(false); QTextCursor edit(document); edit.beginEditBlock();
+            SemanticHtml::setHtml(document, QStringLiteral("<style>a{color:%1;text-decoration:none;}</style><body style=\"font-family:sans-serif;font-size:%2pt\">%3</body>")
+                .arg(window.palette().color(QPalette::Link).name()).arg(window.readingPointSize_).arg(window.spansHtml(spans)));
+            const auto expansion = CompiledInlineBox::expand(document); CompiledInlineBox::finalize(expansion);
+            edit.endEditBlock(); document->setLayoutEnabled(true); document->setTextWidth(10000);
+            document->documentLayout()->documentSize();
+        };
+        for (int dpi : {96, 144}) for (qreal points : {12.0, 18.0}) {
+            QImage device(1600, 400, QImage::Format_ARGB32_Premultiplied);
+            device.setDotsPerMeterX(qRound(dpi * 1000 / 25.4)); device.setDotsPerMeterY(device.dotsPerMeterX());
+            document->documentLayout()->setPaintDevice(&device); window.readingPointSize_ = points;
+            auto ordinary = original; ordinary.remove("inline_box_group"); ordinary.insert("text", "Oorganklik");
+            install({ordinary}); const auto unboxed = document->find("Oorganklik").charFormat();
+            const qreal advance = document->begin().layout()->lineAt(0).horizontalAdvance();
+            const qreal height = document->begin().layout()->lineAt(0).height();
+            const auto glyphs = document->begin().layout()->glyphRuns();
+            for (const auto &radius : {QJsonValue(QJsonValue::Undefined), QJsonValue(QJsonValue::Null),
+                                       QJsonValue(length("px", 0)), QJsonValue(length("px", 2))}) {
+                auto boxed = makeBox("Oorganklik", radius); install({boxed});
+                QCOMPARE(document->toPlainText(), QStringLiteral("Oorganklik"));
+                QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto actual = document->find("Oorganklik").charFormat();
+                QCOMPARE(actual.anchorHref(), href); QCOMPARE(actual.font(), unboxed.font());
+                QCOMPARE(actual.foreground(), unboxed.foreground()); QCOMPARE(actual.underlineStyle(), unboxed.underlineStyle());
+                QVERIFY(!actual.hasProperty(QTextFormat::BackgroundBrush));
+                const auto slices = QCompiledInlineBox::slices(document->begin().layout()); QCOMPARE(slices.size(), 1);
+                const auto &box = slices.first().box; const auto &slice = slices.first().geometry;
+                QCOMPARE(box.identity.value("action").toMap().value("source").toByteArray(), QJsonDocument(boxed).toJson(QJsonDocument::Compact));
+                QCOMPARE(box.identity.contains("radius"), radius.isObject());
+                QCOMPARE(document->begin().layout()->lineAt(0).height(), height);
+                const qreal edges = slice.border.width() - slice.content.width();
+                QVERIFY(qAbs(document->begin().layout()->lineAt(0).horizontalAdvance() - advance - edges) < .1);
+                const qreal density = device.logicalDpiY() / QFontMetricsF(QFont()).fontDpi();
+                const qreal sourceEdges = .3 * points * device.logicalDpiY() / 72 + 2 * density;
+                QVERIFY(qAbs(edges - sourceEdges) < .1); // Owner em and CSS px each scale once.
+                const auto shaped = document->begin().layout()->glyphRuns(); QCOMPARE(shaped.size(), glyphs.size());
+                for (int i = 0; i < shaped.size(); ++i) {
+                    QCOMPARE(shaped[i].rawFont(), glyphs[i].rawFont()); QCOMPARE(shaped[i].glyphIndexes(), glyphs[i].glyphIndexes());
+                    const auto a = shaped[i].positions(), b = glyphs[i].positions(); QCOMPARE(a.size(), b.size()); QVERIFY(!a.isEmpty());
+                    for (int j = 0; j < a.size(); ++j) QVERIFY(QLineF(a[j] - a[0], b[j] - b[0]).length() < .05);
+                }
+                const auto position = LogicalFlow::position(document, 0); QVERIFY(position.status != LogicalFlow::Status::Refused);
+                const auto path = position.values.value("inlineBoxActionPath").value<QPainterPath>(); QVERIFY(!path.isEmpty());
+                QCOMPARE(path.boundingRect(), position.values.value("actionRect").toRectF());
+                const QPointF origin = document->begin().layout()->position();
+                const QPointF paddingPoint = origin + QPointF((slice.border.left() + slice.content.left()) / 2, slice.content.center().y());
+                QVERIFY(path.contains(paddingPoint)); QCOMPARE(document->documentLayout()->anchorAt(paddingPoint), href);
+                const int hit = document->documentLayout()->hitTest(paddingPoint, Qt::ExactHit); QVERIFY(hit >= 0 && hit < 9);
+                if (radius.isObject() && radius.toObject().value("value").toDouble() > 0) {
+                    const QPointF corner = path.boundingRect().topLeft() + QPointF(.05, .05);
+                    QVERIFY(!path.contains(corner)); QVERIFY(document->documentLayout()->anchorAt(corner).isEmpty());
+                }
+                QTextCursor selected(document); selected.select(QTextCursor::Document);
+                QCOMPARE(selected.selectedText(), QStringLiteral("Oorganklik"));
+                QVERIFY(!document->toRawText().contains(QChar::ObjectReplacementCharacter));
+                QCOMPARE(QJsonDocument(original).toJson(QJsonDocument::Compact), originalBytes);
+            }
+            const QString wrapping = QStringLiteral("Original words wrap naturally without new corners at each line");
+            install({makeBox(wrapping, length("px", 2))}); document->setTextWidth(140 * dpi / 96.0);
+            document->documentLayout()->documentSize();
+            QCOMPARE(document->toPlainText(), wrapping);
+            const auto wrapped = QCompiledInlineBox::slices(document->begin().layout()); QVERIFY(wrapped.size() >= 3);
+            const auto wrappedPath = LogicalFlow::position(document, 0).values.value("inlineBoxActionPath").value<QPainterPath>();
+            QVERIFY(!wrappedPath.isEmpty());
+            for (int i = 1; i + 1 < wrapped.size(); ++i) {
+                const auto &slice = wrapped[i].geometry; QVERIFY(!slice.first && !slice.last);
+                const QPointF probe = document->begin().layout()->position() + slice.border.topLeft() + QPointF(.1, .1);
+                QVERIFY(wrappedPath.contains(probe)); QCOMPARE(document->documentLayout()->anchorAt(probe), href);
+            }
+            document->documentLayout()->setPaintDevice(nullptr);
+        }
+        window.readingPointSize_ = 12;
+        // Real Reading composition: three touching equal-target owners must remain
+        // three focus/AX occurrences, with ordinary punctuation outside the box.
+        auto plain = original; plain.remove("inline_box_group"); plain.insert("text", "Plain");
+        const auto second = makeBox("Second", length("px", 2));
+        const QJsonArray spans{original, plain, second, leaf(".")};
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", spans}}}));
+        document = browser->document(); document->documentLayout()->documentSize();
+        auto *accessible = QAccessible::queryAccessibleInterface(browser); QVERIFY(accessible && accessible->textInterface());
+        QList<QAccessibleInterface *> links;
+        for (int i = 0; i < accessible->childCount(); ++i) {
+            auto *child = accessible->child(i);
+            if (child && child->role() == QAccessible::Link && child->text(QAccessible::Value) == href) links.append(child);
+        }
+        QCOMPARE(links.size(), 3); QCOMPARE(links[0]->text(QAccessible::Name), QStringLiteral("Oorganklik"));
+        QCOMPARE(links[1]->text(QAccessible::Name), QStringLiteral("Plain")); QCOMPARE(links[2]->text(QAccessible::Name), QStringLiteral("Second"));
+        auto *text = accessible->textInterface();
+        QVERIFY(text->text(0, text->characterCount()).contains(QStringLiteral("OorganklikPlainSecond.")));
+        links[0]->actionInterface()->doAction(QAccessibleActionInterface::setFocusAction());
+        QTRY_VERIFY(links[0]->state().focused); QTest::keyClick(browser, Qt::Key_Tab); QTRY_VERIFY(links[1]->state().focused);
+        QTest::keyClick(browser, Qt::Key_Tab); QTRY_VERIFY(links[2]->state().focused);
+        QTest::keyClick(browser, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY(links[1]->state().focused);
+        QTest::keyClick(browser, Qt::Key_Tab, Qt::ShiftModifier); QTRY_VERIFY(links[0]->state().focused);
+        const auto saveFrame = [&](const QString &name) {
+            const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (directory.isEmpty()) return true;
+            return QDir().mkpath(directory) && window.grab().save(QDir(directory).filePath(name));
+        };
+        QVERIFY(saveFrame(QStringLiteral("rounded-link-keyboard-960.png")));
+        window.resize(640, 700); QCoreApplication::processEvents();
+        QTRY_VERIFY(links[0]->state().focused);
+        QVERIFY(saveFrame(QStringLiteral("rounded-link-narrow-640.png")));
+        window.resize(960, 700); QCoreApplication::processEvents();
+        QCOMPARE(activated.size(), 0); QTest::keyClick(browser, Qt::Key_Return); QCOMPARE(activated.size(), 1);
+        QCOMPARE(activated.first().first().toUrl(), QUrl(href));
+        const int first = document->find("Oorganklik").selectionStart();
+        const auto geometry = LogicalFlow::position(document, first); QVERIFY(geometry.status != LogicalFlow::Status::Refused);
+        const auto action = geometry.values.value("inlineBoxActionPath").value<QPainterPath>(); QVERIFY(!action.isEmpty());
+        const QPointF point = action.boundingRect().center();
+        const QPoint local = point.toPoint() - QPoint(browser->horizontalScrollBar()->value(), browser->verticalScrollBar()->value());
+        const QPoint screen = browser->viewport()->mapToGlobal(local); QVERIFY(links[0]->rect().contains(screen));
+        auto *hit = accessible->childAt(screen.x(), screen.y()); QVERIFY(hit); QCOMPARE(hit->object(), links[0]->object());
+        const auto owned = document->find("Oorganklik"); browser->setTextCursor(owned); browser->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("Oorganklik"));
+        QCOMPARE(QJsonDocument(original).toJson(QJsonDocument::Compact), originalBytes);
+    }
+
+    void roundedWholeLinkRejectsUnownedGeometryAndRecovers() {
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *document = window.reading_->document(); document->setLayoutEnabled(false);
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject solid{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}},
+            {"color", QJsonObject{{"rgb", "#c8ccd1"}}}}}};
+        const QJsonObject child{{"kind", "text"}, {"text", "original label"}, {"target", ""}, {"trail", ""}};
+        const QJsonObject group{{"padding", QJsonObject{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}}},
+            {"border", QJsonObject{{"top", solid}, {"right", solid}, {"bottom", solid}, {"left", solid}}},
+            {"radius", QJsonObject{{"unit", "px"}, {"value", 2}}}, {"overlays", QJsonArray{}}, {"spans", QJsonArray{child}}};
+        const QJsonObject owner{{"kind", "link"}, {"text", ""}, {"target", "target"}, {"trail", ""}, {"inline_box_group", group}};
+        const auto refuses = [&](QJsonObject value) {
+            bool refused = false;
+            try { window.spansHtml({value}); } catch (const std::exception &) { refused = true; }
+            return refused;
+        };
+        for (const auto &radius : {QJsonObject{{"unit", "em"}, {"value", 2}}, QJsonObject{{"unit", "px"}, {"value", -1}},
+                                  QJsonObject{{"unit", "px"}, {"value", "2"}}}) {
+            auto bad = owner; auto payload = group; payload.insert("radius", radius); bad.insert("inline_box_group", payload); QVERIFY(refuses(bad));
+        }
+        for (const auto &key : {"link_paint", "target_fragment", "audio_control", "citation_marker"}) {
+            auto bad = owner; bad.insert(key, QJsonObject{}); QVERIFY(refuses(bad));
+        }
+        auto bad = owner; auto payload = group; auto different = child; different.insert("italic", true);
+        payload.insert("spans", QJsonArray{different}); bad.insert("inline_box_group", payload); QVERIFY(refuses(bad));
+        different = child; different.insert("kind", "link"); different.insert("target", "other");
+        payload = group; payload.insert("spans", QJsonArray{different}); bad = owner; bad.insert("inline_box_group", payload); QVERIFY(refuses(bad));
+        payload = group; payload.insert("spans", QJsonArray{child, child}); bad = owner; bad.insert("inline_box_group", payload); QVERIFY(refuses(bad));
+        const auto capability = document->documentLayout()->property("_wikidictInlineBoxRoundedLinkCapability");
+        QVERIFY(capability.isValid()); document->documentLayout()->setProperty("_wikidictInlineBoxRoundedLinkCapability", QVariant());
+        QVERIFY(refuses(owner)); document->documentLayout()->setProperty("_wikidictInlineBoxRoundedLinkCapability", capability);
+        QVERIFY(!refuses(owner)); document->setLayoutEnabled(true);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}}));
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        auto original = document->find("original label"); QVERIFY(!original.isNull());
+        auto forged = original.charFormat(); forged.setAnchorHref(QStringLiteral("dict:forged")); original.setCharFormat(forged);
+        document->documentLayout()->documentSize(); QVERIFY(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt() != 0);
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}}));
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QCOMPARE(document->find("original label").charFormat().anchorHref(), QStringLiteral("dict:target"));
+    }
+
+    void borderOnlyPitchOverlayKeepsInheritedInkInRealTable() {
+        // Exact retained MG Source47 Reader entry, including its real Table and
+        // original null foreground. This is consumer coverage, not a new issuer.
+        const auto entry = QJsonDocument::fromJson(QByteArray("{\"organization\":{\"lexemes\":[{\"language\":\"Japanese\",\"kind\":\"Verb\",\"section\":1,\"etymology\":null,\"definitions\":[{\"block\":2,\"parent\":null,\"examples\":[],\"quotations\":[],\"notes\":[],\"form\":null}],\"introduction\":[0,1],\"other_blocks\":[],\"related_sections\":[2,3]}],\"other_sections\":[0]},\"title\":\"ミスる\",\"display_title\":[],\"kind\":\"language\",\"language\":\"Japanese\",\"language_code\":\"ja\",\"sections\":[{\"level\":2,\"title\":\"Japoney\",\"anchor\":\"Japoney\",\"anchor_fallback\":\"\",\"blocks\":[]},{\"level\":3,\"title\":\"Matoanteny\",\"anchor\":\"Matoanteny\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"heading\",\"depth\":0,\"spans\":[{\"kind\":\"link\",\"text\":\"\",\"target\":\"help:karazan-teny\",\"trail\":\"\",\"language\":\"\",\"classes\":\"wikidict-media wikidict-media-file-4f70656e20626f6f6b2030312e737667\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"image\":{\"file\":\"Open book 01.svg\",\"width_px\":30},\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" Matoanteny \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":3,\"anchor\":\"Matoanteny\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"paragraph\",\"depth\":0,\"spans\":[{\"kind\":\"text\",\"text\":\"ミスる\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":true,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"definition\",\"depth\":1,\"spans\":[{\"kind\":\"link\",\"text\":\"manao\",\"target\":\"manao\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"fahadisoana\",\"target\":\"fahadisoana\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"#\",\"number\":\"1\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]},{\"level\":4,\"title\":\"Fanononana\",\"anchor\":\"Fanononana\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"heading\",\"depth\":0,\"spans\":[{\"kind\":\"link\",\"text\":\"\",\"target\":\"help:fanononana\",\"trail\":\"\",\"language\":\"\",\"classes\":\"wikidict-media wikidict-media-file-4e75766f6c61206170707320656475206c616e6775616765732e737667\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":\"Fampahalalàna ara-peo an'ilay teny ミスる\",\"foreground\":null,\"image\":{\"file\":\"Nuvola apps edu languages.svg\",\"width_px\":30},\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" Fanononana\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":\"Fampahalalàna ara-peo an'ilay teny ミスる\",\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":4,\"anchor\":\"Fanononana\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"list_item\",\"depth\":1,\"spans\":[],\"feature\":null,\"list_path\":\"*\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"table\",\"depth\":0,\"spans\":[],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":{\"caption\":[],\"rows\":[{\"cells\":[{\"spans\":[{\"kind\":\"text\",\"text\":\"• \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"usage-label-accent ib-brac label-brac\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"external_link\",\"text\":\"Tokyo\",\"target\":\"https://mg.wikipedia.org/wiki/Tokyo_dialect\",\"trail\":\"\",\"language\":\"\",\"classes\":\"usage-label-accent ib-content label-content extiw\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"label\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"usage-label-accent ib-brac label-brac\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"ミ\",\"target\":\"\",\"trail\":\"\",\"language\":\"ja\",\"classes\":\"Jpan\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"\",\"target\":\"\",\"trail\":\"\",\"language\":\"ja\",\"classes\":\"Jpan\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"inline_box_group\":{\"padding\":{\"top\":{\"unit\":\"px\",\"value\":1},\"right\":{\"unit\":\"px\",\"value\":1},\"bottom\":{\"unit\":\"px\",\"value\":1},\"left\":{\"unit\":\"px\",\"value\":1}},\"border\":{\"top\":{\"solid\":{\"width\":{\"unit\":\"px\",\"value\":1},\"color\":{\"current_color\":{}}}},\"right\":{\"none\":{}},\"bottom\":{\"none\":{}},\"left\":{\"none\":{}}},\"overlays\":[{\"insets\":{\"top\":{\"unit\":\"px\",\"value\":0},\"right\":{\"unit\":\"percent\",\"value\":0},\"bottom\":{\"unit\":\"percent\",\"value\":67},\"left\":null},\"border\":{\"top\":{\"none\":{}},\"right\":{\"solid\":{\"width\":{\"unit\":\"px\",\"value\":1},\"color\":{\"current_color\":{}}}},\"bottom\":{\"none\":{}},\"left\":{\"none\":{}}}}],\"spans\":[{\"kind\":\"text\",\"text\":\"ス\",\"target\":\"\",\"trail\":\"\",\"language\":\"ja\",\"classes\":\"Jpan\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}]},\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"る\",\"target\":\"\",\"trail\":\"\",\"language\":\"ja\",\"classes\":\"Jpan\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"[mìsúꜜrù]\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"Latn\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":true,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" (\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"Nakadaka\",\"target\":\"中高型\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" – [2])\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"line_break\",\"text\":\"\\n\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"• \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"IPA\",\"target\":\"Wiktionary:International Phonetic Alphabet\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"(\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"link\",\"text\":\"key\",\"target\":\"Appendix:Japanese pronunciation\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":true,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\":\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\"[mʲisɨɾɯ̟]\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"IPA nowrap\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"pronunciation\"},{\"kind\":\"line_break\",\"text\":\"\\n\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"header\":false,\"colspan\":1,\"rowspan\":1,\"background\":null}]}]}},{\"kind\":\"list_item\",\"depth\":1,\"spans\":[{\"kind\":\"link\",\"text\":\"Endrika:ja-acc-table\",\"target\":\"Endrika:ja-acc-table\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"*\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]},{\"level\":4,\"title\":\"Tsiahy\",\"anchor\":\"Tsiahy\",\"anchor_fallback\":\"\",\"blocks\":[{\"kind\":\"heading\",\"depth\":0,\"spans\":[{\"kind\":\"link\",\"text\":\"\",\"target\":\"Wiktionary:Tsiahy\",\"trail\":\"\",\"language\":\"\",\"classes\":\"wikidict-media wikidict-media-file-426f6f6b732d616a2e73766720616a20617368746f6e203031662e737667\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"image\":{\"file\":\"Books-aj.svg aj ashton 01f.svg\",\"width_px\":35},\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" Tsiahy\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"\",\"number\":\"\",\"level\":4,\"anchor\":\"Tsiahy\",\"anchor_fallback\":\"\",\"table\":null},{\"kind\":\"list_item\",\"depth\":1,\"spans\":[{\"kind\":\"text\",\"text\":\"Ity pejy ity dia nadika avy amin'ny pejy \",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"external_link\",\"text\":\"ミスる\",\"target\":\"https://en.wiktionary.org/wiki/%E3%83%9F%E3%82%B9%E3%82%8B\",\"trail\":\"\",\"language\":\"\",\"classes\":\"extiw\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\" tao amin'ny Wikibolana amin'ny teny anglisy. (\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"external_link\",\"text\":\"lisitry ny mpandray anjara\",\"target\":\"http://en.wiktionary.org//w/index.php?title=%E3%83%9F%E3%82%B9%E3%82%8B&action=history\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"},{\"kind\":\"text\",\"text\":\")\",\"target\":\"\",\"trail\":\"\",\"language\":\"\",\"classes\":\"\",\"direction\":\"\",\"explanation\":\"\",\"tooltip\":null,\"foreground\":null,\"bold\":false,\"italic\":false,\"code\":false,\"small\":false,\"superscript\":false,\"subscript\":false,\"strike\":false,\"underline\":false,\"role\":\"normal\"}],\"feature\":null,\"list_path\":\"*\",\"number\":\"\",\"level\":0,\"anchor\":\"\",\"anchor_fallback\":\"\",\"table\":null}]}],\"preamble_spans\":[],\"references\":[],\"media\":[{\"file\":\"Open book 01.svg\",\"kind\":\"image\",\"caption\":\"Open book 01.svg\"},{\"file\":\"Nuvola apps edu languages.svg\",\"kind\":\"image\",\"caption\":\"Nuvola apps edu languages.svg\"},{\"file\":\"Books-aj.svg aj ashton 01f.svg\",\"kind\":\"image\",\"caption\":\"Books-aj.svg aj ashton 01f.svg\"}],\"redirect\":null,\"alias\":null}")).object();
+        QVERIFY(!entry.isEmpty());
+        const auto owner = entry.value("sections").toArray().at(2).toObject().value("blocks").toArray().at(2).toObject()
+            .value("table").toObject().value("rows").toArray().at(0).toObject().value("cells").toArray().at(0).toObject()
+            .value("spans").toArray().at(6).toObject();
+        const auto source = QJsonDocument(owner).toJson(QJsonDocument::Compact);
+        const auto snapshot = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+        QVERIFY(owner.value("foreground").isNull());
+        const auto group = owner.value("inline_box_group").toObject();
+        QCOMPARE(group.value("spans").toArray().size(), 1);
+        QCOMPARE(group.value("spans").toArray().first().toObject().value("text").toString(), QString(QChar(0x30b9)));
+        QVERIFY(group.value("spans").toArray().first().toObject().value("foreground").isNull());
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *document = window.reading_->document();
+        QCOMPARE(document->documentLayout()->property("_wikidictInlineBoxOverlayCapability").toString(),
+            QStringLiteral("wikidict.inline-box-overlay/1"));
+        const auto findOwner = [&] {
+            QTextCursor found(document);
+            for (auto block = document->begin(); block.isValid(); block = block.next())
+                for (auto it = block.begin(); !it.atEnd(); ++it) {
+                    const auto fragment = it.fragment();
+                    if (!fragment.isValid()) continue;
+                    const auto map = fragment.charFormat().property(QCompiledInlineBox::Property).toMap();
+                    if (map.value("borderSource").toByteArray() != source) continue;
+                    found.setPosition(map.value("first").toInt());
+                    found.setPosition(map.value("last").toInt(), QTextCursor::KeepAnchor); return found;
+                }
+            return QTextCursor();
+        };
+        for (const QColor theme : {QColor("#2349a7"), QColor("#a35719")}) {
+            auto palette = window.palette(); palette.setColor(QPalette::Text, theme);
+            window.setPalette(palette); window.reading_->setPalette(palette);
+            for (int width : {900, 640}) {
+                window.resize(width, 700); QCoreApplication::processEvents();
+                QVERIFY(composeReadingEntry(window, entry));
+                document->documentLayout()->documentSize();
+                QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto owned = findOwner(); QVERIFY(!owned.isNull());
+                QCOMPARE(owned.selectedText(), QString(QChar(0x30b9)));
+                auto *table = qobject_cast<QTextTable *>(owned.currentFrame()); QVERIFY(table);
+                QCOMPARE(table->parentFrame(), document->rootFrame());
+                const auto cell = table->cellAt(owned.selectionStart()); QVERIFY(cell.isValid());
+                QCOMPARE(cell, table->cellAt(owned.selectionEnd() - 1));
+                QCOMPARE(cell.row(), 0); QCOMPARE(cell.column(), 0);
+                const auto format = owned.charFormat(); QVERIFY(format.anchorHref().isEmpty());
+                QCOMPARE(format.foreground().color(), theme);
+                const auto map = format.property(QCompiledInlineBox::Property).toMap();
+                QCOMPARE(map.value("borderSource").toByteArray(), source);
+                QCOMPARE(map.value("currentColors").toList(), QVariantList({true, false, false, false}));
+                QCOMPARE(map.value("colors").toList().first().value<QColor>(), QColor(Qt::transparent));
+                const auto overlays = map.value("overlays").toList(); QCOMPARE(overlays.size(), 1);
+                const auto overlay = overlays.first().toMap();
+                QCOMPARE(overlay.value("currentColors").toList(), QVariantList({false, true, false, false}));
+                const auto insets = overlay.value("insets").toList(); QCOMPARE(insets.size(), 4);
+                QVERIFY(!insets.at(3).isValid());
+                QCOMPARE(insets.at(2).toMap().value("unit").toString(), QStringLiteral("percent"));
+                QCOMPARE(insets.at(2).toMap().value("value").toDouble(), 67.0);
+                QCompiledInlineBox::Box parsed; QVERIFY(QCompiledInlineBox::parse(map, &parsed));
+                const auto pieces = QCompiledInlineBox::slices(owned.block().layout());
+                QCOMPARE(pieces.size(), 1);
+                const auto origin = document->documentLayout()->blockBoundingRect(owned.block()).topLeft();
+                QVERIFY(origin.x() > 0); QVERIFY(origin.y() > 0);
+                const qreal scale = QCompiledInline::deviceScale(format.font().resolve(document->defaultFont()));
+                const QRectF padding = pieces.first().geometry.padding.translated(origin);
+                const QRectF expectedOverlay(padding.right() - scale, padding.top(), scale, padding.height() * .33);
+                QList<QCompiledInlineBox::OverlayPaint> paints;
+                QVERIFY(QCompiledInlineBox::overlayPaints(pieces, {scale}, &paints)); QCOMPARE(paints.size(), 1);
+                const auto actualOverlay = paints.first().geometry.border.translated(origin);
+                QVERIFY(qAbs(actualOverlay.left() - expectedOverlay.left()) < .001);
+                QVERIFY(qAbs(actualOverlay.height() - expectedOverlay.height()) < .001);
+                const QPointF offset = QPointF(30, 30) - origin;
+                const auto raster = [&](bool selected) {
+                    QImage image(500, 200, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::white);
+                    QAbstractTextDocumentLayout::PaintContext context; context.palette = palette;
+                    if (selected) {
+                        QAbstractTextDocumentLayout::Selection selection; selection.cursor = owned;
+                        selection.format.setForeground(QColor("#bd118b")); context.selections.append(selection);
+                    }
+                    QPainter painter(&image); painter.translate(offset); document->documentLayout()->draw(&painter, context);
+                    return image;
+                };
+                const QImage normal = raster(false), selected = raster(true);
+                const QRect topBand = QRectF(pieces.first().geometry.border.translated(origin).topLeft() + offset,
+                    QSizeF(pieces.first().geometry.border.width(), scale)).toAlignedRect().intersected(normal.rect());
+                int topInk = 0, selectionInk = 0;
+                for (int y = topBand.top(); y <= topBand.bottom(); ++y)
+                    for (int x = topBand.left(); x <= topBand.right(); ++x) topInk += normal.pixelColor(x, y) == theme;
+                for (int y = 0; y < selected.height(); ++y) for (int x = 0; x < selected.width(); ++x)
+                    selectionInk += selected.pixelColor(x, y) == QColor("#bd118b");
+                QVERIFY(topInk > 0); QVERIFY(selectionInk > 0); QVERIFY(normal != selected);
+                QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                window.reading_->setTextCursor(owned); window.reading_->copy();
+                QCOMPARE(QApplication::clipboard()->text(), QString(QChar(0x30b9)));
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+                QVERIFY(accessible && accessible->textInterface());
+                const auto accessibleText = accessible->textInterface()->text(0, accessible->textInterface()->characterCount());
+                QVERIFY(accessibleText.contains(QString::fromUtf8("ミスる")));
+                QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), snapshot);
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!directory.isEmpty() && theme == QColor("#2349a7")) {
+                    QVERIFY(QDir().mkpath(directory));
+                    QVERIFY(window.grab().save(QDir(directory).filePath(QStringLiteral("mg-pitch-real-table-%1.png").arg(width))));
+                }
+            }
+        }
+        // The same original owner also works as an ordinary paragraph range;
+        // the table path above did not flatten its containing cell to the root.
+        QVERIFY(composeReadingBlocks(window, QJsonArray{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}}));
+        document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto plain = findOwner(); QVERIFY(!plain.isNull()); QCOMPARE(plain.currentFrame(), document->rootFrame());
+        QCOMPARE(plain.selectedText(), QString(QChar(0x30b9)));
+    }
+
+    void borderOnlyPitchOverlayRefusesUnownedPayloadAndRecovers() {
+        const auto owner = QJsonDocument::fromJson(QByteArrayLiteral(R"mgowner({"kind":"text","text":"","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"inline_box_group":{"padding":{"top":{"unit":"px","value":1},"right":{"unit":"px","value":1},"bottom":{"unit":"px","value":1},"left":{"unit":"px","value":1}},"border":{"top":{"solid":{"width":{"unit":"px","value":1},"color":{"current_color":{}}}},"right":{"none":{}},"bottom":{"none":{}},"left":{"none":{}}},"overlays":[{"insets":{"top":{"unit":"px","value":0},"right":{"unit":"percent","value":0},"bottom":{"unit":"percent","value":67},"left":null},"border":{"top":{"none":{}},"right":{"solid":{"width":{"unit":"px","value":1},"color":{"current_color":{}}}},"bottom":{"none":{}},"left":{"none":{}}}}],"spans":[{"kind":"text","text":"ス","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}]},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"})mgowner")).object();
+        QCOMPARE(CompiledContent::inlineBoxGroup(owner), owner.value("inline_box_group").toObject());
+        for (int which = 0; which < 9; ++which) {
+            auto bad = owner; auto group = bad.value("inline_box_group").toObject();
+            auto overlays = group.value("overlays").toArray(); auto overlay = overlays.first().toObject();
+            auto insets = overlay.value("insets").toObject(); auto child = group.value("spans").toArray().first().toObject();
+            if (which == 0) overlay.insert("content", QJsonObject{{"spans", QJsonArray{child}}});
+            if (which == 1) insets.insert("right", QJsonObject{{"unit", "em"}, {"value", 1}});
+            if (which == 2) { insets.insert("top", QJsonValue::Null); insets.insert("bottom", QJsonValue::Null); }
+            if (which == 3) child.insert("foreground", "#123456");
+            if (which == 4) child.insert("kind", "link");
+            if (which == 5) group.insert("radius", QJsonObject{{"unit", "px"}, {"value", 2}});
+            if (which == 6) bad.insert("direction", "rtl");
+            if (which == 7) group.insert("spans", QJsonArray{child, child});
+            if (which == 8) insets.insert("right", QJsonObject{{"unit", "percent"}, {"value", "0"}});
+            overlay.insert("insets", insets); overlays.replace(0, overlay); group.insert("overlays", overlays);
+            if (which != 7) group.insert("spans", QJsonArray{child});
+            bad.insert("inline_box_group", group);
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(bad), std::runtime_error);
+        }
+        MainWindow window{QString()}; QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        auto *document = window.reading_->document();
+        const QJsonArray blocks{QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{owner}}}};
+        auto *layout = document->documentLayout();
+        const auto capability = layout->property("_wikidictInlineBoxOverlayCapability");
+        layout->setProperty("_wikidictInlineBoxOverlayCapability", QVariant());
+        QVERIFY(!composeReadingBlocks(window, blocks));
+        layout->setProperty("_wikidictInlineBoxOverlayCapability", capability);
+        QVERIFY(composeReadingBlocks(window, blocks)); layout->documentSize();
+        QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        const auto original = document->toRawText();
+        const auto glyph = document->find(QString(QChar(0x30b9))); QVERIFY(!glyph.isNull());
+        QCOMPARE(glyph.selectedText(), QString(QChar(0x30b9))); QVERIFY(glyph.charFormat().anchorHref().isEmpty());
+        auto forged = glyph.charFormat().property(QCompiledInlineBox::Property).toMap();
+        auto flags = forged.value("currentColors").toList(); flags[0] = 1; forged.insert("currentColors", flags);
+        QVERIFY(!QCompiledInlineBox::parse(forged, nullptr));
+        QCOMPARE(document->toRawText(), original);
+    }
+
+    void finalYInlineBoxUnicodeBackgroundKeepsShapingSelectionAndSource() {
+        MainWindow window{QString()}; window.resize(900, 700); window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+        auto *document = window.reading_->document();
+        const auto leaf = [](const QString &value) { return QJsonObject{{"kind", "text"},
+            {"text", value}, {"target", ""}, {"trail", ""}}; };
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject padding{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
+        const QJsonObject solid{{"solid", QJsonObject{{"width", QJsonObject{{"unit", "px"}, {"value", 1}}},
+            {"color", QJsonObject{{"rgb", "#cedff2"}}}}}};
+        const QJsonObject border{{"top", solid}, {"right", solid}, {"bottom", solid}, {"left", solid}};
+        const QStringList sources{QString::fromUtf8("閩南"), QString::fromUtf8("A閩 e\u0301 Ελληνικά Z"),
+            QString::fromUtf8("e\u0301閩南"), QString::fromUtf8("閩南e\u0301"), QString::fromUtf8("界\U00020000界"),
+            QString(QChar(0xe000)) + QStringLiteral(" fallback ") + QChar(0x0378),
+            QStringLiteral("A\u200dB\u200cC\ufe0f D")};
+        for (int dpi : {96, 144}) for (qreal points : {12.0, 18.0}) for (const auto &source : sources) {
+            QImage device(1800, 500, QImage::Format_ARGB32_Premultiplied);
+            device.setDotsPerMeterX(qRound(dpi * 1000 / 25.4)); device.setDotsPerMeterY(device.dotsPerMeterX());
+            document->documentLayout()->setPaintDevice(&device);
+            window.readingPointSize_ = points;
+            auto effectiveChild = leaf(source); effectiveChild.insert("background", "#f5faff");
+            const QJsonArray children{effectiveChild};
+            auto box = leaf(QString());
+            box.insert("tooltip", QString::fromUtf8("閩南語詞彙"));
+            box.insert("background", "#f5faff");
+            box.insert("inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+                {"overlays", QJsonArray{}}, {"spans", children}});
+            const QByteArray immutable = QJsonDocument(box).toJson(QJsonDocument::Compact);
+            const auto install = [&](const QJsonArray &spans) {
+                document->setLayoutEnabled(false);
+                QTextCursor edit(document); edit.beginEditBlock();
+                SemanticHtml::setHtml(document, QStringLiteral("<body style=\"font-family:sans-serif;font-size:%1pt;color:#202020\">%2</body>")
+                    .arg(points).arg(window.spansHtml(spans)));
+                const auto expanded = CompiledInlineBox::expand(document);
+                CompiledInlineBox::finalize(expanded);
+                edit.endEditBlock(); document->setLayoutEnabled(true);
+                document->setTextWidth(10000); document->documentLayout()->documentSize();
+            };
+            install(children);
+            const auto ordinaryLine = document->begin().layout()->lineAt(0);
+            const qreal advance = ordinaryLine.horizontalAdvance(), height = ordinaryLine.height();
+            const auto ordinaryGlyphs = document->begin().layout()->glyphRuns(0, source.size());
+            QVERIFY(!ordinaryGlyphs.isEmpty());
+            install(QJsonArray{box});
+            QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QCOMPARE(document->toRawText(), source);
+            auto *layout = document->begin().layout();
+            const auto line = layout->lineAt(0);
+            if (source == QString::fromUtf8("界\U00020000界")) {
+                // Inspect the actual boxed document's selected font, not only
+                // its source offsets or a separately requested font family.
+                const auto runs = layout->glyphRuns(1, 2, QTextLayout::RetrieveGlyphIndexes
+                    | QTextLayout::RetrieveStringIndexes);
+                QVERIFY(!runs.isEmpty());
+                int realGlyphs = 0;
+                for (const auto &run : runs) {
+                    QCOMPARE(run.rawFont().familyName(), QStringLiteral("HanaMinB"));
+                    QVERIFY(run.rawFont().supportsCharacter(char32_t(0x20000)));
+                    QCOMPARE(run.glyphIndexes().size(), run.stringIndexes().size());
+                    for (qsizetype index = 0; index < run.glyphIndexes().size(); ++index) {
+                        QCOMPARE(run.stringIndexes().at(index), qsizetype(1));
+                        QCOMPARE(run.glyphIndexes().at(index), quint32(104));
+                        const auto outline = run.rawFont().pathForGlyph(run.glyphIndexes().at(index));
+                        QVERIFY(!outline.isEmpty());
+                        QVERIFY(outline != run.rawFont().pathForGlyph(0));
+                        ++realGlyphs;
+                    }
+                }
+                QVERIFY(realGlyphs > 0);
+            }
+            const auto slices = QCompiledInlineBox::slices(layout); QCOMPARE(slices.size(), 1);
+            const qreal density = device.logicalDpiY() / QFontMetricsF(QFont()).fontDpi();
+            QVERIFY(qAbs(slices[0].geometry.border.width() - slices[0].geometry.content.width() - 2 * density) < .1);
+            QVERIFY(qAbs(line.horizontalAdvance() - advance - 2 * density) < .1);
+            QCOMPARE(line.height(), height);
+            const auto boxedGlyphs = layout->glyphRuns(0, source.size());
+            QCOMPARE(boxedGlyphs.size(), ordinaryGlyphs.size());
+            for (qsizetype run = 0; run < boxedGlyphs.size(); ++run) {
+                QCOMPARE(boxedGlyphs[run].rawFont(), ordinaryGlyphs[run].rawFont());
+                QCOMPARE(boxedGlyphs[run].glyphIndexes(), ordinaryGlyphs[run].glyphIndexes());
+                const auto actual = boxedGlyphs[run].positions(), expected = ordinaryGlyphs[run].positions();
+                QCOMPARE(actual.size(), expected.size());
+                for (qsizetype glyph = 0; glyph < actual.size(); ++glyph) {
+                    QVERIFY(qAbs(actual[glyph].x() - expected[glyph].x() - density) < .1);
+                    QVERIFY(qAbs(actual[glyph].y() - expected[glyph].y()) < .1);
+                }
+            }
+            for (auto it = document->begin().begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.isValid()) continue;
+                QCOMPARE(fragment.charFormat().objectType(), int(QTextFormat::NoObject));
+                QCOMPARE(fragment.charFormat().toolTip(), QString::fromUtf8("閩南語詞彙"));
+                QVERIFY(!fragment.charFormat().hasProperty(QTextFormat::BackgroundBrush));
+                const auto map = fragment.charFormat().property(QCompiledInlineBox::Property).toMap();
+                QCOMPARE(map.size(), 10); QCOMPARE(map.value("source").toString(), source);
+                QCOMPARE(map.value("background").value<QColor>(), QColor("#f5faff"));
+            }
+            device.fill(Qt::white);
+            QPainter painter(&device); painter.translate(40, 100); document->drawContents(&painter); painter.end();
+            int borderPixels = 0, backgroundPixels = 0;
+            const QRect area = slices[0].geometry.border.translated(layout->position() + QPointF(40, 100)).toAlignedRect().intersected(device.rect());
+            for (int y = area.top(); y <= area.bottom(); ++y) for (int x = area.left(); x <= area.right(); ++x) {
+                borderPixels += device.pixelColor(x, y) == QColor("#cedff2");
+                backgroundPixels += device.pixelColor(x, y) == QColor("#f5faff");
+            }
+            QVERIFY(borderPixels > 0); QVERIFY(backgroundPixels > 0);
+            QAbstractTextDocumentLayout::Selection paintedSelection;
+            paintedSelection.cursor = QTextCursor(document);
+            paintedSelection.cursor.select(QTextCursor::Document);
+            paintedSelection.format.setBackground(QColor("#336699"));
+            paintedSelection.format.setForeground(Qt::white);
+            QAbstractTextDocumentLayout::PaintContext selectionContext;
+            selectionContext.selections.append(paintedSelection);
+            device.fill(Qt::white); QPainter selectedPainter(&device);
+            selectedPainter.translate(40, 100);
+            document->documentLayout()->draw(&selectedPainter, selectionContext); selectedPainter.end();
+            const QRect selectedContent = slices[0].geometry.content
+                .translated(layout->position() + QPointF(40, 100)).toAlignedRect().intersected(device.rect());
+            int highlightedPixels = 0;
+            for (int y = selectedContent.top(); y <= selectedContent.bottom(); ++y)
+                for (int x = selectedContent.left(); x <= selectedContent.right(); ++x)
+                    highlightedPixels += device.pixelColor(x, y) == QColor("#336699");
+            QVERIFY(highlightedPixels > 0);
+            for (qreal width : {90.0, 150.0, 10000.0}) {
+                document->setTextWidth(width); document->documentLayout()->documentSize();
+                QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(document->toPlainText(), source);
+                QTextCursor selection(document); selection.select(QTextCursor::Document);
+                QCOMPARE(selection.selectedText(), source);
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+                QVERIFY(accessible && accessible->textInterface());
+                auto *ax = accessible->textInterface(); QCOMPARE(ax->text(0, source.size()), source);
+                QCOMPARE(ax->characterCount(), source.size());
+                layout = document->begin().layout();
+                for (int offset = 0; offset < source.size(); ++offset) {
+                    if (!layout->isValidCursorPosition(offset) || source.at(offset).isSpace()) continue;
+                    const auto rect = ax->characterRect(offset); QVERIFY(!rect.isEmpty());
+                    const int hit = ax->offsetAtPoint(rect.center());
+                    QCOMPARE(hit, offset);
+                }
+            }
+            QCOMPARE(QJsonDocument(box).toJson(QJsonDocument::Compact), immutable);
+            document->documentLayout()->setPaintDevice(nullptr);
+        }
+        // The actual label has an ordinary following action, not a box-sized link.
+        auto owner = leaf(QString()); owner.insert("background", "#f5faff");
+        owner.insert("tooltip", QString::fromUtf8("閩南語詞彙"));
+        auto labelChild = leaf(QString::fromUtf8("閩南")); labelChild.insert("background", "#f5faff");
+        owner.insert("inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{labelChild}}});
+        const QJsonObject action{{"kind", "external_link"}, {"text", " following"},
+            {"target", "https://example.test/after-static-label"}, {"trail", ""}};
+        const QJsonObject block{{"kind", "paragraph"}, {"spans", QJsonArray{owner, action}}};
+        const QJsonObject entry{{"title", "controlled static label"}, {"sections", QJsonArray{QJsonObject{
+            {"level", 0}, {"title", ""}, {"blocks", QJsonArray{block}}}}}};
+        const auto snapshot = QJsonDocument(entry).toJson(QJsonDocument::Compact);
+        QVERIFY(composeReadingEntry(window, entry));
+        document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QVERIFY(document->toPlainText().contains(QString::fromUtf8("閩南 following")));
+        const auto label = document->find(QString::fromUtf8("閩南")); QVERIFY(!label.isNull());
+        QVERIFY(label.charFormat().anchorHref().isEmpty());
+        QCOMPARE(label.charFormat().toolTip(), QString::fromUtf8("閩南語詞彙"));
+        const auto link = document->find("following"); QVERIFY(!link.isNull());
+        QCOMPARE(QUrl(link.charFormat().anchorHref()), QUrl("https://example.test/after-static-label"));
+        QCOMPARE(QJsonDocument(entry).toJson(QJsonDocument::Compact), snapshot);
+        // Controlled future-group substitution in the exact held section4/list-item
+        // slice. The retained envelope still has the old plain label; this does
+        // not claim a new producer emission or genuine UI qualification.
+        auto sourceList = QJsonDocument::fromJson(QByteArrayLiteral(R"json({"kind":"list_item","depth":1,"spans":[{"kind":"text","text":"〈","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"閩南","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","tooltip":"閩南語詞彙","foreground":null,"background":"#f5faff","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"〉 ","target":"","trail":"","language":"","classes":"","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"番仔學堂","target":"番仔學堂#漢語","trail":"","language":"zh-Hant","classes":"Hant","direction":"","explanation":"","tooltip":null,"foreground":null,"font_scale":1.2000000476837158,"font_scale_basis":"normal_body","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"／","target":"","trail":"","language":"zh","classes":"Hani","direction":"","explanation":"","tooltip":null,"foreground":null,"font_scale":1.2000000476837158,"font_scale_basis":"normal_body","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"link","text":"番仔学堂","target":"番仔学堂#漢語","trail":"","language":"zh-Hans","classes":"Hans","direction":"","explanation":"","tooltip":null,"foreground":null,"font_scale":1.2000000476837158,"font_scale_basis":"normal_body","bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"feature":null,"list_path":"*","number":"","level":0,"anchor":"","anchor_fallback":"","table":null})json")).object();
+        QVERIFY(!sourceList.isEmpty());
+        const auto originalList = sourceList;
+        auto listSpans = sourceList.value("spans").toArray();
+        const auto originalLabel = listSpans.at(1).toObject();
+        auto listOwner = originalLabel; listOwner.insert("text", "");
+        listOwner.insert("inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{originalLabel}}});
+        listSpans.replace(1, listOwner); sourceList.insert("spans", listSpans);
+        auto restoredList = sourceList; auto restoredSpans = listSpans;
+        restoredSpans.replace(1, originalLabel); restoredList.insert("spans", restoredSpans);
+        QCOMPARE(restoredList, originalList);
+        const QJsonObject listEntry{{"title", "controlled source-derived static list label"},
+            {"sections", QJsonArray{QJsonObject{{"level", 4}, {"title", QString::fromUtf8("參見")},
+                {"blocks", QJsonArray{sourceList}}}}}};
+        const auto listSnapshot = QJsonDocument(listEntry).toJson(QJsonDocument::Compact);
+        QVERIFY(composeReadingEntry(window, listEntry));
+        document->documentLayout()->documentSize();
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+        QVERIFY(document->toPlainText().contains(QString::fromUtf8("• 〈閩南〉 番仔學堂／番仔学堂")));
+        const auto listLabel = document->find(QString::fromUtf8("閩南")); QVERIFY(!listLabel.isNull());
+        QCOMPARE(listLabel.currentFrame(), document->rootFrame());
+        QVERIFY(!listLabel.block().textList());
+        QCOMPARE(listLabel.block().textDirection(), Qt::LeftToRight);
+        QVERIFY(listLabel.charFormat().anchorHref().isEmpty());
+        QCOMPARE(listLabel.charFormat().toolTip(), originalLabel.value("tooltip").toString());
+        const auto listMap = listLabel.charFormat().property(QCompiledInlineBox::Property).toMap();
+        QCOMPARE(listMap.value("source").toString(), originalLabel.value("text").toString());
+        QCOMPARE(listMap.value("background").value<QColor>(), QColor("#f5faff"));
+        for (int index : {3, 5}) {
+            const auto sourceAction = listSpans.at(index).toObject();
+            const auto actualAction = document->find(sourceAction.value("text").toString());
+            QVERIFY(!actualAction.isNull());
+            const QUrl actualUrl(actualAction.charFormat().anchorHref());
+            QVERIFY(actualUrl.isValid()); QCOMPARE(actualUrl.scheme(), QStringLiteral("dict"));
+            // This retained source uses a legacy combined target, not the
+            // independent target_fragment component. Decode the original path
+            // before interpreting its section, exactly as ordinary navigation.
+            const QString originalTarget = sourceAction.value("target").toString();
+            QCOMPARE(actualUrl.path(QUrl::FullyDecoded), originalTarget);
+            QVERIFY(!actualUrl.hasFragment()); QVERIFY(!actualUrl.hasQuery());
+            QVERIFY(!SemanticHtml::present(sourceAction.value("target_fragment")));
+            QCOMPARE(actualUrl.path(QUrl::FullyDecoded).section(QChar('#'), 0, 0),
+                originalTarget.section(QChar('#'), 0, 0));
+            QCOMPARE(actualUrl.path(QUrl::FullyDecoded).section(QChar('#'), 1),
+                originalTarget.section(QChar('#'), 1));
+            QVERIFY(!actualAction.charFormat().hasProperty(QCompiledInlineBox::Property));
+        }
+        auto *listAccessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(listAccessible && listAccessible->textInterface());
+        QVERIFY(listAccessible->textInterface()->text(0, listAccessible->textInterface()->characterCount())
+            .contains(QString::fromUtf8("〈閩南〉 番仔學堂／番仔学堂")));
+        QCOMPARE(QJsonDocument(listEntry).toJson(QJsonDocument::Compact), listSnapshot);
+        // Controlled Reading view of the exact supplementary-plane specimen
+        // observed by the read-only AX diagnostic. The original matrix above
+        // remains the DPI/font/width oracle. These use the existing AX cursor
+        // and selection interfaces; no painted keyboard caret is claimed.
+        const QString witness = QString::fromUtf8("界𠀀界");
+        const auto witnessScalars = witness.toUcs4();
+        QCOMPARE(witnessScalars.size(), 3); QCOMPARE(witness.size(), 4);
+        QCOMPARE(witnessScalars.at(0), uint(0x754c)); QCOMPARE(witnessScalars.at(1), uint(0x20000));
+        QCOMPARE(witnessScalars.at(2), uint(0x754c));
+        window.readingPointSize_ = 12;
+        auto witnessChild = leaf(witness); witnessChild.insert("background", "#f5faff");
+        auto witnessOwner = leaf(QString()); witnessOwner.insert("background", "#f5faff");
+        witnessOwner.insert("inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{witnessChild}}});
+        const QJsonObject witnessBlock{{"kind", "paragraph"}, {"spans", QJsonArray{
+            leaf("Before "), witnessOwner, leaf(" after. Original Unicode source is retained.")}}};
+        const QJsonObject witnessEntry{{"title", "controlled Unicode AX cursor and selection"},
+            {"sections", QJsonArray{QJsonObject{{"level", 0}, {"title", ""}, {"blocks", QJsonArray{witnessBlock}}}}}};
+        const QByteArray witnessSource = QJsonDocument(witnessEntry).toJson(QJsonDocument::Compact);
+        QVERIFY(composeReadingEntry(window, witnessEntry)); window.showCompactPane(false);
+        auto *witnessBrowser = window.reading_; document = witnessBrowser->document();
+        const auto witnessRange = document->find(witness); QVERIFY(!witnessRange.isNull());
+        const int witnessFirst = witnessRange.selectionStart();
+        const QString witnessRaw = document->toRawText();
+        const auto saveUnicodeFrame = [&](const QString &name) {
+            const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (directory.isEmpty()) return true;
+            return QDir().mkpath(directory) && window.grab().save(QDir(directory).filePath(name));
+        };
+        // The matrix intentionally ended at textWidth=10000. A real resize
+        // returns this same document to QTextEdit's ordinary viewport layout.
+        QCOMPARE(witnessBrowser->lineWrapMode(), QTextEdit::WidgetWidth);
+        window.resize(901, 700); QTRY_COMPARE(window.contentsRect().width(), 901);
+        QTRY_COMPARE(document->textWidth(), qreal(witnessBrowser->viewport()->width()));
+        window.resize(900, 700); QTRY_COMPARE(window.contentsRect().width(), 900);
+        QTRY_COMPARE(document->textWidth(), qreal(witnessBrowser->viewport()->width()));
+        QTRY_COMPARE(witnessBrowser->horizontalScrollBar()->maximum(), 0);
+        window.activateWindow(); witnessBrowser->setFocus(Qt::OtherFocusReason); QTRY_VERIFY(witnessBrowser->hasFocus());
+        const auto witnessInteraction = witnessBrowser->textInteractionFlags();
+        auto *witnessAccessible = QAccessible::queryAccessibleInterface(witnessBrowser);
+        QVERIFY(witnessAccessible && witnessAccessible->textInterface());
+        auto *witnessText = witnessAccessible->textInterface();
+        const QString witnessSemantic = witnessText->text(0, witnessText->characterCount());
+        const int witnessSemanticFirst = witnessSemantic.indexOf(witness);
+        QVERIFY(witnessSemanticFirst >= 0); QCOMPARE(witnessSemantic.count(witness), 1);
+        witnessText->setCursorPosition(witnessSemanticFirst + 1);
+        QCOMPARE(witnessText->cursorPosition(), witnessSemanticFirst + 1);
+        QCOMPARE(witnessText->selectionCount(), 0);
+        QCOMPARE(witnessBrowser->textCursor().position(), witnessFirst + 1);
+        QVERIFY(!witnessBrowser->textCursor().hasSelection());
+        QVERIFY(!witnessBrowser->cursorRect().isEmpty());
+        QCOMPARE(witnessText->text(witnessSemanticFirst, witnessSemanticFirst + witness.size()), witness);
+        const QRect witnessRect = witnessText->characterRect(witnessSemanticFirst + 1); QVERIFY(!witnessRect.isEmpty());
+        QCOMPARE(witnessText->offsetAtPoint(witnessRect.center()), witnessSemanticFirst + 1);
+        QCOMPARE(witnessBrowser->textInteractionFlags(), witnessInteraction);
+        qInfo() << "Unicode controlled AX cursor location" << witness.toUcs4() << "logicalDpi" << witnessBrowser->logicalDpiX()
+                << "documentWidth" << document->textWidth() << "rootWidth" << window.contentsRect().width()
+                << "sourcePosition" << witnessBrowser->textCursor().position() << "characterRect" << witnessRect;
+        QVERIFY(saveUnicodeFrame(QStringLiteral("unicode-fallback-ax-cursor-location-900.png")));
+        window.resize(640, 700); QTRY_COMPARE(window.contentsRect().width(), 640);
+        QTRY_COMPARE(document->textWidth(), qreal(witnessBrowser->viewport()->width()));
+        QTRY_COMPARE(witnessBrowser->horizontalScrollBar()->maximum(), 0);
+        QTRY_VERIFY(witnessBrowser->hasFocus());
+        witnessText->setSelection(0, witnessSemanticFirst + 1, witnessSemanticFirst + 3);
+        QCOMPARE(witnessText->selectionCount(), 1);
+        int witnessSelectedFirst = -1, witnessSelectedLast = -1;
+        witnessText->selection(0, &witnessSelectedFirst, &witnessSelectedLast);
+        QCOMPARE(witnessSelectedFirst, witnessSemanticFirst + 1);
+        QCOMPARE(witnessSelectedLast, witnessSemanticFirst + 3);
+        QCOMPARE(witnessBrowser->textCursor().anchor(), witnessFirst + 1);
+        QCOMPARE(witnessBrowser->textCursor().position(), witnessFirst + 3);
+        QCOMPARE(witnessBrowser->textCursor().selectedText(), QString::fromUtf8("𠀀"));
+        witnessBrowser->copy(); QCOMPARE(QApplication::clipboard()->text(), QString::fromUtf8("𠀀"));
+        QCOMPARE(witnessText->text(witnessSemanticFirst, witnessSemanticFirst + witness.size()), witness);
+        QCOMPARE(witnessBrowser->textInteractionFlags(), witnessInteraction);
+        qInfo() << "Unicode controlled AX selection" << "rootWidth" << window.contentsRect().width()
+                << "first" << witnessBrowser->textCursor().selectionStart() << "last" << witnessBrowser->textCursor().selectionEnd();
+        QVERIFY(saveUnicodeFrame(QStringLiteral("unicode-fallback-selection-640.png")));
+        QCOMPARE(document->toRawText(), witnessRaw);
+        QCOMPARE(document->find(witness).selectionStart(), witnessFirst);
+        QCOMPARE(QJsonDocument(witnessEntry).toJson(QJsonDocument::Compact), witnessSource);
+        QCOMPARE(document->documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+    }
+
+    void finalYInlineBoxUnicodeAndBackgroundRefuseUnownedStates() {
+        const auto leaf = [](const QString &value) { return QJsonObject{{"kind", "text"},
+            {"text", value}, {"target", ""}, {"trail", ""}}; };
+        const QJsonObject zero{{"unit", "px"}, {"value", 0}};
+        const QJsonObject padding{{"top", zero}, {"right", zero}, {"bottom", zero}, {"left", zero}};
+        const QJsonObject none{{"none", QJsonObject{}}};
+        const QJsonObject border{{"top", none}, {"right", none}, {"bottom", none}, {"left", none}};
+        auto owner = leaf(QString());
+        owner.insert("inline_box_group", QJsonObject{{"padding", padding}, {"border", border},
+            {"overlays", QJsonArray{}}, {"spans", QJsonArray{leaf(QString::fromUtf8("閩南"))}}});
+        QCOMPARE(CompiledContent::inlineBoxGroup(owner), owner.value("inline_box_group").toObject());
+        QStringList invalidText{QString::fromUtf8("aאבb"), QString(QChar(char16_t(0xd800)))};
+        for (char32_t scalar : {char32_t(0), char32_t(0x1f), char32_t(0x7f), char32_t(0x9f),
+                               char32_t(0xfffc), char32_t(0x2028), char32_t(0x2029), char32_t(0x061c),
+                               char32_t(0x200e), char32_t(0x200f), char32_t(0x202a), char32_t(0x202e),
+                               char32_t(0x2066), char32_t(0x2069), char32_t(0xad), char32_t(0x200b),
+                               char32_t(0x2060), char32_t(0xfeff)}) {
+            QVERIFY2(scalar <= 0xffff, "This fixture inserts a literal BMP code point");
+            const QString bad = QStringLiteral("A") + QChar(char16_t(scalar)) + QStringLiteral("B");
+            QVERIFY2(bad.size() == 3 && bad.at(1).unicode() == scalar,
+                qPrintable(QStringLiteral("Expected literal U+%1 between A and B; got %2 UTF-16 units")
+                    .arg(quint32(scalar), 4, 16, QLatin1Char('0')).arg(bad.size())));
+            invalidText.append(bad);
+        }
+        for (const auto &bad : invalidText) {
+            auto malformed = owner; auto group = owner.value("inline_box_group").toObject();
+            group.insert("spans", QJsonArray{leaf(bad)}); malformed.insert("inline_box_group", group);
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(malformed), std::runtime_error);
+        }
+        for (const auto &bad : QJsonArray{true, 1, "red", "#F5FAFF", "#f5faff00", QJsonObject{{"native_theme", QJsonObject{}}}}) {
+            auto malformed = owner; malformed.insert("background", bad);
+            QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(malformed), std::runtime_error);
+        }
+        auto invalidOverlay = owner; auto group = owner.value("inline_box_group").toObject();
+        group.insert("overlays", QJsonArray{leaf("foreign")}); invalidOverlay.insert("inline_box_group", group);
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(invalidOverlay), std::runtime_error);
+        auto nested = owner; group = owner.value("inline_box_group").toObject();
+        group.insert("spans", QJsonArray{owner}); nested.insert("inline_box_group", group);
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(nested), std::runtime_error);
+        auto childBackground = owner; group = owner.value("inline_box_group").toObject();
+        auto child = leaf("child"); child.insert("background", "#abcdef");
+        group.insert("spans", QJsonArray{child}); childBackground.insert("inline_box_group", group);
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(childBackground), std::runtime_error);
+        childBackground.insert("background", "#abcdef");
+        QCOMPARE(CompiledContent::inlineBoxGroup(childBackground), group);
+        childBackground.insert("background", "#fedcba");
+        QVERIFY_EXCEPTION_THROWN(CompiledContent::inlineBoxGroup(childBackground), std::runtime_error);
+    }
+
     void finalYInlineBoxEmptyOwnerPreservesNaturalChildrenAndActions() {
         MainWindow window{QString()}; window.resize(900, 700); window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
@@ -18507,7 +19210,7 @@ private slots:
         QVERIFY(window.readingLogicalOwners_.isEmpty());
         QCOMPARE(LogicalFlow::inventory(document), LogicalFlow::Status::Stock);
         QVERIFY(!document->isLayoutEnabled()); // Unknown replacement stays unexposed until explicit recomposition.
-        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language."));
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This entry could not be displayed."));
         QVERIFY(window.clearReadingProjection());
         disconnect(connection);
         QVERIFY(window.refreshReading());
@@ -18737,6 +19440,7 @@ private slots:
                 {"style", QJsonObject{{"padding", edges(unit, top)}}}};
         };
         const QString failure = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
+        const QString failureStatus = QStringLiteral("This entry could not be displayed.");
         const QString missingFile = QStringLiteral("Controlled previous-entry image.png");
         const QJsonObject cat = window.currentEntry_;
         const auto catKey = window.savedWord(cat).key;
@@ -18817,7 +19521,11 @@ private slots:
             QCOMPARE(QSettings().value(QStringLiteral("reader/lastKind")), priorLastKind);
             QVERIFY(window.api_); QCOMPARE(window.api_->root(), priorRoot); QCOMPARE(window.api_->language(), priorLanguage);
             QCOMPARE(window.api_->kind(), priorKind); QCOMPARE(window.searchTitles_, priorTitles);
-            QCOMPARE(window.resultStatus_->text(), failure); QCOMPARE(window.statusBar()->currentMessage(), failure);
+            QCOMPARE(window.resultStatus_->text(), failure); QCOMPARE(window.statusBar()->currentMessage(), failureStatus);
+            auto *accessible = QAccessible::queryAccessibleInterface(reader);
+            QVERIFY(accessible && accessible->textInterface());
+            auto *accessibleText = accessible->textInterface();
+            QCOMPARE(accessibleText->text(0, accessibleText->characterCount()), failure);
             QVERIFY(window.back_->isEnabled());
             if (variant == 0 || variant == 2) {
                 for (int width : {900, 640}) {
@@ -18833,6 +19541,13 @@ private slots:
                         QTRY_COMPARE(window.readerContent_->geometry().right(), window.readerSplit_->contentsRect().right());
                     }
                     QCOMPARE(reader->document()->toPlainText(), failure);
+                    if (variant == 0 && width == 640) {
+                        const QString frameDirectory = qEnvironmentVariable("WIKIDICT_INLINE_BOX_FRAME_DIR");
+                        if (!frameDirectory.isEmpty()) {
+                            QVERIFY(QDir().mkpath(frameDirectory));
+                            QVERIFY(window.grab().save(QDir(frameDirectory).filePath(QStringLiteral("reading-refusal-status-640.png"))));
+                        }
+                    }
                     QVERIFY(window.grab().save(frameStem + (variant == 0 ? QStringLiteral("-failed-%1.png")
                         : QStringLiteral("-container-failed-%1.png")).arg(width)));
                 }
@@ -18848,7 +19563,7 @@ private slots:
             QCOMPARE(window.bookmark_->text(), window.learning_.isBookmarked(window.savedWord(window.currentEntry_).key)
                 ? QString::fromUtf8("\xe2\x98\x85 Saved") : QString::fromUtf8("\xe2\x98\x86 Bookmark"));
             QVERIFY(window.resultStatus_->text() != failure);
-            QVERIFY(window.statusBar()->currentMessage() != failure);
+            QVERIFY(window.statusBar()->currentMessage() != failureStatus);
             QCOMPARE(words(window.learning_.bookmarks()), priorBookmarks);
             if (variant) {
                 QTest::keyClick(reader, Qt::Key_Left, Qt::AltModifier);
@@ -18925,7 +19640,7 @@ private slots:
         QCOMPARE(document->toPlainText(), replacement);
         QVERIFY(!document->isLayoutEnabled());
         QVERIFY(window.readingUncommitted_ && window.readingLogicalOwners_.isEmpty());
-        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language."));
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This entry could not be displayed."));
         disconnect(connection);
         QVERIFY(window.refreshReading());
         QVERIFY(document->isLayoutEnabled());
@@ -25086,6 +25801,7 @@ private slots:
         window.search_->setText(QStringLiteral("newterm"));
         window.refreshSearch();
         QCOMPARE(window.results_->count(), 1);
+        QCOMPARE(window.resultStatus_->text(), QStringLiteral("1 suggestion"));
         window.search_->setFocus();
         QTest::keyClick(window.search_, Qt::Key_Return);
         QTRY_COMPARE(title(window), QStringLiteral("newterm"));
@@ -26107,12 +26823,17 @@ private slots:
     void ordinaryLinksFallBackOnlyToExactSameEditionUnclassified() {
         QTemporaryDir directory(QStringLiteral(".tmp/ui-unclassified-links-XXXXXX"));
         QVERIFY(directory.isValid());
+        QStringList greekTitles{QStringLiteral("source"), QStringLiteral("Shared")};
+        for (int index = 0; index < 170; ++index)
+            greekTitles.append(QStringLiteral("paged-%1").arg(index, 3, 10, QChar('0')));
+        QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(), greekTitles,
+            QByteArrayLiteral("el"), QByteArrayLiteral("Greek")));
         QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
-            {QStringLiteral("source"), QStringLiteral("Shared")}, QByteArrayLiteral("el"), QByteArrayLiteral("Greek")));
+            {QStringLiteral("fallback"), QStringLiteral("Shared"), QStringLiteral("ambiguous")}, QByteArrayLiteral("und"), QByteArrayLiteral("Unclassified"), true));
         QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
-            {QStringLiteral("fallback"), QStringLiteral("Shared")}, QByteArrayLiteral("und"), QByteArrayLiteral("Unclassified"), true));
+            {QStringLiteral("foreign-only"), QStringLiteral("ambiguous")}, QByteArrayLiteral("fr"), QByteArrayLiteral("French"), true));
         QVERIFY(prepareCaseTitleFixture(fixture_, directory.path(),
-            {QStringLiteral("foreign-only")}, QByteArrayLiteral("fr"), QByteArrayLiteral("French"), true));
+            {QStringLiteral("ambiguous")}, QByteArrayLiteral("de"), QByteArrayLiteral("German"), true));
         const QString root = directory.path() + QStringLiteral("/library");
         QFile edition(root + QStringLiteral("/.desktop-edition"));
         QVERIFY(edition.open(QIODevice::WriteOnly));
@@ -26120,7 +26841,8 @@ private slots:
         QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size()));
         edition.close();
         QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
-        MainWindow window(root, QStringLiteral("source")); window.show(); window.activateWindow();
+        MainWindow window(root, QStringLiteral("source")); window.resize(900, 700); window.show(); window.activateWindow();
+        QTRY_VERIFY(window.isActiveWindow());
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("source"));
         const QString originRoot = window.originRoot_, originEdition = window.originEdition_;
@@ -26166,15 +26888,26 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
         QCOMPARE(title(window), QStringLiteral("source"));
 
-        // A default search, explicit current-owner fragment, and another installed
-        // language must not borrow an Unclassified or arbitrary-language target.
+        // Search and explicit current-owner links do not opt into owner discovery.
+        // The historical Unclassified fallback is one real owner among the catalogue.
         unsigned serial = window.loadSerial_;
         QVERIFY(!window.openWord(QStringLiteral("fallback")));
         QCOMPARE(window.loadSerial_, serial);
         QVERIFY(follow(QStringLiteral("fallback#Greek")));
         QCOMPARE(window.loadSerial_, serial);
         QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
-        for (const QString &target : {QStringLiteral("FALLBACK"), QStringLiteral("foreign-only"), QStringLiteral("absent")}) {
+        // A single exact ordinary title in another language opens there and Back
+        // restores the original owner and source identity.
+        QVERIFY(follow(QStringLiteral("foreign-only")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("French"), 30000);
+        QCOMPARE(title(window), QStringLiteral("foreign-only"));
+        QCOMPARE(window.originRoot_, originRoot); QCOMPARE(window.originEdition_, originEdition);
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QCOMPARE(title(window), QStringLiteral("source"));
+        QCOMPARE(window.savedWord(window.currentEntry_).key, sourceKey);
+
+        for (const QString &target : {QStringLiteral("FALLBACK"), QStringLiteral("absent"), QStringLiteral("sou")}) {
             const int visitIndex = window.visitIndex_, visitCount = window.visits_.size();
             const int historyCount = window.learning_.history().size();
             QVERIFY(follow(target));
@@ -26187,8 +26920,187 @@ private slots:
             QCOMPARE(window.learning_.history().size(), historyCount);
             QCOMPARE(QSettings().value(QStringLiteral("reader/language")).toString(), QStringLiteral("Greek"));
             QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+            QCOMPARE(window.resultsQuery_, target);
+            QCOMPARE(window.results_->count(), target == QStringLiteral("sou") ? 1 : 0);
+            const QString expected = target == QStringLiteral("sou")
+                ? QStringLiteral("No exact entry for “%1”. Try a suggestion or another collection.")
+                : QStringLiteral("No exact entry for “%1”. Check the spelling or choose another collection.");
+            QCOMPARE(window.resultStatus_->text(), expected.arg(target));
             QVERIFY(window.reading_->toPlainText().contains(QStringLiteral("A small animal.")));
         }
+
+        // Multiple exact owners are a choice, never the first catalogue entry or a miss.
+        const auto ownerChoice = [&] {
+            return window.findChild<QInputDialog *>(QStringLiteral("dictionaryOwnerChoice"));
+        };
+        const auto chooseFrench = [&](QInputDialog *dialog) {
+            dialog->setTextValue(QStringLiteral("French"));
+            QTest::keyClick(dialog, Qt::Key_Return);
+        };
+        // An unrelated typed query with two loaded pages must survive the
+        // in-entry owner choice without rebuilding or selecting its first row.
+        window.search_->setText(QStringLiteral("paged-")); window.refreshSearch();
+        window.loadMoreResults(); QCOMPARE(window.results_->count(), 160); QVERIFY(window.moreAvailable_);
+        window.results_->setCurrentRow(85); window.searchSelectionExplicit_ = true;
+        window.results_->scrollToItem(window.results_->currentItem());
+        QTest::mouseClick(window.search_, Qt::LeftButton);
+        QTRY_VERIFY(window.search_->hasFocus());
+        window.search_->setSelection(1, 3);
+        QCOMPARE(window.search_->selectedText(), QStringLiteral("age"));
+        const int selectedCursor = window.search_->cursorPosition();
+        // A real Reading click applies QLineEdit's ordinary focus-out policy
+        // before the link starts navigation. Preserve that activation state.
+        QTextCursor readingPoint = window.reading_->document()->find(QStringLiteral("A small animal."));
+        QVERIFY(!readingPoint.isNull()); readingPoint.setPosition(readingPoint.selectionStart());
+        window.reading_->setTextCursor(readingPoint); window.reading_->ensureCursorVisible();
+        const QPoint readingClick = window.reading_->cursorRect(readingPoint).center() + QPoint(2, 0);
+        QVERIFY(window.reading_->anchorAt(readingClick).isEmpty());
+        QTest::mouseClick(window.reading_->viewport(), Qt::LeftButton, Qt::NoModifier, readingClick);
+        QTRY_VERIFY(window.reading_->hasFocus());
+        QCOMPARE(window.search_->selectedText(), QString());
+        QCOMPARE(window.search_->cursorPosition(), selectedCursor);
+        const QString priorQuery = window.search_->text(), priorResultsQuery = window.resultsQuery_;
+        const QString priorStatus = window.resultStatus_->text(), priorSelection = window.search_->selectedText();
+        const int priorCursor = window.search_->cursorPosition(), priorRow = window.results_->currentRow();
+        const int priorScroll = window.results_->verticalScrollBar()->value();
+        const int priorKind = window.kind_->currentIndex(), priorLanguage = window.language_->currentIndex();
+        const auto priorFirst = window.searchFirst_, priorLast = window.searchLast_;
+        QList<QListWidgetItem *> priorItems;
+        for (int row = 0; row < window.results_->count(); ++row) priorItems.append(window.results_->item(row));
+        QVERIFY(!window.searchTimer_->isActive());
+        QVERIFY(follow(QStringLiteral("ambiguous")));
+        const QJsonObject beforeChoice = window.currentEntry_;
+        const int beforeChoiceVisit = window.visitIndex_, beforeChoiceVisits = window.visits_.size();
+        const int beforeChoiceHistory = window.learning_.history().size();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && ownerChoice() && ownerChoice()->isVisible(), 30000);
+        QStringList owners = ownerChoice()->comboBoxItems(); owners.sort();
+        QCOMPARE(owners, QStringList({QStringLiteral("French"), QStringLiteral("German"), QStringLiteral("Unclassified")}));
+        QVERIFY(!ownerChoice()->isComboBoxEditable());
+        QCOMPARE(window.currentEntry_, beforeChoice);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QCOMPARE(window.visitIndex_, beforeChoiceVisit); QCOMPARE(window.visits_.size(), beforeChoiceVisits);
+        QCOMPARE(window.learning_.history().size(), beforeChoiceHistory);
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("several collections")));
+        QVERIFY(!window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+        QPointer<QInputDialog> cancelledChoice(ownerChoice());
+        QTRY_VERIFY(cancelledChoice && cancelledChoice->isActiveWindow());
+        const auto saveChoiceFrame = [&](QWidget *widget, const QString &name) {
+            const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            return directory.isEmpty() || (QDir().mkpath(directory) && widget->grab().save(QDir(directory).filePath(name)));
+        };
+        QVERIFY(saveChoiceFrame(cancelledChoice, QStringLiteral("owner-choice-dialog.png")));
+        QTest::keyClick(cancelledChoice, Qt::Key_Escape);
+        QTRY_VERIFY(!cancelledChoice);
+        bool afterDialogTurn = false;
+        QTimer::singleShot(0, &window, [&] { afterDialogTurn = true; });
+        QTRY_VERIFY(afterDialogTurn);
+        QCOMPARE(window.currentEntry_, beforeChoice);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        const auto focusState = [&] {
+            const auto describe = [](QWidget *widget) {
+                return widget ? QStringLiteral("%1/%2").arg(QString::fromLatin1(widget->metaObject()->className()), widget->objectName())
+                    : QStringLiteral("none");
+            };
+            return QStringLiteral("active=%1 parentActive=%2 parentFocus=%3 appFocus=%4 readingVisible=%5 readingEnabled=%6 compact=%7 searchPane=%8")
+                .arg(describe(QApplication::activeWindow())).arg(window.isActiveWindow())
+                .arg(describe(window.focusWidget())).arg(describe(QApplication::focusWidget()))
+                .arg(window.reading_->isVisible()).arg(window.reading_->isEnabled())
+                .arg(window.compactNavigation_).arg(window.compactSearchPane_);
+        };
+        // The offscreen platform focuses a shown dialog but does not reactivate
+        // its parent on hide. First prove the application's child-focus intent
+        // while preserving that platform state; never set Reading focus here.
+        QTRY_VERIFY2(window.focusWidget() == window.reading_, qPrintable(focusState()));
+        QVERIFY2(window.reading_->isVisible() && window.reading_->isEnabled(), qPrintable(focusState()));
+        window.activateWindow();
+        QTRY_VERIFY2(window.isActiveWindow(), qPrintable(focusState()));
+        bool afterActivationTurn = false;
+        QTimer::singleShot(0, &window, [&] { afterActivationTurn = true; });
+        QTRY_VERIFY(afterActivationTurn);
+        QTRY_VERIFY2(window.reading_->hasFocus(), qPrintable(focusState()));
+        QCOMPARE(window.search_->text(), priorQuery); QCOMPARE(window.resultsQuery_, priorResultsQuery);
+        QCOMPARE(window.resultStatus_->text(), priorStatus);
+        QCOMPARE(window.search_->selectedText(), priorSelection); QCOMPARE(window.search_->cursorPosition(), priorCursor);
+        QCOMPARE(window.kind_->currentIndex(), priorKind); QCOMPARE(window.language_->currentIndex(), priorLanguage);
+        QCOMPARE(window.searchFirst_, priorFirst); QCOMPARE(window.searchLast_, priorLast);
+        QCOMPARE(window.results_->count(), priorItems.size()); QCOMPARE(window.results_->currentRow(), priorRow);
+        QCOMPARE(window.results_->verticalScrollBar()->value(), priorScroll);
+        QVERIFY(window.searchSelectionExplicit_); QVERIFY(window.moreAvailable_); QVERIFY(window.moreResults_->isEnabled());
+        for (int row = 0; row < priorItems.size(); ++row) QCOMPARE(window.results_->item(row), priorItems.at(row));
+        QVERIFY(!window.searchTimer_->isActive());
+        QCOMPARE(window.visitIndex_, beforeChoiceVisit); QCOMPARE(window.visits_.size(), beforeChoiceVisits);
+        QCOMPARE(window.learning_.history().size(), beforeChoiceHistory);
+        QVERIFY(saveChoiceFrame(&window, QStringLiteral("owner-choice-cancel-recovery-900.png")));
+
+        // Pause and resume the real pending debounce, without substituting the
+        // entry title for the user's not-yet-published search.
+        window.search_->setText(QStringLiteral("Shared"));
+        QVERIFY(window.searchTimer_->isActive());
+        const QString pendingStatus = window.resultStatus_->text();
+        QVERIFY(QMetaObject::invokeMethod(window.reading_, "anchorClicked", Qt::DirectConnection,
+            Q_ARG(QUrl, QUrl(QStringLiteral("dict:ambiguous")))));
+        QVERIFY(window.loading_); QVERIFY(!window.searchTimer_->isActive());
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && ownerChoice() && ownerChoice()->isVisible(), 30000);
+        QCOMPARE(window.search_->text(), QStringLiteral("Shared")); QCOMPARE(window.results_->count(), 0);
+        QPointer<QInputDialog> pendingChoice(ownerChoice());
+        QTest::keyClick(pendingChoice, Qt::Key_Escape);
+        QCOMPARE(window.resultStatus_->text(), pendingStatus);
+        QVERIFY(window.searchTimer_->isActive());
+        QTRY_VERIFY(!pendingChoice);
+        QTRY_COMPARE(window.resultsQuery_, QStringLiteral("Shared"));
+        QTRY_COMPARE(window.results_->count(), 1);
+        QCOMPARE(window.resultStatus_->text(), QStringLiteral("1 suggestion"));
+        QCOMPARE(window.currentEntry_, beforeChoice);
+        QCOMPARE(window.visitIndex_, beforeChoiceVisit); QCOMPARE(window.visits_.size(), beforeChoiceVisits);
+        QCOMPARE(window.learning_.history().size(), beforeChoiceHistory);
+        QTRY_VERIFY(window.focusWidget() == window.reading_);
+        window.activateWindow(); QTRY_VERIFY(window.isActiveWindow()); QTRY_VERIFY(window.reading_->hasFocus());
+
+        // A typed search is still a search in the selected collection, not an
+        // implicit request for cross-owner navigation or an owner chooser.
+        window.search_->setText(QStringLiteral("ambiguous"));
+        const unsigned typedSerial = window.loadSerial_;
+        QTest::keyClick(window.search_, Qt::Key_Return);
+        QCOMPARE(window.loadSerial_, typedSerial); QVERIFY(!ownerChoice());
+        QCOMPARE(window.currentEntry_, beforeChoice); QCOMPARE(window.results_->count(), 0);
+        QVERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
+
+        QVERIFY(follow(QStringLiteral("ambiguous")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && ownerChoice() && ownerChoice()->isVisible(), 30000);
+        chooseFrench(ownerChoice());
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("French"), 30000);
+        QCOMPARE(title(window), QStringLiteral("ambiguous"));
+        QCOMPARE(window.originRoot_, originRoot); QCOMPARE(window.originEdition_, originEdition);
+        QTest::mouseClick(window.back_, Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+        QCOMPARE(title(window), QStringLiteral("source"));
+
+        // A newer dataset intent retires a still-open owner choice.
+        QVERIFY(follow(QStringLiteral("ambiguous")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && ownerChoice() && ownerChoice()->isVisible(), 30000);
+        QPointer<QInputDialog> staleChoice(ownerChoice());
+        window.loadDataset(root, QStringLiteral("Greek"), QStringLiteral("language"), false, QStringLiteral("source"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        chooseFrench(staleChoice);
+        QTRY_VERIFY(!staleChoice);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QCOMPARE(title(window), QStringLiteral("source"));
+
+        // A changed publication is an opening error, not a missing-word hint, and
+        // cannot replace the current entry after the user selects a real owner.
+        QVERIFY(follow(QStringLiteral("ambiguous")));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && ownerChoice() && ownerChoice()->isVisible(), 30000);
+        const QJsonObject beforeChangedEdition = window.currentEntry_;
+        QVERIFY(edition.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        const QByteArray changedEdition = QByteArrayLiteral("enwiktionary-other-edition\n");
+        QCOMPARE(edition.write(changedEdition), qint64(changedEdition.size())); edition.close();
+        chooseFrench(ownerChoice());
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QCOMPARE(window.api_->language(), QStringLiteral("Greek"));
+        QCOMPARE(window.currentEntry_, beforeChangedEdition);
+        QCOMPARE(window.resultStatus_->text(), QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
+        QVERIFY(edition.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(edition.write(editionBytes), qint64(editionBytes.size())); edition.close();
 
         // Cancellation before publication cannot install a stale fallback owner.
         const QString body = window.reading_->toPlainText();
@@ -26435,13 +27347,20 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
         QCOMPARE(window.search_->text(), QStringLiteral("dog"));
 
+        // An exact miss with real prefix alternatives retains the suggestion hint.
+        QVERIFY(!window.openWord(QStringLiteral("do")));
+        QCOMPARE(window.resultsQuery_, QStringLiteral("do"));
+        QVERIFY(window.results_->count() > 0);
+        QCOMPARE(window.resultStatus_->text(),
+            QStringLiteral("No exact entry for “do”. Try a suggestion or another collection."));
+        QCOMPARE(title(window), QStringLiteral("dog"));
         QTest::keyClick(window.search_, Qt::Key_A, Qt::ControlModifier);
         QTest::keyClicks(window.search_, "<b>missing</b>");
         QTest::keyClick(window.search_, Qt::Key_Return);
         QTRY_VERIFY(window.resultStatus_->text().contains(QStringLiteral("No exact entry")));
         QCOMPARE(title(window), QStringLiteral("dog"));
         QCOMPARE(window.results_->count(), 0);
-        const QString literal = QStringLiteral("No exact entry for “<b>missing</b>”. Try a suggestion or another collection.");
+        const QString literal = QStringLiteral("No exact entry for “<b>missing</b>”. Check the spelling or choose another collection.");
         QCOMPARE(window.resultStatus_->text(), literal);
         // Capture the ordinary missing-word state before the isolated label-render oracle.
         window.resize(780, 480);
@@ -29185,6 +30104,101 @@ private slots:
             } else {
                 QVERIFY_EXCEPTION_THROWN(walker.table(mixed, {0, 1}), std::runtime_error);
                 QVERIFY_EXCEPTION_THROWN(window.tableHtml(mixed, 0), std::runtime_error);
+            }
+        }
+    }
+
+    void bundledHanFallbackKeepsSupplementaryGlyphsAndPrimaryFonts() {
+        const QFont applicationFont = QApplication::font();
+        // This method is first in the selected command. Do not pre-register a
+        // test font: observe the ordinary application's first construction.
+        QElapsedTimer construction; construction.start();
+        MainWindow window{QString()};
+        const qint64 constructionNs = construction.nsecsElapsed();
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        QCOMPARE(QApplication::font(), applicationFont);
+        const QString family = QStringLiteral("HanaMinB");
+        QVERIFY(QFontDatabase::applicationFallbackFontFamilies(QChar::Script_Han).contains(family));
+        QElapsedTimer firstGlyph; firstGlyph.start();
+        const char32_t specimen = 0x20000;
+        QTextLayout firstLayout(QString::fromUcs4(&specimen, 1), window.reading_->document()->defaultFont());
+        firstLayout.beginLayout(); auto firstLine = firstLayout.createLine();
+        QVERIFY(firstLine.isValid()); firstLine.setLineWidth(200); firstLayout.endLayout();
+        const auto firstRuns = firstLayout.glyphRuns(); QVERIFY(!firstRuns.isEmpty());
+        bool genuineGlyph = false;
+        for (const auto &run : firstRuns) {
+            QCOMPARE(run.rawFont().familyName(), family);
+            for (quint32 glyph : run.glyphIndexes()) {
+                QCOMPARE(glyph, quint32(104));
+                QVERIFY(!run.rawFont().pathForGlyph(glyph).isEmpty());
+                QVERIFY(run.rawFont().pathForGlyph(glyph) != run.rawFont().pathForGlyph(0));
+                genuineGlyph = true;
+            }
+        }
+        QVERIFY(genuineGlyph);
+        QImage firstRaster(240, 160, QImage::Format_ARGB32_Premultiplied); firstRaster.fill(Qt::white);
+        { QPainter painter(&firstRaster); painter.setPen(Qt::black); firstLayout.draw(&painter, QPointF(20, 20)); }
+        const qint64 firstGlyphNs = firstGlyph.nsecsElapsed();
+        int rasterInk = 0;
+        for (int y = 0; y < firstRaster.height(); ++y) for (int x = 0; x < firstRaster.width(); ++x)
+            rasterInk += firstRaster.pixelColor(x, y) != QColor(Qt::white);
+        QVERIFY(rasterInk > 0);
+        qInfo().noquote() << QStringLiteral("WIKIDICT_HAN_FIRST_USE constructor_ns=%1 glyph_layout_and_raster_ns=%2 ink_pixels=%3 constructor_includes_ui=true cold_cache_claim=false")
+            .arg(constructionNs).arg(firstGlyphNs).arg(rasterInk);
+        const QString frameDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+        if (!frameDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(frameDirectory));
+            QVERIFY(firstRaster.save(QDir(frameDirectory).filePath(QStringLiteral("han-first-selected-glyph.png"))));
+        }
+        QFile asset(QStringLiteral(":/fonts/HanaMinB.ttf"));
+        QVERIFY(asset.open(QIODevice::ReadOnly));
+        const QByteArray bytes = asset.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
+            QByteArray("829543436cdf7b4c6730e2af5806fa406f8ddf0d4b656e0cd49c58d4db1c8d3c"));
+        QFile license(QStringLiteral(":/fonts/HanaMinB-LICENSE.txt"));
+        QVERIFY(license.open(QIODevice::ReadOnly));
+        QCOMPARE(QCryptographicHash::hash(license.readAll(), QCryptographicHash::Sha256).toHex(),
+            QByteArray("3983a1b74d18bc5e9fe733224838af1045df28a68d677432462a5a85da1b689e"));
+        QRawFont bundled(bytes, 20, QFont::PreferDefaultHinting);
+        QVERIFY(bundled.isValid()); QCOMPARE(bundled.familyName(), family);
+        const QList<char32_t> characters{0x20000, 0x2a6d6, 0x2ebe0, 0x754c, 0x0041};
+        for (const char32_t character : characters)
+            QCOMPARE(bundled.supportsCharacter(character), character > 0xffff || character == 0x0041);
+        // The upstream face also contains ASCII and five BMP Han ideographs.
+        // Latin A remains in its real primary font; U+754C is not in this face.
+        for (const QFont &base : {window.search_->font(), window.title_->font(),
+                                window.reading_->document()->defaultFont()}) {
+            for (const bool styled : {false, true}) {
+                QFont font = base;
+                if (styled) { font.setBold(true); font.setItalic(true); }
+                for (const char32_t character : characters) {
+                    const QString source = QString::fromUcs4(&character, 1);
+                    QTextLayout layout(source, font);
+                    layout.beginLayout();
+                    auto line = layout.createLine(); QVERIFY(line.isValid());
+                    line.setLineWidth(500); layout.endLayout();
+                    const auto runs = layout.glyphRuns(); QVERIFY(!runs.isEmpty());
+                    int visibleGlyphs = 0;
+                    for (const auto &run : runs) {
+                        QVERIFY(run.rawFont().isValid());
+                        QVERIFY(run.rawFont().supportsCharacter(character));
+                        if (character > 0xffff) {
+                            QCOMPARE(run.rawFont().familyName(), family);
+                            QCOMPARE(run.rawFont().fontTable("cmap"), bundled.fontTable("cmap"));
+                        } else {
+                            QVERIFY(run.rawFont().familyName() != family);
+                        }
+                        for (const quint32 glyph : run.glyphIndexes()) {
+                            QVERIFY(glyph != 0);
+                            const auto outline = run.rawFont().pathForGlyph(glyph);
+                            QVERIFY(!outline.isEmpty());
+                            QVERIFY(outline != run.rawFont().pathForGlyph(0));
+                            ++visibleGlyphs;
+                        }
+                    }
+                    QVERIFY(visibleGlyphs > 0); QVERIFY(line.naturalTextWidth() > 0);
+                    QCOMPARE(layout.text(), source); QCOMPARE(layout.font(), font);
+                }
             }
         }
     }
