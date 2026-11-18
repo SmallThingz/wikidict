@@ -545,7 +545,7 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=Path('zig-out/bin/dict'))
+    parser.add_argument('--binary', type=Path, default=Path('zig-out/bin/wikidict'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--batch-size', type=int, default=1, choices=range(1, 65),
