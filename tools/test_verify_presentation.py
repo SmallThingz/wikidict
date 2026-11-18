@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import ExitStack
 from unittest import mock
 
 import verify_presentation as audit
@@ -558,6 +559,19 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 audit.write_report(target, result)
                 actual = target.read_bytes()
                 self.assertEqual(gzip.decompress(actual) if name.endswith('.gz') else actual, expected)
+
+    def test_diagnostic_spools_preserve_order_counts_and_unicode_at_batch_boundaries(self):
+        for codec in (None, audit.zstd):
+            with self.subTest(codec=codec), mock.patch.object(audit, 'zstd', codec), ExitStack() as resources:
+                for size in (0, 1, 128, 129, 256, 257):
+                    rows = audit.ReportRows(resources)
+                    expected = [{'title': f'𛀀 {n}', 'text': 'line\n\"ქართული\"' * 14} for n in range(size)]
+                    for row in expected:
+                        rows.append(row)
+                    self.assertEqual(len(rows), size)
+                    self.assertLessEqual(len(rows.pending), 128)
+                    self.assertEqual(''.join(audit.report_chunks({'issues': rows})),
+                                     json.dumps({'issues': expected}, ensure_ascii=False, indent=2) + '\n')
 
     def test_command_timeout_exit_and_json_errors_replace_stale_success(self):
         for error in (subprocess.CalledProcessError(1, ['dict']),

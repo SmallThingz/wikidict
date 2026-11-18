@@ -8,6 +8,7 @@ by the CLI; aliases are covered only through its selected, one-hop export view.
 import argparse
 import gzip
 import hashlib
+import io
 import json
 import re
 import os
@@ -276,9 +277,9 @@ def emitted_views(root, catalog, query):
     return views
 
 
-def scan(root, query, export_page=None, *, observe_record=None, audit_references=False):
+def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list):
     require(root.is_dir(), 'root does not exist')
-    result = dict(records=0, issues=[], annotations=[], views=[], search_matches=0,
+    result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0,
                   diagnostic_only=True, semantic_acceptance=False, scan_complete=False,
                   scope=dict(record_kinds=list(SUPPORTED_KINDS),
@@ -644,10 +645,59 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged, refer
         offset += len(titles)
 
 
+def nested_json(value):
+    return json.dumps(value, ensure_ascii=False, indent=2).replace('\n', '\n  ')
+
+
+def row_body(rows):
+    return nested_json(rows).removeprefix('[').removesuffix('\n  ]')
+
+
+class ReportRows:
+    """Keep small results in memory and spool large diagnostic arrays as formatted JSON."""
+
+    def __init__(self, resources):
+        self.resources = resources
+        self.pending = []
+        self.count = 0
+        self.storage = None
+        self.writer = None
+
+    def __len__(self):
+        return self.count
+
+    def append(self, row):
+        if len(self.pending) == 128:
+            self.flush()
+        self.pending.append(row)
+        self.count += 1
+
+    def flush(self):
+        if self.writer is None:
+            self.storage = self.resources.enter_context(tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024))
+            self.writer = self.resources.enter_context(export_spool(self.storage, 'wb'))
+        else:
+            self.writer.write(b',')
+        self.writer.write(row_body(self.pending).encode('utf-8'))
+        self.pending.clear()
+
+    def chunks(self):
+        if self.writer is None:
+            yield nested_json(self.pending)
+            return
+        if self.pending:
+            self.flush()
+        self.writer.close()
+        self.storage.seek(0)
+        yield '['
+        with io.TextIOWrapper(export_spool(self.storage, 'rb'), encoding='utf-8', newline='') as stream:
+            while chunk := stream.read(128 * 1024):
+                yield chunk
+        yield '\n  ]'
+
+
 def report_chunks(result):
     """Use the standard JSON encoder on bounded slices of the large top-level arrays."""
-    def nested(value):
-        return json.dumps(value, ensure_ascii=False, indent=2).replace('\n', '\n  ')
 
     if not result:
         yield '{}\n'
@@ -657,16 +707,17 @@ def report_chunks(result):
         if index:
             yield ',\n'
         yield '  ' + json.dumps(key, ensure_ascii=False) + ': '
-        if isinstance(value, list) and len(value) > 128:
+        if isinstance(value, ReportRows):
+            yield from value.chunks()
+        elif isinstance(value, list) and len(value) > 128:
             yield '['
             for offset in range(0, len(value), 128):
                 if offset:
                     yield ','
-                section = nested(value[offset:offset + 128])
-                yield section.removeprefix('[').removesuffix('\n  ]')
+                yield row_body(value[offset:offset + 128])
             yield '\n  ]'
         else:
-            yield nested(value)
+            yield nested_json(value)
     yield '\n}\n'
 
 
@@ -703,6 +754,10 @@ def main():
     if args.audit_reference_hints and args.batch_size == 1:
         parser.error('--audit-reference-hints requires batch export')
 
+    with ExitStack() as report_files:
+        return run_audit(args, report_files)
+
+def run_audit(args, report_files):
     def query(*parts):
         return cli_query(args.binary, args.root, *parts)
 
@@ -726,7 +781,7 @@ def main():
                 review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
                 resources.callback(review.close)
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
-                          audit_references=args.audit_reference_hints)
+                          audit_references=args.audit_reference_hints, row_factory=lambda: ReportRows(report_files))
             if review is not None:
                 result['source_definitions'] = review.report()
                 if result['source_definitions']['unmatched']:
