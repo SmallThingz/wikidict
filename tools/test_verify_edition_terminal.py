@@ -206,3 +206,21 @@ class EditionTerminalTests(unittest.TestCase):
         self.assertTrue(source_witness_visible(reader, 'first words next words', 'chosen / owner'))
         for witness in ('next words unrelated column', 'private match', 'chosen / owner first words'):
             self.assertFalse(source_witness_visible(reader, witness, 'chosen / owner'))
+
+    def test_full_width_glyph_wrap_only_rejoins_at_the_pane_edge(self):
+        def cells(text):
+            row = []
+            for char in text:
+                width = 2 if ord(char) > 127 else 1
+                row.append({'text': char, 'width': width})
+                if width == 2:
+                    row.append({'text': '', 'width': 0})
+            return row + [{'text': ' ', 'width': 1}] * (45 - len(row))
+
+        rows = [cells('')] * 6 + [cells('  Adam / 英文'), cells('  ' + '甲' * 20),
+                                  cells('  乙丙'), cells('  丁戊')] + [cells('')] * 2
+        display = [''.join(c['text'] for c in row) for row in rows]
+        reader = SimpleNamespace(width=45, screen=SimpleNamespace(display=display, cell_rows=lambda: rows))
+        self.assertTrue(source_witness_visible(reader, '甲甲乙丙', 'Adam / 英文'))
+        for hidden in ('乙丙丁戊', '甲甲丙乙', 'Adam / 英文'):
+            self.assertFalse(source_witness_visible(reader, hidden, 'Adam / 英文'))

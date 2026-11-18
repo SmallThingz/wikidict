@@ -110,7 +110,9 @@ class Screen:
                         if scalar == 0:
                             break
                         scalars.append(scalar)
-                    continuation = scalars == [0xffffffff]
+                    # For a wide glyph's second cell only the leading sentinel
+                    # is meaningful. libvterm can retain the old combining tail.
+                    continuation = cell.chars[0] == 0xffffffff
                     text = '' if continuation else ''.join(map(chr, scalars)) or ' '
                     projected = dict(text=text, width=int(cell.width), continuation=continuation)
                     if cell.attrs.bold:

@@ -62,6 +62,14 @@ class NativeCellTests(unittest.TestCase):
         self.stream.feed('\x1b[4;12HX')
         self.assertEqual(self.screen.cell_rows()[3][11]['text'], 'X')
 
+    def test_wide_glyph_overwrites_cell_with_old_combining_mark(self):
+        self.stream.feed('ax\u0301\x1b[1;1H甲')
+        first, second = self.screen.cell_rows()[0][:2]
+        self.assertEqual(first['text'], '甲')
+        self.assertTrue(second['continuation'])
+        self.assertEqual(second['text'], '')
+        self.assertEqual(self.screen.display[0], '甲' + ' ' * 18)
+
     def test_emphasis_is_captured_from_individual_cells_after_selective_resets(self):
         self.stream.feed('A\x1b[1;3;4mB\x1b[23mC\x1b[22;24mD')
         attrs = [{key: cell.get(key) for key in ('bold', 'italic', 'underline')}

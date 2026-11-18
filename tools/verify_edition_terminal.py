@@ -95,6 +95,27 @@ def source_witness_visible(reader, wanted, heading):
     start = min(36, reader.width // 3) if reader.width >= 80 else 0
     rows = reader.screen.cell_rows()[6:-2]
 
+    # A full line may split a word (including an unspaced CJK sentence).
+    # Use cell coordinates: a wide glyph can leave one unused column.
+    # The native Reader reserves two cells at the right of its reading pane.
+    left, right = start + 2, reader.width - 2
+    fragments = []
+    previous_end = 0
+    for row in rows:
+        content = row[left:right]
+        text = normalized(' '.join(''.join(cell['text'] for cell in content).split()))
+        if not text or text == heading or '│' in text:
+            previous_end = 0
+            fragments.append(' ')
+            continue
+        if previous_end + content[0].get('width', 1) <= right or not content[0]['text'].strip():
+            fragments.append(' ')
+        fragments.append(text)
+        previous_end = max((left + i + cell.get('width', 1) for i, cell in enumerate(content)
+                            if cell['text'].strip()), default=0)
+    if wanted in ''.join(fragments):
+        return True
+
     def table_edges(row):
         return tuple(i for i in range(start, len(row)) if row[i]['text'] == '│')
 
