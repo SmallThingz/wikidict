@@ -249,7 +249,16 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Retained KW abm p2087/r12186 authors this noun heading above gender,
     // plural and a definition, with the Henwyn Kernewek category. Kind only:
     // preserve the independently established or unknown language owner.
-    if (std.mem.eql(u8, title, "Hanow")) return "Noun";
+    if (std.mem.eql(u8, title, "Hanow") or std.mem.eql(u8, title, "Hanow / Noun") or
+        std.mem.eql(u8, title, "Hanow gorow / Noun")) return "Noun";
+    // These bilingual headings occur verbatim in the Cornish edition. The
+    // supplied owner and the original section title are independent of the POS.
+    if (std.mem.eql(u8, title, "Hanow gwadn / Adjective")) return "Adjective";
+    if (std.mem.eql(u8, title, "Adverb / Adverb")) return "Adverb";
+    if (std.mem.eql(u8, title, "Rag-er / Preposition")) return "Preposition";
+    if (std.mem.eql(u8, title, "Hanow / Pronoun")) return "Pronoun";
+    if (std.mem.eql(u8, title, "Verb / Verb")) return "Verb";
+    if (std.mem.eql(u8, title, "Verb-hanow / Verbal noun")) return "Verbal noun";
     // ZU unwabu p2460/r14746 authors this heading. The cited Zulu dictionary
     // sense identifies its grammatical noun meaning; it grants neither an
     // owner nor a definition absent from the retained page.
@@ -266,6 +275,22 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
 fn lexicalDefinition(block: wiki.Block, colon_meanings: bool) bool {
     return block.kind == .definition or (colon_meanings and block.kind == .list_item and
         std.mem.eql(u8, block.list_path, ":#"));
+}
+
+// A bare numbered line can be an unfilled gloss. Preserve its visible block
+// and numbering. Keep existing parent/child organization when nested list
+// paths follow: compiled blocks need not retain a physical blank between them.
+fn standaloneEmptyDefinition(blocks: []const wiki.Block, index: usize) bool {
+    const block = blocks[index];
+    if (block.kind != .definition or !std.mem.eql(u8, block.list_path, "#") or
+        block.number.len == 0 or block.spans.len != 0 or block.text.len != 0 or
+        block.feature != null or block.table != null or block.figure != null or
+        block.flow != null or block.container != null) return false;
+    for (blocks[index + 1 ..]) |next| {
+        if (next.kind == .blank) continue;
+        return next.list_path.len < 2 or next.list_path[0] != '#';
+    }
+    return true;
 }
 // A plain positive numeric term followed immediately by its definition-list
 // detail is an authored sense label under an explicit POS. Keep both original
@@ -568,6 +593,12 @@ const LexicalAnalysis = struct {
                 break :path child_path[0 .. prefix.len + 1];
             } else &.{};
             const root_index = root orelse b;
+            if (standaloneEmptyDefinition(blocks, b)) {
+                stack_len = 1;
+                const addresses = if (self.pending.items.len == 0) &self.intro else &self.other;
+                try addresses.append(a, root_index, path);
+                continue;
+            }
             if (block.kind == .container) {
                 const container = block.container orelse return error.InvalidPresentation;
                 if (path.len >= max_depth) return error.InvalidPresentation;
@@ -1539,7 +1570,8 @@ fn hasLexicalDefinitions(blocks: []const wiki.Block, declared_pos: bool, depth: 
             if (try hasLexicalDefinitions(container.blocks, declared_pos, depth + 1)) found = true;
         } else {
             if (block.container != null) return error.InvalidPresentation;
-            if (lexicalDefinition(block, declared_pos) or numberedDefinitionDetail(blocks, index, declared_pos)) found = true;
+            if (!standaloneEmptyDefinition(blocks, index) and
+                (lexicalDefinition(block, declared_pos) or numberedDefinitionDetail(blocks, index, declared_pos))) found = true;
         }
     }
     return found;
@@ -2407,6 +2439,73 @@ test "Hungarian noun heading organizes senses without choosing the record langua
     }
     for ([_][]const u8{ "főnév", "Főnév?", "Főnévi igenév", "Főnév (régies)" }) |other|
         try std.testing.expect(partOfSpeech(other) == null);
+}
+
+test "Cornish bilingual parts of speech preserve authored glosses and empty numbered blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    const Case = struct { title: []const u8, heading: []const u8, kind: []const u8, body: []const u8, senses: usize, empty: ?usize = null };
+    // Source excerpts retain each numbered gloss or placeholder. An empty
+    // marker stays visible, including when it is the entry's only gloss.
+    const cases = [_]Case{
+        .{ .title = "abajes", .heading = "Hanow / Noun", .kind = "Noun", .body = "* '''Kernowek'''\n#\n* '''Sowsnek'''\n# Abbess", .senses = 1, .empty = 1 },
+        .{ .title = "gallus", .heading = "Hanow gwadn / Adjective", .kind = "Adjective", .body = "* '''Kernowek'''\n#\n* '''Sowsnek'''\n# Not prevented from; permitted to; having the power or capacity to", .senses = 1, .empty = 1 },
+        .{ .title = "tygra", .heading = "Hanow gorow / Noun", .kind = "Noun", .body = "'''Kernowek'''\n# An best cathus bras (''Panthera tigris'')\n\n'''Sowsnek'''\n# A large [[carnivorous]] animal (''Panthera tigris'') of the cat family indigenous to Asia.", .senses = 2 },
+        .{ .title = "abhorrya", .heading = "Verb", .kind = "Verb", .body = "'''abhorrya'''\n#", .senses = 0, .empty = 1 },
+        .{ .title = "a ble", .heading = "Adverb / Adverb", .kind = "Adverb", .body = "* '''Kernowek'''\n#\n* '''Sowsnek'''\n# whence\n# from what place", .senses = 2, .empty = 1 },
+        .{ .title = "a dal", .heading = "Rag-er / Preposition", .kind = "Preposition", .body = "* '''Kernowek'''\n#\n* '''Sowsnek'''\n# opposite\n# facing\n# fronting.", .senses = 3, .empty = 1 },
+        .{ .title = "abases", .heading = "Hanow / Noun", .kind = "Noun", .body = "* '''Kernowek'''\n#\n* '''Sowsnek'''\n#", .senses = 0, .empty = 1 },
+    };
+    for (cases) |case| {
+        const source = try std.mem.concat(a, u8, &.{ "== Kernowek ==\n=== ", case.heading, " ===\n", case.body, "\n" });
+        const bytes = try document.compileClassifiedWithHeadingAnchorsAlloc(a, case.title, .language, "kernowek", "kw",
+            document.MissingText.untracked(source), null, .{}, null, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "kernowek", .code = "kw" });
+        const decoded = try codec.decodeAlloc(a, bytes, case.title, .language, .{ .heading = "kernowek", .code = "kw" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+        const entry = decoded.entry;
+        try std.testing.expectEqual(@as(usize, 1), entry.organization.lexemes.len);
+        const lexeme = entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("kernowek", lexeme.language);
+        try std.testing.expectEqualStrings(case.kind, lexeme.kind);
+        try std.testing.expectEqual(case.senses, lexeme.definitions.len);
+        const section = entry.sections[lexeme.section];
+        try std.testing.expectEqualStrings(case.heading, section.title);
+        if (case.empty) |index| {
+            const marker = section.blocks[index];
+            try std.testing.expectEqual(.definition, marker.kind);
+            try std.testing.expectEqualStrings("1", marker.number);
+            try std.testing.expectEqual(@as(usize, 0), marker.spans.len);
+            try std.testing.expect(std.mem.indexOfScalar(usize, lexeme.introduction, index) != null);
+            for (lexeme.definitions, 3..) |sense, expected_block| {
+                try std.testing.expectEqual(expected_block, sense.block);
+                try std.testing.expect(section.blocks[sense.block].spans.len > 0);
+            }
+        } else {
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+            try std.testing.expectEqual(@as(usize, 3), lexeme.definitions[1].block);
+            const gloss = section.blocks[3].spans;
+            try std.testing.expectEqualStrings("carnivorous", gloss[1].target);
+            try std.testing.expectEqualStrings("Panthera tigris", gloss[3].text);
+            try std.testing.expect(gloss[3].italic);
+        }
+    }
+    for ([_][]const u8{ "Adverb / Adverb", "Rag-er / Preposition", "Hanow / Pronoun", "Verb / Verb", "Verb-hanow / Verbal noun" },
+        [_][]const u8{ "Adverb", "Preposition", "Pronoun", "Verb", "Verbal noun" }) |heading, kind|
+        try std.testing.expectEqualStrings(kind, partOfSpeech(heading).?);
+    try std.testing.expect(partOfSpeech("Unknown / Noun") == null);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    for ([_][]const u8{ "#\n## nested", "#\n\n## nested" }) |body| {
+        const blocks = try renderer.renderBody(body);
+        const layout = try buildOwned(a, &[_]Section{.{ .title = "Noun", .level = 3, .blocks = blocks }}, "kernowek");
+        const senses = layout.lexemes[0].definitions;
+        try std.testing.expectEqual(@as(usize, 2), senses.len);
+        try std.testing.expectEqual(@as(?usize, 0), senses[1].parent);
+        try std.testing.expectEqualStrings("nested", blocks[senses[1].block].spans[0].text);
+    }
 }
 
 test "Tsonga verb and noun headings preserve authored translations and their section levels" {
