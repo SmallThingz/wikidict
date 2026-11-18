@@ -12401,6 +12401,40 @@ class ClosedWholePreparedCustodyTests(unittest.TestCase):
         values.update(kwargs)
         return b.prepare_shard_workspace(f.workspace,f.expected,123,**values)
 
+    def test_closed_whole_seal_checks_bracket_the_state_write(self):
+        with self.fixture() as f:
+            cache=f.f.cache
+            with patch.object(cache,'frozen_runtime_context',wraps=cache.frozen_runtime_context) as verify:
+                self.assertEqual(self.adopt(f),123)
+                self.assertEqual(verify.call_count,3)  # provenance, before link, after link
+                verify.reset_mock()
+                self.assertEqual(self.adopt(f),123)
+                self.assertEqual(verify.call_count,2)  # existing state needs no write
+
+        for boundary in ('before write','after link'):
+            with self.subTest(boundary=boundary), self.fixture() as f:
+                owner, name = (b,'prepared_metadata') if boundary=='before write' else (os,'link')
+                original=getattr(owner,name)
+
+                def change_seal(*args, **kwargs):
+                    result=original(*args, **kwargs)
+                    f.f.seal['changed_during_adoption']=True
+                    return result
+
+                with patch.object(owner,name,side_effect=change_seal):
+                    with self.assertRaisesRegex(ValueError,'Retained initial sealed input changed'):
+                        self.adopt(f)
+                self.assertIsNone(f.roles.initial_sealed_context)
+                self.assertEqual((f.workspace/'state.json').exists(),boundary=='after link')
+
+    def test_closed_whole_refuses_a_different_initial_worker_before_creating_state(self):
+        with self.fixture() as f:
+            _,dump,digest=f.roles._closed_native_context
+            f.roles.initial_sealed_context=(f.root/'other-worker',dump,digest)
+            with self.assertRaisesRegex(ValueError,'different sealed worker'):
+                self.adopt(f)
+            self.assertFalse(f.workspace.exists())
+
     def test_failed_whole_adopts_new_state_dispatches_and_keeps_original_history(self):
         with self.fixture()as f:
             original=Path(f.history['path']).read_bytes();seal=(f.native/'.completed-expander.json').read_bytes()

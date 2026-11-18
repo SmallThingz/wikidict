@@ -4662,17 +4662,19 @@ def closed_whole_worker_inputs(value, *, state=False):
 
 def adopt_closed_whole_workspace(workspace,expected,now_unix,build_identity,dump,reference,native_roles):
     """Bind a fresh ordinary output to an authenticated failed-whole worker."""
-    import extraction_cache as cache
     import copy
     if (native_roles is None or native_roles.closed_whole_execution!=reference
             or native_roles.initial_sealed_generation is not None
             or native_roles.closed_native_origin is None
             or getattr(native_roles,'_closed_whole_workspace_state',None)is None):
         raise ValueError('Closed whole adoption lacks its original history')
-    native_roles.require_unchanged()
-    root,original_dump,seal_sha=native_roles._closed_native_context
+    original_context=native_roles._closed_native_context
+    if native_roles.initial_sealed_context not in (None,original_context):
+        raise ValueError('Closed whole adoption selected a different sealed worker')
+    root,original_dump,seal_sha=original_context
     original=native_roles._closed_whole_workspace_state
     old_workspace=root.parent.parent
+    # provenance() verifies the selected seal, loader and tool identities together.
     if (Path(dump)!=original_dump or workspace==old_workspace
             or workspace.is_relative_to(old_workspace) or old_workspace.is_relative_to(workspace)
             or build_identity is None or expected.get('source')!=build_identity.get('source')
@@ -4682,8 +4684,6 @@ def adopt_closed_whole_workspace(workspace,expected,now_unix,build_identity,dump
             or closed_whole_worker_inputs(expected,state=True)!=closed_whole_worker_inputs(original,state=True)
             or closed_whole_worker_inputs(build_identity)!=closed_whole_worker_inputs(original['native_generation']['build_inputs'])):
         raise ValueError('Closed whole adoption changed worker inputs, source, root or epoch')
-    context=cache.frozen_runtime_context(root,Path(dump),seal_sha,**native_roles._closed_native_context_options)
-    if context!=native_roles.closed_native_origin:raise ValueError('Closed whole worker is not finalized')
     state_path=workspace/'state.json'
     binding=dict(seal_sha256=seal_sha,dump=str(dump),build_inputs=copy.deepcopy(build_identity),
                  retained_expander_root=str(root),closed_whole_execution=copy.deepcopy(reference))
@@ -4703,16 +4703,14 @@ def adopt_closed_whole_workspace(workspace,expected,now_unix,build_identity,dump
                 raise ValueError('Closed whole adoption has partial raw output')
         temporary=state_path.with_suffix('.part')
         if os.path.lexists(temporary):raise ValueError('Unexpected closed whole state transaction')
-        native_roles.require_unchanged()
         prepared_metadata(reference)
-        if cache.frozen_runtime_context(root,Path(dump),seal_sha,**native_roles._closed_native_context_options)!=context:
-            raise ValueError('Closed whole worker changed during adoption')
+        native_roles.require_unchanged()
         try:
             with temporary.open('x')as stream:stream.write(build_envelope_text(desired))
             os.link(temporary,state_path)
         finally:temporary.unlink(missing_ok=True)
     native_roles.require_unchanged()
-    native_roles.initial_sealed_context=(root,Path(dump),seal_sha)
+    native_roles.initial_sealed_context=original_context
     return now_unix
 
 
