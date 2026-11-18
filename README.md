@@ -74,6 +74,19 @@ zig build test-storage
 The Reader/PTY and storage checks require Python 3 with `pyte` installed in the
 selected test environment.
 
+To check an entry in a generated dictionary, choose its exact language heading,
+title, and a visible phrase from the original definition. For example, this
+checks both terminal widths on a Zhuang edition and saves the rendered screens:
+
+```sh
+python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
+  --root "$EDITION_DIR" --language Vahgun --entry 梯田 --witness nazbanzseuj \
+  --report .tmp/edition-terminal
+```
+
+The check uses a disposable copy of the edition's verified files. It exercises
+empty search, keyboard recovery, entry reading, resize, Back, and terminal restoration.
+
 Build just the reader or C ABI:
 
 ```sh

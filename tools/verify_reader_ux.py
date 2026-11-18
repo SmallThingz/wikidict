@@ -83,7 +83,8 @@ class OwnedReaderProcess:
 
 class ReaderPty:
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
-                 output: Path, timeout: float, budget_end: float, pyte_module, *, force_color: bool = False):
+                 output: Path, timeout: float, budget_end: float, pyte_module, *,
+                 force_color: bool = False, language: str = "English"):
         require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
                 "pidfd signaling is required for Reader ownership")
         self.output = output
@@ -107,7 +108,7 @@ class ReaderPty:
                     struct.pack("HHHH", rows, width, 0, 0))
         self.original_termios = termios.tcgetattr(self.slave)
         self.env = os.environ.copy()
-        self.env.update(DICT_ROOT=str(root), DICT_LANGUAGE="English",
+        self.env.update(DICT_ROOT=str(root), DICT_LANGUAGE=language,
                         TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8")
         for name, directory in (("XDG_CONFIG_HOME", "config"),
                                 ("XDG_DATA_HOME", "data"),
