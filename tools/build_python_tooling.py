@@ -29,7 +29,8 @@ def _regular(reference):
         data = stream.read()
         after = os.fstat(stream.fileno())
     fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_mode')
-    if (any(getattr(before, k) != getattr(after, k) or getattr(before, k) != getattr(path.stat(), k) for k in fields)
+    named = path.stat()
+    if (any(getattr(before, k) != getattr(after, k) or getattr(before, k) != getattr(named, k) for k in fields)
             or len(data) != reference['bytes'] or stat.S_IMODE(before.st_mode) != reference['mode']
             or hashlib.sha256(data).hexdigest() != reference['sha256']):
         raise ValueError('Selected Python source identity changed: ' + str(path))
@@ -96,11 +97,9 @@ class PythonTooling:
         if (not isinstance(modules, dict) or not {'build_wiktionaries', 'corpus_controller'} <= modules.keys()
                 or not modules or len(modules) > 512):
             raise ValueError('Missing selected production scripts')
-        for name, reference in modules.items():
+        for name in modules:
             if not name.isidentifier() or name.startswith('test_') or '.' in name:
                 raise ValueError('Invalid selected project module name')
-            _regular(reference)
-        _regular(spec['selector'])
         self.require_unchanged()
 
     def require_prepared_imports(self):
