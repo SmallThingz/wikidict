@@ -11,8 +11,10 @@ import json
 import re
 import os
 import stat
+import sqlite3
 import tempfile
 import subprocess
+from contextlib import ExitStack
 from functools import cache as memoize
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
@@ -256,7 +258,7 @@ def emitted_views(root, catalog, query):
     return views
 
 
-def scan(root, query, export_page=None):
+def scan(root, query, export_page=None, *, observe_record=None):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=[], annotations=[], views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0,
@@ -354,6 +356,8 @@ def scan(root, query, export_page=None):
                 destinations[identity] = digest
                 result['records'] += 1
                 summary['unique_records'] += 1
+                if observe_record is not None:
+                    observe_record(entry)
                 for path, text in text_fields(content):
                     categories = diagnostic_categories(text)
                     if categories:
@@ -575,6 +579,8 @@ def main():
     parser.add_argument('--binary', type=Path, default=installed_reader)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--definition-dump', type=Path, action='append',
+                        help='Compare simple numbered definitions to the selected original XML. Supply every .xml.bz2 part.')
     parser.add_argument('--batch-size', type=int, choices=range(1, 65),
                         help='Exact exports per Reader process (default: 32 with the installed wikidict, 1 with another binary)')
     args = parser.parse_args()
@@ -585,22 +591,34 @@ def main():
         return cli_query(args.binary, args.root, *parts)
 
     try:
-        if args.batch_size == 1:
-            result = scan(args.root, query)
-        else:
+        exports = None
+        if args.batch_size > 1 or args.definition_dump:
             prepare_index_directories(args.root)
             before = dictionary_snapshot(args.root)
             binary_before = dictionary_snapshot(args.binary)
             def unchanged():
                 require(dictionary_snapshot(args.root) == before, 'dictionary source changed during audit')
                 require(dictionary_snapshot(args.binary) == binary_before, 'CLI binary changed during audit')
-            def exports(selection, matches):
-                return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged)
-            result = scan(args.root, query, exports)
+            if args.batch_size > 1:
+                def exports(selection, matches):
+                    return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged)
+        with ExitStack() as resources:
+            review = None
+            if args.definition_dump:
+                from source_definition_audit import SourceDefinitions
+                review = SourceDefinitions('', args.root, args.definition_dump)
+                resources.callback(review.close)
+            result = scan(args.root, query, exports, observe_record=review.observe if review else None)
+            if review is not None:
+                result['source_definitions'] = review.report()
+                if result['source_definitions']['unmatched']:
+                    result['status'] = 'failed'
+        if args.batch_size > 1 or args.definition_dump:
             unchanged()
+        if args.batch_size > 1:
             result['export_transport'] = dict(mode='guarded-native-json-lines', batch_size=args.batch_size,
                 timeout_seconds=60, immutable_source_guard=True, logical_commands=result['commands'])
-    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+    except (OSError, subprocess.SubprocessError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
     args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -610,7 +628,11 @@ def main():
     else:
         print(f"PRESENTATION_AUDIT {result['status']} records={result['records']} "
               f"issues={len(result['issues'])} views={result['view_count']} commands={result['commands']}")
-    return 2 if result['status'] == 'error' else int(bool(result['issues']))
+        if 'source_definitions' in result:
+            score = result['source_definitions']
+            print(f"SOURCE_DEFINITIONS matched={score['matched']} eligible={score['eligible']} "
+                  f"unmatched={score['unmatched']}")
+    return 2 if result['status'] == 'error' else int(result['status'] == 'failed')
 
 
 if __name__ == '__main__':

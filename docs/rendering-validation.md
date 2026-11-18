@@ -85,6 +85,26 @@ semantic result to copy. The builder therefore retains the page under
 `Unclassified` with no fabricated body text and puts the exact failure category
 in the fallback report.
 
+## Comparing compiled definitions to the original dump
+
+Pass `--definition-dump` to the Reader presentation audit to compare numbered
+source lines with the compiled entry. Supply the original XML member from the
+edition's `complete.json`, or repeat the option for each split member.
+
+```sh
+python3 tools/verify_presentation.py --root "$edition" --report "$report" \
+    --definition-dump "$dump"
+```
+
+The audit verifies each compressed member against its recorded size and SHA-1.
+It checks plain text and simple internal links under literal language headings
+on template-free pages. A match requires the expected language, definition
+order, visible text and link destination. `source_definitions` reports eligible,
+matched and unmatched counts with up to 32 examples and their page and revision
+IDs. Review unmatched lines against the source, including numbered examples
+and lists of related terms. Other headings, expanded templates and visual styling
+need separate checks.
+
 ## Whole-dump evidence
 
 The earlier recovery checkpoint was exercised against complete indexed
