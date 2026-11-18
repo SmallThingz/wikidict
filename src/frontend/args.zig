@@ -99,7 +99,7 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
             const value = argv[pos];
             if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
-            if (has_query) return error.Usage;
+            if (has_query or batch_export) return error.Usage;
             out.query = arg;
             has_query = true;
         }
@@ -237,6 +237,7 @@ test "bounded exact export batches preserve literal order duplicates and dash ti
         &.{ "lookup", "--batch", "--case-sensitive", "--", "cat" },
         &.{ "export", "--batch", "--", "cat" },
         &.{ "export", "--batch", "--case-sensitive", "cat" },
+        &.{ "export", "--batch", "cat", "--case-sensitive", "--", "dog" },
         &.{ "export", "--batch", "--case-sensitive", "--" },
         &.{ "export", "--batch", "--case-sensitive", "--", "" },
         &.{ "export", "--batch", "--case-sensitive", "--format", "text", "--", "cat" },
