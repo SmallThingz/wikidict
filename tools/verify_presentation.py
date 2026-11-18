@@ -545,12 +545,15 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=Path('zig-out/bin/wikidict'))
+    installed_reader = Path('zig-out/bin/wikidict')
+    parser.add_argument('--binary', type=Path, default=installed_reader)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
-    parser.add_argument('--batch-size', type=int, default=1, choices=range(1, 65),
-                        help='Exact export queries per guarded native child (default: ordinary single export)')
+    parser.add_argument('--batch-size', type=int, choices=range(1, 65),
+                        help='Exact exports per Reader process (default: 32 with the installed wikidict, 1 with another binary)')
     args = parser.parse_args()
+    if args.batch_size is None:
+        args.batch_size = 32 if args.binary.resolve() == installed_reader.resolve() else 1
 
     def query(*parts):
         return cli_query(args.binary, args.root, *parts)
