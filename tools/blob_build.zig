@@ -1127,6 +1127,8 @@ fn loadLanguageRegistry(io: std.Io, a: std.mem.Allocator, expander_root: []const
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zhuang);
     } else if (std.mem.eql(u8, out.content_code orelse "", "gor")) {
         try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .documented_literal);
+    } else if (std.mem.eql(u8, out.content_code orelse "", "zu") and std.mem.eql(u8, namespaces.wiki, "zuwiktionary")) {
+        try loadLiteralLanguageTemplates(io, a, expander_root, namespaces, &out, .zulu);
     }
     try loadNomFormatterModules(io, a, expander_root, namespaces, manifest.bytes, &out);
     try loadNamedSectionFormatterModules(io, a, expander_root, namespaces, manifest.bytes, &out);
@@ -1532,7 +1534,17 @@ fn literalDocumentedLanguageTemplate(source: []const u8) ?[]const u8 {
     return label;
 }
 
-const LiteralLanguageTemplateKind = enum { arabic, zhuang, documented_literal };
+fn literalZuluLanguageTemplate(source: []const u8) ?[]const u8 {
+    const label = literalDocumentedLanguageTemplate(source) orelse return null;
+    // The local ISO-code templates emit isiNgisi, isiKotava, etc. The initial
+    // i is also capitalized in headings. Preserve the rest of the spelling.
+    if (label.len < 4 or !std.ascii.eqlIgnoreCase(label[0..1], "i") or
+        !std.mem.eql(u8, label[1..3], "si") or !std.ascii.isUpper(label[3])) return null;
+    for (label[4..]) |ch| if (!std.ascii.isAlphabetic(ch)) return null;
+    return label;
+}
+
+const LiteralLanguageTemplateKind = enum { arabic, zhuang, documented_literal, zulu };
 
 fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const u8, namespaces: *const namespace_registry.Registry, registry: *language_registry.Registry, kind: LiteralLanguageTemplateKind) !void {
     const path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
@@ -1556,7 +1568,7 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
         const title = namespaces.ofTitle(row.title);
         if (title.id != 10) continue;
         const code = switch (kind) {
-            .arabic, .documented_literal => title.text,
+            .arabic, .documented_literal, .zulu => title.text,
             .zhuang => blk: {
                 if (title.text.len <= 2 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
                 break :blk title.text[1 .. title.text.len - 1];
@@ -1572,8 +1584,20 @@ fn loadLiteralLanguageTemplates(io: std.Io, a: std.mem.Allocator, root: []const 
             .arabic => literalArabicLanguageTemplate(source orelse raw),
             .zhuang => literalZhuangLanguageTemplate(source orelse raw, code),
             .documented_literal => literalDocumentedLanguageTemplate(source orelse raw),
+            .zulu => literalZuluLanguageTemplate(source orelse raw),
         };
-        if (label) |name| try registry.addLocalAlias(name, code);
+        const name = label orelse continue;
+        if (kind != .zulu) {
+            try registry.addLocalAlias(name, code);
+            continue;
+        }
+        try registry.addSourceTemplateLabel(name, code);
+        if (name[0] == 'i') {
+            const heading = try a.dupe(u8, name);
+            defer a.free(heading);
+            heading[0] = 'I';
+            try registry.addSourceTemplateLabel(heading, code);
+        }
     }
 }
 
@@ -7645,6 +7669,76 @@ test "GOR indexed literal alias preserves ordinary aliases conflicts and edition
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = "# content-language\ten\n# mediawiki\ngor\tBahasa Hulontalo\nen\tEnglish\n" });
     var foreign = try loadLanguageRegistry(io, a, root, &namespaces); defer foreign.deinit();
     try std.testing.expect(foreign.resolveTrusted("bahasa Hulontalo") == null);
+}
+
+test "Zulu indexed code templates route real language headings and retain their noun definitions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const output = try std.fs.path.join(a, &.{ root, "output" });
+    const registry = "# content-language\tzu\n# mediawiki\n" ++
+        "avk\tKotava\tavk\nen\ti-English\tI-English\tEnglish\ten\teng\n" ++
+        "tr\tisi-Turkish\tIsi-Turkish\tTürkçe\ttr\tTurkish\ttur\nzu\tisiZulu\tIsiZulu\tzu\tZulu\tzul\n";
+    var ns = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tzuwiktionary\n# dump-date\t20261001\n# content-language\tzu\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tentries\n10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    try tmp.dir.writeFile(io, .{ .sub_path = "language-registry.tsv", .data = registry });
+    try tmp.dir.writeFile(io, .{ .sub_path = "manifest.jsonl", .data = "" });
+    const cases = [_]struct { code: []const u8, label: []const u8, page: u64, revision: u64, source: []const u8, title: []const u8, body: []const u8, meaning: []const u8 }{
+        .{ .code = "en", .label = "IsiNgisi", .page = 2449, .revision = 14652,
+            .source = "isiNgisi<noinclude>[[Category:Templates]]\n[[cs:Šablona:en]]\n[[en:Template:en]]\n[[ik:Template:en]]\n[[nds:Vörlaag:en]]\n[[nn:Mal:en]]\n[[sk:Šablóna:en]]\n[[th:แม่แบบ:en]]\n[[za:模板:en]]\n</noinclude>",
+            .title = "plan", .body = "== IsiNgisi ==\n\n=== Ibizo ===\n'''plan''' [[:en:plan|(en)]]\n\n# [[icebo]]\n\n[[Category:Amagama esiNgisi]]", .meaning = "icebo" },
+        .{ .code = "avk", .label = "IsiKotava", .page = 4128, .revision = 14667,
+            .source = "isiKotava<noinclude>[[Category:Templates]]</noinclude>",
+            .title = "aabre", .body = "== IsiKotava ==\n\n=== Ibizo ===\n'''aabre''' [[:avk:aabre|(avk)]]\n\n# [[isobho]]\n\n[[Category:Amagama esiKotava]]", .meaning = "isobho" },
+        .{ .code = "tr", .label = "IsiTheki", .page = 4741, .revision = 14694,
+            .source = "isiTheki<noinclude>[[Category:Templates]]</noinclude>",
+            .title = "hıyar", .body = "== IsiTheki ==\n\n=== Ibizo ===\n'''hıyar''' [[:tr:hıyar|(tr)]]\n\n# [[ikhukhamba]]\n\n[[Category:Amagama esiTheki]]", .meaning = "ikhukhamba" },
+    };
+    var rows: std.Io.Writer.Allocating = .init(a);
+    defer rows.deinit();
+    var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+    defer templates.deinit();
+    for (cases, 0..) |case, i| {
+        try rows.writer.print("0\t0\tTemplate:{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{ case.code, case.page, case.revision });
+        try templates.append(i, case.page, case.revision, case.source);
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = rows.written() });
+    try templates.finish(try std.fs.path.join(a, &.{ root, "page-index.tsv" }));
+    var langs = try loadLanguageRegistry(io, a, root, &ns);
+    defer langs.deinit();
+    const codes = languageCodes(&langs, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    for (cases) |case| {
+        try std.testing.expectEqualStrings(case.code, (langs.resolveTrusted(case.label) orelse return error.MissingZuluAlias).code);
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, case.body, case.body, null);
+    }
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, cases.len), stats.language_records);
+    for (cases) |case| {
+        const stored = try TemplateCollisionFixture.entry(io, a, output, langs.resolveTrusted(case.label).?.heading, case.title);
+        try std.testing.expectEqualStrings(case.code, stored.language_code);
+        try std.testing.expectEqual(@as(usize, 1), stored.organization.lexemes.len);
+        try std.testing.expectEqual(@as(usize, 1), stored.organization.lexemes[0].definitions.len);
+        var actions: usize = 0;
+        for (stored.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link and std.mem.eql(u8, span.target, case.meaning) and std.mem.eql(u8, span.text, case.meaning)) actions += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), actions);
+    }
+    try std.testing.expect(langs.resolveTrusted("ISINGISI") == null);
+    try langs.addSourceTemplateLabel("isiNgisi", "tr");
+    try std.testing.expect(langs.resolveTrusted("IsiNgisi") == null and langs.resolveTrusted("isiNgisi") == null);
+    for ([_][]const u8{ "English<noinclude>docs</noinclude>", "isiNgisi phrase<noinclude>docs</noinclude>",
+        "isi{{name}}<noinclude>docs</noinclude>", "isiNgisi<noinclude>docs</noinclude>tail" }) |invalid|
+        try std.testing.expect(literalZuluLanguageTemplate(invalid) == null);
 }
 
 test "Writer trusted language link ignores only hidden category metadata and preserves typed content" {
