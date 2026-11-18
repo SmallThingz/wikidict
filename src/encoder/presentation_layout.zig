@@ -126,6 +126,8 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Sezione voce p172588/r1880894 emits this exact linked POS heading.
     // Lexical kind only: keep the independently supplied or unknown owner.
     if (std.mem.eql(u8, title, "Nome proprio")) return "Proper noun";
+    // The Chinese edition uses this heading for entries in several languages.
+    if (std.mem.eql(u8, title, "專有名詞")) return "Proper noun";
     // Retained ουσιαστικό p254472/r3274141 invokes PartOfSpeech; its
     // selected pos table p804996/r7358611 names this exact noun heading.
     if (std.mem.eql(u8, title, "Ουσιαστικό")) return "Noun";
@@ -11409,6 +11411,36 @@ test "actual Fuhe Reader meaning organization preserves every body action style 
     try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
 }
 
+
+test "Chinese proper noun heading groups the Hindi definition and its two quotations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    // कॅटलोनिया (zh revision 6013702) uses {{hi-proper noun}}. The Chinese
+    // heading describes the Hindi word. Its declension table is a child section.
+    const sections = [_]Section{
+        .{ .title = "印地語", .level = 2 }, .{ .title = "替代形式", .level = 3 },
+        .{ .title = "詞源", .level = 3 }, .{ .title = "發音", .level = 3 },
+        .{ .title = "專有名詞", .level = 3, .blocks = &.{
+            .{ .kind = .paragraph }, .{ .kind = .definition, .depth = 1, .list_path = "#" },
+            .{ .kind = .quotation, .depth = 2, .list_path = "#*" },
+            .{ .kind = .quotation, .depth = 3, .list_path = "#*:" },
+        } },
+        .{ .title = "變格", .level = 4 },
+    };
+    const layout = try buildOwned(a, &sections, "印地語");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const lexeme = layout.lexemes[0];
+    try std.testing.expectEqualStrings("印地語", lexeme.language);
+    try std.testing.expectEqualStrings("Proper noun", lexeme.kind);
+    try std.testing.expectEqual(@as(usize, 4), lexeme.section);
+    try std.testing.expectEqualSlices(usize, &.{0}, lexeme.introduction);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{ 2, 3 }, lexeme.definitions[0].quotations);
+    try std.testing.expect(partOfSpeech("專有名詞的變格") == null);
+}
 
 test "Italian proper noun label preserves exact spelling and independent ownership" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

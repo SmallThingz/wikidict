@@ -38697,6 +38697,13 @@ test "normal Writer retained ZH ciriciring preserves nested rule free headword l
     var scan: F.Scan = .{}; try scan.entry(a, actual);
     try std.testing.expect(scan.proper_noun);
     try std.testing.expectEqual(@as(usize, 1), scan.definitions);
+    try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+    const lexeme = actual.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Proper noun", lexeme.kind);
+    try std.testing.expectEqualStrings(owner.heading, lexeme.language);
+    try std.testing.expectEqualStrings("專有名詞", actual.sections[lexeme.section].title);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    try std.testing.expect(actual.sections[lexeme.section].blocks[lexeme.definitions[0].block].kind == .definition);
     try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "ciriciring no tao") != null);
     try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, "達悟語，臺灣原住民族達悟族的語言") != null);
     const targets = [_][]const u8{ "ciriciring#達悟語", "no#達悟語", "tao#達悟語", "達悟語", "達悟族" };
