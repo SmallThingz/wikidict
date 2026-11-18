@@ -762,7 +762,7 @@ pub const FloatProjection = struct {
     started: bool = false,
     capturing: bool = false,
     capturing_float: bool = false,
-    capturing_stacked_table: bool = false,
+    capturing_serial_table: bool = false,
     fn stop(self: *FloatProjection) !void {
         if (!self.enabled) return;
         if (self.started) {
@@ -779,7 +779,7 @@ pub const FloatProjection = struct {
                 event.kind = .float_grid;
                 event.side = side;
                 event.table_float = true;
-                event.supported = !self.capturing_stacked_table;
+                event.supported = !self.capturing_serial_table;
                 if (style.margins) |margins| {
                     // There is no established vertical or positive-em metric.
                     const left = horizontalFloatMargin(margins.left, self.columns);
@@ -1374,7 +1374,7 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
         .{ .background = background, .header = if (inherited) |value| value.header else false, .foreground = if (inherited) |value| value.foreground else null, .content_depth = if (inherited) |value| value.content_depth else 0, .caption_paint = if (inherited) |value| value.caption_paint else false }
     else inherited else inherited;
     if (render_context.stacked_tables) {
-        if (projection) |p| if (p.float_flow) |flow| if (flow.capturing_float) { flow.capturing_stacked_table = true; };
+        if (projection) |p| if (p.float_flow) |flow| if (flow.capturing_float) { flow.capturing_serial_table = true; };
         return tableStackedText(w, table, color, maximum, table_depth, surface, render_context);
     }
     const padding: usize = if (table.geometry) |g| if (g.cell_padding) |v| tablePixels(v) else 1 else 1;
@@ -1451,16 +1451,56 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     // The terminal body is at least 36 cells at its supported 40-column size.
     // Keep the natural grid byte-for-byte when it fits, and the CLI unbounded.
     if (columns_limit) |requested| {
-        const columns = @max(requested, 8);
+        var columns = @max(requested, 8);
         var natural: usize = (overhead * widths.items.len + indentation + separator) -| spacing;
         for (widths.items) |width| natural += width;
         if (natural > columns and widths.items.len != 0) {
-            const budget = columns -| ((overhead * widths.items.len + indentation + separator) -| spacing);
-            if (budget < (if (has_nested) @as(usize, 8) else 2) * widths.items.len) {
-                // A grid cannot give every column one full wide glyph. Stack
-                // owned cells with explicit row/column/span identity instead.
+            const natural_widths = try a.dupe(usize, widths.items);
+            const captured_float = if (projection) |p| if (p.float_flow) |flow| flow.capturing_float else false else false;
+            const readable_float = captured_float and maximum != null and columns < maximum.? and
+                !tableStyleOwnsWidth(table) and
+                (if (table.geometry) |g| g.width != null else false) and
+                (if (table.style) |style| style.float_side != null else false);
+            var stack = false;
+            while (true) {
+                const budget = columns -| ((overhead * widths.items.len + indentation + separator) -| spacing);
+                if (budget < (if (has_nested) @as(usize, 8) else 2) * widths.items.len) {
+                    stack = true;
+                    break;
+                }
+                const share = budget / widths.items.len;
+                var left = budget;
+                for (widths.items, natural_widths) |*width, original| {
+                    width.* = @min(original, share);
+                    left -= width.*;
+                }
+                for (widths.items, natural_widths) |*width, original| {
+                    const extra = @min(left, original - width.*);
+                    width.* += extra;
+                    left -= extra;
+                }
+                if (!readable_float) break;
+                // A terminal float should not turn labels into two-cell strips.
+                // This is a display-cell readability cap, not a CSS minimum.
+                const readable_cell_columns = 8;
+                const readable = for (cells.items) |cell| {
+                    var allocated = overhead * (cell.colspan - 1);
+                    for (widths.items[cell.column..][0..cell.colspan]) |part| allocated += part;
+                    if (allocated < @min(cell.natural_width, readable_cell_columns)) break false;
+                } else true;
+                if (readable) break;
+                if (columns == maximum.?) {
+                    stack = true;
+                    break;
+                }
+                columns = maximum.?;
+                projection.?.float_flow.?.capturing_serial_table = true;
+            }
+            if (stack) {
+                // The grid is too cramped. Stack owned cells with explicit
+                // row/column/span identity instead.
                 // These serial labels/cells are no longer a floating rectangle.
-                if (projection) |p| if (p.float_flow) |flow| if (flow.capturing_float) { flow.capturing_stacked_table = true; };
+                if (projection) |p| if (p.float_flow) |flow| if (flow.capturing_float) { flow.capturing_serial_table = true; };
                 // Once cells are stacked, the percentage/fixed grid width no
                 // longer buys a second column. Use the available serial width.
                 const stacked_columns = @max(columns, maximum orelse columns);
@@ -1500,18 +1540,6 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
                 }
                 try w.writeByte('\n');
                 return;
-            }
-            const natural_widths = try a.dupe(usize, widths.items);
-            const share = budget / widths.items.len;
-            var left = budget;
-            for (widths.items) |*width| {
-                width.* = @min(width.*, share);
-                left -= width.*;
-            }
-            for (widths.items, natural_widths) |*width, original| {
-                const extra = @min(left, original - width.*);
-                width.* += extra;
-                left -= extra;
             }
             for (cells.items) |*cell| {
                 var width: usize = overhead * (cell.colspan - 1);
@@ -2489,8 +2517,8 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 const start = p.frame.written().len;
                 flow.capturing = true;
                 flow.capturing_float = floating;
-                flow.capturing_stacked_table = false;
-                defer { flow.capturing = false; flow.capturing_float = false; flow.capturing_stacked_table = false; }
+                flow.capturing_serial_table = false;
+                defer { flow.capturing = false; flow.capturing_float = false; flow.capturing_serial_table = false; }
                 var captured_context = context;
                 captured_context.ordinal = ordinal;
                 captured_context.alignment_suppressed = true;
@@ -6786,7 +6814,7 @@ test "Romanian percentage float stacks full width before prose in a narrow termi
         };
         const entry: model.Entry = .{ .title = "casă", .kind = .language, .language = "română", .language_code = "ro", .sections = &sections };
         const before = try std.json.Stringify.valueAlloc(a, entry, .{});
-        for ([_]usize{ 41, 80 }) |columns| for ([_]bool{ false, true }) |color| {
+        for ([_]usize{ 41, 56, 80, 160 }) |columns| for ([_]bool{ false, true }) |color| {
             const captured = try CrossSectionFloatTest.capture(a, entry, columns, color, &.{});
             const layout = try floatLayoutAlloc(a, captured.text, columns, captured.poems, captured.events, color);
             const plain = try NarrowTableTest.plain(a, layout.text);
@@ -6795,19 +6823,30 @@ test "Romanian percentage float stacks full width before prose in a narrow termi
             for (layout.rows) |row| try std.testing.expect(terminal.cellWidth(row.bytes) <= columns);
             const selected = try NarrowTableTest.plain(a, layout.rows[layout.rowForOffset(captured.selected)].bytes);
             try std.testing.expect(std.mem.indexOf(u8, selected, "Referințe") != null);
-            if (columns == 41) {
+            if (columns != 160) {
                 try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
-                for ([_][]const u8{ "Singular", "Plural", "Nominativ-Acuzativ", "Row 3, column 3" }) |word|
+                for ([_][]const u8{ "Singular", "Plural", "Nominativ-Acuzativ" }) |word|
                     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, word));
-                try std.testing.expect(std.mem.indexOf(u8, plain, "Row 3, column 3").? < std.mem.indexOf(u8, plain, "masă").?);
+                if (columns == 41) {
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, "Row 3, column 3"));
+                    try std.testing.expect(std.mem.indexOf(u8, plain, "Row 3, column 3").? < std.mem.indexOf(u8, plain, "masă").?);
+                } else try std.testing.expect(std.mem.indexOf(u8, plain, "Row 3, column 3") == null);
                 const prose_at = std.mem.indexOf(u8, captured.text, "masă").?;
-                const last_cell = std.mem.indexOf(u8, captured.text, "Row 3, column 3").?;
+                const last_cell = std.mem.indexOf(u8, captured.text, if (columns == 41) "Row 3, column 3" else "Nominativ-Acuzativ").?;
                 try std.testing.expect(layout.rowForOffset(last_cell) < layout.rowForOffset(prose_at));
                 for (layout.rows) |row| if (std.mem.indexOf(u8, row.bytes, "masă") != null or std.mem.indexOf(u8, row.bytes, "cumpărăturilor") != null)
                     try std.testing.expect(std.mem.indexOf(u8, row.bytes, "│") == null);
             } else {
                 try std.testing.expectEqual(@as(usize, 0), layout.unsupported);
                 try std.testing.expect(std.mem.indexOf(u8, plain, "Row 3, column 3") == null);
+                for ([_][]const u8{ "Singular", "Plural", "Nominativ-Acuzativ" }) |word|
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain, word));
+                var table_width: usize = 0;
+                for (captured.events) |event| if (event.kind == .float_grid) {
+                    var rows = std.mem.splitScalar(u8, captured.text[event.start..event.end], '\n');
+                    while (rows.next()) |row| table_width = @max(table_width, terminal.cellWidth(row));
+                };
+                try std.testing.expectEqual(columns * 33 / 100, table_width);
                 var shared_row = false;
                 for (layout.rows) |row| if (std.mem.indexOf(u8, row.bytes, "masă") != null) {
                     shared_row = std.mem.indexOf(u8, row.bytes, "│") != null;
@@ -6831,6 +6870,52 @@ test "Romanian percentage float stacks full width before prose in a narrow termi
         _ = try visitEntrySpanLists(entry, &targets);
         try std.testing.expectEqual(@as(usize, 8), targets.next);
         try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, entry, .{}));
+    }
+}
+
+test "terminal authored float readability keeps short cells and stacks a cramped full width grid" {
+    terminal.initLocale();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const short_cells = [_]@import("blob_encoder").presentation_types.Cell{
+        .{ .spans = &.{.{ .text = "LONG_COLUMN_LABEL" }} },
+        .{ .spans = &.{.{ .text = "q" }} },
+    };
+    const long_cells = [_]@import("blob_encoder").presentation_types.Cell{
+        .{ .spans = &.{.{ .text = "LONG_COLUMN_ONE" }} },
+        .{ .spans = &.{.{ .text = "LONG_COLUMN_TWO" }} },
+        .{ .spans = &.{.{ .text = "LONG_COLUMN_THREE" }} },
+    };
+    for ([_]bool{ false, true }) |cramped| {
+        const columns: usize = if (cramped) 32 else 56;
+        const cells: []const @import("blob_encoder").presentation_types.Cell = if (cramped) &long_cells else &short_cells;
+        const rows = [_]@import("blob_encoder").presentation_types.Row{.{ .cells = cells }};
+        const table: model.Table = .{
+            .geometry = .{ .width = .{ .unit = .percent, .value = if (cramped) 75 else 43 } },
+            .style = .{ .float_side = .right }, .rows = &rows,
+        };
+        const blocks = [_]model.Block{ .{ .kind = .table, .table = table }, .{ .kind = .paragraph, .spans = &.{.{ .text = "PROSE_OK" }} } };
+        const sections = [_]model.Section{
+            .{ .level = 2, .title = "Table", .blocks = &blocks },
+            .{ .level = 3, .title = "After", .blocks = &.{} },
+        };
+        const value: model.Entry = .{ .title = "fit", .kind = .language, .language = "English", .language_code = "en", .sections = &sections };
+        const captured = try CrossSectionFloatTest.capture(a, value, columns, false, &.{});
+        const layout = try floatLayoutAlloc(a, captured.text, columns, captured.poems, captured.events, false);
+        try std.testing.expectEqual(@as(usize, @intFromBool(cramped)), layout.unsupported);
+        for (layout.rows) |row| try std.testing.expect(terminal.cellWidth(row.bytes) <= columns);
+        if (cramped) {
+            for (long_cells) |cell| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, layout.text, cell.spans[0].text));
+            try std.testing.expect(std.mem.indexOf(u8, layout.text, "Row 1, column 3").? < std.mem.indexOf(u8, layout.text, "PROSE_OK").?);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, layout.text, "Row 1, column") == null);
+            var shared_row = false;
+            for (layout.rows) |row| if (std.mem.indexOf(u8, row.bytes, "PROSE_OK") != null) {
+                shared_row = std.mem.indexOf(u8, row.bytes, "│") != null;
+            };
+            try std.testing.expect(shared_row);
+        }
     }
 }
 
