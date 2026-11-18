@@ -485,6 +485,11 @@ each selected build. The reason counts can overlap on a single page. The
 manifest hash ties each row to the corresponding directory in the output index.
 An edition without a completed build has blank counts.
 
+[Local edition build times](data/corpus-campaign-current01/local-edition-build-times.tsv)
+lists the elapsed build time, input XML pages, and pages per second for each
+selected output. Separate columns record known retry time and the number of
+attempts whose duration is unknown.
+
 The native verifier checks the selected directory.
 
 ```sh
