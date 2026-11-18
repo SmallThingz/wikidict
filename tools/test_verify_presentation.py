@@ -592,5 +592,210 @@ class Fixture:
         assert '--case-sensitive' in parts and parts[-2:] == ('--', '')
 
 
+class BatchExportBoundaryTests(unittest.TestCase):
+    def test_previous_decoded_response_is_released_before_next_native_or_fallback_response(self):
+        import weakref
+        original_loads = json.loads
+        class Response(dict):
+            pass
+        for fallback in (False, True):
+            refs = []
+            queries = ['a' * 65537, 'b' * 65537] if fallback else ['one', 'two']
+            def observe(value):
+                if refs:
+                    self.assertIsNone(refs[-1](), 'previous decoded response overlaps the next response')
+                answer = Response(value)
+                refs.append(weakref.ref(answer))
+                return answer
+            def decode(line):
+                return observe(original_loads(line))
+            def single(*parts):
+                return observe(dict(query=parts[-1], entries=[]))
+            class Child:
+                pid = 123
+                def __init__(self, argv, **kw):
+                    for title in queries:
+                        row = dict(schema='dict.results.v1', operation='lookup', query=title,
+                                   match_mode='exact-utf8', entries=[])
+                        kw['stdout'].write(json.dumps(row).encode() + b'\n')
+                def wait(self, timeout=None): return 0
+            with mock.patch.object(audit.subprocess, 'Popen', Child), mock.patch.object(audit, 'process_birth', return_value=42), \
+                 mock.patch.object(audit.json, 'loads', side_effect=decode), mock.patch.object(audit, 'cli_query', side_effect=single):
+                stream = audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title=q) for q in queries], 2, lambda: None)
+                first = next(stream); self.assertEqual(queries[0], first['query']); del first
+                second = next(stream); self.assertEqual(queries[1], second['query']); del second
+                with self.assertRaises(StopIteration): next(stream)
+                self.assertIsNone(refs[-1]())
+                self.assertEqual(2, len(refs))
+
+    def test_guard_refuses_member_replacement_edit_symlink_swap_and_membership(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / 'root'; root.mkdir()
+            data = root / 'a.wikblb'; data.write_bytes(b'first')
+            before = audit.dictionary_snapshot(root)
+            data.write_bytes(b'other')
+            self.assertNotEqual(before, audit.dictionary_snapshot(root))
+            data.unlink(); data.write_bytes(b'first')
+            self.assertNotEqual(before, audit.dictionary_snapshot(root))
+            link = root / 'link'; link.symlink_to(data)
+            current = audit.dictionary_snapshot(root)
+            link.unlink(); link.symlink_to('a.wikblb')
+            self.assertNotEqual(current, audit.dictionary_snapshot(root))
+            current = audit.dictionary_snapshot(root)
+            (root / '.incomplete').write_bytes(b'')
+            self.assertNotEqual(current, audit.dictionary_snapshot(root))
+
+    def test_prepared_derived_index_writes_do_not_change_published_source_snapshot(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); (root/'a.wikblb').write_bytes(b'source')
+            audit.prepare_index_directories(root)
+            before = audit.dictionary_snapshot(root)
+            (root/'.dict-cache'/'a.idx').write_bytes(b'derived')
+            self.assertEqual(before, audit.dictionary_snapshot(root))
+
+    def test_batch_stream_retains_duplicate_unicode_dash_queries_and_rejects_extra(self):
+        responses = [dict(schema='dict.results.v1', operation='lookup', query=q,
+                          match_mode='exact-utf8', entries=[dict(title=q)]) for q in ['猫', '-dash', '猫']]
+        class Child:
+            pid = 123
+            def __init__(self, argv, **kw):
+                self.argv = argv
+                self.spool = kw['stdout']
+                self.spool.write(b''.join(json.dumps(x, ensure_ascii=False).encode()+b'\n' for x in responses))
+            def wait(self, timeout=None): return 0
+        with mock.patch.object(audit.subprocess, 'Popen', Child), mock.patch.object(audit, 'process_birth', return_value=42):
+            got = list(audit.batch_exports(Path('/binary'), Path('/root'), ['--kind','language'],
+                       [dict(title=x) for x in ['猫','-dash','猫']], 3, lambda: None))
+            self.assertEqual(responses, got)
+            with self.assertRaises(audit.ScanError):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='猫')], 1, lambda: None))
+
+    def test_failed_and_truncated_batch_never_yields_a_success(self):
+        class Child:
+            pid = 123
+            def __init__(self, argv, **kw): pass
+            def wait(self, timeout=None): return 1
+        with mock.patch.object(audit.subprocess, 'Popen', Child), mock.patch.object(audit, 'process_birth', return_value=42):
+            with self.assertRaisesRegex(audit.ScanError, 'status 1'):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='missing')], 1, lambda: None))
+        Child.wait = lambda self, timeout=None: 0
+        with mock.patch.object(audit.subprocess, 'Popen', Child), mock.patch.object(audit, 'process_birth', return_value=42):
+            with self.assertRaisesRegex(audit.ScanError, 'incomplete'):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='missing')], 1, lambda: None))
+
+    def test_source_guard_failure_happens_before_any_child_launch(self):
+        def changed(): raise audit.ScanError('changed')
+        with mock.patch.object(audit.subprocess, 'Popen') as spawn:
+            with self.assertRaisesRegex(audit.ScanError, 'changed'):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='cat')], 1, changed))
+            spawn.assert_not_called()
+
+    def test_timeout_signals_only_same_birth_owned_child_and_waits(self):
+        class Child:
+            pid = 123
+            def __init__(self, argv, **kw): self.calls = 0; self.killed = False
+            def wait(self, timeout=None):
+                self.calls += 1
+                if self.calls == 1: raise subprocess.TimeoutExpired('export', 60)
+                return -9
+            def poll(self): return None
+            def kill(self): self.killed = True
+        child = Child([])
+        with mock.patch.object(audit.subprocess, 'Popen', return_value=child), mock.patch.object(audit, 'process_birth', return_value=42):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='cat')], 1, lambda: None))
+        self.assertTrue(child.killed)
+        self.assertEqual(child.calls, 2)
+        child = Child([])
+        with mock.patch.object(audit.subprocess, 'Popen', return_value=child), mock.patch.object(audit, 'process_birth', side_effect=[42,43]):
+            with self.assertRaisesRegex(audit.ScanError, 'identity changed'):
+                list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='cat')], 1, lambda: None))
+        self.assertFalse(child.killed)
+        self.assertEqual(child.calls, 2)
+
+    def test_guard_rejects_file_edit_then_restore_and_directory_link_retarget(self):
+        with tempfile.TemporaryDirectory() as d:
+            parent = Path(d); a = parent/'a'; b = parent/'b'; a.mkdir(); b.mkdir()
+            (a/'entry.wikblb').write_bytes(b'first'); (b/'entry.wikblb').write_bytes(b'first')
+            root = parent/'view'; root.symlink_to(a, target_is_directory=True)
+            before = audit.dictionary_snapshot(root)
+            (a/'entry.wikblb').write_bytes(b'other'); (a/'entry.wikblb').write_bytes(b'first')
+            self.assertNotEqual(before, audit.dictionary_snapshot(root))
+            before = audit.dictionary_snapshot(root)
+            root.unlink(); root.symlink_to(b, target_is_directory=True)
+            self.assertNotEqual(before, audit.dictionary_snapshot(root))
+
+    def test_birth_read_failures_always_join_without_unproved_signal(self):
+        class Child:
+            pid = 123
+            def __init__(self): self.waits = 0; self.killed = False
+            def wait(self, timeout=None):
+                self.waits += 1
+                if timeout is not None: raise subprocess.TimeoutExpired('export', timeout)
+                return 0
+            def poll(self): return None
+            def kill(self): self.killed = True
+        for births, waits in [([OSError('initial birth unavailable')], 1),
+                              ([42, OSError('timeout birth unavailable')], 2)]:
+            child = Child()
+            with mock.patch.object(audit.subprocess, 'Popen', return_value=child), mock.patch.object(audit, 'process_birth', side_effect=births):
+                with self.assertRaisesRegex(OSError, 'birth unavailable'):
+                    list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='cat')], 1, lambda: None))
+            self.assertEqual(child.waits, waits)
+            self.assertFalse(child.killed)
+
+
+    def test_transient_published_members_and_cache_routes_cannot_evade_guard(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d); (root/'a.wikblb').write_bytes(b'source')
+            audit.prepare_index_directories(root)
+            before = audit.dictionary_snapshot(root)
+            member = root/'aliases.wikblb'; member.write_bytes(b'transient'); member.unlink()
+            self.assertNotEqual(before, audit.dictionary_snapshot(root))
+            before = audit.dictionary_snapshot(root)
+            cache = root/'.dict-cache'; cache.rmdir(); cache.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(audit.ScanError): audit.dictionary_snapshot(root)
+
+    def test_cache_preparation_rejects_foreign_routes_and_allows_readonly_no_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cache = root/'.dict-cache'; cache.write_bytes(b'not a directory')
+            with self.assertRaises(audit.ScanError): audit.prepare_index_directories(root)
+            cache.unlink(); cache.symlink_to(root, target_is_directory=True)
+            with self.assertRaises(audit.ScanError): audit.prepare_index_directories(root)
+            cache.unlink()
+            with mock.patch.object(Path, 'mkdir', side_effect=PermissionError('read only')):
+                audit.prepare_index_directories(root)
+            self.assertFalse(cache.exists())
+            self.assertEqual(audit.dictionary_snapshot(root), audit.dictionary_snapshot(root))
+
+
+    def test_batch_scan_retains_alias_owner_pagination_report_and_strictness(self):
+        with Fixture() as f:
+            target = f.entry('destination', '__NOEDITSECTION__', language='English')
+            alias = dict(target, redirect=dict(source_title='-alias', target_title='destination', fragment='', followed=True))
+            f.language('English', [target], aliases={'-alias': alias})
+            f.language('French', [f.entry('destination', 'Lua error', language='French')])
+            f.feature('supplemental', [f.entry('Appendix:X', 'plain', kind='supplemental')])
+            f.page_size = 1
+            ordinary = audit.scan(f.root, f.query)
+            def pages(selection, matches):
+                for match in matches:
+                    yield f.query('export', *selection, '--case-sensitive', '--', match['title'])
+            self.assertEqual(ordinary, audit.scan(f.root, f.query, pages))
+            self.assertEqual(ordinary['alias_views'], 1)
+            self.assertEqual(ordinary['duplicate_destinations'], 1)
+            def foreign(selection, matches):
+                for response in pages(selection, matches):
+                    yield dict(response, language='foreign')
+            with self.assertRaisesRegex(audit.ScanError, 'selection owner mismatch'):
+                audit.scan(f.root, f.query, foreign)
+            def extra(selection, matches):
+                yield from pages(selection, matches)
+                yield {}
+            with self.assertRaisesRegex(audit.ScanError, 'extra batch export'):
+                audit.scan(f.root, f.query, extra)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -9,6 +9,9 @@ import argparse
 import hashlib
 import json
 import re
+import os
+import stat
+import tempfile
 import subprocess
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
@@ -252,7 +255,7 @@ def emitted_views(root, catalog, query):
     return views
 
 
-def scan(root, query):
+def scan(root, query, export_page=None):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=[], annotations=[], views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0,
@@ -300,6 +303,7 @@ def scan(root, query):
                     'invalid search page')
             require(page['has_more'] == (offset + len(matches) < total), 'inconsistent has_more')
             require(matches or not page['has_more'], 'nonprogressing search page')
+            page_exports = iter(export_page(selection, matches)) if export_page is not None else None
             for match in matches:
                 title = match['title']
                 require(isinstance(title, str) and title and (previous is None or title > previous),
@@ -307,7 +311,12 @@ def scan(root, query):
                 previous = title
                 summary['matches'] += 1
                 result['search_matches'] += 1
-                exported = ask('export', *selection, '--case-sensitive', '--', title)
+                if page_exports is None:
+                    exported = ask('export', *selection, '--case-sensitive', '--', title)
+                else:
+                    result['commands'] += 1  # Same logical export count; transport is reported separately.
+                    exported = next(page_exports, None)
+                    require(isinstance(exported, dict), 'incomplete batch export')
                 require(exported.get('kind') == view['kind'].replace('-', '_') and
                         exported.get('language') == view['language'], 'export selection owner mismatch')
                 entries = exported['entries']
@@ -339,6 +348,7 @@ def scan(root, query):
                     require(destinations[identity] == digest, 'conflicting duplicate destination')
                     summary['duplicate_destinations'] += 1
                     result['duplicate_destinations'] += 1
+                    exported = entries = entry = content = redirect = None
                     continue
                 destinations[identity] = digest
                 result['records'] += 1
@@ -365,6 +375,11 @@ def scan(root, query):
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500],
                             categories=['unresolved-action-target'], nonwaivable=True))
+                # Release the decoded response before requesting the next line.
+                # Audit summaries retain only their existing hashes/snippets.
+                exported = entries = entry = content = redirect = text = None
+            if page_exports is not None:
+                require(next(page_exports, None) is None, 'unexpected extra batch export')
             offset += len(matches)
             if not page['has_more']:
                 break
@@ -395,18 +410,167 @@ def cli_query(binary, root, *parts):
     return json.loads(payload)
 
 
+def prepare_index_directories(root):
+    # Ordinary Store writes indexes only beneath these two existing source
+    # directories. Create their empty cache directories before binding source
+    # directory timestamps; this does not read or warm any dictionary index.
+    for parent in (Path(root), Path(root) / 'languages'):
+        if not parent.is_dir():
+            continue
+        cache = parent / '.dict-cache'
+        try:
+            cache.mkdir()
+        except FileExistsError:
+            require(cache.is_dir() and not cache.is_symlink(), 'invalid derived index directory')
+        except PermissionError:
+            # Ordinary read-only Store also continues without saving a cache.
+            # A later permission/member change is still caught by the snapshot.
+            pass
+
+
+def dictionary_snapshot(root):
+    root = Path(root).absolute()
+    rows, seen = [], set()
+
+    def state(path, follow):
+        value = path.stat() if follow else path.lstat()
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                value.st_gid, value.st_nlink, value.st_size,
+                value.st_mtime_ns, value.st_ctime_ns)
+
+    def visit(path, depth):
+        require(depth <= 16, 'dictionary directory depth exceeded')
+        lexical = state(path, False)
+        target = state(path, True)
+        resolved = path.resolve(strict=True)
+        route = [(str(parent), state(parent, False)[:5])
+                 for parent in (path, *path.parents, resolved, *resolved.parents)]
+        if stat.S_ISDIR(target[2]):
+            identity = target[:2]
+            require(identity not in seen, 'dictionary directory alias or cycle')
+            seen.add(identity)
+            before = state(path, True)
+            names = sorted(name for name in os.listdir(path) if name != '.dict-cache')
+            cache = path / '.dict-cache'
+            try:
+                cache_state = state(cache, False)
+            except FileNotFoundError:
+                cache_identity = None
+            else:
+                require(stat.S_ISDIR(cache_state[2]), 'derived cache directory changed type')
+                cache_identity = cache_state[:5]
+            rows.append((str(path), str(resolved), lexical, target, route, names, cache_identity))
+            for name in names:
+                visit(path / name, depth + 1)
+            require(before == state(path, True), 'dictionary directory changed during snapshot')
+        else:
+            require(stat.S_ISREG(target[2]), 'nonregular dictionary member')
+            rows.append((str(path), str(resolved), lexical, target, route))
+            require(target == state(path, True) and lexical == state(path, False),
+                    'dictionary member changed during snapshot')
+    visit(root, 0)
+    return rows
+
+
+def process_birth(pid):
+    # Popen owns exactly this child. A timeout may signal only that PID with
+    # this still-current kernel birth, never a group or a reused PID.
+    return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])
+
+
+def batch_exports(binary, root, selection, matches, batch_size, unchanged):
+    require(1 <= batch_size <= 64, 'invalid export batch size')
+    offset = 0
+    while offset < len(matches):
+        titles, total = [], 0
+        for match in matches[offset:offset + batch_size]:
+            title = match['title']
+            require(isinstance(title, str) and title, 'invalid batch query title')
+            size = len(title.encode('utf-8'))
+            if size > 65536:
+                break
+            if total + size > 65536:
+                break
+            titles.append(title)
+            total += size
+        if not titles:
+            # Preserve the ordinary CLI's argument domain beyond the bounded
+            # batch interface; no title is skipped or truncated.
+            title = matches[offset]['title']
+            unchanged()
+            value = cli_query(binary, root, 'export', *selection, '--case-sensitive', '--', title)
+            unchanged()
+            yield value
+            value = None
+            offset += 1
+            continue
+        unchanged()
+        argv = [str(binary.resolve()), 'export', '--root', str(root),
+                '--format', 'json', *selection, '--batch', '--case-sensitive', '--', *titles]
+        # Disk-backed framing bounds Python memory to one decoded response.
+        # Nothing from a failed/incomplete child is accepted as an export.
+        with tempfile.TemporaryFile() as spool:
+            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=spool)
+            birth = None
+            try:
+                birth = process_birth(process.pid)
+                code = process.wait(timeout=60)
+            except BaseException:
+                try:
+                    if process.poll() is None and birth is not None:
+                        require(process_birth(process.pid) == birth, 'export child identity changed')
+                        process.kill()
+                finally:
+                    # Joining is mandatory even if /proc is unreadable or its
+                    # identity proof fails. An unproved PID is never signalled;
+                    # that exceptional case waits for natural child handback.
+                    process.wait()
+                raise
+            require(code == 0, f'export batch failed with status {code}')
+            unchanged()
+            spool.seek(0)
+            for title in titles:
+                line = spool.readline()
+                require(bool(line) and line.endswith(b'\n'), 'incomplete export batch')
+                value = json.loads(line)
+                line = None
+                require(isinstance(value, dict) and value.get('schema') == 'dict.results.v1' and
+                        value.get('operation') == 'lookup' and value.get('query') == title and
+                        value.get('match_mode') == 'exact-utf8', 'batch response/query mismatch')
+                yield value
+                value = None
+            require(spool.read(1) == b'', 'unexpected extra batch response')
+        offset += len(titles)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, default=Path('zig-out/bin/dict'))
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--batch-size', type=int, default=1, choices=range(1, 65),
+                        help='Exact export queries per guarded native child (default: ordinary single export)')
     args = parser.parse_args()
 
     def query(*parts):
         return cli_query(args.binary, args.root, *parts)
 
     try:
-        result = scan(args.root, query)
+        if args.batch_size == 1:
+            result = scan(args.root, query)
+        else:
+            prepare_index_directories(args.root)
+            before = dictionary_snapshot(args.root)
+            binary_before = dictionary_snapshot(args.binary)
+            def unchanged():
+                require(dictionary_snapshot(args.root) == before, 'dictionary source changed during audit')
+                require(dictionary_snapshot(args.binary) == binary_before, 'CLI binary changed during audit')
+            def exports(selection, matches):
+                return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged)
+            result = scan(args.root, query, exports)
+            unchanged()
+            result['export_transport'] = dict(mode='guarded-native-json-lines', batch_size=args.batch_size,
+                timeout_seconds=60, immutable_source_guard=True, logical_commands=result['commands'])
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
