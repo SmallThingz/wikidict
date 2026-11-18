@@ -811,6 +811,8 @@ class FigureFileTests(unittest.TestCase):
         self.assertEqual(before,{p.name:p.read_bytes() for p in parent.iterdir()})
         snapshots={role:args.output/name for role,name in {**figure.ROLES,'file-metadata':figure.PROVIDER}.items()}
         self.assertEqual(set(figure.verify_tuple(snapshots,self.wiki,self.date)),set(snapshots))
+        with self.assertRaisesRegex(ValueError,'not scoped to the selected page'):
+            figure.verify_tuple(snapshots,self.wiki,self.date,selected_page={'page_id':1})
         plan=json.loads((args.output/figure.PLAN).read_text());self.assertEqual(plan['figure_profile'],figure.FIGURE_PROFILE_V4)
         plan.pop('figure_profile');(args.output/figure.PLAN).write_bytes(figure.encoded(plan))
         with self.assertRaises(ValueError):figure.verify(args.output)
@@ -2151,13 +2153,19 @@ class FigureFileTests(unittest.TestCase):
     def test_normal_offline_cache_reuse_joins_selected_manifest_and_namespace(self):
         inputs=self.normal_build_inputs();root=self.root/'figure-inputs';root.mkdir()
         (root/figure.COMPLETE).write_text('published fixture marker')
-        record=dict(source_dump_files=[row for row in inputs['selected_inputs'] if row['name'].endswith('.sql.gz')],
+        record=dict(coverage={'file_inventory_complete':True},
+            source_dump_files=[row for row in inputs['selected_inputs'] if row['name'].endswith('.sql.gz')],
             namespace_registry_sha256=figure.digest(self.namespace.read_bytes()))
         verified={role:(record,{}) for role in {*figure.ROLES,'file-metadata'}}
         with patch.object(figure,'verify_tuple',return_value=verified) as verify,patch.object(figure,'capture_files') as collect,patch.object(figure.site_info,'capture') as defaults:
             selected=figure.prepare_for_build(**inputs)
         verify.assert_called_once();collect.assert_not_called();defaults.assert_not_called()
         self.assertEqual(set(selected),set(verified))
+        record['coverage']['file_inventory_complete']=False
+        with patch.object(figure,'verify_tuple',return_value=verified),patch.object(figure,'capture_files') as collect,self.assertRaisesRegex(ValueError,'complete file inventory coverage'):
+            figure.prepare_for_build(**inputs,network=True)
+        collect.assert_not_called()
+        record['coverage']['file_inventory_complete']=True
         record['source_dump_files'][0]=dict(record['source_dump_files'][0],sha1='0'*40)
         with patch.object(figure,'verify_tuple',return_value=verified),patch.object(figure,'capture_files') as collect,self.assertRaisesRegex(ValueError,'official SQL'):
             figure.prepare_for_build(**inputs,network=True)

@@ -1716,7 +1716,62 @@ def verified_source_inventory(namespace_raw, wiki, date, dumpstatus_raw, paths, 
     return value
 
 
+SELECTED_PAGE_INVENTORY_SCHEMA = 'wikidict.figure-selected-page-inventory.v1'
+
+
+def selected_page_inventory(catalogue, page, namespace_raw, wiki, date):
+    """Select literal file occurrences without promoting them to edition coverage.
+
+    The caller supplies the authenticated original page, not expanded template
+    guesses. The complete SQL catalogue remains independently replayable.
+    """
+    if (not isinstance(catalogue, dict) or catalogue.get('schema') != INVENTORY_SCHEMA or
+            catalogue.get('wiki') != wiki or catalogue.get('date') != date or
+            catalogue.get('namespace_registry_sha256') != digest(namespace_raw)):
+        raise ValueError('Selected page requires the matching complete Figure catalogue')
+    fields = {'wiki', 'date', 'page_id', 'revision_id', 'title', 'source_wikitext',
+              'source_sha256', 'occurrences'}
+    if (not isinstance(page, dict) or set(page) != fields or page['wiki'] != wiki or page['date'] != date or
+            any(type(page[key]) is not int or not 0 < page[key] < 2**64 for key in ('page_id', 'revision_id')) or
+            not isinstance(page['title'], str) or not page['title'] or
+            not isinstance(page['source_wikitext'], str)):
+        raise ValueError('Invalid selected Figure page identity')
+    raw = page['source_wikitext'].encode('utf-8')
+    occurrences = page['occurrences']
+    if (len(raw) > MAX_RESPONSE or digest(raw) != page['source_sha256'] or
+            not isinstance(occurrences, list) or not 1 <= len(occurrences) <= 128):
+        raise ValueError('Invalid selected Figure page source or occurrence count')
+    registry = evidence.Registry(namespace_raw, wiki, date)
+    names, previous_end = set(), 0
+    for occurrence in occurrences:
+        if (not isinstance(occurrence, dict) or set(occurrence) != {'start', 'end', 'file'} or
+                type(occurrence['start']) is not int or type(occurrence['end']) is not int or
+                not previous_end <= occurrence['start'] < occurrence['end'] < len(raw) or
+                not isinstance(occurrence['file'], str)):
+            raise ValueError('Invalid selected Figure occurrence range')
+        start, end, name = occurrence['start'], occurrence['end'], occurrence['file']
+        if (registry.file_title(name) != name or raw[start:end] != ('[[' + name).encode('utf-8') or
+                not (raw[end:end+1] == b'|' or raw[end:end+2] == b']]')):
+            raise ValueError('Selected Figure occurrence differs from original source')
+        names.add(name)
+        previous_end = end
+    if not names <= set(catalogue['titles']):
+        raise ValueError('Selected Figure file is absent from the complete dated catalogue')
+    return {**catalogue, 'schema': SELECTED_PAGE_INVENTORY_SCHEMA,
+            'titles': sorted(names, key=lambda name: name.encode('utf-8')),
+            'catalogue': catalogue, 'selected_page': page}
+
+
 def verify_inventory(value, namespace_raw, wiki, date, *, inventory_cache=None):
+    if isinstance(value, dict) and value.get('schema') == SELECTED_PAGE_INVENTORY_SCHEMA:
+        catalogue = value.get('catalogue')
+        if not isinstance(catalogue, dict) or catalogue.get('schema') != INVENTORY_SCHEMA:
+            raise ValueError('Selected Figure inventory requires a complete catalogue')
+        verify_inventory(catalogue, namespace_raw, wiki, date, inventory_cache=inventory_cache)
+        expected = selected_page_inventory(catalogue, value.get('selected_page'), namespace_raw, wiki, date)
+        if encoded(value) != encoded(expected):
+            raise ValueError('Selected Figure inventory differs from its page and catalogue')
+        return value
     if (not isinstance(value, dict) or value.get('schema') != INVENTORY_SCHEMA or
             not isinstance(value.get('sources'), list) or not isinstance(value.get('dumpstatus_raw'), str)):
         raise ValueError('Invalid Figure inventory authority')
@@ -1732,6 +1787,9 @@ def verify_inventory(value, namespace_raw, wiki, date, *, inventory_cache=None):
 
 
 def file_coverage(projection, inventory, query_titles=None):
+    page_selected = inventory.get('schema') == SELECTED_PAGE_INVENTORY_SCHEMA
+    if page_selected and query_titles:
+        raise ValueError('Selected page cannot acquire unrelated provider query names')
     names = [row['requested_file'] for row in projection['records']]
     selected = set(inventory['titles']) | set(query_titles or ())
     if names != sorted(selected, key=lambda name: name.encode('utf-8')):
@@ -1765,6 +1823,14 @@ def file_coverage(projection, inventory, query_titles=None):
             'sql_files': len(inventory['titles']), 'observed_query_files': len(query_titles),
             'observed_only_files': len(set(query_titles) - set(inventory['titles'])),
             'corpus_query_closure_proven': False}
+    if page_selected:
+        page = inventory['selected_page']
+        result.update(file_inventory_complete=False, selected_page_only=True,
+                      selected_page={key: page[key] for key in ('wiki', 'date', 'page_id', 'revision_id', 'title', 'source_sha256')},
+                      selected_occurrences=len(page['occurrences']),
+                      catalogue_sha256=digest(encoded(inventory['catalogue'])))
+        if query_titles is not None:
+            result['provider']['sql_files'] = len(inventory['catalogue']['titles'])
     return result
 
 
@@ -2185,8 +2251,8 @@ def validate_snapshot(path, wiki=None, date=None):
     return {**manifest, 'output_sha256': manifest['outputs'][role]}
 
 
-def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_cache=None):
-    """One semantic replay for one invocation-local, complete source tuple."""
+def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_cache=None, selected_page=None):
+    """Replay the complete capture; page-scoped callers may select geometry only."""
     if set(paths) not in (set(ROLES), {*ROLES, 'file-metadata'}):
         raise ValueError('Incomplete Figure source tuple')
     selected_roles = {**ROLES, 'file-metadata': PROVIDER}
@@ -2217,7 +2283,17 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
     before = capture_identity()
     manifest_raw = small(root / MANIFEST)
     manifest = verify(root, retained_cache=retained_cache, inventory_cache=inventory_cache)
-    if set(paths) != set(manifest['outputs']):
+    coverage = manifest.get('coverage', {})
+    if coverage.get('selected_page_only') is True:
+        if selected_page is None or encoded(selected_page) != encoded(coverage['selected_page']):
+            raise ValueError('Selected-page Figure tuple requires its exact page identity')
+    elif selected_page is not None:
+        raise ValueError('Figure tuple is not scoped to the selected page')
+    # An independent Provider may serve audio while these page-bound roles serve
+    # geometry. The capture's own Provider was still fully checked by verify.
+    geometry_only = (coverage.get('selected_page_only') is True and selected_page is not None
+                     and set(paths) == set(ROLES))
+    if set(paths) != set(manifest['outputs']) and not geometry_only:
         raise ValueError('Shared file capture requires its Provider TSV and all four Figure roles')
     if (wiki is not None and manifest['wiki'] != wiki) or (date is not None and manifest['date'] != date):
         raise ValueError('Figure capture edition/date mismatch')
@@ -4100,15 +4176,21 @@ def check_prefix_cache(cache):
 def selected_inventory(args, namespace, *, inventory_cache=None):
     prepared = getattr(args, 'prepared_inventory', None)
     if prepared is None:
-        return verified_source_inventory(namespace, args.wiki, args.date, small(args.dumpstatus), args.sql, inventory_cache)
-    inventory, stamps = prepared
-    paths = {Path(path).resolve() for path in args.sql}
-    if (set(stamps) != paths or any(evidence.stamp(path) != before for path, before in stamps.items()) or
+        inventory = verified_source_inventory(namespace, args.wiki, args.date, small(args.dumpstatus), args.sql, inventory_cache)
+    else:
+        inventory, stamps = prepared
+        paths = {Path(path).resolve() for path in args.sql}
+        if (set(stamps) != paths or any(evidence.stamp(path) != before for path, before in stamps.items()) or
             inventory.get('wiki') != args.wiki or inventory.get('date') != args.date or
             inventory.get('namespace_registry_sha256') != digest(namespace) or
             inventory.get('dumpstatus_raw') != small(args.dumpstatus).decode('utf-8') or
             {Path(row['path']) for row in inventory.get('sources', [])} != paths):
-        raise ValueError('Invocation-local Figure inventory changed')
+            raise ValueError('Invocation-local Figure inventory changed')
+    selection = getattr(args, 'page_selection', None)
+    if selection is not None:
+        if getattr(args, 'log', []):
+            raise ValueError('Selected Figure page does not accept extra query logs')
+        inventory = selected_page_inventory(inventory, decode(small(Path(selection))), namespace, args.wiki, args.date)
     return inventory
 
 
@@ -4878,6 +4960,8 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
     if (generation/COMPLETE).exists() or (generation/COMPLETE).is_symlink():
         verified = verify_tuple(paths, wiki, date)
         record = verified['figure-sizing'][0]
+        if record.get('coverage', {}).get('file_inventory_complete') is not True:
+            raise ValueError('Normal edition Figure preparation requires complete file inventory coverage')
         if record.get('namespace_registry_sha256') != digest(namespace_raw):
             raise ValueError('Figure capture namespace differs from the normal selected registry')
         selected_sources(record)
@@ -6304,6 +6388,8 @@ def main():
                          help='existing normal request/receipt evidence record, replayed without refetching')
     collect.add_argument('--log', type=Path, action='append', default=[],
                          help='retained provider-query warnings, distinct from the dated SQL file inventory')
+    collect.add_argument('--page-selection', type=Path,
+                         help='explicit original page identity and literal file spans; never whole-edition coverage')
     collect.add_argument('--batch-size', type=int, default=50)
     collect.add_argument('--delay', type=float, default=1)
     collect.add_argument('--wall-seconds', type=int, default=3600)
