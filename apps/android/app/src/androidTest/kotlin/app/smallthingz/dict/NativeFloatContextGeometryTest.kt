@@ -1685,4 +1685,76 @@ class NativeFloatContextGeometryTest {
             assertTrue(below.nodes.isEmpty())
         }
     }
+
+    @Test fun disclosureChildRetainsFractionalParentFloatBoxAndSeparateInkWithoutDocumentObject() {
+        val containing = 100.75f
+        val usedWidth = 20.25f
+        val usedHeight = 8.5f
+        val margins = FloatMargins(.125f, .625f, .875f, .375f)
+        val ink = NativeFloatBounds(-2f, -3f, usedWidth + 4f, usedHeight + 5f)
+        fun child(side: TableFloatSide, height: Float = usedHeight, withInk: Boolean = true,
+            exact: Boolean = true) = NativeFloatContextPart.Child(900, NativeBlockWidth.FixedPx(usedWidth),
+            { request ->
+                assertEquals(if (exact) containing else 100f, request.containingWidth, 0f)
+                NativeBlockMeasure(usedWidth, usedWidth, height)
+            }, floatSide = side, margins = margins, logicalObject = false,
+            exactContainingWidth = containing.takeIf { exact }, inkBounds = ink.takeIf { withInk })
+        for (side in TableFloatSide.entries) {
+            val control = child(side)
+            val scene = NativeFloatContextGeometry.build(100, listOf(control), containAtEnd = false,
+                allowProtrudingFloats = true)
+            val bounds = scene.children.single().bounds
+            val left = if (side == TableFloatSide.Left) .375f else 79.875f
+            assertEquals(RectF(left, .125f, left + usedWidth, .125f + usedHeight), bounds)
+            assertEquals(NativeFloatBounds(if (side == TableFloatSide.Left) 0f else 79.5f, 0f,
+                if (side == TableFloatSide.Left) 21.25f else containing, 9.5f), scene.ownExclusions.single().outer)
+            assertEquals(0f, scene.usedHeight, 0f)
+            assertEquals(0f, scene.textBottom, 0f)
+            assertEquals("", scene.text.toString())
+            assertTrue(scene.nodes.isEmpty())
+            val translated = ink.translated(left, .125f)
+            assertTrue(scene.ordinaryPaintBounds.contains(translated))
+            assertTrue(checkNotNull(scene.extents.ink).top <= translated.top)
+            assertEquals(9.5f, scene.scrollableBounds.bottom, 0f)
+            val noInk = NativeFloatContextGeometry.build(100, listOf(child(side, withInk = false)),
+                containAtEnd = false, allowProtrudingFloats = true)
+            assertEquals(scene.usedHeight, noInk.usedHeight, 0f)
+            assertEquals(scene.scrollableBounds, noInk.scrollableBounds)
+            assertEquals(scene.ownExclusions, noInk.ownExclusions)
+            var clicked = 0
+            val source = "Following real source words"
+            val withText = NativeFloatContextGeometry.build(100, listOf(control, paragraph(source, action = { clicked++ })))
+            assertEquals(source, withText.text.toString())
+            assertEquals(0, withText.nodes.single().start)
+            assertEquals(source.length, withText.nodes.single().end)
+            withText.nodes.single().onClick?.invoke()
+            assertEquals(1, clicked)
+            assertEquals(scene.ownExclusions, withText.ownExclusions)
+            // Ordinary preparation probes floats before the final build: both must see C=100.75.
+            val owner = NativeFloatContextPart.Container(901, 100, { _, _ -> error("Prepared original owner required") },
+                preparedParts = listOf(control),
+                horizontal = NativeContainerHorizontal(containing, containing, containing, 0f, 0f, 0f, containing))
+            val nested = NativeFloatContextGeometry.build(200, listOf(owner), containAtEnd = false,
+                allowProtrudingFloats = true, adjoining = true)
+            assertEquals(0f, nested.usedHeight, 0f)
+            assertEquals(bounds, nested.children.single().bounds)
+            assertTrue(nested.ordinaryPaintBounds.contains(translated))
+            // Old callers still use the integer allocation/placement route.
+            val legacy = NativeFloatContextGeometry.build(100, listOf(child(side, exact = false)),
+                containAtEnd = false, allowProtrudingFloats = true)
+            assertNotEquals(scene.ownExclusions.single().outer, legacy.ownExclusions.single().outer)
+        }
+        val zero = child(TableFloatSide.Left, height = 0f).copy(margins = FloatMargins(0f, 0f, 0f, 0f))
+        val zeroScene = NativeFloatContextGeometry.build(100, listOf(zero), containAtEnd = false,
+            allowProtrudingFloats = true)
+        assertEquals(0f, zeroScene.usedHeight, 0f)
+        assertEquals(0f, zeroScene.ownExclusions.single().outer.height, 0f)
+        assertTrue(checkNotNull(zeroScene.extents.ink).bottom > 0f)
+        assertEquals("", zeroScene.text.toString())
+        val recovered = NativeFloatContextGeometry.build(100, listOf(paragraph("Recovered")))
+        assertTrue(recovered.children.isEmpty())
+        assertTrue(recovered.ownExclusions.isEmpty())
+        assertEquals("Recovered", recovered.text.toString())
+    }
+
 }

@@ -189,4 +189,52 @@ class AuthoredInlineTextLoweringTest {
         assertEquals(listOf(AnonymousInlineTextPart(0, 2, "go")),
             anonymousInlineSemantic(listOf(point, Span("text", "go")), "go"))
     }
+    @Test fun generatedDisclosureLabelKeepsUtf8RunBoundariesAndFourButtonStatesOutsideDocumentActions() {
+        val label = "[é𐐀ไทย]"
+        assertArrayEquals(intArrayOf(0x5b, 0xc3, 0xa9, 0xf0, 0x90, 0x90, 0x80,
+            0xe0, 0xb9, 0x84, 0xe0, 0xb8, 0x97, 0xe0, 0xb8, 0xa2, 0x5d),
+            label.toByteArray(Charsets.UTF_8).map { it.toInt() and 255 }.toIntArray())
+        val paint = ContainerDisclosureTextPaint(LinkState("#112233", false), LinkState("#223344", true),
+            LinkState("#334455", false), LinkState("#445566", false), underlineOnFocus = true)
+        val run = ContainerDisclosureLabelRun(1L, 16L, paint)
+        assertEquals(1 until 7, nativeDisclosureLabelRange(label, run.start, run.end))
+        for ((start, end) in listOf(2L to 16L, 1L to 5L, 1L to 18L)) {
+            assertThrows(IllegalArgumentException::class.java) { nativeDisclosureLabelRange(label, start, end) }
+        }
+        val base = androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color(0xff556677),
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)
+        val cases = listOf(
+            NativeDisclosureInteraction() to (0xff112233 to false),
+            NativeDisclosureInteraction(hovered = true) to (0xff223344 to true),
+            NativeDisclosureInteraction(active = true) to (0xff334455 to false),
+            NativeDisclosureInteraction(hovered = true, active = true) to (0xff445566 to false),
+            NativeDisclosureInteraction(hovered = true, active = true, focused = true) to (0xff445566 to true),
+            NativeDisclosureInteraction(focused = true) to (0xff112233 to true),
+            NativeDisclosureInteraction() to (0xff112233 to false))
+        for ((interaction, expected) in cases) {
+            val result = nativeDisclosureLabelAnnotation(label, run, interaction, base)
+            assertEquals(label, result.text)
+            assertTrue(result.getLinkAnnotations(0, result.length).isEmpty())
+            assertEquals(2, result.spanStyles.size)
+            assertEquals(base, result.spanStyles[0].item)
+            assertEquals(0 to label.length, result.spanStyles[0].let { it.start to it.end })
+            val selected = result.spanStyles[1]
+            assertEquals(1 to 7, selected.start to selected.end)
+            assertEquals("é𐐀ไทย", result.text.substring(selected.start, selected.end))
+            assertEquals(androidx.compose.ui.graphics.Color(expected.first), selected.item.color)
+            assertEquals(if (expected.second) androidx.compose.ui.text.style.TextDecoration.Underline
+                else androidx.compose.ui.text.style.TextDecoration.None, selected.item.textDecoration)
+            assertNull(selected.item.fontWeight)
+            assertNull(selected.item.fontStyle)
+            assertEquals('[', result.text.first()); assertEquals(']', result.text.last())
+        }
+        val unpainted = nativeDisclosureLabelAnnotation(label, null,
+            NativeDisclosureInteraction(hovered = true, active = true, focused = true), base)
+        assertEquals(label, unpainted.text)
+        assertEquals(listOf(androidx.compose.ui.text.AnnotatedString.Range(base, 0, label.length)), unpainted.spanStyles)
+        assertSame(paint, run.paint)
+        assertEquals(LinkState("#112233", false), paint.normal)
+    }
+
 }

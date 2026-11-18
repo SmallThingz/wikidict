@@ -141,10 +141,15 @@ internal fun inheritedCellTextStyle(style: TextStyle): TextStyle {
     return ownerStyle.copy(letterSpacing = with(density) { pixels.toSp() })
 }
 internal class CellHeadingRequest(val path: String, val anchorMatch: HeadingAnchorSelection? = null,
-    val externalRequest: EntryAnchorRequest? = null, val referenceIndex: Int? = null)
+    val externalRequest: EntryAnchorRequest? = null, val referenceIndex: Int? = null,
+    val disclosureReveal: Boolean = false,
+    val disclosureOwners: List<NativeContainerDisclosureOwner> = emptyList())
 
-internal fun referenceHeadingRequest(request: CellHeadingRequest?, referenceIndex: Int?): CellHeadingRequest? =
-    request?.takeIf { referenceIndex == null || it.referenceIndex == referenceIndex }
+internal fun referenceHeadingRequest(request: CellHeadingRequest?, referenceIndex: Int?,
+    disclosureReferenceIndex: Int? = referenceIndex): CellHeadingRequest? = request?.takeIf {
+        if (it.disclosureReveal) disclosureReferenceIndex != null && it.referenceIndex == disclosureReferenceIndex
+        else referenceIndex == null || it.referenceIndex == referenceIndex
+    }
 internal val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingRequest?> { null }
 internal val LocalCellHeadingReached = staticCompositionLocalOf<(CellHeadingRequest) -> Unit> { {} }
 internal val LocalSourceHeadingReveal = staticCompositionLocalOf<suspend (CellHeadingRequest, Float?) -> Unit> { { _, _ -> } }
@@ -192,6 +197,7 @@ class EntryAnchorRequest(val entryKey: String, val target: String)
 class EntryReadingState {
     internal val scroll = androidx.compose.foundation.lazy.LazyListState()
     internal val documentScroll = NativeDocumentScrollState()
+    internal val disclosure = NativeContainerDisclosureVisit()
     internal var foldKey: List<Any?>? = null
     internal var folds: androidx.compose.runtime.snapshots.SnapshotStateMap<String, Boolean>? = null
 }
@@ -212,6 +218,19 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
+        val disclosureEpoch = NativeContainerDisclosureSourceIdentity(entry)
+        val disclosureIndex = remember(disclosureEpoch) { NativeContainerDisclosureIndex(entry) }
+        val disclosureState = remember(readingState, disclosureEpoch) {
+            readingState?.disclosure?.stateFor(entry) ?: NativeContainerDisclosureState()
+        }
+        val disclosureNavigationKey: Any = if (disclosureIndex.owners.isEmpty()) entry else disclosureEpoch
+        val pendingDisclosureAnchor = remember(disclosureEpoch) { mutableStateOf<NativeDisclosureAnchorRequest?>(null) }
+        DisposableEffect(disclosureEpoch) {
+            onDispose {
+                pendingDisclosureAnchor.value?.externalRequest?.let(onAnchorConsumed)
+                pendingDisclosureAnchor.value = null
+            }
+        }
         var referenceLayoutTarget by remember(entry) { mutableStateOf<Int?>(null) }
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val documentScroll = readingState?.documentScroll ?: remember { NativeDocumentScrollState() }
@@ -272,12 +291,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         val entryTextSections = remember(entry, foldedKeys) { foldedEntryTextSections(entry.readingRows, foldedKeys) }
-        var cellHeadingRequest by remember { mutableStateOf<CellHeadingRequest?>(null) }
+        var cellHeadingRequest by remember(if (disclosureIndex.owners.isEmpty()) Unit else disclosureEpoch) {
+            mutableStateOf<CellHeadingRequest?>(null)
+        }
         var sourceRevealFailed by remember { mutableStateOf(false) }
         var citationRevealFailed by remember { mutableStateOf(false) }
         val citationEnabled = entry.references.any { it.backlinks.isNotEmpty() }
-        val citationLocations = remember(entry) { if (citationEnabled) citationDestinations(entry) else emptyMap() }
-        val citationNavigation = remember(entry, readingState) { NativeCitationNavigation() }
+        val citationLocations = remember(disclosureNavigationKey) { if (citationEnabled) citationDestinations(entry) else emptyMap() }
+        val citationNavigation = remember(disclosureNavigationKey, readingState) { NativeCitationNavigation() }
         val citationRequest = citationNavigation.request
         LaunchedEffect(citationNavigation, citationRequest, citationNavigation.revision) {
             val request = citationRequest ?: return@LaunchedEffect
@@ -305,6 +326,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         fun clearCitationRequest(replacingExternal: EntryAnchorRequest? = null) {
+            pendingDisclosureAnchor.value?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
+            pendingDisclosureAnchor.value = null
+            cellHeadingRequest?.takeIf { it.disclosureReveal }?.let { request ->
+                cellHeadingRequest = null
+                request.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
+            }
             citationNavigation.clear()?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
         }
         var viewportCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -314,11 +341,23 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             cellHeadingRequest = null
             previous?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
         }
-        fun jumpToAnchor(target: String, externalRequest: EntryAnchorRequest? = null): Boolean {
+        fun jumpToAnchor(target: String, externalRequest: EntryAnchorRequest? = null,
+            afterDisclosure: Boolean = false): Boolean {
             referenceLayoutTarget = null
             clearCitationRequest(externalRequest)
             citationRevealFailed = false
             val citation = target.takeIf { it.startsWith("#") }?.substring(1)?.let(citationLocations::get)
+            val destination = if (citation == null) headingDestination(entry, target) else null
+            val disclosureOwners = if (citation != null) disclosureIndex.enclosingSpan(
+                citation.span, citation.rowKey, citation.referenceIndex) else destination?.path?.let {
+                disclosureIndex.enclosingPath(it, destination.referenceIndex)
+            }.orEmpty()
+            if (disclosureState.expandOwners(disclosureOwners)) {
+                clearHeadingRequest(externalRequest)
+                sourceRevealFailed = false
+                pendingDisclosureAnchor.value = NativeDisclosureAnchorRequest(target, externalRequest, disclosureOwners)
+                return true
+            }
             if (citation != null) {
                 clearHeadingRequest(externalRequest)
                 sourceRevealFailed = false
@@ -330,7 +369,6 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 scroll.requestScrollToItem(index)
                 return true
             }
-            val destination = headingDestination(entry, target)
             val headingRow = entry.readingRows.firstOrNull { it.key == destination?.rowKey }
             val compiledHeading = destination?.compiledId == true
             clearHeadingRequest(externalRequest)
@@ -351,9 +389,13 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 if (entry.referenceBatches == null) folded["references"] = false
                 cellHeadingRequest = if (referenceOrdinal != null && entry.referenceBatches?.any {
                     it.layout != null && referenceOrdinal in it.referenceIndices } == true)
-                    CellHeadingRequest("compiled-reference-$referenceOrdinal", referenceIndex = referenceOrdinal)
+                    CellHeadingRequest("compiled-reference-$referenceOrdinal",
+                        externalRequest = externalRequest.takeIf { afterDisclosure }, referenceIndex = referenceOrdinal,
+                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList())
                 else destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch,
-                    referenceIndex = if (entry.referenceBatches != null) destination.referenceIndex else null) }
+                    externalRequest = externalRequest.takeIf { afterDisclosure },
+                    referenceIndex = if (entry.referenceBatches != null || afterDisclosure) destination.referenceIndex else null,
+                    disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList()) }
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
             } else if (headingRow != null) {
@@ -371,22 +413,61 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     return false
                 }
                 cellHeadingRequest = (destination?.path ?: headingRow.key.takeIf { containingRun != null })?.let {
-                    CellHeadingRequest(it, match, externalRequest.takeIf { match?.revealTop != null })
+                    CellHeadingRequest(it, match, externalRequest.takeIf { match?.revealTop != null || afterDisclosure },
+                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList())
                 }
                 scroll.requestScrollToItem((containingRun?.first ?: headingIndex) + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
             } else return false
             return true
         }
+        DisposableEffect(disclosureEpoch, citationNavigation) {
+            onDispose {
+                if (disclosureIndex.owners.isNotEmpty()) {
+                    val headingRequest = cellHeadingRequest
+                    cellHeadingRequest = null
+                    headingRequest?.externalRequest?.let(onAnchorConsumed)
+                    citationNavigation.clear()?.externalRequest?.let(onAnchorConsumed)
+                }
+            }
+        }
+        val concealedHeading = cellHeadingRequest?.takeIf { request -> request.disclosureReveal &&
+            request.disclosureOwners.any { !disclosureState.isExpanded(it) }
+        }
+        val concealedCitation = citationNavigation.request?.takeIf { request ->
+            citationLocations[request.marker.anchor]?.let { target -> disclosureIndex.enclosingSpan(
+                target.span, target.rowKey, target.referenceIndex).any { !disclosureState.isExpanded(it) } } == true
+        }
+        LaunchedEffect(concealedHeading, concealedCitation) {
+            if (concealedHeading != null && cellHeadingRequest === concealedHeading) clearHeadingRequest()
+            if (concealedCitation != null && citationNavigation.request === concealedCitation) clearCitationRequest()
+        }
+        val disclosureAnchor = pendingDisclosureAnchor.value
+        LaunchedEffect(disclosureEpoch, disclosureAnchor) {
+            val request = disclosureAnchor ?: return@LaunchedEffect
+            // Projection rebuilds from the unchanged original tree. The second lookup resolves
+            // the actual native owner after opening; existing reveal APIs own measured completion.
+            withFrameNanos { }
+            if (pendingDisclosureAnchor.value === request) {
+                pendingDisclosureAnchor.value = null
+                if (request.owners.all { disclosureState.isExpanded(it) })
+                    jumpToAnchor(request.target, request.externalRequest, afterDisclosure = true)
+                request.externalRequest?.takeIf {
+                    pendingDisclosureAnchor.value?.externalRequest !== it &&
+                        cellHeadingRequest?.externalRequest !== it && citationNavigation.request?.externalRequest !== it
+                }?.let(onAnchorConsumed)
+            }
+        }
         val readerLink: (EntryLink) -> Unit = { target ->
             onNavigate()
             if (target.local) jumpToAnchor("#${target.fragment}") else { clearCitationRequest(); onLink(target) }
         }
-        LaunchedEffect(entry.key, anchorRequest) {
+        LaunchedEffect(if (disclosureIndex.owners.isEmpty()) entry.key else disclosureEpoch, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
                 jumpToAnchor(it.target, it)
                 // Source positioning completes after its measured scroll (or explicit refusal).
                 // Missing and legacy fragments retain their existing one-shot behavior.
-                if (cellHeadingRequest?.externalRequest !== it && citationNavigation.request?.externalRequest !== it) onAnchorConsumed(it)
+                if (pendingDisclosureAnchor.value?.externalRequest !== it &&
+                    cellHeadingRequest?.externalRequest !== it && citationNavigation.request?.externalRequest !== it) onAnchorConsumed(it)
             }
         }
         val bodyText = entry.bodyTypography?.let { typography -> nativeBodyTextContext(
@@ -423,15 +504,21 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner, LocalCellHeadingRequest provides cellHeadingRequest,
+            LocalNativeContainerDisclosureState provides disclosureState,
             LocalNativeClippedAbsoluteCoordinateScope provides clippedCoordinateOwner?.rootScope,
             LocalNativeCitationNavigation provides citationNavigation.takeIf { citationEnabled },
             LocalNativeCitationTargetAnchor provides citationNavigation.targetAnchor,
             LocalSourceHeadingReveal provides revealSourceHeading,
-            LocalCellHeadingReached provides { request -> if (cellHeadingRequest === request) cellHeadingRequest = null }) {
+            LocalCellHeadingReached provides { request -> if (cellHeadingRequest === request) {
+                cellHeadingRequest = null
+                request.externalRequest?.let(onAnchorConsumed)
+            } }) {
         Column(Modifier.fillMaxSize()) {
         if (sourceRevealFailed) Text(SourceHeadingRevealUnavailable, color = MaterialTheme.colorScheme.error)
         if (citationRevealFailed) Text(CitationRevealUnavailable, color = MaterialTheme.colorScheme.error)
-        NativeDocumentScroll(documentScroll, enabled = remember(entry) { nativeDocumentScrollNeeded(entry) },
+        NativeDocumentScroll(documentScroll, enabled = remember(entry, disclosureIndex) {
+            nativeDocumentScrollNeeded(entry) || disclosureIndex.owners.isNotEmpty()
+        },
             resourceKey = listOf(entry, settings, imageOwner, MaterialTheme.typography.bodyLarge,
                 LocalNativeContainerTextContext.current, LocalCssPixelTextZoom.current),
             sourceKeys = floatRuns.map { run -> visibleRows.slice(run).map { it.key } }.toSet(),
@@ -484,8 +571,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
                     else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
-                    if (entryTextSections.isNotEmpty()) {
-                        TextButton(onClick = { entryTextSections.forEach { folded[it] = false } },
+                    if (entryTextSections.isNotEmpty() || disclosureIndex.owners.any { !disclosureState.isExpanded(it) }) {
+                        TextButton(onClick = {
+                            entryTextSections.forEach { folded[it] = false }
+                            disclosureState.expandOwners(disclosureIndex.owners)
+                        },
                             modifier = Modifier.testTag("show-entry-text")) { Text("Show entry text") }
                     }
                     if (entry.textDetails.isNotEmpty()) {
@@ -551,7 +641,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         containAtEnd = true, blockPaths = rows.map { it.key }, gapsDp = rows.map { if (it.compact) 2f else 6f },
                         sectionRows = sectionRows, sectionActions = actions, sectionKeys = rows.map { it.sectionKey },
                         documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
-                            blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() } || nativeAudioDocumentScrollNeeded(blocks),
+                            blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() || it.hasContainerDisclosure() } || nativeAudioDocumentScrollNeeded(blocks),
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
                         bodyTextContext = bodyText?.getOrNull(), referenceLayoutParagraphs = referenceParagraphs)
                     }
@@ -600,8 +690,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 }
             }
             if (entry.referenceBatches == null && entry.references.isNotEmpty()) item("references-heading") { FoldHeading("References", folded["references"] == true) { folded["references"] = folded["references"] != true } }
-            items(if (entry.referenceBatches != null || folded["references"] == true) emptyList() else entry.references, key = { "reference-${it.number}" }, contentType = { "reference" }) { ref ->
-                ReferenceRow(ref, readerLink)
+            itemsIndexed(if (entry.referenceBatches != null || folded["references"] == true) emptyList() else entry.references,
+                key = { _, ref -> "reference-${ref.number}" }, contentType = { _, _ -> "reference" }) { index, ref ->
+                CompositionLocalProvider(LocalNativeContainerDisclosureState provides disclosureState.inReference(index)) {
+                    ReferenceRow(ref, readerLink)
+                }
             }
             if (remainingMedia.isNotEmpty()) item("media-heading") { FoldHeading("Media", folded["media"] == true) { folded["media"] = folded["media"] != true } }
             (if (folded["media"] == true) emptyList() else remainingMedia).forEachIndexed { index, media -> item("media-$index", contentType = "media") {
@@ -628,9 +721,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
 @Composable
 internal fun ReferenceRow(reference: Reference, onLink: (EntryLink) -> Unit, referenceIndex: Int? = null) {
     val label = referenceLabel(reference)
+    val disclosureState = LocalNativeContainerDisclosureState.current
+    val referenceDisclosureState = remember(disclosureState, referenceIndex) {
+        if (referenceIndex == null) disclosureState else disclosureState?.inReference(referenceIndex)
+    }
     // Native paths retain displayed note numbers; the original index scopes an explicit body's reveal.
     CompositionLocalProvider(LocalCellHeadingRequest provides
-        referenceHeadingRequest(LocalCellHeadingRequest.current, referenceIndex)) {
+        referenceHeadingRequest(LocalCellHeadingRequest.current, referenceIndex, referenceDisclosureState?.referenceIndex),
+        LocalNativeContainerDisclosureState provides referenceDisclosureState) {
     Row(Modifier.padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (label != null) Text(label, style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary)
@@ -2603,6 +2701,10 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         documentSurface = documentSurface, bodyAdjoining = bodyAdjoining,
         sourceReveal = if (request?.anchorMatch?.revealTop != null && revealIndex != null)
             { top -> sourceReveal(request, top) } else null,
+        revealUnavailable = if (request?.disclosureReveal == true && (revealIndex != null ||
+            (blockPaths ?: blocks.indices.map { "$path/block-$it" }).any {
+                request.path == it || request.path.startsWith(it + "/")
+            })) ({ sourceReveal(request, null) }) else null,
         delegatedSourceRevision = listOf(blocks, rootContext, baseStyle, settings, edition, media,
             LocalMissingLinkOwner.current, containAtEnd, documentSurface, fixedHeightReachable, positionedPaintRoot) +
             listOfNotNull(bodyAdjoining)) { id, originalWidth ->

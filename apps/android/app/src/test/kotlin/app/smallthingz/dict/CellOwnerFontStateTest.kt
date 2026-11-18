@@ -130,4 +130,50 @@ class CellOwnerFontStateTest {
         assertEquals(emptyList<Span>(), empty.spans)
         assertSame(zeroFont, context(empty).cellText!!.ownerFont!!.snapshot)
     }
+
+    @Test fun disclosureUsesCompleteResolvedCellFontWithoutReclassifyingItsStoredSnapshot() {
+        val source = font().copy(bold = true, italic = true, fontNormalized = false)
+        val header = body.copy(fontSize = 8.sp, fontWeight = FontWeight.Normal,
+            fontStyle = FontStyle.Normal, fontFeatureSettings = "'kern' 0")
+        val inherited = context(cell(source), style = header)
+        val original = checkNotNull(inherited.cellText)
+        val originalOwner = checkNotNull(original.ownerFont)
+        val ordinary = nativeContainerTextFormat(inherited, 40.sp, header, density)
+        assertNull(ordinary.ownerFont)
+        assertEquals(FontWeight.Normal, ordinary.style.fontWeight)
+        val actual = nativeDisclosureTextFormat(inherited, ordinary)
+        val declaring = checkNotNull(actual.ownerFont)
+        assertSame(source, declaring.snapshot)
+        assertFalse(declaring.snapshot.fontNormalized)
+        assertEquals(NativeDeclaringFontKind.Container, declaring.kind)
+        assertEquals(original.fontPixels!!, declaring.fontPixels!!, 0f)
+        assertEquals(original.fontPixels!!, with(density) { actual.style.fontSize.toPx() }, .001f)
+        assertEquals(FontWeight.Bold, actual.style.fontWeight)
+        assertEquals(FontStyle.Italic, actual.style.fontStyle)
+        assertEquals(FontFeaturePolicy.SevenOn.nativeSettings, actual.style.fontFeatureSettings)
+        assertEquals("th", actual.style.localeList!!.first().toLanguageTag())
+        assertEquals(source.fontFamily, actual.sourceFamily)
+        assertEquals(ordinary.lineHeight, actual.lineHeight)
+        assertSame(originalOwner.style, declaring.style)
+        assertNull(ordinary.ownerFont) // Ordinary descendants still keep their existing defaults.
+        val noOp = ContainerStyle(ownerFontScale = .7f, fontFamily = source.fontFamily).textContext(inherited)
+        assertFalse(noOp.cellText!!.ownerFontInvalidated)
+        assertEquals(declaring, nativeDisclosureTextFormat(noOp,
+            nativeContainerTextFormat(noOp, 40.sp, header, density)).ownerFont)
+        val changed = ContainerStyle(ownerFontScale = 2f).textContext(inherited)
+        assertEquals(NativeCellOwnerFontChanged, assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeDisclosureTextFormat(changed, nativeContainerTextFormat(changed, 40.sp, header, density))
+        }.message)
+        for (missing in listOf(original.copy(fontPixels = null),
+            original.copy(ownerFont = originalOwner.copy(style = null)))) {
+            assertEquals(NativeCellOwnerFontUnavailable, assertThrows(UnsupportedFloatLayout::class.java) {
+                nativeDisclosureTextFormat(inherited.copy(cellText = missing), ordinary)
+            }.message)
+        }
+        val nearer = actual.copy(ownerFont = declaring.copy(snapshot = source.copy(fontNormalized = true)))
+        assertSame(nearer, nativeDisclosureTextFormat(changed, nearer))
+        assertEquals(declaring, nativeDisclosureTextFormat(inherited, ordinary).ownerFont)
+        assertFalse(source.fontNormalized)
+    }
+
 }

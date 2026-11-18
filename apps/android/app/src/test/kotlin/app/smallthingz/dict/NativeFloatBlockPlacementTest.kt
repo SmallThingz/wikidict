@@ -250,4 +250,32 @@ class NativeFloatBlockPlacementTest {
         }
         assertEquals(FigureClear.Right, sourceStyle.clear); assertEquals(TableFloatSide.Right, sourceStyle.floatSide)
     }
+
+    @Test fun disclosureFloatFitsOriginalFractionalWidthAndKeepsPhysicalExclusion() {
+        val intrinsic = ContainerWidths(20.25f, 43.75f)
+        assertEquals(20.25f, nativeDisclosureWidth(0f, intrinsic), 0f)
+        assertEquals(25.375f, nativeDisclosureWidth(25.375f, intrinsic), 0f)
+        assertEquals(43.75f, nativeDisclosureWidth(100.75f, intrinsic), 0f)
+        assertEquals(0f, nativeDisclosureWidth(0f, ContainerWidths(0f, 0f)), 0f)
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeDisclosureWidth(Float.NaN, intrinsic) }
+        val blocker = NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 80.5f, 12.25f))
+        for (side in TableFloatSide.entries) {
+            var calls = 0
+            val placed = placeNativeFloatingTable(100.75f, 0f, listOf(blocker), side, zero,
+                NativeBlockWidth.FixedPx(nativeDisclosureWidth(100.75f, intrinsic)), pixelAligned = false) { request ->
+                calls++
+                assertEquals(100.75f, request.containingWidth, 0f)
+                assertEquals(43.75f, request.requestedWidth!!, 0f)
+                NativeBlockMeasure(43.75f, 20.25f, 8.5f)
+            }
+            assertEquals(1, calls)
+            assertEquals(if (side == TableFloatSide.Left) 0f else 57f, placed.content.left, 0f)
+            assertEquals(12.25f, placed.content.top, 0f)
+            assertEquals(43.75f, placed.outer.width, 0f)
+            assertEquals(8.5f, placed.outer.height, 0f)
+        }
+        // Returning to the original width restores the original allocation, without state.
+        assertEquals(25.375f, nativeDisclosureWidth(25.375f, intrinsic), 0f)
+    }
+
 }

@@ -362,7 +362,68 @@ internal data class ContainerViewportStyle(val box: ContainerStyle, val margins:
 internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || absoluteStatic != null || textWrap != null ||
     ownerFont != null && positioning == ContainerPositioning.RelativeAuto
 
-data class Container(val blocks: List<Block>, val style: ContainerStyle = ContainerStyle()) {
+enum class ContainerDisclosureFocusMode { AuthoredNone, UaAuto }
+data class ContainerDisclosureFocusPaint(val mode: ContainerDisclosureFocusMode, val color: FigureColor? = null) {
+    init {
+        require(color == null || mode == ContainerDisclosureFocusMode.UaAuto &&
+            (color == FigureColor.Transparent || color is FigureColor.Rgb)) {
+            "Disclosure focus color requires automatic RGB or transparent paint"
+        }
+    }
+}
+enum class ContainerDisclosurePlacement { InlineFlow, FloatLeft, FloatRight }
+/** A button has four independent pointer states and no visited history. */
+data class ContainerDisclosureTextPaint(val normal: LinkState, val hover: LinkState, val active: LinkState,
+    val hoverActive: LinkState, val underlineOnFocus: Boolean = false)
+data class ContainerDisclosureLabelRun(val start: Long, val end: Long, val paint: ContainerDisclosureTextPaint) {
+    init { require(start in 0..0xffff_ffffL && end in 0..0xffff_ffffL && start < end) { "Invalid disclosure label range" } }
+}
+/** Original UTF-8 byte boundaries; the label has already passed strict string validation. */
+private fun validDisclosureRun(label: String, run: ContainerDisclosureLabelRun): Boolean {
+    var bytes = 0L
+    var index = 0
+    var starts = run.start == 0L
+    var ends = false
+    while (index < label.length) {
+        val char = label[index++]
+        bytes += when {
+            Character.isHighSurrogate(char) -> { index++; 4 }
+            char.code < 0x80 -> 1
+            char.code < 0x800 -> 2
+            else -> 3
+        }
+        if (bytes == run.start) starts = true
+        if (bytes == run.end) ends = true
+    }
+    return starts && ends
+}
+data class ContainerDisclosure(val contentIndex: Long, val initiallyCollapsed: Boolean,
+    val expandLabel: String, val collapseLabel: String, val focus: ContainerDisclosureFocusPaint? = null,
+    val placement: ContainerDisclosurePlacement = ContainerDisclosurePlacement.InlineFlow,
+    val foreground: FigureColor? = null, val direction: BidiResolvedDirection? = null,
+    val expandRun: ContainerDisclosureLabelRun? = null, val collapseRun: ContainerDisclosureLabelRun? = null) {
+    init {
+        require(contentIndex in 0..0xffff_ffffL) { "Invalid disclosure child index" }
+        require(listOf(expandLabel, collapseLabel).all { label -> label.isNotEmpty() &&
+            validPresentationString(label) && label.none { it.code < 0x20 || it.code == 0x7f } }) {
+            "Invalid complete disclosure label"
+        }
+        require(foreground == null || foreground == FigureColor.Transparent || foreground is FigureColor.Rgb) {
+            "Disclosure foreground requires RGB or transparent paint"
+        }
+        require(expandRun == null || validDisclosureRun(expandLabel, expandRun)) { "Invalid expand label UTF-8 range" }
+        require(collapseRun == null || validDisclosureRun(collapseLabel, collapseRun)) { "Invalid collapse label UTF-8 range" }
+    }
+}
+internal fun validContainerDisclosureOwner(value: Container): Boolean {
+    val disclosure = value.disclosure ?: return true
+    if (disclosure.contentIndex >= value.blocks.size.toLong()) return false
+    val child = value.blocks[disclosure.contentIndex.toInt()]
+    return child.kind == "container" && child.container != null
+}
+
+data class Container(val blocks: List<Block>, val style: ContainerStyle = ContainerStyle(),
+    val disclosure: ContainerDisclosure? = null) {
     init {
         require(supportedContainerShape(this, 1)) { "Unsupported container heading, positioning or depth" }
         if (style.positionedScope != null) {
@@ -396,7 +457,7 @@ internal fun legacyContainerMarginsSupported(value: Container, depth: Int = 1): 
 }
 
 private fun supportedContainerShape(value: Container, depth: Int): Boolean {
-    if (depth > MaxContentDepth || value.blocks.size > (1 shl 20)) return false
+    if (depth > MaxContentDepth || value.blocks.size > (1 shl 20) || !validContainerDisclosureOwner(value)) return false
     if (value.style.absoluteStatic != null && !validContainerAbsoluteStaticBody(value)) return false
     return value.blocks.all { block -> block.kind != "heading" &&
         (block.container == null ||

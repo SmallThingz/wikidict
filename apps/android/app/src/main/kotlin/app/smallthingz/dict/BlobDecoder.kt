@@ -886,7 +886,40 @@ object BlobDecoder {
             remainingItems--
             return inlineFontSnapshot().also { hasContainerOwnerFont = true }
         }
-        private fun containerStyle(): ContainerStyle {
+        private fun containerDisclosureLabelRun(): ContainerDisclosureLabelRun {
+            require(remainingItems > 0 && buffer.remaining() >= 53) { "Truncated disclosure label run or exhausted budget" }
+            remainingItems--
+            val start = u32(); val end = u32()
+            val normal = string(); val hover = string(); val active = string(); val hoverActive = string()
+            val flags = byte().also { require(it and 31 == it) { "Unknown disclosure text paint flags" } }
+            return ContainerDisclosureLabelRun(start, end, ContainerDisclosureTextPaint(
+                LinkState(normal, flags and 1 != 0), LinkState(hover, flags and 2 != 0),
+                LinkState(active, flags and 4 != 0), LinkState(hoverActive, flags and 8 != 0), flags and 16 != 0))
+        }
+        private fun containerDisclosure(): ContainerDisclosure {
+            require(positionedContainers && remainingItems > 0 && buffer.remaining() >= 18) {
+                "Truncated disclosure or exhausted budget"
+            }
+            remainingItems--
+            val index = u32(); val collapsed = presence()
+            val expand = string(); val collapse = string()
+            val focus = if (presence()) {
+                require(remainingItems > 0 && buffer.remaining() >= 2) { "Truncated disclosure focus or exhausted budget" }
+                remainingItems--
+                ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.entries.getOrNull(byte())
+                    ?: error("Unknown disclosure focus mode"), if (presence()) figureColor() else null)
+            } else null
+            val placement = ContainerDisclosurePlacement.entries.getOrNull(byte()) ?: error("Unknown disclosure placement")
+            val fields = byte().also { require(it and 15 == it) { "Unknown disclosure fields" } }
+            val foreground = if (fields and 1 != 0) figureColor() else null
+            val direction = if (fields and 2 != 0) BidiResolvedDirection.entries.getOrNull(byte())
+                ?: error("Unknown disclosure direction") else null
+            val expandRun = if (fields and 4 != 0) containerDisclosureLabelRun() else null
+            val collapseRun = if (fields and 8 != 0) containerDisclosureLabelRun() else null
+            return ContainerDisclosure(index, collapsed, expand, collapse, focus, placement, foreground,
+                direction, expandRun, collapseRun).also { hasPositionedContainers = true }
+        }
+        private fun containerStyle(readDisclosure: ((ContainerDisclosure) -> Unit)? = null): ContainerStyle {
             val flags = if (containerFonts) u32().also {
                 val reserved = if (ownerGeometry) {
                     if (containerOwnerFonts) 0xfe800000L else 0xff800000L
@@ -926,7 +959,7 @@ object BlobDecoder {
                 if (flags and 8388608 != 0) positionedScope() else null,
                 if (flags and 16777216 != 0) containerOwnerFont() else null)
             val oldStyle = if (positionedContainers) {
-                val extension = byte().also { require(it and 7 == it) { "Unknown positioned Container extension" } }
+                val extension = byte().also { require(it and (if (readDisclosure != null) 15 else 7) == it) { "Unknown positioned Container extension" } }
                 val position = if (extension and 1 != 0)
                     ContainerAbsolutePosition(containerMarginLength(), containerMarginLength()) else null
                 val wrap = if (extension and 2 != 0) when (byte()) {
@@ -936,6 +969,7 @@ object BlobDecoder {
                 } else null
                 val static = if (extension and 4 != 0) ContainerAbsoluteStaticPosition(
                     ContainerStaticDirection.entries.getOrNull(byte()) ?: error("Unknown static Container direction")) else null
+                if (extension and 8 != 0) checkNotNull(readDisclosure).invoke(containerDisclosure())
                 base.copy(absolutePosition = position, textWrap = wrap, absoluteStatic = static)
             } else base
             val style = extendedColumns?.let { (count, gap) ->
@@ -978,7 +1012,8 @@ object BlobDecoder {
             return result
         }
         private fun container(tableDepth: Int): Container = content {
-            val style = containerStyle()
+            var disclosure: ContainerDisclosure? = null
+            val style = containerStyle { disclosure = it }
             require(style.positioning !is ContainerPositioning.Absolute || positionedParent) {
                 "Absolute text requires a direct positioned containing scope"
             }
@@ -988,7 +1023,7 @@ object BlobDecoder {
             positionedParent = style.positionedScope != null
             positionedActive = previousActive || style.positionedScope != null
             try {
-                Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style).also {
+                Container(List(count(minimumBlockBytes)) { block(tableDepth) }, style, disclosure).also {
                     require(containerFonts || legacyContainerMarginsSupported(it)) { "Adjoining container margins require M" }
                 }
             } finally { positionedParent = previous; positionedActive = previousActive }

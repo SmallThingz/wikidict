@@ -1374,4 +1374,205 @@ class ReadingLayoutTest {
         }
     }
 
+
+    @Test fun containerDisclosureStateSeparatesSourceEpochOwnerOccurrenceAndReferenceSlot() {
+        val action = Span("link", "hidden", target = "retained-action")
+        val content = Block("container", 0, emptyList(), container = Container(
+            listOf(Block("paragraph", 0, listOf(action)))))
+        val header = Block("paragraph", 0, listOf(Span("text", "header")))
+        val policy = ContainerDisclosure(1L, true, "[show]", "[hide]")
+        val owner = Container(listOf(header, content), disclosure = policy)
+        val original = Block("container", 0, emptyList(), container = owner)
+        val entry = Entry("disclosure", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(original))), emptyList())
+        val equalEntry = entry.copy()
+        val equalOwner = owner.copy()
+        assertEquals(entry, equalEntry); assertNotSame(entry, equalEntry)
+        assertEquals(owner, equalOwner); assertNotSame(owner, equalOwner)
+        val identity = NativeContainerDisclosureSourceIdentity(entry)
+        assertEquals(identity, NativeContainerDisclosureSourceIdentity(entry))
+        assertNotEquals(identity, NativeContainerDisclosureSourceIdentity(equalEntry))
+        val visit = NativeContainerDisclosureVisit()
+        val state = visit.stateFor(entry)
+        assertSame(state, visit.stateFor(entry))
+        val firstPath = "block-0-0"
+        val secondPath = "block-0-1"
+        assertFalse(state.isExpanded(owner, firstPath))
+        state.toggle(owner, firstPath)
+        assertTrue(state.isExpanded(owner, firstPath))
+        assertFalse(state.isExpanded(owner, secondPath))
+        assertFalse(state.isExpanded(equalOwner, firstPath))
+        assertFalse(state.expand(owner, firstPath))
+        assertTrue(state.expand(owner, secondPath))
+        assertTrue(state.isExpanded(owner, secondPath))
+        state.toggle(owner, firstPath)
+        assertFalse(state.isExpanded(owner, firstPath)); assertTrue(state.isExpanded(owner, secondPath))
+        val referencePath = "reference-7/block-0"
+        val firstReference = state.inReference(0)
+        val secondReference = state.inReference(1)
+        assertSame(firstReference, state.inReference(0))
+        assertSame(firstReference, firstReference.inReference(0))
+        assertTrue(firstReference.expand(owner, referencePath))
+        assertTrue(firstReference.isExpanded(owner, referencePath))
+        assertFalse(secondReference.isExpanded(owner, referencePath))
+        assertFalse(state.isExpanded(owner, referencePath))
+        assertTrue(state.isExpanded(NativeContainerDisclosureOwner(owner, referencePath, null, 0)))
+        assertFalse(state.isExpanded(NativeContainerDisclosureOwner(owner, referencePath, null, 1)))
+        val selectedOwner = NativeContainerDisclosureOwner(owner, referencePath, null, 0)
+        val heldHeading = CellHeadingRequest("compiled-reference-0", referenceIndex = 0,
+            disclosureReveal = true, disclosureOwners = listOf(selectedOwner))
+        assertSame(heldHeading, referenceHeadingRequest(heldHeading, null, firstReference.referenceIndex))
+        assertNull(referenceHeadingRequest(heldHeading, null, secondReference.referenceIndex))
+        assertNull(referenceHeadingRequest(heldHeading, null, state.referenceIndex))
+        assertSame(heldHeading, referenceHeadingRequest(heldHeading, 0))
+        assertNull(referenceHeadingRequest(heldHeading, 1))
+        assertSame(selectedOwner, heldHeading.disclosureOwners.single())
+        val legacyHeading = CellHeadingRequest(referencePath, referenceIndex = 0)
+        assertSame(legacyHeading, referenceHeadingRequest(legacyHeading, null, null))
+        assertNull(referenceHeadingRequest(legacyHeading, 1, null))
+        val initiallyOpen = owner.copy(disclosure = policy.copy(initiallyCollapsed = false))
+        assertTrue(state.isExpanded(initiallyOpen, firstPath))
+        state.toggle(initiallyOpen, firstPath)
+        assertFalse(state.isExpanded(initiallyOpen, firstPath))
+        assertTrue(state.expand(initiallyOpen, firstPath))
+        assertSame(state, visit.stateFor(entry))
+        assertTrue(visit.stateFor(entry).isExpanded(owner, secondPath))
+        assertTrue(visit.stateFor(entry).inReference(0).isExpanded(owner, referencePath))
+        val replacementState = visit.stateFor(equalEntry)
+        assertNotSame(state, replacementState)
+        assertSame(replacementState, visit.stateFor(equalEntry))
+        assertFalse(replacementState.isExpanded(owner, secondPath))
+        assertFalse(replacementState.inReference(0).isExpanded(owner, referencePath))
+        assertTrue(replacementState.isExpanded(initiallyOpen, firstPath))
+        val returnedState = visit.stateFor(entry)
+        assertNotSame(state, returnedState)
+        assertNotSame(replacementState, returnedState)
+        assertFalse(returnedState.isExpanded(owner, secondPath))
+        assertSame(content, owner.blocks[1]); assertSame(header, owner.blocks[0])
+        assertSame(action, owner.blocks[1].container!!.blocks.single().spans.single())
+        assertEquals("retained-action", action.target)
+    }
+
+    @Test fun disclosureHeadingInventoryExpandsOriginalContainerCellAndCaptionPaths() {
+        fun paragraph(label: String) = Block("paragraph", 0, listOf(Span("text", label)))
+        fun child(value: Container) = Block("container", 0, emptyList(), container = value)
+        val heading = Block("heading", 0, listOf(Span("link", "Hidden heading", target = "heading-action")),
+            level = 3, anchor = "hidden-heading", anchorFallback = "Hidden_heading")
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+            blocks = listOf(paragraph("before heading"), heading, paragraph("after heading"))))))
+        val content = child(Container(listOf(Block("table", 0, emptyList(), table = table))))
+        val inner = Container(listOf(paragraph("inner header"), content, paragraph("inner tail")),
+            disclosure = ContainerDisclosure(1L, true, "inner show", "inner hide"))
+        val innerBlock = child(inner)
+        val outer = Container(listOf(paragraph("outer header"), innerBlock, paragraph("outer tail")),
+            disclosure = ContainerDisclosure(1L, true, "outer show", "outer hide"))
+        val captionHeading = heading.copy(anchor = "caption-heading", anchorFallback = "")
+        val captionTable = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
+            blocks = listOf(captionHeading)))))
+        val captionContent = child(Container(listOf(Block("table", 0, emptyList(), table = captionTable))))
+        val captionOwner = Container(listOf(captionContent),
+            disclosure = ContainerDisclosure(0L, true, "caption show", "caption hide"))
+        val outerTable = Table(emptyList(), listOf(listOf(Cell(listOf(Span("text", "visible cell")), false, 1, 1))),
+            captionBlocks = listOf(child(captionOwner)))
+        val first = child(outer)
+        val second = Block("table", 0, emptyList(), table = outerTable)
+        val entry = Entry("disclosure paths", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(first, second))), emptyList())
+        val index = NativeContainerDisclosureIndex(entry)
+        val ownerPath = "block-0-0"
+        val innerPath = "$ownerPath/container/block-1"
+        val headingPath = "$innerPath/container/block-1/container/block-0/table/cell-0/block-1"
+        val captionPath = "block-0-1/table/caption/block-0"
+        val captionHeadingPath = "$captionPath/container/block-0/container/block-0/table/cell-0/block-0"
+        assertEquals(listOf(ownerPath, innerPath, captionPath), index.owners.map { it.path })
+        assertSame(outer, index.owners[0].container); assertSame(inner, index.owners[1].container)
+        assertSame(captionOwner, index.owners[2].container)
+        assertSame(innerBlock, index.owners[0].content); assertSame(content, index.owners[1].content)
+        val selected = checkNotNull(headingDestination(entry, "#hidden-heading"))
+        assertEquals("block-0-0", selected.rowKey); assertEquals(headingPath, selected.path)
+        assertTrue(selected.compiledId)
+        assertEquals(HeadingAnchorSelection("hidden-heading", HeadingAnchorKind.Primary, null), selected.anchorMatch)
+        assertEquals(headingPath, headingDestination(entry, "#Hidden heading")!!.path)
+        assertEquals(captionHeadingPath, headingDestination(entry, "#caption-heading")!!.path)
+        val enclosing = index.enclosingPath(checkNotNull(selected.path))
+        assertEquals(index.owners.take(2), enclosing)
+        assertTrue(index.enclosingPath("$ownerPath/container/block-0").isEmpty())
+        assertTrue(index.enclosingPath("${index.owners[0].contentPath}0").isEmpty())
+        val state = NativeContainerDisclosureState()
+        assertTrue(enclosing.all { !state.isExpanded(it) })
+        assertTrue(state.expandOwners(enclosing)); assertFalse(state.expandOwners(enclosing))
+        assertTrue(enclosing.all(state::isExpanded)); assertFalse(state.isExpanded(index.owners[2]))
+        assertEquals(selected, headingDestination(entry, "#hidden-heading"))
+        assertTrue(state.expandOwners(index.enclosingPath(captionHeadingPath)))
+        assertTrue(index.owners.all(state::isExpanded))
+        assertEquals(listOf("heading-0", "block-0-0", "block-0-1"), entry.readingRows.map { it.key })
+        assertSame(first, entry.sections.single().blocks[0]); assertSame(second, entry.sections.single().blocks[1])
+        assertSame(heading, table.rows.single().single().blocks!![1])
+        assertEquals(listOf("inner header", "", "inner tail"), inner.blocks.map { textOf(it.spans) })
+        assertEquals(1L, inner.disclosure!!.contentIndex)
+        val legacy = Entry("legacy paths", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(child(Container(listOf(Block("table", 0, emptyList(), table = table))))))), emptyList())
+        assertTrue(NativeContainerDisclosureIndex(legacy).owners.isEmpty())
+        assertNull(headingDestination(legacy, "#hidden-heading")) // Keep the old null-disclosure admission unchanged.
+    }
+
+    @Test fun disclosureCitationExpansionKeepsOriginalSpanIdentityAndEveryStoredAction() {
+        fun marker(occurrence: Long, anchor: String) = Span("link", "[7]", "", role = "reference",
+            targetFragment = "reference-7", citationMarker = CitationMarker(7, occurrence, anchor))
+        fun owner(spans: List<Span>, label: String): Container {
+            val hidden = Block("container", 0, emptyList(), container = Container(
+                listOf(Block("paragraph", 0, spans))))
+            return Container(listOf(Block("paragraph", 0, listOf(Span("text", label))), hidden),
+                disclosure = ContainerDisclosure(1L, true, "[show]", "[hide]"))
+        }
+        val bodyMarker = marker(1, "hidden-body-cite")
+        val noteMarker = marker(2, "hidden-note-cite")
+        val retained = Span("link", "retained text", target = "independent-target", tooltip = "retained tooltip")
+        val bodyOwner = owner(listOf(bodyMarker, Span("text", " "), retained), "visible header")
+        val noteOwner = owner(listOf(noteMarker, Span("text", " note body")), "visible note header")
+        val body = Block("container", 0, emptyList(), container = bodyOwner)
+        val note = Block("container", 0, emptyList(), container = noteOwner)
+        val backlinks = listOf(1L to "hidden-body-cite", 2L to "hidden-note-cite").map { (occurrence, anchor) ->
+            ReferenceBacklink.withPolicies(occurrence, Span("link", "return-$occurrence", "", targetFragment = anchor))
+        }
+        val reference = Reference(7, 1, "", emptyList(), blocks = listOf(note), backlinks = backlinks)
+        val entry = Entry("hidden citations", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(body))), listOf(reference))
+        val index = NativeContainerDisclosureIndex(entry)
+        val destinations = citationDestinations(entry)
+        val bodyDestination = destinations.getValue("hidden-body-cite")
+        val noteDestination = destinations.getValue("hidden-note-cite")
+        assertSame(bodyMarker, bodyDestination.span); assertSame(noteMarker, noteDestination.span)
+        assertTrue(bodyDestination.graphical && noteDestination.graphical) // Source ranges, not current visibility.
+        assertEquals("block-0-0", bodyDestination.rowKey)
+        assertEquals(CitationSourceSlot.Reference, noteDestination.slot); assertEquals(0, noteDestination.referenceIndex)
+        val bodyOwners = index.enclosingSpan(bodyDestination.span, bodyDestination.rowKey, bodyDestination.referenceIndex)
+        val noteOwners = index.enclosingSpan(noteDestination.span, noteDestination.rowKey, noteDestination.referenceIndex)
+        assertEquals(listOf("block-0-0"), bodyOwners.map { it.path })
+        assertEquals(listOf("reference-7/block-0"), noteOwners.map { it.path })
+        assertTrue(index.enclosingSpan(bodyMarker.copy(), bodyDestination.rowKey, null).isEmpty())
+        assertTrue(index.enclosingSpan(bodyMarker, "block-0-1", null).isEmpty())
+        assertTrue(index.enclosingSpan(noteMarker, null, 1).isEmpty())
+        val state = NativeContainerDisclosureState()
+        assertTrue(state.expandOwners(bodyOwners))
+        assertFalse(state.isExpanded(noteOwners.single()))
+        assertTrue(state.expandOwners(noteOwners)); assertFalse(state.expandOwners(noteOwners))
+        assertTrue(state.inReference(0).isExpanded(noteOwner, "reference-7/block-0"))
+        assertFalse(state.isExpanded(noteOwner, "reference-7/block-0"))
+        val after = citationDestinations(entry)
+        assertSame(bodyMarker, after.getValue("hidden-body-cite").span)
+        assertSame(noteMarker, after.getValue("hidden-note-cite").span)
+        val all = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { all += it } }.also {
+            it.block(body); it.block(note)
+        }
+        assertEquals(listOf("visible header", "[7]", " ", "retained text", "visible note header", "[7]", " note body"), all.map { it.text })
+        assertSame(retained, all[3]); assertEquals("independent-target", all[3].target)
+        assertEquals("retained tooltip", all[3].tooltip)
+        assertEquals("reference-7", bodyMarker.targetFragment)
+        assertSame(note, reference.blocks!!.single()); assertSame(backlinks, reference.backlinks)
+        assertEquals(setOf("references"), citationFoldKeys(entry, noteDestination))
+        assertNotNull(citationScrollIndex(entry, bodyDestination, emptySet()))
+        assertNotNull(citationScrollIndex(entry, noteDestination, emptySet()))
+    }
 }

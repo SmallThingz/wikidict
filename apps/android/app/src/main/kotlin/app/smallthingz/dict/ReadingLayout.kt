@@ -517,22 +517,34 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
     if (!target.startsWith("#") || target.length == 1) return null
     val headings = mutableListOf<HeadingCandidate>()
     fun includeContent(rowKey: String, blocks: List<Pair<Block, String>>, referenceIndex: Int? = null) {
-        lateinit var includeBlock: (Block, String, Boolean) -> Unit
-        fun includeTable(table: Table, path: String) {
+        lateinit var includeBlock: (Block, String, Boolean, Boolean) -> Unit
+        fun includeTable(table: Table, path: String, disclosureAncestor: Boolean) {
+            table.captionBlocks?.forEachIndexed { index, block ->
+                if (disclosureAncestor || block.hasContainerDisclosure())
+                    includeBlock(block, "$path/caption/block-$index", true, disclosureAncestor)
+            }
             var index = 0
             table.rows.forEach { cells -> cells.forEach { cell ->
                 val cellPath = "$path/cell-${index++}"
                 val content = cell.blocks
-                if (content != null) content.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true) }
-                else cell.nestedTable?.let { includeTable(it, "$cellPath/nested") }
+                if (content != null) content.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true, disclosureAncestor) }
+                else cell.nestedTable?.let { includeTable(it, "$cellPath/nested", disclosureAncestor) }
             } }
         }
-        includeBlock = { block, path, nested ->
+        includeBlock = { block, path, nested, disclosureAncestor ->
             if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(rowKey, path.takeIf { nested },
                 block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty(), referenceIndex), block.anchor, block.anchorFallback, textOf(block.spans)))
-            block.table?.let { includeTable(it, "$path/table") }
+            val container = block.container
+            if (container != null && (disclosureAncestor || block.hasContainerDisclosure())) {
+                // Only the new source owner opens this path. Container heading validity stays
+                // unchanged; real Table/cell descendants keep their established heading domain.
+                container.blocks.forEachIndexed { index, child ->
+                    includeBlock(child, "$path/container/block-$index", true, true)
+                }
+            }
+            block.table?.let { includeTable(it, "$path/table", disclosureAncestor) }
         }
-        blocks.forEach { (block, path) -> includeBlock(block, path, referenceIndex != null) }
+        blocks.forEach { (block, path) -> includeBlock(block, path, referenceIndex != null, false) }
     }
     entry.readingRows.forEach { row ->
         row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,

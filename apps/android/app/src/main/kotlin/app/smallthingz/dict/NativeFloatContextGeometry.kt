@@ -102,6 +102,8 @@ internal sealed interface NativeFloatContextPart {
         val fixedMarginDirection: TableContainingDirection? = null,
         val pairedViewportDirection: TableContainingDirection? = null,
         val ordinaryDirection: TableContainingDirection? = null,
+        val exactContainingWidth: Float? = null,
+        val inkBounds: NativeFloatBounds? = null,
     ) : NativeFloatContextPart
 }
 
@@ -134,6 +136,7 @@ internal class NativeFloatContextGeometry private constructor(
     val clearanceById: Map<Int, Float> = emptyMap(),
     val structuralMargins: NativeAdjoiningMargins? = null,
     private val hardSeparators: Set<Int> = emptySet(),
+    private val childInk: List<NativeFloatBounds> = emptyList(),
 ) : FloatTextGeometry {
     private data class Paragraph(val partIndex: Int, val offset: Int, val x: Float, val y: Float, val geometry: FloatTextGeometry,
         val textBottom: Float, val paintHere: Boolean = true, val ordinary: Boolean = false,
@@ -199,14 +202,15 @@ internal class NativeFloatContextGeometry private constructor(
         inputLeaves().map { it.sourceIndex }.distinct().flatMap(::positionedGroupsAtSource)
     }
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
-        listOfNotNull(nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values)) +
+        childInk + listOfNotNull(nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values)) +
             paragraphs.flatMap { paragraph -> paragraph.geometry.ordinaryPaintBounds.map {
                 it.translated(paragraph.x, paragraph.y)
             } }
     }
     override val extents: NativeGeometryExtents by lazy {
         paragraphs.fold(NativeGeometryExtents(width, usedHeight,
-            nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values), nativeBoundsOf(children.map { it.bounds }))) { area, paragraph ->
+            childInk.fold(nativeBoundsOf(children.map { it.bounds } + ordinaryBounds.values), ::enclosingBounds),
+            nativeBoundsOf(children.map { it.bounds }))) { area, paragraph ->
             area.including(paragraph.geometry.extents, paragraph.x, paragraph.y)
         }
     }
@@ -638,6 +642,7 @@ internal class NativeFloatContextGeometry private constructor(
             val flowChildren = mutableListOf<PlacedFloatContextChild>()
             val exclusions = carriedExclusions.toMutableList()
             val partOffsets = mutableListOf<Int>()
+            val childInk = mutableListOf<NativeFloatBounds>()
             val prepared = if (adjoining) preparation ?: NativeOrdinaryPreparation(parts) else null
             if (bodyAdjoining) checkNotNull(prepared).resolveBodyLeading(parts, width)
             val ordinaryBounds = mutableMapOf<Int, RectF>()
@@ -1079,6 +1084,10 @@ internal class NativeFloatContextGeometry private constructor(
                         }
                     }
                     is NativeFloatContextPart.Child -> {
+                        val containingWidth = part.exactContainingWidth ?: width.toFloat()
+                        if (!containingWidth.isFinite() || containingWidth < 0f ||
+                            part.exactContainingWidth != null && kotlin.math.floor(containingWidth).toInt() != width)
+                            throw UnsupportedFloatLayout("Exact control containing width differs from its represented parent")
                         require(part.gapAfter.isFinite() && part.gapAfter >= 0)
                         require(part.gapBefore.isFinite() && part.gapBefore >= 0)
                         y += part.gapBefore
@@ -1092,7 +1101,7 @@ internal class NativeFloatContextGeometry private constructor(
                             throw UnsupportedFloatLayout("Ordinary media placement cannot replace another child owner")
                         if (part.ordinaryDirection != null) {
                             val fixed = if (adjoining) part.margins.copy(top = 0f, bottom = 0f) else part.margins
-                            val placed = placeNativeFixedMarginTable(width.toFloat(), y, exclusions, fixed,
+                            val placed = placeNativeFixedMarginTable(containingWidth, y, exclusions, fixed,
                                 part.ordinaryDirection, part.widthRule, if (adjoining) FigureClear.None else part.clear, part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
                                 RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), false)
@@ -1108,7 +1117,7 @@ internal class NativeFloatContextGeometry private constructor(
                                     part.fixedMarginDirection != null)
                                 throw UnsupportedFloatLayout("Paired table placement owner is inconsistent")
                             val fixed = if (adjoining) part.margins.copy(top = 0f, bottom = 0f) else part.margins
-                            val placed = placeNativeFixedMarginTable(width.toFloat(), y, exclusions, fixed,
+                            val placed = placeNativeFixedMarginTable(containingWidth, y, exclusions, fixed,
                                 part.pairedViewportDirection, NativeBlockWidth.Auto,
                                 if (adjoining) FigureClear.None else part.clear, part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
@@ -1129,14 +1138,14 @@ internal class NativeFloatContextGeometry private constructor(
                                 part.widthRule != NativeBlockWidth.FixedPx(box.placementWidth))
                                 throw UnsupportedFloatLayout("Fixed table placement owner is inconsistent")
                             if (side == TableFloatSide.Right) {
-                                val placed = placeNativeFloatingTable(width.toFloat(), clearedY, exclusions, side,
+                                val placed = placeNativeFloatingTable(containingWidth, clearedY, exclusions, side,
                                     part.margins, part.widthRule, pixelAligned = false, measure = part.measure)
                                 children += PlacedFloatContextChild(part.id, text.length,
                                     RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), part.logicalObject)
                                 exclusions += NativeFloatExclusion(side, placed.outer)
                             } else {
                                 val fixed = if (adjoining) part.margins.copy(top = 0f, bottom = 0f) else part.margins
-                                val placed = placeNativeFixedMarginTable(width.toFloat(), y, exclusions, fixed, direction,
+                                val placed = placeNativeFixedMarginTable(containingWidth, y, exclusions, fixed, direction,
                                     part.widthRule, if (adjoining) FigureClear.None else part.clear, part.measure)
                                 children += PlacedFloatContextChild(part.id, text.length,
                                     RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), part.logicalObject)
@@ -1158,7 +1167,7 @@ internal class NativeFloatContextGeometry private constructor(
                                 throw UnsupportedFloatLayout("Table automatic margin flow owner is inconsistent")
                             val actualMargins = if (adjoining)
                                 margins.copy(fixed = margins.fixed.copy(top = 0f, bottom = 0f)) else margins
-                            val placed = placeNativeAutoMarginTable(width.toFloat(), y, exclusions, actualMargins,
+                            val placed = placeNativeAutoMarginTable(containingWidth, y, exclusions, actualMargins,
                                 direction, NativeBlockWidth.FixedPx(box.placementWidth),
                                 if (adjoining) FigureClear.None else part.clear, measure = part.measure)
                             // A local scroll surface clips the real table border box. Its initial
@@ -1175,7 +1184,7 @@ internal class NativeFloatContextGeometry private constructor(
                                 marginPlacements[partIndex] = checkNotNull(marginPlacement)
                             }
                         } else if (adjoining && side == null) {
-                            val placed = placeNativeClearedTable(width.toFloat(), y, exclusions, FigureClear.None,
+                            val placed = placeNativeClearedTable(containingWidth, y, exclusions, FigureClear.None,
                                 part.margins.copy(top = 0f, bottom = 0f), part.widthRule,
                                 pixelAligned = false, measure = part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
@@ -1185,20 +1194,20 @@ internal class NativeFloatContextGeometry private constructor(
                             marginPlacement = checkNotNull(marginPlacement).copy(borderTop = borderTop)
                             marginPlacements[partIndex] = checkNotNull(marginPlacement)
                         } else if (side == null && part.clear != null && part.clear != FigureClear.None) {
-                            val placed = placeNativeClearedTable(width.toFloat(), y, exclusions, part.clear,
-                                part.margins, part.widthRule, measure = part.measure)
+                            val placed = placeNativeClearedTable(containingWidth, y, exclusions, part.clear,
+                                part.margins, part.widthRule, pixelAligned = part.exactContainingWidth == null, measure = part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
                                 RectF(placed.content.left, placed.content.top, placed.content.right, placed.content.bottom), part.logicalObject)
                             y = placed.outer.bottom + part.gapAfter
                         } else if (side == null) {
-                            val placed = placeNativeFloatBlock(width.toFloat(), clearedY, exclusions, part.widthRule,
-                                pixelAligned = true, measure = part.measure)
+                            val placed = placeNativeFloatBlock(containingWidth, clearedY, exclusions, part.widthRule,
+                                pixelAligned = part.exactContainingWidth == null, measure = part.measure)
                             children += PlacedFloatContextChild(part.id, text.length,
                                 RectF(placed.bounds.left, placed.bounds.top, placed.bounds.right, placed.bounds.bottom), part.logicalObject)
                             y = placed.nextY + part.gapAfter
                         } else {
-                            val placed = placeNativeFloatingTable(width.toFloat(), clearedY, exclusions, side,
-                                part.margins, part.widthRule, pixelAligned = !adjoining, measure = { request ->
+                            val placed = placeNativeFloatingTable(containingWidth, clearedY, exclusions, side,
+                                part.margins, part.widthRule, pixelAligned = !adjoining && part.exactContainingWidth == null, measure = { request ->
                                     prepared?.measureChild(part, request) ?: part.measure(request)
                                 })
                             children += PlacedFloatContextChild(part.id, text.length,
@@ -1206,6 +1215,10 @@ internal class NativeFloatContextGeometry private constructor(
                             exclusions += NativeFloatExclusion(side, placed.outer)
                             // A floated table leaves the following body at its normal flow Y.
                             // Its stored margins, rather than a fabricated empty paragraph, exclude later lines.
+                        }
+                        part.inkBounds?.let { ink ->
+                            val placed = children.last().also { check(it.id == part.id) }
+                            childInk += ink.translated(placed.bounds.left, placed.bounds.top)
                         }
                         // App-owned media controls have their own input/AX tree, not authored copy text.
                         if (part.logicalObject) text.append('\ufffc')
@@ -1234,7 +1247,7 @@ internal class NativeFloatContextGeometry private constructor(
                 parts.mapNotNull { adjoiningProfile(it, prepared) }) else null
             return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(usedBottom).toInt(), usedBottom, paragraphs, children,
                 partOffsets, flowChildren, maxOf(0f, y), ownExclusions, adjoiningMargins, marginPlacements, ordinaryBounds, clearanceById,
-                if (adjoining) adjoiningMarginsFor(parts) else null, hardSeparators = hardSeparators.toSet())
+                if (adjoining) adjoiningMarginsFor(parts) else null, hardSeparators = hardSeparators.toSet(), childInk = childInk)
         }
     }
 }

@@ -43,4 +43,26 @@ class ContainerFlowProjectionTest {
         assertTrue(items.filterIsInstance<ContainerFlowItem.Block>().none { it.listContinuation })
         assertEquals(listOf("*", "#", "#"), items.filterIsInstance<ContainerFlowItem.ListGroup>().map { it.path })
     }
+
+    @Test fun disclosureProjectionKeepsOriginalListBarriersAndChildIndices() {
+        val hidden = Block("container", 0, emptyList(), container = Container(listOf(block("paragraph"))))
+        val first = block("list_item", "*")
+        val last = block("list_item", "*")
+        val original = listOf(first, hidden, last)
+        val owner = Container(original, disclosure = ContainerDisclosure(1L, true, "+", "-"))
+        val projected = nativeDisclosureFlowItems(original, true, nativeDisclosureHiddenChild(owner, false))
+        assertEquals(2, projected.size)
+        assertEquals(listOf(0, 2), projected.map { (it as ContainerFlowItem.ListGroup).items.single().index })
+        assertSame(first, owner.blocks[0])
+        assertSame(hidden, owner.blocks[1])
+        assertSame(last, owner.blocks[2])
+        assertEquals(containerFlowItems(original), nativeDisclosureFlowItems(original, true, nativeDisclosureHiddenChild(owner, true)))
+        val hiddenFirst = Container(listOf(hidden, last), disclosure = ContainerDisclosure(0L, true, "+", "-"))
+        assertEquals(listOf(ContainerFlowItem.Block(1)), nativeDisclosureFlowItems(hiddenFirst.blocks, false,
+            nativeDisclosureHiddenChild(hiddenFirst, false)))
+        assertEquals(listOf(ContainerFlowItem.Block(0), ContainerFlowItem.Block(1)),
+            nativeDisclosureFlowItems(hiddenFirst.blocks, false, nativeDisclosureHiddenChild(hiddenFirst, true)))
+        assertEquals(projected, nativeDisclosureFlowItems(original, true, nativeDisclosureHiddenChild(owner, false)))
+    }
+
 }

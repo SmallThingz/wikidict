@@ -7,6 +7,7 @@ import android.graphics.RectF
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.TextUnit
@@ -476,6 +477,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     staticInlineAlign: androidx.compose.ui.text.style.TextAlign? = null,
     leaf: @Composable (NativeContainerLeaf) -> List<NativeFloatContextSpec>
 ): List<NativeFloatContextSpec> {
+    val disclosureState = rememberNativeContainerDisclosureState(blocks)
     val inheritedWrap = LocalNativeContainerTextWrap.current
     val inheritedClippedScope = LocalNativeClippedAbsoluteCoordinateScope.current
     val tableDirection = LocalCompiledTableTextDirection.current
@@ -488,7 +490,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         is ContainerFlowItem.ListGroup -> item.items.flatMap { listOf(it.index) + it.children.flatMap(::groupIndices) }
     }
     fun hasTextLeaf(values: List<Block>): Boolean = values.any { block ->
-        block.container?.let { hasTextLeaf(it.blocks) } ?: true
+        block.container?.let { it.disclosure != null || hasTextLeaf(it.blocks) } ?: true
     }
     @Composable fun visit(values: List<Block>, paths: List<String>, grids: List<String>,
         gaps: List<Float>, context: ContainerTextContext, align: CellTextAlign?, inside: Boolean,
@@ -498,9 +500,10 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         ordinaryContainingBlock: Int? = null, staticScope: NativeStaticInlineScope? = null,
         staticInlineParent: NativeStaticInlineParent? = null,
         sourceAlign: androidx.compose.ui.text.style.TextAlign? = null,
-        clippedScope: NativeClippedAbsoluteCoordinateScope? = null): List<NativeFloatContextSpec> {
+        clippedScope: NativeClippedAbsoluteCoordinateScope? = null,
+        hiddenChild: Int? = null): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
-        val groups = if (row) containerFlowItems(values) else values.indices.map { ContainerFlowItem.Block(it) }
+        val groups = nativeDisclosureFlowItems(values, row, hiddenChild)
         for (group in groups) {
             val indices = groupIndices(group)
             val first = indices.first()
@@ -532,7 +535,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 }
                 // A tree containing only empty containers has no text font to resolve.
                 // Its real boxes still participate; an actual empty paragraph is a leaf.
-                val unusedContainerFont = requestedContext.containerText != null && !hasTextLeaf(container.blocks)
+                val unusedContainerFont = requestedContext.containerText != null && container.disclosure == null &&
+                    !hasTextLeaf(container.blocks)
                 val containerContext = if (absoluteFormat == null && requestedContext.containerText != null && !unusedContainerFont)
                     nativeContainerOwnerTextContext(requestedContext, inheritedStyle, density) else null
                 val familyAdmission = if (absoluteFormat == null && !unusedContainerFont) nativeContainerFontAdmission(requestedContext.fontFamily,
@@ -590,7 +594,49 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     textFailure = error.message ?: "Static inline parent typography is unavailable"
                     null
                 }
+                val disclosure = container.disclosure
+                val expanded = disclosure?.let { disclosureState.isExpanded(container, paths[first]) } ?: true
+                val hiddenChild = nativeDisclosureHiddenChild(container, expanded)
                 val prepareChildren: @Composable () -> Unit = {
+                    if (disclosure != null) {
+                        val identity = remember(disclosureState, NativeContainerDisclosureSourceIdentity(container), paths[first]) { Any() }
+                        val columnDirection = LocalNativeColumnTextDirection.current
+                        var toggleFormat: NativeContainerTextFormat? = null
+                        var toggleDirection: BidiResolvedDirection? = null
+                        try {
+                            val format = absoluteFormat?.getOrThrow() ?:
+                                nativeDisclosureTextFormat(next,
+                                    nativeContainerTextFormat(next, normalBodySize, parentTextStyle.merge(inheritedStyle), density))
+                            val inheritedDirection = compiledBodyParagraphDirection(tableDirection, next.bodyDirection,
+                                columnDirection) ?: format.style.textDirection
+                            toggleFormat = format
+                            toggleDirection = disclosure.direction ?: when (inheritedDirection) {
+                                androidx.compose.ui.text.style.TextDirection.Ltr -> BidiResolvedDirection.Ltr
+                                androidx.compose.ui.text.style.TextDirection.Rtl -> BidiResolvedDirection.Rtl
+                                else -> throw UnsupportedFloatLayout("Disclosure needs its represented Container direction")
+                            }
+                        } catch (error: UnsupportedFloatLayout) {
+                            textFailure = textFailure ?: error.message ?: "Disclosure typography is unavailable"
+                        }
+                        if (toggleFormat != null && toggleDirection != null) {
+                            val toggle = prepareNativeContainerDisclosureToggle(disclosure, expanded,
+                                { disclosureState.toggle(container, paths[first]) }, checkNotNull(toggleFormat),
+                                checkNotNull(toggleDirection), identity)
+                            val side = when (disclosure.placement) {
+                                ContainerDisclosurePlacement.InlineFlow -> null
+                                ContainerDisclosurePlacement.FloatLeft -> TableFloatSide.Left
+                                ContainerDisclosurePlacement.FloatRight -> TableFloatSide.Right
+                            }
+                            children += NativeFloatContextSpec.Child(id(paths[first] + "/disclosure-toggle"),
+                                width = { it }, gapAfter = 0f, floatSide = side, logicalObject = false,
+                                exactWidth = { containing -> nativeDisclosureWidth(containing, toggle.intrinsic) },
+                                exactMeasure = { width ->
+                                    val geometry = toggle.measure(width)
+                                    NativeExactChildMeasure(NativeBlockMeasure(width, toggle.intrinsic.minimum, geometry.textBottom),
+                                        geometry.extents.ink)
+                                }, content = { width -> toggle.Content(width) })
+                        }
+                    }
                     children += visit(container.blocks,
                         container.blocks.indices.map { "${paths[first]}/container/block-$it" },
                         container.blocks.indices.map { "${grids[first]}/container/block-$it" },
@@ -598,7 +644,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
                         inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
-                        nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign, nextClippedScope)
+                        nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign,
+                        nextClippedScope, hiddenChild)
                 }
                 CompositionLocalProvider(LocalAuthoredBackground provides background) {
                     if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
@@ -712,8 +759,12 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         }
         return result
     }
-    return visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
+    var projected: List<NativeFloatContextSpec> = emptyList()
+    CompositionLocalProvider(LocalNativeContainerDisclosureState provides disclosureState) {
+    projected = visit(blocks, rootPaths ?: blocks.indices.map { "$path/block-$it" },
         blocks.indices.map { "$gridPath/block-$it" }, rootGaps, inherited, inheritedAlign,
         false, false, blocks.indices.map { it }, false, ownerWrap = inheritedWrap,
         sourceAlign = staticInlineAlign ?: inheritedAlign?.composeAlign(), clippedScope = inheritedClippedScope)
+    }
+    return projected
 }

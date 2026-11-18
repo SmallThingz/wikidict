@@ -1364,6 +1364,13 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
         when {
             value.container != null -> {
+                require(validContainerDisclosureOwner(value.container)) { "Invalid original disclosure child" }
+                value.container.disclosure?.let {
+                    charge(1)
+                    if (it.focus != null) charge(1)
+                    if (it.expandRun != null) charge(1)
+                    if (it.collapseRun != null) charge(1)
+                }
                 if (value.container.style.ownerFont != null) charge(1)
                 val previous = relativeContainerAvailable
                 val previousStatic = staticInlineParent

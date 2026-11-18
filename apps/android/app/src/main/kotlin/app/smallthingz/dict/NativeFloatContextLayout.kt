@@ -89,6 +89,9 @@ internal fun rememberNativeTableCoordinateBinding(): NativeTableCoordinateBindin
     return binding
 }
 
+/** Used box and signed glyph ink are independent for an app-owned native control. */
+internal data class NativeExactChildMeasure(val block: NativeBlockMeasure, val ink: NativeFloatBounds?)
+
 internal sealed interface NativeFloatContextSpec {
     data class Text(val prepared: PreparedNativeFloatText, val gapAfter: Float, val path: String? = null,
         val box: ParagraphBox? = null,
@@ -146,7 +149,10 @@ internal sealed interface NativeFloatContextSpec {
         val intrinsicMarginTable: NativeFixedMarginTableInput? = null,
         val minimumWidth: (Int) -> Float? = { null },
         val documentScrollable: Boolean = false,
-        val ordinaryDirection: TableContainingDirection? = null) : NativeFloatContextSpec
+        val ordinaryDirection: TableContainingDirection? = null,
+        val exactWidth: ((Float) -> Float)? = null,
+        val exactMeasure: ((Float) -> NativeExactChildMeasure)? = null,
+        val content: (@Composable (NativeLayoutInput<Float>) -> Unit)? = null) : NativeFloatContextSpec
 }
 
 /** Keep an unavailable fallback within both the parent's bounds and Compose's packed range. */
@@ -171,6 +177,7 @@ internal fun NativeFloatContextLayout(
     sourceReveal: (suspend (Float?) -> Unit)? = null,
     absoluteScope: Boolean = false,
     onInputGeometry: ((NativeFloatContextGeometry, FloatTextGeometry) -> Unit)? = null,
+    revealUnavailable: (suspend () -> Unit)? = null,
     child: @Composable (id: Int, originalContainingWidth: NativeLayoutInput<Int>) -> Unit,
 ) {
     val ordinaryBody = bodyAdjoining == BodyAdjoiningPolicy.Ordinary
@@ -285,6 +292,7 @@ internal fun NativeFloatContextLayout(
             val slots = leaves.withIndex().filter { it.value !is NativeFloatContextSpec.Text && it.value !is NativeFloatContextSpec.Rule }
             val textSlots = leaves.indices.filter { leaves[it] is NativeFloatContextSpec.Text || leaves[it] is NativeFloatContextSpec.Rule }
             val widths = mutableMapOf<Int, NativeLayoutInput<Int>>()
+            val exactWidths = mutableMapOf<Int, NativeLayoutInput<Float>>()
             val tableMarginInputs = mutableMapOf<Int, NativeTableMarginMeasureInput>()
             val flows = mutableMapOf<Int, NativeFlowMeasureInput>()
             val containers = mutableMapOf<Int, NativeContextMeasureInput>()
@@ -298,6 +306,7 @@ internal fun NativeFloatContextLayout(
                 when (part) {
                     is NativeFloatContextSpec.Child -> {
                         widths[index] = remember { NativeLayoutInput(0) }
+                        if (part.content != null) exactWidths[index] = remember { NativeLayoutInput(0f) }
                         (part.autoMarginTable ?: part.fixedMarginTable?.table ?: part.pairedMarginTable?.table ?: part.intrinsicMarginTable?.table)?.let { table ->
                             tableMarginInputs[index] = remember(NativeDelegatedTableIdentity(table)) { NativeTableMarginMeasureInput(table) }
                         }
@@ -348,7 +357,8 @@ internal fun NativeFloatContextLayout(
                             LocalNativePositionedPaintUnavailable provides
                                 "Positioned Figure media needs the delegated child's Entry paint-order join") { Box {
                             val scrollport = part.scrollport
-                            if (scrollport == null) child(part.id, widths.getValue(index))
+                            if (part.content != null) part.content.invoke(exactWidths.getValue(index))
+                            else if (scrollport == null) child(part.id, widths.getValue(index))
                             else NativeContainerScrollport(scrollport, linkColor, parentMeasureInput, child)
                         } }
                         is NativeFloatContextSpec.Flow -> {
@@ -388,7 +398,7 @@ internal fun NativeFloatContextLayout(
                 } }
                 CompositionLocalProvider(LocalNativeCitationGeometryOwners provides inheritedCitationOwners) {
                     NativeFloatAuxiliary(auxiliary, leaves, linkColor, revealIndex, revealToken, onRevealed, interactionOwner,
-                        delegatedCell, delegatedTables.values.singleOrNull(), sourceReveal)
+                        delegatedCell, delegatedTables.values.singleOrNull(), sourceReveal, revealUnavailable)
                 }
             }, measurePolicy = object : MeasurePolicy {
                 private fun intrinsicWidthOf(measurables: List<IntrinsicMeasurable>, maximum: Boolean,
@@ -657,6 +667,14 @@ internal fun NativeFloatContextLayout(
                                     part.columnClearEvent)
                             }
                             is NativeFloatContextSpec.Child -> {
+                                val exact = part.exactWidth
+                                if ((exact != null) != (part.exactMeasure != null) || (exact != null) != (part.content != null) ||
+                                    exact != null && (part.logicalObject || part.atomicInline || part.widthFromContent ||
+                                        part.overflowViewport || part.scrollport != null || part.delegatedTable != null ||
+                                        part.autoMarginTable != null || part.fixedMarginTable != null || part.pairedMarginTable != null ||
+                                        part.intrinsicMarginTable != null || part.blockViewport != null || part.blockBox != null ||
+                                        part.documentScrollable || part.ordinaryDirection != null))
+                                    throw UnsupportedFloatLayout("Exact native control requires its own ordinary content slot")
                                 if (part.documentScrollable && (part.ordinaryDirection == null || part.logicalObject ||
                                         part.floatSide != null || part.atomicInline || part.overflowViewport || part.scrollport != null ||
                                         part.autoMarginTable != null || part.fixedMarginTable != null || part.pairedMarginTable != null ||
@@ -670,7 +688,7 @@ internal fun NativeFloatContextLayout(
                                 if (minimumFloor != null && (part.blockViewport != null || part.fixedMarginTable != null ||
                                         part.pairedMarginTable != null || part.intrinsicMarginTable != null || part.blockBox != null))
                                     throw UnsupportedFloatLayout("Responsive table minima require an extended sizing policy")
-                                if (minimumFloor != null && !part.widthFromContent && !part.atomicInline)
+                                if (minimumFloor != null && (exact != null || !part.widthFromContent && !part.atomicInline))
                                     throw UnsupportedFloatLayout("Table minimum requires its intrinsic content owner")
                                 val paired = part.pairedMarginTable
                                 val intrinsicOwner = part.intrinsicMarginTable
@@ -785,11 +803,17 @@ internal fun NativeFloatContextLayout(
                                     throw UnsupportedFloatLayout("Table block viewport owner is inconsistent")
                                 val blockBox = numericBlockBox ?: part.blockBox?.invoke(containingWidth)
                                 widths.getValue(index).update(containingWidth)
+                                val exactAllocation = exact?.invoke(available)?.also { value ->
+                                    if (!value.isFinite() || value < 0f || value > TablePixelLimit)
+                                        throw UnsupportedFloatLayout("Disclosure label allocation exceeds native geometry")
+                                    exactWidths.getValue(index).update(value)
+                                }
                                 val atomic = if (part.atomicInline) measurePart(index, Constraints(maxWidth = containingWidth)) else null
                                 if (minimumFloor != null && atomic != null && atomic.width < minimumFloor)
                                     throw UnsupportedFloatLayout("Inline table minimum exceeds its represented atomic allocation")
                                 var intrinsicMinimum: Int? = null
-                                val allocated = blockBox?.let { ceil(it.borderWidth).toInt() } ?: atomic?.width ?: if (part.widthFromContent) {
+                                val allocated = exactAllocation?.let { ceil(it).toInt() } ?:
+                                    blockBox?.let { ceil(it.borderWidth).toInt() } ?: atomic?.width ?: if (part.widthFromContent) {
                                     val measurable = childMeasurables.getValue(index)
                                     val naturalMinimum = measurable.minIntrinsicWidth(Constraints.Infinity)
                                     val maximum = measurable.maxIntrinsicWidth(Constraints.Infinity)
@@ -836,6 +860,19 @@ internal fun NativeFloatContextLayout(
                                         containingDirection = containingDirection,
                                         fixedMarginBox = box.takeIf { fixedTable != null },
                                         fixedMarginDirection = fixedTable?.containingDirection)
+                                } else if (exactAllocation != null) {
+                                    val measured = checkNotNull(part.exactMeasure).invoke(exactAllocation)
+                                    if (measured.block.usedWidth != exactAllocation)
+                                        throw UnsupportedFloatLayout("Disclosure measurement changed its original allocation")
+                                    val placeable = measurePart(index, Constraints(minWidth = allocated, maxWidth = allocated))
+                                    if (placeable.width != allocated || placeable.height != ceil(measured.block.height).toInt())
+                                        throw UnsupportedFloatLayout("Disclosure View allocation differs from its native used box")
+                                    NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(exactAllocation), { request ->
+                                        if (request.requestedWidth != exactAllocation)
+                                            throw UnsupportedFloatLayout("Disclosure placement changed its measured width")
+                                        measured.block
+                                    }, part.gapAfter, part.floatSide, part.margins(containingWidth), part.requiresUnobstructedText,
+                                        part.gapBefore, part.clear, false, exactContainingWidth = available, inkBounds = measured.ink)
                                 } else NativeFloatContextPart.Child(part.id, NativeBlockWidth.FixedPx(allocated.toFloat()), { request ->
                                     val childWidth = ceil(request.requestedWidth ?: allocated.toFloat()).toInt()
                                     val placeable = atomic ?: measurePart(index, Constraints(minWidth = childWidth, maxWidth = childWidth))
@@ -1064,7 +1101,7 @@ internal fun NativeFloatContextLayout(
                             geometry.children.forEach { placed ->
                                 val index = leaves.indexOfFirst { it is NativeFloatContextSpec.Child && it.id == placed.id }
                                 val childOwner = leaves[index] as NativeFloatContextSpec.Child
-                                if (childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null || childOwner.intrinsicMarginTable != null || childOwner.ordinaryDirection != null) {
+                                if (childOwner.exactWidth != null || childOwner.autoMarginTable != null || childOwner.fixedMarginTable != null || childOwner.pairedMarginTable != null || childOwner.intrinsicMarginTable != null || childOwner.ordinaryDirection != null) {
                                     val x = floor(placed.bounds.left).toInt()
                                     val y = floor(placed.bounds.top).toInt()
                                     measured.getValue(index).placeWithLayer(x, y + documentOrigin,
@@ -1272,7 +1309,8 @@ private class NativeDelegatedPointerSharingNode : Modifier.Node(), PointerInputM
 private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, parts: List<NativeFloatContextSpec>,
     linkColor: Color, revealIndex: Int?, revealToken: Any?, onRevealed: () -> Unit, interactionOwner: Boolean,
     delegatedCell: NativeDelegatedCellOwner? = null, stateTable: NativeDelegatedTableOwner? = null,
-    sourceReveal: (suspend (Float?) -> Unit)? = null) {
+    sourceReveal: (suspend (Float?) -> Unit)? = null,
+    revealUnavailable: (suspend () -> Unit)? = null) {
     val scrollClip = LocalNativeScrollClip.current
     val minimumTouch = LocalViewConfiguration.current.minimumTouchTargetSize
     val minimumTouchWidth = with(LocalDensity.current) { minimumTouch.width.toPx() }
@@ -1286,7 +1324,10 @@ private fun NativeFloatAuxiliary(input: NativeLayoutInput<NativeContextPass?>, p
             val message = subcompose("unsupported-flow") {
                 val observer = LocalNativeFloatContextFailureObserver.current
                 LaunchedEffect(reason, observer) { observer?.invoke(reason) }
-                LaunchedEffect(revealToken, sourceReveal != null) { sourceReveal?.invoke(null) }
+                LaunchedEffect(revealToken, sourceReveal != null, revealUnavailable != null) {
+                    if (sourceReveal != null) sourceReveal(null)
+                    else if (revealToken != null) revealUnavailable?.invoke()
+                }
                 ReaderLayoutUnavailable(reason)
             }.single().measure(constraints)
             val fallback = linkedMapOf<Int, Placeable>()

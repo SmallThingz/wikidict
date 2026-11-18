@@ -146,7 +146,7 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
             if (margins == null) {
                 val normalY = tableClearanceY(cursor.floatTop, nativeClearForPart(part), exclusions)
                 val placement = when (part) {
-                    is NativeFloatContextPart.Child -> placeNativeFloatingTable(width.toFloat(), normalY,
+                    is NativeFloatContextPart.Child -> placeNativeFloatingTable(part.exactContainingWidth ?: width.toFloat(), normalY,
                         exclusions, checkNotNull(part.floatSide), part.margins, part.widthRule,
                         pixelAligned = false) { measureChild(part, it) }.outer
                     is NativeFloatContextPart.Container -> {

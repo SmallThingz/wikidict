@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
@@ -1324,4 +1325,465 @@ class ContainerRelativeAutoDeviceTest {
             }
         }
     }
+    @Test fun flatDisclosureUsesNativeRunHitsAndWholeControlKeysWithoutButtonChrome() {
+        val mode = mutableStateOf(0)
+        val expanded = mutableStateOf(false)
+        val identity = Any()
+        val calls = mutableListOf<Boolean>()
+        val policy = ContainerDisclosureTextPaint(LinkState("#cc0000", false), LinkState("#0000cc", true),
+            LinkState("#cc00cc", false), LinkState("#bb5500", false), underlineOnFocus = true)
+        val disclosure = ContainerDisclosure(0L, true, "[é𐐀ไทย] f", "[ซ่อน𐐀] f",
+            expandRun = ContainerDisclosureLabelRun(1L, 16L, policy),
+            collapseRun = ContainerDisclosureLabelRun(1L, 17L, policy))
+        val focus = listOf(null,
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.Rgb("#00ff00")),
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.AuthoredNone),
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.Transparent),
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto))
+        val sourceStyle = ContainerStyle(ownerFont = InlineFontSnapshot(fontScale = 1.35f,
+            fontScaleBasis = FontScaleBasis.NormalBody, fontNormalized = true, bold = true, italic = true,
+            fontFamily = ContainerFontFamily.SansSerif), lineHeight = ContainerLineHeight.Multiplier(1.6f))
+        var current: NativeContainerDisclosureToggle? = null
+        fun buttons(): List<NativeContainerDisclosureView> {
+            val found = mutableListOf<NativeContainerDisclosureView>()
+            compose.activityRule.scenario.onActivity { activity ->
+                fun visit(view: View) {
+                    if (view is NativeContainerDisclosureView) found += view
+                    if (view is android.view.ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
+                }
+                visit(activity.window.decorView)
+            }
+            return found
+        }
+        var pointerDownTime = 0L
+        fun event(view: NativeContainerDisclosureView, action: Int, point: Offset, mouse: Boolean = true) {
+            val time = android.os.SystemClock.uptimeMillis()
+            if (action == MotionEvent.ACTION_DOWN) pointerDownTime = time
+            val downTime = if (action in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) pointerDownTime else time
+            val value = MotionEvent.obtain(downTime, time, action, point.x, point.y, 0)
+            try {
+                value.source = if (mouse) android.view.InputDevice.SOURCE_MOUSE else android.view.InputDevice.SOURCE_TOUCHSCREEN
+                if (action in listOf(MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_EXIT))
+                    view.dispatchGenericMotionEvent(value) else view.dispatchTouchEvent(value)
+            } finally { value.recycle() }
+        }
+        fun paintAt(at: Int): android.text.TextPaint {
+            val value = checkNotNull(current)
+            val native = checkNotNull(value.prepared.native)
+            val source = native.source(kotlin.math.ceil(value.intrinsic.maximum).toInt())
+            return android.text.TextPaint(native.paint).apply {
+                source.getSpans(at, at + 1, android.text.style.CharacterStyle::class.java).forEach { it.updateDrawState(this) }
+            }
+        }
+        fun points(view: NativeContainerDisclosureView): Pair<Offset, Offset> {
+            val geometry = checkNotNull(view.currentMeasuredGeometry)
+            val bracket = checkNotNull(geometry.characterRects(0, 1).single())
+            val run = checkNotNull(geometry.characterRects(1, 1).single())
+            return Offset(bracket.centerX(), bracket.centerY()) to Offset(run.centerX(), run.centerY())
+        }
+        fun pixels(view: NativeContainerDisclosureView): Pair<Pair<Int, Int>, IntArray> {
+            view.jumpDrawablesToCurrentState()
+            val image = android.graphics.Bitmap.createBitmap(view.width, view.height, android.graphics.Bitmap.Config.ARGB_8888)
+            return try {
+                image.eraseColor(android.graphics.Color.WHITE)
+                view.draw(android.graphics.Canvas(image))
+                val data = IntArray(image.width * image.height)
+                image.getPixels(data, 0, image.width, 0, 0, image.width, image.height)
+                (image.width to image.height) to data
+            } finally { image.recycle() }
+        }
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val density = if (mode.value == 5) Density(1.25f, 1.4f) else Density(1f, 1f)
+                CompositionLocalProvider(LocalDensity provides density) {
+                    DictTheme("light") {
+                        val style = androidx.compose.ui.text.TextStyle(fontSize = 20.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
+                            color = Color(0xff111111), letterSpacing = 0.sp)
+                        MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = style)) {
+                            val context = nativeContainerOwnerTextContext(sourceStyle.textContext(ContainerTextContext()),
+                                style, density).getOrThrow()
+                            val format = nativeContainerTextFormat(context, 20.sp, style, density)
+                            val control = prepareNativeContainerDisclosureToggle(
+                                disclosure.copy(focus = focus[mode.value.coerceAtMost(4)]), expanded.value,
+                                { calls += expanded.value; expanded.value = !expanded.value }, format,
+                                BidiResolvedDirection.Ltr, identity)
+                            val width = androidx.compose.runtime.remember(identity) { NativeLayoutInput(control.intrinsic.maximum) }
+                            androidx.compose.runtime.SideEffect { current = control; width.update(control.intrinsic.maximum) }
+                            Box(Modifier.width(500.dp).height(300.dp).background(Color.White).padding(start = 23.dp, top = 17.dp)) { control.Content(width) }
+                        }
+                    }
+                }
+            } }
+            compose.waitForIdle()
+            val view = buttons().single()
+            val images = mutableListOf<Pair<Pair<Int, Int>, IntArray>>()
+            var initialWidth = 0f
+            for (phase in 0..6) {
+                compose.runOnIdle { mode.value = phase }
+                compose.waitForIdle()
+                assertSame(view, buttons().single())
+                compose.runOnIdle {
+                    val value = checkNotNull(current)
+                    assertNull(value.failureReason)
+                    assertSame(identity, view.controlIdentity)
+                    assertFalse(view.isFocusableInTouchMode)
+                    assertEquals(0, view.paddingLeft); assertEquals(0, view.paddingTop)
+                    assertEquals(0, view.paddingRight); assertEquals(0, view.paddingBottom)
+                    assertEquals(0, view.minimumWidth); assertEquals(0, view.minimumHeight)
+                    assertNull(view.background)
+                    assertEquals(disclosure.expandLabel, view.logicalLabel)
+                    val native = checkNotNull(value.prepared.native)
+                    val scale = if (phase == 5) 1.25f * 1.4f else 1f
+                    assertEquals(27f * scale, native.paint.textSize, .01f)
+                    assertTrue(native.paint.typeface.isBold); assertTrue(native.paint.typeface.isItalic)
+                    val geometry = checkNotNull(view.currentMeasuredGeometry)
+                    assertEquals(disclosure.expandLabel, geometry.text.toString())
+                    assertTrue(geometry.nodes.isEmpty()) // One real Button, no fabricated document/link node.
+                    val logical = view.logicalFocusBounds()
+                    val focused = Rect(); view.getFocusedRect(focused)
+                    assertEquals(logical, focused)
+                    assertEquals(kotlin.math.ceil(value.intrinsic.maximum).toInt(), logical.width())
+                    geometry.content.extents.ink?.let { ink ->
+                        assertTrue(geometry.surface.left <= ink.left)
+                        assertTrue(geometry.surface.top <= ink.top)
+                        assertTrue(geometry.surface.left + geometry.width >= ink.right)
+                        assertTrue(geometry.surface.top + geometry.height >= ink.bottom)
+                    }
+                    if (phase == 0) initialWidth = value.intrinsic.maximum
+                    if (phase == 5) assertTrue(value.intrinsic.maximum > initialWidth)
+                    if (phase == 6) assertEquals(initialWidth, value.intrinsic.maximum, .001f)
+                    view.clearFocus()
+                }
+                compose.waitForIdle()
+                val point = points(view)
+                compose.runOnIdle { event(view, MotionEvent.ACTION_HOVER_ENTER, point.first) }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(0xffcc0000.toInt(), paintAt(1).color) }
+                compose.runOnIdle { event(view, MotionEvent.ACTION_HOVER_MOVE, point.second) }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(0xff0000cc.toInt(), paintAt(1).color) }
+                // A bracket press activates the whole button but does not press its inner paint subject.
+                compose.runOnIdle { event(view, MotionEvent.ACTION_DOWN, point.first) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(0xffcc0000.toInt(), paintAt(1).color)
+                    event(view, MotionEvent.ACTION_CANCEL, point.first)
+                    event(view, MotionEvent.ACTION_DOWN, point.second)
+                }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(0xffbb5500.toInt(), paintAt(1).color); event(view, MotionEvent.ACTION_MOVE, point.first) }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(0xffcc0000.toInt(), paintAt(1).color); event(view, MotionEvent.ACTION_MOVE, point.second) }
+                compose.waitForIdle()
+                compose.runOnIdle { assertEquals(0xffbb5500.toInt(), paintAt(1).color); event(view, MotionEvent.ACTION_CANCEL, point.second) }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(0xff0000cc.toInt(), paintAt(1).color)
+                    event(view, MotionEvent.ACTION_HOVER_EXIT, point.second)
+                    assertEquals(phase * 4, calls.size)
+                    // Genuine native down/up tests the first-touch focusTaken path, not performClick.
+                    event(view, MotionEvent.ACTION_DOWN, point.first, mouse = false)
+                    event(view, MotionEvent.ACTION_UP, point.first, mouse = false)
+                }
+                compose.waitUntil(5_000) { calls.size == phase * 4 + 1 }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(disclosure.collapseLabel, view.logicalLabel)
+                    assertTrue(view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_FOCUS, null))
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertTrue(view.hasFocus())
+                    assertEquals(0xffcc0000.toInt(), paintAt(1).color); assertTrue(paintAt(1).isUnderlineText)
+                    assertEquals(0xff111111.toInt(), paintAt(0).color); assertFalse(paintAt(0).isUnderlineText)
+                    assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_SPACE)))
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertTrue(view.isPressed)
+                    assertEquals(0xffcc0000.toInt(), paintAt(1).color) // Keyboard does not synthesize child-run active.
+                    assertEquals(phase * 4 + 1, calls.size)
+                    assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_SPACE)))
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(disclosure.expandLabel, view.logicalLabel)
+                    assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                    assertTrue(view.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(disclosure.collapseLabel, view.logicalLabel)
+                    assertTrue(view.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertEquals(disclosure.expandLabel, view.logicalLabel)
+                    assertEquals((phase + 1) * 4, calls.size)
+                    assertEquals(listOf(false, true, false, true), calls.takeLast(4))
+                    val info = view.createAccessibilityNodeInfo()
+                    try {
+                        assertEquals("android.widget.Button", info.className.toString())
+                        assertEquals(disclosure.expandLabel, info.text.toString())
+                        assertEquals("Collapsed", info.stateDescription.toString())
+                        assertTrue(info.isClickable); assertTrue(info.isFocusable); assertTrue(info.isFocused)
+                        val bounds = Rect(); info.getBoundsInParent(bounds)
+                        assertEquals(view.logicalFocusBounds(), bounds)
+                        val screen = IntArray(2); val window = IntArray(2)
+                        view.getLocationOnScreen(screen); view.getLocationInWindow(window)
+                        assertTrue(window[0] >= 20); assertTrue(window[1] >= 15)
+                        val expectedScreen = Rect(bounds).apply { offset(screen[0], screen[1]) }
+                        val actualScreen = Rect(); info.getBoundsInScreen(actualScreen)
+                        assertEquals(expectedScreen, actualScreen)
+                        if (android.os.Build.VERSION.SDK_INT >= 34) {
+                            val actualWindow = Rect(); info.getBoundsInWindow(actualWindow)
+                            assertEquals(Rect(bounds).apply { offset(window[0], window[1]) }, actualWindow)
+                        }
+                    } finally { info.recycle() }
+                    if (phase < 5) images += pixels(view)
+                }
+            }
+            compose.runOnIdle {
+                fun green(data: IntArray) = data.count { pixel ->
+                    android.graphics.Color.green(pixel) > android.graphics.Color.red(pixel) + 12 &&
+                        android.graphics.Color.green(pixel) > android.graphics.Color.blue(pixel) + 12
+                }
+                assertTrue(green(images[1].second) > 0)
+                assertEquals(0, green(images[2].second)); assertEquals(0, green(images[3].second))
+                assertEquals(images[2].first, images[3].first); assertArrayEquals(images[2].second, images[3].second)
+                assertEquals(images[0].first, images[4].first); assertArrayEquals(images[0].second, images[4].second)
+                assertEquals(28, calls.size)
+                assertEquals("[é𐐀ไทย] f", disclosure.expandLabel)
+                assertSame(policy, checkNotNull(disclosure.expandRun).paint)
+            }
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun entryDisclosureHidesOnlyOriginalChildAndRevealsNestedMeasuredCellTarget() {
+        val zero = px(0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val cellFont = InlineFontSnapshot(fontScale = 1.2f, fontScaleBasis = FontScaleBasis.NormalBody,
+            fontFamily = ContainerFontFamily.SansSerif, fontFeatures = FontFeaturePolicy.SevenOn,
+            language = "en", bold = true, italic = true)
+        fun plainLink(label: String, target: String) = Span("link", label, target = target,
+            fontScale = 14f, fontScaleBasis = FontScaleBasis.CssPx,
+            fontFamily = ContainerFontFamily.SansSerif, fontFeatures = FontFeaturePolicy.SevenOn, language = "en")
+        val header = plainLink("HEADER OUTER", "header-owner")
+        val innerHeader = plainLink("HEADER INNER", "inner-header-owner")
+        val target = plainLink("HIDDEN TARGET", "hidden-word")
+        val heading = Block("heading", 0, listOf(target), level = 3, anchor = "hidden-heading")
+        fun table(blocks: List<Block>, ownerFont: InlineFontSnapshot? = null) = Table(emptyList(),
+            listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = blocks,
+                style = CellStyle(border = StyleBorder.None, padding = edges,
+                    lineHeight = ownerFont?.let { CellLineHeight(CellLineHeightValue.Normal,
+                        CellTextStrut(it.fontScale!!, it.fontScaleBasis, it)) })))),
+            TableGeometry(border = 0, cellSpacing = 0, cellPadding = 0),
+            style = TableStyle(border = StyleBorder.None, padding = edges,
+                width = StyleWidth(StyleWidthUnit.Percent, 100f)))
+        val retainedTable = Block("table", 0, emptyList(), table = table(listOf(heading)))
+        val retainedBody = Container((0 until 16).map { Block("paragraph", 0,
+            listOf(Span("text", "Retained body line $it", fontScale = 14f,
+                fontScaleBasis = FontScaleBasis.CssPx))) } + retainedTable, ContainerStyle())
+        val inner = Container(listOf(Block("paragraph", 0, listOf(innerHeader)),
+            Block("container", 0, emptyList(), container = retainedBody)), ContainerStyle(),
+            disclosure = ContainerDisclosure(1L, true, "[show inner]", "[hide inner]",
+                placement = ContainerDisclosurePlacement.FloatRight, direction = BidiResolvedDirection.Ltr))
+        val retainedOuterChild = Container(listOf(Block("container", 0, emptyList(), container = inner)), ContainerStyle())
+        val outer = Container(listOf(Block("paragraph", 0, listOf(header)),
+            Block("container", 0, emptyList(), container = retainedOuterChild)), ContainerStyle(),
+            disclosure = ContainerDisclosure(1L, true, "[show outer]", "[hide outer]",
+                placement = ContainerDisclosurePlacement.FloatRight, direction = BidiResolvedDirection.Ltr))
+        val outerTable = table(listOf(Block("container", 0, emptyList(), container = outer)), cellFont)
+        val original = Entry("Disclosure owner", emptyList(), "language", "English", "en",
+            listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = outerTable)))), emptyList())
+        val source = mutableStateOf(original, androidx.compose.runtime.referentialEqualityPolicy())
+        val request = mutableStateOf<EntryAnchorRequest?>(null)
+        val reading = EntryReadingState()
+        val opened = mutableListOf<EntryLink>()
+        val consumed = mutableListOf<Pair<EntryAnchorRequest, Boolean>>()
+        lateinit var activity: MainActivity
+        fun allViews(): List<View> {
+            val found = mutableListOf<View>()
+            fun visit(view: View) {
+                found += view
+                if (view is android.view.ViewGroup) for (i in 0 until view.childCount) visit(view.getChildAt(i))
+            }
+            visit(activity.window.decorView)
+            return found
+        }
+        fun button(label: String) = allViews().filterIsInstance<NativeContainerDisclosureView>().single { it.logicalLabel == label }
+        fun targetOwner(): Pair<NativeFloatTextView, FloatInteractionNode>? = allViews().filterIsInstance<NativeFloatTextView>()
+            .flatMap { view -> view.currentMeasuredGeometry?.nodes.orEmpty().filter {
+                it.kind == FloatInteractionKind.LINK && it.label?.toString() == target.text
+            }.map { view to it } }.singleOrNull()
+        fun targetVisible(): Boolean {
+            val (view, node) = targetOwner() ?: return false
+            val info = view.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id) ?: return false
+            return try { val bounds = Rect(); info.getBoundsInScreen(bounds); info.isVisibleToUser && !bounds.isEmpty }
+            finally { info.recycle() }
+        }
+        fun hidden() {
+            assertTrue(allViews().filterIsInstance<NativeFloatTextView>().none {
+                it.logicalText.contains(target.text) || it.currentMeasuredGeometry?.nodes.orEmpty().any { node -> node.label?.toString() == target.text }
+            })
+            assertNull(targetOwner())
+        }
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { owner -> activity = owner; owner.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    DictTheme("light") { MaterialTheme(typography = MaterialTheme.typography.copy(
+                        bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, lineHeight = 28.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif, letterSpacing = 0.sp))) {
+                        Box(Modifier.width(380.dp).height(420.dp).testTag("disclosure-entry")) {
+                            EntryView(source.value, false, {}, onLink = { opened += it },
+                                settings = AppSettings(allowImages = false, allowAudio = false,
+                                    collapseOtherSections = false, collapseDetails = false), readingState = reading,
+                                anchorRequest = request.value, onAnchorConsumed = { completed ->
+                                    consumed += completed to (targetOwner()?.let { (view, node) ->
+                                        view.isAttachedToWindow && view.isLaidOut &&
+                                            view.currentMeasuredGeometry?.rectsForRange(node.start, node.end)?.isNotEmpty() == true
+                                    } == true)
+                                    if (request.value === completed) request.value = null
+                                })
+                        }
+                    } }
+                }
+            } }
+            compose.waitForIdle()
+            var firstIdentity: Any? = null
+            var collapsedHeight = 0
+            compose.runOnIdle {
+                hidden()
+                val toggle = button("[show outer]")
+                firstIdentity = toggle.controlIdentity
+                assertEquals(1, allViews().filterIsInstance<NativeContainerDisclosureView>().size)
+                val geometry = checkNotNull(toggle.currentMeasuredGeometry)
+                val expected = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD_ITALIC)
+                    textSize = 24f; fontFeatureSettings = FontFeaturePolicy.SevenOn.nativeSettings
+                    textLocale = java.util.Locale.forLanguageTag("en")
+                }
+                val label = toggle.logicalLabel
+                val advance = expected.getRunAdvance(label, 0, label.length, 0, label.length, false, label.length)
+                assertEquals(advance, geometry.caretRect(label.length).left - geometry.caretRect(0).left, .05f)
+                assertEquals(kotlin.math.ceil(advance).toInt(), toggle.logicalFocusBounds().width())
+                val headerView = allViews().filterIsInstance<NativeFloatTextView>().single { it.logicalText.contains(header.text) }
+                collapsedHeight = headerView.height
+                val actualHeader = checkNotNull(headerView.currentMeasuredGeometry)
+                val start = actualHeader.text.indexOf(header.text)
+                val childPaint = android.text.TextPaint(expected).apply {
+                    textSize = 14f; typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
+                }
+                val childAdvance = childPaint.getRunAdvance(header.text, 0, header.text.length, 0, header.text.length, false, header.text.length)
+                assertEquals(childAdvance, actualHeader.caretRect(start + header.text.length).left - actualHeader.caretRect(start).left, .05f)
+                headerView.setSelection(0, headerView.logicalText.length)
+                assertFalse(checkNotNull(headerView.selectedTextForCopy()).contains(target.text))
+                assertFalse(headerView.logicalText.contains("[show outer]"))
+                headerView.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE))
+                val action = actualHeader.nodes.single { it.kind == FloatInteractionKind.LINK && it.label?.toString() == header.text }
+                assertTrue(headerView.accessibilityNodeProvider.performAction(action.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                val bounds = toggle.logicalFocusBounds()
+                val time = android.os.SystemClock.uptimeMillis()
+                for (eventAction in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                    val event = MotionEvent.obtain(time, time + if (eventAction == MotionEvent.ACTION_UP) 1 else 0,
+                        eventAction, bounds.exactCenterX(), bounds.exactCenterY(), 0)
+                    try { event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN; assertTrue(toggle.dispatchTouchEvent(event)) }
+                    finally { event.recycle() }
+                }
+            }
+            compose.waitUntil(5_000) {
+                var ready = false
+                compose.activityRule.scenario.onActivity { ready = allViews().filterIsInstance<NativeContainerDisclosureView>().any { it.logicalLabel == "[show inner]" } }
+                ready
+            }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertEquals(listOf(EntryLink("header-owner")), opened)
+                assertSame(firstIdentity, button("[hide outer]").controlIdentity)
+                assertEquals(2, allViews().filterIsInstance<NativeContainerDisclosureView>().size)
+                hidden()
+                val headerView = allViews().filterIsInstance<NativeFloatTextView>().single { it.logicalText.contains(header.text) }
+                assertTrue(headerView.height > collapsedHeight)
+                assertTrue(button("[hide outer]").performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { hidden(); assertEquals(1, allViews().filterIsInstance<NativeContainerDisclosureView>().size) }
+            val reveal = EntryAnchorRequest(original.key, "#hidden-heading")
+            compose.runOnIdle { request.value = reveal }
+            compose.waitUntil(8_000) { consumed.any { it.first === reveal } }
+            compose.waitForIdle()
+            compose.waitUntil(8_000) {
+                var visible = false
+                compose.activityRule.scenario.onActivity { visible = targetVisible() }
+                visible
+            }
+            compose.runOnIdle {
+                val completions = consumed.filter { it.first === reveal }
+                assertEquals(1, completions.size)
+                assertTrue("completion follows actual native target placement", completions.single().second)
+                assertTrue(targetVisible())
+                assertEquals("[hide outer]", button("[hide outer]").logicalLabel)
+                assertEquals("[hide inner]", button("[hide inner]").logicalLabel)
+                val (view, node) = checkNotNull(targetOwner())
+                view.setSelection(node.start, node.end)
+                assertEquals(target.text, view.selectedTextForCopy())
+                assertTrue(view.accessibilityNodeProvider.performAction(node.id, AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(EntryLink("hidden-word"), opened.last())
+                assertSame(target, heading.spans.single())
+                assertSame(retainedOuterChild, outer.blocks[1].container)
+                assertSame(retainedBody, inner.blocks[1].container)
+                assertEquals(1L, checkNotNull(outer.disclosure).contentIndex)
+                assertEquals(1L, checkNotNull(inner.disclosure).contentIndex)
+                assertTrue(allViews().filterIsInstance<NativeFloatTextView>().none { it.logicalText.contains("[hide inner]") })
+            }
+            compose.onNodeWithTag("entry-scroll").performScrollToIndex(0)
+            val replacement = original.copy()
+            assertEquals(original, replacement); assertNotSame(original, replacement)
+            compose.runOnIdle { source.value = replacement }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                hidden()
+                assertEquals(1, allViews().filterIsInstance<NativeContainerDisclosureView>().size)
+                assertNotSame(firstIdentity, button("[show outer]").controlIdentity)
+                assertSame(outer, replacement.sections.single().blocks.single().table!!.rows.single().single().blocks!!.single().container)
+                assertEquals(1, consumed.count { it.first === reveal })
+            }
+            val recovery = EntryAnchorRequest(replacement.key, "#hidden-heading")
+            compose.runOnIdle { request.value = recovery }
+            compose.waitUntil(8_000) { consumed.any { it.first === recovery } }
+            compose.waitForIdle()
+            compose.waitUntil(8_000) {
+                var visible = false
+                compose.activityRule.scenario.onActivity { visible = targetVisible() }
+                visible
+            }
+            compose.runOnIdle {
+                assertEquals(1, consumed.count { it.first === recovery })
+                assertTrue(consumed.single { it.first === recovery }.second)
+                assertTrue(targetVisible())
+                assertEquals(2, opened.size)
+                assertSame(outer, original.sections.single().blocks.single().table!!.rows.single().single().blocks!!.single().container)
+            }
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
 }

@@ -339,8 +339,49 @@ class RubyModelCodecTest {
             repeat(count) { out.write(record) }
             columnLayoutTail()
         }
+        private fun disclosureColor(value: FigureColor, label: String) {
+            mark(label)
+            when (value) {
+                FigureColor.NativeTheme -> byte(0)
+                FigureColor.Transparent -> byte(1)
+                is FigureColor.Rgb -> { byte(2); string(value.value, "$label.rgb") }
+            }
+        }
+        private fun disclosureRun(value: ContainerDisclosureLabelRun, label: String) {
+            mark(label); mark("$label.start"); u32(value.start); mark("$label.end"); u32(value.end)
+            val states = listOf(value.paint.normal, value.paint.hover, value.paint.active, value.paint.hoverActive)
+            states.forEachIndexed { index, state -> string(state.foreground, "$label.color$index") }
+            var flags = if (value.paint.underlineOnFocus) 16 else 0
+            states.forEachIndexed { index, state -> if (state.underline) flags = flags or (1 shl index) }
+            mark("$label.flags"); byte(flags)
+        }
+        private fun disclosure(value: ContainerDisclosure, label: String) {
+            mark(label); mark("$label.index"); u32(value.contentIndex)
+            mark("$label.collapsed"); byte(if (value.initiallyCollapsed) 1 else 0)
+            string(value.expandLabel, "$label.expand"); string(value.collapseLabel, "$label.collapse")
+            mark("$label.focus"); byte(if (value.focus == null) 0 else 1)
+            value.focus?.let { focus ->
+                mark("$label.focus.mode"); byte(focus.mode.ordinal)
+                mark("$label.focus.presence"); byte(if (focus.color == null) 0 else 1)
+                focus.color?.let { disclosureColor(it, "$label.focus.color") }
+            }
+            mark("$label.placement"); byte(value.placement.ordinal)
+            mark("$label.fields"); byte((if (value.foreground != null) 1 else 0) or
+                (if (value.direction != null) 2 else 0) or (if (value.expandRun != null) 4 else 0) or
+                (if (value.collapseRun != null) 8 else 0))
+            value.foreground?.let { disclosureColor(it, "$label.foreground") }
+            value.direction?.let { mark("$label.direction"); byte(it.ordinal) }
+            value.expandRun?.let { disclosureRun(it, "$label.expandRun") }
+            value.collapseRun?.let { disclosureRun(it, "$label.collapseRun") }
+            mark("$label.end")
+        }
+        fun disclosureTableChain(policy: ContainerDisclosure, depth: Int) {
+            prefix(13); byte(0); tail(); positionedStyle(ContainerStyle(), "tableOwner.style", policy)
+            u32(1); prefix(13); byte(0); tail(); positionedStyle(ContainerStyle(), "tableContent.style")
+            u32(1); tableChain(depth, mixed = true); columnLayoutTail(); columnLayoutTail()
+        }
         /** Literal Z Container subset; existing primitives retain every ordinary span field. */
-        fun positionedStyle(value: ContainerStyle, label: String) {
+        fun positionedStyle(value: ContainerStyle, label: String, disclosure: ContainerDisclosure? = null) {
             require(value == ContainerStyle(width = value.width, lineHeight = value.lineHeight,
                 textAlign = value.textAlign, overflow = value.overflow, ownerFontScale = value.ownerFontScale,
                 height = value.height, columns = value.columns, positioning = value.positioning, fontFamily = value.fontFamily,
@@ -383,7 +424,7 @@ class RubyModelCodecTest {
             value.ownerFont?.let { fontSnapshot(it, "$label.owner") }
             if (version == 'Z' && yFlags and 256 != 0) {
                 mark("$label.extension")
-                byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0) or (if (value.absoluteStatic != null) 4 else 0))
+                byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0) or (if (value.absoluteStatic != null) 4 else 0) or (if (disclosure != null) 8 else 0))
                 value.absolutePosition?.let {
                     positionedLength(it.left, "$label.left"); positionedLength(it.top, "$label.top")
                 }
@@ -392,7 +433,8 @@ class RubyModelCodecTest {
                     byte(when (it) { TextWrap.Normal -> 0; TextWrap.NoWrap -> 1; else -> error("Unsupported fixture wrap") })
                 }
                 value.absoluteStatic?.let { mark("$label.static"); byte(it.direction.ordinal) }
-            } else require(value.absolutePosition == null && value.textWrap == null && value.absoluteStatic == null)
+                disclosure?.let { this.disclosure(it, "$label.disclosure") }
+            } else require(value.absolutePosition == null && value.textWrap == null && value.absoluteStatic == null && disclosure == null)
             value.columns?.takeIf { it.width != null || it.direction != null }?.let { columns ->
                 mark("$label.columnExtension"); byte((if (columns.width != null) 1 else 0) or (if (columns.direction != null) 2 else 0))
                 columns.width?.let { positionedLength(it, "$label.columnWidth") }
@@ -414,7 +456,7 @@ class RubyModelCodecTest {
             when {
                 container != null -> {
                     require(value == Block("container", 0, emptyList(), container = container))
-                    prefix(13); byte(0); tail(); positionedStyle(container.style, "$label.style")
+                    prefix(13); byte(0); tail(); positionedStyle(container.style, "$label.style", container.disclosure)
                     mark("$label.children"); u32(container.blocks.size.toLong())
                     container.blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.child$index") }
                 }
@@ -725,7 +767,7 @@ class RubyModelCodecTest {
         private fun headingStyle(extensions: Boolean) {
             u32((1 or 2 or 16 or 2048 or 4096 or 65536 or 4194304).toLong())
             repeat(8) { length() }; byte(0); byte(0); byte(0); f32(1f); byte(0)
-            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+            if (version == 'Z' && yFlags and 256 != 0) { mark("heading.extension"); byte(0) }
             byte(1); f32(1f); byte(1); byte(0); string("ja"); string(""); byte(0); byte(0)
             if (extensions) byte(0)
         }
@@ -4897,6 +4939,226 @@ class RubyModelCodecTest {
                 .document(listOf(rounded), Sink.Body)
             if (depth == 32) assertEquals(1, read(bytes).sections.size)
             else reject("Rounded box cannot reset table depth", bytes)
+        }
+    }
+
+    private fun disclosurePaint() = ContainerDisclosureTextPaint(LinkState("#102030", false),
+        LinkState("#203040", true), LinkState("#304050", false), LinkState("#405060", true), true)
+    private fun disclosurePolicy() = ContainerDisclosure(1, true, "[ก😀é]", "[hide]",
+        ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.Rgb("#3366cc")),
+        ContainerDisclosurePlacement.FloatRight, FigureColor.Transparent, BidiResolvedDirection.Rtl,
+        ContainerDisclosureLabelRun(1, 8, disclosurePaint()), ContainerDisclosureLabelRun(1, 5, disclosurePaint()))
+    private fun disclosureOwner(policy: ContainerDisclosure? = disclosurePolicy(),
+        style: ContainerStyle = ContainerStyle(), hidden: List<Block> = listOf(Block("paragraph", 0,
+            listOf(Span("text", "hidden 😀 ", bold = true), Span("link", "target", "Original target", targetFragment = "sense"))))) =
+        Block("container", 0, emptyList(), container = Container(listOf(
+            Block("paragraph", 0, listOf(Span("external_link", "outside", "https://example.test/outside"))),
+            Block("container", 0, emptyList(), container = Container(hidden))), style, policy))
+    private fun disclosureContainers(entry: Entry): List<Container> = buildList {
+        val visitor = PresentationSpanVisitor { _, _ -> }
+        visitor.onContainer = { add(it) }
+        entry.sections.forEach { visitor.blocks(it.blocks) }
+        entry.references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
+    }
+
+    @Test fun containerDisclosureRetainsOriginalChildLabelsStatesAndRejectsMutatedCustody() {
+        val root = disclosureOwner()
+        val owner = checkNotNull(root.container)
+        val policy = checkNotNull(owner.disclosure)
+        val child = checkNotNull(owner.blocks[1].container)
+        val entry = Entry("Disclosure", emptyList(), "language", "Thai", "th",
+            listOf(Section(2, "Body", listOf(root))), emptyList())
+        assertSame(owner, disclosureContainers(entry).first())
+        assertSame(child, disclosureContainers(entry)[1])
+        val original = mutableListOf<Span>()
+        root.visitSpanRuns { spans, _ -> original.addAll(spans) }
+        assertEquals(listOf("outside", "hidden 😀 ", "target"), original.map { it.text })
+        assertSame(child.blocks.single().spans.last(), original.last())
+        assertEquals(EntryLink("Original target", "sense"), original.last().entryLink())
+        assertEquals("[ก😀é]", policy.expandLabel)
+        assertEquals(1L, policy.expandRun!!.start); assertEquals(8L, policy.expandRun!!.end)
+        assertEquals(listOf("#102030", "#203040", "#304050", "#405060"), listOf(policy.expandRun!!.paint.normal,
+            policy.expandRun!!.paint.hover, policy.expandRun!!.paint.active, policy.expandRun!!.paint.hoverActive).map { it.foreground })
+        assertEquals(listOf(false, true, false, true), listOf(policy.expandRun!!.paint.normal,
+            policy.expandRun!!.paint.hover, policy.expandRun!!.paint.active, policy.expandRun!!.paint.hoverActive).map { it.underline })
+        assertTrue(policy.expandRun!!.paint.underlineOnFocus)
+        assertEquals(FigureColor.Transparent, policy.foreground)
+        assertSame(child, owner.copy(disclosure = policy.copy(initiallyCollapsed = false)).blocks[1].container)
+        for (index in listOf(0L, 2L, 0xffff_ffffL)) invalid("Original immediate child index $index") {
+            owner.copy(disclosure = policy.copy(contentIndex = index))
+        }
+        for (index in listOf(-1L, 0x1_0000_0000L)) invalid("u32 index $index") { policy.copy(contentIndex = index) }
+        for (label in listOf("", "\u0000", "\t", "\n", "\r", "\u001f", "\u007f", "\ud800", "\udc00")) {
+            invalid("Invalid complete expand label") { policy.copy(expandLabel = label, expandRun = null) }
+            invalid("Invalid complete collapse label") { policy.copy(collapseLabel = label, collapseRun = null) }
+        }
+        assertEquals(" \u0085 ", policy.copy(expandLabel = " \u0085 ", expandRun = null).expandLabel)
+        for ((start, end) in listOf(2L to 8L, 1L to 5L, 1L to 40L)) invalid("Original UTF-8 boundaries") {
+            policy.copy(expandRun = ContainerDisclosureLabelRun(start, end, disclosurePaint()))
+        }
+        invalid("Nonempty run") { ContainerDisclosureLabelRun(1, 1, disclosurePaint()) }
+        invalid("No native-theme label paint") { policy.copy(foreground = FigureColor.NativeTheme) }
+        invalid("No native-theme focus paint") { ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.NativeTheme) }
+        invalid("None cannot carry color") { ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.AuthoredNone, FigureColor.Transparent) }
+        invalid("Run states require canonical RGB") { disclosurePaint().copy(normal = LinkState("#ABCDEF", false)) }
+        assertNotNull(policy.copy(focus = ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.AuthoredNone)))
+        assertNotNull(policy.copy(focus = ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.Transparent)))
+        val mutable = owner.blocks.toMutableList()
+        val retained = owner.copy(blocks = mutable)
+        val retainedEntry = entry.copy(sections = listOf(Section(2, "Body", listOf(root.copy(container = retained)))))
+        mutable[1] = mutable[0]
+        invalid("Container copy rechecks original child") { retained.copy() }
+        invalid("Complete hidden-tree validation rechecks original child") { retainedEntry.copy() }
+        mutable[1] = owner.blocks[1]
+        assertSame(child, disclosureContainers(retainedEntry.copy())[1])
+    }
+
+    @Test fun containerDisclosure256RoundtripsFullHiddenGraphAtEveryBlockSinkAndMixedColumnTail() {
+        val original = disclosureOwner()
+        val sinks = listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption,
+            Sink.ReferenceBlocks, Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)
+        for (sink in sinks) {
+            val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(original, "disclosure") } }
+            val bytes = wire.document(emptyList(), sink)
+            val decoded = read(bytes)
+            val actual = disclosureContainers(decoded).single { it.disclosure != null }
+            assertEquals("Full original owner at $sink", original.container, actual)
+            assertEquals(listOf("hidden 😀 ", "target"), actual.blocks[1].container!!.blocks.single().spans.map { it.text })
+            assertEquals(EntryLink("Original target", "sense"), actual.blocks[1].container!!.blocks.single().spans.last().entryLink())
+            val label = "disclosure.style.disclosure"
+            assertEquals(8, bytes[wire.at.getValue("disclosure.style.extension")].toInt() and 255)
+            assertEquals(2, bytes[wire.at.getValue("$label.placement")].toInt() and 255)
+            assertEquals(15, bytes[wire.at.getValue("$label.fields")].toInt() and 255)
+            assertEquals(1, bytes[wire.at.getValue("$label.direction")].toInt() and 255)
+            assertEquals(26, bytes[wire.at.getValue("$label.expandRun.flags")].toInt() and 255)
+            assertEquals(53, wire.at.getValue("$label.expandRun.flags") + 1 - wire.at.getValue("$label.expandRun"))
+            assertEquals(wire.at.getValue("$label.end"), wire.at.getValue("disclosure.children"))
+        }
+        val minimal = ContainerDisclosure(1, true, "e", "c")
+        val plain = disclosureOwner(minimal)
+        val minimalWire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(plain, "minimal") } }
+        val minimalBytes = minimalWire.document(emptyList(), Sink.Body)
+        assertArrayEquals(byteArrayOf(1, 0, 0, 0, 1, 1, 0, 0, 0, 101, 1, 0, 0, 0, 99, 0, 0, 0),
+            minimalBytes.copyOfRange(minimalWire.at.getValue("minimal.style.disclosure"),
+                minimalWire.at.getValue("minimal.style.disclosure.end")))
+        for ((index, focus) in listOf(null, ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.AuthoredNone),
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto),
+            ContainerDisclosureFocusPaint(ContainerDisclosureFocusMode.UaAuto, FigureColor.Transparent)).withIndex()) {
+            val policy = minimal.copy(initiallyCollapsed = index % 2 == 0, focus = focus,
+                placement = ContainerDisclosurePlacement.entries[index % 3],
+                foreground = if (index == 1) FigureColor.Rgb("#123456") else null,
+                direction = if (index == 2) BidiResolvedDirection.Ltr else null)
+            val originalPolicy = disclosureOwner(policy)
+            val candidate = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(originalPolicy) } }
+            assertEquals(originalPolicy, read(candidate.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+        }
+        val font = InlineFontSnapshot(fontScale = 18f, fontScaleBasis = FontScaleBasis.CssPx, fontNormalized = true)
+        val style = ContainerStyle(ownerFont = font, columns = ContainerColumns(2, StyleLength(StyleLengthUnit.Px, 1f),
+            StyleLength(StyleLengthUnit.Em, 12f), BidiResolvedDirection.Ltr))
+        val mixed = disclosureOwner(style = style)
+        val wire = Wire('Z', 1 or 256 or 4096).apply { paragraphOverride = { positionedBlock(mixed, "mixed") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        assertEquals(mixed, read(bytes).sections.single().blocks.single())
+        assertEquals(wire.at.getValue("mixed.style.disclosure.end"), wire.at.getValue("mixed.style.columnExtension"))
+        assertEquals(wire.at.getValue("mixed.style.end"), wire.at.getValue("mixed.children"))
+        assertEquals(font, read(bytes).sections.single().blocks.single().container!!.style.ownerFont)
+        // The same capability remains occupied by an ordinary wrap after removing disclosure.
+        val wrapped = disclosureOwner(style = ContainerStyle(textWrap = TextWrap.Normal))
+        val with = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(wrapped, "nullPair") } }
+        val full = with.document(emptyList(), Sink.Body)
+        val start = with.at.getValue("nullPair.style.disclosure")
+        val end = with.at.getValue("nullPair.style.disclosure.end")
+        val stripped = changed(replace(full, start, end, byteArrayOf()), with.at.getValue("nullPair.style.extension"), 2)
+        val square = wrapped.copy(container = wrapped.container!!.copy(disclosure = null))
+        val without = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(square, "nullPair") } }
+        val legacy = without.document(emptyList(), Sink.Body)
+        assertArrayEquals(legacy, stripped)
+        assertEquals(square, read(legacy).sections.single().blocks.single())
+        val noExtension = disclosureOwner(null)
+        val old = Wire('O').apply { paragraphOverride = { positionedBlock(noExtension) } }
+        assertEquals(noExtension, read(old.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+    }
+
+    @Test fun containerDisclosureRefusesMalformedLocalContextLabelsStatesAndCapabilityDebt() {
+        val source = disclosureOwner()
+        val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(source, "disclosure") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val name = "disclosure.style.disclosure"
+        for (extension in listOf(16, 128, 255)) reject("Unknown Container extension $extension",
+            changed(bytes, wire.at.getValue("disclosure.style.extension"), extension))
+        reject("Disclosure cannot borrow missing header256", changed(bytes, 5, 0))
+        val noPayload = changed(replace(bytes, wire.at.getValue(name), wire.at.getValue("$name.end"), byteArrayOf()),
+            wire.at.getValue("disclosure.style.extension"), 0)
+        assertEquals("The complete tree has no actual256 owner", "Y/Z features do not match owner geometry payload",
+            runCatching { read(noPayload) }.exceptionOrNull()?.message)
+        for (index in listOf(0L, 2L, 0xffff_ffffL)) reject("Original immediate Container child", changed32(bytes, wire.at.getValue("$name.index"), index))
+        for (key in listOf("collapsed", "focus", "focus.presence")) reject("Canonical bool $key", changed(bytes, wire.at.getValue("$name.$key"), 2))
+        reject("Unknown focus mode", changed(bytes, wire.at.getValue("$name.focus.mode"), 2))
+        reject("None cannot carry paint", changed(bytes, wire.at.getValue("$name.focus.mode"), 0))
+        reject("No native-theme focus", changed(bytes, wire.at.getValue("$name.focus.color"), 0))
+        reject("No native-theme foreground", changed(bytes, wire.at.getValue("$name.foreground"), 0))
+        reject("Unknown placement", changed(bytes, wire.at.getValue("$name.placement"), 3))
+        reject("Unknown direction", changed(bytes, wire.at.getValue("$name.direction"), 2))
+        for (flag in listOf(16, 32, 64, 128)) reject("Unknown disclosure fields $flag", changed(bytes, wire.at.getValue("$name.fields"), 15 or flag))
+        for (flag in listOf(32, 64, 128)) reject("Unknown run flags $flag", changed(bytes, wire.at.getValue("$name.expandRun.flags"), 26 or flag))
+        for (key in listOf("expand", "collapse")) {
+            val length = if (key == "expand") source.container!!.disclosure!!.expandLabel.encodeToByteArray().size else 6
+            val offset = wire.at.getValue("$name.$key")
+            reject("Empty complete $key", replace(bytes, offset, offset + 4 + length, byteArrayOf(0, 0, 0, 0)))
+            reject("Oversize $key", changed32(bytes, offset, 32L * 1024 * 1024 + 1))
+            for (bad in listOf(0, 31, 127, 255)) reject("Invalid $key bytes", changed(bytes, wire.at.getValue("$name.$key.bytes"), bad))
+        }
+        reject("No continuation-byte start", changed32(bytes, wire.at.getValue("$name.expandRun.start"), 2))
+        reject("No continuation-byte end", changed32(bytes, wire.at.getValue("$name.expandRun.end"), 5))
+        reject("Run outside label", changed32(bytes, wire.at.getValue("$name.expandRun.end"), 0xffff_ffffL))
+        reject("Four canonical RGB states", changed(bytes, wire.at.getValue("$name.expandRun.color3.bytes") + 1, 'A'.code))
+        for (end in wire.at.getValue(name) until wire.at.getValue("$name.end")) reject("Truncated disclosure $end", bytes.copyOf(end))
+        reject("No trailing data", bytes + byteArrayOf(0))
+        val heading = Wire('Z', 256)
+        val generic = heading.document(listOf(text("heading")), Sink.Heading, headingTitle = "heading")
+        val wrongContext = changed(generic, heading.at.getValue("heading.extension"), 8)
+        assertTrue("Generic style rejects8 before payload", runCatching { read(wrongContext) }.exceptionOrNull()?.message
+            ?.contains("Unknown positioned Container extension") == true)
+        assertEquals(source, read(bytes).sections.single().blocks.single())
+    }
+
+    @Test fun containerDisclosureHiddenTreeUsesOneItemContentAndTableBudget() {
+        val limit = 1 shl 20
+        val minimal = ContainerDisclosure(0, true, "e", "c")
+        val rich = disclosurePolicy().copy(contentIndex = 0)
+        fun owner(rows: Int, policy: ContainerDisclosure): Block {
+            val table = Block("table", 0, emptyList(), table = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>())))
+            val child = Block("container", 0, emptyList(), container = Container(listOf(table)))
+            return Block("container", 0, emptyList(), container = Container(listOf(child), disclosure = policy))
+        }
+        for ((policy, cost) in listOf(minimal to 1, rich to 4)) {
+            fun entry(rows: Int) = Entry("Hidden budget", emptyList(), "language", "Thai", "th",
+                listOf(Section(2, "Body", listOf(owner(rows, policy)))), emptyList())
+            val exact = entry(limit - 3 - cost)
+            assertEquals(limit - 3 - cost, exact.sections.single().blocks.single().container!!.blocks.single().container!!.blocks.single().table!!.rows.size)
+            invalid("Hidden rows cannot restart model budget") { entry(limit - 2 - cost) }
+            fun wire(rows: Int): ByteArray = Wire('Z', 256).apply {
+                paragraphOverride = { positionedBlock(owner(rows, policy), "budget") }
+            }.document(emptyList(), Sink.Body)
+            val decoded = read(wire(limit - 4 - cost))
+            assertEquals(policy, decoded.sections.single().blocks.single().container!!.disclosure)
+            assertEquals(limit - 4 - cost, decoded.sections.single().blocks.single().container!!.blocks.single().container!!.blocks.single().table!!.rows.size)
+            reject("Disclosure/focus/runs share decoder budget", wire(limit - 3 - cost))
+        }
+        val source = disclosureOwner(minimal.copy(contentIndex = 1))
+        var nested = source
+        repeat(14) { nested = Block("container", 0, emptyList(), container = Container(listOf(nested))) }
+        assertNotNull(nested)
+        invalid("Hidden content cannot exceed depth16") { Container(listOf(nested)) }
+        for (count in listOf(14, 15)) {
+            val wire = Wire('Z', 256).apply { paragraphOverride = { positionedBlock(source, "depth") } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = count)
+            if (count == 14) assertNotNull(read(bytes)) else reject("Shared hidden content depth17", bytes)
+        }
+        for (depth in listOf(32, 33)) {
+            val wire = Wire('Z', 256).apply { paragraphOverride = { disclosureTableChain(minimal, depth) } }
+            val bytes = wire.document(listOf(Span("link", "deep hidden", "Deep target")), Sink.Body)
+            if (depth == 32) assertNotNull(read(bytes)) else reject("Shared hidden table depth33", bytes)
         }
     }
 }
