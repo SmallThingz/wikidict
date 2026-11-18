@@ -40,12 +40,13 @@ def screen_projection(name):
     return pyte, ReaderPty
 
 
-def copy_publication(source, destination, expected_digest=None):
+def copy_publication(source, destination, expected_digest=None, *, expected_status='built'):
     raw = (source / 'complete.json').read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     require(expected_digest is None or digest == expected_digest, 'Selected edition manifest has changed')
     manifest = json.loads(raw)
-    require(manifest['status'] == 'built', 'Entry review requires a built dictionary')
+    require(expected_status in ('built', 'empty') and manifest['status'] == expected_status,
+            f'Expected dictionary manifest status {expected_status!r}')
     members = manifest['publication_files']
     require('languages.tsv' in members, 'Missing language catalog')
     destination.mkdir()

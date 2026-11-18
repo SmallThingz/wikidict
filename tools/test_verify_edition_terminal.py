@@ -157,6 +157,20 @@ class EditionTerminalTests(unittest.TestCase):
             with self.assertRaisesRegex(CheckFailure, 'member differs'):
                 copy_publication(source, parent / 'bad')
 
+    def test_copying_a_verified_empty_catalog_requires_explicit_empty_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            source = work / 'original'
+            source.mkdir()
+            catalog = b'heading\n'
+            (source / 'languages.tsv').write_bytes(catalog)
+            (source / 'complete.json').write_text(json.dumps({'status': 'empty', 'publication_files': {
+                'languages.tsv': {'size': len(catalog), 'sha256': hashlib.sha256(catalog).hexdigest()}}}))
+            with self.assertRaisesRegex(CheckFailure, 'manifest status'):
+                copy_publication(source, work / 'entry-review')
+            copy_publication(source, work / 'empty-review', expected_status='empty')
+            self.assertEqual((work / 'empty-review/languages.tsv').read_bytes(), catalog)
+
     def test_body_witness_excludes_match_sidebar_and_reading_title(self):
         lines = [''] * 11
         lines[6:9] = ['other title │ chosen / owner', 'sidebar │', 'wrong │ actual definition']
