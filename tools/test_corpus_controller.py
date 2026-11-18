@@ -5465,6 +5465,47 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
                     cwd=str(root), environment=dict(TMPDIR='/foreign/old-sr/tmp', WIKIDICT_PHASE_TIMING='1'),
                     output=root, roles=roles, source_refs=[ref('input')], scope='selected actual whole command')
 
+    def test_large_role_argument_survives_exec_and_preserves_validations(self):
+        import build_wiktionaries as builder
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            selected = self.selected(folder)
+            roles = selected['roles']
+            roles['dict-bundle-build']['source_evidence'] = 'x' * (32 * os.sysconf('SC_PAGE_SIZE'))
+            value = json.dumps(roles, sort_keys=True, separators=(',', ':'))
+            selected['argv'][-1] = value
+            compact = controller.compact_role_argv(selected['argv'], folder)
+            self.assertEqual(controller.logical_role_argv(compact), selected['argv'])
+            command = controller.ordinary_command_record(**dict(selected, argv=compact))
+            self.assertEqual(command['argv'], compact)
+            self.assertEqual(command['current_production_closure'], roles['dict-blob-build']['qualification_closure'])
+            # Exercise the operating system's actual per-argument limit.
+            subprocess.run([sys.executable, '-c', 'pass', *compact], check=True)
+            reference = compact[-1]
+            with mock.patch.object(builder, 'RetainedNativeToolRoles', return_value='loaded') as loader:
+                self.assertEqual(builder.parse_retained_native_roles(None, sys.executable,
+                    sharded=True, edition_count=1, jobs=1, reference=reference), 'loaded')
+                self.assertEqual(loader.call_args.args[0], roles)
+            with self.assertRaisesRegex(ValueError, 'one retained'):
+                builder.parse_retained_native_roles(value, sys.executable, sharded=True, edition_count=1,
+                    jobs=1, reference=reference)
+            (folder / 'retained-native-roles.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                controller.logical_role_argv(compact)
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                builder.parse_retained_native_roles(None, sys.executable, sharded=True, edition_count=1,
+                    jobs=1, reference=reference)
+
+    def test_small_or_unselected_role_arguments_remain_inline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            for argv in (['builder'], self.selected(folder)['argv']):
+                self.assertEqual(controller.compact_role_argv(argv, folder), argv)
+                self.assertEqual(controller.logical_role_argv(argv), argv)
+            self.assertEqual(list(folder.iterdir()), [])
+
     def test_selected_whole_command_owns_temp_and_role_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);selected=self.selected(root);before=copy.deepcopy(selected)

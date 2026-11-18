@@ -8064,11 +8064,13 @@ def watchdog_memory_limit_bytes(limit_mib, resource_mode):
     return limit_mib * 1024**2
 
 
-def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs):
-    if value is None:return None
+def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs, reference=None):
+    if value is not None and reference is not None:
+        raise ValueError('Select one retained native role argument')
+    if value is None and reference is None:return None
     if not sharded or edition_count != 1 or jobs != 1:
         raise ValueError('Retained native roles require one ordinary compressed edition')
-    roles=json.loads(value)
+    roles = prepared_metadata(json.loads(reference)) if reference is not None else json.loads(value)
     if not isinstance(roles,dict):raise ValueError('Invalid retained native roles')
     prepared=os.environ.get('WIKIDICT_PREPARED_SOURCE_ATTEMPT')
     selected=_prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1'
@@ -8107,7 +8109,9 @@ def main():
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--python-tooling-json',help='Explicit source-bound Python script/helper selection; native source root remains separately bound')
-    p.add_argument('--retained-native-roles-json',help='Explicit source-bound retained native role selection for one compressed edition; original producer provenance is retained')
+    role_args = p.add_mutually_exclusive_group()
+    role_args.add_argument('--retained-native-roles-ref', help='Path, byte count and SHA-256 descriptor of a retained native roles JSON file')
+    role_args.add_argument('--retained-native-roles-json',help='Explicit source-bound retained native role selection for one compressed edition; original producer provenance is retained')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
                    help='Resource supervisor: strict cgroup (default), or explicit best-effort 8 GiB process-tree watchdog with a two-hour deadline')
     p.add_argument('--watchdog-address-space',choices=('default','unlimited'),default='default',
@@ -8221,7 +8225,7 @@ def main():
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
     try:
         require_auxiliary_tooling(auxiliary)
-        retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig,
+        retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig, reference=a.retained_native_roles_ref,
             sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
     except (ValueError,OSError,KeyError,TypeError) as error:p.error(str(error))
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
@@ -8271,7 +8275,9 @@ def cli():
         route.add_argument('--downloads','--in',type=Path)
         route.add_argument('--input-manifest',type=Path)
         route.add_argument('--input-manifest-sha256')
-        route.add_argument('--retained-native-roles-json')
+        role_args = route.add_mutually_exclusive_group()
+        role_args.add_argument('--retained-native-roles-json')
+        role_args.add_argument('--retained-native-roles-ref')
         route.add_argument('--python-tooling-json')
         route.add_argument('--wikis',nargs='+')
         route.add_argument('--threads',type=int)

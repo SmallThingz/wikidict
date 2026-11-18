@@ -1001,7 +1001,7 @@ def prepared_source_observation(cfg, binding):
             and {'start','authorization'}<=set(binding), 'Invalid prepared source authorization')
     start=builder.prepared_metadata(binding['start'])
     require(start['context']==production_context(cfg) and start['date']==cfg['date']
-            and start['argv']==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
+            and logical_role_argv(start['argv'])==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
                 prepared_bytecode_prefix=str(Path(binding['start']['path']).parent/'unwritten-python-cache')),
             'Prepared source attempt invocation differs')
     source,workspace=source_roots(cfg)
@@ -1056,7 +1056,7 @@ def authorize_prepared_source(cfg,start,start_ref,launch_path,generation_ref,*,p
             and builder.prepared_metadata(start_ref)==start
             and start.get('prepared_source_control',{}).get('configuration')==cfg
             and {'argv','edition','workers_requested','memory_limit_bytes'}<=set(start)
-            and start['argv']==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
+            and logical_role_argv(start['argv'])==command(cfg,start['edition'],start['workers_requested'],start['memory_limit_bytes'],
                 prepared_bytecode_prefix=str(Path(start_ref['path']).parent/'unwritten-python-cache'))
             and getattr(process,'args',None)==start['argv']
             and record.get('source')==cfg['source']
@@ -2040,6 +2040,35 @@ def command(cfg, edition, workers, memory_limit_bytes=MEMORY, *, prepared_byteco
     return argv
 
 
+def compact_role_argv(argv, folder):
+    """Keep large role provenance out of the OS argument vector."""
+    if '--retained-native-roles-json' not in argv:
+        return argv
+    index = argv.index('--retained-native-roles-json')
+    value = argv[index + 1]
+    # Linux limits each argument to 32 pages including its terminating NUL.
+    if len(os.fsencode(value)) < 32 * os.sysconf('SC_PAGE_SIZE'):
+        return argv
+    path = folder / 'retained-native-roles.json'
+    with path.open('x', encoding='utf-8') as stream:
+        stream.write(value)
+    reference = descriptor(path)
+    return [*argv[:index], '--retained-native-roles-ref', json.dumps(reference), *argv[index + 2:]]
+
+
+def logical_role_argv(argv):
+    """Authenticate the recorded file and recover the usual command for comparison."""
+    if '--retained-native-roles-ref' not in argv:
+        return argv
+    index = argv.index('--retained-native-roles-ref')
+    require(argv.count('--retained-native-roles-ref') == 1 and index + 1 < len(argv)
+            and '--retained-native-roles-json' not in argv, 'Invalid retained native role arguments')
+    from build_wiktionaries import prepared_metadata
+    roles = prepared_metadata(json.loads(argv[index + 1]))
+    value = json.dumps(roles, sort_keys=True, separators=(',', ':'))
+    return [*argv[:index], '--retained-native-roles-json', value, *argv[index + 2:]]
+
+
 def ordinary_command_record(*, argv, cwd, environment, output, roles, source_refs, scope):
     """Build the direct-owner record from selected inputs, without donor state."""
     output = Path(output)
@@ -2057,10 +2086,11 @@ def ordinary_command_record(*, argv, cwd, environment, output, roles, source_ref
             'dict-blob-build', 'dict-blob-merge', 'dict-blob-verify', 'dict-bundle-build'}
             and all(isinstance(row, dict) for row in roles.values()),
             'Ordinary command requires its selected native roles')
-    require(argv.count('--retained-native-roles-json') == 1
-            and argv.index('--retained-native-roles-json') + 1 < len(argv),
+    logical = logical_role_argv(argv)
+    require(logical.count('--retained-native-roles-json') == 1
+            and logical.index('--retained-native-roles-json') + 1 < len(logical),
             'Ordinary command requires its selected role arguments')
-    require(json.loads(argv[argv.index('--retained-native-roles-json') + 1]) == roles,
+    require(json.loads(logical[logical.index('--retained-native-roles-json') + 1]) == roles,
             'Ordinary command role arguments differ from selected provenance')
     require(isinstance(source_refs, list) and isinstance(scope, str) and bool(scope),
             'Ordinary command requires source custody and scope')
@@ -3332,6 +3362,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
         workers_requested=workers, memory_limit_bytes=memory_limit_bytes, address_space='unlimited', context=context,
         controller=process_identity(os.getpid()), started_utc=utc(), argv=command(cfg, edition, workers, memory_limit_bytes,
             **({'prepared_bytecode_prefix':str(folder/'unwritten-python-cache')} if cfg.get('prepared_source_custody') is True or cfg.get('python_tooling') is not None else {})))
+    start['argv'] = compact_role_argv(start['argv'], folder)
     if cfg.get('prepared_source_custody') is True:
         bytecode_prefix=folder/'unwritten-python-cache'
         require(not os.path.lexists(bytecode_prefix), 'Prepared bytecode prefix is not absent')
