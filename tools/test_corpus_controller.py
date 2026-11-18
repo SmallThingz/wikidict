@@ -2883,6 +2883,38 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
                 with self.subTest(rows=rows), self.assertRaises(ValueError):
                     controller.phase_evidence(log, 'toy', '20261001', strict=True)
 
+    def test_single_read_authenticates_raw_bytes_and_matches_text_phase_records(self):
+        start = b'BUILD_PHASE {"edition":"toy","date":"d","phase":"edition_build","event":"start"}'
+        end = start.replace(b'"start"', b'"end","seconds":12,"label":"\xff"')
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'build.log'
+            log.write_bytes(b'\xff' + b'x' * 1024 + end + b'\r' + start + b'\r\nnoise\n' + end)
+            expected = (controller.descriptor(log), controller.phase_evidence(log, 'toy', 'd', strict=True), None)
+            self.assertEqual(expected[1]['end']['label'], '\ufffd')
+            for size in (1, 2, 11, 12, 27, 79, 512, 2048):
+                with self.subTest(size=size):
+                    self.assertEqual(controller.read_attempt_log(log, 'toy', 'd', block_size=size), expected)
+
+    def test_single_read_preserves_complete_failed_log_and_refuses_changed_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / 'build.log'
+            self.assertEqual(controller.read_attempt_log(log, 'toy', 'd'),
+                             (None, dict(production_started=False, end=None), None))
+            log.write_bytes(b'BUILD_PHASE malformed\r' + b'trailing bytes\n' * 100)
+            expected = (controller.descriptor(log), dict(production_started=None, end=None),
+                        'ValueError: Malformed edition phase record')
+            self.assertEqual(controller.read_attempt_log(log, 'toy', 'd', block_size=31), expected)
+            link = log.with_suffix('.link')
+            link.symlink_to(log)
+            with self.assertRaisesRegex(ValueError, 'Unsafe receipt'):
+                controller.read_attempt_log(link, 'toy', 'd')
+            def change_during_parse(*args, **kwargs):
+                log.write_bytes(b'replaced while reading')
+                raise ValueError('bad record')
+            with mock.patch.object(controller, '_phase_evidence', side_effect=change_during_parse):
+                with self.assertRaisesRegex(ValueError, 'Changed while reading'):
+                    controller.read_attempt_log(log, 'toy', 'd')
+
     def test_all44_unstarted_are_selected_from_complete_inventory_without_payload_reads(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, manifest, ledger, report, store = self.fixture(Path(tmp))

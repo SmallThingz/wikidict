@@ -20,6 +20,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import resource
 import signal
 import subprocess
@@ -95,15 +96,22 @@ def digest(path):
     return h.hexdigest()
 
 
-def descriptor(path):
-    path = Path(path).absolute()
+def _receipt_stat(path):
     require(path.is_file() and not path.is_symlink(), f'Unsafe receipt: {path}')
-    before = path.stat()
-    result = dict(path=str(path), bytes=before.st_size, sha256=digest(path))
+    return path.stat()
+
+
+def _checked_descriptor(path, before, checksum):
     after = path.stat()
     fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
     require(all(getattr(after, k) == getattr(before, k) for k in fields), f'Changed while reading: {path}')
-    return result
+    return dict(path=str(path), bytes=before.st_size, sha256=checksum)
+
+
+def descriptor(path):
+    path = Path(path).absolute()
+    before = _receipt_stat(path)
+    return _checked_descriptor(path, before, digest(path))
 
 
 def read_json(path):
@@ -158,31 +166,82 @@ def next_resources(workers, memory_limit_bytes, watchdog):
     return (reduced, MEMORY) if reduced is not None else None
 
 
-def phase_evidence(log_path, edition, date, *, strict=False):
+def _phase_evidence(lines, edition, date, *, strict=False):
     starts, ends = [], []
-    with Path(log_path).open(errors='replace') as stream:
-        for line in stream:
-            if not line.startswith('BUILD_PHASE '):
-                continue
-            try:
-                row = json.loads(line[len('BUILD_PHASE '):])
-            except ValueError:
-                require(not strict, 'Malformed edition phase record')
-                continue
-            require(isinstance(row, dict), 'Malformed edition phase object')
-            if (row.get('edition'), row.get('date'), row.get('phase')) != (edition, date, 'edition_build'):
-                continue
-            if strict:
-                require(row.get('event') in ('start', 'end'), 'Unknown edition phase event')
-                require(not ends, 'Edition phase follows terminal')
-                if row['event'] == 'end':
-                    require(len(starts) == 1, 'Edition terminal has no preceding start')
-                    require(type(row.get('seconds')) in (int, float) and math.isfinite(row['seconds'])
-                            and row['seconds'] >= 0, 'Invalid edition phase duration')
-            if row.get('event') == 'start': starts.append(row)
-            if row.get('event') == 'end': ends.append(row)
+    for line in lines:
+        if not line.startswith('BUILD_PHASE '):
+            continue
+        try:
+            row = json.loads(line[len('BUILD_PHASE '):])
+        except ValueError:
+            require(not strict, 'Malformed edition phase record')
+            continue
+        require(isinstance(row, dict), 'Malformed edition phase object')
+        if (row.get('edition'), row.get('date'), row.get('phase')) != (edition, date, 'edition_build'):
+            continue
+        if strict:
+            require(row.get('event') in ('start', 'end'), 'Unknown edition phase event')
+            require(not ends, 'Edition phase follows terminal')
+            if row['event'] == 'end':
+                require(len(starts) == 1, 'Edition terminal has no preceding start')
+                require(type(row.get('seconds')) in (int, float) and math.isfinite(row['seconds'])
+                        and row['seconds'] >= 0, 'Invalid edition phase duration')
+        if row.get('event') == 'start': starts.append(row)
+        if row.get('event') == 'end': ends.append(row)
     require(len(starts) <= 1 and len(ends) <= 1, 'More than one edition completion in a serial attempt')
     return dict(production_started=bool(starts or ends), end=ends[0] if ends else None)
+
+
+def phase_evidence(log_path, edition, date, *, strict=False):
+    with Path(log_path).open(errors='replace') as stream:
+        return _phase_evidence(stream, edition, date, strict=strict)
+
+
+_PHASE_LINE = re.compile(rb'BUILD_PHASE [^\r\n]*')
+
+
+def _hashed_phase_lines(stream, checksum, block_size):
+    """Hash every byte, decoding only phase records at logical line starts."""
+    tail = bytearray()
+    prefix = b'BUILD_PHASE '
+    for block in iter(lambda: stream.read(block_size), b''):
+        checksum.update(block)
+        end = 1 + max(block.rfind(b'\n'), block.rfind(b'\r'))
+        if end:
+            tail.extend(block[:end])
+            for match in _PHASE_LINE.finditer(tail):
+                if match.start() == 0 or tail[match.start() - 1] in (10, 13):
+                    yield match.group().decode(errors='replace')
+            tail = bytearray(block[end:])
+        else:
+            tail.extend(block)
+        # Retain one non-prefix byte for skipped lines so a mid-line marker at
+        # the next block boundary cannot start a record.
+        if tail and not (tail.startswith(prefix) or prefix.startswith(tail)):
+            tail = bytearray(b'!')
+    if tail.startswith(prefix):
+        yield tail.decode(errors='replace')
+
+
+def read_attempt_log(path, edition, date, *, block_size=1024 * 1024):
+    path = Path(path).absolute()
+    if not path.exists():
+        return None, dict(production_started=False, end=None), None
+    before = _receipt_stat(path)
+    checksum = hashlib.sha256()
+    error = None
+    with path.open('rb') as stream:
+        try:
+            evidence = _phase_evidence(_hashed_phase_lines(stream, checksum, block_size),
+                                       edition, date, strict=True)
+        except ValueError as exc:
+            error = f'{type(exc).__name__}: {exc}'
+            evidence = dict(production_started=None, end=None)
+            # The current block has already been hashed. A malformed record
+            # still needs an authenticated receipt for the rest of the log.
+            for block in iter(lambda: stream.read(block_size), b''):
+                checksum.update(block)
+    return _checked_descriptor(path, before, checksum.hexdigest()), evidence, error
 
 
 def phase_end(log_path, edition, date):
@@ -3317,14 +3376,9 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     elapsed = time.monotonic() - started
     wdpath = folder / '.tmp/build-watchdog-report.json'
     wd = read_json(wdpath) if wdpath.exists() else {}
-    log_ref = descriptor(folder / 'build.log') if (folder / 'build.log').exists() else None
-    phase_error = None
-    try:
-        evidence = phase_evidence(folder / 'build.log', edition, cfg['date'], strict=True) if log_ref else dict(production_started=False, end=None)
-    except (OSError, ValueError) as exc:
-        phase_error = f'{type(exc).__name__}: {exc}'
+    log_ref, evidence, phase_error = read_attempt_log(folder / 'build.log', edition, cfg['date'])
+    if phase_error:
         error = '; '.join(part for part in (error, 'Invalid phase evidence: ' + phase_error) if part)
-        evidence = dict(production_started=None, end=None)
     phase = evidence['end']
     accepted = None
     cleanup_proven = process is not None and process.poll() is not None and watchdog_closed(wd)
