@@ -2103,12 +2103,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         }
         break :lexical .{ .section = selected orelse break :lexical null, .kind = proof.kind, .definition_text = proof.definition_text };
     };
-    const layout = if (synthetic_unclassified)
-        try semantic.buildUnclassified(a, work.sections)
-    else if (classified_owner) |owner|
-        try semantic.buildOwnedWithSourceLexeme(a, work.sections, owner.heading, source_lexeme)
-    else
-        try semantic.build(a, work.sections);
+    const layout = try semantic.buildForDictionary(a, work.sections, synthetic_unclassified,
+        if (classified_owner) |owner| owner.heading else null, source_lexeme,
+        if (namespace_catalog) |catalog| catalog.wiki else "");
     const codec_phase = consume_diagnostics.beginConsumePhase(.codec);
     defer consume_diagnostics.endConsumePhase(codec_phase);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);

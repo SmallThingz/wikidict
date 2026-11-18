@@ -685,24 +685,24 @@ fn analyzeProjected(a: A, kind: []const u8, index: usize, etymology: ?usize, blo
 
 /// Uses the entry arena. The result only refers to existing semantic source sections.
 pub fn build(a: A, sections: anytype) !Layout {
-    return buildInContext(a, sections, false, null, null);
+    return buildForDictionary(a, sections, false, null, null, "");
 }
 /// A synthetic unresolved owner supplies no evidence that an L2 term label is
 /// a language boundary or a part of speech. Keep nested POS structure, but do
 /// not turn those unverified boundary labels into language grouping metadata.
 pub fn buildUnclassified(a: A, sections: anytype) !Layout {
-    return buildInContext(a, sections, true, null, null);
+    return buildForDictionary(a, sections, true, null, null, "");
 }
 /// The caller has already classified and split this single-owner record.
 /// Section labels retain structure but cannot reclassify its lexeme language.
 pub fn buildOwned(a: A, sections: anytype, owner: []const u8) !Layout {
-    return buildInContext(a, sections, false, owner, null);
+    return buildForDictionary(a, sections, false, owner, null, "");
 }
 // Build-only metadata from an exact source declaration and its independently
 // owned final section. It selects existing body addresses, never a new heading.
 pub const SourceLexeme = struct { section: usize, kind: []const u8, definition_text: []const u8 };
 pub fn buildOwnedWithSourceLexeme(a: A, sections: anytype, owner: []const u8, source_lexeme: ?SourceLexeme) !Layout {
-    return buildInContext(a, sections, false, owner, source_lexeme);
+    return buildForDictionary(a, sections, false, owner, source_lexeme, "");
 }
 fn sourceLexemeParagraph(section: anytype, index: usize, owner: ?[]const u8, source_lexeme: ?SourceLexeme) ?MarkedParagraphPart {
     const language = owner orelse return null;
@@ -2127,7 +2127,33 @@ fn exactNumberedHeading(title: []const u8, label: []const u8) bool {
     return true;
 }
 
-fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme) !Layout {
+// These H3s come from the Quechua Wiktionary's own POS templates. On
+// amañachiy, -pron- also labels IPA-only material. Require a numbered definition.
+fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
+    if (section.level != 3) return null;
+    const headings = .{
+        .{ "Suti", "Noun" },
+        .{ "Simichaq", "Verb" },
+        .{ "Sutip Rampaqnin", "Adjective" },
+        .{ "Sutip Rantin", "Pronoun" },
+        .{ "Simichaqpa K'askaqnin", "Adverb" },
+        .{ "Huchha Simi", "Numeral" },
+        .{ "Mayñiq Simi", "Preposition" },
+    };
+    inline for (headings) |heading| {
+        if (std.mem.eql(u8, section.title, heading[0])) {
+            for (section.blocks, 0..) |block, i| {
+                if (block.kind == .definition and std.mem.eql(u8, block.list_path, "#") and
+                    !standaloneEmptyDefinition(section.blocks, i)) return heading[1];
+            }
+            return null;
+        }
+    }
+    return null;
+}
+
+pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8) !Layout {
+    const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
     var origin: ?usize = null;
@@ -2137,7 +2163,8 @@ fn buildInContext(a: A, sections: anytype, unclassified: bool, owner: ?[]const u
     var related: std.ArrayList(usize) = .empty;
     var lemma_parent: ?struct { level: u8, kind: []const u8 } = null;
     for (sections, 0..) |section, i| {
-        const declared_kind = if (unclassified and section.level == 2) null else partOfSpeech(section.title);
+        const declared_kind = if (unclassified and section.level == 2) null else
+            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else null;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const named_kind = declared_kind orelse grammar_kind orelse if (unclassified) null else
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
@@ -2407,6 +2434,73 @@ test "classified layout owner survives support labels without changing lexical s
     try std.testing.expectEqualStrings("Unknown support", legacy.lexemes[1].language);
     try std.testing.expectEqualDeep(legacy.other_sections, owned.other_sections);
 }
+test "Quechua dictionary POS headings organize authored definitions and preserve owners and actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const Case = struct { heading: []const u8, kind: []const u8, body: []const u8 };
+    // Numbered lines from agua, achalay, achka, ich, ama and iskay.
+    const cases = [_]Case{
+        .{ .heading = "Suti", .kind = "Noun", .body = "# [[yaku]]" },
+        .{ .heading = "Simichaq", .kind = "Verb", .body = "# pitapas, imatapas achalawan sumaqchay" },
+        .{ .heading = "Sutip Rampaqnin", .kind = "Adjective", .body = "# mana pisilla, tawqa-tawqa" },
+        .{ .heading = "Sutip Rantin", .kind = "Pronoun", .body = "# [[ñuqa]]" },
+        .{ .heading = "Simichaqpa K'askaqnin", .kind = "Adverb", .body = "# mana saqillana rima, ruraqta hark'anapaq" },
+        .{ .heading = "Huchha Simi", .kind = "Numeral", .body = "# yanantin, yanayuq kaq, huk masiyuq kaq, '''2'''" },
+        .{ .heading = "Mayñiq Simi", .kind = "Preposition", .body = "# [[ukhupi]]" },
+    };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    for (cases) |case| {
+        const blocks = try renderer.renderBody(case.body);
+        const sections = [_]Section{.{ .title = case.heading, .level = 3, .blocks = blocks }};
+        var reference = sections;
+        reference[0].title = case.kind;
+        const known = try buildForDictionary(a, &sections, false, "Runa Simi", null, "quwiktionary");
+        const unknown = try buildForDictionary(a, &sections, true, null, null, "quwiktionary");
+        try std.testing.expectEqualDeep(try buildOwned(a, &reference, "Runa Simi"), known);
+        try std.testing.expectEqualDeep(try buildUnclassified(a, &reference), unknown);
+        for ([_]Layout{ known, unknown }, [_][]const u8{ "Runa Simi", "" }) |layout, language| {
+            try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+            const lexeme = layout.lexemes[0];
+            try std.testing.expectEqualStrings(case.kind, lexeme.kind);
+            try std.testing.expectEqualStrings(language, lexeme.language);
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+            const spans = sections[lexeme.section].blocks[lexeme.definitions[0].block].spans;
+            if (std.mem.eql(u8, case.heading, "Suti")) {
+                try std.testing.expectEqual(.link, spans[0].kind);
+                try std.testing.expectEqualStrings("yaku", spans[0].target);
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, true, null, null, "enwiktionary")).lexemes.len);
+    }
+    // Exercise the normal document-to-codec handoff, with the edition catalog
+    // and an independently chosen owner. The definition still navigates to yaku.
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    var ns = try @import("namespace_registry").Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\tquwiktionary\n# dump-date\t20261001\n# content-language\tqu\n0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n10\tPlantilla\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n14\tKatiguriya\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const source = "===Suti===\n# [[yaku]]";
+    const encoded = try document.compileClassifiedWithHeadingAnchorsAlloc(a, "agua", .language,
+        "Español", "es", document.MissingText.untracked(source), null, .{}, &ns, null, null, .{},
+        null, null, &.{}, null, &.{}, .{ .heading = "Español", .code = "es" });
+    const decoded = try codec.decodeAlloc(a, encoded, "agua", .language, .{ .heading = "Español", .code = "es" });
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+    const noun = decoded.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Español", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const definition = decoded.entry.sections[noun.section].blocks[noun.definitions[0].block];
+    try std.testing.expectEqual(.definition, definition.kind);
+    try std.testing.expectEqual(.link, definition.spans[0].kind);
+    try std.testing.expectEqualStrings("yaku", definition.spans[0].target);
+    const ipa = try renderer.renderBody("* IPA: /ɑ.ˌmɑ.ɲɑ.ˈʧij/");
+    try std.testing.expect(quechuaDefinitionPart(Section{ .title = "Sutip Rantin", .level = 3, .blocks = ipa }) == null);
+    const meaning = try renderer.renderBody("# [[yaku]]");
+    try std.testing.expect(quechuaDefinitionPart(Section{ .title = "Suti", .level = 2, .blocks = meaning }) == null);
+    try std.testing.expect(quechuaDefinitionPart(Section{ .title = "Rikuy ima", .level = 3, .blocks = meaning }) == null);
+}
+
 test "Hungarian noun heading organizes senses without choosing the record language" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
