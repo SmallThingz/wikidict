@@ -300,6 +300,7 @@ internal fun prepareNativeFloatText(
     val ruby = rubyStyledTextContexts(spans, rubyWeight, effective)
     val visibleSpans = ruby?.leaves?.map { checkNotNull(it.range.span) } ?: spans
     val clippedRanges = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.ClippedAbsolute }
+    val detachedDirectionRanges = clippedRanges + ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.OverlayContent }
     val nativeAnnotation = if (clippedRanges.isEmpty()) annotated else
         rubyStyledTextAnnotation(checkNotNull(ruby), rubyWeight, onLink, measureClippedChildren = true)
     check(nativeAnnotation.text == annotated.text) { "Clipped measurement must preserve the original UTF-16 source" }
@@ -670,8 +671,10 @@ internal fun prepareNativeFloatText(
     ruby?.groups?.forEach { (path, group) ->
         val range = group.range
         val owner = range.base?.owner ?: range.annotation?.owner
-        val authored = owner?.inlineStyle ?: range.span?.inlineStyle
-        val language = owner?.font?.language ?: range.span?.language.orEmpty()
+        val overlayContent = range.overlayContent
+        val authored = overlayContent?.let { InlineTextStyle(lineHeight = it.lineHeight) }
+            ?: owner?.inlineStyle ?: range.span?.inlineStyle
+        val language = overlayContent?.ownerFont?.language ?: owner?.font?.language ?: range.span?.language.orEmpty()
         if (language.isNotEmpty() && nativeTableOwnerLanguageTag(language) == null)
             familyFailure = "Ruby declaring language is unavailable for this layout."
         val relativeLanguage = (authored?.lineHeight as? InlineLineHeight.FontRelative)?.font?.language.orEmpty()
@@ -695,7 +698,7 @@ internal fun prepareNativeFloatText(
         }
         try {
             val height = when (val value = authored?.lineHeight) {
-                null -> parentPolicy
+                null -> if (overlayContent != null) NativeLineHeightPolicy.Normal else parentPolicy
                 is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(inlineLength(value.value))
                 is InlineLineHeight.FontRelative -> {
                     val pixels = checkNotNull(relativeFont).textSize.toDouble() * value.factor
@@ -1050,9 +1053,9 @@ internal fun prepareNativeFloatText(
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
                     val paragraphStyle = annotated.paragraphStyles.filter { it.start <= start && it.end >= end }
                         .fold(effective.toParagraphStyle()) { merged, range -> merged.merge(range.item) }
-                    val paragraphText = if (clippedRanges.isEmpty()) annotated.text.substring(start, end) else buildString {
+                    val paragraphText = if (detachedDirectionRanges.isEmpty()) annotated.text.substring(start, end) else buildString {
                         var at = start
-                        clippedRanges.filter { it.start < end && it.end > start }.sortedBy { it.start }.forEach { range ->
+                        detachedDirectionRanges.filter { it.start < end && it.end > start }.sortedBy { it.start }.forEach { range ->
                             append(annotated.text, at, maxOf(at, range.start))
                             at = minOf(end, range.end)
                         }

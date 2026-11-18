@@ -491,6 +491,20 @@ object BlobDecoder {
             }
             return InlineBoxAtomicLayout(width, height, margins, boxSizing, align, wrap, lineHeight)
         }
+        private fun inlineBoxOverlayContent(): InlineBoxOverlayContent = content {
+            // Boundary + complete normalized font + height/alignment tags + child count.
+            require(buffer.remaining() >= 26) { "Truncated inline box overlay content" }
+            val boundary = u32()
+            val font = inlineFontSnapshot()
+            val height = when (byte()) {
+                0 -> null
+                1 -> InlineLineHeight.Computed(inlineComputedLength())
+                2 -> InlineLineHeight.FontRelative(buffer.float, inlineFontSnapshot())
+                else -> error("Unknown overlay line-height tag")
+            }
+            val align = InlineBoxOverlayTextAlign.entries.getOrNull(byte()) ?: error("Unknown overlay text alignment")
+            InlineBoxOverlayContent(boundary, font, height, align, spans())
+        }
         private fun inlineBoxGroup(radiusDeclared: Boolean, atomicDeclared: Boolean): InlineBoxGroup = content {
             require(buffer.remaining() >= 32 + (if (radiusDeclared) 5 else 0) + (if (atomicDeclared) 34 else 0)) {
                 "Truncated inline box group"
@@ -499,14 +513,15 @@ object BlobDecoder {
             val border = inlineBoxBorders()
             val overlays = List(count(15)) {
                 val flags = byte()
-                require(flags and 0xf0 == 0 && flags and 5 != 0 && flags and 10 != 0) {
+                require(flags and 0xe0 == 0 && flags and 5 != 0 && flags and 10 != 0) {
                     "Inline box overlay requires two positioned axes"
                 }
                 InlineBoxOverlay(InlineBoxInsets(
                     if (flags and 1 != 0) inlineBoxInset() else null,
                     if (flags and 2 != 0) inlineBoxInset() else null,
                     if (flags and 4 != 0) inlineBoxInset() else null,
-                    if (flags and 8 != 0) inlineBoxInset() else null), inlineBoxBorders())
+                    if (flags and 8 != 0) inlineBoxInset() else null), inlineBoxBorders(),
+                    if (flags and 16 != 0) inlineBoxOverlayContent() else null)
             }
             val children = spans()
             val radius = if (radiusDeclared) {

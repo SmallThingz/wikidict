@@ -177,10 +177,12 @@ internal fun anonymousWidthRange(content: AnonymousFlowContent, paint: TextPaint
         row.second.toString()
     }
     val text = SpannableString(offsets.nativeText)
-    prepared.forEachIndexed { index, (_, source) ->
+    prepared.forEachIndexed { index, (event, source) ->
         val range = offsets.inlineSources[index]
         source.getSpans(0, source.length, Any::class.java).forEach { span ->
-            text.setSpan(span, range.start + source.getSpanStart(span), range.start + source.getSpanEnd(span), source.getSpanFlags(span))
+            val copied = if (span is NativeRubyPreparedSource) nativeInlineStyleSpanCopy(span) else span
+            text.setSpan(copied, range.start + source.getSpanStart(span), range.start + source.getSpanEnd(span), source.getSpanFlags(span))
+            if (copied is NativeRubyPreparedSource) nativeRubyBindAnonymousScope(text, copied, event)
         }
     }
     offsets.figures.forEach { anchor ->

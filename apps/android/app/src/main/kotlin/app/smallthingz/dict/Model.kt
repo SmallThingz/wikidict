@@ -306,15 +306,38 @@ data class InlineBoxInset(val unit: StyleWidthUnit, val value: Float) {
 }
 data class InlineBoxInsets(val top: InlineBoxInset? = null, val right: InlineBoxInset? = null,
     val bottom: InlineBoxInset? = null, val left: InlineBoxInset? = null)
-/** Empty absolute decoration with auto sizes and no text, advance, or action. */
-data class InlineBoxOverlay(val insets: InlineBoxInsets, val border: InlineBoxBorderEdges) {
+/** Detached source text; null line height is independently resolved CSS normal. */
+data class InlineBoxOverlayContent(val beforeChild: Long, val ownerFont: InlineFontSnapshot,
+    val lineHeight: InlineLineHeight? = null, val textAlign: InlineBoxOverlayTextAlign, val spans: List<Span>) {
+    init { require(validInlineBoxOverlayContent(this)) { "Invalid inline box overlay content" } }
+}
+internal fun validInlineBoxOverlayContent(value: InlineBoxOverlayContent): Boolean {
+    val font = value.ownerFont
+    if (value.beforeChild !in 0L..0xffff_ffffL || !font.fontNormalized || font.fontScale == null ||
+        font.fontScaleBasis == FontScaleBasis.Context || font.small || font.superscript || font.subscript ||
+        value.spans.isEmpty() || value.spans.size > (1 shl 20)) return false
+    val height = value.lineHeight
+    if (height is InlineLineHeight.FontRelative && !sameRubyFont(font, height.font)) return false
+    return value.spans.all { child ->
+        validRubyBodyChild(child) && child.kind == "text" && child.text.isNotEmpty() && child.target.isEmpty() &&
+            child.trail.isEmpty() && child.direction.isEmpty() && child.targetFragment == null &&
+            child.ruby == null && child.inlinePaddingGroup == null && child.inlineActionGroup == null &&
+            child.inlineBoxGroup == null && child.clippedAbsolute == null && child.citationMarker == null &&
+            !child.isQualifiedCitationBacklink && child.background == null && child.inlineStyle == null &&
+            child.linkPaint == null && !child.small && !child.superscript && !child.subscript &&
+            !child.underline && !child.strike && font.matches(child, normalized = true)
+    }
+}
+/** An absolute decoration may retain detached text without adding parent advance. */
+data class InlineBoxOverlay(val insets: InlineBoxInsets, val border: InlineBoxBorderEdges,
+    val content: InlineBoxOverlayContent? = null) {
     init {
         require((insets.left != null || insets.right != null) && (insets.top != null || insets.bottom != null)) {
             "Inline box overlay requires an explicit inset on each axis"
         }
     }
 }
-// Shared declaration also used by the separately held overlay-content carrier.
+// Shared alignment for atomic and detached inline-box text.
 enum class InlineBoxOverlayTextAlign { Start, Left, Center, Right }
 
 /** Authored atom dimensions use the declaring Box font for em, exactly once. */
@@ -375,7 +398,7 @@ private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
     }
 }
 
-/** Only original children contribute text. Overlay order is authored paint order. */
+/** Child boundaries order detached text; overlay array order also retains authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
     val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleWidth? = null,
     val atomicLayout: InlineBoxAtomicLayout? = null) {
@@ -1259,7 +1282,7 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
 /** Existence only: legacy ignored prefixes do not acquire a new validation budget.
  * Work follows the supplied graph; absence is not claimed within the wire item cap.
  * Identity tracking terminates shared/cyclic direct-model graphs without recursion. */
-private fun hasAtomicInlineBox(values: List<Span>): Boolean {
+private fun hasAtomicOrOverlayContent(values: List<Span>): Boolean {
     val seen = java.util.IdentityHashMap<Span, Boolean>()
     val work = java.util.ArrayDeque<Iterator<Span>>()
     work.addLast(values.iterator())
@@ -1270,7 +1293,7 @@ private fun hasAtomicInlineBox(values: List<Span>): Boolean {
         if (seen.put(span, true) != null) continue
         val box = span.inlineBoxGroup
         if (box != null) {
-            if (box.atomicLayout != null) return true
+            if (box.atomicLayout != null || box.overlays.any { it.content != null }) return true
             work.addLast(box.spans.iterator())
         }
         span.inlinePaddingGroup?.let { work.addLast(it.spans.iterator()) }
@@ -1449,6 +1472,17 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         }
         val depth = descend(contentDepth)
         charge(value.overlays.size)
+        var previousBoundary = 0L
+        for (overlay in value.overlays) overlay.content?.let { body ->
+            require(actionOwner == null) { "Inline overlay text cannot inherit an action" }
+            require(validInlineBoxOverlayContent(body) && body.beforeChild >= previousBoundary &&
+                body.beforeChild <= value.spans.size.toLong()) { "Invalid inline overlay body or source boundary" }
+            previousBoundary = body.beforeChild
+            val beforeOverlay = actualTextLeaves
+            spanList(body.spans, false, descend(depth), display = false, rubyChild = true)
+            // Detached text never satisfies the containing Box's in-flow text requirement.
+            actualTextLeaves = beforeOverlay
+        }
         val before = actualTextLeaves
         spanList(value.spans, false, depth, display = false, rubyChild = strictBody, boxChild = true,
             actionOwner = actionOwner)
@@ -1492,7 +1526,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         // Legacy rendering ignores these prefix runs. New typed custody still validates
         // their serialized owners and budgets without invoking display callbacks.
         if ((value.table != null || value.kind == "rule") &&
-            (value.spans.any { it.audioControl != null || it.clippedAbsolute != null } || hasAtomicInlineBox(value.spans)))
+            (value.spans.any { it.audioControl != null || it.clippedAbsolute != null } || hasAtomicOrOverlayContent(value.spans)))
             spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
         when {
             value.container != null -> {

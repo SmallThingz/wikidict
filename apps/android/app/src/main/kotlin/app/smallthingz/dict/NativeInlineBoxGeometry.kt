@@ -33,7 +33,7 @@ internal class NativeInlineBoxGeometry(
         val painter: NativeInlineBoxBorderPaint)
     private data class Owner(val range: NativeInlineRange<NativeInlineBoxSpan>, val fragments: List<Fragment>,
         val decoration: NativeInlineActionPaint, val overlays: List<NativeInlineBoxBorderPaint>,
-        val overlayLine: Int)
+        val overlayText: List<NativeInlineBoxOverlayGeometry>, val overlayLine: Int)
     private val lines: List<Line>
     private val owners: List<Owner>
     private val fragments: List<Fragment>
@@ -229,17 +229,44 @@ internal class NativeInlineBoxGeometry(
             }
             val first = own.filter { it.line == firstLine(range) }.let { if (ownerRtl(range, firstLine(range))) it.last() else it.first() }
             val last = own.filter { it.line == lastLine(range) }.let { if (ownerRtl(range, lastLine(range))) it.first() else it.last() }
-            val containing = rectangle(minOf(first.padding.left, last.padding.left), minOf(first.padding.top, last.padding.top),
-                maxOf(first.padding.right, last.padding.right), maxOf(first.padding.bottom, last.padding.bottom))
-            val overlays = range.value.box.overlays.map { overlay ->
-                NativeInlineBoxBorderPaint(nativeInlineBoxOverlayRect(overlay, containing, ownerRtl(range, first.line)), overlay.border)
+            val containing = if (range.value.overlaySources.isEmpty())
+                rectangle(minOf(first.padding.left, last.padding.left), minOf(first.padding.top, last.padding.top),
+                    maxOf(first.padding.right, last.padding.right), maxOf(first.padding.bottom, last.padding.bottom))
+            else {
+                if (own.groupBy { it.line }.values.any { it.size != 1 } || own.any { fragment ->
+                        lines[fragment.line].mapped.piecesForRange(maxOf(range.start, fragment.first),
+                            minOf(range.end, fragment.last)).map { it.rtl }.distinct().size != 1 })
+                    throw UnsupportedFloatLayout("Positioned inline text requires one directional fragment per line")
+                if (first.line == last.line) RectF(first.padding)
+                else {
+                    if (own.any { ownerRtl(range, it.line) ||
+                            lines[it.line].mapped.piecesForRange(maxOf(range.start, it.first),
+                                minOf(range.end, it.last)).any { piece -> piece.rtl } })
+                        throw UnsupportedFloatLayout("Wrapped positioned inline text requires the measured LTR profile")
+                    val bounds = nativeInlineBoxOverlayLtrContainingPadding(
+                        NativeFloatBounds(first.padding.left, first.padding.top, first.padding.right, first.padding.bottom),
+                        NativeFloatBounds(last.padding.left, last.padding.top, last.padding.right, last.padding.bottom))
+                    rectangle(bounds.left, bounds.top, bounds.right, bounds.bottom)
+                }
+            }
+            val overlayText = range.value.overlaySources.map { body ->
+                NativeInlineBoxOverlayGeometry(body, range.value.box.overlays[body.index], containing, first.line)
+            }
+            val overlays = range.value.box.overlays.mapIndexed { index, overlay ->
+                val placed = overlayText.singleOrNull { it.source.index == index }?.placement?.border
+                val rectangle = placed?.let { RectF(it.left, it.top, it.right, it.bottom) }
+                    ?: nativeInlineBoxOverlayRect(overlay, containing, ownerRtl(range, first.line))
+                NativeInlineBoxBorderPaint(rectangle, overlay.border)
             }
             Owner(range, own, NativeInlineActionPaint(range.value.format, range.value.shift,
                 lines.flatMap { it.mapped.fragmentsForRange(range.start, range.end) },
-                currentColorPaint = range.value.box.currentColorPaint), overlays, last.line)
+                currentColorPaint = range.value.box.currentColorPaint), overlays, overlayText, last.line)
         }
         rounded = roundedFragments.toMap()
     }
+
+    fun overlay(owner: NativeInlineBoxOwner, index: Int): NativeInlineBoxOverlayGeometry? =
+        owners.singleOrNull { it.range.value.box.owner === owner }?.overlayText?.singleOrNull { it.source.index == index }
 
     fun lineAdvance(line: Int): Float = lines[line].advance
     fun lineAdvanceBounds(line: Int): RectF = RectF(lines[line].bounds)
@@ -348,7 +375,10 @@ internal class NativeInlineBoxGeometry(
         fragments.filter { it.line == line }.forEach { fragment -> add(boxBounds(fragment)); addAll(fragment.painter.bounds) }
         owners.forEach { owner ->
             addAll(owner.decoration.bounds(line))
-            if (owner.overlayLine == line) owner.overlays.forEach { addAll(it.bounds) }
+            if (owner.overlayLine == line) {
+                owner.overlays.forEach { addAll(it.bounds) }
+                owner.overlayText.forEach { addAll(it.paintBounds) }
+            }
         }
     }
     override val ordinaryPaintBounds: List<NativeFloatBounds> get() = lines.indices.flatMap(::linePaintBounds)
@@ -356,7 +386,10 @@ internal class NativeInlineBoxGeometry(
         var result = NativeFloatBounds(0f, 0f, width.toFloat(), raw.textBottom)
         lines.forEach { result = result.enclosing(NativeFloatBounds(it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom)) }
         fragments.forEach { result = result.enclosing(boxBounds(it)) }
-        owners.forEach { owner -> owner.overlays.forEach { overlay -> overlay.bounds.forEach { result = result.enclosing(it) } } }
+        owners.forEach { owner ->
+            owner.overlays.forEach { overlay -> overlay.bounds.forEach { result = result.enclosing(it) } }
+            owner.overlayText.forEach { result = result.enclosing(it.scrollableBounds) }
+        }
         result
     }
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
@@ -376,9 +409,10 @@ internal class NativeInlineBoxGeometry(
     }
     fun paintOverlays(canvas: Canvas, line: Int? = null) {
         owners.filter { line == null || it.overlayLine == line }.forEach { owner ->
-            owner.overlays.forEach { overlay -> overlay.paint(canvas) {
-                owner.range.value.box.color(it, owner.range.value.format)
-            } }
+            owner.overlays.forEachIndexed { index, overlay ->
+                overlay.paint(canvas) { owner.range.value.box.color(it, owner.range.value.format) }
+                owner.overlayText.singleOrNull { it.source.index == index }?.paint(canvas)
+            }
         }
     }
     fun paintLine(canvas: Canvas, line: Int, includeOverlays: Boolean = true) {

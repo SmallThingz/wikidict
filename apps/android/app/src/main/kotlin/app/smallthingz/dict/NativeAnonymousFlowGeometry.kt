@@ -696,15 +696,17 @@ internal class NativeAnonymousFlowGeometry private constructor(
                 row.second.toString()
             }
             val source = SpannableString(offsets.nativeText)
-            prepared.forEachIndexed { index, (_, styled) -> if (styled.isNotEmpty() || hasNativeInlineLayoutOwner(styled)) {
+            prepared.forEachIndexed { index, (event, styled) -> if (styled.isNotEmpty() || hasNativeInlineLayoutOwner(styled)) {
                 val range = offsets.inlineSources[index]
                 check(styled.toString() == offsets.nativeText.substring(range.start, range.end))
                 styled.getSpans(0, styled.length, Any::class.java).forEach { span ->
                     // Alignment belongs to this full anonymous owner, not an independently shaped inline shard.
                     if (span is AlignmentSpan) return@forEach
                     // Each source occurrence retains its own point/range owner, even when an empty fragment is reused.
-                    source.setSpan(nativeInlineStyleSpanCopy(span), range.start + styled.getSpanStart(span),
+                    val copied = nativeInlineStyleSpanCopy(span)
+                    source.setSpan(copied, range.start + styled.getSpanStart(span),
                         range.start + styled.getSpanEnd(span), styled.getSpanFlags(span))
+                    if (copied is NativeRubyPreparedSource) nativeRubyBindAnonymousScope(source, copied, event)
                 }
             } }
             val measured = offsets.figures.associateWith { figure(it.event, width) }

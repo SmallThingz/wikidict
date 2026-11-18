@@ -209,13 +209,28 @@ class RubyModelCodecTest {
                 }
             }
         }
+        private fun boxOverlayContent(value: InlineBoxOverlayContent, label: String) {
+            mark("$label.start"); mark("$label.beforeChild"); u32(value.beforeChild)
+            fontSnapshot(value.ownerFont, "$label.font")
+            mark("$label.lineHeight")
+            when (val height = value.lineHeight) {
+                null -> byte(0)
+                is InlineLineHeight.Computed -> { byte(1); f32(height.value.value); byte(height.value.fontScaleBasis.ordinal) }
+                is InlineLineHeight.FontRelative -> { byte(2); f32(height.factor); fontSnapshot(height.font, "$label.heightFont") }
+            }
+            mark("$label.align"); byte(value.textAlign.ordinal)
+            spans(value.spans, "$label.body")
+            mark("$label.end")
+        }
         private fun boxOverlay(value: InlineBoxOverlay, label: String) {
             val sides = listOf(value.insets.top, value.insets.right, value.insets.bottom, value.insets.left)
-            mark("$label.flags"); byte(sides.withIndex().sumOf { (index, inset) -> if (inset == null) 0 else 1 shl index })
+            mark("$label.flags"); byte(sides.withIndex().sumOf { (index, inset) -> if (inset == null) 0 else 1 shl index } or
+                (if (value.content != null) 0x10 else 0))
             sides.forEachIndexed { index, inset -> if (inset != null) {
                 mark("$label.inset$index"); byte(inset.unit.ordinal); f32(inset.value)
             } }
             boxBorder(value.border, "$label.border")
+            value.content?.let { boxOverlayContent(it, "$label.content") }
         }
         private fun inlineBox(value: InlineBoxGroup, label: String) {
             listOf(value.padding.top, value.padding.right, value.padding.bottom, value.padding.left)
@@ -6025,5 +6040,262 @@ class RubyModelCodecTest {
             positionedBlock(Block("table", 0, emptyList(), table = hidden), "hiddenAction") } }
         reject("Zero alpha does not suppress serialized child action validation",
             invalidWire.document(emptyList(), Sink.Body))
+    }
+    private fun overlayTextOwner(): Span {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val edges = InlineBoxBorderEdges(none, none, none, none)
+        val font = InlineFontSnapshot(14f, FontScaleBasis.CssPx, fontNormalized = true)
+        val detached = Span("text", "\u200b", fontScale = 14f, fontScaleBasis = FontScaleBasis.CssPx,
+            tooltip = "original detached text", explanation = "independent source")
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Percent, 0f), bottom = InlineBoxInset(StyleWidthUnit.Percent, 67f)),
+            edges, InlineBoxOverlayContent(1L, font, null, InlineBoxOverlayTextAlign.Start, listOf(detached)))
+        return Span("text", "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), edges,
+            listOf(overlay), listOf(Span("link", "スリ", "Original target", targetFragment = "fragment"), text("!"))))
+    }
+
+    @Test fun inlineOverlayContentPreservesBoundariesDeclaringMetricsAndOriginalFlatSource() {
+        val source = overlayTextOwner()
+        val group = checkNotNull(source.inlineBoxGroup)
+        val overlay = group.overlays.single()
+        val body = checkNotNull(overlay.content)
+        assertEquals("\u200b", body.spans.single().text)
+        assertSame(body, overlay.content); assertSame(overlay, group.overlays.single())
+        assertEquals(1L, body.beforeChild); assertEquals(14f, body.ownerFont.fontScale)
+        assertNull(body.lineHeight); assertEquals(InlineBoxOverlayTextAlign.Start, body.textAlign)
+        assertEquals(EntryLink("Original target", "fragment"), group.spans.first().entryLink())
+        val last = overlay.copy(content = body.copy(beforeChild = 2L))
+        val start = overlay.copy(content = body.copy(beforeChild = 0L))
+        val duplicateBoundary = group.copy(overlays = listOf(start, overlay, overlay, last))
+        assertEquals(listOf(0L, 1L, 1L, 2L), duplicateBoundary.overlays.map { it.content!!.beforeChild })
+        assertSame(group.spans, duplicateBoundary.spans)
+        for (alignment in InlineBoxOverlayTextAlign.entries) for (height in listOf(null,
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx)),
+            InlineLineHeight.FontRelative(1.25f, body.ownerFont))) {
+            val value = body.copy(lineHeight = height, textAlign = alignment)
+            assertSame(height, value.lineHeight); assertEquals(alignment, value.textAlign)
+        }
+        invalid("Out-of-range source boundary") { group.copy(overlays = listOf(overlay.copy(content = body.copy(beforeChild = 3L)))) }
+        invalid("Nonmonotone boundaries") { group.copy(overlays = listOf(last, overlay)) }
+        invalid("Negative ordinal") { body.copy(beforeChild = -1L) }
+        invalid("Ordinal exceeds u32") { body.copy(beforeChild = 0x1_0000_0000L) }
+        invalid("Unknown contextual strut") { body.copy(ownerFont = InlineFontSnapshot()) }
+        invalid("Font-relative height cannot name another font") { body.copy(lineHeight =
+            InlineLineHeight.FontRelative(1f, body.ownerFont.copy(bold = true))) }
+        val plain = body.spans.single()
+        val invalidChildren = listOf(plain.copy(text = ""), plain.copy(trail = "!"), plain.copy(direction = "rtl"),
+            plain.copy(bold = true), plain.copy(underline = true), plain.copy(strike = true),
+            plain.copy(background = "#123456"), plain.copy(kind = "link", target = "action"),
+            plain.copy(inlineStyle = InlineTextStyle(lineHeight = InlineLineHeight.Computed(InlineComputedLength(14f, FontScaleBasis.CssPx)))),
+            simple(), Span("text", "", image = InlineImage("Probe.svg")))
+        for (child in invalidChildren) invalid("Detached body remains flat and complete: $child") { body.copy(spans = listOf(child)) }
+        for (control in listOf('\t', '\n', '\r', '\u000c')) invalid("Raw body control") {
+            body.copy(spans = listOf(plain.copy(text = "x${control}y")))
+        }
+        val actionless = source.copy(inlineBoxGroup = group.copy(spans = listOf(text("flow"))))
+        invalid("Direct Box action cannot become inherited overlay action") { actionless.copy(kind = "link", target = "owner") }
+        invalid("Enclosing action still cannot reach detached body") {
+            Span("link", "", "ancestor", inlineActionGroup = InlineActionGroup(listOf(actionless)))
+        }
+        invalid("Detached body is not in-flow text") { group.copy(spans = listOf(text(""))) }
+        val mutableBody = body.spans.toMutableList()
+        val retained = source.copy(inlineBoxGroup = group.copy(overlays = listOf(overlay.copy(content = body.copy(spans = mutableBody)))))
+        mutableBody[0] = plain.copy(bold = true)
+        invalid("A retained mutable child cannot escape shared revalidation") { PresentationSpanVisitor { _, _ -> }.spans(listOf(retained)) }
+        mutableBody[0] = plain
+        PresentationSpanVisitor { _, _ -> }.spans(listOf(retained))
+        assertSame(plain, retained.inlineBoxGroup!!.overlays.single().content!!.spans.single())
+    }
+
+    @Test fun inlineOverlayLocalTailRoundtripsEverySinkNullBytesAndExistingAudioNamespace() {
+        val source = overlayTextOwner()
+        for (sink in Sink.entries) {
+            val wire = Wire('Y', 4)
+            val decoded = read(wire.document(listOf(source), sink, headingTitle = "スリ\u200b!"))
+            assertEquals("Complete original graph at $sink", source, selected(decoded, sink))
+            val body = selected(decoded, sink).inlineBoxGroup!!.overlays.single().content!!
+            assertEquals("\u200b", body.spans.single().text)
+            assertEquals("original detached text", body.spans.single().tooltip)
+            assertEquals("independent source", body.spans.single().explanation)
+        }
+        val raw = Wire('Y', 4)
+        val bytes = raw.document(listOf(source))
+        val root = "root.0.box.overlay0"
+        assertEquals(0x17, bytes[raw.at.getValue("$root.flags")].toInt() and 0xff)
+        assertArrayEquals(byteArrayOf(1, 0, 0, 0), bytes.copyOfRange(raw.at.getValue("$root.content.beforeChild"),
+            raw.at.getValue("$root.content.beforeChild") + 4))
+        assertEquals(17, bytes[raw.at.getValue("$root.content.font.flags")].toInt() and 0xff)
+        assertEquals(0, bytes[raw.at.getValue("$root.content.lineHeight")].toInt())
+        assertArrayEquals(byteArrayOf(1, 0, 0, 0, 17, 0, 0, 0x60, 0x41, 2, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0),
+            bytes.copyOfRange(raw.at.getValue("$root.content.start"), raw.at.getValue("$root.content.body.0.start")))
+        val group = source.inlineBoxGroup!!
+        val empty = source.copy(inlineBoxGroup = group.copy(overlays = listOf(group.overlays.single().copy(content = null))))
+        val legacy = Wire('Y', 4).document(listOf(empty))
+        val removed = replace(changed(bytes, raw.at.getValue("$root.flags"), 7),
+            raw.at.getValue("$root.content.start"), raw.at.getValue("$root.content.end"), byteArrayOf())
+        assertArrayEquals(legacy, removed)
+        assertEquals(empty, read(legacy).displayTitle.single())
+        val body = group.overlays.single().content!!
+        for (alignment in InlineBoxOverlayTextAlign.entries) for (height in listOf(null,
+            InlineLineHeight.Computed(InlineComputedLength(17.5f, FontScaleBasis.CssPx)),
+            InlineLineHeight.FontRelative(1.25f, body.ownerFont))) {
+            val owner = source.copy(inlineBoxGroup = group.copy(overlays = listOf(group.overlays.single().copy(
+                content = body.copy(lineHeight = height, textAlign = alignment)))))
+            assertEquals(owner, read(Wire('Y', 4).document(listOf(owner))).displayTitle.single())
+        }
+        val familyFont = body.ownerFont.copy(fontFamily = ContainerFontFamily.SansSerif)
+        val familyBody = body.copy(ownerFont = familyFont, spans = body.spans.map { it.copy(fontFamily = familyFont.fontFamily) })
+        val familySource = source.copy(inlineBoxGroup = group.copy(overlays = listOf(group.overlays.single().copy(content = familyBody))))
+        assertEquals(familySource, read(Wire('Y', 4).document(listOf(familySource), features = 4)).displayTitle.single())
+        reject("Snapshot and detached child require actual family feature", Wire('Y', 4).document(listOf(familySource)))
+        reject("No false family census for the old generic heading font", Wire('Y', 4).document(listOf(source), features = 4))
+        val audio = Span("link", "Play", "File:Tone.ogg", classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val mixed = Wire('Z', 4 or 8192).document(listOf(source, audio), mediaValues = listOf(Media("Tone.ogg", "audio", "")))
+        assertEquals(listOf(source, audio), read(mixed).displayTitle)
+        val ordinary = group.spans.singleOrNull() ?: group.spans.first()
+        assertEquals("Original target", ordinary.target)
+    }
+
+    @Test fun inlineOverlayLocalFlagRefusesMalformedPayloadAndInheritedActionDebt() {
+        val source = overlayTextOwner()
+        val raw = Wire('Y', 4)
+        val bytes = raw.document(listOf(source))
+        val p = "root.0.box.overlay0"
+        for (bit in listOf(0x20, 0x40, 0x80)) reject("Unknown overlay flag", changed(bytes, raw.at.getValue("$p.flags"), 0x17 or bit))
+        reject("Removed owning Box capability", changed(bytes, raw.at.getValue("yFeatures"), 0))
+        for (tag in listOf(3, 255)) reject("Unknown detached height", changed(bytes, raw.at.getValue("$p.content.lineHeight"), tag))
+        for (tag in listOf(4, 255)) reject("Unknown detached alignment", changed(bytes, raw.at.getValue("$p.content.align"), tag))
+        reject("Missing normalization proof", changed(bytes, raw.at.getValue("$p.content.font.flags"), 1))
+        reject("Unknown font face bits", changed(bytes, raw.at.getValue("$p.content.font.face"), 0x80))
+        reject("Context size is not a detached strut", changed(bytes, raw.at.getValue("$p.content.font.scale") + 4, 0))
+        reject("NaN detached size", changed32(bytes, raw.at.getValue("$p.content.font.scale"), 0x7fc00000L))
+        reject("Source boundary cannot exceed in-flow children", changed32(bytes, raw.at.getValue("$p.content.beforeChild"), 3))
+        reject("Body cannot be empty", changed32(bytes, raw.at.getValue("$p.content.body.count"), 0))
+        reject("Computed height cannot be negative", replace(bytes, raw.at.getValue("$p.content.lineHeight"),
+            raw.at.getValue("$p.content.lineHeight") + 1, byteArrayOf(1, 0, 0, 0x80.toByte(), 0xbf.toByte(), 2)))
+        for (end in raw.at.getValue("$p.content.start") until raw.at.getValue("$p.content.end"))
+            reject("Truncated detached payload $end", bytes.copyOf(end))
+        reject("Final EOF remains strict", bytes + 0)
+        val body = source.inlineBoxGroup!!.overlays.single().content!!
+        val badChild = body.spans.single().copy(kind = "link", target = "unexpected")
+        reject("Wire child action", replace(bytes, raw.at.getValue("$p.content.body.0.start"),
+            raw.at.getValue("$p.content.body.0.end"), Wire('Y', 4).isolatedSpan(badChild)))
+        val holder = Span("link", "", "ancestor", inlineActionGroup = InlineActionGroup(listOf(text("placeholder"))))
+        val outer = Wire('Y', 4)
+        val outerBytes = outer.document(listOf(holder))
+        val plainBox = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(spans = listOf(text("flow"))))
+        reject("Ancestor action rejected across the wire", replace(outerBytes,
+            outer.at.getValue("root.0.action.body.0.start"), outer.at.getValue("root.0.action.body.0.end"),
+            Wire('Y', 4).isolatedSpan(plainBox)))
+        val group = source.inlineBoxGroup!!
+        val pair = source.copy(inlineBoxGroup = group.copy(overlays = listOf(group.overlays.single(), group.overlays.single())))
+        val order = Wire('Y', 4); val orderedBytes = order.document(listOf(pair))
+        reject("Wire source boundaries are nondecreasing", changed32(orderedBytes,
+            order.at.getValue("root.0.box.overlay1.content.beforeChild"), 0))
+    }
+
+    @Test fun inlineOverlaySharesItemContentTableBudgetsAndValidatesIgnoredSerializedPrefixes() {
+        val source = overlayTextOwner()
+        val group = source.inlineBoxGroup!!
+        val oneFlow = source.copy(inlineBoxGroup = group.copy(spans = listOf(text("flow"))))
+        val limit = 1 shl 20
+        fun table(count: Int, prefix: List<Span> = emptyList(), caption: List<Span> = listOf(oneFlow)) =
+            Block("table", 0, prefix, table = Table(caption, java.util.Collections.nCopies(count, emptyList<Cell>())))
+        fun entry(block: Block) = Entry("Overlay", emptyList(), "language", "French", "fr",
+            listOf(Section(2, "Body", listOf(block))), emptyList())
+        // Block + Box owner + overlay + detached child + in-flow child = five items.
+        assertEquals(limit - 5, entry(table(limit - 5)).sections.single().blocks.single().table!!.rows.size)
+        invalid("Detached spans share the original model budget") { entry(table(limit - 4)) }
+        fun wire(count: Int) = Wire('Y', 4).apply { paragraphOverride = { positionedBlock(table(count), "overlayBudget") } }
+            .document(emptyList(), Sink.Body)
+        assertEquals(limit - 6, read(wire(limit - 6)).sections.single().blocks.single().table!!.rows.size)
+        reject("Reader also charges the Section slot", wire(limit - 5))
+        for (depth in listOf(14, 15)) {
+            val bytes = Wire('Y', 4).document(listOf(oneFlow), Sink.Container, containers = depth)
+            if (depth == 14) assertEquals(1, read(bytes).sections.size)
+            else reject("Detached body uses its second content level", bytes)
+        }
+        for (depth in listOf(32, 33)) {
+            val bytes = Wire('Y', 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }.document(listOf(oneFlow), Sink.Body)
+            if (depth == 32) assertEquals(1, read(bytes).sections.size) else reject("Overlay does not reset table depth", bytes)
+        }
+        val pad = StyleLength(StyleLengthUnit.Px, 1f)
+        val nested = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(pad, pad, listOf(oneFlow)))
+        var displayed = 0
+        val ignored = table(0, listOf(nested), emptyList())
+        PresentationSpanVisitor { spans, _ -> displayed += spans.size }.block(ignored)
+        assertEquals(0, displayed)
+        assertSame(nested, entry(ignored).sections.single().blocks.single().spans.single())
+        // Root + padding owner + Box owner + overlay + both real children = six.
+        assertEquals(limit - 6, entry(table(limit - 6, listOf(nested), emptyList())).sections.single().blocks.single().table!!.rows.size)
+        invalid("Ignored nested overlay still consumes the one model budget") { entry(table(limit - 5, listOf(nested), emptyList())) }
+        fun prefixLiteral(rows: Int) = Wire('Y', 4).apply {
+            paragraphOverride = { audioPrefixTable(Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()))) }
+        }.document(listOf(nested), Sink.Body)
+        val decodedPrefix = read(prefixLiteral(limit - 7)).sections.single().blocks.single()
+        assertEquals(listOf(nested), decodedPrefix.spans)
+        assertEquals(limit - 7, decodedPrefix.table!!.rows.size)
+        reject("Ignored overlay shares the decoder budget too", prefixLiteral(limit - 6))
+        val mutable = mutableListOf(text("placeholder"))
+        val action = Span("link", "", "ancestor", inlineActionGroup = InlineActionGroup(mutable))
+        mutable[0] = oneFlow
+        invalid("Ignored prefix cannot conceal inherited overlay action") { entry(table(0, listOf(action), emptyList())) }
+        invalid("Ignored rule prefix has the same action custody") { entry(Block("rule", 0, listOf(action))) }
+        var ruleDisplay = 0
+        PresentationSpanVisitor { spans, _ -> ruleDisplay += spans.size }.block(Block("rule", 0, listOf(nested)))
+        assertEquals(0, ruleDisplay)
+        val legacy = table(0, listOf(text("legacy ignored")), emptyList())
+        var oldDisplayed = 0
+        PresentationSpanVisitor { spans, _ -> oldDisplayed += spans.size }.block(legacy)
+        assertEquals(0, oldDisplayed); assertSame(legacy, entry(legacy).sections.single().blocks.single())
+        // Legacy direct-only ignored prefixes were not subject to the serialized-span budget.
+        // Discovery proves absence without charging that graph or recursing through shared owners.
+        val plain = text("legacy")
+        val noOverlay = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(pad, pad, listOf(plain)))
+        for (oldSpan in listOf(plain, noOverlay)) {
+            val oldPrefix = java.util.Collections.nCopies(limit + 1, oldSpan)
+            assertSame(oldPrefix, entry(table(0, oldPrefix, emptyList())).sections.single().blocks.single().spans)
+        }
+        invalid("Actual overlay selects full serialized work despite legacy predecessors") {
+            entry(table(0, java.util.Collections.nCopies(limit, plain) + oneFlow, emptyList()))
+        }
+    }
+
+    @org.junit.Test fun inlineOverlayRebaseKeepsAtomicRadiusAndOpacityNamespacesAndCustody() {
+        val overlay = overlayTextOwner()
+        val atom = atomicWireOwner()
+        val rounded = percentCircleOwner()
+        val spans = listOf(overlay, atom, rounded)
+        val table = opacityTable(CellStyle(opacity = 0f), spans)
+        val wire = Wire('Y', 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = table), "coexist") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        assertEquals(table, read(bytes).sections.single().blocks.single().table)
+        val cell = "coexist.table.row0.cell0"
+        assertEquals(0, bytes[wire.at.getValue("$cell.spans.0.fontFields")].toInt() and 0x70)
+        assertEquals(0x10, bytes[wire.at.getValue("$cell.spans.0.box.overlay0.flags")].toInt() and 0x10)
+        assertEquals(0x40, bytes[wire.at.getValue("$cell.spans.1.fontFields")].toInt() and 0x70)
+        assertEquals(0x20, bytes[wire.at.getValue("$cell.spans.2.fontFields")].toInt() and 0x70)
+        assertEquals(0x10, bytes[wire.at.getValue("$cell.style.flags")].toInt() and 0xff)
+        reject("Overlay content does not allocate the remaining Span bit", changed(bytes,
+            wire.at.getValue("$cell.spans.0.fontFields"), 0x80))
+        val bodies = checkNotNull(overlay.inlineBoxGroup).overlays
+        invalid("Current atomic layout still excludes detached overlays") {
+            checkNotNull(atom.inlineBoxGroup).copy(overlays = bodies)
+        }
+        invalid("Current percent/dotted radius still excludes detached overlays") {
+            checkNotNull(rounded.inlineBoxGroup).copy(overlays = bodies)
+        }
+        val ignored = Block("table", 0, listOf(overlay, atom), table = Table(emptyList(), emptyList()))
+        val seen = mutableListOf<Span>()
+        var displayed = 0
+        PresentationSpanVisitor { values, _ -> displayed += values.size }.apply { onSpan = { seen.add(it) } }.block(ignored)
+        assertEquals(0, displayed)
+        assertTrue(seen.any { it === overlay })
+        assertTrue(seen.any { it === atom })
+        assertTrue(seen.any { it === bodies.single().content!!.spans.single() })
+        assertSame(atom, ignored.spans.last())
     }
 }

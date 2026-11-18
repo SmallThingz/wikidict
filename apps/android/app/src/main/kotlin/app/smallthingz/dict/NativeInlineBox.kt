@@ -61,7 +61,7 @@ internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val paddin
 /** Installed over only this owner's private native child interval, without inserted characters.
  * Null parentRtl uses the actual paragraph line; an enclosing directional group supplies its flow. */
 internal class NativeInlineBoxSpan(val format: NativeRubyGroupFormat, val shift: Float,
-    val parentRtl: Boolean?) {
+    val parentRtl: Boolean?, val overlaySources: List<NativeInlineBoxOverlaySource> = emptyList()) {
     init { require(format.box != null); nativeInlineBoxCoordinates(shift) }
     val box: NativeInlineBoxFormat get() = checkNotNull(format.box)
 }

@@ -5252,4 +5252,183 @@ class NativeRubyGeometryDeviceTest {
         assertEquals(value.projection.text, withCarry(false).text.toString())
         sameRect(ownerBox(value, wide), ownerBox(value, value.shape(threshold + .03125f)))
     }
+
+    @Test fun anonymousScopedRubyUsesResolvedScopeWithoutReplacingExplicitChildrenOrRootFallback() {
+        fun heuristic(rtl: Boolean) = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+        fun resolved(rtl: Boolean) = if (rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr
+        fun inherited(scale: Float = 1f) = context(scale).copy(direction = "")
+        fun action(children: List<Span>, direction: String = "") = Span("link", "", "ruby-action",
+            targetFragment = "original-fragment", language = "ja", direction = direction,
+            inlineActionGroup = InlineActionGroup(children))
+        val calls = mutableListOf<Span>()
+        val callbacks = IdentityHashMap<Span, () -> Unit>()
+        data class Prepared(val source: Spanned, val projection: RubyTextProjection, val action: NativeInlineActionOwner)
+        fun prepared(owner: Span, rtl: Boolean): Prepared {
+            val children = checkNotNull(owner.inlineActionGroup).spans
+            val inner = prepare(children, rtl = rtl)
+            val old = inner.source.getSpans(0, inner.source.length, NativeRubyPreparedSource::class.java).single()
+            val projection = rubyGraphicalProjection(listOf(owner))
+            assertEquals(inner.projection.text, projection.text)
+            val groups = projection.ranges.filter { it.role in setOf(RubyTextRole.Owner,
+                RubyTextRole.Base, RubyTextRole.Annotation, RubyTextRole.ActionGroup) }.associate { range ->
+                val format = if (range.role == RubyTextRole.ActionGroup) {
+                    NativeRubyGroupFormat(paint(), heuristic(rtl), NativeLineHeightPolicy.Normal,
+                        sourceDirection = owner.direction, actionOwner = NativeInlineActionOwner(owner, range.path))
+                } else {
+                    val original = inner.projection.ranges.single { candidate -> candidate.role == range.role &&
+                        when (range.role) {
+                            RubyTextRole.Owner -> candidate.span === range.span
+                            RubyTextRole.Base -> candidate.base === range.base
+                            RubyTextRole.Annotation -> candidate.annotation === range.annotation
+                            else -> false
+                        } }
+                    old.groups.getValue(original.path)
+                }
+                range.path to format
+            }
+            val source = SpannableString(old.source)
+            val metadata = NativeRubyPreparedSource(projection, source, paint(), heuristic(rtl), groups)
+            source.setSpan(metadata, 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val actionRange = projection.ranges.single { it.role == RubyTextRole.ActionGroup }
+            return Prepared(SpannedString(source), projection, checkNotNull(groups.getValue(actionRange.path).actionOwner))
+        }
+        fun scope(rtl: Boolean, parts: List<FlowPart>) = FlowPart.Scope(BidiScope(BidiMode.Isolate,
+            BidiDirectionInput.Auto, resolved(rtl), "ja", parts))
+        fun content(rootRtl: Boolean, parts: List<FlowPart>) = anonymousFlowContent(
+            Block("paragraph", 0, emptyList(), flow = parts), AnonymousFlowContext(resolved(rootRtl), "ja", null))
+        fun build(content: AnonymousFlowContent, shared: Prepared? = null): NativeAnonymousFlowGeometry {
+            val rows = IdentityHashMap<AnonymousFlowEvent.Inline, Prepared>()
+            content.events.filterIsInstance<AnonymousFlowEvent.Inline>().forEach { event ->
+                rows[event] = shared ?: prepared(event.layoutSpans.single(), event.context.direction == BidiResolvedDirection.Rtl)
+            }
+            fun nodes(geometry: NativeAnonymousFlowGeometry) = geometry.offsets.inlineSources.mapIndexed { index, range ->
+                val original = range.event.spans.single()
+                val callback = callbacks.getOrPut(original) { { calls += original } }
+                NativeAnonymousInlineNode(FloatInteractionNode(index, FloatInteractionKind.LINK,
+                    geometry.selection.semanticOffset(range.start), geometry.selection.semanticOffset(range.end),
+                    checkNotNull(geometry.nativeInlineActionGroupRects(rows.getValue(range.event).action,
+                        range.start, range.end)), rows.getValue(range.event).projection.text,
+                    original.targetFragment, callback), range.start, range.end)
+            }
+            return NativeAnonymousFlowGeometry.build(content, paint(), 1200,
+                inline = { rows.getValue(it).source }, figure = { _, _ -> error("No figures in this control") },
+                inlineNodes = { nodes(it).map { source -> source.node } },
+                inlineSemantic = { event, text -> anonymousInlineSemantic(event.layoutSpans, text) },
+                inlineNodeSources = { nodes(it) })
+        }
+        fun direct(owner: Span, rootRtl: Boolean, preparedRtl: Boolean = rootRtl): NativeFloatGeometry =
+            NativeFloatGeometry.build(prepared(owner, preparedRtl).source, paint(), 1200, emptyList(),
+                textDirection = heuristic(rootRtl))
+        fun normalized(geometry: FloatTextGeometry, start: Int, count: Int): List<RectF?> {
+            val rects = geometry.characterRects(start, count)
+            val left = rects.filterNotNull().minOf { it.left }
+            val top = rects.filterNotNull().minOf { it.top }
+            return rects.map { it?.let { box -> RectF(box).apply { offset(-left, -top) } } }
+        }
+        fun sameCharacters(expected: FloatTextGeometry, actual: FloatTextGeometry, actualStart: Int = 0) {
+            val wanted = normalized(expected, 0, expected.text.length)
+            val found = normalized(actual, actualStart, expected.text.length)
+            assertEquals(wanted.size, found.size)
+            wanted.zip(found).forEach { (a, b) ->
+                if (a == null) assertNull(b) else sameRect(a, checkNotNull(b))
+            }
+        }
+        fun differs(a: FloatTextGeometry, b: FloatTextGeometry): Boolean =
+            normalized(a, 0, a.text.length).zip(normalized(b, 0, b.text.length)).any { (x, y) ->
+                x != null && y != null && kotlin.math.abs(x.left - y.left) > .1f
+            }
+        // The actual FR order remains one action, not three links or flattened ruby.
+        val frChildren = listOf(
+            ruby(listOf(base(listOf(leaf("紅差")), inherited())),
+                listOf(reading(listOf(leaf("べにさ", scale = .5f)), owner = inherited(.5f)))).copy(direction = ""),
+            leaf("し"),
+            ruby(listOf(base(listOf(leaf("指")), inherited())),
+                listOf(reading(listOf(leaf("ゆび", scale = .5f)), owner = inherited(.5f)))).copy(direction = ""))
+        val fr = action(frChildren, "ltr")
+        val frContent = content(false, listOf(scope(false, listOf(FlowPart.Inline(listOf(fr))))))
+        val frEvent = frContent.events.filterIsInstance<AnonymousFlowEvent.Inline>().single()
+        assertSame(fr, frEvent.spans.single())
+        assertEquals("", frEvent.layoutSpans.single().direction) // Exercise the actual scope-owned clearing seam.
+        val frActual = build(frContent)
+        assertEquals("紅差べにさし指ゆび", frActual.text.toString())
+        sameCharacters(direct(fr, false), frActual)
+        assertEquals(1, frActual.nodes.size)
+        val frNode = frActual.nodes.single()
+        assertEquals(0 to frActual.text.length, frNode.start to frNode.end)
+        assertEquals(frActual.text.toString(), frNode.label.toString())
+        assertEquals("original-fragment", frNode.tooltip)
+        frNode.onClick!!.invoke()
+        assertEquals(listOf(fr), calls)
+        assertTrue(frActual.text.none { it in "\u2066\u2067\u2068\u2069\u202a\u202b\u202c\u202d\u202e" })
+        assertTrue(raster(frActual).values.sumOf { it.count } > 0)
+
+        // A two-base inherited owner makes the opposite root/scope direction observable.
+        // Explicit base and reading directions stay independent of the containing owner.
+        val mixed = ruby(listOf(
+            base(listOf(leaf("Aא ")), context().copy(direction = "ltr")),
+            base(listOf(leaf("Bב ")), context().copy(direction = "rtl"))),
+            listOf(reading(listOf(leaf("rא ", scale = .5f)), owner = context(.5f).copy(direction = "rtl")),
+                reading(listOf(leaf("sב ", scale = .5f)), start = 1,
+                    owner = context(.5f).copy(direction = "ltr")))).copy(direction = "")
+        val inheritedAction = action(listOf(mixed))
+        val ltrReference = direct(action(listOf(mixed), "ltr"), true)
+        val rtlReference = direct(action(listOf(mixed), "rtl"), false)
+        assertTrue("Opposite inherited owner directions must yield different base placement", differs(ltrReference, rtlReference))
+        for (scopeRtl in listOf(false, true)) {
+            val source = content(!scopeRtl, listOf(scope(scopeRtl,
+                listOf(FlowPart.Inline(listOf(inheritedAction))))))
+            val geometry = build(source)
+            val expected = if (scopeRtl) rtlReference else ltrReference
+            sameCharacters(expected, geometry)
+            assertEquals(expected.text.toString(), geometry.text.toString())
+            assertEquals(0 to geometry.text.length, geometry.nodes.single().let { it.start to it.end })
+            for (offset in 0..geometry.text.length) {
+                assertTrue(geometry.caretRect(offset).left.isFinite())
+                assertTrue(geometry.visualOffset(offset, -1) in 0..geometry.text.length)
+                assertTrue(geometry.visualOffset(offset, 1) in 0..geometry.text.length)
+            }
+            calls.clear()
+            geometry.nodes.single().onClick!!.invoke()
+            assertEquals(listOf(inheritedAction), calls)
+        }
+        // Nearest nested scope wins, with each actual event retaining its own prepared action owner.
+        val shared = prepared(inheritedAction, false)
+        val nestedContent = content(false, listOf(scope(true, listOf(
+            FlowPart.Inline(listOf(inheritedAction)),
+            scope(false, listOf(FlowPart.Inline(listOf(inheritedAction))))))))
+        val nested = build(nestedContent)
+        assertEquals(shared.projection.text.repeat(2), nested.text.toString())
+        sameCharacters(rtlReference, nested)
+        sameCharacters(ltrReference, nested, shared.projection.text.length)
+        assertEquals(listOf(0 to shared.projection.text.length,
+            shared.projection.text.length to nested.text.length), nested.nodes.map { it.start to it.end })
+        assertSame(nested.nodes[0].onClick, nested.nodes[1].onClick)
+        // Intrinsic measurement may reuse a preparation: copy its marker per occurrence before binding.
+        val intrinsic = anonymousWidthRange(nestedContent, paint(), inline = { shared.source },
+            figureWidth = { error("No figure") }, inset = 0f)
+        assertTrue(intrinsic.minimum > 0 && intrinsic.maximum >= intrinsic.minimum)
+        val separatelyPrepared = anonymousWidthRange(nestedContent, paint(), inline = { event ->
+            prepared(event.layoutSpans.single(), event.context.direction == BidiResolvedDirection.Rtl).source
+        }, figureWidth = { error("No figure") }, inset = 0f)
+        assertEquals(separatelyPrepared, intrinsic)
+
+        // Direct callers retain their explicit root heuristic even if prepared.direction differs.
+        sameCharacters(ltrReference, direct(inheritedAction, rootRtl = false, preparedRtl = true))
+        sameCharacters(rtlReference, direct(inheritedAction, rootRtl = true, preparedRtl = false))
+        val unscoped = content(false, listOf(FlowPart.Inline(listOf(inheritedAction))))
+        sameCharacters(ltrReference, build(unscoped, shared))
+        sameCharacters(rtlReference, build(content(false, listOf(scope(true,
+            listOf(FlowPart.Inline(listOf(inheritedAction)))))), shared)) // recovery
+
+        // Intrinsic figure separators shift installed markers. The scope proof must shift with them.
+        val shifted = android.text.SpannableStringBuilder(shared.source)
+        val marker = shifted.getSpans(0, shifted.length, NativeRubyPreparedSource::class.java).single()
+        val scopedEvent = nestedContent.events.filterIsInstance<AnonymousFlowEvent.Inline>().first()
+        nativeRubyBindAnonymousScope(shifted, marker, scopedEvent)
+        shifted.insert(0, "\n")
+        val shiftedGeometry = NativeFloatGeometry.build(SpannedString(shifted), paint(), 1200, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR)
+        sameCharacters(rtlReference, shiftedGeometry, 1)
+        assertEquals("\n" + shared.projection.text, shiftedGeometry.text.toString())
+    }
 }

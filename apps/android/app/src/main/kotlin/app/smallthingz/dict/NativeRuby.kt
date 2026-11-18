@@ -128,11 +128,26 @@ internal class NativeRubyPreparedSource(
         require(projection.ranges.all { it.start >= 0 && it.end >= it.start && it.end <= source.length })
         require(projection.ranges.map { it.path }.distinct().size == projection.ranges.size)
         require(projection.ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.Base,
-            RubyTextRole.Annotation, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
+            RubyTextRole.Annotation, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup, RubyTextRole.OverlayContent) }.all { it.path in groups }) { "Ruby declaring group context is missing" }
         require(this.source.getSpans(0, this.source.length, NativeRubyPreparedSource::class.java).isEmpty()) {
             "A Ruby preparation cannot contain itself"
         }
     }
+}
+
+/** Actual anonymous scope authority belongs to this prepared occurrence, not to
+ * the root paragraph heuristic or a descendant's first strong character. */
+private class NativeRubyAnonymousScope(val prepared: NativeRubyPreparedSource,
+    val direction: BidiResolvedDirection)
+
+internal fun nativeRubyBindAnonymousScope(target: android.text.Spannable,
+    prepared: NativeRubyPreparedSource, event: AnonymousFlowEvent.Inline) {
+    if (event.containingScopeId == null) return
+    val first = target.getSpanStart(prepared); val last = target.getSpanEnd(prepared)
+    if (first < 0 || last < first || target.subSequence(first, last).toString() != prepared.projection.text)
+        throw UnsupportedFloatLayout("Scoped Ruby preparation lost its source occurrence")
+    target.setSpan(NativeRubyAnonymousScope(prepared, event.context.direction), first, last,
+        target.getSpanFlags(prepared))
 }
 
 private fun nativeRubyOmitted(offset: Int, omissions: List<Pair<Int, Int>>): Boolean {
@@ -590,8 +605,11 @@ internal data class NativeRubyActionScope(
     val ownBox: NativeInlineBoxOwner? = null,
 )
 internal data class NativeRubyActionBox(val owner: NativeInlineBoxOwner, val start: Int, val end: Int)
+internal data class NativeRubyOverlayScope(val start: Int, val end: Int,
+    val owner: NativeInlineBoxOwner, val body: NativeInlineBoxOverlaySource)
 internal data class NativeRubyBoxScope(val start: Int, val end: Int, val nativeStart: Int,
-    val nativeEnd: Int, val format: NativeRubyGroupFormat, val shift: Float, val parentRtl: Boolean?)
+    val nativeEnd: Int, val format: NativeRubyGroupFormat, val shift: Float, val parentRtl: Boolean?,
+    val overlays: List<NativeRubyOverlayScope> = emptyList())
 
 /** The actual declaring metric point is the authority for an empty no-wrap line. */
 internal class NativeInlineActionPoint(val owner: NativeInlineActionOwner,
@@ -614,6 +632,8 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
         require(offset in 0..source.length)
         val atoms = pieces.filterIsInstance<NativeRubyPiece.AtomicBox>()
         if (endAffinity) atoms.lastOrNull { it.atom.child.end == offset }?.let { return it.nativeEnd }
+        boxScopes.firstOrNull { scope -> scope.overlays.any { offset >= it.start && offset < it.end } }
+            ?.let { return it.nativeStart }
         val texts = pieces.filterIsInstance<NativeRubyPiece.Text>()
         texts.firstOrNull { offset >= it.start && offset < it.end }?.let {
             return if (it.collapsed) it.nativeStart else it.nativeStart + offset - it.start
@@ -774,7 +794,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     val raw: NativeFloatGeometry, private val isolatedColumn: Boolean = false) {
     private data class Child(val start: Int, val end: Int, val geometry: FloatTextGeometry,
         val x: Float, val y: Float, val line: Int, val cursor: InlineCursor?,
-        val ranges: List<Pair<Int, Int>>, val atomic: Boolean = false, val paintOrder: Long = 0) {
+        val ranges: List<Pair<Int, Int>>, val atomic: Boolean = false, val paintOrder: Long = 0, val overlay: Boolean = false) {
         fun owns(offset: Int): Boolean = ranges.any { offset >= it.first && offset < it.second }
         fun endsAt(offset: Int): Boolean = ranges.any { it.first < it.second && offset == it.second }
     }
@@ -795,7 +815,30 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
                 paintOrder = raw.nativeReplacementPaintOrder(piece.nativeStart)))
         }
         is NativeRubyPiece.Text -> emptyList()
-    } }.let { if (atoms.isEmpty()) it else it.sortedBy { child -> child.paintOrder } }
+    } }.let { if (atoms.isEmpty()) it else it.sortedBy { child -> child.paintOrder } } + compiled.boxScopes.flatMap { scope -> scope.overlays.map { overlay ->
+        val placed = raw.nativeInlineBoxOverlay(overlay.owner, overlay.body.index)
+            ?: throw UnsupportedFloatLayout("Positioned inline text lost its actual relative padding box")
+        if (placed.source !== overlay.body || placed.geometry.text.toString() != compiled.source.subSequence(overlay.start, overlay.end).toString())
+            throw UnsupportedFloatLayout("Positioned inline text lost its original source occurrence")
+        Child(overlay.start, overlay.end, placed.geometry, placed.x, placed.y, placed.line, null,
+            listOf(overlay.start to overlay.end), paintOrder = Long.MAX_VALUE, overlay = true)
+    } }
+    private fun Child.containsPosition(x: Float, y: Float): Boolean {
+        val localX = x - this.x; val localY = y - this.y
+        if (geometry.containsInteraction(localX, localY)) return true
+        // Zero-advance text still has real caret bands. This adds no glyph or
+        // selectable character width and does not change normal-flow geometry.
+        return overlay && listOf(geometry.caretRect(0),
+            geometry.caretRect(NativeTextCaret(end - start, NativeTextAffinity.Upstream))).any {
+                localX >= it.left && localX <= it.right && localY >= it.top && localY <= it.bottom
+            }
+    }
+    fun detachedCaretBounds(): List<RectF> = children.filter { it.overlay }.flatMap { child ->
+        listOf(child.geometry.caretRect(0), child.geometry.caretRect(
+            NativeTextCaret(child.end - child.start, NativeTextAffinity.Upstream))).map {
+                RectF(it).apply { offset(child.x, child.y) }
+            }
+    }
     private val texts = compiled.pieces.filterIsInstance<NativeRubyPiece.Text>()
     private val sourceCursors = nativeInlineRanges(compiled.source, NativeAuthoredCursor::class.java)
     private fun textOwner(offset: Int): NativeRubyPiece.Text? = texts.firstOrNull { offset >= it.start && offset < it.end }
@@ -1099,9 +1142,40 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         return sourceCaret(rawCaret)
     }
 
+    private fun detachedVisualCaret(value: NativeTextCaret, direction: Int): NativeTextCaret {
+        require(value.offset in 0..length && direction in listOf(-1, 1))
+        if (children.none { it.overlay }) return NativeTextCaret(legacyVisualOffset(value.offset, direction))
+        val upstream = (value.affinity == NativeTextAffinity.Upstream || value.offset == length) && value.offset > 0
+        val precedingChild = if (upstream) children.lastOrNull { it.endsAt(value.offset) } else null
+        val precedingText = if (upstream) texts.lastOrNull { it.end == value.offset } else null
+        val child = precedingChild ?: if (precedingText == null) children.firstOrNull { it.owns(value.offset) } else null
+        val ordinary = if (child != null) null else precedingText ?: textOwner(value.offset)
+        val first = child?.start ?: ordinary?.start ?: return NativeTextCaret(legacyVisualOffset(value.offset, direction))
+        val end = child?.end ?: checkNotNull(ordinary).end
+        val local = if (child != null) value.offset - child.start else inText(checkNotNull(ordinary), value.offset)
+        val moved = if (child != null) child.geometry.visualCaret(NativeTextCaret(local, value.affinity), direction).offset
+            else raw.visualOffset(local, direction)
+        val target = if (child != null) first + moved else if (ordinary!!.collapsed) value.offset
+            else first + moved - ordinary.nativeStart
+        val bounded = target.coerceIn(first, end)
+        if (bounded != value.offset) return NativeTextCaret(bounded,
+            if (bounded == end) NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+        // Leaving a real run enters its source neighbor at the same integer boundary.
+        // This transition retains both geometries instead of skipping detached text.
+        val rtl = if (child != null) (child.geometry as? NativeFloatGeometry)?.nativeRubyParagraphDirection?.let { it < 0 }
+            ?: false else raw.nativeRubyLineDirection(raw.nativeLineAt(local)) < 0
+        val forward = if (target != value.offset) target > value.offset else (direction > 0) != rtl
+        if (forward && value.offset == end && end < length)
+            return NativeTextCaret(end, NativeTextAffinity.Downstream)
+        if (!forward && value.offset == first && first > 0)
+            return NativeTextCaret(first, NativeTextAffinity.Upstream)
+        return value
+    }
+
     fun visualCaret(value: NativeTextCaret, direction: Int): NativeTextCaret {
         require(value.offset in 0..length && direction in listOf(-1, 1))
         val child = childAt(value)
+        if (children.any { it.overlay } && child?.atomic != true) return detachedVisualCaret(value, direction)
         if (child != null) {
             if (!child.atomic) return NativeTextCaret(legacyVisualOffset(value.offset, direction))
             val local = NativeTextCaret(value.offset - child.start, value.affinity)
@@ -1126,7 +1200,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun visualLineRanges(value: NativeTextCaret): List<Pair<Int, Int>> {
         require(value.offset in 0..length)
-        childAt(value)?.takeIf { it.atomic }?.let { child ->
+        childAt(value)?.takeIf { it.atomic || it.overlay }?.let { child ->
             return child.geometry.visualLineRanges(NativeTextCaret(value.offset - child.start, value.affinity))
                 .map { (a, b) -> a + child.start to b + child.start }
         }
@@ -1192,7 +1266,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun offset(x: Float, y: Float): Int {
         if (atoms.isNotEmpty()) return caretAt(x, y).offset
-        children.lastOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
+        children.lastOrNull { it.containsPosition(x, y) }?.let {
             return it.start + it.geometry.offsetForPosition(x - it.x, y - it.y)
         }
         if (isolatedColumn) {
@@ -1227,7 +1301,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     }
 
     fun offsetOnLine(line: Int, x: Float, y: Float): Int {
-        children.lastOrNull { it.line == line && it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
+        children.lastOrNull { it.line == line && it.containsPosition(x, y) }?.let {
             return it.start + it.geometry.offsetForPosition(x - it.x, y - it.y)
         }
         return sourceOffset(raw.nativeRubyLineOffsetForPosition(line, x, y))
@@ -1238,7 +1312,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             .all { scope -> boxHitTest(checkNotNull(scope.format.box).owner, scope.start, scope.end)?.invoke(x, y) == true }
 
     fun cursorOnLine(line: Int, x: Float, y: Float): InlineCursor? {
-        children.lastOrNull { it.line == line && it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
+        children.lastOrNull { it.line == line && it.containsPosition(x, y) }?.let {
             it.geometry.cursorAt(x - it.x, y - it.y)?.let { cursor -> return cursor }
         }
         compiled.pieces.filterIsInstance<NativeRubyPiece.Column>().asReversed().filter {
@@ -1342,8 +1416,13 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun visualLineRanges(offset: Int): List<Pair<Int, Int>> {
         require(offset in 0..length)
-        children.firstOrNull { it.atomic && it.owns(offset) }?.let { child ->
+        children.firstOrNull { (it.atomic || it.overlay) && it.owns(offset) }?.let { child ->
             return child.geometry.visualLineRanges(offset - child.start).map { (a, b) -> a + child.start to b + child.start }
+        }
+        if (offset == length) children.lastOrNull { it.overlay && it.endsAt(offset) }?.let { child ->
+            return child.geometry.visualLineRanges(offset - child.start).map { (first, last) ->
+                first + child.start to last + child.start
+            }
         }
         val line = lineAt(offset)
         return lineRanges(line)
@@ -1376,7 +1455,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
                 else if (piece.collapsed && piece.nativeStart == piece.nativeEnd &&
                     raw.nativeLineAt(piece.nativeStart) == line) add(piece.start to piece.end)
             }
-            children.filter { it.line == line }.forEach { addAll(it.ranges.filter { range -> range.first < range.second }) }
+            children.filter { it.line == line && !it.overlay }.forEach { addAll(it.ranges.filter { range -> range.first < range.second }) }
         }.sortedBy { it.first }
         if (ranges.isEmpty()) {
             val offset = sourceOffset(native.first)
@@ -1392,7 +1471,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     }
 
     fun cursor(x: Float, y: Float): InlineCursor? {
-        children.lastOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
+        children.lastOrNull { it.containsPosition(x, y) }?.let {
             it.geometry.cursorAt(x - it.x, y - it.y)?.let { cursor -> return cursor }
         }
         cursors.lastOrNull { x >= it.bounds.left && x < it.bounds.right &&
@@ -1881,7 +1960,11 @@ internal fun nativeRubyLayout(source: Spanned, paint: TextPaint,
     var cursor = 0
     markers.forEach { marker ->
         compiler.text(cursor, marker.start)
-        compiler.prepared(marker.value, marker.start)
+        val scopes = source.getSpans(marker.start, marker.end, NativeRubyAnonymousScope::class.java)
+            .filter { it.prepared === marker.value }
+        if (scopes.size > 1 || scopes.any { source.getSpanStart(it) != marker.start || source.getSpanEnd(it) != marker.end })
+            throw UnsupportedFloatLayout("Scoped Ruby direction lost its exact prepared range")
+        compiler.prepared(marker.value, marker.start, scopes.singleOrNull()?.direction)
         cursor = marker.end
     }
     compiler.text(cursor, source.length)
@@ -1901,6 +1984,50 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     private val ownerWraps = mutableListOf<NativeInlineRange<NativeAuthoredTextWrap>>()
     private val actionScopes = mutableListOf<NativeRubyActionScope>()
     private val boxScopes = mutableListOf<NativeRubyBoxScope>()
+    private val overlayScopes = mutableListOf<NativeRubyOverlayScope>()
+    private val detachedRanges = nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
+        marker.value.projection.ranges.filter { it.role == RubyTextRole.OverlayContent }.map {
+            marker.start + it.start to marker.start + it.end
+        }
+    }
+
+    private val paragraphSource by lazy { original.toString() }
+    private val paragraphStarts by lazy {
+        buildList { add(0); paragraphSource.forEachIndexed { index, c -> if (c == '\n') add(index + 1) } }.toIntArray()
+    }
+    private val paragraphDirections = mutableMapOf<Int, Boolean>()
+    private val paragraphNeutralRanges by lazy {
+        nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
+            marker.value.projection.ranges.filter { range ->
+                range.role == RubyTextRole.OverlayContent || range.role == RubyTextRole.Owner ||
+                    marker.value.groups[range.path]?.box?.atomicLayout != null || range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
+            }.map { range -> Triple(marker.start + range.start, marker.start + range.end,
+                range.role != RubyTextRole.OverlayContent) }
+        }.filter { it.first < it.second }.sortedWith(compareBy({ it.first }, { -it.second }))
+    }
+    private fun completeParagraphRtl(at: Int): Boolean? {
+        if (detachedRanges.isEmpty()) return null
+        val index = paragraphStarts.binarySearch(at).let { if (it >= 0) it else -it - 2 }
+        return paragraphDirections.getOrPut(index) {
+            val first = paragraphStarts[index]
+            val last = paragraphStarts.getOrNull(index + 1)?.minus(1) ?: paragraphSource.length
+            // A stored isolate may cross LF. Each native paragraph sees only its
+            // intersection, including citation isolates reopened at the hard break.
+            val hidden = paragraphNeutralRanges.filter { it.first < last && it.second > first }
+                .map { Triple(maxOf(first, it.first), minOf(last, it.second), it.third) }
+                .sortedWith(compareBy({ it.first }, { -it.second }))
+            val text = buildString {
+                var cursor = first
+                hidden.forEach { range -> if (range.first >= cursor) {
+                    append(paragraphSource, cursor, range.first)
+                    if (range.third) append('\ufffc')
+                    cursor = range.second
+                } }
+                append(paragraphSource, cursor, last)
+            }
+            direction.isRtl(text, 0, text.length)
+        }
+    }
     private data class ActionContext(val range: RubyTextRange, val format: NativeRubyGroupFormat,
         val script: NativeRubyScriptState, val shift: Float, val rtl: Boolean, val styled: Spanned)
 
@@ -1947,16 +2074,17 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         breakEdges[breakText.length] = native.length
     }
 
-    fun prepared(prepared: NativeRubyPreparedSource, sourceStart: Int) {
+    fun prepared(prepared: NativeRubyPreparedSource, sourceStart: Int, enclosingScopeDirection: BidiResolvedDirection? = null) {
         prepared.visualOmissions.forEach { (first, last) -> for (offset in first until last) omitted += sourceStart + offset }
         prepared.visualSpaces.forEach { collapsedSpaces += sourceStart + it }
         prepared.protectedSpaces.forEach { protectedSpaces += sourceStart + it }
-        emitPrepared(prepared, sourceStart, null)
+        emitPrepared(prepared, sourceStart, null, enclosingScopeDirection)
     }
 
-    private fun emitPrepared(prepared: NativeRubyPreparedSource, sourceStart: Int, context: ActionContext?) {
+    private fun emitPrepared(prepared: NativeRubyPreparedSource, sourceStart: Int, context: ActionContext?,
+        enclosingScopeDirection: BidiResolvedDirection? = null) {
         val ranges = prepared.projection.ranges.filter { context == null || it.path.startsWith(context.range.path + "/") }
-        val structural = ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) }
+        val structural = ranges.filter { it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup, RubyTextRole.OverlayContent) }
         val owners = structural.filter { candidate -> structural.none { candidate.path.startsWith(it.path + "/") } }
         if (ranges.any { it.role == RubyTextRole.PaddingGroup &&
                 owners.none { owner -> it.path.startsWith(owner.path + "/") } })
@@ -1968,18 +2096,31 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             if (it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) 0 else 1 }))
         val rootText = buildString {
             events.forEach { range ->
-                if (range.role == RubyTextRole.Owner || prepared.groups[range.path]?.box?.atomicLayout != null ||
+                if (range.role == RubyTextRole.OverlayContent) Unit
+                else if (range.role == RubyTextRole.Owner || prepared.groups[range.path]?.box?.atomicLayout != null ||
                     range.span?.usesInlineDirectionIsolate() == true ||
                     range.span?.citationMarker?.isolation != null) append('\ufffc')
                 else if (range.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) append(directText(prepared, range))
                 else append(prepared.projection.text, range.start, range.end)
             }
         }
-        val fallbackRtl = context?.rtl ?: direction.isRtl(rootText, 0, rootText.length)
-        events.forEach { range -> when (range.role) {
+        val scopedRtl = context?.rtl ?: enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl }
+        events.forEach { range ->
+            val fallbackRtl = scopedRtl ?: completeParagraphRtl(sourceStart + range.start)
+                ?: direction.isRtl(rootText, 0, rootText.length)
+            when (range.role) {
             RubyTextRole.Owner -> owner(prepared, range, sourceStart, fallbackRtl,
                 context?.script, context?.shift ?: 0f)
-            RubyTextRole.ActionGroup, RubyTextRole.BoxGroup -> action(prepared, range, sourceStart, context, fallbackRtl)
+            RubyTextRole.ActionGroup, RubyTextRole.BoxGroup -> action(prepared, range, sourceStart, context, fallbackRtl, enclosingScopeDirection)
+            RubyTextRole.OverlayContent -> {
+                val owner = context?.format?.box?.owner
+                    ?: throw UnsupportedFloatLayout("Positioned inline text lacks its original Box context")
+                val format = checkNotNull(prepared.groups[range.path])
+                val body = NativeInlineBoxOverlaySource(checkNotNull(range.overlayIndex),
+                    SpannedString(prepared.source.subSequence(range.start, range.end)), format.paint,
+                    format.lineHeight, checkNotNull(range.overlayContent).textAlign, context.rtl)
+                overlayScopes += NativeRubyOverlayScope(sourceStart + range.start, sourceStart + range.end, owner, body)
+            }
             else -> {
                 val span = checkNotNull(range.span)
                 fun emitPart(first: Int, last: Int) = text(sourceStart + first, sourceStart + last,
@@ -2000,11 +2141,25 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                         if (lf < range.end) emitPart(lf, lf + 1)
                         first = lf + 1
                     }
-                } else if (span.usesInlineDirectionIsolate()) isolate(resolveDirection(span.direction,
-                    prepared.projection.text.substring(range.start, range.end),
-                    nativeClippedParagraphDirectionAt(original, sourceStart + range.start)?.let { it == BidiResolvedDirection.Rtl }
-                        ?: fallbackRtl), emit)
-                else emit()
+                } else if (span.usesInlineDirectionIsolate()) {
+                    val rtl = resolveDirection(span.direction, prepared.projection.text.substring(range.start, range.end),
+                        nativeClippedParagraphDirectionAt(original, sourceStart + range.start)?.let { it == BidiResolvedDirection.Rtl }
+                            ?: fallbackRtl)
+                    if (detachedRanges.isEmpty()) isolate(rtl, emit)
+                    else {
+                        // Overlay paragraph classification excludes this stored isolate.
+                        // Reopen it after each real LF, as citation isolates already do,
+                        // so the emitted native paragraphs honor that same ownership.
+                        var first = range.start
+                        while (first < range.end) {
+                            val lf = prepared.projection.text.indexOf('\n', first)
+                                .let { if (it < 0 || it >= range.end) range.end else it }
+                            if (first < lf) isolate(rtl) { emitPart(first, lf) }
+                            if (lf < range.end) emitPart(lf, lf + 1)
+                            first = lf + 1
+                        }
+                    }
+                } else emit()
                 if (marker != null) {
                     val body = pieces.drop(firstPiece).filterIsInstance<NativeRubyPiece.Text>()
                     val first = body.firstOrNull()?.nativeStart
@@ -2017,13 +2172,14 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     }
 
     private fun action(prepared: NativeRubyPreparedSource, range: RubyTextRange, sourceStart: Int,
-        parent: ActionContext?, enclosingRtl: Boolean) {
+        parent: ActionContext?, enclosingRtl: Boolean, enclosingScopeDirection: BidiResolvedDirection?) {
         val format = checkNotNull(prepared.groups[range.path])
         val box = format.box
         if (box?.atomicLayout != null) {
             if (parent != null || range.role != RubyTextRole.BoxGroup)
                 throw UnsupportedFloatLayout("Atomic inline box requires its original independent group")
-            atomicBox(prepared, range, sourceStart, atomicParentRtl(prepared, sourceStart + range.start))
+            atomicBox(prepared, range, sourceStart, enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl }
+                ?: atomicParentRtl(prepared, sourceStart + range.start))
             return
         }
         val key = format.actionOwner
@@ -2123,7 +2279,9 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             if ((box.leftAdvance > 0f || box.rightAdvance > 0f) &&
                 (!graphemes.isBoundary(firstSource) || !graphemes.isBoundary(lastSource)))
                 throw UnsupportedFloatLayout("Inline box edge is inside a source grapheme")
-            boxScopes += NativeRubyBoxScope(firstSource, lastSource, point, bodyEnd, format, shift, parent?.rtl)
+            boxScopes += NativeRubyBoxScope(firstSource, lastSource, point, bodyEnd, format, shift,
+                parent?.rtl ?: enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl },
+                overlayScopes.filter { it.owner === box.owner && it.start >= firstSource && it.end <= lastSource })
         }
         if (key != null) {
             val boxes = prepared.projection.ranges.filter { it.role == RubyTextRole.BoxGroup &&
@@ -2147,7 +2305,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val result = original.toString().toCharArray()
         val intervals = nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
             marker.value.projection.ranges.filter { range ->
-                range.role == RubyTextRole.Owner || marker.value.groups[range.path]?.box?.atomicLayout != null ||
+                range.role == RubyTextRole.OverlayContent || range.role == RubyTextRole.Owner ||
+                    marker.value.groups[range.path]?.box?.atomicLayout != null ||
                     range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
             }.map { marker.start + it.start to marker.start + it.end }
         }.sortedBy { it.first }
@@ -2247,13 +2406,16 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     private fun directText(prepared: NativeRubyPreparedSource, range: RubyTextRange): String = buildString {
         val candidates = prepared.projection.ranges.filter { candidate ->
             candidate.path.startsWith(range.path + "/") &&
-                (candidate.role == RubyTextRole.Owner || candidate.span?.usesInlineDirectionIsolate() == true ||
+                (candidate.role == RubyTextRole.Owner || candidate.role == RubyTextRole.OverlayContent ||
+                    candidate.span?.usesInlineDirectionIsolate() == true ||
                     range.role == RubyTextRole.Owner && candidate.role in setOf(RubyTextRole.Base, RubyTextRole.Annotation))
         }
         val nested = candidates.filter { child -> candidates.none { parent -> child.path.startsWith(parent.path + "/") } }
         var cursor = range.start
         nested.sortedBy { it.start }.forEach { child ->
-            append(prepared.projection.text, cursor, child.start); append('\ufffc'); cursor = child.end
+            append(prepared.projection.text, cursor, child.start)
+            if (child.role != RubyTextRole.OverlayContent) append('\ufffc')
+            cursor = child.end
         }
         append(prepared.projection.text, cursor, range.end)
     }
@@ -2829,7 +2991,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         }
         val clippedPoints = nativeInlineRanges(original, NativeClippedVisibleMetricMarker::class.java)
         original.getSpans(0, original.length, Any::class.java).forEach { span ->
-            if (span is NativeRubyPreparedSource) return@forEach
+            if (span is NativeRubyPreparedSource || span is NativeRubyAnonymousScope) return@forEach
             val start = original.getSpanStart(span); val end = original.getSpanEnd(span)
             val clippedPointKey = when (span) {
                 is NativeAuthoredInlineMetrics -> span.clippedVisiblePoint
@@ -2912,7 +3074,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             if (scope.format.actionOwner == null) target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight,
                 strut = true, includePrimaryInNormal = true, independentNormalStrut = true),
                 scope.nativeStart, scope.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            target.setSpan(NativeInlineBoxSpan(scope.format, scope.shift, scope.parentRtl),
+            target.setSpan(NativeInlineBoxSpan(scope.format, scope.shift, scope.parentRtl, scope.overlays.map { it.body }),
                 scope.nativeStart, scope.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         pieces.filterIsInstance<NativeRubyPiece.Text>().filter { it.collapsed && it.nativeStart < it.nativeEnd }.forEach { piece ->

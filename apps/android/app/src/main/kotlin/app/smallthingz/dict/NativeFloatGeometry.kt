@@ -121,6 +121,7 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
     internal open val nativeRubyColumns: List<NativeRubyPiece.Column> get() = emptyList()
     internal open val nativeRubyCollapsedText: List<NativeRubyPiece.Text> get() = emptyList()
     internal open fun nativeRubyRawOffset(publicOffset: Int): Int = publicOffset
+    internal open fun nativeInlineBoxOverlay(owner: NativeInlineBoxOwner, index: Int): NativeInlineBoxOverlayGeometry? = null
     internal open val nativeInlineBoxCursorBounds: List<RectF> get() = emptyList()
     internal open fun nativeInlineBoxCursorAt(x: Float, y: Float, line: Int? = null): InlineCursor? = null
     internal open fun nativeInlineBoxRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
@@ -335,12 +336,14 @@ private class NativeStaticFloatGeometry private constructor(
     override val extents: NativeGeometryExtents by lazy {
         val ink = ordinaryPaintBounds.fold(nativeFocusInk(nodes), ::enclosingBounds)
         val interaction = nativeBoundsOf(selectableFragments +
-            nodes.flatMap { it.bounds } + nativeInlineBoxCursorBounds + listOf(caretRect(0), caretRect(text.length)))
+            nodes.flatMap { it.bounds } + nativeInlineBoxCursorBounds + ruby?.detachedCaretBounds().orEmpty() +
+            listOf(caretRect(0), caretRect(text.length)))
         NativeGeometryExtents(width, height.toFloat(), ink, interaction)
     }
 
     override fun containsInteraction(x: Float, y: Float): Boolean =
         selectableFragments.any { it.contains(x, y) } || nativeInlineBoxCursorBounds.any { it.contains(x, y) } ||
+            ruby?.detachedCaretBounds()?.any { it.contains(x, y) } == true ||
             nodes.any { node -> node.bounds.any { it.contains(x, y) } }
 
     override fun paint(canvas: Canvas) {
@@ -410,6 +413,26 @@ private class NativeStaticFloatGeometry private constructor(
         return RectF(x, layout.getLineTop(line) + shift, x + 1f, layout.getLineBottom(line) + shift)
     }
 
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        require(caret.offset in 0..text.length)
+        ruby?.let { return it.caret(caret) }
+        inlineBox?.let { return it.caretRect(caret) }
+        return if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            checkNotNull(nativeRubyLineCaret(layout.getLineForOffset(caret.offset - 1), caret.offset))
+        else caretRect(caret.offset)
+    }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        ruby?.let { return it.caretAt(x, y) }
+        inlineBox?.let { return it.caretAt(x, y) }
+        floats.lastOrNull { it.content.contains(x, y) }?.let { return NativeTextCaret(it.occurrence.offset) }
+        val line = lineForPosition(x, y)
+        val offset = horizontalOffset(line, x).coerceIn(0, text.length)
+        return NativeTextCaret(offset, if (offset == layout.getLineEnd(line))
+            NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+    }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret =
+        ruby?.visualCaret(caret, direction) ?: NativeTextCaret(visualOffset(caret.offset, direction))
+
     override fun visualOffset(offset: Int, direction: Int): Int {
         ruby?.let { return it.visualOffset(offset, direction) }
         require(offset in 0..text.length && direction in listOf(-1, 1))
@@ -434,6 +457,9 @@ private class NativeStaticFloatGeometry private constructor(
         require(start in 0..text.length && end in start..text.length)
         return ruby?.paddingRects(owner, start, end)
     }
+
+    internal override fun nativeInlineBoxOverlay(owner: NativeInlineBoxOwner, index: Int): NativeInlineBoxOverlayGeometry? =
+        inlineBox?.overlay(owner, index)
 
     override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? {
         require(start in 0..text.length && end in start..text.length)

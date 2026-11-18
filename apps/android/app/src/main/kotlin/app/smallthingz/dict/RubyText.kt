@@ -2,7 +2,7 @@ package app.smallthingz.dict
 
 /** A logical source range, before native shaping or empty-clip visual excision. */
 internal enum class RubyTextRole {
-    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup, ClippedAbsolute, ClippedText,
+    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup, OverlayContent, OverlayText, ClippedAbsolute, ClippedText,
 }
 
 internal data class RubyTextRange(
@@ -14,6 +14,8 @@ internal data class RubyTextRange(
     val segment: RubySegment? = null,
     val base: RubyBase? = null,
     val annotation: RubyAnnotation? = null,
+    val overlayContent: InlineBoxOverlayContent? = null,
+    val overlayIndex: Int? = null,
 )
 
 internal data class RubyTextProjection(val text: String, val ranges: List<RubyTextRange>)
@@ -41,7 +43,7 @@ internal fun rubyBaseText(spans: List<Span>): String = buildString {
             val box = span.inlineBoxGroup
             val clipped = span.clippedAbsolute
             if (clipped != null) appendBase(clipped.children)
-            else if (box != null) appendBase(box.spans)
+            else if (box != null) appendBase(inlineBoxSourceSpans(box))
             else if (action != null) appendBase(action.spans)
             else if (padding != null) appendBase(padding.spans)
             else if (ruby == null) append(span.text).append(span.trail) else ruby.segments.forEach { segment ->
@@ -84,7 +86,7 @@ internal fun rubyGraphicalSpans(spans: List<Span>): List<Span> {
     return ranges.mapNotNull { range ->
         if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup ||
             range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup ||
-            range.role == RubyTextRole.ClippedAbsolute) null
+            range.role == RubyTextRole.ClippedAbsolute || range.role == RubyTextRole.OverlayContent) null
         else range.span?.rubyFallbackAction(ranges.lastOrNull { ancestor ->
             (ancestor.role == RubyTextRole.PaddingGroup || ancestor.role == RubyTextRole.ActionGroup ||
                 ancestor.role == RubyTextRole.BoxGroup || ancestor.role == RubyTextRole.ClippedAbsolute) &&
@@ -110,8 +112,9 @@ private class RubyGraphicalTextBuilder {
         ranges[index] = range.copy(end = text.length)
     }
 
-    private fun appendSpans(spans: List<Span>, path: String, role: RubyTextRole) {
-        spans.forEachIndexed { index, span ->
+    private fun appendSpans(spans: List<Span>, path: String, role: RubyTextRole, firstIndex: Int = 0) {
+        spans.forEachIndexed { ordinal, span ->
+            val index = firstIndex + ordinal
             val childPath = "$path/$index"
             val start = text.length
             val ruby = span.ruby
@@ -123,8 +126,19 @@ private class RubyGraphicalTextBuilder {
                 // The real source remains addressable; native layout separately excises its visual allocation.
                 appendSpans(clipped.children, "$childPath/clippedAbsolute/children", RubyTextRole.ClippedText)
             } else if (box != null) group(RubyTextRange(RubyTextRole.BoxGroup, childPath, start, start, span = span)) {
-                // Empty absolute overlays are paint records, never logical source children.
-                appendSpans(box.spans, "$childPath/inlineBoxGroup/spans", role)
+                for (boundary in 0..box.spans.size) {
+                    box.overlays.forEachIndexed { overlayIndex, overlay ->
+                        overlay.content?.takeIf { it.beforeChild == boundary.toLong() }?.let { body ->
+                            val bodyPath = "$childPath/inlineBoxGroup/overlays/$overlayIndex/content"
+                            group(RubyTextRange(RubyTextRole.OverlayContent, bodyPath, text.length, text.length,
+                                overlayContent = body, overlayIndex = overlayIndex)) {
+                                appendSpans(body.spans, "$bodyPath/spans", RubyTextRole.OverlayText)
+                            }
+                        }
+                    }
+                    if (boundary < box.spans.size)
+                        appendSpans(listOf(box.spans[boundary]), "$childPath/inlineBoxGroup/spans", role, boundary)
+                }
             } else if (action != null) group(RubyTextRange(RubyTextRole.ActionGroup, childPath, start, start, span = span)) {
                 appendSpans(action.spans, "$childPath/inlineActionGroup/spans", role)
             } else if (padding != null) group(RubyTextRange(RubyTextRole.PaddingGroup, childPath, start, start, span = span)) {
@@ -224,7 +238,7 @@ private fun rubyFallbackProjection(spans: List<Span>, visual: Boolean): List<Spa
                 if (!visual) appendFallback(clipped.children, inheritedUnderline || span.underline,
                     inheritedStrike || span.strike,
                     span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
-            } else if (box != null) appendFallback(box.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
+            } else if (box != null) appendFallback(inlineBoxSourceSpans(box), inheritedUnderline || span.underline, inheritedStrike || span.strike,
                 span.takeIf { it.kind == "link" || it.kind == "external_link" } ?: inheritedAction)
             else if (action != null) appendFallback(action.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike, span)
             else if (padding != null) appendFallback(padding.spans, inheritedUnderline || span.underline, inheritedStrike || span.strike,
@@ -263,3 +277,13 @@ private fun rubyFallbackProjection(spans: List<Span>, visual: Boolean): List<Spa
 
 internal fun rubyFallbackText(spans: List<Span>): String =
     rubyFallbackSpans(spans).joinToString("") { it.text + it.trail }
+
+/** Logical traversal only. The normal-flow builder must continue to use box.spans. */
+internal fun inlineBoxSourceSpans(box: InlineBoxGroup): List<Span> = buildList {
+    for (boundary in 0..box.spans.size) {
+        box.overlays.forEach { overlay ->
+            overlay.content?.takeIf { it.beforeChild == boundary.toLong() }?.let { addAll(it.spans) }
+        }
+        if (boundary < box.spans.size) add(box.spans[boundary])
+    }
+}
