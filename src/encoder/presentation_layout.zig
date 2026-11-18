@@ -36,6 +36,9 @@ const speech = [_][]const u8{
     "Romanization", "Logogram",       "Determinative",
 };
 pub fn partOfSpeech(title: []const u8) ?[]const u8 {
+    // Hungarian hunfn and főnév both emit this heading, including on pages
+    // whose record language was independently identified as another language.
+    if (std.mem.eql(u8, title, "Főnév")) return "Noun";
     // Retained FR borracho explicitly declares adjectif/nom with es; its
     // expansion repeats these exact headings and Spanish POS categories.
     // Lexical kind only: the independently established owner is unchanged.
@@ -2369,7 +2372,40 @@ test "classified layout owner survives support labels without changing lexical s
     try std.testing.expectEqualStrings("Unknown support", legacy.lexemes[1].language);
     try std.testing.expectEqualDeep(legacy.other_sections, owned.other_sections);
 }
-// Append to src/encoder/presentation_layout.zig in a private source only.
+test "Hungarian noun heading organizes senses without choosing the record language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // The retained Danish section of te uses the Hungarian noun heading and
+    // a definition linking to tea. The two strings have separate roles.
+    const source = @embedFile("testdata/hu-root-literal/te.prepared-expanded.wikitext");
+    const danish = std.mem.indexOf(u8, source, "|Dán]]==\n===Főnév===\n") orelse return error.DanishNounHeadingMissing;
+    const rest = source[danish..];
+    const next_heading = std.mem.indexOf(u8, rest, "\n==[") orelse return error.FollowingHeadingMissing;
+    const section = rest[0..next_heading];
+    const body = "#[[tea]]";
+    try std.testing.expect(std.mem.indexOf(u8, section, "\n" ++ body ++ "\n") != null);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(body);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const sections = [_]Section{.{ .title = "Főnév", .level = 3, .blocks = blocks }};
+    const owned = try buildOwned(a, &sections, "dán");
+    const unknown = try buildUnclassified(a, &sections);
+    for ([_]Layout{ owned, unknown }, [_][]const u8{ "dán", "" }) |layout, owner| {
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings(owner, noun.language);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        const definition = sections[noun.section].blocks[noun.definitions[0].block];
+        try std.testing.expectEqual(@as(usize, 1), definition.spans.len);
+        try std.testing.expectEqual(.link, definition.spans[0].kind);
+        try std.testing.expectEqualStrings("tea", definition.spans[0].target);
+    }
+    for ([_][]const u8{ "főnév", "Főnév?", "Főnévi igenév", "Főnév (régies)" }) |other|
+        try std.testing.expect(partOfSpeech(other) == null);
+}
+
 test "KBD exact localized noun heading preserves owner and descendant section evidence" {
     const title = "ПСАЛЪЭ ЛЪЭПКЪЫГЪУЭ: ЩЫӀЭЦӀЭ";
     try std.testing.expectEqualStrings("Noun", partOfSpeech(title).?);
