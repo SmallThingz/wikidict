@@ -11981,5 +11981,144 @@ class CompleteParentBatchSingleReadTests(unittest.TestCase):
                             fixture.wiki, fixture.date, fixture.namespace.read_bytes(), set(), cache,
                             inventory_cache=inventory)
 
+
+class FigureHttpSingleTraversalTests(unittest.TestCase):
+    setUp = FigureStreamDigestTests.setUp
+
+    def verify_counted(self, fused, *, indexed=False):
+        original = figure.stream_values
+        calls = []
+        def values(path, schema, **options):
+            if Path(path) == self.raw and schema == figure.RAW_STREAM_SCHEMA:
+                calls.append((path, options))
+            return original(path, schema, **options)
+        index = {} if indexed else None
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch.object(figure, 'stream_values', side_effect=values))
+            if not fused:
+                stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+            result = figure.verify(self.args.output, _raw_index_out=index)
+        return result, index, len(calls)
+
+    def test_http_single_stream_matches_two_pass_manifest_index_and_full_tuple(self):
+        before, old_index, old_calls = self.verify_counted(False, indexed=True)
+        after, new_index, new_calls = self.verify_counted(True, indexed=True)
+        self.assertEqual(before, after)
+        self.assertEqual(old_index, new_index)
+        self.assertEqual((old_calls, new_calls), (2, 1))
+        with patch.object(figure, '_HttpBatchReplay', return_value=None):
+            old_tuple = figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date)
+        self.assertEqual(old_tuple, figure.verify_tuple(self.paths, self.fixture.wiki, self.fixture.date))
+
+    def test_http_single_stream_keeps_outer_projection_error_before_http_error(self):
+        projection = self.paths['figure-sizing']
+        raw = projection.read_bytes()
+        lines = raw.splitlines(keepends=True)
+        header = json.loads(lines[0]); header['raw_sha256'] = '0' * 64
+        projection.write_bytes(figure.stream_encoded(header) + b''.join(lines[1:]))
+        try:
+            for fused, expected_calls in ((False, 0), (True, 1)):
+                with self.subTest(fused=fused), contextlib.ExitStack() as stack:
+                    if not fused:
+                        stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                    replay = stack.enter_context(patch.object(figure, 'replay_source', side_effect=ValueError('first HTTP failure')))
+                    with self.assertRaisesRegex(ValueError, 'projection stream header differs from exact raw replay'):
+                        figure.verify(self.args.output)
+                    self.assertEqual(replay.call_count, expected_calls)
+        finally:
+            projection.write_bytes(raw)
+
+    def test_http_single_stream_keeps_inventory_error_before_http_error(self):
+        for fused, expected_calls in ((False, 0), (True, 1)):
+            with self.subTest(fused=fused), contextlib.ExitStack() as stack:
+                if not fused:
+                    stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                replay = stack.enter_context(patch.object(figure, 'replay_source', side_effect=ValueError('first HTTP failure')))
+                stack.enter_context(patch.object(figure, 'verify_inventory', side_effect=ValueError('outer SQL failure')))
+                with self.assertRaisesRegex(ValueError, '^outer SQL failure$'):
+                    figure.verify(self.args.output)
+                self.assertEqual(replay.call_count, expected_calls)
+
+    def test_http_single_stream_preserves_source_failure_and_raw_eof_priority(self):
+        for fused in (False, True):
+            with self.subTest(fused=fused), contextlib.ExitStack() as stack:
+                if not fused:
+                    stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                stack.enter_context(patch.object(figure, 'replay_source', side_effect=ValueError('first HTTP failure')))
+                with self.assertRaisesRegex(ValueError, '^first HTTP failure$'):
+                    figure.verify(self.args.output)
+        self.raw.write_bytes(self.original + b'\n')
+        try:
+            for fused in (False, True):
+                with self.subTest(trailing=fused), contextlib.ExitStack() as stack:
+                    if not fused:
+                        stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                    stack.enter_context(patch.object(figure, 'replay_source', side_effect=ValueError('first HTTP failure')))
+                    with self.assertRaisesRegex(ValueError, 'Trailing Figure stream records or bytes'):
+                        figure.verify(self.args.output)
+        finally:
+            self.raw.write_bytes(self.original)
+
+    def test_http_single_stream_rejects_late_raw_mutation_without_publishing_digest(self):
+        original_inventory = figure.verify_inventory
+        for fused in (False, True):
+            with self.subTest(fused=fused), contextlib.ExitStack() as stack:
+                self.raw.write_bytes(self.original)
+                if not fused:
+                    stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                def changed(*values, **options):
+                    result = original_inventory(*values, **options)
+                    self.raw.write_bytes(self.original + b'changed')
+                    return result
+                stack.enter_context(patch.object(figure, 'verify_inventory', side_effect=changed))
+                with self.assertRaises((ValueError, StopIteration)):
+                    figure.verify(self.args.output)
+        self.raw.write_bytes(self.original)
+
+    def test_http_single_stream_falls_back_for_light_source_and_retains_no_response_graph(self):
+        journal = self.args.output / figure.FILE_REQUESTS
+        raw = journal.read_bytes(); lines = raw.splitlines(keepends=True)
+        source = json.loads(lines[1]); source['kind'] = 'http-archived-light'
+        journal.write_bytes(lines[0] + figure.stream_encoded(source) + b''.join(lines[2:]))
+        try:
+            original = figure.stream_values
+            calls = []
+            def values(path, schema, **options):
+                if Path(path) == self.raw and schema == figure.RAW_STREAM_SCHEMA: calls.append(path)
+                return original(path, schema, **options)
+            with patch.object(figure, 'stream_values', side_effect=values):
+                with self.assertRaises(ValueError):
+                    figure.verify(self.args.output)
+            self.assertEqual(len(calls), 2)
+        finally:
+            journal.write_bytes(raw)
+        states = []
+        original_consume = figure._HttpBatchReplay.consume
+        def consume(state, header, batch):
+            original_consume(state, header, batch)
+            self.assertIsNone(state.error)
+            self.assertTrue(all(set(summary) == {'requests'} for summary, _, _ in state.frames))
+            self.assertTrue(all('response' not in source for _, source, _ in state.frames))
+            states.append(len(state.frames))
+        with patch.object(figure._HttpBatchReplay, 'consume', consume):
+            figure.verify(self.args.output)
+        self.assertTrue(states)
+
+    def test_http_single_stream_malformed_plan_does_not_preempt_outer_failure(self):
+        plan = self.args.output / figure.PLAN
+        saved = plan.read_bytes()
+        try:
+            for value in ([], None, 'not an object', 3):
+                plan.write_bytes(figure.encoded(value))
+                for fused in (False, True):
+                    with self.subTest(value=value, fused=fused), contextlib.ExitStack() as stack:
+                        if not fused:
+                            stack.enter_context(patch.object(figure, '_HttpBatchReplay', return_value=None))
+                        stack.enter_context(patch.object(figure, 'verify_inventory', side_effect=ValueError('outer SQL failure')))
+                        with self.assertRaisesRegex(ValueError, '^outer SQL failure$'):
+                            figure.verify(self.args.output)
+        finally:
+            plan.write_bytes(saved)
+
 if __name__ == '__main__':
     unittest.main()

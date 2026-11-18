@@ -889,12 +889,22 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
         identity_out.update(size=size, sha256=sha.hexdigest())
 
 
-def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
+def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_encoded=True, allow_compatible_epochs=True, allow_decimal_tiff_axes=True, allow_default_tiff_page=True, _http_replay=None):
     before = evidence.stamp(Path(raw_path))
     identity = {}
-    values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity)
+    if _http_replay is not None and type(_http_replay) is not _HttpBatchReplay:
+        raise ValueError('Invalid private Figure HTTP stream replay')
+    values = stream_values(raw_path, RAW_STREAM_SCHEMA, allow_encoded=allow_encoded, identity_out=identity,
+                           record_offsets=None if _http_replay is None else _http_replay.offsets)
     header = next(values)
-    result = file_records(values, namespace_raw, wiki, date, site_raw,
+    def observed_values():
+        for batch in values:
+            # Derive this batch's ordinary facts first. On resumption the same
+            # decoded object receives the unchanged HTTP proof, then dies.
+            yield batch
+            _http_replay.consume(header, batch)
+    selected_values = values if _http_replay is None else observed_values()
+    result = file_records(selected_values, namespace_raw, wiki, date, site_raw,
                           has_batches=bool(header['base_batches']), record_limit=header['records_count'],
                           profile_kind=profile_kind, allow_tiff_companion=allow_tiff_companion,
                           allow_compatible_epochs=allow_compatible_epochs,
@@ -907,6 +917,8 @@ def figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, *, pro
         raise ValueError('Figure raw stream has incomplete file membership')
     if evidence.stamp(Path(raw_path)) != before:
         raise ValueError('Figure raw stream changed after replay')
+    if _http_replay is not None:
+        _http_replay.raw_complete(header, identity)
     result.update(schema=FILES_STREAM_SCHEMA, records_count=len(result['records']),
                   raw_bytes=identity['size'], raw_sha256=identity['sha256'],
                   generator_sha256=producer()['generator_sha256'], replay_contract=REPLAY_CONTRACT)
@@ -1017,7 +1029,7 @@ class _ReprojectionRecords:
         return document
 
 
-def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None):
+def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date, site_raw, *, regenerate_projection=None, _reprojection_records=None, _http_replay=None):
     if _reprojection_records is not None and (type(_reprojection_records) is not _ReprojectionRecords or regenerate_projection is not None):
         raise ValueError('Invalid private reprojection record reuse')
     if regenerate_projection is None:
@@ -1058,6 +1070,10 @@ def verify_stream_document(projection_path, raw_path, namespace_raw, wiki, date,
         allow_compatible_epochs=header.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_decimal_tiff_axes=header.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT),
         allow_default_tiff_page=header.get('replay_contract') == REPLAY_CONTRACT)
+    if _http_replay is not None:
+        if regenerate_projection is not None or _reprojection_records is not None:
+            raise ValueError('HTTP stream reuse cannot replace projection regeneration')
+        options['_http_replay'] = _http_replay
     expected = (figure_stream_document(raw_path, namespace_raw, wiki, date, site_raw, **options)
                 if _reprojection_records is None else
                 _reprojection_records.take(raw_path, namespace_raw, wiki, date, site_raw,
@@ -2539,6 +2555,73 @@ def source_records(path, expected):
         raise ValueError('Figure requests changed during replay')
 
 
+class _HttpBatchReplay:
+    """One invocation's ordinary HTTP proofs; never retain response graphs.
+
+    Semantic/projection errors keep their old priority over HTTP-source errors.
+    Only the first latter exception is held, with its original traceback (and
+    at most its one bounded failed batch), until the old replay boundary.
+    Mixed/parent/light/lean streams use the existing independent second pass.
+    """
+    def __init__(self, root, wiki, date, namespace, plan, *, indexed):
+        self.root, self.wiki, self.date, self.namespace, self.plan = root, wiki, date, namespace, plan
+        self.sources = None
+        self.frames, self.http_files, self.archived_names = [], set(), set()
+        self.ordinary, self.error = True, None
+        self.header, self.identity = None, None
+        self.offsets = [] if indexed else None
+
+    def consume(self, header, batch):
+        if self.error is not None:
+            return
+        try:
+            if self.sources is None:
+                self.sources = source_records(self.root / FILE_REQUESTS,
+                    header['base_batches'] + header['observed_batches'])
+            source = next(self.sources)
+            if not isinstance(source, dict) or source.get('kind') != 'http-archived':
+                self.ordinary = False
+                self.frames.clear(); self.http_files.clear(); self.archived_names.clear()
+            if not self.ordinary:
+                return
+            archived = replay_source(self.root, source, batch, self.wiki, self.date,
+                self.namespace, self.http_files, origin_plan=self.plan)
+            if self.archived_names.intersection(archived):
+                raise ValueError('Duplicate contained Figure HTTP archive identity')
+            self.archived_names.update(archived)
+            # Requests and small source/artifact identities are the same bounded
+            # metadata already retained by the old planned/archived collections.
+            self.frames.append(({'requests': batch['requests']}, source, archived))
+        except Exception as error:
+            self.error = (error, error.__traceback__)
+            self.frames.clear(); self.http_files.clear(); self.archived_names.clear()
+
+    def raw_complete(self, header, identity):
+        self.header, self.identity = header, identity
+
+    def finish(self):
+        if self.error is not None:
+            return
+        try:
+            if self.sources is None:
+                self.sources = source_records(self.root / FILE_REQUESTS,
+                    self.header['base_batches'] + self.header['observed_batches'])
+            if next(self.sources, None) is not None:
+                raise ValueError('Unexpected Figure request stream record')
+        except Exception as error:
+            self.error = (error, error.__traceback__)
+            self.frames.clear(); self.http_files.clear(); self.archived_names.clear()
+
+    def close(self):
+        if self.sources is not None:
+            self.sources.close()
+
+    def raise_source_error(self):
+        if self.error is not None:
+            error, traceback = self.error
+            raise error.with_traceback(traceback)
+
+
 def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False, origin_plan=None):
     # Return only this frame's authenticated retired-response identities.
     if not isinstance(source, dict):
@@ -2727,8 +2810,23 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     generation = {} if regenerate_projection is None else {'regenerate_projection': regenerate_projection}
     if _reprojection_records is not None:
         generation['_reprojection_records'] = _reprojection_records
-    projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
-                                        namespace, wiki, date, site_raw, **generation)
+    early_plan_error = None
+    try:
+        early_plan = inventory_document(root / PLAN)
+    except Exception as error:
+        early_plan, early_plan_error = None, (error, error.__traceback__)
+    http_replay = (_HttpBatchReplay(root, wiki, date, namespace, early_plan, indexed=_raw_index_out is not None)
+        if regenerate_projection is None and _reprojection_records is None and
+           isinstance(early_plan, dict) and early_plan.get('metadata_mode', 'full') == 'full' else None)
+    try:
+        options = {} if http_replay is None else {'_http_replay': http_replay}
+        projection = verify_stream_document(root / ROLES['figure-sizing'], raw_path,
+                                            namespace, wiki, date, site_raw, **generation, **options)
+        if http_replay is not None:
+            http_replay.finish()
+    finally:
+        if http_replay is not None:
+            http_replay.close()
     if regenerate_projection is not None:
         # The verifier fences the single owned projection insertion. Preserve
         # the unchanged raw identity and use the resulting directory identity.
@@ -2771,9 +2869,14 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     # All record consumers have finished. Keep only header/scalar authority
     # while replaying nested parents; their records must not overlap this graph.
     del projection['records']
-    http_files, prefix_cache = set(), {} if retained_cache is None else retained_cache
-    archived, planned = {}, []
+    if early_plan_error is not None:
+        error, traceback = early_plan_error
+        raise error.with_traceback(traceback)
     plan = inventory_document(root / PLAN)
+    fused = http_replay is not None and http_replay.ordinary and http_replay.plan == plan
+    http_files = http_replay.http_files if fused else set()
+    prefix_cache = {} if retained_cache is None else retained_cache
+    archived, planned = {}, []
     if ((projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) !=
             (plan.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) or
             (projection.get('replay_contract') in (REPLAY_CONTRACT_V4, REPLAY_CONTRACT)) !=
@@ -2790,9 +2893,18 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
     complete_sources = []
     offsets = [] if materialized is not None or _raw_index_out is not None else None
     replay_identity = {} if offsets is not None or _raw_payload_out is not None else None
-    batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
-    header = next(batches)
-    sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
+    if fused:
+        header = http_replay.header
+        if offsets is not None:
+            offsets = http_replay.offsets
+        if replay_identity is not None:
+            replay_identity = http_replay.identity
+        frames = iter(http_replay.frames)
+    else:
+        batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
+        header = next(batches)
+        sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
+        frames = ((batch, source, None) for batch, source in zip(batches, sources, strict=True))
     def selected_batches(selected):
         # The two complete traversals have validated every physical record.
         # Retain only offsets and digests, and replay each origin's own rows.
@@ -2820,9 +2932,14 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
                 yield raw_record_decode(raw, encoding)
             if held_stamp() != raw_before[1] or raw_identity() != raw_before:
                 raise ValueError('Figure raw identity changed during selected replay')
-    for batch, source in zip(batches, sources, strict=True):
-        frame_archived = replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
-                      allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan)
+    if fused:
+        # All former whole-projection/inventory/provider/plan gates above retain
+        # priority over an earlier HTTP proof error observed during that scan.
+        http_replay.raise_source_error()
+    for batch, source, checked_archive in frames:
+        frame_archived = (checked_archive if checked_archive is not None else
+            replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
+                          allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan))
         for name, identity in frame_archived.items():
             if name in archived:
                 raise ValueError('Duplicate contained Figure HTTP archive identity')
@@ -2840,6 +2957,8 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             ordinary_requests.update(batch['requests'])
         elif source['kind'] == 'http-archived-lean':
             lean_requests.update(batch['requests'])
+    if fused:
+        http_replay.frames.clear()
     check_prefix_cache(prefix_cache)
     if (('max_inflight' in plan and (plan['max_inflight'] != 2 or type(plan['max_inflight']) is not int)) or
             (('max_inflight' in plan or mode == 'lean-tiff-v1') and
