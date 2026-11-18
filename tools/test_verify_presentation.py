@@ -140,6 +140,27 @@ class PresentationDiagnosticTests(unittest.TestCase):
             self.assertEqual('passed', result['status'])
             self.assertEqual([], result['issues'])
 
+    def test_visible_advice_matches_native_image_precedence_and_keeps_body_separate(self):
+        with Fixture() as f:
+            entry = f.entry('advice', 'ordinary', language='English')
+            entry['sections'] = [dict(blocks=[dict(spans=[
+                dict(kind='text', text='†', explanation='abbreviation', tooltip='Obsolete sense'),
+                dict(kind='text', text='', tooltip='outer', image=dict(tooltip='{{own image title}}')),
+                dict(kind='text', text='', tooltip='suppressed', image=dict(tooltip='')),
+                dict(kind='text', text='', tooltip='inherited', image=dict(tooltip=None)),
+                dict(kind='text', text='plain', tooltip=None),
+            ])])]
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            notes = result['annotations']
+            self.assertEqual(['abbreviation', 'Obsolete sense', '{{own image title}}', 'inherited'],
+                             [note['text'] for note in notes])
+            self.assertEqual(['[0].explanation', '[0].tooltip', '[1].image.tooltip', '[3].tooltip'],
+                             [note['path'].split('.spans')[1] for note in notes])
+            self.assertEqual(['source-markup'], notes[2]['spelling_matches'])
+            self.assertEqual([], result['issues'])
+            self.assertEqual('passed', result['status'])
+
     def test_residual_action_targets_are_separate_nonwaivable_candidates(self):
         with Fixture() as f:
             entry = f.entry('citation', 'clean prose', language='Hindi')

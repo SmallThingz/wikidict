@@ -99,11 +99,20 @@ def text_fields(value, path='entry'):
 
 
 def attribute_fields(value, path='entry'):
-    """Walk explanations and link destinations once, independently of visible prose."""
+    """Walk decoded annotations and link destinations independently of visible prose."""
     if isinstance(value, dict):
-        if ('kind' in value and 'text' in value and
-                isinstance(value.get('explanation'), str) and value['explanation']):
-            yield 'explanation', path + '.explanation', value['explanation']
+        if 'kind' in value and 'text' in value:
+            if isinstance(value.get('explanation'), str) and value['explanation']:
+                yield 'explanation', path + '.explanation', value['explanation']
+            # Match the native Reader's effectiveAdvisory. An explicit empty
+            # image title suppresses advice inherited from the surrounding span.
+            image = value.get('image')
+            if isinstance(image, dict) and image.get('tooltip') is not None:
+                tooltip, origin = image['tooltip'], '.image.tooltip'
+            else:
+                tooltip, origin = value.get('tooltip'), '.tooltip'
+            if isinstance(tooltip, str) and tooltip:
+                yield 'tooltip', path + origin, tooltip
         if value.get('kind') in ('link', 'external_link') and isinstance(value.get('target'), str):
             yield 'target', path + '.target', value['target']
         for key, child in value.items():
@@ -116,7 +125,7 @@ def attribute_fields(value, path='entry'):
 
 
 def annotation_fields(value, path='entry'):
-    return ((p, text) for field, p, text in attribute_fields(value, path) if field == 'explanation')
+    return ((p, text) for field, p, text in attribute_fields(value, path) if field != 'target')
 
 
 def unresolved_action_target(target):
@@ -324,7 +333,7 @@ def scan(root, query):
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
                 for field, path, text in attribute_fields(content):
-                    if field == 'explanation':
+                    if field in ('explanation', 'tooltip'):
                         result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
