@@ -674,7 +674,7 @@ class CompletedExpanderTests(unittest.TestCase):
         source = Path(cache.__file__).with_name('bundle_build.zig').read_text()
         prefixes = re.findall(r'"python3", "-I", "-S", "-B", helper', source)
         # One new isolated probe call plus two mutually exclusive seal argv branches.
-        self.assertEqual(len(prefixes), 5)
+        self.assertEqual(len(prefixes), 6)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             marker = root/'startup-executed'
@@ -4281,6 +4281,158 @@ class RestoredIndexCustodyTests(unittest.TestCase):
         with mock.patch.object(cache, 'stable_file_digest', side_effect=mutating):
             with self.assertRaises(ValueError): cache.restored_index_binding(root, selection, selection['original_seal_sha256'])
         self.assertTrue(fired)
+
+
+
+
+class ObjectCacheSessionTests(unittest.TestCase):
+    # Reuse the maintained real object-plan/output fixtures, not a fake cache.
+    names = ObjectCacheTest.names
+    llvm = ObjectCacheTest.llvm
+    complete_missing = ObjectCacheTest.complete_missing
+    probe = ObjectCacheTest.probe
+    publish = ObjectCacheTest.publish
+    seed = ObjectCacheTest.seed
+    entry = ObjectCacheTest.entry
+
+    def setUp(self):
+        import types
+        ObjectCacheTest.setUp(self)
+        self.patched.stop()
+        self.compiler = self.base / 'compiler'
+        self.compiler.write_bytes(b'compiler-v1')
+        self.compiler.chmod(0o755)
+        self.library = self.base / 'library.so'
+        self.library.write_bytes(b'library-v1')
+        self.loaded_library = self.library
+        self.target, self.version, self.features = 'x86_64-test', 'clang fixture', '+sse2'
+        self.probes = []
+        def run(argv, **kwargs):
+            self.probes.append(argv)
+            if argv[0] == 'ldd':
+                return types.SimpleNamespace(stdout=f'libfixture => {self.loaded_library} (0x1234)\n')
+            if argv[1] == '-dumpmachine': return types.SimpleNamespace(stdout=self.target+'\n')
+            if argv[1] == '--version': return types.SimpleNamespace(stdout=self.version+'\n')
+            self.assertEqual(argv[1:3], ['-###', '-march=native'])
+            return types.SimpleNamespace(stderr=f'"-target-cpu" "test" "-target-feature" "{self.features}"')
+        for patcher in (mock.patch.object(cache.shutil, 'which', return_value=str(self.compiler)),
+                        mock.patch.object(cache.subprocess, 'run', side_effect=run)):
+            patcher.start(); self.addCleanup(patcher.stop)
+
+    def session(self, output, compile_action=None, request_bytes=b'P'):
+        import io
+        outer = self
+        class Request:
+            def read(self, count):
+                outer.assertEqual(count, 2)
+                if compile_action is not None: compile_action()
+                return request_bytes
+        response = io.BytesIO()
+        code = cache.object_cache_session(self.root, 'clang', self.project, output,
+                                         self.flags, request=Request(), response=response)
+        return code, response.getvalue()
+
+    def trace_tools(self):
+        return CompletedExpanderTests._trace_seal_digest_reads(
+            self, (self.compiler, self.library))
+
+    def cached_bytes(self):
+        return {str(p.relative_to(self.root)): p.read_bytes()
+                for p in self.root.rglob('*') if p.is_file()}
+
+    def test_session_preserves_snapshots_cache_bytes_and_all_fresh_tool_probes(self):
+        baseline = self.llvm('baseline')
+        with self.trace_tools() as old_reads:
+            self.assertEqual(cache.MISS, self.probe(baseline))
+            self.complete_missing(baseline)
+            self.assertEqual(0, self.publish(baseline))
+        snapshot = (baseline/'.object-identity.json').read_bytes()
+        assets = self.cached_bytes()
+        self.root = self.base/'candidate-cache'
+        candidate = self.llvm('candidate')
+        self.probes.clear()
+        with self.trace_tools() as new_reads:
+            self.assertEqual((0, b'O3\n'), self.session(candidate, lambda: self.complete_missing(candidate)))
+        self.assertEqual(snapshot, (candidate/'.object-identity.json').read_bytes())
+        self.assertEqual((baseline/'.object-hits').read_bytes(), (candidate/'.object-hits').read_bytes())
+        self.assertEqual(assets, self.cached_bytes())
+        self.assertEqual(8, len(self.probes))
+        self.assertEqual(2*new_reads['bytes'], old_reads['bytes'])
+        self.assertEqual(4, new_reads['opens'])
+        # A new transaction has no authority from the previous process-local memo.
+        warm = self.llvm('warm')
+        with self.trace_tools() as warm_reads:
+            self.assertEqual((0, b'O0\n'), self.session(warm, lambda: self.complete_missing(warm)))
+        self.assertEqual(new_reads['bytes'], warm_reads['bytes'])
+        self.assertEqual('111\n', (warm/'.object-hits').read_text())
+        print('OBJECT_SESSION_BYTES '+json.dumps({'baseline':old_reads,'session':new_reads,'new_session':warm_reads},sort_keys=True))
+
+    def test_session_detects_tool_content_replacement_alias_and_observation_changes(self):
+        for change in ('restored-mtime', 'replacement', 'symlink', 'compiler', 'target', 'version', 'features', 'libraries'):
+            with self.subTest(change=change):
+                output = self.llvm('changed-'+change)
+                self.root = self.base/('cache-'+change)
+                def changed():
+                    self.complete_missing(output)
+                    before = self.library.stat()
+                    if change == 'restored-mtime':
+                        self.library.write_bytes(b'library-v2')
+                        cache.os.utime(self.library, ns=(before.st_atime_ns,before.st_mtime_ns))
+                    elif change in ('replacement','symlink','libraries'):
+                        other=self.base/('other-'+change);other.write_bytes(b'library-v3')
+                        cache.os.utime(other, ns=(before.st_atime_ns,before.st_mtime_ns))
+                        if change=='replacement': other.replace(self.library)
+                        elif change=='symlink': self.library.unlink();self.library.symlink_to(other)
+                        else: self.loaded_library=other
+                    elif change=='compiler': self.compiler.write_bytes(b'compiler-v2')
+                    elif change=='target': self.target='changed-target'
+                    elif change=='version': self.version='changed-version'
+                    else: self.features='-sse2'
+                with self.assertRaisesRegex(ValueError,'Clang native target or compile flags changed'):
+                    self.session(output,changed)
+                self.assertFalse(self.root.exists())
+                if self.library.is_symlink(): self.library.unlink()
+                self.library.write_bytes(b'library-v1');self.loaded_library=self.library
+                self.compiler.write_bytes(b'compiler-v1')
+                self.target,self.version,self.features='x86_64-test','clang fixture','+sse2'
+
+    def test_session_retains_plan_metadata_leaf_and_restored_output_checks(self):
+        for filename, message in [('batch-plan.tsv','batch-plan.tsv changed'),
+                                  ('program.meta','program.meta changed'),
+                                  ('value_leaf.bc','value helper bitcode changed')]:
+            with self.subTest(filename=filename):
+                output=self.llvm('input-'+filename);self.root=self.base/('cache-'+filename)
+                def changed():
+                    self.complete_missing(output);(output/filename).write_bytes(b'changed')
+                with self.assertRaisesRegex(ValueError,message): self.session(output,changed)
+                self.assertFalse(self.root.exists())
+        self.root=self.base/'restored-cache';self.seed()
+        output=self.llvm('restored')
+        def changed_restored(): (output/self.names[0]).write_bytes(b'corrupted')
+        with self.assertRaisesRegex(ValueError,'Restored native object changed'):
+            self.session(output,changed_restored)
+
+    def test_session_abort_extra_request_probe_error_and_changed_snapshot_never_publish(self):
+        for request in (b'',b'X',b'PP',b'P\n'):
+            with self.subTest(request=request):
+                output=self.llvm('abort-'+str(len(list(self.base.iterdir()))))
+                with mock.patch.object(cache,'publish_objects') as publish:
+                    with self.assertRaisesRegex(ValueError,'not requested exactly once'):
+                        self.session(output,request_bytes=request)
+                    publish.assert_not_called()
+        output=self.llvm('probe-error')
+        with mock.patch.object(cache,'probe_objects',side_effect=OSError('read failure')), mock.patch.object(cache,'publish_objects') as publish:
+            with self.assertRaisesRegex(OSError,'read failure'): self.session(output)
+            publish.assert_not_called()
+        output=self.llvm('snapshot')
+        def change_snapshot():
+            self.complete_missing(output)
+            p=output/'.object-identity.json';value=json.loads(p.read_text())
+            value['identity']['clang']['tool']['extractor_sha256']='0'*64
+            value['_digest_memo']={'pretend':'authenticated'}
+            p.write_text(json.dumps(value))
+        with self.assertRaisesRegex(ValueError,'Clang native target or compile flags changed'):
+            self.session(output,change_snapshot)
 
 
 if __name__ == "__main__":

@@ -1850,7 +1850,7 @@ def identity_probe_timeout(default):
     return remaining
 
 
-def tool_identity(executable):
+def tool_identity(executable, *, _digest_memo=None):
     """Digest the emitted extractor and its resolved dynamic libraries."""
     regular(executable)
     result = subprocess.run(["ldd", str(executable)], capture_output=True,
@@ -1862,9 +1862,15 @@ def tool_identity(executable):
             libraries.add(Path(match.group(1)))
         elif "not found" in line:
             raise ValueError(f"Unresolved extractor library: {line}")
+    # Only a live object-cache transaction supplies this process-local memo.
+    # Resolve/open and guard every current library path even on memo hits.
+    def digest(path):
+        if _digest_memo is None:
+            return sha256(path)
+        return stable_file_digest(path, snapshot=True, _memo=_digest_memo)[1]
     return {
-        "extractor_sha256": sha256(executable),
-        "libraries": [[str(path), sha256(path)] for path in sorted(libraries)],
+        "extractor_sha256": digest(executable),
+        "libraries": [[str(path), digest(path)] for path in sorted(libraries)],
     }
 
 
@@ -2280,7 +2286,7 @@ def publish(root, expected, source):
         if timing is not None: timing.finish("success" if completed else "failure")
 
 
-def clang_identity(command, flags=()):
+def clang_identity(command, flags=(), *, _digest_memo=None):
     resolved = shutil.which(command)
     if resolved is None:
         raise ValueError(f"Clang executable unavailable: {command}")
@@ -2291,7 +2297,9 @@ def clang_identity(command, flags=()):
                              text=True, check=True, timeout=identity_probe_timeout(15)).stdout.splitlines()[0]
     if not target or not version:
         raise ValueError("Clang target/version unavailable")
-    result = {"tool": tool_identity(executable), "target": target, "version": version}
+    observed_tool = (tool_identity(executable) if _digest_memo is None else
+                     tool_identity(executable, _digest_memo=_digest_memo))
+    result = {"tool": observed_tool, "target": target, "version": version}
     if "-march=native" in flags:
         # -### resolves native CPUID without compiling a source file. A literal
         # '-march=native' cache key is unsafe when the cache moves hosts.
@@ -2380,7 +2388,7 @@ def read_object_plan(llvm_dir):
     return plans
 
 
-def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
+def object_identity(llvm_dir, clang, project_root, flags, zig="zig", *, _digest_memo=None):
     """Snapshot all build inputs; only object_entries() defines reuse keys."""
     if not flags or flags[-1] not in ("-O0", "-O1", "-O2"):
         raise ValueError("Missing LLVM program optimization mode")
@@ -2400,7 +2408,8 @@ def object_identity(llvm_dir, clang, project_root, flags, zig="zig"):
         "program_meta_sha256": sha256(program_meta),
         "bitcode": bitcode,
         "program_bc": [program_bc.stat().st_size, sha256(program_bc)],
-        "clang": clang_identity(clang, flags),
+        "clang": (clang_identity(clang, flags) if _digest_memo is None else
+                  clang_identity(clang, flags, _digest_memo=_digest_memo)),
         "flags": flags,
         # Only optimized Lua batches record the live Zig tool observation.
         # It is provenance, not an input to Clang's emitted-bitcode compilation.
@@ -2568,8 +2577,10 @@ def write_private_marker(path, value):
         Path(temporary).unlink(missing_ok=True)
 
 
-def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
-    expected = object_identity(llvm_dir, clang, project_root, flags, zig)
+def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig", *, _digest_memo=None):
+    expected = (object_identity(llvm_dir, clang, project_root, flags, zig)
+                if _digest_memo is None else object_identity(
+                    llvm_dir, clang, project_root, flags, zig, _digest_memo=_digest_memo))
     entries = list(object_entries(expected))
     # Preflight the whole output set before installing any cache link. A file
     # merely existing in the private build directory is never a verified hit.
@@ -2605,6 +2616,51 @@ def probe_objects(root, clang, project_root, llvm_dir, flags, zig="zig"):
     return 0 if len(restored) == len(entries) else MISS
 
 
+def _object_session_phase(action, operation):
+    started = time.monotonic()
+    code, status = 1, "failed"
+    try:
+        code = operation()
+        status = "returned"
+        return code
+    finally:
+        try:
+            print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
+                action=action, status=status, exit_code=code,
+                seconds=round(time.monotonic() - started, 3),
+                scope="live-helper-operation-wall"), sort_keys=True),
+                file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+
+def object_cache_session(root, clang, project_root, llvm_dir, flags, zig="zig", *, request=None, response=None):
+    """One probe/compile/publish transaction; no digest authority leaves memory.
+
+    The driver owns this child and closes its input after the single publication
+    request. EOF, extra input or a failed compiler never authorizes publication.
+    Legacy one-shot commands still perform independent complete observations.
+    """
+    import contextlib
+    request = sys.stdin.buffer if request is None else request
+    response = sys.stdout.buffer if response is None else response
+    digest_memo = {}
+    # Session stdout is only the bounded readiness response. Diagnostics retain
+    # their text on stderr; the old standalone CLI's streams are unchanged.
+    with contextlib.redirect_stdout(sys.stderr):
+        code = _object_session_phase("probe-objects", lambda: probe_objects(
+            root, clang, project_root, llvm_dir, flags, zig, _digest_memo=digest_memo))
+    if code not in (0, MISS):
+        raise ValueError("Invalid object-cache probe result")
+    response.write(b"O0\n" if code == 0 else b"O3\n")
+    response.flush()
+    if request.read(2) != b"P":
+        raise ValueError("Object-cache publication was not requested exactly once")
+    with contextlib.redirect_stdout(sys.stderr):
+        return _object_session_phase("publish-objects", lambda: publish_objects(
+            root, llvm_dir, clang, flags, _digest_memo=digest_memo))
+
+
 def remove_cache_entry(path):
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
@@ -2638,7 +2694,7 @@ def publish_object(root, source, identity, provenance, asset):
     return destination
 
 
-def publish_objects(root, llvm_dir, clang, flags):
+def publish_objects(root, llvm_dir, clang, flags, *, _digest_memo=None):
     # The LLVM directory and immutable cache are protected by the corpus lock.
     # No producer may mutate inputs while Clang is running or publishing.
     snapshot = read_marker(llvm_dir / ".object-identity.json")
@@ -2652,7 +2708,9 @@ def publish_objects(root, llvm_dir, clang, flags):
     # Older private snapshots also observed live ABI files. Keep accepting
     # their list shape while making that scope explicit on new publications.
     provenance = dict(provenance, abi_scope="live-source-observation")
-    if expected.get("clang") != clang_identity(clang, flags) or expected.get("flags") != flags:
+    observed_clang = (clang_identity(clang, flags) if _digest_memo is None else
+                      clang_identity(clang, flags, _digest_memo=_digest_memo))
+    if expected.get("clang") != observed_clang or expected.get("flags") != flags:
         raise ValueError("Clang native target or compile flags changed during compilation")
     for filename, key in (("batch-plan.tsv", "batch_plan_sha256"),
                           ("program.meta", "program_meta_sha256")):
@@ -3298,12 +3356,15 @@ def main(argv):
         _, action, root, dump, dump_sha, index_sha, graph, snapshots = argv
         return seal_completed_expander(Path(root), Path(dump), dump_sha, index_sha,
                                        json.loads(graph), json.loads(snapshots))
-    if len(argv) == 8 and argv[1] in ("probe-objects", "publish-objects"):
+    if len(argv) == 8 and argv[1] in ("probe-objects", "publish-objects", "object-session"):
         _, action, root, clang, project_root, llvm_dir, flags_raw, zig = argv
         flags = flags_raw.split(",")
         if not flags or any(not re.fullmatch(r"-[A-Za-z0-9-]+(?:=[A-Za-z0-9_.-]+)?", flag)
                             for flag in flags):
             raise ValueError("Invalid Clang compile flags")
+        if action == "object-session":
+            return object_cache_session(Path(root), clang, Path(project_root),
+                                        Path(llvm_dir), flags, zig)
         if action == "probe-objects":
             return probe_objects(Path(root), clang, Path(project_root),
                                  Path(llvm_dir), flags, zig)
@@ -3342,12 +3403,13 @@ if __name__ == "__main__":
         try:
             action = sys.argv[1] if len(sys.argv) > 1 else "unknown"
             if action not in ("probe", "publish", "probe-objects", "publish-objects",
-                              "seal-expander", "probe-sealed-frontend"):
+                              "object-session", "seal-expander", "probe-sealed-frontend"):
                 action = "unknown"
             print("EXTRACTION_CACHE_PHASE " + json.dumps(dict(
                 action=action, status=phase_status, exit_code=phase_exit_code,
                 seconds=round(time.monotonic() - phase_started, 3),
-                scope="joined-helper-invocation-wall"), sort_keys=True),
+                scope=("live-helper-lifetime-including-compilation" if action == "object-session"
+                       else "joined-helper-invocation-wall")), sort_keys=True),
                 file=sys.stderr, flush=True)
         except Exception:
             # Diagnostic output must not replace the original exit or error.

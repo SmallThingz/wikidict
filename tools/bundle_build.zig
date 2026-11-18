@@ -442,6 +442,44 @@ fn objectCacheCommand(
     return error.PipelineStageFailed;
 }
 
+// Keep the authenticated tool digest observations inside this one owned helper.
+// It is idle while Clang runs; every failure kills/reaps it without publication.
+const ObjectCacheSession = struct {
+    child: std.process.Child,
+
+    fn start(io: std.Io, a: std.mem.Allocator, cache_root: []const u8, llvm_dir: []const u8) !ObjectCacheSession {
+        const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
+        defer a.free(helper);
+        const flags = try std.mem.join(a, ",", &.{ clang_common_flags[0], clang_common_flags[1], clang_common_flags[2], clang_program_mode });
+        defer a.free(flags);
+        return spawn(io, &.{ "python3", "-I", "-S", "-B", helper, "object-session", cache_root, paths.clang, paths.project_root, llvm_dir, flags, paths.zig });
+    }
+
+    fn spawn(io: std.Io, argv: []const []const u8) !ObjectCacheSession {
+        var child = try std.process.spawn(io, .{ .argv = argv, .stdin = .pipe, .stdout = .pipe });
+        errdefer child.kill(io);
+        var buffer: [3]u8 = undefined;
+        var reader = child.stdout.?.readerStreaming(io, &buffer);
+        var response: [3]u8 = undefined;
+        reader.interface.readSliceAll(&response) catch return error.PipelineStageFailed;
+        if (!std.mem.eql(u8, &response, "O0\n") and !std.mem.eql(u8, &response, "O3\n"))
+            return error.PipelineStageFailed;
+        return .{ .child = child };
+    }
+
+    fn publish(self: *ObjectCacheSession, io: std.Io) !void {
+        var buffer: [1]u8 = undefined;
+        var writer = self.child.stdin.?.writer(io, &buffer);
+        try writer.interface.writeAll("P");
+        try writer.interface.flush();
+        // The helper requires exactly one byte and EOF before publication.
+        self.child.stdin.?.close(io);
+        self.child.stdin = null;
+        const term = try self.child.wait(io);
+        if (term != .exited or term.exited != 0) return error.PipelineStageFailed;
+    }
+};
+
 fn fileSize(io: std.Io, path: []const u8) !u64 {
     var file = try std.Io.Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
@@ -1029,9 +1067,11 @@ fn compileNativeWorker(
     worker: []const u8,
     options: Options,
 ) !void {
+    var object_session: ?ObjectCacheSession = null;
+    defer if (object_session) |*session| session.child.kill(io);
     if (options.sealed_frontend_reference == null) {
         if (object_cache_root) |cache|
-            _ = try objectCacheCommand(io, a, "probe-objects", cache, llvm_dir);
+            object_session = try ObjectCacheSession.start(io, a, cache, llvm_dir);
     }
     const lua_objects = try compileBitcodeModules(
         io,
@@ -1042,8 +1082,12 @@ fn compileNativeWorker(
         object_cache_root != null,
         options.sealed_frontend_reference != null,
     );
-    if (object_cache_root) |cache|
+    if (object_session) |*session| {
+        try session.publish(io);
+    } else if (object_cache_root) |cache| {
+        // A sealed frontend has no fresh probe in this invocation.
         _ = try objectCacheCommand(io, a, "publish-objects", cache, llvm_dir);
+    }
     const main_c = paths.worker_main_c;
     const output = try std.fs.path.join(a, &.{ publish_root, "dict-bundle-expander" });
     try linkNativeWorker(io, a, marker, llvm_dir, main_c, worker, lua_objects.items, output);
@@ -1645,4 +1689,48 @@ test "sealed frontend bitmap permits only exact fully verified native object hit
     try std.testing.expectError(error.InvalidObjectCacheHits, validateSealedFrontendHits("11x\n", 3));
     // Ordinary cache misses retain their original protocol.
     try validateObjectHits("101\n", 3);
+}
+
+
+test "object cache session publishes once after readiness and joins its owned helper" {
+    const io = std.testing.io;
+    for ([_][]const u8{ "O0\n", "O3\n" }) |ready| {
+        const script = try std.fmt.allocPrint(std.testing.allocator,
+            "import sys;sys.stdout.buffer.write({s});sys.stdout.buffer.flush();assert sys.stdin.buffer.read()==b'P'",
+            .{if (ready[1] == '0') "b'O0\\n'" else "b'O3\\n'"});
+        defer std.testing.allocator.free(script);
+        var session = try ObjectCacheSession.spawn(io, &.{ "python3", "-I", "-S", "-B", "-c", script });
+        defer session.child.kill(io);
+        try session.publish(io);
+        try std.testing.expect(session.child.id == null);
+        try std.testing.expect(session.child.stdin == null and session.child.stdout == null);
+    }
+}
+
+test "object cache session refuses invalid readiness and failed publication" {
+    const io = std.testing.io;
+    try std.testing.expectError(error.PipelineStageFailed, ObjectCacheSession.spawn(io, &.{
+        "python3", "-I", "-S", "-B", "-c", "import sys;sys.stdout.buffer.write(b'O4\\n');sys.stdout.buffer.flush();sys.stdin.buffer.read()",
+    }));
+    try std.testing.expectError(error.PipelineStageFailed, ObjectCacheSession.spawn(io, &.{
+        "python3", "-I", "-S", "-B", "-c", "import sys;sys.stdout.buffer.write(b'O');sys.exit(1)",
+    }));
+    var session = try ObjectCacheSession.spawn(io, &.{
+        "python3", "-I", "-S", "-B", "-c", "import sys;sys.stdout.buffer.write(b'O3\\n');sys.stdout.buffer.flush();assert sys.stdin.buffer.read()==b'P';sys.exit(1)",
+    });
+    defer session.child.kill(io);
+    try std.testing.expectError(error.PipelineStageFailed, session.publish(io));
+    try std.testing.expect(session.child.id == null);
+}
+
+test "abandoned object cache session is killed and reaped without publication" {
+    const io = std.testing.io;
+    var session = try ObjectCacheSession.spawn(io, &.{
+        "python3", "-I", "-S", "-B", "-c", "import sys;sys.stdout.buffer.write(b'O3\\n');sys.stdout.buffer.flush();assert sys.stdin.buffer.read()==b'P';raise RuntimeError('must not publish')",
+    });
+    // This is the same unconditional cleanup used around compilation failures.
+    session.child.kill(io);
+    try std.testing.expect(session.child.id == null);
+    try std.testing.expect(session.child.stdin == null and session.child.stdout == null);
+    session.child.kill(io); // Cleanup after a joined child is harmless.
 }
