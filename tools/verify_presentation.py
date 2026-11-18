@@ -98,22 +98,25 @@ def text_fields(value, path='entry'):
 
 
 
-def annotation_fields(value, path='entry'):
-    """Decoded explanations are plain attribute text, not executable markup.
-
-    Walk spans separately from text_fields' joined-body shortcut. Each annotation
-    keeps its own path; it cannot join body fragments or supply an action target.
-    """
+def attribute_fields(value, path='entry'):
+    """Walk explanations and link destinations once, independently of visible prose."""
     if isinstance(value, dict):
         if ('kind' in value and 'text' in value and
                 isinstance(value.get('explanation'), str) and value['explanation']):
-            yield path + '.explanation', value['explanation']
+            yield 'explanation', path + '.explanation', value['explanation']
+        if value.get('kind') in ('link', 'external_link') and isinstance(value.get('target'), str):
+            yield 'target', path + '.target', value['target']
         for key, child in value.items():
             if isinstance(child, (dict, list)):
-                yield from annotation_fields(child, path + '.' + key)
+                yield from attribute_fields(child, path + '.' + key)
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            yield from annotation_fields(child, f'{path}[{index}]')
+            if isinstance(child, (dict, list)):
+                yield from attribute_fields(child, f'{path}[{index}]')
+
+
+def annotation_fields(value, path='entry'):
+    return ((p, text) for field, p, text in attribute_fields(value, path) if field == 'explanation')
 
 
 def unresolved_action_target(target):
@@ -122,15 +125,7 @@ def unresolved_action_target(target):
 
 
 def action_fields(value, path='entry'):
-    if isinstance(value, dict):
-        if value.get('kind') in ('link', 'external_link') and isinstance(value.get('target'), str):
-            yield path + '.target', value['target']
-        for key, child in value.items():
-            if isinstance(child, (dict, list)):
-                yield from action_fields(child, path + '.' + key)
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            yield from action_fields(child, f'{path}[{index}]')
+    return ((p, target) for field, p, target in attribute_fields(value, path) if field == 'target')
 
 
 def require(condition, message):
@@ -328,20 +323,20 @@ def scan(root, query):
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
-                for path, text in annotation_fields(content):
-                    result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
-                        view_kind=view['kind'], view_language=view['language'], query_title=title,
-                        source_title=redirect['source_title'] if redirect else title,
-                        redirect=redirect, path=path, text=text[:500], text_length=len(text),
-                        text_truncated=len(text) > 500, spelling_matches=diagnostic_categories(text),
-                        interpretation='decoded-plain-attribute', lexical_body=False,
-                        runtime_markup=False, review_issue=False))
-                for path, target in action_fields(content):
-                    if unresolved_action_target(target):
+                for field, path, text in attribute_fields(content):
+                    if field == 'explanation':
+                        result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                            view_kind=view['kind'], view_language=view['language'], query_title=title,
+                            source_title=redirect['source_title'] if redirect else title,
+                            redirect=redirect, path=path, text=text[:500], text_length=len(text),
+                            text_truncated=len(text) > 500, spelling_matches=diagnostic_categories(text),
+                            interpretation='decoded-plain-attribute', lexical_body=False,
+                            runtime_markup=False, review_issue=False))
+                    elif unresolved_action_target(text):
                         result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
-                            redirect=redirect, path=path, text=target[:500],
+                            redirect=redirect, path=path, text=text[:500],
                             categories=['unresolved-action-target'], nonwaivable=True))
             offset += len(matches)
             if not page['has_more']:
