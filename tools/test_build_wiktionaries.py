@@ -14805,4 +14805,45 @@ class CompositeProducerSourceTests(unittest.TestCase):
             with self.assertRaises(OSError):b.validate_composite_source_inventory(recipe,base,selected,self.auth_payload)
 
 
+
+class CanonicalFigureOverlapTests(unittest.TestCase):
+    setUp=ImmutableFigureBorrowTests.setUp
+    selection=ImmutableCaptureBorrowTests.selection
+
+    def test_alias_introduced_after_eligibility_refuses_before_capture_binding(self):
+        roles=self.selection(self.fixture.root/'native-late-alias')
+        hashes={role:b.sha256_file(path)for role,path in self.paths.items()}
+        source=self.args.sql[0];original=source.read_bytes()
+        moved=source.with_name(source.name+'.held-original')
+        owned=self.fixture.root/'owned';owned.mkdir()
+        target=owned/source.name;target.write_bytes(original)
+        bind=roles.bind_capture;entered=[]
+        def changed(*values,**options):
+            source.rename(moved);source.symlink_to(target);entered.append(True)
+            return bind(*values,**options)
+        try:
+            with patch.object(roles,'bind_capture',side_effect=changed),patch.object(b,'copy_verified_snapshot',side_effect=AssertionError('Changed authority must not reach copying')):
+                with self.assertRaisesRegex(ValueError,'Unsafe|changed'):
+                    b.pinned_auxiliary_snapshots(self.paths,hashes,self.fixture.root/'workspace',borrower=roles,owned_roots=(owned,))
+            self.assertEqual(entered,[True])
+            self.assertFalse(getattr(roles,'borrowed_capture_directories',{}))
+            self.assertNotIn(source,roles.inputs)
+            self.assertFalse((self.fixture.root/'workspace').exists())
+        finally:
+            if source.is_symlink():source.unlink()
+            if moved.exists():moved.rename(source)
+        self.assertEqual(source.read_bytes(),original)
+
+    def test_owned_transitive_authority_keeps_original_verified_copy_failure(self):
+        roles=self.selection(self.fixture.root/'native-owned-copy')
+        hashes={role:b.sha256_file(path)for role,path in self.paths.items()}
+        originals={path:path.read_bytes()for path in self.paths.values()}
+        failure=OSError('original verified copy failure')
+        with patch.object(roles,'bind_capture',side_effect=AssertionError('Owned authority must not be borrowed')),patch.object(b,'copy_verified_snapshot',side_effect=failure):
+            with self.assertRaises(OSError)as caught:
+                b.pinned_auxiliary_snapshots(self.paths,hashes,self.fixture.root/'workspace',borrower=roles,owned_roots=(self.parent,))
+        self.assertIs(caught.exception,failure)
+        self.assertFalse(getattr(roles,'borrowed_capture_directories',{}))
+        for path,raw in originals.items():self.assertEqual(path.read_bytes(),raw)
+
 if __name__=='__main__':unittest.main()

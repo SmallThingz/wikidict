@@ -2411,7 +2411,8 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         if borrower is not None:
             owned=tuple(Path(path).resolve() for path in (destination,*owned_roots) if path is not None)
             def overlaps_owned(path):
-                path=path.resolve()
+                # Both callers have just required this exact path to resolve to
+                # itself. Binding and dispatch retain their fresh route guards.
                 return any(path==root or path in root.parents or root in path.parents for root in owned)
             bound_figures={}
             capture_bindings=0;reused_capture_bindings=0
