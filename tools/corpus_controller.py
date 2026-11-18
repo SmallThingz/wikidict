@@ -121,8 +121,14 @@ def read_json(path):
 
 
 def read_ref(ref):
-    require(descriptor(ref['path']) == ref, 'Receipt bytes changed')
-    return read_json(ref['path'])
+    path = Path(ref['path']).absolute()
+    before = _receipt_stat(path)
+    require(before.st_size <= 8 * 1024**2, f'Metadata exceeds bound: {path}')
+    with path.open('rb') as stream:
+        data = stream.read(before.st_size + 1)
+    actual = _checked_descriptor(path, before, hashlib.sha256(data).hexdigest())
+    require(len(data) == before.st_size and actual == ref, 'Receipt bytes changed')
+    return json.loads(data)
 
 
 def write_json(path, value, *, replace=False):

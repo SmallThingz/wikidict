@@ -2915,6 +2915,21 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'Changed while reading'):
                     controller.read_attempt_log(log, 'toy', 'd')
 
+    def test_read_ref_parses_the_same_bounded_read_it_authenticates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'receipt.json'
+            ref = controller.write_json(path, {'edition': 'zu', 'count': 3})
+            with mock.patch.object(Path, 'open', autospec=True, side_effect=Path.open) as opened:
+                self.assertEqual(controller.read_ref(ref), {'edition': 'zu', 'count': 3})
+            opened.assert_called_once_with(path, 'rb')
+            with self.assertRaisesRegex(ValueError, 'Receipt bytes changed'):
+                controller.read_ref(dict(ref, sha256='0' * 64))
+            with path.open('r+b') as stream:
+                stream.truncate(8 * 1024**2 + 1)
+            with mock.patch.object(Path, 'open', side_effect=AssertionError('oversized receipt read')):
+                with self.assertRaisesRegex(ValueError, 'Metadata exceeds bound'):
+                    controller.read_ref(ref)
+
     def test_all44_unstarted_are_selected_from_complete_inventory_without_payload_reads(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, manifest, ledger, report, store = self.fixture(Path(tmp))
