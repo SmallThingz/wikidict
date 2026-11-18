@@ -4,13 +4,42 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from verify_edition_terminal import copy_publication, main, reading_text
 from verify_reader_ux import CheckFailure
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_batch_preserves_stale_generation_failure_and_runs_next_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / 'published'
+            source.mkdir()
+            catalog = b'heading\nOwner\n'
+            (source / 'languages.tsv').write_bytes(catalog)
+            manifest = json.dumps({'status': 'built', 'publication_files': {'languages.tsv': {
+                'size': len(catalog), 'sha256': hashlib.sha256(catalog).hexdigest()}}}).encode()
+            (source / 'complete.json').write_bytes(manifest)
+            digest = hashlib.sha256(manifest).hexdigest()
+            binary = parent / 'reader'
+            binary.write_bytes(b'test double')
+            selections = parent / 'entries.tsv'
+            selections.write_text('output_directory\towner_heading\texact_title\tvisible_definition_witness\tselected_complete_sha256\n'
+                                  f'{source}\tOwner\tA\tFirst\t{"0" * 64}\n'
+                                  f'{source}\tOwner\tB\tSecond\t{digest}\n')
+            factory = Mock(return_value=Mock(checks=['checked'], snapshots=[]))
+            with patch('verify_edition_terminal.screen_projection', return_value=(None, factory)), \
+                    patch('verify_edition_terminal.exercise') as exercise:
+                self.assertEqual(main(['--binary', str(binary), '--cases', str(selections),
+                                       '--report', str(parent / 'reports')]), 1)
+            exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second')
+            ledger = next((parent / 'reports').glob('*/results.jsonl'))
+            first, second = [json.loads(line) for line in ledger.read_text().splitlines()]
+            self.assertEqual([first['passed'], second['passed']], [False, True])
+            self.assertIn('manifest has changed', json.loads(Path(first['report']).read_text())['error'])
+            self.assertEqual(json.loads(Path(second['report']).read_text())['complete_sha256'], digest)
+
     def test_failed_native_review_closes_reader_and_preserves_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
@@ -33,6 +62,9 @@ class EditionTerminalTests(unittest.TestCase):
                     (root / 'languages.tsv').write_bytes(b'private state changed')
                     self.width, self.rows, self.timeout = width, rows, timeout
 
+                def wait(self, predicate, label):
+                    events.append((self.timeout, label))
+
                 def close(self):
                     events.append('reader closed')
 
@@ -47,7 +79,7 @@ class EditionTerminalTests(unittest.TestCase):
                                '--entry', 'Title', '--witness', 'body', '--report', str(parent / 'reports'),
                                '--screen-projection', 'libvterm'])
             self.assertEqual(result, 1)
-            self.assertEqual(events, ['reader closed', 'projection closed'])
+            self.assertEqual(events, [(45, 'opened edition'), 'reader closed', 'projection closed'])
             report = json.loads(next((parent / 'reports').glob('*/result.json')).read_text())
             self.assertFalse(report['passed'])
             self.assertEqual(report['error'], 'body witness missing')

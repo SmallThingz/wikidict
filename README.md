@@ -86,6 +86,12 @@ python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
 
 The check uses a disposable copy of the edition's verified files. It exercises
 empty search, keyboard recovery, entry reading, resize, Back, and terminal restoration.
+Use `--screen-projection libvterm` to check native terminal cells, including combining marks.
+For serial reviews, pass `--cases entries.tsv` in place of `--root`, `--language`,
+`--entry`, and `--witness`. Each row needs `output_directory`, `owner_heading`,
+`exact_title`, `visible_definition_witness`, and `selected_complete_sha256` (the hash
+of `complete.json`). Each result links to its own screens. A failed entry is recorded
+and the remaining entries still run.
 
 Build just the reader or C ABI:
 

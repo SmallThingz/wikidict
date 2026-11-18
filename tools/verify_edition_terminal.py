@@ -2,9 +2,11 @@
 """Render a source-selected entry from a compiled edition in a disposable terminal."""
 
 import argparse
+import csv
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -32,8 +34,10 @@ def screen_projection(name):
     return pyte, ReaderPty
 
 
-def copy_publication(source, destination):
+def copy_publication(source, destination, expected_digest=None):
     raw = (source / 'complete.json').read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    require(expected_digest is None or digest == expected_digest, 'Selected edition manifest has changed')
     manifest = json.loads(raw)
     require(manifest['status'] == 'built', 'Entry review requires a built dictionary')
     members = manifest['publication_files']
@@ -54,7 +58,7 @@ def copy_publication(source, destination):
                     hashlib.file_digest(f, 'sha256').hexdigest() == expected['sha256'],
                     f'Publication member differs: {name}')
     (destination / 'complete.json').write_bytes(raw)
-    return hashlib.sha256(raw).hexdigest()
+    return digest
 
 
 def reading_text(reader, first_row=6):
@@ -84,7 +88,6 @@ def reveal_witness(reader, wanted):
 
 
 def exercise(reader, language, entry, witness):
-    reader.wait(lambda: reader.frames and reader.page_is('search'), 'opened edition')
     reader.action(b'\x15wikidict-no-match-5400b4b7', lambda: reader.query() == 'wikidict-no-match-5400b4b7'
                   and reader.page_is('search', count=0) and 'No matching words.' in reader.text(), 'empty search')
     reader.snapshot('empty')
@@ -104,51 +107,100 @@ def exercise(reader, language, entry, witness):
     reader.finish(b'\x03')
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, required=True)
-    parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--language', required=True, help='Exact compiled language heading')
-    parser.add_argument('--entry', required=True, help='Exact title in that language')
-    parser.add_argument('--witness', required=True, help='Visible text expected from the original entry body')
-    parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
-    parser.add_argument('--screen-projection', choices=('pyte', 'libvterm'), default='pyte',
-                        help='Screen cell engine (libvterm requires the native libvterm.so.0 library)')
-    args = parser.parse_args(argv)
-    source = args.root.resolve(strict=True)
-    binary = args.binary.resolve(strict=True)
-    parent = args.report.resolve()
-    require(parent != source and source not in parent.parents, 'Reports must be outside the publication')
-    require(all(s.strip() for s in (args.language, args.entry, args.witness)), 'Empty selection or witness')
-    parent.mkdir(parents=True, exist_ok=True)
+def binary_identity(stat):
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
+
+
+def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
-    result = dict(edition_root=str(source), language=args.language, entry=args.entry, witness=args.witness,
-                  passed=False, screens=[], screen_projection=args.screen_projection)
+    result = dict(edition_root=str(source), language=language, entry=entry, witness=witness,
+                  passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest)
     try:
-        projection, reader_type = screen_projection(args.screen_projection)
-        with binary.open('rb') as f:
-            result['binary_sha256'] = hashlib.file_digest(f, 'sha256').hexdigest()
+        projection, reader_type = screen_projection(engine)
         with tempfile.TemporaryDirectory(dir=out) as temp:
             root = Path(temp) / 'dictionary'
-            result['complete_sha256'] = copy_publication(source, root)
-            reader = reader_type(binary, root, 90, 30, out / 'screens', 5, time.monotonic() + 45,
-                                 projection, language=args.language)
+            result['complete_sha256'] = copy_publication(source, root, expected_digest)
+            require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
+            started = time.monotonic()
+            reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
+                                 projection, language=language)
             try:
-                exercise(reader, args.language, args.entry, args.witness)
+                # A cold compressed edition may still be indexing after the ordinary key-response deadline.
+                try:
+                    reader.wait(lambda: reader.frames and reader.page_is('search'), 'opened edition')
+                finally:
+                    result['opening_wait_seconds'] = time.monotonic() - started
+                reader.timeout = 5
+                exercise(reader, language, entry, witness)
             finally:
                 try:
                     reader.close()
                     result.update(checks=reader.checks, screens=reader.snapshots)
                 finally:
-                    if args.screen_projection == 'libvterm':
+                    if engine == 'libvterm':
                         reader.screen.close()
+        require(binary_identity(binary.stat()) == stamp, 'Reader executable changed during review')
         result['passed'] = True
     except Exception as exc:
         result['error'] = str(exc)
     path = out / 'result.json'
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
-    print(path)
-    return 0 if result['passed'] else 1
+    print(path, flush=True)
+    return path, result['passed']
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--binary', type=Path, required=True)
+    selection = parser.add_mutually_exclusive_group(required=True)
+    selection.add_argument('--root', type=Path)
+    selection.add_argument('--cases', type=Path, help='TSV of source-selected entries for serial review')
+    parser.add_argument('--language', help='Exact compiled language heading')
+    parser.add_argument('--entry', help='Exact title in that language')
+    parser.add_argument('--witness', help='Visible text expected from the original entry body')
+    parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
+    parser.add_argument('--screen-projection', choices=('pyte', 'libvterm'), default='pyte',
+                        help='Screen cell engine (libvterm requires the native libvterm.so.0 library)')
+    args = parser.parse_args(argv)
+    if args.cases:
+        if any((args.language, args.entry, args.witness)):
+            parser.error('--cases supplies the language, entry and witness for each row')
+        with args.cases.open(encoding='utf-8', newline='') as data:
+            rows = csv.DictReader(data, delimiter='\t')
+            columns = ('output_directory', 'owner_heading', 'exact_title', 'visible_definition_witness', 'selected_complete_sha256')
+            if not set(columns).issubset(rows.fieldnames or []):
+                parser.error('TSV requires columns ' + ', '.join(columns))
+            cases = [tuple(row[key] for key in columns) for row in rows]
+    else:
+        cases = [(str(args.root), args.language, args.entry, args.witness, None)]
+    parent = args.report.resolve()
+    if not cases:
+        parser.error('No entries selected')
+    for root, language, entry, witness, digest in cases:
+        if not all(s and s.strip() for s in (root, language, entry, witness)):
+            parser.error('Each entry needs a dictionary directory, language heading, title and witness')
+        if args.cases and (not digest or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)):
+            parser.error('Each TSV row needs the SHA-256 digest of the selected complete.json')
+        source = Path(root).resolve()
+        require(parent != source and source not in parent.parents, 'Reports must be outside the publication')
+    parent.mkdir(parents=True, exist_ok=True)
+    binary = args.binary.resolve(strict=True)
+    with binary.open('rb') as f:
+        stamp = binary_identity(os.fstat(f.fileno()))
+        binary_digest = hashlib.file_digest(f, 'sha256').hexdigest()
+        require(binary_identity(os.fstat(f.fileno())) == stamp, 'Reader executable changed during hashing')
+    if args.cases:
+        parent = Path(tempfile.mkdtemp(prefix='edition-batch-', dir=parent))
+    failures = 0
+    for root, language, entry, witness, digest in cases:
+        path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
+                                digest, parent, args.screen_projection)
+        if args.cases:
+            with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
+                ledger.write(json.dumps(dict(root=root, language=language, entry=entry, passed=passed, report=str(path)),
+                                        ensure_ascii=False) + '\n')
+        failures += not passed
+    return int(failures != 0)
 
 
 if __name__ == '__main__':
