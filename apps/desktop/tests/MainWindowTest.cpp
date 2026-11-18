@@ -31459,6 +31459,23 @@ private slots:
             word.clue = QStringLiteral("Saved meaning for the Clear history fixture");
             window.learning_.record(word);
             QCOMPARE(window.learning_.history().size(), 1);
+            bool closedFromTab = false;
+            QTimer::singleShot(0, &window, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                QVERIFY(dialog);
+                const auto dismiss = qScopeGuard([&] { if (dialog->isVisible()) dialog->reject(); });
+                auto *tabs = dialog->findChild<QTabWidget *>(QStringLiteral("learningDialogTabs"));
+                auto *buttons = dialog->findChild<QDialogButtonBox *>(QStringLiteral("learningDialogButtons"));
+                QVERIFY(tabs && buttons);
+                tabs->tabBar()->setFocus(Qt::TabFocusReason);
+                QTRY_VERIFY(tabs->tabBar()->hasFocus());
+                QVERIFY(buttons->button(QDialogButtonBox::Close)->isDefault());
+                QTest::keyClick(tabs->tabBar(), Qt::Key_Return);
+                closedFromTab = !dialog->isVisible();
+            });
+            window.showLearningDialog(0);
+            QVERIFY(closedFromTab);
+            QCOMPARE(window.learning_.history().size(), 1);
             QCOMPARE(window.learning_.history().first().key, word.key);
             bool cleared = false;
             QTimer::singleShot(0, &window, [&] {

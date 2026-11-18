@@ -7734,6 +7734,7 @@ void MainWindow::showLearningDialog(int tab) {
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     buttons->setObjectName(QStringLiteral("learningDialogButtons"));
+    buttons->button(QDialogButtonBox::Close)->setDefault(true);
     layout->addWidget(buttons);
     refreshPractice();
     tabs->setCurrentIndex(std::clamp(tab, 0, tabs->count() - 1));
