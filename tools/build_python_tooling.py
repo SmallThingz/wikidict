@@ -3,6 +3,7 @@
 Only named source modules are imported; no bytecode or replacement source tree is
 created. Native executable producer provenance belongs to the existing role API.
 """
+import ast
 import hashlib
 import importlib.abc
 import importlib.util
@@ -13,6 +14,35 @@ import stat
 import sys
 
 _ACTIVE = None
+
+
+def normal_build_catalog(spec):
+    """Omit terminal QA entry points when constructing a normal build catalog.
+
+    Selection remains explicit: consumers still authenticate every retained
+    module. Refuse narrowing if any retained source names a removed entry point.
+    """
+    result = json.loads(json.dumps(spec))
+    modules = result['modules']
+    omitted = {'verify_reader_ux', 'verify_reader_navigation',
+               'verify_edition_terminal', 'verify_terminal'} & modules.keys()
+    for name, reference in modules.items():
+        if name in omitted:
+            continue
+        path, data = _regular(reference)
+        for node in ast.walk(ast.parse(data, filename=str(path))):
+            names = []
+            if isinstance(node, ast.Import):
+                names = [item.name.split('.')[0] for item in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module.split('.')[0]]
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                names = [candidate for candidate in omitted if candidate in node.value]
+            if omitted.intersection(names):
+                raise ValueError('Normal build source references terminal QA: ' + str(path))
+    for name in omitted:
+        del modules[name]
+    return result
 
 
 def _regular(reference):
