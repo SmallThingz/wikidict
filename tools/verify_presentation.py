@@ -21,6 +21,11 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
 
+try:
+    from compression import zstd
+except ImportError:
+    zstd = None
+
 MARKUP = re.compile(r'\[\[|\]\]|\{\{|\}\}|</?[A-Za-z][^>]*>|\{\||\|}')
 # Decoded spans do not preserve reliable nowiki/source provenance. Intentional
 # literal spellings need source-backed disposition, including code=true spans.
@@ -530,8 +535,16 @@ def process_birth(pid):
     return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])
 
 
+def export_spool(storage, mode):
+    if zstd is not None:
+        return zstd.ZstdFile(storage, mode, level=1 if mode == 'wb' else None)
+    return gzip.GzipFile(fileobj=storage, mode=mode, compresslevel=1, mtime=0)
+
+
 def compress_exports(stream, storage):
-    with stream, gzip.GzipFile(fileobj=storage, mode='wb', compresslevel=1, mtime=0) as compressed:
+    with stream, export_spool(storage, 'wb') as compressed:
+        # An empty successful child must still produce a readable empty frame.
+        compressed.write(b'')
         shutil.copyfileobj(stream, compressed, length=128 * 1024)
 
 
@@ -563,7 +576,7 @@ def checked_export_stream(argv):
                 copied.result()
                 require(code == 0, f'export batch failed with status {code}')
         storage.seek(0)
-        with gzip.GzipFile(fileobj=storage, mode='rb') as decoded:
+        with export_spool(storage, 'rb') as decoded:
             yield decoded
 
 

@@ -744,13 +744,14 @@ class BatchExportBoundaryTests(unittest.TestCase):
         payload = line * 50000
         command = [sys.executable, '-c', f'import sys; sys.stdout.buffer.write({line!r} * 50000)']
         spool = tempfile.SpooledTemporaryFile
-        for limit in (64, len(payload)):
-            with self.subTest(limit=limit), spool(max_size=limit) as storage:
-                with mock.patch.object(audit.tempfile, 'SpooledTemporaryFile', return_value=storage):
-                    with audit.checked_export_stream(command) as result:
-                        self.assertEqual(payload, result.read())
-                        self.assertEqual(limit == 64, storage._rolled)
-                        self.assertLess(storage.tell(), len(payload) // 10)
+        for codec in {audit.zstd, None}:
+            for limit in (64, len(payload)):
+                with self.subTest(codec=codec, limit=limit), spool(max_size=limit) as storage:
+                    with mock.patch.object(audit, 'zstd', codec), mock.patch.object(audit.tempfile, 'SpooledTemporaryFile', return_value=storage):
+                        with audit.checked_export_stream(command) as result:
+                            self.assertEqual(payload, result.read())
+                            self.assertEqual(limit == 64, storage._rolled)
+                            self.assertLess(storage.tell(), len(payload) // 10)
 
     def test_failed_and_truncated_batch_never_yields_a_success(self):
         class Child:
