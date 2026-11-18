@@ -114,6 +114,10 @@ For a large edition, give `--report` a filename ending in `.json.gz`. The audit
 writes compressed JSON directly, including findings from failed scans. `gzip -dc`
 returns the same UTF-8 JSON as the plain report.
 
+`render-diagnostic` marks visible text such as `[malformed link]`, `[missing
+parameter]` and `[render output truncated]`. Check the original page to distinguish
+an authored example from a message inserted during rendering.
+
 The audit verifies each compressed member against its recorded size and SHA-1.
 It checks plain text and internal links under literal language headings
 on template-free pages. A match requires the expected language, definition

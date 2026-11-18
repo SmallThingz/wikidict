@@ -28,6 +28,7 @@ MARKUP = re.compile(r'\[\[|\]\]|\{\{|\}\}|</?[A-Za-z][^>]*>|\{\||\|}')
 BEHAVIOR_SWITCH = re.compile(r'(?<!_)_{2,}[^\W_]\w*__')
 ERROR_PROSE = re.compile(r'\b(?:Lua|Script|Parser|Scribunto)\s+error\b', re.IGNORECASE)
 UNAVAILABLE_TEMPLATE = re.compile(r'\[(?:missing template\]|unavailable template:)', re.IGNORECASE)
+RENDER_DIAGNOSTIC = re.compile(r'\[(?:malformed (?:template|link|table)|missing parameter|render (?:nesting limit|output truncated))\]')
 FEATURE_KINDS = ('thesaurus', 'citations', 'reconstruction', 'rhymes',
                  'sign-gloss', 'supplemental')
 SUPPORTED_KINDS = ('language', *FEATURE_KINDS)
@@ -45,8 +46,11 @@ def diagnostic_categories(text):
         found.append('behavior-switch')
     if 'error' in text.lower() and ERROR_PROSE.search(text):
         found.append('error-prose')
-    if '[' in text and UNAVAILABLE_TEMPLATE.search(text):
-        found.append('unavailable-template')
+    if '[' in text:
+        if UNAVAILABLE_TEMPLATE.search(text):
+            found.append('unavailable-template')
+        if RENDER_DIAGNOSTIC.search(text):
+            found.append('render-diagnostic')
     return found
 
 

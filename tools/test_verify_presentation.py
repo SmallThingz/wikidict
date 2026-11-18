@@ -41,6 +41,14 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual(['unavailable-template'],
                          audit.diagnostic_categories('[unavailable template: Missing]'))
 
+    def test_native_recovery_messages_in_visible_prose(self):
+        for message in ('malformed template', 'malformed link', 'malformed table', 'missing parameter',
+                        'render nesting limit', 'render output truncated'):
+            spans = [dict(kind='text', text='before ['), dict(kind='text', text=message + '] after')]
+            [(_, prose)] = audit.text_fields(spans)
+            self.assertEqual(audit.diagnostic_categories(prose), ['render-diagnostic'])
+            self.assertEqual(audit.diagnostic_categories(message), [])
+
     def test_visible_missing_template_marker_from_native_writer(self):
         spans = [dict(kind='text', text='cat', trail=''),
                  dict(kind='text', text=' [missing template]', trail='')]
