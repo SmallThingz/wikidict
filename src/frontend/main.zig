@@ -29,6 +29,7 @@ const usage =
     \\
     \\Common options
     \\  --language NAME    Language heading (DICT_LANGUAGE, otherwise English)
+    \\                     An interactive reader without English opens an installed language or chooser.
     \\  --kind KIND        language, thesaurus, citations, reconstruction, rhymes, sign-gloss, supplemental
     \\  --root PATH        Dataset root (DICT_ROOT, otherwise data/wiktionary-blobs)
     \\  --format FORMAT    text, json
@@ -65,6 +66,7 @@ fn run(init: std.process.Init) !u8 {
     var opts = try args.parseWithDefaults(argv[1..], .{
         .root = init.environ_map.get("DICT_ROOT") orelse (args.Options{}).root,
         .language = init.environ_map.get("DICT_LANGUAGE") orelse (args.Options{}).language,
+        .language_explicit = init.environ_map.contains("DICT_LANGUAGE"),
     });
     const interactive = try std.Io.File.stdin().isTty(init.io) and try std.Io.File.stdout().isTty(init.io) and !(if (init.environ_map.get("TERM")) |t| std.mem.eql(u8, t, "dumb") else false);
     if (argv.len == 1 and interactive) {
@@ -120,7 +122,8 @@ fn run(init: std.process.Init) !u8 {
         return 2;
     }
     if (opts.command == .tui) std.debug.print("Opening dictionary...\n", .{});
-    var db = store.Store.open(init.io, init.gpa, opts.root, opts.kind, opts.language) catch |err| {
+    var choose_language = false;
+    var db = openReader(init.io, init.gpa, a, &opts, &choose_language) catch |err| {
         try reportOpenError(init.io, opts, err);
         return 2;
     };
@@ -133,7 +136,7 @@ fn run(init: std.process.Init) !u8 {
     };
     const label = try db.labelAlloc(a);
     if (opts.command == .tui) {
-        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, opts.details, opts.case_sensitive);
+        try tui.run(init.io, init.gpa, &db, label, opts.query, opts.theme, color, opts.details, opts.case_sensitive, choose_language);
         return 0;
     }
     var response: output.Response = .{
@@ -270,6 +273,46 @@ test "empty dataset hint requires the complete header-only language catalog" {
     }
     try tmp.dir.writeFile(io, .{ .sub_path = store.catalog.manifest_filename, .data = h ++ "\n" });
     try std.testing.expect(hasEmptyLanguageCatalog(io, root));
+}
+
+const InitialCollection = struct { heading: []const u8, show_library: bool };
+
+fn implicitCollection(bytes: []const u8, preferred: []const u8) !?InitialCollection {
+    var it = try store.catalog.Iterator.init(bytes);
+    const first = (try it.next()) orelse return null;
+    var has_preferred = std.mem.eql(u8, first.heading, preferred);
+    var multiple = false;
+    while (try it.next()) |entry| {
+        multiple = true;
+        if (std.mem.eql(u8, entry.heading, preferred)) has_preferred = true;
+    }
+    if (has_preferred) return null; // Its listed file is missing; surface the original error.
+    return .{ .heading = first.heading, .show_library = multiple };
+}
+
+fn openReader(io: std.Io, a: std.mem.Allocator, arena: std.mem.Allocator, opts: *args.Options, choose_language: *bool) !store.Store {
+    return store.Store.open(io, a, opts.root, opts.kind, opts.language) catch |err| {
+        if (err != error.FileNotFound or opts.command != .tui or opts.kind != .language or opts.language_explicit) return err;
+        const path = try std.fs.path.join(arena, &.{ opts.root, store.catalog.manifest_filename });
+        const catalog = try std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(16 * 1024 * 1024));
+        const choice = (try implicitCollection(catalog, opts.language)) orelse return err;
+        opts.language = choice.heading;
+        choose_language.* = choice.show_library;
+        return store.Store.open(io, a, opts.root, opts.kind, opts.language);
+    };
+}
+
+test "implicit terminal catalog choice preserves explicit or listed languages" {
+    const h = store.catalog.manifest_header ++ "\n";
+    try std.testing.expect(try implicitCollection(h, "English") == null);
+    try std.testing.expect(try implicitCollection(h ++ "Aymar aru\nEnglish\n", "English") == null);
+    try std.testing.expectError(error.InvalidManifest, implicitCollection(h ++ "Aymar aru\n\n", "English"));
+    const single = (try implicitCollection(h ++ "română\n", "English")).?;
+    try std.testing.expectEqualStrings("română", single.heading);
+    try std.testing.expect(!single.show_library);
+    const multi = (try implicitCollection(h ++ "Aymar aru\nRuso\n", "English")).?;
+    try std.testing.expectEqualStrings("Aymar aru", multi.heading);
+    try std.testing.expect(multi.show_library);
 }
 
 fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {

@@ -114,6 +114,7 @@ const State = struct {
     label_owned: bool = false,
     library_names: std.ArrayList([]const u8) = .empty,
     library_selected: usize = 0,
+    startup_library: bool = false,
     query: [4096]u8 = undefined,
     len: usize = 0,
     cursor: usize = 0,
@@ -199,7 +200,7 @@ const State = struct {
             (self.nav == .learn and self.reading != null and self.reading.?.data.study_pool != .all);
     }
     fn navigate(self: *State, page_name: Page) !void {
-        if (page_name == .library) try self.loadLibrary();
+        if (page_name == .library) try self.loadLibrary() else self.startup_library = false;
         self.notice = "";
         self.confirm_clear_history = false;
         self.nav = page_name;
@@ -498,9 +499,17 @@ const State = struct {
                 .page_up => self.library_selected -|= @max(1, self.bodyHeight()),
                 .page_down => self.library_selected = @min(self.library_names.items.len -| 1, self.library_selected +| self.bodyHeight()),
                 .enter => if (self.library_names.items.len != 0) {
+                    const prefix_len = if (self.startup_library) self.len else 0;
                     self.switchDictionary(self.library_names.items[self.library_selected]) catch {
                         self.notice = "Could not open this dictionary. Your current word is kept.";
+                        return true;
                     };
+                    self.startup_library = false;
+                    if (prefix_len != 0) {
+                        self.len = prefix_len;
+                        self.cursor = prefix_len;
+                        try self.changed();
+                    }
                 },
                 .escape => try self.navigate(.search),
                 .text => if (event.len == 1 and event.bytes[0] == 'q') return false,
@@ -1141,7 +1150,7 @@ const State = struct {
     }
 };
 
-pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, initial_details: bool, case_sensitive: bool) !void {
+pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8, query: []const u8, theme: Theme, color: bool, initial_details: bool, case_sensitive: bool, choose_language: bool) !void {
     if (builtin.os.tag != .linux) return error.UnsupportedTerminalPlatform;
     if (!try std.Io.File.stdin().isTty(io) or !try std.Io.File.stdout().isTty(io)) return error.TerminalRequired;
     if (!std.unicode.utf8ValidateSlice(query) or query.len > 4096) return error.InvalidQuery;
@@ -1167,6 +1176,10 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
         state.selected = index;
         state.focus = .entry;
     };
+    if (choose_language) {
+        state.startup_library = true;
+        try state.navigate(.library);
+    }
     var session = try term.Session.enter();
     defer session.leave();
     var input: term.Input = .{};

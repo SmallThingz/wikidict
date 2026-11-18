@@ -10,6 +10,7 @@ pub const Options = struct {
     root: []const u8 = "data/wiktionary-blobs",
     kind: store.Kind = .language,
     language: []const u8 = "English",
+    language_explicit: bool = false,
     query: []const u8 = "",
     // Borrowed literal argv tail; only explicit bounded exact export uses it.
     batch_queries: []const []const u8 = &.{},
@@ -97,7 +98,10 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) out.language = value else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
+            if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) {
+                out.language = value;
+                out.language_explicit = true;
+            } else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
         } else {
             if (has_query or batch_export) return error.Usage;
             out.query = arg;
@@ -181,6 +185,9 @@ test "reader commands and configured defaults remain explicit" {
     const override = try parseWithDefaults(&.{ "chat", "--root", "local", "--language", "English" }, defaults);
     try std.testing.expectEqualStrings("local", override.root);
     try std.testing.expectEqualStrings("English", override.language);
+    try std.testing.expect(override.language_explicit);
+    try std.testing.expect(!(try parse(&.{"tui"})).language_explicit);
+    try std.testing.expect((try parseWithDefaults(&.{"tui"}, .{ .language = "English", .language_explicit = true })).language_explicit);
     try std.testing.expectEqual(Command.save, (try parse(&.{ "save", "cat" })).command);
     try std.testing.expectEqual(@as(usize, 20), (try parse(&.{ "saved", "--offset", "20" })).offset);
     try std.testing.expectError(error.Usage, parse(&.{"save"}));
