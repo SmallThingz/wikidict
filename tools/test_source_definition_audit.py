@@ -48,6 +48,19 @@ class SourceDefinitionTests(unittest.TestCase):
         for marked in ("a ''word''", "'''bold'''", "[[word|''label'']]", "unclosed ''word"):
             self.assertIsNone(simple_line(marked, 'other'))
 
+    def test_whitespace_inside_a_link_label_remains_part_of_the_action(self):
+        source = '[[ഖചിതം| ചിത്രഖചിതമായ]] [[ആഭരണം]]'
+        spans = [dict(kind='text', text='  '), dict(kind='link', target='ഖചിതം', text=' ചിത്രഖചിതമായ'),
+                 dict(kind='text', text=' '), dict(kind='link', target='ആഭരണം', text='ആഭരണം'),
+                 dict(kind='text', text='   ')]
+        self.assertEqual(compiled_line(spans), simple_line(source, 'cameo'))
+        spans[1]['text'] = spans[1]['text'].lstrip()
+        spans[0]['text'] += ' '
+        self.assertNotEqual(compiled_line(spans), simple_line(source, 'cameo'))
+        source = "''[[word|word ]]''"
+        spans = [dict(kind='link', target='word', text='word ', italic=True), dict(kind='text', text='   ')]
+        self.assertEqual((*compiled_line(spans), compiled_emphasis(spans)), source_line(source, 'other'))
+
     def test_numbered_bare_url_must_be_an_external_link_to_its_own_text(self):
         url = 'https://tuludictionary.in/dictionary/cgi-bin/web/frame.html'
         expected = simple_line(url, 'word')

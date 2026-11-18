@@ -43,6 +43,21 @@ def simple_line(source, title):
     return (text, tuple(links)) if links or any(c.isalpha() for c in text) else None
 
 
+def edge_padding(spans, *, leading):
+    # Source lines discard unmarked whitespace around the body. Whitespace in
+    # an explicit link label or emphasis run still belongs to its authored range.
+    padding = 0
+    for span in spans if leading else reversed(spans):
+        if span.get('kind', 'text') != 'text' or span.get('bold') or span.get('italic'):
+            break
+        text = span['text'] + span.get('trail', '')
+        body = text.lstrip() if leading else text.rstrip()
+        padding += len(text) - len(body)
+        if body:
+            break
+    return padding
+
+
 def compiled_line(spans):
     parts, links = [], []
     offset = 0
@@ -62,8 +77,9 @@ def compiled_line(spans):
         parts.append(text)
         offset += len(text)
     text = ''.join(parts)
-    leading = len(text) - len(text.lstrip())
-    return text.strip(), tuple((start - leading, end - leading, *action) for start, end, *action in links)
+    leading = edge_padding(spans, leading=True)
+    end = len(text) - edge_padding(spans, leading=False)
+    return text[leading:end], tuple((start - leading, stop - leading, *action) for start, stop, *action in links)
 
 
 def source_line(source, title):
@@ -96,8 +112,8 @@ def source_line(source, title):
 def compiled_emphasis(spans):
     """Return the single visible emphasis range, if this block has exactly one."""
     text = ''.join(span['text'] for span in spans)
-    first = len(text) - len(text.lstrip())
-    last = len(text.rstrip())
+    first = edge_padding(spans, leading=True)
+    last = len(text) - edge_padding(spans, leading=False)
     offset = 0
     interval = None
     for span in spans:
