@@ -112,7 +112,9 @@ If an opted-in export fails, the audit reports an incomplete scan.
 
 For a large edition, give `--report` a filename ending in `.json.gz`. The audit
 writes compressed JSON directly, including findings from failed scans. `gzip -dc`
-returns the same UTF-8 JSON as the plain report.
+returns the same UTF-8 JSON as the plain report. Use `--summary-json` in batch
+scripts to read the status and counts from standard output after the report has
+been written. This avoids loading every flagged field a second time.
 
 `render-diagnostic` marks visible text such as `[malformed link]`, `[missing
 parameter]` and `[render output truncated]`. Check the original page to distinguish

@@ -497,7 +497,7 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 with self.assertRaises(audit.ScanError):
                     audit.scan(f.root, query)
 
-    def run_report(self, text=None, error=None, compressed=False):
+    def run_report(self, text=None, error=None, compressed=False, summary_json=False):
         with Fixture() as f:
             if text is not None: f.language('English', [f.entry('fixture', text, language='English')])
             report = f.root / ('audit.json.gz' if compressed else 'audit.json')
@@ -509,6 +509,8 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 return json.dumps(f.query(argv[1], *argv[6:])).encode()
             argv = ['verify_presentation.py', '--binary', str(f.root / 'dict'),
                     '--root', str(f.root), '--report', str(report)]
+            if summary_json:
+                argv.append('--summary-json')
             with mock.patch.object(audit.subprocess, 'check_output', side_effect=output), \
                  mock.patch('sys.argv', argv), mock.patch('builtins.print') as printed:
                 exit_value = audit.main()
@@ -518,7 +520,12 @@ class PresentationDiagnosticTests(unittest.TestCase):
             result = json.loads(raw)
             self.assertEqual(raw, (json.dumps(result, ensure_ascii=False, indent=2) + '\n').encode())
             stdout = printed.call_args.args[0]
-            if result['status'] == 'error':
+            if summary_json:
+                expected = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records') if k in result}
+                if 'issues' in result:
+                    expected['review_fields'] = len(result['issues'])
+                self.assertEqual(json.loads(stdout), expected)
+            elif result['status'] == 'error':
                 self.assertTrue(stdout.startswith('PRESENTATION_AUDIT error '))
                 self.assertLess(len(stdout), 530)
             else:
@@ -549,6 +556,7 @@ class PresentationDiagnosticTests(unittest.TestCase):
         for kwargs in ({'text': 'სიტყვა'}, {'text': '{{მცდარი}}'}, {'error': OSError('missing binary')}):
             with self.subTest(kwargs=kwargs):
                 self.assertEqual(self.run_report(**kwargs), self.run_report(**kwargs, compressed=True))
+                self.assertEqual(self.run_report(**kwargs), self.run_report(**kwargs, compressed=True, summary_json=True))
 
     def test_report_larger_than_one_write_preserves_exact_bytes(self):
         result = {'issues': [{'title': f'词{n}', 'text': 'მცდარი\n[[target]]'} for n in range(2050)]}

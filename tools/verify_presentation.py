@@ -738,6 +738,7 @@ def main():
     parser.add_argument('--binary', type=Path, default=installed_reader)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--report', type=Path, required=True, help='JSON report path. A .gz suffix writes gzip-compressed JSON.')
+    parser.add_argument('--summary-json', action='store_true', help='Print counts and status as JSON after writing the full report.')
     parser.add_argument('--definition-dump', type=Path, action='append',
                         help='Compare simple numbered definitions to the selected original XML. Supply every .xml.bz2 part.')
     parser.add_argument('--definition-registry', type=Path,
@@ -756,6 +757,7 @@ def main():
 
     with ExitStack() as report_files:
         return run_audit(args, report_files)
+
 
 def run_audit(args, report_files):
     def query(*parts):
@@ -795,7 +797,14 @@ def run_audit(args, report_files):
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
     write_report(args.report, result)
-    if result['status'] == 'error':
+    if args.summary_json:
+        summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records') if k in result}
+        if 'issues' in result:
+            summary['review_fields'] = len(result['issues'])
+        if 'source_definitions' in result:
+            summary.update({k: result['source_definitions'][k] for k in ('eligible', 'matched', 'unmatched')})
+        print(json.dumps(summary, ensure_ascii=False))
+    elif result['status'] == 'error':
         print(f"PRESENTATION_AUDIT error {result['error'][:500]}")
     else:
         print(f"PRESENTATION_AUDIT {result['status']} records={result['records']} "
