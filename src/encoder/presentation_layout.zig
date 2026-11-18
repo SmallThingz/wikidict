@@ -254,6 +254,9 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // sense identifies its grammatical noun meaning; it grants neither an
     // owner nor a definition absent from the retained page.
     if (std.mem.eql(u8, title, "Ibizo")) return "Noun";
+    // The Tsonga heading templates link to the local entries for verb and noun.
+    if (std.mem.eql(u8, title, "Riendli")) return "Verb";
+    if (std.mem.eql(u8, title, "Riviti")) return "Noun";
     for (speech) |name| if (part.named(title, name)) return name;
     return null;
 }
@@ -2403,6 +2406,59 @@ test "Hungarian noun heading organizes senses without choosing the record langua
         try std.testing.expectEqualStrings("tea", definition.spans[0].target);
     }
     for ([_][]const u8{ "főnév", "Főnév?", "Főnévi igenév", "Főnév (régies)" }) |other|
+        try std.testing.expect(partOfSpeech(other) == null);
+}
+
+test "Tsonga verb and noun headings preserve authored translations and their section levels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    // From famba p2124/r7898 and Xihlamuselamarito p2795/r8037. The glosses
+    // are translation bullets. Neither entry supplies a numbered definition.
+    const Case = struct { title: []const u8, heading: []const u8, body: []const u8, gloss: []const u8, kind: []const u8, level: u8 };
+    const cases = [_]Case{
+        .{ .title = "famba", .heading = "=====[[riendli|Riendli]]=====", .body = "famba\n* ku ''famba''", .gloss = ": (verb) walk, march, go, journey, peregrinate, tour, travel", .kind = "Verb", .level = 5 },
+        .{ .title = "Xihlamuselamarito", .heading = "====[[riviti|Riviti]]====", .body = "dikixinari", .gloss = ": Dictionary", .kind = "Noun", .level = 4 },
+    };
+    for (cases) |case| {
+        const source = try std.mem.concat(a, u8, &.{ "== Xitsonga ==\n", case.heading, "\n\n", case.body,
+            "\n\n=====[[vuhundzuluxi|Vuhundzuluxi]]=====\n* [[Xhingezi|English]]", case.gloss, "\n" });
+        const bytes = try document.compileClassifiedWithHeadingAnchorsAlloc(a, case.title, .language,
+            "Xitsonga", "ts", document.MissingText.untracked(source), null, .{}, null, null, null, .{},
+            null, null, &.{}, null, &.{}, .{ .heading = "Xitsonga", .code = "ts" });
+        const stored = try codec.decodeAlloc(a, bytes, case.title, .language, .{ .heading = "Xitsonga", .code = "ts" });
+        const entry = stored.entry;
+        try std.testing.expectEqual(@as(usize, 1), entry.organization.lexemes.len);
+        const lexeme = entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings(case.kind, lexeme.kind);
+        try std.testing.expectEqualStrings("Xitsonga", lexeme.language);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.section);
+        try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 3), entry.sections.len);
+        const translation = entry.sections[2];
+        try std.testing.expectEqualStrings("Vuhundzuluxi", translation.title);
+        const bullet = translation.blocks[translation.blocks.len - 1];
+        try std.testing.expectEqual(.list_item, bullet.kind);
+        try std.testing.expectEqualStrings("Xhingezi", bullet.spans[0].target);
+        try std.testing.expectEqualStrings(case.gloss, bullet.spans[1].text);
+        try std.testing.expectEqual(case.level, entry.sections[1].level);
+        if (case.level == 5) {
+            try std.testing.expectEqualSlices(usize, &.{ 0, 2 }, entry.organization.other_sections);
+            try std.testing.expectEqual(@as(usize, 0), lexeme.related_sections.len);
+            const verb_blocks = entry.sections[1].blocks;
+            const use = verb_blocks[verb_blocks.len - 1];
+            try std.testing.expectEqual(.list_item, use.kind);
+            try std.testing.expectEqualStrings("famba", use.spans[1].text);
+            try std.testing.expect(use.spans[1].italic);
+        } else {
+            try std.testing.expectEqualSlices(usize, &.{0}, entry.organization.other_sections);
+            try std.testing.expectEqualSlices(usize, &.{2}, lexeme.related_sections);
+        }
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    }
+    for ([_][]const u8{ "riendli", "Riviti?", "Vuhundzuluxi" }) |other|
         try std.testing.expect(partOfSpeech(other) == null);
 }
 
