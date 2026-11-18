@@ -2936,8 +2936,21 @@ fn translationWarningHeading(codes: LanguageCodes, value: []const u8) ?[]const u
     const at = std.mem.indexOf(u8, body, annotation) orelse return null;
     const label = std.mem.trim(u8, body[0..at], " \t");
     if (label.len == 0 or std.mem.indexOfAny(u8, label, "<>{}[]\"\r\n") != null) return null;
+    // The captured label and quoted warning retain their exact bytes. A single
+    // trailing LRM is display direction metadata, not language-name authority.
+    // Use the unmarked spelling only after exact independent lookup fails.
+    var lookup = label;
     const language = codes.resolveStrong(label) orelse
-        (if (codes.trusted_fn) |trusted| trusted(codes.ctx, label) else null) orelse return null;
+        (if (codes.trusted_fn) |trusted| trusted(codes.ctx, label) else null) orelse normalized: {
+        const lrm = "\u{200e}";
+        if (!std.mem.endsWith(u8, label, lrm) or codes.isLanguageBoundary(label)) return null;
+        lookup = label[0 .. label.len - lrm.len];
+        if (lookup.len == 0 or std.mem.indexOf(u8, lookup, lrm) != null) return null;
+        const owner = codes.resolveStrong(lookup) orelse
+            (if (codes.trusted_fn) |trusted| trusted(codes.ctx, lookup) else null) orelse return null;
+        if (codes.resolve(label)) |known| if (!std.mem.eql(u8, known.code, owner.code)) return null;
+        break :normalized owner;
+    };
     var rest = body[at + annotation.len ..];
     if (!std.mem.startsWith(u8, rest, label)) return null;
     rest = rest[label.len..];
@@ -2945,7 +2958,7 @@ fn translationWarningHeading(codes: LanguageCodes, value: []const u8) ?[]const u
     const end = "-&action=edit here])'''";
     if (!std.mem.startsWith(u8, rest, edit) or !std.mem.endsWith(u8, rest, end) or rest.len < edit.len + end.len) return null;
     const code = rest[edit.len .. rest.len - end.len];
-    return if (std.mem.eql(u8, code, language.code)) label else null;
+    return if (std.mem.eql(u8, code, language.code)) lookup else null;
 }
 
 fn classificationHeadingProjectionAlloc(a: std.mem.Allocator, codes: LanguageCodes, value: []const u8) !?[]u8 {
@@ -13123,16 +13136,12 @@ test "translation warning headings require complete corroboration and preserve s
     for (TranslationWarningFixture.rows[0..13]) |row| {
         const label = if (std.mem.eql(u8, row.code, "kl")) "Kalaallisut\u{200e}" else row.label;
         const heading = try TranslationWarningFixture.banner(a, label, row.code);
-        if (std.mem.eql(u8, row.code, "kl")) {
-            try std.testing.expect(translationWarningHeading(codes, heading) == null);
-            continue;
-        }
-        try std.testing.expectEqualStrings(label, translationWarningHeading(codes, heading).?);
+        try std.testing.expectEqualStrings(row.label, translationWarningHeading(codes, heading).?);
         const source = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{heading});
         var owned: std.ArrayList([]u8) = .empty;
         var sections: std.ArrayList(language_source.Section) = .empty;
         try appendClassifiedSection(a, codes, &sections, &owned, .{ .heading = heading, .source = source });
-        try std.testing.expectEqualStrings(label, sections.items[0].heading);
+        try std.testing.expectEqualStrings(row.label, sections.items[0].heading);
         try std.testing.expectEqual(@intFromPtr(source.ptr), @intFromPtr(sections.items[0].source.ptr));
         try std.testing.expectEqualStrings(source, sections.items[0].source);
         const markers: LanguageMarkers = .{ .codes = &codes };
@@ -13230,6 +13239,116 @@ test "translation warning projection never substitutes generic resolution for tr
     }
 }
 
+test "translation warning trailing LRM lookup preserves raw corroboration and independent authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const codes = TranslationWarningFixture.codes();
+    const marked = try TranslationWarningFixture.banner(a, "Kalaallisut\u{200e}", "kl");
+    try std.testing.expectEqualStrings("Kalaallisut", translationWarningHeading(codes, marked).?);
+    var trusted_only = codes;
+    trusted_only.strong_fn = null;
+    try std.testing.expectEqualStrings("Kalaallisut", translationWarningHeading(trusted_only, marked).?);
+    var strong_only = codes;
+    strong_only.trusted_fn = null;
+    try std.testing.expectEqualStrings("Kalaallisut", translationWarningHeading(strong_only, marked).?);
+    const untrusted: LanguageCodes = .{ .get_fn = TranslationWarningFixture.get, .resolve_fn = TranslationWarningFixture.resolve };
+    try std.testing.expect(untrusted.resolve("Kalaallisut") != null);
+    try std.testing.expect(translationWarningHeading(untrusted, marked) == null);
+    const negative = [_][]const u8{
+        try TranslationWarningFixture.banner(a, "Unknown\u{200e}", "kl"),
+        try TranslationWarningFixture.banner(a, "Kalaallisut\u{200e}", "en"),
+        try TranslationWarningFixture.banner(a, "Kalaal\u{200e}lisut", "kl"),
+        try TranslationWarningFixture.banner(a, "Kalaal\u{200e}lisut\u{200e}", "kl"),
+        try TranslationWarningFixture.banner(a, "Kalaallisut\u{200e}\u{200e}", "kl"),
+        try TranslationWarningFixture.banner(a, "Kalaallisut\u{200f}", "kl"),
+        try AssameseSupportFixture.replaced(a, marked, "translate \"Kalaallisut\u{200e}\"", "translate \"Kalaallisut\""),
+        try AssameseSupportFixture.replaced(a, marked, "(Please translate", "(Please\u{200e} translate"),
+        try AssameseSupportFixture.replaced(a, marked, "action=edit here", "action=edit here\u{200e}"),
+        try std.fmt.allocPrint(a, "<nowiki>{s}</nowiki>", .{marked}),
+    };
+    for (negative) |heading| try std.testing.expect(translationWarningHeading(codes, heading) == null);
+    const Conflicting = struct {
+        fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "Kalaallisut\u{200e}")) return .{ .code = "en", .heading = "English" };
+            return TranslationWarningFixture.resolve(ctx, value);
+        }
+        fn boundary(_: ?*const anyopaque, value: []const u8) bool {
+            return std.mem.eql(u8, value, "Kalaallisut\u{200e}");
+        }
+    };
+    var conflicting = codes;
+    conflicting.resolve_fn = Conflicting.resolve;
+    try std.testing.expect(translationWarningHeading(conflicting, marked) == null);
+    var ambiguous = codes;
+    ambiguous.boundary_fn = Conflicting.boundary;
+    try std.testing.expect(translationWarningHeading(ambiguous, marked) == null);
+}
+
+test "Writer retained aasiak trailing LRM changes owner only and preserves complete body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/aasiak-lrm", .{tmp.sub_path});
+    var namespaces = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/ik-aasiak-lrm/namespace-registry.tsv"));
+    defer namespaces.deinit();
+    try namespaces.attachInterwikiMap(@embedFile("testdata/ik-aasiak-lrm/interwiki-map.tsv"));
+    var codes = TranslationWarningFixture.codes();
+    codes.strong_fn = null; // Actual selected TSV supplies independent Trusted authority.
+    codes.namespace_catalog = &namespaces;
+    const raw = @embedFile("testdata/ik-aasiak-lrm/page.raw.wikitext");
+    // Static substitution of the authenticated constant template body, with
+    // includeonly/noinclude preprocessing recorded in the source binding.
+    // This is not claimed to be a new native-expander capture.
+    const expanded = @embedFile("testdata/ik-aasiak-lrm/page.static-expanded.wikitext");
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "aasiak", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Kalaallisut"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("Kalaallisut", metadata.heading);
+    try std.testing.expectEqualStrings("kl", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("aasiak")).?;
+    const actual = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    const Reader = struct { entries: []const blobs.presentation_types.Entry };
+    const parsed = try std.json.parseFromSlice(Reader, a, @embedFile("testdata/ik-aasiak-lrm/reader-current100.json"), .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    var expected_entry = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("Unclassified", expected_entry.language.?);
+    try std.testing.expectEqualStrings("", expected_entry.language_code);
+    expected_entry.language = "Kalaallisut";
+    expected_entry.language_code = "kl";
+    try std.testing.expectEqualDeep(expected_entry, actual.entry);
+    const expected_payload = try blobs.presentation_codec.encodeAlloc(a, .{ .entry = expected_entry });
+    try std.testing.expectEqualSlices(u8, expected_payload, record.payload);
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, actual));
+    const roundtrip = try blobs.presentation_codec.decodeAlloc(a, expected_payload, "aasiak", .language, metadata);
+    try std.testing.expectEqualDeep(actual, roundtrip);
+    try std.testing.expectEqual(@as(usize, 0), actual.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.sections.len);
+    const heading_spans = actual.entry.sections[0].blocks[0].spans;
+    try std.testing.expectEqualStrings(" Kalaallisut\u{200e} ", heading_spans[0].text);
+    try std.testing.expectEqualStrings("(Please translate \"Kalaallisut\u{200e}\" ", heading_spans[1].text);
+    try std.testing.expectEqualStrings("http://ik.wiktionary.org/w/index.php?title=Template:-kl-&action=edit", heading_spans[2].target);
+    const meaning_spans = actual.entry.sections[0].blocks[2].spans;
+    try std.testing.expectEqualStrings("aasivak", meaning_spans[1].target);
+    try std.testing.expectEqualStrings("aarsivak", meaning_spans[3].target);
+    const diagnostics = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(8192));
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics, "missing_language_heading") == null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostics, "unresolved_language_heading") == null);
+}
+
 test "Writer warning projection preserves undeclared POS LRM and literal diagnostic controls" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -13244,7 +13363,9 @@ test "Writer warning projection preserves undeclared POS LRM and literal diagnos
     const cases = [_]struct { title: []const u8, raw: []const u8, expanded: []const u8 }{
         .{ .title = "pos-code", .raw = "{{-adj-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "adj", "adj")}) },
         .{ .title = "conflicting-edit", .raw = "{{-en-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "English", "fr")}) },
-        .{ .title = "lrm-label", .raw = "{{-kl-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "Kalaallisut\u{200e}", "kl")}) },
+        // Trailing LRM now has a separate whole-page positive. An internal
+        // mark is still outside the admitted lookup normalization.
+        .{ .title = "lrm-label", .raw = "{{-kl-}}\n# kept\n", .expanded = try std.fmt.allocPrint(a, "=={s}==\n# kept\n", .{try TranslationWarningFixture.banner(a, "Kalaal\u{200e}lisut", "kl")}) },
         // Exact lexical prefix of iggaġri p1691/r4832. Its later translation
         // template expansion is deliberately not fabricated by this fixture.
         .{ .title = "iggaġri prefix", .raw = "'''iggaġri''' \n\n#''Ursus americanus''\n", .expanded = "'''iggaġri''' \n\n#''Ursus americanus''\n" },

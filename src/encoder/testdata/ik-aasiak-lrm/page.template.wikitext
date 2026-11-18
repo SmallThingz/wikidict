@@ -1,0 +1,9 @@
+<includeonly><!--[[Category:Kalaallisut‎]] translate "Kalaallisut‎" and remove this warning--></includeonly>__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> Kalaallisut‎ <small><small><small>'''(Please translate "Kalaallisut‎" [http://ik.wiktionary.org/w/index.php?title=Template:-kl-&action=edit here])'''</small></small></small> </big></big></big></div>==
+<br><noinclude>
+<!--[[Category:Language templates]] Please translate "language templates" and remove this warning-->
+</noinclude><noinclude>
+
+[[Category:Wiktionary/translate]]
+
+</noinclude>

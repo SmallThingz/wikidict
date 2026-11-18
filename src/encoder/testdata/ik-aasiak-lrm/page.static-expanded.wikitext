@@ -1,0 +1,11 @@
+<!--[[Category:Kalaallisut‎]] translate "Kalaallisut‎" and remove this warning-->__NOEDITSECTION__
+==<div id="toc" class="toccolours" ><big><big><big> Kalaallisut‎ <small><small><small>'''(Please translate "Kalaallisut‎" [http://ik.wiktionary.org/w/index.php?title=Template:-kl-&action=edit here])'''</small></small></small> </big></big></big></div>==
+<br>
+'''aasiak'''
+
+:[1] [[aasivak]], [[aarsivak]]
+
+[[en:aasiak]]
+[[gl:aasiak]]
+[[iu:aasiak]]
+[[sv:aasiak]]
