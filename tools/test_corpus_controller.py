@@ -1,6 +1,8 @@
 """Pure controller controls; no builder, provider, or native process is invoked."""
 import copy
 from contextlib import contextmanager
+import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1617,7 +1619,7 @@ class ControllerMemoryPolicyTests(unittest.TestCase):
 
 
 
-def content_review_fixture(top, editions, *, fallback_reasons=(), unclassified=False, empty=False):
+def content_review_fixture(top, editions, *, fallback_reasons=(), unclassified=False, empty=False, gzip_fallback=False):
     """Synthetic authenticated metadata; no native publication is represented as tested."""
     source = dict(head='test-head', fingerprint='test-source')
     rows = []; reviews = []
@@ -1631,17 +1633,26 @@ def content_review_fixture(top, editions, *, fallback_reasons=(), unclassified=F
         write_json(root/'page-coverage.json', dict(version=1,start_page=0,requested_limit=None,pages_seen=81,index_byte_offset=0,expected_input_pages=81,page_index_rows=81,page_index_identity=dict(device_major=1,device_minor=0,inode=1,size=81,mtime_ns=1)))
         counters=dict(input_rows=81,compile_only_rows=81 if is_empty else 0,source_unavailable_rows=0,dispatched_rows=0 if is_empty else 81,expanded_pages=0 if is_empty else 81-int(bool(reasons)),fallback_pages=int(bool(reasons)),duplicate_rows=0)
         write_json(root/'namespace-coverage.json',dict(version=1,namespaces=[dict(id=10,name='Template',kind=None,**counters)] if is_empty else [dict(id=0,name='',kind='language',**counters)]))
-        (root/'fallback-pages.jsonl').write_text(''.join(json.dumps(dict(namespace=0,title='entry',reasons=reasons))+'\n' for _ in range(bool(reasons))))
+        report_name = 'fallback-pages.jsonl'
+        raw = ''.join(json.dumps(dict(namespace=0,title='entry',reasons=reasons))+'\n' for _ in range(bool(reasons))).encode()
+        if gzip_fallback and raw:
+            report_name += '.gz'
+            (root/report_name).write_bytes(gzip.compress(raw, mtime=0))
+        else:
+            (root/report_name).write_bytes(raw)
         if not is_empty: (root/'test.wikblb.xz').write_bytes(b'synthetic payload; structurally qualified elsewhere')
         files = {p.name:dict(size=p.stat().st_size,sha256=controller.digest(p)) for p in root.iterdir()}
         inputs = dict(source=source['fingerprint'], files=[[edition,'20261001','dump.xml',81,'test-sha1']])
         complete = dict(edition=edition,date='20261001',build_inputs=inputs,input_pages=81,
                         status='empty' if is_empty else 'built',blobs=0 if is_empty else 1,
-                        fallback_pages=int(bool(reasons)),namespace_coverage_totals=counters,publication_files=files)
+                        fallback_pages=int(bool(reasons)),fallback_report=report_name,
+                        namespace_coverage_totals=counters,publication_files=files)
+        if report_name.endswith('.gz'):
+            complete['fallback_report_decoded'] = dict(size=len(raw),sha256=hashlib.sha256(raw).hexdigest())
         write_json(root/'complete.json',complete)
         snapshot=top/'receipts'/edition/'complete.json'; snapshot.parent.mkdir(parents=True)
         snapshot.write_bytes((root/'complete.json').read_bytes())
-        reports={name:controller.descriptor(root/name) for name in controller.REVIEW_REPORT_NAMES}
+        reports={name:controller.descriptor(root/name) for name in (*controller.REVIEW_COVERAGE_NAMES, report_name)}
         accepted=dict(root=str(root),source=source,build_inputs=inputs,input_pages=81,
                       complete=controller.descriptor(root/'complete.json'),complete_snapshot=controller.descriptor(snapshot),reports=reports)
         rows.append(dict(edition=edition,accepted=accepted))
@@ -1683,6 +1694,33 @@ class ContentReviewTests(unittest.TestCase):
 
     def test_exact_clean_pilot_passes(self):
         data=self.fixture(); self.assertIs(data[2],self.check(data))
+
+    def test_gzip_and_legacy_plain_reports_coexist_in_content_review(self):
+        data=self.fixture(fallback_reasons=['unclosed_formatting'], gzip_fallback=True)
+        reports=data[1][0]['accepted']['reports']
+        self.assertIn('fallback-pages.jsonl.gz',reports)
+        self.assertIn('fallback-pages.jsonl',data[1][1]['accepted']['reports'])
+        self.assertIs(data[2],self.check(data))
+
+    def test_accept_records_the_actual_gzip_report_member(self):
+        source, rows, _ = self.fixture(fallback_reasons=['unclosed_formatting'], gzip_fallback=True)
+        row = rows[0]
+        root = Path(row['accepted']['root'])
+        complete = controller.read_ref(row['accepted']['complete'])
+        complete['now_unix'] = 123
+        complete['build_inputs'].update(expansion_timeout_ms=60000, zig_sha256='test-zig')
+        write_json(root / 'complete.json', complete)
+        manifest = self.top / 'manifest.json'
+        write_json(manifest, {})
+        cfg = dict(output=str(root.parents[1]), date=root.name, now_unix=123, manifest=controller.descriptor(manifest),
+                   expansion_timeout_ms=60000, source=source, compiler={'sha256': 'test-zig'})
+        wiki, date, name, size, sha1 = complete['build_inputs']['files'][0]
+        items = [dict(wiki=wiki, date=date, name=name, size=size, sha1=sha1)]
+        folder = self.top / 'acceptance'
+        folder.mkdir()
+        with mock.patch('build_wiktionaries.select_manifest_files', return_value=items):
+            accepted = controller.accept(cfg, wiki, folder, {'status': 'success'}, None)
+        self.assertEqual(accepted['reports'], row['accepted']['reports'])
 
     def test_same_validator_accepts_exact_final198(self):
         data=content_review_fixture(self.top,all_editions()); self.check(data,'final')

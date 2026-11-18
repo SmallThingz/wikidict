@@ -1211,7 +1211,7 @@ def gate(ref, cfg, outcomes):
 
 
 REVIEW_METADATA_LIMIT = 8 * 1024**2
-REVIEW_REPORT_NAMES = ('page-coverage.json', 'namespace-coverage.json', 'fallback-pages.jsonl')
+REVIEW_COVERAGE_NAMES = ('page-coverage.json', 'namespace-coverage.json')
 
 
 def _review_file(reference, root, name):
@@ -1594,6 +1594,7 @@ def _review_source_lua_defects(review, accepted, complete):
 
 def _review_fallbacks(path, expected_count, namespace_counts=None, source_limitations=None, source_lua_defects=None, unsectioned_notices=None):
     # Stream every row, including errors after any possible sample prefix.
+    from build_wiktionaries import open_fallback_report
     before = path.stat(); count = 0; reason_counts = {}; namespaces = {}; used = set()
     source_limitations = source_limitations or {}
     source_lua_defects = source_lua_defects or {}
@@ -1604,7 +1605,7 @@ def _review_fallbacks(path, expected_count, namespace_counts=None, source_limita
     dispositions = dict(source_limitations)
     dispositions.update(source_lua_defects)
     dispositions.update(unsectioned_notices)
-    with path.open('rb') as stream:
+    with open_fallback_report(path, 'rb') as stream:
         while True:
             raw = stream.readline(REVIEW_METADATA_LIMIT + 1)
             if not raw: break
@@ -1687,10 +1688,13 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
                 complete['date'] == root.name and complete['build_inputs'] == accepted['build_inputs'] and
                 complete['build_inputs']['source'] == source['fingerprint'], 'Accepted completion identity differs')
         reports = accepted['reports']
-        require(set(reports) == set(REVIEW_REPORT_NAMES) and review.get('reports') == reports,
+        import build_wiktionaries as builder
+        fallback_name, fallback_decoded = builder.published_fallback_report(complete)
+        report_names = (*REVIEW_COVERAGE_NAMES, fallback_name)
+        require(set(reports) == set(report_names) and review.get('reports') == reports,
                 'Content review report inventory differs')
         files = complete['publication_files']
-        for name in REVIEW_REPORT_NAMES:
+        for name in report_names:
             expected_ref = dict(path=str(root / name), bytes=files[name]['size'], sha256=files[name]['sha256'])
             require(reports[name] == expected_ref, 'Content report differs from completion inventory')
             path = _review_file(reports[name], root, name)
@@ -1708,9 +1712,11 @@ def validate_content_review(value, source, rows, expected_editions, *, scope):
         unsectioned_notices = _review_unsectioned_notices(review, accepted, complete)
         source_lua_defects, source_lua_messages = _review_source_lua_defects(review, accepted, complete)
         fallback_namespaces = {}
-        reasons = _review_fallbacks(root / 'fallback-pages.jsonl', fallback_count, fallback_namespaces, source_limitations, source_lua_defects, unsectioned_notices)
+        fallback_path = root / fallback_name
+        if fallback_decoded is not None:
+            builder.require_decoded_fallback_report(fallback_path, fallback_decoded)
+        reasons = _review_fallbacks(fallback_path, fallback_count, fallback_namespaces, source_limitations, source_lua_defects, unsectioned_notices)
         # Reuse the producer's exact bounded coverage/conservation validators.
-        import build_wiktionaries as builder
         coverage = builder.validate_page_coverage(root, require_total=True)
         site_info_ref = review.get('site_info_snapshot')
         site_info_path = None
@@ -2230,9 +2236,11 @@ def accept(cfg, edition, folder, phase, log_ref):
     snap = descriptor(snapshot)
     require((snap['bytes'], snap['sha256']) == (live['bytes'], live['sha256']), 'Completion changed during snapshot')
     require(type(complete['input_pages']) is int and complete['input_pages'] >= 0, 'Invalid accepted page count')
+    fallback_name, _ = builder.published_fallback_report(complete)
+    report_names = (*REVIEW_COVERAGE_NAMES, fallback_name)
     reports = {name: dict(path=str(root / name), bytes=value['size'], sha256=value['sha256'])
                for name, value in complete['publication_files'].items()
-               if name in ('page-coverage.json', 'namespace-coverage.json', 'fallback-pages.jsonl')}
+               if name in report_names}
     require(len(reports) == 3, 'Required publication reports absent')
     accepted = dict(root=str(root), input_pages=complete['input_pages'], complete=live, complete_snapshot=snap,
                     source=cfg['source'], build_inputs=complete['build_inputs'], reports=reports, build_log=log_ref)

@@ -2,6 +2,7 @@ import bz2
 import concurrent.futures
 import contextlib
 from compression import zstd
+import gzip
 import hashlib
 import io
 import lzma
@@ -3440,6 +3441,54 @@ class FallbackNamespaceHistogramTests(unittest.TestCase):
 
 
 class PublicationResumeTests(unittest.TestCase):
+    def test_large_fallback_gzip_fresh_and_resume_preserve_sealed_bytes(self):
+        for interrupted in ('fresh', 'partial', 'pair', 'gzip-only', 'corrupt'):
+            with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                with patch.object(b, 'PROJECT', root), patch.object(b, 'FALLBACK_GZIP_MIN_BYTES', 1):
+                    item, target, workspace, staging, namespace, hashes, identity = self.fallback_namespace_fixture(root)
+                    plain = staging / b.FALLBACK_REPORT_NAME
+                    archived = staging / b.FALLBACK_GZIP_NAME
+                    row = json.loads(plain.read_text())
+                    row['title'] += '-fixture' * 128
+                    plain.write_text(json.dumps(row) + '\n')
+                    (staging / b.VERIFIED_INVENTORY_NAME).unlink()
+                    b.seal_verified_publication_inventory(staging)
+                    original = plain.read_bytes()
+                    logical = dict(size=len(original), sha256=hashlib.sha256(original).hexdigest())
+                    if interrupted == 'partial':
+                        archived.with_name(archived.name + '.part').write_bytes(b'interrupted gzip write')
+                    if interrupted in ('pair', 'gzip-only', 'corrupt'):
+                        b.compress_publication_fallback(staging, logical)
+                    if interrupted in ('gzip-only', 'corrupt'):
+                        plain.unlink()
+                    if interrupted == 'corrupt':
+                        good = archived.read_bytes()
+                        archived.write_bytes(good[:-5])
+                        with self.assertRaisesRegex(ValueError, 'Invalid gzip fallback report'):
+                            b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                                auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                        self.assertFalse(target.exists())
+                        self.assertEqual(archived.read_bytes(), good[:-5])
+                        self.assertTrue((workspace / 'sentinel').is_file())
+                        continue
+                    if interrupted == 'fresh':
+                        b._publish_verified_staging(staging, target, item['wiki'], item['date'], 1,
+                            auxiliary_hashes=hashes, build_identity=identity, namespace_snapshot=namespace)
+                    else:
+                        with patch.object(b, 'run_checked') as native:
+                            self.assertEqual(b.build_locked([item], root, root/'output', 'zig', 1), 'resumed_publication')
+                            native.assert_not_called()
+                    metadata = json.loads((target / 'complete.json').read_text())
+                    self.assertEqual(b.published_fallback_report(metadata), (b.FALLBACK_GZIP_NAME, logical))
+                    self.assertEqual(metadata['fallback_pages'], 1)
+                    self.assertEqual(gzip.decompress((target / b.FALLBACK_GZIP_NAME).read_bytes()), original)
+                    self.assertFalse((target / b.FALLBACK_REPORT_NAME).exists())
+                    self.assertEqual(b.publication_inventory(target), metadata['publication_files'])
+                    with patch.object(b, 'run_checked') as native:
+                        self.assertEqual(b.build_locked([item], root, root/'output', 'zig', 1), 'existing_output')
+                        native.assert_not_called()
+
     def fallback_namespace_fixture(self, root):
         item, target, workspace = self.prepare(root, publish=False)
         staging = target.with_name(item['date']+'.building')

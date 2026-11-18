@@ -19,17 +19,19 @@ or a reader-side wikitext fallback.
 Here, publication means finalizing verified local dictionary files. It does not
 approve a release or establish production readiness; those require user approval.
 
-The build report is `fallback-pages.jsonl`, with one JSON object per recovered
-page:
+The build report has one JSON object per recovered page:
 
 ```json
 {"namespace":0,"title":"example","reasons":["literal_markup","unclosed_formatting"]}
 ```
 
 `complete.json` records the validated line count as `fallback_pages` and names the
-report as `fallback_report`. Publication rejects blank or malformed JSONL records,
-invalid identities, empty/duplicate reasons, and duplicate `(namespace,title)`
-records before compression or rename.
+report as `fallback_report`. Read that field to choose either plain
+`fallback-pages.jsonl` or `fallback-pages.jsonl.gz`. For gzip reports,
+`fallback_report_decoded` records the exact original size and SHA-256. Native
+shards and failure diagnostics continue to use plain JSONL. Publication rejects
+blank or malformed JSONL records, invalid identities, empty or duplicate reasons,
+and duplicate `(namespace,title)` records before compression or rename.
 
 The current presentation reasons are defined by
 [`presentation_fallback.Report`](../src/encoder/presentation_fallback.zig).
@@ -81,7 +83,7 @@ MediaWiki-style `Lua error in ...` markup. An outer worker timeout, oversized
 request, or unrecovered expansion failure is different: there is no live-page
 semantic result to copy. The builder therefore retains the page under
 `Unclassified` with no fabricated body text and puts the exact failure category
-in `fallback-pages.jsonl`.
+in the fallback report.
 
 ## Whole-dump evidence
 

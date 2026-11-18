@@ -14,6 +14,7 @@ import concurrent.futures
 from collections import defaultdict, deque
 from contextlib import contextmanager, ExitStack
 import fcntl
+import gzip
 import hashlib
 import inspect
 import json
@@ -28,6 +29,7 @@ import sys
 import threading
 import time
 import uuid
+import zlib
 def sha256_file(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
@@ -7160,12 +7162,78 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
             raise
 
 
+FALLBACK_REPORT_NAME = 'fallback-pages.jsonl'
+FALLBACK_GZIP_NAME = FALLBACK_REPORT_NAME + '.gz'
+FALLBACK_GZIP_MIN_BYTES = 1024 * 1024
+
+
+def published_fallback_report(metadata):
+    name = metadata.get('fallback_report')
+    decoded = metadata.get('fallback_report_decoded')
+    if name == FALLBACK_REPORT_NAME and 'fallback_report_decoded' not in metadata:
+        return name, None
+    if (name == FALLBACK_GZIP_NAME and isinstance(decoded, dict) and set(decoded) == {'size', 'sha256'}
+            and type(decoded['size']) is int and decoded['size'] > 0
+            and isinstance(decoded['sha256'], str) and re.fullmatch('[0-9a-f]{64}', decoded['sha256'])):
+        return name, decoded
+    raise ValueError('Invalid publication fallback report declaration')
+
+
+def open_fallback_report(path, mode):
+    options = {'encoding': 'utf-8'} if mode == 'rt' else {}
+    if path.name == FALLBACK_GZIP_NAME:
+        return gzip.open(path, mode, **options)
+    return path.open(mode, **options)
+
+
+def require_decoded_fallback_report(path, expected):
+    before = index_identity(path.stat())
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with gzip.open(path, 'rb') as stream:
+            while block := stream.read(min(1024 * 1024, expected['size'] - size + 1)):
+                size += len(block)
+                if size > expected['size']:
+                    raise ValueError('Decoded fallback report exceeds its sealed size')
+                digest.update(block)
+    except (OSError, EOFError, zlib.error) as error:
+        raise ValueError('Invalid gzip fallback report') from error
+    if (size != expected['size'] or digest.hexdigest() != expected['sha256']
+            or index_identity(path.stat()) != before):
+        raise ValueError('Decoded fallback report differs from its sealed bytes')
+
+
+def compress_publication_fallback(root, expected):
+    raw = artifact_path(root / FALLBACK_REPORT_NAME)
+    target = artifact_path(root / FALLBACK_GZIP_NAME)
+    part = artifact_path(root / (FALLBACK_GZIP_NAME + '.part'))
+    before = index_identity(raw.stat())
+    with part.open('xb') as output:
+        try:
+            with raw.open('rb') as source, gzip.GzipFile(filename='', mode='wb', fileobj=output, compresslevel=1, mtime=0) as archive:
+                shutil.copyfileobj(source, archive, length=1024 * 1024)
+            output.flush()
+            os.fsync(output.fileno())
+            require_decoded_fallback_report(part, expected)
+            if index_identity(raw.stat()) != before:
+                raise ValueError('Plain fallback report changed during compression')
+            record = {'size': part.stat().st_size, 'sha256': sha256_file(part)}
+            if record['size'] >= expected['size']:
+                return None
+            os.replace(part, target)
+            sync_shard_directory(root)
+            return record
+        finally:
+            unlink_artifact(part, missing_ok=True)
+
+
 def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
     if not path.is_file():
         raise ValueError(f'Missing fallback report: {path}')
     reasons_seen = {}
     titles_by_namespace = defaultdict(set)
-    with path.open(encoding='utf-8') as lines:
+    with open_fallback_report(path, 'rt') as lines:
         for line_number, line in enumerate(lines, 1):
             if not line.strip():
                 raise ValueError(f'Blank fallback report record at {path}:{line_number}')
@@ -7222,10 +7290,11 @@ def require_current_staging_version(path, version):
     if version != DUMP_STAGING_VERSION:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
 
-def publication_inventory(root, *, allow_raw=False):
+def publication_inventory(root, *, allow_raw=False, allow_fallback_pair=False):
     """Pin verified data bytes so resume cannot bless missing or changed output."""
-    required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
-    metadata=required|{nonlexical.NAME,'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
+    required={'languages.tsv','page-coverage.json','namespace-coverage.json'}
+    fallback_names={FALLBACK_REPORT_NAME,FALLBACK_GZIP_NAME}
+    metadata=required|fallback_names|{nonlexical.NAME,'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
                        INTERWIKI_SHA_NAME,AUXILIARY_SHA_NAME,NOW_UNIX_NAME}
     if root.is_symlink() or not root.is_dir():raise ValueError('Unsafe publication directory')
     pending=[root];files=[]
@@ -7251,12 +7320,18 @@ def publication_inventory(root, *, allow_raw=False):
         digest=sha256_file(path)
         if index_identity(path.stat())!=before:raise ValueError('Publication artifact changed while reading: '+name)
         inventory[name]={'size':before['size'],'sha256':digest}
-    if not required.issubset(inventory):raise ValueError('Missing required publication report or language manifest')
+    fallback_members=fallback_names.intersection(inventory)
+    if not required.issubset(inventory) or not fallback_members:
+        raise ValueError('Missing required publication report or language manifest')
+    if len(fallback_members) != 1 and not allow_fallback_pair:
+        raise ValueError('Multiple published fallback reports')
     return inventory
 
 def seal_verified_publication_inventory(staging, *, fresh_compressed=False):
     """Seal native-verified logical bytes before compression can remove raw twins."""
     files=publication_inventory(staging,allow_raw=True)
+    if FALLBACK_REPORT_NAME not in files:
+        raise ValueError('Initial verified inventory requires a plain fallback report')
     if type(fresh_compressed) is not bool:raise ValueError('Invalid fresh compressed seal mode')
     if not fresh_compressed and any(name.endswith('.wikblb.xz') for name in files):
         raise ValueError('Cannot establish verified inventory from compressed leftovers')
@@ -7345,7 +7420,7 @@ def _verified_publication_inventories(staging, verified_compressed, *, allow_raw
     if index_identity(path.stat())!=before:raise ValueError('Verified inventory changed while reading')
     if not isinstance(saved,dict) or set(saved)!={'version','files'} or type(saved['version']) is not int or saved['version']!=1 or not isinstance(saved['files'],dict):
         raise ValueError('Invalid verified publication inventory')
-    expected=saved['files'];actual=publication_inventory(staging,allow_raw=allow_raw);allowed=set()
+    expected=saved['files'];actual=publication_inventory(staging,allow_raw=allow_raw,allow_fallback_pair=True);allowed=set()
     verified_compressed=verified_compressed or {};checked={}
     for name,record in expected.items():
         relative=Path(name)
@@ -7355,6 +7430,14 @@ def _verified_publication_inventories(staging, verified_compressed, *, allow_raw
                 not re.fullmatch('[0-9a-f]{64}',record['sha256']) or name.endswith('.wikblb.xz')):
             raise ValueError('Invalid verified publication member')
         allowed.add(name)
+        if name == FALLBACK_REPORT_NAME and FALLBACK_GZIP_NAME in actual:
+            allowed.add(FALLBACK_GZIP_NAME)
+            if actual[FALLBACK_GZIP_NAME]['size'] >= record['size']:
+                raise ValueError('Gzip fallback report is not smaller than the sealed plain report')
+            if name in actual and actual[name] != record:
+                raise ValueError('Verified plain fallback report changed')
+            require_decoded_fallback_report(staging / FALLBACK_GZIP_NAME, record)
+            continue
         if not name.endswith('.wikblb'):
             if actual.get(name)!=record:raise ValueError('Verified publication metadata changed: '+name)
             continue
@@ -7457,15 +7540,29 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     recorded_now=read_small_json(staging/NOW_UNIX_NAME) if (staging/NOW_UNIX_NAME).is_file() else None
     validate_now_unix(recorded_now)
     coverage=validate_page_coverage(staging,require_total=True)
+    fallback_raw = staging / FALLBACK_REPORT_NAME
+    fallback_gzip = staging / FALLBACK_GZIP_NAME
+    def checked_inventory():
+        fallback_part = staging / (FALLBACK_GZIP_NAME + '.part')
+        if os.path.lexists(fallback_part):
+            if (fallback_part.is_symlink() or not fallback_part.is_file()
+                    or fallback_raw.is_symlink() or not fallback_raw.is_file()):
+                raise ValueError('Unresolved fallback compression partial')
+            unlink_artifact(fallback_part)
+        for part in staging.rglob('*.xz.part'):
+            unlink_artifact(part)
+        return validate_verified_publication_inventory(staging)
+    # On gzip-only resume, authenticate and bound decoded bytes before reading
+    # report records. Plain staging keeps the original validation order.
+    fallback_path = fallback_gzip if not fallback_raw.exists() and fallback_gzip.is_file() else fallback_raw
+    authenticated = checked_inventory() if fallback_path == fallback_gzip else None
     fallback_counts = {}
     fallback_reasons = {}
-    fallback_pages = validate_fallback_report(staging / 'fallback-pages.jsonl', fallback_counts, fallback_reasons)
+    fallback_pages = validate_fallback_report(fallback_path, fallback_counts, fallback_reasons)
     namespace_totals=validate_namespace_coverage(staging,coverage['pages_seen'],namespace_snapshot,fallback_counts,site_info_snapshot)
     nonlexical.check_coverage(staging,build_identity)
     if namespace_snapshot is not None and namespace_totals['fallback_pages']!=fallback_pages:raise ValueError('Namespace fallback totals differ from fallback report')
-    for part in staging.rglob('*.xz.part'):
-        unlink_artifact(part)
-    sealed,checked_compressed=validate_verified_publication_inventory(staging)
+    sealed,checked_compressed=authenticated if authenticated is not None else checked_inventory()
     if _staged_input_guard is not None:_staged_input_guard()
     if build_identity is not None:
         # Only authenticated merged bytes may replace the owned shard recovery copies.
@@ -7494,14 +7591,32 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
             raise ValueError(f'Unexpected publication payload in reader indexes: {cache}')
     if compressed.keys() != logical:
         raise ValueError(f'Incomplete compressed publication: {staging}')
+    fallback_decoded = sealed[FALLBACK_REPORT_NAME]
+    if FALLBACK_GZIP_NAME not in inventory and fallback_decoded['size'] >= FALLBACK_GZIP_MIN_BYTES:
+        gzip_member = compress_publication_fallback(staging, fallback_decoded)
+        if gzip_member is not None: inventory[FALLBACK_GZIP_NAME] = gzip_member
+    fallback_name = FALLBACK_REPORT_NAME
+    if FALLBACK_GZIP_NAME in inventory:
+        fallback_name = FALLBACK_GZIP_NAME
+        if FALLBACK_REPORT_NAME in inventory:
+            fd = os.open(fallback_gzip, os.O_RDONLY | os.O_NOFOLLOW)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+            # On resume the archive rename may not have reached the directory
+            # yet. Make it durable before retiring the plain recovery copy.
+            sync_shard_directory(staging)
+            unlink_artifact(fallback_raw)
+            sync_shard_directory(staging)
+            del inventory[FALLBACK_REPORT_NAME]
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_reason_counts':fallback_reasons,
-        'fallback_report':'fallback-pages.jsonl', 'compression':'xz -0; 1 MiB blocks','blobs':len(compressed),
+        'fallback_report':fallback_name, 'compression':'xz -0; 1 MiB blocks','blobs':len(compressed),
         'input_pages':coverage['pages_seen'],'page_coverage_report':'page-coverage.json',
         'namespace_coverage_report':'namespace-coverage.json','namespace_coverage_totals':namespace_totals,
         'publication_files':inventory}
+    if fallback_name == FALLBACK_GZIP_NAME: metadata['fallback_report_decoded'] = fallback_decoded
     if build_identity is not None:metadata['build_inputs']=build_identity
     if recorded_now is not None: metadata['now_unix']=recorded_now
     if interwiki_sha is not None: metadata['interwiki_map_sha256']=interwiki_sha
@@ -7636,7 +7751,10 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             raise ValueError('Existing output page total differs from coverage')
         fallback_counts = {}
         fallback_reasons = {}
-        fallback_pages=validate_fallback_report(target/'fallback-pages.jsonl', fallback_counts, fallback_reasons)
+        fallback_name,fallback_decoded=published_fallback_report(metadata)
+        if fallback_decoded is not None:
+            require_decoded_fallback_report(target/fallback_name, fallback_decoded)
+        fallback_pages=validate_fallback_report(target/fallback_name, fallback_counts, fallback_reasons)
         namespace_totals=validate_namespace_coverage(target,metadata['input_pages'],namespace,fallback_counts,auxiliary_snapshots.get('site-info'))
         nonlexical.check_coverage(target,build_identity)
         if (type(metadata.get('fallback_pages')) is not int or metadata['fallback_pages']!=fallback_pages or
@@ -7651,8 +7769,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
                     recorded_reasons != fallback_reasons):
                 raise ValueError('Existing output fallback reason counts differ from report')
         for field,name in (('page_coverage_report','page-coverage.json'),
-                           ('namespace_coverage_report','namespace-coverage.json'),
-                           ('fallback_report','fallback-pages.jsonl')):
+                           ('namespace_coverage_report','namespace-coverage.json')):
             if metadata.get(field)!=name:raise ValueError('Existing output identifies a different coverage report')
         inventory=publication_inventory(target)
         recorded=metadata.get('publication_files')
