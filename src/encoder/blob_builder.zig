@@ -6473,7 +6473,19 @@ pub const Writer = struct {
     }
 
     pub fn finish(self: *Writer, codes: LanguageCodes) !BuildStats {
+        return self.finishInternal(codes, false);
+    }
+
+    /// Finish a disposable build output. Deinit and rebuild the writer on error.
+    pub fn finishDiscardingSpools(self: *Writer, codes: LanguageCodes) !BuildStats {
+        return self.finishInternal(codes, true);
+    }
+
+    fn finishInternal(self: *Writer, codes: LanguageCodes, discard_spools: bool) !BuildStats {
         if (self.finished) return error.WriterFinished;
+        errdefer if (discard_spools) {
+            self.finished = true;
+        };
         if (self.namespace_coverage.rows.count() != 0) try self.namespace_coverage.validate(self.stats.pages_seen);
         self.namespace_coverage.registry_sha256 = if (codes.namespace_catalog) |registry| registry.source_sha256 else null;
         if (!self.closed) {
@@ -6493,8 +6505,11 @@ pub const Writer = struct {
             for (headings.items) |heading| self.allocator.free(heading);
             headings.deinit(self.allocator);
         }
-        for (&self.spools.language) |*spool|
-            self.stats.language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, &self.spools.language_owners);
+        var language_blobs: usize = 0;
+        for (&self.spools.language) |*spool| {
+            language_blobs += try finalizeLanguageBucket(self.io, self.allocator, spool, self.output_root, &headings, &self.spools.language_owners);
+            if (discard_spools) deleteFileIfExists(self.io, spool.path) catch {};
+        }
         std.mem.sort([]const u8, headings.items, {}, struct {
             fn less(_: void, a: []const u8, b: []const u8) bool {
                 return std.mem.order(u8, a, b) == .lt;
@@ -6504,13 +6519,19 @@ pub const Writer = struct {
         for (headings.items) |heading| try blob_catalog.writeEntry(manifest, heading);
         try manifest.flush();
 
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.thesaurus, self.output_root, "thesaurus", .thesaurus);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.citations, self.output_root, "citations", .citations);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.reconstruction, self.output_root, "reconstruction", .reconstruction);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.rhymes, self.output_root, "rhymes", .rhymes);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.sign_gloss, self.output_root, "sign-gloss", .sign_gloss);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.supplemental, self.output_root, "supplemental", .supplemental);
-        try finalizeFixedSpool(self.io, self.allocator, &self.spools.aliases, self.output_root, "aliases", .alias);
+        inline for (.{
+            .{ "thesaurus", "thesaurus", .thesaurus },
+            .{ "citations", "citations", .citations },
+            .{ "reconstruction", "reconstruction", .reconstruction },
+            .{ "rhymes", "rhymes", .rhymes },
+            .{ "sign_gloss", "sign-gloss", .sign_gloss },
+            .{ "supplemental", "supplemental", .supplemental },
+            .{ "aliases", "aliases", .alias },
+        }) |entry| {
+            const spool = &@field(self.spools, entry[0]);
+            try finalizeFixedSpool(self.io, self.allocator, spool, self.output_root, entry[1], entry[2]);
+            if (discard_spools) deleteFileIfExists(self.io, spool.path) catch {};
+        }
         // Alias-only feature namespaces still have a selected compiled store.
         inline for (.{ blob_format.BlobKind.thesaurus, .citations, .reconstruction, .rhymes, .sign_gloss, .supplemental }) |kind| {
             const spool = &@field(self.spools, @tagName(kind));
@@ -6529,10 +6550,62 @@ pub const Writer = struct {
             }
         }
         try self.namespace_coverage.write(self.io, self.allocator, self.output_root);
+        self.stats.language_blobs = language_blobs;
         self.finished = true;
         return self.stats;
     }
 };
+
+test "Writer retires completed spools only for terminal finalization" {
+    const io = std.testing.io;
+    for ([_]bool{ false, true }) |discard_spools| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+        const codes = TestLanguages.codes();
+        var writer = try Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const source = "==English==\n===Noun===\n# spool fixture\n";
+        const namespace: PageNamespace = .{ .id = 0, .kind = .language };
+        try writer.addPage(a, namespace, "fixture", source, null);
+        try writer.reportFallback(a, namespace, "fixture", .{}, &.{"fixture diagnostic"});
+        try writer.spools.thesaurus.append(io, a, "", "fixture", "payload");
+
+        var largest = &writer.spools.language[0];
+        for (&writer.spools.language) |*spool| {
+            if (spool.offset > largest.offset) largest = spool;
+        }
+        try std.testing.expect(largest.offset > writer.spools.thesaurus.offset);
+        const dir = std.Io.Dir.cwd();
+        const blocked = try fixedBlobPathAlloc(a, root, "thesaurus");
+        try dir.createDir(io, blocked, .default_dir);
+        if (discard_spools) {
+            try std.testing.expectError(error.IsDir, writer.finishDiscardingSpools(codes));
+            try std.testing.expectError(error.FileNotFound, dir.access(io, largest.path, .{}));
+        } else {
+            try std.testing.expectError(error.IsDir, writer.finish(codes));
+            try dir.access(io, largest.path, .{});
+        }
+        try dir.access(io, writer.spools.thesaurus.path, .{});
+        const language_blob = try languageBlobPathAlloc(a, root, "English");
+        try dir.access(io, language_blob, .{});
+        const report_path = try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" });
+        const report = try dir.readFileAlloc(io, report_path, a, .limited(4096));
+        try std.testing.expect(std.mem.indexOf(u8, report, "fixture diagnostic") != null);
+        try dir.deleteDir(io, blocked);
+        if (discard_spools) {
+            try std.testing.expectError(error.WriterFinished, writer.finish(codes));
+        } else {
+            const stats = try writer.finish(codes);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_blobs);
+            try dir.access(io, blocked, .{});
+        }
+    }
+}
 
 test "Writer publishes quoted colon prose while retaining literal markup diagnostic" {
     var tmp = std.testing.tmpDir(.{});

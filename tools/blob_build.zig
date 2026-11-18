@@ -3428,7 +3428,7 @@ const ExpansionPool = struct {
         const profile_start = if (self.profile_enabled) ParentProfileStamp.now(self.io) else null;
         defer if (profile_start) |started| self.finish_profile.record(started, ParentProfileStamp.now(self.io));
         if (self.figure_inputs) |inputs| try inputs.verify();
-        const stats = try writer.finish(codes);
+        const stats = try writer.finishDiscardingSpools(codes);
         if (self.figure_inputs) |inputs| try inputs.verify();
         return stats;
     }
