@@ -198,6 +198,27 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual([], list(audit.action_fields(spans)))
         self.assertEqual(['source-markup'], audit.diagnostic_categories(list(audit.text_fields(spans))[0][1]))
 
+    def test_split_fragment_and_image_map_destinations_follow_native_action_paths(self):
+        with Fixture() as f:
+            entry = f.entry('map', 'clean', language='English')
+            region = dict(kind='internal', target='term', target_fragment='{{section}}', label='visible')
+            default = dict(kind='external', target='https://example.test/{{page}}', label='fallback')
+            image_map = dict(regions=[dict(shape='rectangle', coordinates=[0, 0, 2, 2], action=region)],
+                             default_action=default)
+            entry['sections'] = [dict(blocks=[dict(spans=[
+                dict(kind='link', text='word', target='word', target_fragment='{{heading}}'),
+                dict(kind='text', text='', image=dict(file='Map.png', map=image_map)),
+                dict(kind='link', text='clean', target='word', target_fragment='%7B%7Bencoded%7D%7D'),
+            ])])]
+            entry['metadata'] = dict(kind='internal', target='{{not an action}}', target_fragment='{{ignored}}')
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('failed', result['status'])
+            self.assertEqual({'[0].target_fragment', '[1].image.map.regions[0].action.target_fragment',
+                              '[1].image.map.default_action.target'},
+                             {issue['path'].split('.spans')[1] for issue in result['issues']})
+            self.assertTrue(all(issue['nonwaivable'] for issue in result['issues']))
+
     def test_all_seven_views_and_owner_inventory(self):
         with Fixture() as f:
             f.language('Unverified exact heading', [f.entry('main', '__NOEDITSECTION__', language='Unverified exact heading')])

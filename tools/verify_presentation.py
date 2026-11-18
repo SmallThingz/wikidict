@@ -98,6 +98,15 @@ def text_fields(value, path='entry'):
 
 
 
+def destination_fields(action, path, internal_kind, external_kind):
+    if not isinstance(action, dict) or action.get('kind') not in (internal_kind, external_kind):
+        return
+    if isinstance(action.get('target'), str):
+        yield 'target', path + '.target', action['target']
+    if action['kind'] == internal_kind and isinstance(action.get('target_fragment'), str):
+        yield 'target', path + '.target_fragment', action['target_fragment']
+
+
 def attribute_fields(value, path='entry'):
     """Walk decoded annotations and link destinations independently of visible prose."""
     if isinstance(value, dict):
@@ -113,8 +122,16 @@ def attribute_fields(value, path='entry'):
                 tooltip, origin = value.get('tooltip'), '.tooltip'
             if isinstance(tooltip, str) and tooltip:
                 yield 'tooltip', path + origin, tooltip
-        if value.get('kind') in ('link', 'external_link') and isinstance(value.get('target'), str):
-            yield 'target', path + '.target', value['target']
+            image_map = image.get('map') if isinstance(image, dict) else None
+            if isinstance(image_map, dict):
+                map_path = path + '.image.map'
+                for i, region in enumerate(image_map.get('regions', [])):
+                    yield from destination_fields(region.get('action'), f'{map_path}.regions[{i}].action',
+                                                  'internal', 'external')
+                yield from destination_fields(image_map.get('default_action'), map_path + '.default_action',
+                                              'internal', 'external')
+        if value.get('kind') in ('link', 'external_link'):
+            yield from destination_fields(value, path, 'link', 'external_link')
         for key, child in value.items():
             if isinstance(child, (dict, list)):
                 yield from attribute_fields(child, path + '.' + key)
