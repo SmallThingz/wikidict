@@ -84,7 +84,7 @@ class OwnedReaderProcess:
 class ReaderPty:
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
                  output: Path, timeout: float, budget_end: float, pyte_module, *,
-                 force_color: bool = False, language: str = "English"):
+                 force_color: bool = False, language: str | None = "English", kind: str = "language"):
         require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
                 "pidfd signaling is required for Reader ownership")
         self.output = output
@@ -102,14 +102,17 @@ class ReaderPty:
         self.cli_calls = []
         self.checks = []
         self.closed = False
-        self.binary, self.root = binary, root
+        self.binary, self.root, self.kind = binary, root, kind
         self.master, self.slave = os.openpty()
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ,
                     struct.pack("HHHH", rows, width, 0, 0))
         self.original_termios = termios.tcgetattr(self.slave)
         self.env = os.environ.copy()
-        self.env.update(DICT_ROOT=str(root), DICT_LANGUAGE=language,
-                        TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+        self.env.update(DICT_ROOT=str(root), TERM="xterm-256color", LANG="C.UTF-8", LC_ALL="C.UTF-8")
+        if language is None:
+            self.env.pop("DICT_LANGUAGE", None)
+        else:
+            self.env["DICT_LANGUAGE"] = language
         for name, directory in (("XDG_CONFIG_HOME", "config"),
                                 ("XDG_DATA_HOME", "data"),
                                 ("XDG_CACHE_HOME", "cache")):
@@ -121,8 +124,13 @@ class ReaderPty:
             os.setsid()
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
-        # Historical startup remains argument-free; swatch validation selects color explicitly.
-        argv = [str(binary), "tui", "--color", "always"] if force_color else [str(binary)]
+        argv = [str(binary)]
+        if force_color or kind != "language":
+            argv.append("tui")
+        if kind != "language":
+            argv.extend(("--kind", kind))
+        if force_color:
+            argv.extend(("--color", "always"))
         self.launch = {"argv": argv, "color_mode": "always" if force_color else "auto",
                        "NO_COLOR_present": "NO_COLOR" in self.env, "TERM": self.env.get("TERM")}
         self.process = subprocess.Popen(
@@ -166,7 +174,7 @@ class ReaderPty:
         return "\n".join(line.rstrip() for line in self.screen.display)
 
     def header(self) -> tuple[str, int, int, int] | None:
-        match = re.search(r"\b(search|saved|history|learn)\s*/\s*(\d+) words\s*/\s*(\d+)/(\d+)",
+        match = re.search(r"\b(search|saved|history|learn)\s*/\s*(\d+) words?\s*/\s*(\d+)/(\d+)",
                           self.screen.display[1])
         return (match[1], *map(int, match.groups()[1:])) if match else None
 
@@ -235,6 +243,8 @@ class ReaderPty:
             argv.append(word)
         argv.extend(options)
         argv += ["--root", str(self.root)]
+        if self.kind != "language":
+            argv.extend(("--kind", self.kind))
         result = subprocess.run(argv, env=self.env, cwd=self.root,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 encoding="utf-8", errors="strict",
@@ -337,6 +347,9 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
     require(reader.cli("saved") == [], "Fixture copy started with saved words")
     require(reader.cli("history") == [], "Preview unexpectedly recorded history before opening a word")
 
+    reader.action(b"\x15missing-fixture-word", lambda: reader.page_is("search", count=0)
+                  and reader.text().count("No matching words.") == 1,
+                  "empty search shows one explanation")
     reader.search("CAT", 2, "catfish")
     reader.action(DOWN, lambda: reader.page_is("search", 1, 2)
                   and reader.screen.cursor.hidden,

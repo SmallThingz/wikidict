@@ -90,7 +90,9 @@ Use `--screen-projection libvterm` to check native terminal cells, including com
 For serial reviews, pass `--cases entries.tsv` in place of `--root`, `--language`,
 `--entry`, and `--witness`. Each row needs `output_directory`, `owner_heading`,
 `exact_title`, `visible_definition_witness`, and `selected_complete_sha256` (the hash
-of `complete.json`). Each result links to its own screens. A failed entry is recorded
+of `complete.json`). For appendices and other supplemental records, set the optional
+`kind` column to `supplemental` and leave `owner_heading` empty. With `--root`, use
+`--kind supplemental` and omit `--language`. Each result links to its own screens. A failed entry is recorded
 and the remaining entries still run.
 
 Build just the reader or C ABI:
@@ -458,36 +460,40 @@ component of the dated XML/SQL dump.
 
 ## Verify and read
 
-Verify a compiled directory:
+Set `EDITION_DIR` to the edition's dated output directory containing `complete.json`
+and `languages.tsv`. A build with `--out data/dictionaries` writes to
+`data/dictionaries/<wiki>/<dump-date>/`. This command verifies the selected directory.
 
 ```sh
-zig build -Doptimize=fast verify-blobs -- data/wiktionary-blobs
+zig build -Doptimize=fast verify-blobs -- "$EDITION_DIR"
 ```
 
-Build the reader and query it directly:
+Build the reader and query it directly. The executable is `wikidict` on Unix and
+`dict.exe` on Windows.
 
 ```sh
 zig build cli -Doptimize=fast
 
-zig-out/bin/dict lookup cat --root data/wiktionary-blobs
-zig-out/bin/dict search ca --root data/wiktionary-blobs
-zig-out/bin/dict languages --root data/wiktionary-blobs
-zig-out/bin/dict stats --root data/wiktionary-blobs
+zig-out/bin/wikidict languages --root "$EDITION_DIR"
+zig-out/bin/wikidict lookup cat --language English --root "$EDITION_DIR"
+zig-out/bin/wikidict search ca --language English --root "$EDITION_DIR"
+zig-out/bin/wikidict stats --language English --root "$EDITION_DIR"
 ```
 
-Run `zig-out/bin/dict` in a terminal to open the interactive reader. `DICT_ROOT`
-and `DICT_LANGUAGE` can provide defaults; explicit flags take precedence.
+Use a language heading returned by `languages`. To open the interactive reader,
+run `zig-out/bin/wikidict tui --root "$EDITION_DIR" --language English` with that
+heading. `DICT_ROOT` and `DICT_LANGUAGE` supply defaults for subsequent commands.
 
 Saved words and history use the same state as the TUI:
 
 ```sh
-export DICT_ROOT=data/wiktionary-blobs
+export DICT_ROOT="$EDITION_DIR"
 export DICT_LANGUAGE=English
 
-zig-out/bin/dict save cat
-zig-out/bin/dict saved
-zig-out/bin/dict history
-zig-out/bin/dict unsave cat
+zig-out/bin/wikidict save cat
+zig-out/bin/wikidict saved
+zig-out/bin/wikidict history
+zig-out/bin/wikidict unsave cat
 ```
 
 Search is Unicode case-insensitive by default while preserving exact-title
@@ -545,8 +551,8 @@ Catalogue format and publishing details are documented in
 The reader can inspect a catalogue or install a dictionary directly:
 
 ```sh
-zig-out/bin/dict catalog
-zig-out/bin/dict install FILE_OR_HTTPS_URL --root DIRECTORY --sha256 HASH
+zig-out/bin/wikidict catalog
+zig-out/bin/wikidict install FILE_OR_HTTPS_URL --root DIRECTORY --sha256 HASH
 ```
 
 Use a separate root folder for each edition and snapshot date. Canonically named

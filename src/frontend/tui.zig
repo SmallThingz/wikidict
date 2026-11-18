@@ -120,6 +120,8 @@ const State = struct {
     range: store.Range = .{ .start = 0, .end = 0 },
     search: Search = .{},
     folded_search: bool = false,
+    exact_title_index: ?usize = null,
+    displayed_match_count: usize = 0,
     case_sensitive: bool = true,
     selected: usize = 0,
     scroll: usize = 0,
@@ -187,15 +189,14 @@ const State = struct {
         self.a.free(self.text);
     }
     fn count(self: State) usize {
-        if (self.nav == .search and self.folded_search) return self.search.matches.items.len;
-        return if (self.collection()) self.filtered.items.len else self.range.end - self.range.start;
+        return if (self.usesFilteredRecords()) self.filtered.items.len else self.range.end - self.range.start;
     }
     fn recordIndex(self: State, n: usize) usize {
-        if (self.nav == .search and self.folded_search) return self.search.matches.items[n].index;
-        return if (self.collection()) self.filtered.items[n] else self.range.start + n;
+        return if (self.usesFilteredRecords()) self.filtered.items[n] else self.range.start + n;
     }
-    fn collection(self: State) bool {
-        return self.nav == .saved or self.nav == .history or (self.nav == .learn and self.reading != null and self.reading.?.data.study_pool != .all);
+    fn usesFilteredRecords(self: State) bool {
+        return (self.nav == .search and self.folded_search) or self.nav == .saved or self.nav == .history or
+            (self.nav == .learn and self.reading != null and self.reading.?.data.study_pool != .all);
     }
     fn navigate(self: *State, page_name: Page) !void {
         if (page_name == .library) try self.loadLibrary();
@@ -388,6 +389,9 @@ const State = struct {
         self.folded_search = !self.case_sensitive and std.mem.trim(u8, self.query[0..self.len], " \t\r\n").len != 0;
         if (self.folded_search) {
             try self.search.begin(self.a, self.query[0..self.len]);
+            self.exact_title_index = try self.db.find(std.mem.trim(u8, self.query[0..self.len], " \t\r\n"));
+            self.displayed_match_count = 0;
+            if (self.exact_title_index) |index| try self.filtered.append(self.a, index);
         } else self.range = try self.db.prefix(if (self.case_sensitive) self.query[0..self.len] else "");
         self.selected = 0;
         self.scroll = 0;
@@ -395,18 +399,27 @@ const State = struct {
     fn searchPending(self: State) bool {
         return self.nav == .search and self.folded_search and !self.search.complete;
     }
-    fn searchStep(self: *State) !bool {
+    fn searchStep(self: *State, budget: usize) !bool {
         if (!self.searchPending()) return false;
         const before = self.count();
-        const selected: ?usize = if (before != 0) self.recordIndex(self.selected) else null;
-        try self.search.step(self.a, self.db, 4096);
-        if (self.search.complete) if (selected) |index| {
-            for (self.search.matches.items, 0..) |match, i| if (match.index == index) {
-                self.selected = i;
-                break;
-            };
-        };
-        return self.search.complete or (before == 0 and self.count() != 0) or self.search.cursor % 65536 == 0;
+        try self.search.step(self.a, self.db, budget);
+        if (!self.search.complete and (self.displayed_match_count != 0 or self.search.matches.items.len == 0) and self.search.cursor % 65536 != 0) return false;
+        if (self.displayed_match_count == self.search.total_matches) return true;
+        const selected = if (self.focus != .search and before != 0) self.recordIndex(self.selected) else null;
+        try self.search.rankedRecordIndices(self.a, &self.filtered);
+        if (self.exact_title_index) |exact| {
+            // Case-folded peers stay searchable. The user's exact spelling leads even before the scan reaches it.
+            if (std.mem.indexOfScalar(usize, self.filtered.items, exact)) |slot| {
+                std.mem.copyBackwards(usize, self.filtered.items[1 .. slot + 1], self.filtered.items[0..slot]);
+                self.filtered.items[0] = exact;
+            } else {
+                if (self.filtered.items.len == self.search.max_matches) _ = self.filtered.pop();
+                try self.filtered.insert(self.a, 0, exact);
+            }
+        }
+        self.displayed_match_count = self.search.total_matches;
+        self.selected = if (selected) |index| std.mem.indexOfScalar(usize, self.filtered.items, index) orelse 0 else 0;
+        return true;
     }
     fn insert(self: *State, text: []const u8) !void {
         if (self.len + text.len > self.query.len) return;
@@ -1061,7 +1074,11 @@ const State = struct {
             try self.put(w, 1, 3, 9, "dict.", p.accent);
             try self.put(w, 1, 13, sz.cols -| 15, self.label, p.muted);
             var buf: [256]u8 = undefined;
-            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s}  /  {d} words  /  {d}/{d}", .{ @tagName(self.nav), self.db.count(), if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count() }), p.muted);
+            const words = self.db.count();
+            try self.put(w, 2, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "{s}  /  {d} {s}  /  {d}/{d}", .{
+                @tagName(self.nav), words, if (words == 1) "word" else "words",
+                if (self.count() == 0) @as(usize, 0) else self.selected + 1, self.count(),
+            }), p.muted);
             if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
             if (self.searchPending()) try self.put(w, 3, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "Searching... {d}%  /  {d} matches", .{ self.search.cursor * 100 / @max(1, self.db.count()), self.count() }), p.muted);
             try self.put(w, 4, 3, 10, if (self.nav == .learn) "Study" else "Search /", if (self.focus == .search) p.accent else p.muted);
@@ -1090,7 +1107,8 @@ const State = struct {
                 }
             }
             if (split_at != 0) for (5..sz.rows - 1) |row| try self.put(w, row, split_at, 1, "│", p.muted);
-            if (split_at != 0 or self.focus == .entry) {
+            const empty_search_in_matches = show_matches and self.nav == .search and self.count() == 0;
+            if ((split_at != 0 or self.focus == .entry) and !empty_search_in_matches) {
                 try self.put(w, 6, content_col, content_width, "READING", if (self.focus == .entry) p.accent else p.muted);
                 if (self.count() != 0 and content_width > 12) {
                     const title = try self.db.titleAt(self.recordIndex(self.selected));
@@ -1157,7 +1175,7 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
     var running = true;
     while (running and !term.Session.shouldQuit()) {
         dirty = state.mediaPoll() or dirty;
-        dirty = try state.searchStep() or dirty;
+        dirty = try state.searchStep(4096) or dirty;
         const sz = term.size();
         if (!std.meta.eql(sz, state.screen)) {
             state.screen = sz;
@@ -1194,6 +1212,74 @@ pub fn run(io: std.Io, a: std.mem.Allocator, db: *store.Store, label: []const u8
         };
     }
     try reading.save(io);
+}
+
+test "terminal partial prefix results rank exact titles and preserve an explicit selection" {
+    const a = std.testing.allocator;
+    const titles = [_][]const u8{ "FOB", "FOOBAR", "fo", "fox", "խեղճ", "խեղճուկրակություն", "տուն" };
+    var records: [titles.len]enc.blob_format.RecordInput = undefined;
+    for (&records, titles) |*record, title| record.* = .{ .title = title, .payload = "" };
+    const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &records);
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "titles", .data = bytes });
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/titles", .{tmp.sub_path});
+    defer a.free(path);
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .label = "Titles", .theme = .terminal, .color = false, .case_sensitive = false };
+    defer state.deinit();
+    try state.insert("խեղճ");
+    try std.testing.expect(try state.searchStep(6));
+    try std.testing.expect(state.searchPending());
+    try std.testing.expectEqualStrings("խեղճ", try db.titleAt(state.recordIndex(0)));
+    try std.testing.expectEqualStrings("խեղճուկրակություն", try db.titleAt(state.recordIndex(1)));
+    for ([_]bool{ false, true }) |select_second| {
+        _ = try state.key(.{ .key = .clear });
+        try state.insert("fO");
+        try std.testing.expect(try state.searchStep(2));
+        try std.testing.expectEqualStrings("FOB", try db.titleAt(state.recordIndex(0)));
+        if (select_second) {
+            _ = try state.key(.{ .key = .down });
+            _ = try state.key(.{ .key = .down });
+            _ = try state.key(.{ .key = .enter });
+        }
+        try std.testing.expect(try state.searchStep(titles.len));
+        try std.testing.expect(!state.searchPending());
+        try std.testing.expectEqualStrings("fo", try db.titleAt(state.recordIndex(0)));
+        try std.testing.expectEqualStrings(if (select_second) "FOOBAR" else "fo", try db.titleAt(state.recordIndex(state.selected)));
+    }
+}
+
+test "terminal exact spelling leads folded peers before and after scanning" {
+    const a = std.testing.allocator;
+    const bytes = try enc.blob_format.buildAlloc(a, .citations, "", &.{
+        .{ .title = "Aabo", .payload = "" }, .{ .title = "aabayeelid", .payload = "" }, .{ .title = "aabo", .payload = "" },
+    });
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "titles", .data = bytes });
+    const path = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/titles", .{tmp.sub_path});
+    defer a.free(path);
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .label = "Titles", .theme = .terminal, .color = false, .case_sensitive = false };
+    defer state.deinit();
+    try state.insert("aabo");
+    try std.testing.expectEqualStrings("aabo", try db.titleAt(state.recordIndex(0)));
+    try std.testing.expect(try state.searchStep(1));
+    try std.testing.expect(state.searchPending());
+    try std.testing.expectEqual(@as(usize, 2), state.count());
+    try std.testing.expectEqualStrings("aabo", try db.titleAt(state.recordIndex(0)));
+    try std.testing.expectEqualStrings("Aabo", try db.titleAt(state.recordIndex(1)));
+    _ = try state.key(.{ .key = .down });
+    _ = try state.key(.{ .key = .down });
+    try std.testing.expect(try state.searchStep(2));
+    try std.testing.expectEqual(@as(usize, 2), state.count());
+    try std.testing.expectEqualStrings("aabo", try db.titleAt(state.recordIndex(0)));
+    try std.testing.expectEqualStrings("Aabo", try db.titleAt(state.recordIndex(state.selected)));
 }
 
 test "terminal neutral redirect selection has no invented library heading" {
@@ -1514,13 +1600,13 @@ test "terminal query editing is bounded and UTF8-aware" {
     _ = try state.key(.{ .key = .clear });
     try state.insert("CA");
     try std.testing.expect(state.searchPending());
-    _ = try state.searchStep();
+    _ = try state.searchStep(4096);
     try std.testing.expect(!state.searchPending());
     try std.testing.expectEqual(@as(usize, 2), state.count());
     try std.testing.expectEqualStrings("café", try state.db.titleAt(state.recordIndex(0)));
     _ = try state.key(.{ .key = .clear });
     try state.insert("missing");
-    _ = try state.searchStep();
+    _ = try state.searchStep(4096);
     try std.testing.expectEqual(@as(usize, 0), state.count());
     try state.prepare(40);
     try std.testing.expect(std.mem.indexOf(u8, state.text, "No matching words") != null);

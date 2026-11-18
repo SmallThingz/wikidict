@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import copy_publication, main, reading_body
+from verify_edition_terminal import copy_publication, main, reading_body, source_witness_visible
 from verify_reader_ux import CheckFailure
 
 
@@ -34,6 +34,7 @@ class EditionTerminalTests(unittest.TestCase):
                 self.assertEqual(main(['--binary', str(binary), '--cases', str(selections),
                                        '--report', str(parent / 'reports')]), 1)
             exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second')
+            self.assertEqual(factory.call_args.kwargs['kind'], 'language')
             ledger = next((parent / 'reports').glob('*/results.jsonl'))
             first, second = [json.loads(line) for line in ledger.read_text().splitlines()]
             self.assertEqual([first['passed'], second['passed']], [False, True])
@@ -89,6 +90,27 @@ class EditionTerminalTests(unittest.TestCase):
             self.assertEqual(report['checks'], ['original check'])
             self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in source.iterdir()})
 
+    def test_supplemental_row_uses_the_collection_without_a_language_owner(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            root = parent / 'edition'
+            root.mkdir()
+            binary = parent / 'reader'
+            binary.write_bytes(b'test double')
+            cases = parent / 'cases.tsv'
+            cases.write_text('output_directory\towner_heading\texact_title\tvisible_definition_witness\tselected_complete_sha256\tkind\n'
+                             f'{root}\t\tAppendix\tBody\t{"a" * 64}\tsupplemental\n')
+            factory = Mock(return_value=Mock(checks=[], snapshots=[]))
+            with patch('verify_edition_terminal.copy_publication', return_value='a' * 64), \
+                    patch('verify_edition_terminal.screen_projection', return_value=(None, factory)), \
+                    patch('verify_edition_terminal.exercise') as exercise:
+                self.assertEqual(main(['--binary', str(binary), '--cases', str(cases), '--report', str(parent / 'out')]), 0)
+            self.assertEqual(factory.call_args.kwargs, {'language': None, 'kind': 'supplemental'})
+            exercise.assert_called_once_with(factory.return_value, 'supplemental', 'Appendix', 'Body')
+            result = json.loads(next((parent / 'out').glob('*/*/result.json')).read_text())
+            self.assertIsNone(result['language'])
+            self.assertEqual(result['kind'], 'supplemental')
+
     def test_only_verified_publication_members_enter_the_writable_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
@@ -121,3 +143,16 @@ class EditionTerminalTests(unittest.TestCase):
         lines[6:8] = ['first scrolled definition line', 'second line']
         lines[8] = 'part one │ part two'
         self.assertEqual(reading_body(reader, 'chosen / owner'), 'first scrolled definition line second line part one │ part two')
+
+    def test_wrapped_definition_beside_table_uses_only_its_own_physical_column(self):
+        lines = [''] * 6 + [
+            'sidebar'.ljust(29) + '│ chosen / owner  │a │b│',
+            'private'.ljust(29) + '│ first words     │no│c│',
+            'match'.ljust(29) + '│ next words      │so│d│',
+            'elsewhere'.ljust(29) + '│ unrelated column │o│d│',
+        ] + [''] * 2
+        cells = [[{'text': char} for char in line] for line in lines]
+        reader = SimpleNamespace(width=90, screen=SimpleNamespace(display=lines, cell_rows=lambda: cells))
+        self.assertTrue(source_witness_visible(reader, 'first words next words', 'chosen / owner'))
+        for witness in ('next words unrelated column', 'private match', 'chosen / owner first words'):
+            self.assertFalse(source_witness_visible(reader, witness, 'chosen / owner'))

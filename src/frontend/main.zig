@@ -18,6 +18,7 @@ const usage =
     \\  wikidict saved / wikidict history     List saved or recently viewed words
     \\  wikidict save WORD / wikidict unsave WORD Save or remove a word
     \\  wikidict export WORD                  Export compiled presentation JSON
+    \\  wikidict export --batch --case-sensitive -- WORD...  Exact JSON Lines (max 64)
     \\  wikidict languages [WORD]             List installed languages
     \\  wikidict catalog HTTPS_LIST         Read a download catalogue
     \\  wikidict install FILE_OR_HTTPS_URL    Install raw/XZ blob; optional --sha256 HASH
@@ -124,6 +125,7 @@ fn run(init: std.process.Init) !u8 {
         return 2;
     };
     defer db.deinit();
+    if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, w);
     const color = switch (opts.color) {
         .always => true,
         .never => false,
@@ -245,10 +247,42 @@ fn run(init: std.process.Init) !u8 {
     return if (response.total_matches == 0 and opts.command != .stats) 1 else 0;
 }
 
+fn hasEmptyLanguageCatalog(io: std.Io, root: []const u8) bool {
+    var dir = std.Io.Dir.cwd().openDir(io, root, .{}) catch return false;
+    defer dir.close(io);
+    // One extra byte distinguishes a header-only catalog from a populated one.
+    var buffer: [store.catalog.manifest_header.len + 2]u8 = undefined;
+    const bytes = dir.readFile(io, store.catalog.manifest_filename, &buffer) catch return false;
+    return std.mem.eql(u8, bytes, store.catalog.manifest_header ++ "\n");
+}
+
+test "empty dataset hint requires the complete header-only language catalog" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer std.testing.allocator.free(root);
+    try std.testing.expect(!hasEmptyLanguageCatalog(io, root));
+    const h = store.catalog.manifest_header;
+    for ([_][]const u8{ "", "head", h, "other\n", h ++ "\n\n", h ++ "\nA", h ++ "\nEnglish\n" }) |contents| {
+        try tmp.dir.writeFile(io, .{ .sub_path = store.catalog.manifest_filename, .data = contents });
+        try std.testing.expect(!hasEmptyLanguageCatalog(io, root));
+    }
+    try tmp.dir.writeFile(io, .{ .sub_path = store.catalog.manifest_filename, .data = h ++ "\n" });
+    try std.testing.expect(hasEmptyLanguageCatalog(io, root));
+}
+
 fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {
     var buffer: [2048]u8 = undefined;
     var stderr = std.Io.File.stderr().writerStreaming(io, &buffer);
     const w = &stderr.interface;
+    if (err == error.FileNotFound and opts.kind == .language and opts.command != .install and
+        opts.command != .languages and hasEmptyLanguageCatalog(io, opts.root))
+    {
+        try w.writeAll("dict: this dataset lists no language entries. Choose another dataset with --root PATH.\n");
+        try w.flush();
+        return;
+    }
     if (opts.command == .install) {
         try w.writeAll("dict: could not install in ");
     } else if (opts.command == .languages) {
@@ -302,4 +336,41 @@ test {
     _ = @import("pipeline_tests.zig");
     _ = @import("library.zig");
     _ = @import("blob_storage");
+}
+
+// One ordinary Store selection and the same exact lookup/decoder/Response as
+// single export. Each line is independently associated by its unchanged query;
+// duplicates remain duplicates. Stop after the first empty result or error.
+fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []const u8, w: *std.Io.Writer) !u8 {
+    for (queries) |query| {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var response: output.Response = .{
+            .operation = .lookup,
+            .query = try model.utf8Text(a, query),
+            .kind = db.selectionKind(),
+            .language = if (db.heading()) |heading| try model.utf8Text(a, heading) else null,
+            .record_count = db.count(),
+            .total_matches = 0,
+            .match_mode = "exact-utf8",
+        };
+        if (try db.find(query)) |index| {
+            var raw = try db.recordAlloc(gpa, index);
+            defer raw.deinit();
+            var doc = try model.fromRecord(gpa, raw.record);
+            defer doc.deinit();
+            response.entries = &.{doc.entry};
+            response.total_matches = 1;
+            try std.json.Stringify.value(response, .{}, w);
+            try w.writeByte('\n');
+            try w.flush();
+        } else {
+            try std.json.Stringify.value(response, .{}, w);
+            try w.writeByte('\n');
+            try w.flush();
+            return 1;
+        }
+    }
+    return 0;
 }

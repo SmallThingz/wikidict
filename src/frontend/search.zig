@@ -219,6 +219,22 @@ pub const Task = struct {
             .eq => lhs.index < rhs.index,
         };
     }
+    pub fn rankedRecordIndices(self: *const Task, a: std.mem.Allocator, indices: *std.ArrayList(usize)) !void {
+        const matches: []const Match = self.matches.items;
+        try indices.resize(a, matches.len);
+        if (self.complete) {
+            for (indices.items, matches) |*out, match| out.* = match.index;
+            return;
+        }
+        // Retention uses a max-heap. Sort positions for display without changing the heap or copying keys.
+        for (indices.items, 0..) |*out, i| out.* = i;
+        std.mem.sort(usize, indices.items, matches, struct {
+            fn order(items: []const Match, lhs: usize, rhs: usize) bool {
+                return less(items[lhs], items[rhs]);
+            }
+        }.order);
+        for (indices.items) |*out| out.* = matches[out.*].index;
+    }
     fn keyLess(key: []const u8, index: usize, rhs: Match) bool {
         return switch (std.mem.order(u8, key, rhs.key)) {
             .lt => true,

@@ -11,6 +11,8 @@ pub const Options = struct {
     kind: store.Kind = .language,
     language: []const u8 = "English",
     query: []const u8 = "",
+    // Borrowed literal argv tail; only explicit bounded exact export uses it.
+    batch_queries: []const []const u8 = &.{},
     format: Format = .text,
     color: Color = .auto,
     theme: Theme = .terminal,
@@ -36,6 +38,7 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
     }
     var pos: usize = 1;
     var has_query = false;
+    var batch_export = false;
     var positional_only = false;
     if (std.mem.eql(u8, argv[0], "--")) {
         out.command = .lookup;
@@ -59,11 +62,28 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
         const arg = argv[pos];
         if (!positional_only and std.mem.eql(u8, arg, "--")) {
             positional_only = true;
+            if (batch_export) {
+                out.batch_queries = argv[pos + 1 ..];
+                if (out.batch_queries.len == 0 or out.batch_queries.len > 64) return error.Usage;
+                var bytes: usize = 0;
+                for (out.batch_queries) |query| {
+                    if (query.len == 0 or query.len > 65536 - bytes) return error.Usage;
+                    bytes += query.len;
+                }
+                out.query = out.batch_queries[0];
+                has_query = true;
+                break;
+            }
             continue;
         }
         if (!positional_only and std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, "-")) {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
                 out.help = true;
+                continue;
+            }
+            if (std.mem.eql(u8, arg, "--batch")) {
+                if (!std.mem.eql(u8, argv[0], "export") or batch_export or has_query) return error.Usage;
+                batch_export = true;
                 continue;
             }
             if (std.mem.eql(u8, arg, "--details")) {
@@ -85,6 +105,7 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
         }
     }
     if (out.help) return out;
+    if (batch_export and (out.batch_queries.len == 0 or !out.case_sensitive or out.format != .json)) return error.Usage;
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
     if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
@@ -203,4 +224,27 @@ test "direct prefix pagination bypasses only the folded retention limit" {
         try std.testing.expectError(error.Usage, parse(&.{ "search", query, "--offset", maximum_offset, "--limit", "1" }));
     }
     try std.testing.expectError(error.Usage, parse(&.{ "search", "--offset", boundary, "--limit", "1001" }));
+}
+
+test "bounded exact export batches preserve literal order duplicates and dash titles" {
+    const selected = try parse(&.{ "export", "--batch", "--case-sensitive", "--", "猫", "-dash", "猫" });
+    try std.testing.expectEqual(@as(usize, 3), selected.batch_queries.len);
+    for ([_][]const u8{ "猫", "-dash", "猫" }, selected.batch_queries) |expected, actual|
+        try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expectEqualStrings("猫", selected.query);
+    try std.testing.expect((try parse(&.{ "export", "cat" })).batch_queries.len == 0);
+    for ([_][]const []const u8{
+        &.{ "lookup", "--batch", "--case-sensitive", "--", "cat" },
+        &.{ "export", "--batch", "--", "cat" },
+        &.{ "export", "--batch", "--case-sensitive", "cat" },
+        &.{ "export", "--batch", "--case-sensitive", "--" },
+        &.{ "export", "--batch", "--case-sensitive", "--", "" },
+        &.{ "export", "--batch", "--case-sensitive", "--format", "text", "--", "cat" },
+        &.{ "export", "cat", "--batch", "--case-sensitive", "--", "dog" },
+    }) |invalid| try std.testing.expectError(error.Usage, parse(invalid));
+    var many: [69][]const u8 = @splat("cat");
+    many[0] = "export"; many[1] = "--batch"; many[2] = "--case-sensitive"; many[3] = "--";
+    try std.testing.expectError(error.Usage, parse(&many));
+    const long: [65537]u8 = @splat('x');
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--batch", "--case-sensitive", "--", &long }));
 }

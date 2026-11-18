@@ -5,6 +5,7 @@ import argparse
 import csv
 import gzip
 import hashlib
+import itertools
 import json
 import os
 from pathlib import Path
@@ -77,32 +78,61 @@ def reading_body(reader, heading):
     return text.removeprefix(heading + ' ')
 
 
+def source_witness_visible(reader, wanted, heading):
+    if wanted in reading_body(reader, heading):
+        return True
+    if not hasattr(reader.screen, 'cell_rows'):
+        return False
+
+    # Prose can wrap beside a floated table. Compare consecutive lines in the
+    # same physical column without interleaving cells from the table or sidebar.
+    start = min(36, reader.width // 3) if reader.width >= 80 else 0
+    rows = reader.screen.cell_rows()[6:-2]
+
+    def table_edges(row):
+        return tuple(i for i in range(start, len(row)) if row[i]['text'] == '│')
+
+    for edges, lines in itertools.groupby(rows, key=table_edges):
+        if len(edges) < 2:
+            continue
+        prose = [''.join(cell['text'] for cell in row[start:edges[0]]) for row in lines]
+        text = normalized(' '.join(' '.join(prose).split()))
+        if text != heading and wanted in text.removeprefix(heading + ' '):
+            return True
+    return False
+
+
 def reveal_witness(reader, wanted, heading):
     body = reading_body(reader, heading)
-    if wanted in body:
+    if source_witness_visible(reader, wanted, heading):
         return
     if '[+]' in body or '[+ notes]' in body:
         frame = reader.send('d')
         reader.wait(reader.entry_focused, 'expanded entry details', after=frame)
     for _ in range(64):
-        if wanted in reading_body(reader, heading):
+        if source_witness_visible(reader, wanted, heading):
             return
         previous = reader.text()
         frame = reader.send(b'\x1b[6~')
         reader.wait(reader.entry_focused, 'paged through entry', after=frame)
         if reader.text() == previous:
             break
-    require(wanted in reading_body(reader, heading), f'Source witness missing from body at {reader.width} columns')
+    require(source_witness_visible(reader, wanted, heading), f'Source witness missing from body at {reader.width} columns')
 
 
-def exercise(reader, language, entry, witness):
+def exercise(reader, heading_label, entry, witness):
     reader.action(b'\x15wikidict-no-match-5400b4b7', lambda: reader.query() == 'wikidict-no-match-5400b4b7'
                   and reader.page_is('search', count=0) and 'No matching words.' in reader.text(), 'empty search')
+    require(reader.text().count('No matching words.') == 1, 'Empty search repeats the same message')
+    total = reader.header()[1]
+    expected_count = f'{total} {"word" if total == 1 else "words"}'
+    require(reader.screen.display[1].split('/')[1].strip() == expected_count,
+            f'Incorrect word count label for {total} records')
     reader.snapshot('empty')
     reader.action(b'\x15' + entry.encode(), lambda: reader.query() == normalized(entry) and
                   reader.page_is('search') and reader.header()[3] > 0, 'recovered search')
     reader.action(DOWN, lambda: reader.screen.cursor.hidden, 'selected first exact prefix match')
-    heading = normalized(' '.join(f'{entry} / {language}'.split()))
+    heading = normalized(' '.join(f'{entry} / {heading_label}'.split()))
     reader.action(ENTER, lambda: reader.entry_focused() and
                   (reading_text(reader) + ' ').startswith(heading + ' '), 'opened requested entry')
     wanted = normalized(' '.join(witness.split()))
@@ -120,9 +150,9 @@ def binary_identity(stat):
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
-def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine):
+def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
-    result = dict(edition_root=str(source), language=language, entry=entry, witness=witness,
+    result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest)
     try:
         projection, reader_type = screen_projection(engine)
@@ -132,7 +162,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
-                                 projection, language=language)
+                                 projection, language=language, kind=kind)
             try:
                 # A cold compressed edition may still be indexing after the ordinary key-response deadline.
                 try:
@@ -140,7 +170,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                 finally:
                     result['opening_wait_seconds'] = time.monotonic() - started
                 reader.timeout = 5
-                exercise(reader, language, entry, witness)
+                exercise(reader, language or kind, entry, witness)
             except Exception:
                 try:
                     reader.snapshot('failure-before-close')
@@ -170,30 +200,39 @@ def main(argv=None):
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--root', type=Path)
     selection.add_argument('--cases', type=Path, help='TSV of source-selected entries for serial review')
+    parser.add_argument('--kind', choices=('language', 'supplemental'), help='Record collection (default: language)')
     parser.add_argument('--language', help='Exact compiled language heading')
-    parser.add_argument('--entry', help='Exact title in that language')
+    parser.add_argument('--entry', help='Exact title in the selected collection')
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
     parser.add_argument('--screen-projection', choices=('pyte', 'libvterm'), default='pyte',
                         help='Screen cell engine (libvterm requires the native libvterm.so.0 library)')
     args = parser.parse_args(argv)
     if args.cases:
-        if any((args.language, args.entry, args.witness)):
+        if any((args.kind, args.language, args.entry, args.witness)):
             parser.error('--cases supplies the language, entry and witness for each row')
         with args.cases.open(encoding='utf-8', newline='') as data:
             rows = csv.DictReader(data, delimiter='\t')
             columns = ('output_directory', 'owner_heading', 'exact_title', 'visible_definition_witness', 'selected_complete_sha256')
             if not set(columns).issubset(rows.fieldnames or []):
                 parser.error('TSV requires columns ' + ', '.join(columns))
-            cases = [tuple(row[key] for key in columns) for row in rows]
+            cases = [(row['output_directory'], row['owner_heading'] or None, row['exact_title'],
+                      row['visible_definition_witness'], row['selected_complete_sha256'], row.get('kind') or 'language')
+                     for row in rows]
     else:
-        cases = [(str(args.root), args.language, args.entry, args.witness, None)]
+        cases = [(str(args.root), args.language, args.entry, args.witness, None, args.kind or 'language')]
     parent = args.report.resolve()
     if not cases:
         parser.error('No entries selected')
-    for root, language, entry, witness, digest in cases:
-        if not all(s and s.strip() for s in (root, language, entry, witness)):
-            parser.error('Each entry needs a dictionary directory, language heading, title and witness')
+    for root, language, entry, witness, digest, kind in cases:
+        if not all(s and s.strip() for s in (root, entry, witness)):
+            parser.error('Each entry needs a dictionary directory, title and witness')
+        if kind not in ('language', 'supplemental'):
+            parser.error(f'Unsupported collection: {kind!r}')
+        if kind == 'language' and not (language and language.strip()):
+            parser.error('A language entry requires its exact owner heading')
+        if kind == 'supplemental' and language is not None:
+            parser.error('Leave the owner heading empty for a supplemental entry')
         if args.cases and (not digest or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)):
             parser.error('Each TSV row needs the SHA-256 digest of the selected complete.json')
         source = Path(root).resolve()
@@ -207,12 +246,12 @@ def main(argv=None):
     if args.cases:
         parent = Path(tempfile.mkdtemp(prefix='edition-batch-', dir=parent))
     failures = 0
-    for root, language, entry, witness, digest in cases:
+    for root, language, entry, witness, digest, kind in cases:
         path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
-                                digest, parent, args.screen_projection)
+                                digest, parent, args.screen_projection, kind)
         if args.cases:
             with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
-                ledger.write(json.dumps(dict(root=root, language=language, entry=entry, passed=passed, report=str(path)),
+                ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),
                                         ensure_ascii=False) + '\n')
         failures += not passed
     return int(failures != 0)
