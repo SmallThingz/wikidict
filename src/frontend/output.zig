@@ -132,12 +132,13 @@ pub const PoemProjection = struct {
 
 const RubyTypes = @import("blob_encoder").presentation_types;
 fn hasRecursiveSpans(values: []const model.Span) bool {
-    for (values) |span| if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null) return true;
+    for (values) |span| if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(span) or RubyTypes.spanHasClippedAbsolute(span)) return true;
     return false;
 }
-// A transient semantic leaf view for Ruby, padding and ordinary action groups.
-// Padding contributes no text or terminal cells. Preserve the existing whole-array
-// terminal line grouping and state machine, rather than resetting it per child.
+// A transient semantic leaf view for Ruby, padding, inline boxes and action groups.
+// Padding and empty decorative overlays contribute no text. Overlay bodies retain
+// their logical text, with positioned geometry explicitly unavailable in a terminal.
+// Preserve the whole-array line grouping and state machine across child boundaries.
 const RubyFallbackView = struct {
     allocator: std.mem.Allocator,
     values: []const model.Span,
@@ -151,7 +152,7 @@ const RubyFallbackView = struct {
         };
         var collect: Collect = .{ .a = a };
         errdefer collect.spans.deinit(a);
-        try RubyTypes.visitRubyFallback(values, &collect, Collect.emit);
+        try RubyTypes.visitRubyVisualFallback(values, &collect, Collect.emit);
         return .{ .allocator = a, .values = try collect.spans.toOwnedSlice(a), .owned = true };
     }
     fn deinit(self: *RubyFallbackView) void {
@@ -164,11 +165,13 @@ const RubyOwnerNotices = struct {
     css_font: bool = false,
     inline_padding: bool = false,
     inline_action: bool = false,
+    inline_box: bool = false,
     fn merge(self: *@This(), other: @This()) void {
         self.inline_style = self.inline_style or other.inline_style;
         self.css_font = self.css_font or other.css_font;
         self.inline_padding = self.inline_padding or other.inline_padding;
         self.inline_action = self.inline_action or other.inline_action;
+        self.inline_box = self.inline_box or other.inline_box;
     }
 };
 fn rubyOwnerNotices(values: []const model.Span, depth: usize) error{InvalidPresentation}!RubyOwnerNotices {
@@ -181,6 +184,20 @@ fn rubyOwnerNotices(values: []const model.Span, depth: usize) error{InvalidPrese
             result.inline_style = result.inline_style or span.inline_style != null;
             result.css_font = result.css_font or span.font_scale_basis == .css_px;
             result.merge(try rubyOwnerNotices(group.spans, depth + 1));
+        }
+        if (span.inline_box_group) |group| {
+            if (depth >= RubyTypes.max_content_depth or !RubyTypes.validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
+            // The shared fallback visitor has already validated the full tree.
+            result.inline_box = true;
+            result.inline_style = result.inline_style or span.inline_style != null;
+            result.css_font = result.css_font or span.font_scale_basis == .css_px;
+            result.merge(try rubyOwnerNotices(group.spans, depth + 1));
+            for (group.overlays) |overlay| if (overlay.content) |content| {
+                if (depth + 1 >= RubyTypes.max_content_depth) return error.InvalidPresentation;
+                result.inline_style = result.inline_style or content.line_height != null;
+                result.css_font = result.css_font or content.owner_font.font_scale_basis == .css_px;
+                result.merge(try rubyOwnerNotices(content.spans, depth + 2));
+            };
         }
         if (span.inline_padding_group) |group| {
             if (depth >= RubyTypes.max_content_depth or !RubyTypes.validInlinePaddingGroupOwner(span) or
@@ -229,10 +246,23 @@ pub fn spansPlainText(w: *std.Io.Writer, values: []const model.Span) !void {
         }
     };
     var emit: Emit = .{ .writer = w };
-    if (hasRecursiveSpans(values)) return RubyTypes.visitRubyFallback(values, &emit, Emit.span);
+    if (hasRecursiveSpans(values)) return RubyTypes.visitRubyVisualFallback(values, &emit, Emit.span);
     for (values) |span| try emit.span(span);
 }
+// Metadata/accessible descriptions retain logical text even when visual paint is clipped.
+fn spansSemanticPlainText(w: *std.Io.Writer, values: []const model.Span) !void {
+    const Emit = struct { writer: *std.Io.Writer,
+        fn span(self: *@This(), value: model.Span) !void {
+            try terminalText(self.writer, value.text); try terminalText(self.writer, value.trail);
+        }
+    };
+    var emit: Emit = .{ .writer = w };
+    return RubyTypes.visitRubyFallback(values, &emit, Emit.span);
+}
 fn spansPresent(values: []const model.Span) error{InvalidPresentation}!bool {
+    return spansPresentIn(values, true);
+}
+fn spansPresentIn(values: []const model.Span, comptime visual: bool) error{InvalidPresentation}!bool {
     const Present = struct {
         value: bool = false,
         fn span(self: *@This(), value: model.Span) error{InvalidPresentation}!void {
@@ -242,7 +272,9 @@ fn spansPresent(values: []const model.Span) error{InvalidPresentation}!bool {
     };
     var present: Present = .{};
     if (hasRecursiveSpans(values)) {
-        RubyTypes.visitRubyFallback(values, &present, Present.span) catch return error.InvalidPresentation;
+        if (visual) {
+            RubyTypes.visitRubyVisualFallback(values, &present, Present.span) catch return error.InvalidPresentation;
+        } else RubyTypes.visitRubyFallback(values, &present, Present.span) catch return error.InvalidPresentation;
     } else for (values) |span| try present.span(span);
     return present.value;
 }
@@ -319,6 +351,11 @@ fn visitRubySpanLists(values: []const model.Span, visitor: anytype,
     }
     if (try visitor.spans(values)) return true;
     for (values) |span| {
+        if (span.clipped_absolute) |group| {
+            if (part == .gap or content_depth >= RubyTypes.max_content_depth) return error.InvalidPresentation;
+            try RubyTypes.validateClippedAbsoluteInlineTree(span, content_depth, ruby_depth);
+            if (try visitRubySpanLists(group.children, visitor, content_depth + 1, ruby_depth, remaining, .body)) return true;
+        }
         if (span.inline_action_group) |group| {
             if (content_depth >= RubyTypes.max_content_depth or !RubyTypes.validInlineActionGroupOwner(span) or
                 !RubyTypes.validInlineActionGroup(group.*)) return error.InvalidPresentation;
@@ -326,6 +363,30 @@ fn visitRubySpanLists(values: []const model.Span, visitor: anytype,
             // Visit the stored action owner once, then charge its semantic
             // children against the same entry budget without consuming Ruby depth.
             if (try visitRubySpanLists(group.spans, visitor, content_depth + 1, ruby_depth, remaining, .body)) return true;
+        }
+        if (span.inline_box_group) |group| {
+            if (part == .gap or content_depth >= RubyTypes.max_content_depth or
+                !RubyTypes.validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
+            try RubyTypes.validateInlineBoxGroupTree(span, content_depth, ruby_depth);
+            if (group.overlays.len > remaining.*) return error.InvalidPresentation;
+            remaining.* -= group.overlays.len;
+            // Preserve the legacy array callback when there is no body. Content
+            // overlays visit their original insertion boundary, exactly once.
+            if (!RubyTypes.inlineBoxHasOverlayContent(group.*)) {
+                if (try visitRubySpanLists(group.spans, visitor, content_depth + 1, ruby_depth, remaining, .ordinary)) return true;
+            } else {
+                var at: usize = 0;
+                for (group.overlays) |overlay| if (overlay.content) |content| {
+                    const boundary: usize = content.before_child;
+                    if (boundary > at and try visitRubySpanLists(group.spans[at..boundary], visitor,
+                        content_depth + 1, ruby_depth, remaining, .ordinary)) return true;
+                    if (content_depth + 1 >= RubyTypes.max_content_depth) return error.InvalidPresentation;
+                    if (try visitRubySpanLists(content.spans, visitor, content_depth + 2, ruby_depth, remaining, .ordinary)) return true;
+                    at = boundary;
+                };
+                if (at < group.spans.len and try visitRubySpanLists(group.spans[at..], visitor,
+                    content_depth + 1, ruby_depth, remaining, .ordinary)) return true;
+            }
         }
         if (span.inline_padding_group) |group| {
             if (content_depth >= RubyTypes.max_content_depth or !RubyTypes.validInlinePaddingGroupOwner(span) or
@@ -593,7 +654,7 @@ fn spansTextDisplayOnBackground(w: *std.Io.Writer, spans: []const model.Span, co
 fn spansTextDisplayWithContinuation(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8) !void {
     return spansTextDisplayWithPaint(w, spans, color, projection, ordinary, cell_background, inherited_header, detail_depth, null);
 }
-const SpanDisplayState = struct { whitespace: OrdinaryDisplayWhitespace = .{}, scripts: ScriptDisplayRuns = .{}, css_font_reported: bool = false, link_paint_reported: bool = false, image_paint_reported: bool = false, inline_style_reported: bool = false, inline_padding_reported: bool = false, inline_action_reported: bool = false };
+const SpanDisplayState = struct { whitespace: OrdinaryDisplayWhitespace = .{}, scripts: ScriptDisplayRuns = .{}, css_font_reported: bool = false, link_paint_reported: bool = false, image_paint_reported: bool = false, image_layout_reported: bool = false, inline_style_reported: bool = false, inline_padding_reported: bool = false, inline_action_reported: bool = false };
 const terminal_action_group_notice = "[grouped link hit regions unavailable; preserving semantic text and targets]\n";
 fn spansTextDisplayWithPaint(w: *std.Io.Writer, spans: []const model.Span, color: bool, projection: ?*PoemProjection, ordinary: bool, cell_background: ?[3]u8, inherited_header: bool, detail_depth: ?u8, container_paint: ?SpanContainerPaint) !void {
     var state: SpanDisplayState = .{};
@@ -610,9 +671,10 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
             try w.writeAll(terminal_action_group_notice);
             state.inline_action_reported = true;
         }
-        if (notices.inline_padding and !state.inline_padding_reported) {
+        if ((notices.inline_padding or notices.inline_box) and !state.inline_padding_reported) {
             // The TTY has no CSS inline-fragment geometry. Retain semantic
-            // children and effective actions, never approximate edges as spaces.
+            // children and effective actions; never replace edges with spaces,
+            // underline or ASCII pitch graphics.
             const projected_report = if (projection) |parent| parent.geometry_report != null or parent.float_flow != null else false;
             if (!projected_report) if (container_paint) |paint| if (paint.geometry_report) |report| try appendProjectionFallback(report);
             try terminalGeometryRefusal(w, projection);
@@ -643,10 +705,24 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
     }
     var has_link_paint = false;
     var has_image_paint = false;
+    var has_image_layout = false;
     for (spans) |span| {
         if (!@import("blob_encoder").presentation_types.validSpanLinkPaint(span)) return error.InvalidPresentation;
         has_link_paint = has_link_paint or (span.link_paint != null and span.image == null);
         has_image_paint = has_image_paint or (span.link_paint != null and span.image != null);
+        if (span.image) |image| if (image.occurrence_layout != null) {
+            if (!@import("blob_encoder").presentation_types.validInlineImage(image)) return error.InvalidPresentation;
+            has_image_layout = true;
+        };
+    }
+    if (has_image_layout and !state.image_layout_reported) {
+        // Presence includes relative paint order at zero offsets. A terminal
+        // cannot represent displacement or padding; keep the original image
+        // label and action without adding spaces or moving surrounding text.
+        const projected_report = if (projection) |parent| parent.geometry_report != null or parent.float_flow != null else false;
+        if (!projected_report) if (container_paint) |paint| if (paint.geometry_report) |report| try appendProjectionFallback(report);
+        try terminalGeometryRefusal(w, projection);
+        state.image_layout_reported = true;
     }
     if (has_image_paint and !state.image_paint_reported) {
         try w.writeAll("Image focus styling is not shown in this text view.\n");
@@ -1317,12 +1393,18 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     if (parent_depth >= @import("blob_encoder").presentation_types.max_table_depth) return error.InvalidPresentation;
     // This table printer preserves complete cell content but has no authored
     // minimum/colspan lower-bound solver. Do not silently claim that layout.
-    const minimum = search: for (table.rows) |row| {
+    var minimum = search: for (table.rows) |row| {
         for (row.cells) |cell| if (cell.style) |style| if (style.min_width) |value| {
             if (!@import("blob_encoder").presentation_types.validStyleLength(value)) return error.InvalidPresentation;
             break :search true;
         };
     } else false;
+    if (table.style) |style| if (style.min_width != null) {
+        if (!@import("blob_encoder").presentation_types.validTableStyle(style)) return error.InvalidPresentation;
+        // A minimum is an independent floor, including explicit zero. It does
+        // not replace the preferred or legacy width used by this text fallback.
+        minimum = true;
+    };
     var has_preferred_width = false;
     for (table.rows) |preference_row| for (preference_row.cells) |preference_cell| {
         if (preference_cell.style) |preference_style| if (preference_style.width) |preference_width| {
@@ -1335,6 +1417,7 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
         if (!@import("blob_encoder").presentation_types.validCellLineHeight(height)) return error.InvalidPresentation;
         cell_text_metrics = true;
     };
+    if (!@import("blob_encoder").presentation_types.validTableRowsVisibility(table)) return error.InvalidPresentation;
     const block_viewport = table.block_viewport != null or table.float_viewport != null;
     if (!@import("blob_encoder").presentation_types.validTableViewportHeaders(table.geometry, table.style,
         table.block_viewport, table.float_viewport)) return error.InvalidPresentation;
@@ -1361,7 +1444,9 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     // Pixel cell alignment and native inline-image intrinsic geometry have no
     // terminal cell projection. Preserve every cell body/action with a notice.
     var pixel_fonts: CssPixelFontVisitor = .{};
-    if (block_viewport or minimum or has_preferred_width or physical_edges or automatic_margins or cell_text_metrics or cell_middle_alignment or @import("blob_encoder").presentation_types.inlineTableRequiresM(table) or
+    // This semantic fallback keeps every row/action and caption. A terminal
+    // allocation is not a root CSS viewport and cannot silently select display:none.
+    if (table.rows_hidden_max_width_px != null or block_viewport or minimum or has_preferred_width or physical_edges or automatic_margins or cell_text_metrics or cell_middle_alignment or @import("blob_encoder").presentation_types.inlineTableRequiresM(table) or
         try visitTableSpanListsAtDepth(table, &pixel_fonts, parent_depth)) try terminalGeometryRefusal(w, projection);
     const table_depth = parent_depth + 1;
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
@@ -1948,8 +2033,8 @@ fn containerResolvedStyle(input: ContainerTypes.ContainerStyle, viewport: usize)
     if (!ContainerTypes.validContainerStyle(input)) return error.InvalidPresentation;
     // A terminal cannot reproduce variable font struts, fixed-height visible
     // overflow, or an interactive scroll BFC using its existing row renderer.
-    if (ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.font_family != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
-        (input.border != null and input.border.? == .edges) or input.overflow == .auto)
+    if (ContainerTypes.containerStyleRequiresPositionedCapability(input) or ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.font_family != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
+        (input.border != null and input.border.? == .edges) or input.overflow == .auto or input.overflow == .hidden)
         return error.UnsupportedTerminalGeometry;
     var result = input;
     // Keep the existing 8CSSpx/column projection and the ROOT viewport. Shared
@@ -1981,8 +2066,8 @@ fn terminalGeometryRefusal(w: *std.Io.Writer, projection: ?*PoemProjection) !voi
     try w.writeAll(terminal_geometry_notice);
 }
 fn containerUnboundedGeometryUnavailable(input: ContainerTypes.ContainerStyle) bool {
-    if (ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.font_family != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
-        (input.border != null and input.border.? == .edges) or input.overflow == .auto) return true;
+    if (ContainerTypes.containerStyleRequiresPositionedCapability(input) or ContainerTypes.containerStyleRequiresMForMargins(input) or input.positioning != null or input.columns != null or input.font_family != null or input.owner_font_scale != null or input.height != null or input.min_height != null or
+        (input.border != null and input.border.? == .edges) or input.overflow == .auto or input.overflow == .hidden) return true;
     if (input.screen_max_width) |screen| return screen.float_side != null or screen.margins != null or
         screen.clear != null or screen.following_rules.len != 0;
     return false;
@@ -2052,7 +2137,7 @@ fn containerUniformScale(block: model.Block) ?f32 {
     if (block.table != null or block.figure != null or block.flow != null or block.container != null) return null;
     var scale: ?f32 = null;
     for (block.spans) |span| {
-        if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null or span.font_scale_basis == .css_px) return null;
+        if (span.ruby != null or span.inline_padding_group != null or span.inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(span) or span.font_scale_basis == .css_px) return null;
         if (span.text.len == 0 and span.trail.len == 0) continue;
         const value = span.font_scale orelse 1;
         if (!std.math.isFinite(value) or value <= 0) return null;
@@ -3278,10 +3363,10 @@ const Abbreviations = struct {
         var at: usize = 0;
         while (at < values.len) {
             const explanation = values[at].explanation;
-            if (values[at].inline_action_group != null and explanation.len != 0) {
+            if ((values[at].inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(values[at]) or RubyTypes.spanHasClippedAbsolute(values[at])) and explanation.len != 0) {
                 var grouped_label: std.Io.Writer.Allocating = .init(self.allocator);
                 defer grouped_label.deinit();
-                try spansPlainText(&grouped_label.writer, values[at .. at + 1]);
+                try spansSemanticPlainText(&grouped_label.writer, values[at .. at + 1]);
                 try self.add(grouped_label.written(), explanation);
                 at += 1;
                 continue;
@@ -3293,7 +3378,7 @@ const Abbreviations = struct {
             label.clearRetainingCapacity();
             // Formatting may split an abbreviation into adjacent spans. A new
             // span list is a structural boundary, even if its explanation matches.
-            while (at < values.len and values[at].inline_action_group == null and std.mem.eql(u8, values[at].explanation, explanation)) : (at += 1) {
+            while (at < values.len and values[at].inline_action_group == null and !RubyTypes.spanHasInlineBoxGroup(values[at]) and !RubyTypes.spanHasClippedAbsolute(values[at]) and std.mem.eql(u8, values[at].explanation, explanation)) : (at += 1) {
                 const value = values[at];
                 if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
                 try label.appendSlice(self.allocator, value.trail);
@@ -3318,7 +3403,7 @@ fn entryHasAbbreviations(entry: model.Entry) bool {
     const Presence = struct {
         fn spans(_: *@This(), values: []const model.Span) error{InvalidPresentation}!bool {
             for (values) |value| {
-                if (value.inline_action_group != null and value.explanation.len != 0 and try spansPresent(&.{value})) return true;
+                if ((value.inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(value) or RubyTypes.spanHasClippedAbsolute(value)) and value.explanation.len != 0 and try spansPresentIn(&.{value}, false)) return true;
                 if (value.explanation.len != 0 and
                     ((value.kind != .line_break and std.mem.trim(u8, value.text, " \t\r\n").len != 0) or
                         std.mem.trim(u8, value.trail, " \t\r\n").len != 0)) return true;
@@ -3380,10 +3465,10 @@ const Advisories = struct {
         var at: usize = 0;
         while (at < values.len) {
             const tooltip = effectiveAdvisory(values[at]) orelse { at += 1; continue; };
-            if (values[at].inline_action_group != null) {
+            if (values[at].inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(values[at]) or RubyTypes.spanHasClippedAbsolute(values[at])) {
                 var grouped_label: std.Io.Writer.Allocating = .init(self.allocator);
                 defer grouped_label.deinit();
-                try spansPlainText(&grouped_label.writer, values[at .. at + 1]);
+                try spansSemanticPlainText(&grouped_label.writer, values[at .. at + 1]);
                 try self.add(grouped_label.written(), tooltip);
                 at += 1;
                 continue;
@@ -3391,7 +3476,7 @@ const Advisories = struct {
             label.clearRetainingCapacity();
             while (at < values.len) : (at += 1) {
                 const candidate = effectiveAdvisory(values[at]) orelse break;
-                if (values[at].inline_action_group != null or !std.mem.eql(u8, candidate, tooltip)) break;
+                if (values[at].inline_action_group != null or RubyTypes.spanHasInlineBoxGroup(values[at]) or RubyTypes.spanHasClippedAbsolute(values[at]) or !std.mem.eql(u8, candidate, tooltip)) break;
                 const value = values[at];
                 if (value.kind == .line_break) try label.append(self.allocator, '\n') else try label.appendSlice(self.allocator, value.text);
                 try label.appendSlice(self.allocator, value.trail);
@@ -9945,4 +10030,671 @@ test "V temporary action leaf projection preserves stored ownership through allo
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Run.call, .{values[0..]});
+}
+
+
+const InlineBoxOutputTest = struct {
+    fn owner(children: []const model.Span, group: *RubyTypes.InlineBoxGroup(model.Span)) model.Span {
+        group.* = .{ .padding = RubyTypes.StyleEdges.all(.{ .unit = .px, .value = 1 }),
+            .border = .{ .top = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } },
+                .right = .none, .bottom = .none, .left = .none },
+            .overlays = &.{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 },
+                .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .percent, .value = 67 } },
+                .border = .{ .top = .none, .right = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 },
+                    .color = .current_color } }, .bottom = .none, .left = .none } }}, .spans = children };
+        return .{ .text = "", .language = "ja", .inline_box_group = group };
+    }
+};
+
+test "inline box terminal projection preserves Japanese body actions and reports unavailable geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    const owner = InlineBoxOutputTest.owner(&.{ .{ .text = "ず", .language = "ja" },
+        .{ .kind = .link, .text = "れ", .target = "ずれ", .target_fragment = "Japanese", .language = "ja" } }, &group);
+    const values = [_]model.Span{ .{ .text = "before" }, owner, .{ .text = "after" } };
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &values);
+    try std.testing.expectEqualStrings("beforeずれafter", plain.written());
+    var tty: std.Io.Writer.Allocating = .init(a); try spansText(&tty.writer, &values, false);
+    try std.testing.expectEqualStrings(terminal_geometry_notice ++ "beforeずれafter", tty.written());
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tty.written(), terminal_geometry_notice));
+    var view = try RubyFallbackView.init(a, &values); defer view.deinit();
+    try std.testing.expectEqual(@as(usize, 4), view.values.len);
+    try std.testing.expectEqualStrings("ずれ", view.values[2].target);
+    try std.testing.expectEqualStrings("Japanese", view.values[2].target_fragment.?);
+    for (view.values) |leaf| try std.testing.expect(!RubyTypes.spanHasInlineBoxGroup(leaf));
+    try std.testing.expect(owner.inline_box_group == &group);
+    try std.testing.expectEqualStrings("", group.spans[0].target);
+    try std.testing.expectEqual(@as(usize, 1), group.overlays.len);
+    try std.testing.expectEqual(@as(f32, 67), group.overlays[0].insets.bottom.?.value);
+    try std.testing.expectEqual(@as(@TypeOf(group.overlays[0].insets.bottom.?.unit), .percent), group.overlays[0].insets.bottom.?.unit);
+    try std.testing.expect(group.overlays[0].insets.left == null);
+    try std.testing.expect(try spansPresent(&.{owner}));
+    const heading: model.Section = .{ .title = "ずれ", .level = 2,
+        .blocks = &.{.{ .kind = .heading, .level = 2, .spans = &.{owner} }} };
+    try std.testing.expect(sectionHeadingCompanion(heading) != null);
+    const entry: model.Entry = .{ .title = "box", .kind = .supplemental, .preamble_spans = &.{owner},
+        .references = &.{.{ .number = 1, .group_number = 1, .name = "note", .blocks = &.{.{ .kind = .paragraph, .spans = &.{owner} }} }} };
+    var actions: InlinePaddingTerminalTest.Actions = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 2), actions.count);
+    const encoded = try @import("blob_encoder").presentation_codec.encodeAlloc(a, .{ .entry = entry });
+    const decoded = try @import("blob_encoder").presentation_codec.decodeAlloc(a, encoded, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqualSlices(u8, encoded, try @import("blob_encoder").presentation_codec.encodeAlloc(a, decoded));
+}
+
+test "inline box terminal metadata uses complete children without mutating action ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    var owner = InlineBoxOutputTest.owner(&.{ .{ .text = "ず" }, .{ .text = "れ" } }, &group);
+    owner.kind = .link; owner.target = "ずれ"; owner.tooltip = "pitch"; owner.explanation = "meaning";
+    const entry: model.Entry = .{ .title = "metadata", .kind = .supplemental, .preamble_spans = &.{owner} };
+    try std.testing.expect(entryHasAdvisories(entry) and entryHasAbbreviations(entry));
+    var advisories = try Advisories.init(a, entry); defer advisories.deinit();
+    var abbreviations = try Abbreviations.init(a, entry); defer abbreviations.deinit();
+    try std.testing.expectEqual(@as(usize, 1), advisories.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+    try std.testing.expectEqualStrings("ずれ", advisories.items.items[0].label);
+    try std.testing.expectEqualStrings("ずれ", abbreviations.items.items[0].label);
+    try std.testing.expectEqualStrings("pitch", advisories.items.items[0].tooltip);
+    try std.testing.expectEqualStrings("meaning", abbreviations.items.items[0].explanation);
+    var view = try RubyFallbackView.init(a, &.{owner}); defer view.deinit();
+    for (view.values) |leaf| try std.testing.expectEqualStrings("ずれ", leaf.target);
+    try std.testing.expectEqualStrings("", group.spans[0].target);
+    try std.testing.expectEqualStrings("", group.spans[1].target);
+}
+
+test "inline box structural walk shares budget and rejects invalid owners and depth excess" {
+    var group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    var owner = InlineBoxOutputTest.owner(&.{ .{ .text = "a" }, .{ .text = "b" } }, &group);
+    var visitor: InlinePaddingTerminalTest.Actions = .{};
+    var remaining: usize = 3;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    remaining = 4;
+    _ = try visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary);
+    try std.testing.expectEqual(@as(usize, 0), remaining);
+    owner.text = "invalid"; remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .ordinary));
+    owner.text = ""; remaining = 100;
+    _ = try visitRubySpanLists(&.{owner}, &visitor, RubyTypes.max_content_depth - 1, 0, &remaining, .ordinary);
+    remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation,
+        visitRubySpanLists(&.{owner}, &visitor, RubyTypes.max_content_depth, 0, &remaining, .ordinary));
+    remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &visitor, 0, 0, &remaining, .gap));
+}
+
+
+test "clipped absolute terminal body omits paint while semantic text actions and codec remain complete" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const margin: RubyTypes.ContainerMargin = .{ .length = .{ .unit = .px, .value = -1 } };
+    const group: RubyTypes.ClippedAbsoluteInline = .{ .static_parent_direction = .ltr, .width = .{ .unit = .px, .value = 1 },
+        .height = .{ .unit = .px, .value = 1 }, .margin = .{ .top = margin, .right = margin, .bottom = margin, .left = margin },
+        .children = &.{ .{ .text = "Tooltip ", .language = "hu" }, .{ .kind = .link, .text = "hidden action", .target = "Target", .target_fragment = "part" } } };
+    const owner: model.Span = .{ .clipped_absolute = &group, .tooltip = "advice", .explanation = "expansion" };
+    const spans = [_]model.Span{ .{ .text = "before" }, owner, .{ .text = "after" } };
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &spans);
+    var tty: std.Io.Writer.Allocating = .init(a); try spansText(&tty.writer, &spans, false);
+    try std.testing.expectEqualStrings("beforeafter", plain.written());
+    try std.testing.expectEqualStrings("beforeafter", tty.written());
+    try std.testing.expect(!try spansPresent(&.{owner}));
+    var semantic: std.Io.Writer.Allocating = .init(a); try spansSemanticPlainText(&semantic.writer, &spans);
+    try std.testing.expectEqualStrings("beforeTooltip hidden actionafter", semantic.written());
+    const entry: model.Entry = .{ .title = "clipped", .kind = .supplemental, .preamble_spans = &spans };
+    try std.testing.expect(entryHasAdvisories(entry) and entryHasAbbreviations(entry));
+    var advisories = try Advisories.init(a, entry); defer advisories.deinit();
+    var abbreviations = try Abbreviations.init(a, entry); defer abbreviations.deinit();
+    try std.testing.expectEqual(@as(usize, 1), advisories.items.items.len);
+    try std.testing.expectEqual(@as(usize, 1), abbreviations.items.items.len);
+    try std.testing.expectEqualStrings("Tooltip hidden action", advisories.items.items[0].label);
+    try std.testing.expectEqualStrings("Tooltip hidden action", abbreviations.items.items[0].label);
+    try std.testing.expectEqualStrings("advice", advisories.items.items[0].tooltip);
+    try std.testing.expectEqualStrings("expansion", abbreviations.items.items[0].explanation);
+    var actions: InlinePaddingTerminalTest.Actions = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 1), actions.count);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, .{ .entry = entry });
+    const decoded = try codec.decodeAlloc(a, encoded, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqual(RubyTypes.ContainerStaticDirection.ltr, decoded.entry.preamble_spans[1].clipped_absolute.?.static_parent_direction);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqualStrings("Target", group.children[1].target);
+    try std.testing.expectEqualStrings("part", group.children[1].target_fragment.?);
+}
+
+
+test "terminal positioned Container and nowrap projection preserve every label image and action with explicit geometry refusal" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    const labels = [_][]const u8{ "thumb", "index", "middle", "ring", "little" };
+    const left = [_]f32{ 20, 40, 55, 50, 35 };
+    const top = [_]f32{ 30, 85, 117, 155, 185 };
+    var label_spans: [5]model.Span = undefined;
+    var paragraphs: [5]model.Block = undefined;
+    var children: [6]model.Block = undefined;
+    children[0] = .{ .kind = .paragraph, .spans = &.{.{ .image = .{ .file = "hand.jpeg", .width_px = 240, .alt = "HAND IMAGE" } }} };
+    for (&label_spans, &paragraphs, children[1..], 0..) |*span, *paragraph, *child, index| {
+        span.* = .{ .kind = if (index == 3) .text else .link, .text = labels[index],
+            .target = if (index == 3) "" else labels[index], .target_fragment = if (index == 3) null else "ja", .bold = index == 3 };
+        paragraph.* = .{ .kind = .paragraph, .spans = label_spans[index..][0..1] };
+        child.* = .{ .kind = .container, .container = .{ .style = .{
+            .absolute_position = .{ .left = .{ .unit = .px, .value = left[index] }, .top = .{ .unit = .px, .value = top[index] } },
+            .width = .{ .length = .{ .unit = .px, .value = if (index == 0) 120 else 160 } }, .height = .{ .unit = .px, .value = 20 },
+            .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_align = if (index == 0) .center else .right,
+            .owner_font = .{ .font_scale = 18, .font_scale_basis = .css_px, .font_normalized = true, .language = "ja" } },
+            .blocks = paragraphs[index..][0..1] } };
+    }
+    const blocks = [_]model.Block{.{ .kind = .container, .container = .{
+        .style = .{ .positioning = .relative_auto, .text_wrap = .nowrap }, .blocks = &children } }};
+    const entry: model.Entry = .{ .title = "positioned", .kind = .citations,
+        .media = &.{.{ .file = "hand.jpeg", .kind = .image, .caption = "" }},
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }} };
+    const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+    for ([_]bool{ false, true }) |color| {
+        var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+        try blocksText(&plain.writer, &blocks, color);
+        try std.testing.expect(std.mem.indexOf(u8, plain.written(), terminal_geometry_notice) != null);
+        for (labels) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), label));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), "HAND IMAGE"));
+        var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+        var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 24 }; defer floats.events.deinit(a);
+        var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 24, .float_flow = &floats };
+        try blocksTextProjected(&frame.writer, &blocks, color, &projection);
+        try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice) != null);
+        for (labels) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), label));
+        const layout = try floatLayoutAlloc(a, frame.written(), 24, lines.items, floats.events.items, color); defer layout.deinit(a);
+        try std.testing.expect(layout.unsupported > 0);
+    }
+    const Actions = struct {
+        count: usize = 0, images: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| {
+                if (span.image) |image| {
+                    try std.testing.expectEqualStrings("hand.jpeg", image.file);
+                    try std.testing.expectEqual(@as(u32, 240), image.width_px.?);
+                    try std.testing.expect(span.target.len == 0); self.images += 1;
+                }
+                if (span.kind == .link) {
+                    try std.testing.expectEqualStrings(span.text, span.target);
+                    try std.testing.expectEqualStrings("ja", span.target_fragment.?); self.count += 1;
+                }
+            }
+            return false;
+        }
+    };
+    var actions: Actions = .{}; _ = try visitEntrySpanLists(entry, &actions);
+    try std.testing.expectEqual(@as(usize, 4), actions.count);
+    try std.testing.expectEqual(@as(usize, 1), actions.images);
+    var machine: std.Io.Writer.Allocating = .init(a); defer machine.deinit();
+    try json(&machine.writer, .{ .operation = .lookup, .query = entry.title, .kind = .citations,
+        .language = null, .record_count = 1, .total_matches = 1, .entries = &.{entry} });
+    for ([_][]const u8{ "absolute_position", "text_wrap", "nowrap", "hand.jpeg" }) |field|
+        try std.testing.expect(std.mem.indexOf(u8, machine.written(), field) != null);
+    const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+    try std.testing.expectEqualStrings(before, after);
+    const codec = @import("blob_encoder").presentation_codec;
+    var missing_media = entry;
+    missing_media.media = &.{};
+    try std.testing.expectError(error.InvalidPresentation, codec.encodeAlloc(a, .{ .entry = missing_media }));
+    const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+    try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .citations, null));
+    // A bare wrap declaration has no height/positioning to trigger legacy refusal.
+    for ([_]T.ContainerStyle{ .{ .text_wrap = .normal }, .{ .text_wrap = .nowrap } }) |style| {
+        try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(style, 80));
+        try std.testing.expect(containerUnboundedGeometryUnavailable(style));
+    }
+}
+
+test "static inline Container reader JSON and narrow terminal preserve one complete linked body with geometry notice" {
+    const a = std.testing.allocator;
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    const body = [_]model.Span{
+        .{ .text = "BEG " },
+        .{ .kind = .link, .text = "語彙", .target = "Kept", .target_fragment = "anchor", .trail = " " },
+        .{ .kind = .external_link, .text = "WEB", .target = "https://example.test/static", .trail = " " },
+        .{ .text = "END", .bold = true },
+    };
+    const Body = struct {
+        writer: *std.Io.Writer, internal: usize = 0, external: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| {
+                try self.writer.writeAll(span.text);
+                try self.writer.writeAll(span.trail);
+                if (span.kind == .link) {
+                    self.internal += 1;
+                    try std.testing.expectEqualStrings("Kept", span.target);
+                    try std.testing.expectEqualStrings("anchor", span.target_fragment.?);
+                }
+                if (span.kind == .external_link) {
+                    self.external += 1;
+                    try std.testing.expectEqualStrings("https://example.test/static", span.target);
+                }
+            }
+            return false;
+        }
+    };
+    for ([_]T.ContainerStaticDirection{ .inherit, .ltr, .rtl }) |direction| {
+        const child: model.Block = .{ .kind = .container, .container = .{ .style = .{
+            .absolute_static = .{ .direction = direction }, .width = .fit_content,
+            .owner_font = .{ .font_scale = 18, .font_scale_basis = .css_px, .font_normalized = true },
+            .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_wrap = .nowrap,
+        }, .blocks = &.{.{ .kind = .paragraph, .spans = &body }} } };
+        const blocks = [_]model.Block{.{ .kind = .container, .container = .{ .style = .{
+            .positioning = .relative_auto, .text_align = .center,
+            .owner_font = .{ .font_scale = 1.25, .font_scale_basis = .normal_body, .font_normalized = true },
+            .line_height = .{ .length = .{ .unit = .px, .value = 22 } },
+        }, .blocks = &.{child} } }};
+        const original: model.Entry = .{ .title = "static-inline", .kind = .citations,
+            .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }} };
+        const bytes = try codec.encodeAlloc(a, .{ .entry = original }); defer a.free(bytes);
+        try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
+        var doc = try model.fromRecord(a, .{ .citations = .{ .title = original.title, .payload = bytes } }); defer doc.deinit();
+        try std.testing.expectEqualDeep(original, doc.entry);
+        const actual_blocks = doc.entry.sections[0].blocks;
+        const actual_child = actual_blocks[0].container.?.blocks[0].container.?;
+        try std.testing.expectEqual(direction, actual_child.style.absolute_static.?.direction);
+        try std.testing.expect(actual_child.style.width.? == .fit_content and actual_child.style.height == null);
+        try std.testing.expect(actual_child.style.absolute_position == null and actual_child.style.positioning == null);
+        var logical: std.Io.Writer.Allocating = .init(a); defer logical.deinit();
+        var visitor: Body = .{ .writer = &logical.writer };
+        _ = try visitEntrySpanLists(doc.entry, &visitor);
+        try std.testing.expectEqualStrings("BEG 語彙 WEB END", logical.written());
+        try std.testing.expectEqual(@as(usize, 1), visitor.internal);
+        try std.testing.expectEqual(@as(usize, 1), visitor.external);
+        var machine: std.Io.Writer.Allocating = .init(a); defer machine.deinit();
+        try json(&machine.writer, .{ .operation = .lookup, .query = original.title, .kind = .citations,
+            .language = null, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, machine.written(), .{}); defer parsed.deinit();
+        const exported = parsed.value.object.get("entries").?.array.items[0].object.get("sections").?.array.items[0]
+            .object.get("blocks").?.array.items[0].object.get("container").?.object.get("blocks").?.array.items[0]
+            .object.get("container").?.object.get("style").?.object.get("absolute_static").?;
+        try std.testing.expectEqualStrings(@tagName(direction), exported.object.get("direction").?.string);
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+            try blocksText(&plain.writer, actual_blocks, color);
+            try std.testing.expect(std.mem.indexOf(u8, plain.written(), terminal_geometry_notice) != null);
+            for ([_][]const u8{ "BEG", "語彙", "WEB", "END" }) |word|
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), word));
+            var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+            var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+            var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 8 }; defer floats.events.deinit(a);
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 8, .float_flow = &floats };
+            try blocksTextProjected(&frame.writer, actual_blocks, color, &projection);
+            try std.testing.expect(std.mem.indexOf(u8, frame.written(), terminal_geometry_notice) != null);
+            const layout = try floatLayoutAlloc(a, frame.written(), 8, lines.items, floats.events.items, color); defer layout.deinit(a);
+            try std.testing.expect(layout.unsupported > 0);
+            const rendered = try NarrowTableTest.plain(a, layout.text); defer a.free(rendered);
+            for ([_][]const u8{ "BEG", "語彙", "WEB", "END" }) |word|
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, rendered, word));
+        }
+        const after = try codec.encodeAlloc(a, .{ .entry = doc.entry }); defer a.free(after);
+        try std.testing.expectEqualSlices(u8, bytes, after);
+    }
+}
+
+
+test "table minimum terminal notice retains legacy preferred widths complete body actions and reader JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    const body_spans = [_]model.Span{
+        .{ .kind = .link, .text = "BODY", .target = "Kept", .target_fragment = "Section" },
+        .{ .text = " " },
+        .{ .kind = .external_link, .text = "TAIL", .target = "https://example.test/tail" },
+    };
+    const legacy_table: model.Table = .{ .caption = &.{.{ .text = "CAP" }},
+        .geometry = .{ .width = .{ .unit = .px, .value = 160 }, .cell_padding = 0, .cell_spacing = 0, .border = 0 },
+        .rows = &.{.{ .cells = &.{.{ .spans = &body_spans }} }} };
+    var blocks = [_]model.Block{.{ .kind = .table, .table = legacy_table }};
+    const entry: model.Entry = .{ .title = "minimum", .kind = .citations,
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }} };
+    const legacy_bytes = try codec.encodeAlloc(a, .{ .entry = entry });
+    var legacy_text: std.Io.Writer.Allocating = .init(a); try tableTextWidth(&legacy_text.writer, legacy_table, false, null, 80);
+    const minima = [_]T.StyleWidth{
+        .{ .unit = .px, .value = 0 }, .{ .unit = .percent, .value = 70 },
+        .{ .unit = .percent, .value = 150 }, .{ .unit = .em, .value = 2.5 },
+    };
+    for (minima) |minimum| {
+        blocks[0].table.?.style = .{ .min_width = minimum };
+        const table = blocks[0].table.?;
+        try std.testing.expect(!tableStyleOwnsWidth(table));
+        var plain: std.Io.Writer.Allocating = .init(a); try tableTextWidth(&plain.writer, table, false, null, 80);
+        try std.testing.expect(std.mem.startsWith(u8, plain.written(), terminal_geometry_notice));
+        try std.testing.expectEqualStrings(legacy_text.written(), plain.written()[terminal_geometry_notice.len..]);
+        var summary: std.Io.Writer.Allocating = .init(a); try entryText(&summary.writer, entry, false);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, summary.written(), terminal_geometry_notice));
+        for ([_][]const u8{ "CAP", "BODY", "TAIL" }) |needle|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, summary.written(), needle));
+        for ([_]bool{ false, true }) |color| {
+            var frame: std.Io.Writer.Allocating = .init(a);
+            var lines: std.ArrayList(terminal.PoemLine) = .empty;
+            var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 12 };
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 12, .float_flow = &flow };
+            try blocksTextProjected(&frame.writer, &blocks, color, &projection);
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+            const layout = try floatLayoutAlloc(a, frame.written(), 12, lines.items, flow.events.items, color);
+            try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+            for ([_][]const u8{ "CAP", "BODY", "TAIL" }) |needle|
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, try NarrowTableTest.plain(a, layout.text), needle));
+        }
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry });
+        try std.testing.expectEqualStrings("DPRZ", bytes[0..4]);
+        var decoded = try model.fromRecord(a, .{ .citations = .{ .title = entry.title, .payload = bytes } }); defer decoded.deinit();
+        try std.testing.expectEqualDeep(entry, decoded.entry);
+        try std.testing.expectEqualDeep(@as([]const model.Span, &body_spans), decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].spans);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = decoded.entry }));
+        var machine: std.Io.Writer.Allocating = .init(a);
+        try json(&machine.writer, .{ .operation = .lookup, .query = entry.title, .kind = .citations,
+            .language = null, .record_count = 1, .total_matches = 1, .entries = &.{decoded.entry} });
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, machine.written(), .{}); defer parsed.deinit();
+        const exported_table = parsed.value.object.get("entries").?.array.items[0].object.get("sections").?.array.items[0]
+            .object.get("blocks").?.array.items[0].object.get("table").?.object;
+        const exported = exported_table.get("style").?.object.get("min_width").?.object;
+        try std.testing.expectEqualStrings(@tagName(minimum.unit), exported.get("unit").?.string);
+        const number: f32 = switch (exported.get("value").?) { .float => |value| @floatCast(value), .integer => |value| @floatFromInt(value), else => return error.TestUnexpectedResult };
+        try std.testing.expectEqual(minimum.value, number);
+        try std.testing.expectEqual(@as(i64, 160), exported_table.get("geometry").?.object.get("width").?.object.get("value").?.integer);
+        // Adding the independent minimum cannot change existing width ownership.
+        var preferred = table; preferred.style.?.width = .{ .unit = .px, .value = 80 };
+        var preferred_without_minimum = preferred; preferred_without_minimum.style.?.min_width = null;
+        try std.testing.expect(tableStyleOwnsWidth(preferred));
+        var both: std.Io.Writer.Allocating = .init(a); try tableTextWidth(&both.writer, preferred, false, null, 80);
+        var preferred_text: std.Io.Writer.Allocating = .init(a); try tableTextWidth(&preferred_text.writer, preferred_without_minimum, false, null, 80);
+        try std.testing.expectEqualStrings(preferred_text.written(), both.written()[terminal_geometry_notice.len..]);
+        try std.testing.expect(!std.mem.eql(u8, legacy_text.written(), preferred_text.written()));
+    }
+    blocks[0].table = legacy_table;
+    try std.testing.expectEqualSlices(u8, legacy_bytes, try codec.encodeAlloc(a, .{ .entry = entry }));
+    var restored: std.Io.Writer.Allocating = .init(a); try tableTextWidth(&restored.writer, blocks[0].table.?, false, null, 80);
+    try std.testing.expectEqualStrings(legacy_text.written(), restored.written());
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32) }) |invalid_value| {
+        var invalid = legacy_table; invalid.style = .{ .min_width = .{ .unit = .percent, .value = invalid_value } };
+        var refused: std.Io.Writer.Allocating = .init(a);
+        try std.testing.expectError(error.InvalidPresentation, tableTextWidth(&refused.writer, invalid, false, null, 80));
+        try std.testing.expectEqual(@as(usize, 0), refused.written().len);
+    }
+}
+
+
+test "image occurrence terminal reports geometry while reader JSON actions and legacy bytes remain complete" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    const zero: T.StyleLength = .{ .unit = .px, .value = 0 };
+    const layouts = [_]T.InlineImageOccurrenceLayout{
+        .{ .x = .{ .unit = .px, .value = -10 }, .y = .{ .unit = .px, .value = -10 }, .padding_left = zero, .padding_right = zero },
+        .{ .x = zero, .y = .{ .unit = .px, .value = -1 }, .padding_left = zero, .padding_right = .{ .unit = .em, .value = 0.4 } },
+        .{ .x = zero, .y = zero, .padding_left = zero, .padding_right = zero },
+    };
+    var image_spans = [_]model.Span{
+        .{ .text = "HEAD " },
+        .{ .kind = .link, .target = "word", .target_fragment = "Image", .image = .{
+            .file = "Writing star.svg", .width_px = 62, .alt = "STAR", .vertical_align = .middle } },
+        .{ .kind = .external_link, .target = "https://example.test/tail", .text = " TAIL" },
+    };
+    const blocks = [_]model.Block{.{ .kind = .paragraph, .spans = &image_spans }};
+    const entry: model.Entry = .{ .title = "image occurrence", .kind = .citations,
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &blocks }},
+        .media = &.{.{ .file = "Writing star.svg", .kind = .image, .caption = "" }} };
+    const legacy_bytes = try codec.encodeAlloc(a, .{ .entry = entry });
+    try std.testing.expectEqualStrings("DPRQ", legacy_bytes[0..4]);
+    var legacy_text: std.Io.Writer.Allocating = .init(a); try spansText(&legacy_text.writer, &image_spans, false);
+    try std.testing.expectEqualStrings("HEAD [image: STAR] TAIL", legacy_text.written());
+    const Actions = struct {
+        images: usize = 0, external: usize = 0,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            for (values) |span| {
+                if (span.image) |image| {
+                    try std.testing.expectEqualStrings("Writing star.svg", image.file);
+                    try std.testing.expectEqualStrings("STAR", image.alt.?);
+                    try std.testing.expectEqualStrings("", span.text);
+                    try std.testing.expectEqualStrings("word", span.target);
+                    try std.testing.expectEqualStrings("Image", span.target_fragment.?);
+                    self.images += 1;
+                } else if (span.kind == .external_link) {
+                    try std.testing.expectEqualStrings("https://example.test/tail", span.target);
+                    self.external += 1;
+                }
+            }
+            return false;
+        }
+    };
+    for (layouts) |occurrence| {
+        image_spans[1].image.?.occurrence_layout = occurrence;
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry });
+        try std.testing.expectEqualStrings("DPRY", bytes[0..4]);
+        var decoded = try model.fromRecord(a, .{ .citations = .{ .title = entry.title, .payload = bytes } }); defer decoded.deinit();
+        try std.testing.expectEqualDeep(entry, decoded.entry);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = decoded.entry }));
+        var actions: Actions = .{}; _ = try visitEntrySpanLists(decoded.entry, &actions);
+        try std.testing.expectEqual(@as(usize, 1), actions.images);
+        try std.testing.expectEqual(@as(usize, 1), actions.external);
+        var machine: std.Io.Writer.Allocating = .init(a);
+        try json(&machine.writer, .{ .operation = .lookup, .query = entry.title, .kind = .citations,
+            .language = null, .record_count = 1, .total_matches = 1, .entries = &.{decoded.entry} });
+        var parsed = try std.json.parseFromSlice(std.json.Value, a, machine.written(), .{}); defer parsed.deinit();
+        const exported = parsed.value.object.get("entries").?.array.items[0].object.get("sections").?.array.items[0]
+            .object.get("blocks").?.array.items[0].object.get("spans").?.array.items[1].object.get("image").?.object.get("occurrence_layout").?;
+        inline for (.{ "x", "y", "padding_left", "padding_right" }) |name| {
+            const expected = @field(occurrence, name);
+            const actual = exported.object.get(name).?.object;
+            try std.testing.expectEqualStrings(@tagName(expected.unit), actual.get("unit").?.string);
+            const value: f32 = switch (actual.get("value").?) { .float => |v| @floatCast(v), .integer => |v| @floatFromInt(v), else => return error.TestUnexpectedResult };
+            try std.testing.expectEqual(expected.value, value);
+        }
+        const decoded_spans = decoded.entry.sections[0].blocks[0].spans;
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); try spansText(&plain.writer, decoded_spans, color);
+            try std.testing.expectEqualStrings(terminal_geometry_notice ++ "HEAD [image: STAR] TAIL", try NarrowTableTest.plain(a, plain.written()));
+            for ([_]bool{ false, true }) |report_only| {
+                var frame: std.Io.Writer.Allocating = .init(a);
+                var lines: std.ArrayList(terminal.PoemLine) = .empty;
+                var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 8 };
+                var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = 8,
+                    .float_flow = if (report_only) null else &flow, .geometry_report = if (report_only) &flow else null };
+                try blocksTextProjected(&frame.writer, decoded.entry.sections[0].blocks, color, &projection);
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+                const projected = try floatLayoutAlloc(a, frame.written(), 8, lines.items, flow.events.items, color);
+                try std.testing.expectEqual(@as(usize, 1), projected.unsupported);
+                // Eight-column wrapping may split STAR between rows. Preserve
+                // every visible non-spacing byte in order, including the notice;
+                // the pre-wrap assertion above independently retains exact spaces.
+                var joined_visible: std.ArrayList(u8) = .empty;
+                for (projected.rows) |row| {
+                    try std.testing.expect(terminal.cellWidth(row.bytes) <= 8);
+                    const visible_row = try NarrowTableTest.plain(a, row.bytes);
+                    for (visible_row) |byte| {
+                        if (byte != ' ' and byte != '\n') try joined_visible.append(a, byte);
+                    }
+                }
+                const visible = joined_visible.items;
+                try std.testing.expectEqualStrings("[layoutunavailable;showingcompletetext]HEAD[image:STAR]TAIL", visible);
+                for ([_][]const u8{ "HEAD", "STAR", "TAIL" }) |needle|
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, visible, needle));
+            }
+        }
+        // A table cell uses a borrowed report sink during staged measurement.
+        // It must retain the occurrence as well as disclose its unavailable box.
+        const table: model.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = decoded_spans }} }} };
+        var cells: std.Io.Writer.Allocating = .init(a);
+        try blocksText(&cells.writer, &.{.{ .kind = .table, .table = table }}, false);
+        try std.testing.expect(std.mem.indexOf(u8, cells.written(), "layout unavailable") != null);
+        for ([_][]const u8{ "HEAD", "STAR", "TAIL" }) |needle|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, cells.written(), needle));
+        try std.testing.expectEqualDeep(occurrence, image_spans[1].image.?.occurrence_layout.?);
+    }
+    image_spans[1].image.?.occurrence_layout = null;
+    try std.testing.expectEqualSlices(u8, legacy_bytes, try codec.encodeAlloc(a, .{ .entry = entry }));
+    var legacy_after: std.Io.Writer.Allocating = .init(a); try spansText(&legacy_after.writer, &image_spans, false);
+    try std.testing.expectEqualStrings(legacy_text.written(), legacy_after.written());
+    image_spans[1].image.?.occurrence_layout = layouts[0];
+    image_spans[1].image.?.occurrence_layout.?.padding_left.value = -1;
+    var invalid: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expectError(error.InvalidPresentation, spansText(&invalid.writer, &image_spans, false));
+    try std.testing.expectEqual(@as(usize, 0), invalid.written().len);
+}
+
+test "CSS-only R intrinsic table keeps absent legacy hints and full terminal body actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    const zero = T.StyleEdges.all(.{ .unit = .px, .value = 0 });
+    const policy: T.TableBlockViewport = .{ .max_viewport_width_px = 639,
+        .box_style = .{ .border = .none, .margins = zero }, .box_sizing = .border_box,
+        .max_width = .{ .unit = .percent, .value = 100 }, .grid_style = .{ .collapse = .collapse },
+        .grid_direction = .ltr, .language = "ru", .focus_paint = .{ .mode = .ua_auto },
+        .intrinsic_containing_direction = .ltr };
+    const table: T.Table = .{ .geometry = null,
+        .style = .{ .border = .none, .collapse = .collapse, .margins = zero }, .block_viewport = &policy,
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "CSS_R_BODY", .target = "Exact target" }} },
+            .{ .spans = &.{.{ .text = "CSS_R_TAIL" }} }} }} };
+    const source: T.Stored = .{ .entry = .{ .title = "CSS R output", .kind = .citations,
+        .sections = &.{.{ .level = 0, .title = "", .blocks = &.{.{ .kind = .table, .table = table }} }} } };
+    const bytes = try codec.encodeAlloc(a, source);
+    try std.testing.expectEqualStrings("DPRR", bytes[0..4]);
+    var ordinary = try model.fromRecord(a, .{ .citations = .{ .title = source.entry.title, .payload = bytes } }); defer ordinary.deinit();
+    try std.testing.expectEqualDeep(source.entry, ordinary.entry);
+    try std.testing.expect(ordinary.entry.sections[0].blocks[0].table.?.geometry == null);
+    const before = try std.json.Stringify.valueAlloc(a, ordinary.entry, .{});
+    var text_out: std.Io.Writer.Allocating = .init(a); defer text_out.deinit();
+    try tableTextWidth(&text_out.writer, ordinary.entry.sections[0].blocks[0].table.?, false, null, 80);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text_out.written(), terminal_geometry_notice));
+    for ([_][]const u8{ "CSS_R_BODY", "CSS_R_TAIL" }) |body|
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text_out.written(), body));
+    try std.testing.expectEqualStrings("Exact target", ordinary.entry.sections[0].blocks[0].table.?.rows[0].cells[0].spans[0].target);
+    try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, ordinary.entry, .{}));
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = ordinary.entry }));
+    // Partial legacy hints remain malformed; CSS-only means no hint record.
+    var malformed = table; malformed.geometry = .{ .border = 1 };
+    var refused: std.Io.Writer.Allocating = .init(a); defer refused.deinit();
+    try std.testing.expectError(error.InvalidPresentation, tableTextWidth(&refused.writer, malformed, false, null, 80));
+    try std.testing.expectEqual(@as(usize, 0), refused.written().len);
+}
+
+test "inline overlay terminal and metadata preserve source insertion order and complete codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = struct {
+        fn text(value: []const u8) model.Span {
+            return .{ .text = value, .language = "ja", .font_scale = 1, .font_scale_basis = .normal_body };
+        }
+        const Collect = struct {
+            a: std.mem.Allocator, text: std.ArrayList(u8) = .empty,
+            fn spans(self: *@This(), values: []const model.Span) !bool {
+                for (values) |span| try self.text.appendSlice(self.a, span.text);
+                return false;
+            }
+        };
+    };
+    const font: RubyTypes.InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body,
+        .font_normalized = true, .language = "ja" };
+    const first: RubyTypes.InlineBoxOverlayContent(model.Span) = .{ .before_child = 1,
+        .owner_font = font, .text_align = .right, .spans = &.{F.text("\u{200b}")} };
+    const second: RubyTypes.InlineBoxOverlayContent(model.Span) = .{ .before_child = 1,
+        .owner_font = font, .text_align = .left, .spans = &.{F.text("X")} };
+    var group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    const owner = InlineBoxOutputTest.owner(&.{F.text("a"), F.text("b"), F.text("c")}, &group);
+    var overlays = [_]RubyTypes.InlineBoxOverlayFor(model.Span){group.overlays[0], group.overlays[0]};
+    overlays[0].content = &first; overlays[1].content = &second; group.overlays = &overlays;
+    var plain: std.Io.Writer.Allocating = .init(a); try spansPlainText(&plain.writer, &.{owner});
+    var semantic: std.Io.Writer.Allocating = .init(a); try spansSemanticPlainText(&semantic.writer, &.{owner});
+    var tty: std.Io.Writer.Allocating = .init(a); try spansText(&tty.writer, &.{owner}, false);
+    try std.testing.expectEqualStrings("a\u{200b}Xbc", plain.written());
+    try std.testing.expectEqualSlices(u8, plain.written(), semantic.written());
+    try std.testing.expectEqualStrings(terminal_geometry_notice ++ "a\u{200b}Xbc", tty.written());
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, tty.written(), terminal_geometry_notice));
+    var collected: F.Collect = .{ .a = a }; var remaining: usize = 8;
+    try std.testing.expect(!try visitRubySpanLists(&.{owner}, &collected, 0, 0, &remaining, .ordinary));
+    try std.testing.expectEqualSlices(u8, plain.written(), collected.text.items);
+    try std.testing.expectEqual(@as(usize, 0), remaining);
+    remaining = 7;
+    try std.testing.expectError(error.InvalidPresentation, visitRubySpanLists(&.{owner}, &collected, 0, 0, &remaining, .ordinary));
+    remaining = 100;
+    try std.testing.expectError(error.InvalidPresentation,
+        visitRubySpanLists(&.{owner}, &collected, RubyTypes.max_content_depth - 1, 0, &remaining, .ordinary));
+    const entry: model.Entry = .{ .title = "overlay", .kind = .supplemental, .preamble_spans = &.{owner} };
+    const Codec = @import("blob_encoder").presentation_codec;
+    const encoded = try Codec.encodeAlloc(a, .{ .entry = entry });
+    const decoded = try Codec.decodeAlloc(a, encoded, entry.title, entry.kind, null);
+    try std.testing.expectEqualDeep(entry, decoded.entry);
+    try std.testing.expectEqualSlices(u8, encoded, try Codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqualStrings("\u{200b}", group.overlays[0].content.?.spans[0].text);
+}
+
+test "terminal hidden wrapper and conditional rows visibly retain complete caption body actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = @import("blob_encoder").presentation_types;
+    const codec = @import("blob_encoder").presentation_codec;
+    for (0..3) |mode| {
+        const table: T.Table = .{ .rows_hidden_max_width_px = if (mode != 1) 639 else null,
+            .caption = &.{.{ .kind = .link, .target = "Caption", .text = "KEPTCAPTION" }},
+            .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .external_link, .target = "https://example.test/row", .text = "KEPTROW" }} }} }} };
+        const table_block: T.Block = .{ .kind = .table, .table = table };
+        const block: T.Block = if (mode == 0) table_block else .{ .kind = .container, .container = .{
+            .style = .{ .overflow = .hidden, .width = .fit_content,
+                .screen_max_width = .{ .max_width_px = 639, .width = .auto, .max_width = .{ .length = .{ .unit = .percent, .value = 100 } } } },
+            .blocks = &.{table_block} } };
+        const entry: model.Entry = .{ .title = "conditional data", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{ block,
+                .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .target = "After", .text = "KEPTAFTER" }} } } }} };
+        const before = try std.json.Stringify.valueAlloc(a, entry, .{});
+        const expected_notices: usize = if (mode == 2) 2 else 1;
+        for ([_]bool{ false, true }) |color| {
+            var plain: std.Io.Writer.Allocating = .init(a); defer plain.deinit();
+            try entryText(&plain.writer, entry, color);
+            try std.testing.expectEqual(expected_notices, std.mem.count(u8, plain.written(), terminal_geometry_notice));
+            for ([_][]const u8{ "KEPTCAPTION", "KEPTROW", "KEPTAFTER" }) |text|
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, plain.written(), text));
+            // Neither an unbounded stream nor a narrow/wide terminal allocation
+            // becomes the source root CSS viewport or silently hides stored rows.
+            for ([_]usize{ 40, 100 }) |columns| {
+                var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+                var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+                var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines,
+                    .table_columns = columns, .viewport_columns = columns };
+                try blocksTextProjected(&frame.writer, entry.sections[0].blocks, color, &projection);
+                try std.testing.expectEqual(expected_notices, std.mem.count(u8, frame.written(), terminal_geometry_notice));
+                for ([_][]const u8{ "KEPTCAPTION", "KEPTROW", "KEPTAFTER" }) |text|
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), text));
+            }
+        }
+        const Targets = struct {
+            internal: usize = 0, external: usize = 0, caption: usize = 0, after: usize = 0,
+            fn spans(self: *@This(), values: []const model.Span) !bool {
+                for (values) |span| {
+                    if (span.kind == .link) {
+                        self.internal += 1;
+                        if (std.mem.eql(u8, span.target, "Caption")) {
+                            try std.testing.expectEqualStrings("KEPTCAPTION", span.text); self.caption += 1;
+                        } else {
+                            try std.testing.expectEqualStrings("After", span.target);
+                            try std.testing.expectEqualStrings("KEPTAFTER", span.text); self.after += 1;
+                        }
+                    } else if (span.kind == .external_link) {
+                        try std.testing.expectEqualStrings("https://example.test/row", span.target);
+                        try std.testing.expectEqualStrings("KEPTROW", span.text); self.external += 1;
+                    }
+                }
+                return false;
+            }
+        };
+        var targets: Targets = .{}; _ = try visitEntrySpanLists(entry, &targets);
+        try std.testing.expectEqual(@as(usize, 2), targets.internal);
+        try std.testing.expectEqual(@as(usize, 1), targets.external);
+        try std.testing.expectEqual(@as(usize, 1), targets.caption);
+        try std.testing.expectEqual(@as(usize, 1), targets.after);
+        try std.testing.expectEqualStrings(before, try std.json.Stringify.valueAlloc(a, entry, .{}));
+        const stored: T.Stored = .{ .entry = entry };
+        const bytes = try codec.encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(codec.container_fonts_magic, bytes[0..4]);
+        try std.testing.expectEqualDeep(stored, try codec.decodeAlloc(a, bytes, entry.title, .supplemental, null));
+        if (mode != 1) try std.testing.expect(try T.resolveTableRowsHidden(table, 639));
+    }
+    try std.testing.expectError(error.UnsupportedTerminalGeometry, containerResolvedStyle(.{ .overflow = .hidden }, 80));
+    try std.testing.expect(containerUnboundedGeometryUnavailable(.{ .overflow = .hidden }));
+    var sink: std.Io.Writer.Allocating = .init(a); defer sink.deinit();
+    const malformed: T.Table = .{ .rows_hidden_max_width_px = 0, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "malformed" }} }} }} };
+    try std.testing.expectError(error.InvalidPresentation, tableText(&sink.writer, malformed, false, null));
 }

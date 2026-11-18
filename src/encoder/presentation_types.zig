@@ -82,6 +82,22 @@ pub const InlineImageVerticalAlign = enum(u8) {
         return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
     }
 };
+/// One source-proved non-replaced wrapper around one ordinary inline image.
+/// Presence retains positioned-auto paint order even at zero displacement.
+/// Offsets translate paint/action bounds, never normal-flow metrics. Horizontal
+/// padding enters fitting once and is outside the image-owned action rectangle.
+/// Em values are normalized once to normal-body units by the source compiler;
+/// CSS pixels retain the ordinary image CSS-pixel/zoom basis.
+pub const InlineImageOccurrenceLayout = struct {
+    x: StyleLength,
+    y: StyleLength,
+    padding_left: StyleLength,
+    padding_right: StyleLength,
+};
+pub fn validInlineImageOccurrenceLayout(value: InlineImageOccurrenceLayout) bool {
+    return validContainerMarginLength(value.x) and validContainerMarginLength(value.y) and
+        validStyleLength(value.padding_left) and validStyleLength(value.padding_right);
+}
 pub const InlineImage = struct {
     file: []const u8,
     width_px: ?u32 = null,
@@ -99,12 +115,13 @@ pub const InlineImage = struct {
     static_poster: ?StaticPoster = null,
     // Explicit source-computed image alignment, distinct from legacy null.
     vertical_align: ?InlineImageVerticalAlign = null,
+    occurrence_layout: ?InlineImageOccurrenceLayout = null,
 
     pub fn jsonStringify(self: InlineImage, jw: anytype) !void {
         try jw.beginObject();
         try jw.objectField("file");
         try jw.write(self.file);
-        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language", "static_poster", "vertical_align" }) |name| {
+        inline for (.{ "width_px", "height_px", "alt", "tooltip", "map", "dark_mode_filter", "svg_language", "static_poster", "vertical_align", "occurrence_layout" }) |name| {
             if (@field(self, name)) |value| {
                 try jw.objectField(name);
                 try jw.write(value);
@@ -284,8 +301,8 @@ pub fn validSpanInlineStyle(span: anytype) bool {
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
     if (std.mem.eql(u8, kind, "text")) {
         if (span.target.len != 0) return false;
-        if (span.text.len == 0 and !spanHasRuby(span) and !spanHasInlinePaddingGroup(span) and (value.line_height == null or value.cursor != null or value.wrap != null)) return false;
-    } else if (span.target.len == 0 or (span.text.len == 0 and !spanHasInlinePaddingGroup(span) and !spanHasInlineActionGroup(span))) return false;
+        if (span.text.len == 0 and !spanHasRuby(span) and !spanHasInlinePaddingGroup(span) and !spanHasInlineBoxGroup(span) and !spanHasClippedAbsolute(span) and (value.line_height == null or value.cursor != null or value.wrap != null)) return false;
+    } else if (span.target.len == 0 or (span.text.len == 0 and !spanHasInlinePaddingGroup(span) and !spanHasInlineActionGroup(span) and !spanHasInlineBoxGroup(span) and !spanHasClippedAbsolute(span))) return false;
     const scale: ?f32 = if (comptime @hasField(@TypeOf(span), "font_scale")) span.font_scale else null;
     const basis: FontScaleBasis = if (comptime @hasField(@TypeOf(span), "font_scale_basis")) span.font_scale_basis else .context;
     if (value.baseline_shift != null) if (value.line_height) |height| if (height == .font_relative) {
@@ -372,7 +389,7 @@ pub fn spanHasRuby(span: anytype) bool {
     return if (comptime @hasField(@TypeOf(span), "ruby")) span.ruby != null else false;
 }
 pub fn validRubyOwner(span: anytype) bool {
-    if (!validRubyChild(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) return false;
+    if (!validRubyChild(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
     if (!std.mem.eql(u8, @tagName(span.kind), "text") or span.text.len != 0 or span.target.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
@@ -381,6 +398,7 @@ pub fn validRubyOwner(span: anytype) bool {
 }
 /// This first subset contains rich text and nested ruby, never media or forced breaks.
 pub fn validRubyChild(span: anytype) bool {
+    if (spanAudioControl(span) != null) return false;
     const kind = @tagName(span.kind);
     if (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
     if ((std.mem.eql(u8, kind, "text") and span.target.len != 0) or (!std.mem.eql(u8, kind, "text") and span.target.len == 0)) return false;
@@ -419,7 +437,7 @@ pub fn validRubyBodyChild(span: anytype) bool {
 pub fn validRubyGap(spans: anytype) bool {
     if (spans.len > max_presentation_items) return false;
     for (spans) |span| {
-        if (!validRubyChild(span) or !std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) return false;
+        if (!validRubyChild(span) or !std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
         if (comptime @hasField(@TypeOf(span), "target_fragment")) if (span.target_fragment != null) return false;
         if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
         for (span.text) |byte| if (byte != ' ' and byte != '\t' and byte != '\n' and byte != '\r' and byte != 0x0c) return false;
@@ -457,19 +475,62 @@ pub fn validRuby(value: anytype) bool {
 const RubyFallbackDecoration = struct {
     underline: bool = false,
     strike: bool = false,
-    fn including(self: @This(), span: anytype) @This() {
-        const flags = if (comptime @hasField(@TypeOf(span), "flags")) span.flags else span;
-        return .{ .underline = self.underline or flags.underline, .strike = self.strike or flags.strike };
+    const Field = enum { bold, italic, code, small, superscript, subscript, strike, underline };
+    fn named(comptime T: type, comptime field: Field) bool {
+        return switch (@typeInfo(T)) {
+            .@"struct" => @hasField(T, @tagName(field)) and
+                @TypeOf(@field(@as(T, undefined), @tagName(field))) == bool,
+            else => false,
+        };
     }
-    fn project(self: @This(), span: anytype) @TypeOf(span) {
-        var result = span;
+    fn codecByte(comptime T: type) bool {
+        // The generic codec bitcasts this exact legacy flags byte regardless
+        // of field names. Other compiler flags retain named semantics.
+        return switch (@typeInfo(T)) {
+            .int => T == u8,
+            .@"struct" => |info| info.layout == .@"packed" and @bitSizeOf(T) == 8,
+            else => false,
+        };
+    }
+    fn mask(comptime field: Field) u8 {
+        // Exact presentation_codec Encoder.span/Reader.span flags-byte layout;
+        // no other integer or enum representation is inferred.
+        return @as(u8, 1) << @intFromEnum(field);
+    }
+    fn flag(span: anytype, comptime field: Field) bool {
         if (comptime @hasField(@TypeOf(span), "flags")) {
-            result.flags.underline = result.flags.underline or self.underline;
-            result.flags.strike = result.flags.strike or self.strike;
-        } else {
-            result.underline = result.underline or self.underline;
-            result.strike = result.strike or self.strike;
+            const T = @TypeOf(span.flags);
+            if (comptime codecByte(T)) return @as(u8, @bitCast(span.flags)) & mask(field) != 0;
+            if (comptime named(T, field)) return @field(span.flags, @tagName(field));
+        } else if (comptime named(@TypeOf(span), field)) return @field(span, @tagName(field));
+        return false;
+    }
+    fn assign(span: anytype, comptime field: Field, value: bool) bool {
+        if (comptime @hasField(@TypeOf(span.*), "flags")) {
+            const T = @TypeOf(span.flags);
+            if (comptime codecByte(T)) {
+                const bits: u8 = @bitCast(span.flags);
+                span.flags = @bitCast(if (value) bits | mask(field) else bits & ~mask(field));
+                return true;
+            }
+            if (comptime named(T, field)) {
+                @field(span.flags, @tagName(field)) = value;
+                return true;
+            }
+        } else if (comptime named(@TypeOf(span.*), field)) {
+            @field(span.*, @tagName(field)) = value;
+            return true;
         }
+        // Absence can remain absent; a required inherited line must not vanish.
+        return !value;
+    }
+    fn including(self: @This(), span: anytype) @This() {
+        return .{ .underline = self.underline or flag(span, .underline), .strike = self.strike or flag(span, .strike) };
+    }
+    fn project(self: @This(), span: anytype) error{InvalidPresentation}!@TypeOf(span) {
+        var result = span;
+        if (!assign(&result, .underline, flag(span, .underline) or self.underline) or
+            !assign(&result, .strike, flag(span, .strike) or self.strike)) return error.InvalidPresentation;
         if (self.underline) if (comptime @hasField(@TypeOf(span), "link_paint")) if (result.link_paint) |paint| {
             var projected = paint;
             inline for (.{ "normal", "hover", "active", "hover_active", "visited", "visited_hover", "visited_active", "visited_hover_active" }) |name|
@@ -480,13 +541,8 @@ const RubyFallbackDecoration = struct {
     }
     fn clear(span: anytype) @TypeOf(span) {
         var result = span;
-        if (comptime @hasField(@TypeOf(span), "flags")) {
-            result.flags.underline = false;
-            result.flags.strike = false;
-        } else {
-            result.underline = false;
-            result.strike = false;
-        }
+        _ = assign(&result, .underline, false);
+        _ = assign(&result, .strike, false);
         return result;
     }
 };
@@ -494,6 +550,8 @@ const RubyFallbackDecoration = struct {
 const RubyFallbackBudget = struct {
     remaining: usize = max_presentation_items,
     action_group_depth: usize = 0,
+    inline_box_depth: usize = 0,
+    actual_text_leaves: usize = 0,
     fn items(self: *RubyFallbackBudget, count: usize) error{InvalidPresentation}!void {
         if (count > self.remaining) return error.InvalidPresentation;
         self.remaining -= count;
@@ -506,29 +564,89 @@ pub fn visitRubyFallback(spans: anytype, context: anytype, comptime emit: anytyp
 }
 pub fn visitRubyFallbackAt(spans: anytype, context: anytype, comptime emit: anytype, content_depth: usize) anyerror!void {
     var budget: RubyFallbackBudget = .{};
-    try visitRubyFallbackInner(spans, context, emit, content_depth, 0, false, .{}, null, false, &budget);
+    try visitRubyFallbackInner(spans, context, emit, content_depth, 0, false, .{}, null, false, &budget, false);
 }
-fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anytype, content_depth: usize, ruby_depth: usize, gap: bool, decoration: RubyFallbackDecoration, inherited_action: ?InlinePaddingGroupAction, inside_group: bool, budget: *RubyFallbackBudget) anyerror!void {
+/// Visual projection only. Clipped absolute descendants retain their authored
+/// box in native layout, but emit no terminal/body text. This visitor validates
+/// the same rich/action children and charges the same budget as semantic output.
+fn discardRubyVisualFallback(_: void, _: anytype) error{}!void {}
+pub fn visitRubyVisualFallback(spans: anytype, context: anytype, comptime emit: anytype) anyerror!void {
+    return visitRubyVisualFallbackAt(spans, context, emit, 0);
+}
+pub fn visitRubyVisualFallbackAt(spans: anytype, context: anytype, comptime emit: anytype, content_depth: usize) anyerror!void {
+    var budget: RubyFallbackBudget = .{};
+    try visitRubyFallbackInner(spans, context, emit, content_depth, 0, false, .{}, null, false, &budget, true);
+}
+fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anytype, content_depth: usize, ruby_depth: usize, gap: bool, decoration: RubyFallbackDecoration, inherited_action: ?InlinePaddingGroupAction, inside_group: bool, budget: *RubyFallbackBudget, comptime visual: bool) anyerror!void {
     try budget.items(spans.len);
     for (spans) |span| {
         // U-only traversal keeps its existing contract. A new action owner also
         // checks each nested declaring Span before entering Ruby or padding.
         if (budget.action_group_depth != 0) if (inherited_action) |action| try action.check(span);
         if (inherited_action != null and (!std.mem.eql(u8, @tagName(span.kind), "text") or span.target.len != 0)) return error.InvalidPresentation;
+        if (comptime @hasField(@TypeOf(span), "clipped_absolute")) if (span.clipped_absolute) |group| {
+            if (gap or ruby_depth != 0 or inside_group or budget.inline_box_depth != 0 or budget.action_group_depth != 0 or
+                content_depth >= max_content_depth or !validClippedAbsoluteInlineOwner(span)) return error.InvalidPresentation;
+            const own_action = InlinePaddingGroupAction.from(span);
+            const before_text = budget.actual_text_leaves;
+            if (own_action != null) budget.action_group_depth += 1;
+            defer if (own_action != null) { budget.action_group_depth -= 1; };
+            if (visual) {
+                try visitRubyFallbackInner(group.children, {}, discardRubyVisualFallback, content_depth + 1, ruby_depth, false,
+                    decoration.including(span), own_action orelse inherited_action, true, budget, visual);
+            } else try visitRubyFallbackInner(group.children, context, emit, content_depth + 1, ruby_depth, false,
+                decoration.including(span), own_action orelse inherited_action, true, budget, visual);
+            if (budget.actual_text_leaves == before_text) return error.InvalidPresentation;
+            continue;
+        };
+        if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
+            if (gap or content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
+            try budget.items(group.overlays.len);
+            const before_text = budget.actual_text_leaves;
+            const own_action = InlinePaddingGroupAction.from(span);
+            budget.inline_box_depth += 1;
+            defer budget.inline_box_depth -= 1;
+            if (own_action != null) budget.action_group_depth += 1;
+            defer if (own_action != null) { budget.action_group_depth -= 1; };
+            if (inlineBoxHasOverlayContent(group.*)) {
+                if (own_action != null or inherited_action != null or content_depth + 1 >= max_content_depth)
+                    return error.InvalidPresentation;
+                var child_cursor: usize = 0;
+                var in_flow_text = false;
+                for (group.overlays) |overlay| if (overlay.content) |content| {
+                    const before_flow = budget.actual_text_leaves;
+                    try visitRubyFallbackInner(group.spans[child_cursor..content.before_child], context, emit,
+                        content_depth + 1, ruby_depth, false, decoration.including(span), null, inside_group, budget, visual);
+                    in_flow_text = in_flow_text or budget.actual_text_leaves != before_flow;
+                    try visitRubyFallbackInner(content.spans, context, emit, content_depth + 2, ruby_depth, false,
+                        decoration.including(span), null, true, budget, visual);
+                    child_cursor = content.before_child;
+                };
+                const before_flow = budget.actual_text_leaves;
+                try visitRubyFallbackInner(group.spans[child_cursor..], context, emit, content_depth + 1, ruby_depth,
+                    false, decoration.including(span), null, inside_group, budget, visual);
+                if (!in_flow_text and budget.actual_text_leaves == before_flow) return error.InvalidPresentation;
+            } else {
+                try visitRubyFallbackInner(group.spans, context, emit, content_depth + 1, ruby_depth, false,
+                    decoration.including(span), own_action orelse inherited_action, inside_group, budget, visual);
+                if (budget.actual_text_leaves == before_text) return error.InvalidPresentation;
+            }
+            continue;
+        };
         if (comptime @hasField(@TypeOf(span), "inline_action_group")) if (span.inline_action_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlineActionGroupOwner(span)) return error.InvalidPresentation;
             const action = InlinePaddingGroupAction.from(span) orelse return error.InvalidPresentation;
             budget.action_group_depth += 1;
             defer budget.action_group_depth -= 1;
             try visitRubyFallbackInner(group.spans, context, emit, content_depth + 1, ruby_depth, false,
-                decoration.including(span), action, true, budget);
+                decoration.including(span), action, true, budget, visual);
             continue;
         };
         if (comptime @hasField(@TypeOf(span), "inline_padding_group")) if (span.inline_padding_group) |group| {
             if (gap or content_depth >= max_content_depth or !validInlinePaddingGroupOwner(span)) return error.InvalidPresentation;
             const action = InlinePaddingGroupAction.from(span) orelse inherited_action;
             try visitRubyFallbackInner(group.spans, context, emit, content_depth + 1, ruby_depth, false,
-                decoration.including(span), action, true, budget);
+                decoration.including(span), action, true, budget, visual);
             continue;
         };
         if (comptime @hasField(@TypeOf(span), "ruby")) if (span.ruby) |ruby| {
@@ -536,23 +654,23 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
             const base_decoration = decoration.including(span);
             try budget.items(ruby.segments.len);
             for (ruby.segments) |segment| {
-                try visitRubyFallbackInner(segment.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, base_decoration, inherited_action, inside_group, budget);
+                try visitRubyFallbackInner(segment.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, base_decoration, inherited_action, inside_group, budget, visual);
                 try budget.items(segment.bases.len);
                 for (segment.bases) |base| {
                     if (inherited_action) |action| try action.checkRubyOwner(base.owner);
                     try budget.items(1);
-                    try visitRubyFallbackInner(base.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, base_decoration, inherited_action, inside_group, budget);
-                    try visitRubyFallbackInner(base.spans, context, emit, content_depth + 1, ruby_depth + 1, false, base_decoration, inherited_action, inside_group, budget);
+                    try visitRubyFallbackInner(base.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, base_decoration, inherited_action, inside_group, budget, visual);
+                    try visitRubyFallbackInner(base.spans, context, emit, content_depth + 1, ruby_depth + 1, false, base_decoration, inherited_action, inside_group, budget, visual);
                 }
                 try budget.items(segment.annotations.len);
                 for (segment.annotations) |annotation| {
                     if (inherited_action) |action| try action.checkRubyOwner(annotation.owner);
                     try budget.items(1);
-                    try visitRubyFallbackInner(annotation.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, .{}, inherited_action, inside_group, budget);
+                    try visitRubyFallbackInner(annotation.gap_before, context, emit, content_depth + 1, ruby_depth + 1, true, .{}, inherited_action, inside_group, budget, visual);
                     if (annotation.explicit_fallback) {
-                        try visitRubyFallbackInner(annotation.fallback_before, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget);
-                        try visitRubyFallbackInner(annotation.spans, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget);
-                        try visitRubyFallbackInner(annotation.fallback_after, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget);
+                        try visitRubyFallbackInner(annotation.fallback_before, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget, visual);
+                        try visitRubyFallbackInner(annotation.spans, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget, visual);
+                        try visitRubyFallbackInner(annotation.fallback_after, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget, visual);
                     } else {
                         var probe_budget = budget.*;
                         const nonempty = try rubyFallbackHasText(annotation.spans, content_depth + 1, ruby_depth + 1, &probe_budget);
@@ -560,7 +678,7 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
                         delimiter.ruby = null;
                         delimiter.text = "\xef\xbc\x88";
                         if (nonempty) try emit(context, delimiter);
-                        try visitRubyFallbackInner(annotation.spans, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget);
+                        try visitRubyFallbackInner(annotation.spans, context, emit, content_depth + 1, ruby_depth + 1, false, .{}, inherited_action, inside_group, budget, visual);
                         delimiter.text = "\xef\xbc\x89";
                         if (nonempty) try emit(context, delimiter);
                     }
@@ -569,14 +687,28 @@ fn visitRubyFallbackInner(spans: anytype, context: anytype, comptime emit: anyty
             continue;
         };
         if ((ruby_depth != 0 or inside_group) and !(if (gap) validRubyChild(span) else validRubyBodyChild(span))) return error.InvalidPresentation;
+        if (budget.inline_box_depth != 0 and !validRubyChild(span)) return error.InvalidPresentation;
         const effective = if (inherited_action) |action| try action.project(span) else span;
-        try emit(context, decoration.project(effective));
+        const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+        if (span.text.len != 0 or trail.len != 0) budget.actual_text_leaves += 1;
+        try emit(context, try decoration.project(effective));
     }
 }
 
 fn rubyFallbackHasText(spans: anytype, content_depth: usize, ruby_depth: usize, budget: *RubyFallbackBudget) error{InvalidPresentation}!bool {
     try budget.items(spans.len);
     for (spans) |span| {
+        if (comptime @hasField(@TypeOf(span), "clipped_absolute")) if (span.clipped_absolute) |group| {
+            if (ruby_depth != 0 or content_depth >= max_content_depth or !validClippedAbsoluteInlineOwner(span)) return error.InvalidPresentation;
+            if (try rubyFallbackHasText(group.children, content_depth + 1, ruby_depth, budget)) return true;
+            continue;
+        };
+        if (comptime @hasField(@TypeOf(span), "inline_box_group")) if (span.inline_box_group) |group| {
+            if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(span)) return error.InvalidPresentation;
+            try budget.items(group.overlays.len);
+            if (try rubyFallbackHasText(group.spans, content_depth + 1, ruby_depth, budget)) return true;
+            continue;
+        };
         if (comptime @hasField(@TypeOf(span), "inline_action_group")) if (span.inline_action_group) |group| {
             if (content_depth >= max_content_depth or !validInlineActionGroupOwner(span)) return error.InvalidPresentation;
             if (try rubyFallbackHasText(group.spans, content_depth + 1, ruby_depth, budget)) return true;
@@ -615,6 +747,283 @@ fn rubyFallbackHasText(spans: anytype, content_depth: usize, ruby_depth: usize, 
     return false;
 }
 
+/// Paint resolved at the declaring inline boundary. current_color is not an
+/// unresolved color: readers resolve it using the owner's effective native paint.
+pub const InlineBoxColor = union(enum) {
+    current_color,
+    transparent,
+    rgb: []const u8,
+    light_dark: struct { light: []const u8, dark: []const u8 },
+};
+pub const InlineBoxBorderEdge = BorderEdgeFor(InlineBoxColor);
+pub const InlineBoxBorderEdges = BorderEdgesFor(InlineBoxBorderEdge);
+/// A resolved signed offset, not a nonnegative width. null in Insets means auto.
+pub const InlineBoxInset = struct {
+    unit: StyleWidthUnit,
+    value: f32,
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject(); try jw.objectField("unit"); try jw.write(self.unit);
+        try jw.objectField("value"); try jw.write(@as(f64, self.value)); try jw.endObject();
+    }
+};
+pub const InlineBoxInsets = struct {
+    top: ?InlineBoxInset = null,
+    right: ?InlineBoxInset = null,
+    bottom: ?InlineBoxInset = null,
+    left: ?InlineBoxInset = null,
+};
+/// Optional semantic text in an absolute inline overlay. It remains outside
+/// the containing Box's flow; before_child orders only logical source text.
+pub const InlineBoxOverlayTextAlign = enum(u8) { start, left, center, right };
+pub fn InlineBoxOverlayContent(comptime Child: type) type {
+    return struct {
+        before_child: u32,
+        owner_font: InlineFontSnapshot,
+        /// null is a proved normal line height, never an unresolved metric.
+        line_height: ?InlineLineHeight = null,
+        text_align: InlineBoxOverlayTextAlign,
+        spans: []const Child,
+    };
+}
+pub const InlineBoxOverlay = InlineBoxOverlayFor(Span);
+pub fn InlineBoxOverlayFor(comptime Child: type) type {
+    return struct {
+        insets: InlineBoxInsets,
+        border: InlineBoxBorderEdges,
+        content: ?*const InlineBoxOverlayContent(Child) = null,
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            try jw.beginObject();
+            try jw.objectField("insets"); try jw.write(self.insets);
+            try jw.objectField("border"); try jw.write(self.border);
+            if (self.content) |content| { try jw.objectField("content"); try jw.write(content); }
+            try jw.endObject();
+        }
+    };
+}
+pub fn inlineBoxHasOverlayContent(value: anytype) bool {
+    for (value.overlays) |overlay| if (overlay.content != null) return true;
+    return false;
+}
+pub fn validInlineBoxOverlayTextChild(span: anytype) bool {
+    if (!validRubyBodyChild(span) or !std.mem.eql(u8, @tagName(span.kind), "text") or
+        span.target.len != 0 or span.text.len == 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or
+        spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
+    inline for (.{ "trail", "direction" }) |name|
+        if (comptime @hasField(@TypeOf(span), name)) if (@field(span, name).len != 0) return false;
+    inline for (.{ "target_fragment", "background", "inline_style", "link_paint", "citation_marker" }) |name|
+        if (comptime @hasField(@TypeOf(span), name)) if (@field(span, name) != null) return false;
+    inline for (.{ "small", "superscript", "subscript", "underline", "strike" }) |name| {
+        const flag = RubyFallbackDecoration.flag(span, @field(RubyFallbackDecoration.Field, name));
+        if (flag) return false;
+    }
+    return true;
+}
+pub fn validInlineBoxOverlayContent(value: anytype) bool {
+    if (!validInlineFontSnapshot(value.owner_font) or !value.owner_font.font_normalized or
+        value.owner_font.font_scale == null or value.owner_font.font_scale_basis == .context or
+        value.owner_font.small or value.owner_font.superscript or value.owner_font.subscript or
+        value.spans.len == 0 or value.spans.len > max_presentation_items) return false;
+    if (value.line_height) |height| {
+        if (!validInlineTextStyle(.{ .line_height = height })) return false;
+        if (height == .font_relative and !rubyFontSnapshotEqual(value.owner_font, height.font_relative.font)) return false;
+    }
+    for (value.spans) |child| {
+        if (!validInlineBoxOverlayTextChild(child)) return false;
+        const scale: ?f32 = if (comptime @hasField(@TypeOf(child), "font_scale")) child.font_scale else null;
+        const basis: FontScaleBasis = if (comptime @hasField(@TypeOf(child), "font_scale_basis")) child.font_scale_basis else .context;
+        if (scale != value.owner_font.font_scale or basis != value.owner_font.font_scale_basis) return false;
+        inline for (.{ "small", "superscript", "subscript", "bold", "italic", "code" }) |name| {
+            const flag = RubyFallbackDecoration.flag(child, @field(RubyFallbackDecoration.Field, name));
+            if (@field(value.owner_font, name) != flag) return false;
+        }
+        inline for (.{ "language", "classes" }) |name| {
+            const text: []const u8 = if (comptime @hasField(@TypeOf(child), name)) @field(child, name) else "";
+            if (!std.mem.eql(u8, @field(value.owner_font, name), text)) return false;
+        }
+        const role = if (comptime @hasField(@TypeOf(child), "role")) @tagName(child.role) else "normal";
+        const features: ?FontFeaturePolicy = if (comptime @hasField(@TypeOf(child), "font_features")) child.font_features else null;
+        const family: ?ContainerFontFamily = if (comptime @hasField(@TypeOf(child), "font_family")) child.font_family else null;
+        if (!std.mem.eql(u8, @tagName(value.owner_font.role), role) or value.owner_font.font_features != features or
+            !sameFontFamilyRequest(value.owner_font.font_family, family)) return false;
+    }
+    return true;
+}
+/// A non-atomic ordinary inline box, using CSS slice decoration and native
+/// parent progression. The owner font governs geometry; child font scales keep
+/// their established original-root Context/normal-body/CSS-pixel semantics and
+/// are never multiplied by the owner. Horizontal padding affects fitting once;
+/// vertical padding/borders paint overflow without replacing the owner's font
+/// band by line-height or descendant bounds. The relative containing block has
+/// zero offset and follows CSS 2.2 first/last padding-box geometry, including
+/// wrapped fragments. Overlay text is logical source only, never parent advance.
+/// Native consumers separately qualify containing-block fragmentation and text geometry.
+pub fn InlineBoxGroup(comptime Child: type) type {
+    return struct {
+        padding: StyleEdges,
+        border: InlineBoxBorderEdges,
+        overlays: []const InlineBoxOverlayFor(Child) = &.{},
+        spans: []const Child,
+        // Uniform circular CSS-pixel corners on this box's existing slice
+        // decoration. null preserves square geometry; explicit zero is retained.
+        // Em and percentage radii are outside the initial shared unit contract.
+        // The initial rounded domain has equal solid RGB borders and no overlays.
+        radius: ?StyleLength = null,
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            try jw.beginObject();
+            try jw.objectField("padding"); try jw.write(self.padding);
+            try jw.objectField("border"); try jw.write(self.border);
+            try jw.objectField("overlays"); try jw.write(self.overlays);
+            try jw.objectField("spans"); try jw.write(self.spans);
+            if (self.radius) |radius| { try jw.objectField("radius"); try jw.write(radius); }
+            try jw.endObject();
+        }
+    };
+}
+pub fn spanHasInlineBoxGroup(span: anytype) bool {
+    return if (comptime @hasField(@TypeOf(span), "inline_box_group")) span.inline_box_group != null else false;
+}
+pub fn validInlineBoxColor(value: InlineBoxColor) bool {
+    return switch (value) {
+        .current_color, .transparent => true,
+        .rgb => |rgb| isCanonicalRgb(rgb),
+        .light_dark => |pair| isCanonicalRgb(pair.light) and isCanonicalRgb(pair.dark),
+    };
+}
+pub fn validInlineBoxBorderEdge(value: InlineBoxBorderEdge) bool {
+    return switch (value) {
+        .none, .hidden => true,
+        .solid, .dotted => |line| validStyleLength(line.width) and validInlineBoxColor(line.color),
+    };
+}
+pub fn validInlineBoxBorderEdges(value: InlineBoxBorderEdges) bool {
+    return validInlineBoxBorderEdge(value.top) and validInlineBoxBorderEdge(value.right) and
+        validInlineBoxBorderEdge(value.bottom) and validInlineBoxBorderEdge(value.left);
+}
+pub fn validInlineBoxOverlay(value: anytype) bool {
+    if ((value.insets.left == null and value.insets.right == null) or
+        (value.insets.top == null and value.insets.bottom == null) or !validInlineBoxBorderEdges(value.border)) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |edge|
+        if (@field(value.insets, edge)) |inset| if (!std.math.isFinite(inset.value)) return false;
+    if (value.content) |content| if (!validInlineBoxOverlayContent(content.*)) return false;
+    return true;
+}
+pub fn inlineBoxRadius(value: anytype) ?StyleLength {
+    return if (comptime @hasField(@TypeOf(value), "radius")) value.radius else null;
+}
+pub fn validInlineBoxRadius(value: StyleLength) bool {
+    return value.unit == .px and validStyleLength(value);
+}
+pub fn validInlineBoxGroup(value: anytype) bool {
+    if (inlineBoxRadius(value)) |radius| {
+        if (!validInlineBoxRadius(radius) or value.overlays.len != 0 or value.border.top != .solid) return false;
+        const line = value.border.top.solid;
+        if (!validStyleLength(line.width) or line.color != .rgb or !isCanonicalRgb(line.color.rgb)) return false;
+        inline for (.{ "right", "bottom", "left" }) |side| {
+            const edge = @field(value.border, side);
+            if (edge != .solid or edge.solid.width.unit != line.width.unit or edge.solid.width.value != line.width.value or
+                edge.solid.color != .rgb or !std.mem.eql(u8, edge.solid.color.rgb, line.color.rgb)) return false;
+        }
+    }
+    if (!validStyleEdges(value.padding) or !validInlineBoxBorderEdges(value.border) or
+        value.spans.len == 0 or value.spans.len > max_presentation_items or
+        value.overlays.len > max_presentation_items) return false;
+    var previous_boundary: u32 = 0;
+    for (value.overlays) |overlay| {
+        if (!validInlineBoxOverlay(overlay)) return false;
+        if (overlay.content) |content| {
+            if (content.before_child > value.spans.len or content.before_child < previous_boundary) return false;
+            previous_boundary = content.before_child;
+        }
+    }
+    return true;
+}
+pub fn validInlineBoxGroupOwner(span: anytype) bool {
+    if (!spanHasInlineBoxGroup(span) or !validRubyChild(span) or span.text.len != 0 or
+        spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasClippedAbsolute(span)) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
+    if (comptime @hasField(@TypeOf(span), "inline_box_group")) return validInlineBoxGroup(span.inline_box_group.?.*);
+    return false;
+}
+pub fn validateInlineBoxGroupTree(owner: anytype, content_depth: usize, ruby_depth: usize) error{InvalidPresentation}!void {
+    if (!validInlineBoxGroupOwner(owner)) return error.InvalidPresentation;
+    const Noop = struct {
+        fn emit(_: void, _: @TypeOf(owner)) error{}!void {}
+    };
+    var budget: RubyFallbackBudget = .{};
+    visitRubyFallbackInner(&[_]@TypeOf(owner){owner}, {}, Noop.emit, content_depth, ruby_depth,
+        false, .{}, null, false, &budget, false) catch return error.InvalidPresentation;
+}
+
+/// A source-proved absolute inline box with an empty clip, overflow hidden,
+/// nowrap, zero border/padding and auto insets. Original ordered occurrence is
+/// its static-position anchor; clipping does not erase box or scroll geometry.
+/// Width/height and signed definite margins retain the authored used values.
+/// Em lengths are normalized once to the original normal-body font basis;
+/// px keeps the established CSS-pixel basis. Never multiply by owner font again.
+/// The initial containing block is always the Entry native article root. A
+/// represented nonstatic ancestor is refused, including across tables/figures.
+/// Native readers retain semantic children while painting neither box nor body.
+pub fn ClippedAbsoluteInlineFor(comptime Child: type) type {
+    return struct {
+        // Proved static-position parent direction, not child first-strong/UI.
+        // No inherited/default value is valid for this unpublished carrier.
+        static_parent_direction: ContainerStaticDirection,
+        width: StyleLength,
+        height: StyleLength,
+        margin: ContainerMargins,
+        children: []const Child,
+    };
+}
+pub const ClippedAbsoluteInline = ClippedAbsoluteInlineFor(Span);
+pub fn spanHasClippedAbsolute(span: anytype) bool {
+    return if (comptime @hasField(@TypeOf(span), "clipped_absolute")) span.clipped_absolute != null else false;
+}
+pub fn validClippedAbsoluteInlineChild(span: anytype) bool {
+    if (!validRubyBodyChild(span) or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or
+        spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
+    if (comptime @hasField(@TypeOf(span), "citation_marker")) if (span.citation_marker != null) return false;
+    return true;
+}
+pub fn validClippedAbsoluteInline(value: anytype) bool {
+    if (value.static_parent_direction != .ltr and value.static_parent_direction != .rtl) return false;
+    if (!validStyleLength(value.width) or !validStyleLength(value.height) or
+        value.children.len == 0 or value.children.len > max_presentation_items) return false;
+    inline for (.{ "top", "right", "bottom", "left" }) |edge| {
+        const margin = @field(value.margin, edge);
+        if (margin != .length or !validContainerMarginLength(margin.length)) return false;
+    }
+    var actual_body = false;
+    for (value.children) |child| {
+        if (!validClippedAbsoluteInlineChild(child)) return false;
+        if (child.text.len != 0) actual_body = true;
+        if (comptime @hasField(@TypeOf(child), "trail")) if (child.trail.len != 0) { actual_body = true; };
+    }
+    return actual_body;
+}
+pub fn validClippedAbsoluteInlineOwner(span: anytype) bool {
+    if (!spanHasClippedAbsolute(span) or !validRubyChild(span) or span.text.len != 0 or spanHasRuby(span) or
+        spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span)) return false;
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    if (comptime @hasField(@TypeOf(span), "citation_marker")) if (span.citation_marker != null) return false;
+    if (comptime @hasField(@TypeOf(span), "clipped_absolute")) {
+        const value = span.clipped_absolute.?.*;
+        if (!validClippedAbsoluteInline(value)) return false;
+        if (comptime @hasField(@TypeOf(span), "direction")) if (span.direction.len != 0 and
+            !std.mem.eql(u8, span.direction, @tagName(value.static_parent_direction))) return false;
+        if (InlinePaddingGroupAction.from(span)) |action| for (value.children) |child| action.check(child) catch return false;
+        return true;
+    }
+    return false;
+}
+pub fn validateClippedAbsoluteInlineTree(owner: anytype, content_depth: usize, ruby_depth: usize) error{InvalidPresentation}!void {
+    if (!validClippedAbsoluteInlineOwner(owner) or content_depth >= max_content_depth or ruby_depth != 0) return error.InvalidPresentation;
+    const Noop = struct { fn emit(_: void, _: anytype) error{}!void {} };
+    var budget: RubyFallbackBudget = .{};
+    visitRubyFallbackInner(&[_]@TypeOf(owner){owner}, {}, Noop.emit, content_depth, ruby_depth,
+        false, .{}, null, false, &budget, false) catch return error.InvalidPresentation;
+}
+
 /// One ordinary inline boundary with zero vertical padding. The containing
 /// Span retains the declaring font, paint and action; children add no shim text.
 pub fn InlinePaddingGroup(comptime Child: type) type {
@@ -634,7 +1043,7 @@ pub fn validInlinePaddingGroup(value: anytype) bool {
 }
 pub fn validInlinePaddingGroupOwner(span: anytype) bool {
     if (!spanHasInlinePaddingGroup(span) or !validRubyBodyChild(span) or
-        span.text.len != 0 or spanHasRuby(span) or spanHasInlineActionGroup(span)) return false;
+        span.text.len != 0 or spanHasRuby(span) or spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
     if (comptime @hasField(@TypeOf(span), "image")) if (span.image != null) return false;
     if (comptime @hasField(@TypeOf(span), "inline_padding_group"))
@@ -652,7 +1061,7 @@ pub fn validateInlinePaddingGroupTree(owner: anytype, content_depth: usize, ruby
     };
     var budget: RubyFallbackBudget = .{};
     visitRubyFallbackInner(&[_]@TypeOf(owner){owner}, {}, Noop.emit, content_depth, ruby_depth,
-        false, .{}, null, false, &budget) catch return error.InvalidPresentation;
+        false, .{}, null, false, &budget, false) catch return error.InvalidPresentation;
 }
 
 /// One authored action occurrence, independently of its rich child runs.
@@ -668,7 +1077,7 @@ pub fn validInlineActionGroup(value: anytype) bool {
 }
 pub fn validInlineActionGroupOwner(span: anytype) bool {
     if (!spanHasInlineActionGroup(span) or !validRubyBodyChild(span) or
-        span.text.len != 0 or span.target.len == 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span)) return false;
+        span.text.len != 0 or span.target.len == 0 or spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) return false;
     const kind = @tagName(span.kind);
     if (!std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
     if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
@@ -688,7 +1097,7 @@ pub fn validateInlineActionGroupTree(owner: anytype, content_depth: usize, ruby_
     };
     var budget: RubyFallbackBudget = .{};
     visitRubyFallbackInner(&[_]@TypeOf(owner){owner}, {}, Noop.emit, content_depth, ruby_depth,
-        false, .{}, null, false, &budget) catch return error.InvalidPresentation;
+        false, .{}, null, false, &budget, false) catch return error.InvalidPresentation;
 }
 
 pub const InlinePaddingGroupAction = struct {
@@ -704,7 +1113,6 @@ pub const InlinePaddingGroupAction = struct {
     pub fn from(span: anytype) ?@This() {
         const kind = std.meta.stringToEnum(InlineKind, @tagName(span.kind)) orelse return null;
         if (kind != .link and kind != .external_link) return null;
-        const flags = if (comptime @hasField(@TypeOf(span), "flags")) span.flags else span;
         const paint: ?LinkPaint = if (comptime @hasField(@TypeOf(span), "link_paint")) span.link_paint else null;
         const ink: ?[]const u8 = if (comptime @hasField(@TypeOf(span), "foreground")) span.foreground else null;
         return .{
@@ -714,7 +1122,7 @@ pub const InlinePaddingGroupAction = struct {
             .explanation = if (comptime @hasField(@TypeOf(span), "explanation")) span.explanation else "",
             .link_paint = paint,
             .foreground = ink orelse if (paint) |policy| policy.normal.foreground else null,
-            .underline = flags.underline,
+            .underline = RubyFallbackDecoration.flag(span, .underline),
         };
     }
     pub fn check(self: @This(), span: anytype) error{InvalidPresentation}!void {
@@ -755,11 +1163,7 @@ pub const InlinePaddingGroupAction = struct {
         } else if (comptime @hasField(@TypeOf(span), "foreground")) {
             result.foreground = result.foreground orelse self.foreground;
         }
-        if (comptime @hasField(@TypeOf(span), "flags")) {
-            result.flags.underline = result.flags.underline or self.underline;
-        } else result.underline = result.underline or self.underline;
-        const flags = if (comptime @hasField(@TypeOf(span), "flags")) result.flags else result;
-        return (RubyFallbackDecoration{ .underline = flags.underline }).project(result);
+        return (RubyFallbackDecoration{ .underline = self.underline or RubyFallbackDecoration.flag(result, .underline) }).project(result);
     }
 };
 
@@ -790,6 +1194,9 @@ pub const Span = struct {
     ruby: ?*const Ruby(@This()) = null,
     inline_padding_group: ?*const InlinePaddingGroup(@This()) = null,
     inline_action_group: ?*const InlineActionGroup(@This()) = null,
+    inline_box_group: ?*const InlineBoxGroup(@This()) = null,
+    audio_control: ?AudioControl = null,
+    clipped_absolute: ?*const ClippedAbsoluteInline = null,
     bold: bool = false,
     italic: bool = false,
     code: bool = false,
@@ -812,11 +1219,14 @@ pub const Span = struct {
             const ruby_field = comptime std.mem.eql(u8, field_name, "ruby");
             const padding_group_field = comptime std.mem.eql(u8, field_name, "inline_padding_group");
             const action_group_field = comptime std.mem.eql(u8, field_name, "inline_action_group");
+            const box_group_field = comptime std.mem.eql(u8, field_name, "inline_box_group");
+            const audio_control_field = comptime std.mem.eql(u8, field_name, "audio_control");
+            const clipped_absolute_field = comptime std.mem.eql(u8, field_name, "clipped_absolute");
             const features_field = comptime std.mem.eql(u8, field_name, "font_features");
             const family_field = comptime std.mem.eql(u8, field_name, "font_family");
             const link_paint_field = comptime std.mem.eql(u8, field_name, "link_paint");
             const inline_style_field = comptime std.mem.eql(u8, field_name, "inline_style");
-            if ((!action_group_field or self.inline_action_group != null) and (!padding_group_field or self.inline_padding_group != null) and (!ruby_field or self.ruby != null) and (!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
+            if ((!audio_control_field or self.audio_control != null) and (!clipped_absolute_field or self.clipped_absolute != null) and (!box_group_field or self.inline_box_group != null) and (!action_group_field or self.inline_action_group != null) and (!padding_group_field or self.inline_padding_group != null) and (!ruby_field or self.ruby != null) and (!fragment_field or self.target_fragment != null) and (!image_field or self.image != null) and (!background_field or self.background != null) and
                 (!scale_field or (self.font_scale != null and (self.font_scale.? != 1 or self.font_scale_basis != .context))) and
                 (!basis_field or self.font_scale_basis != .context) and (!features_field or self.font_features != null) and
                 (!link_paint_field or self.link_paint != null) and (!inline_style_field or self.inline_style != null) and (!family_field or self.font_family != null))
@@ -959,6 +1369,10 @@ pub const TableStyle = struct {
     vertical_align: ?InlineBoxVerticalAlign = null,
     line_height: ?ComputedLineHeight = null,
     corner_radii: ?TableCornerRadii = null,
+    /// Authored table minimum, independent of preferred width and cell minima.
+    /// em uses the existing normalized table basis; percentages retain their
+    /// containing-width basis, including zero and values greater than 100.
+    min_width: ?StyleWidth = null,
 
     pub fn jsonStringify(self: TableStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
@@ -1104,6 +1518,60 @@ pub fn validTableScrollFocusPaint(value: TableScrollFocusPaint) bool {
     if (value.color) |color| return value.mode == .ua_auto and validFigureColor(color);
     return true;
 }
+// Value vocabulary only: AUDIO custody is independent of every TABLE proof.
+pub const AudioControlFocusMode = TableScrollFocusMode;
+pub const AudioControlFocusPaint = TableScrollFocusPaint;
+pub fn validAudioControlFocusPaint(value: AudioControlFocusPaint) bool {
+    if (!validTableScrollFocusPaint(value)) return false;
+    if (value.color) |color| return color.kind == .rgb or color.kind == .transparent;
+    return true;
+}
+pub const AudioControl = struct {
+    // Geometry uses the existing original-normal-body em and containing-width
+    // vocabulary. Null retains source-auto sizing; native height is not guessed.
+    width: ?StyleWidth = null,
+    height: ?StyleLength = null,
+    focus: ?AudioControlFocusPaint = null,
+    const JsonFields = struct {
+        width: ?StyleWidth = null,
+        height: ?StyleLength = null,
+        focus: ?AudioControlFocusPaint = null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{UnexpectedToken}!@This() {
+        const result: @This() = .{ .width = value.width, .height = value.height, .focus = value.focus };
+        if (!validAudioControl(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+pub fn validAudioControl(value: AudioControl) bool {
+    if (value.width) |width| if (!validStyleWidth(width) or width.value <= 0) return false;
+    if (value.height) |height| if (!validStyleLength(height) or height.value <= 0) return false;
+    if (value.focus) |focus| if (!validAudioControlFocusPaint(focus)) return false;
+    return true;
+}
+pub fn spanAudioControl(span: anytype) ?AudioControl {
+    return if (comptime @hasField(@TypeOf(span), "audio_control")) span.audio_control else null;
+}
+pub fn validSpanAudioControl(span: anytype) bool {
+    const control = spanAudioControl(span) orelse return true;
+    const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+    if (!validAudioControl(control) or !std.mem.eql(u8, @tagName(span.kind), "link") or
+        !std.mem.startsWith(u8, span.target, "File:") or span.target.len == 5 or trail.len != 0) return false;
+    inline for (.{ "image", "target_fragment", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "clipped_absolute", "link_paint" }) |name| {
+        if (comptime @hasField(@TypeOf(span), name)) if (@field(span, name) != null) return false;
+    }
+    const owner = inlineTableMediaOwner(span) orelse return false;
+    return owner.adaptation.hex and owner.adaptation.eql(owner.key, span.target[5..]);
+}
+
 pub const TableBlockViewport = struct {
     max_viewport_width_px: u32,
     box_style: TableStyle,
@@ -1198,6 +1666,11 @@ pub const Table = struct {
     style: ?TableStyle = null,
     block_viewport: ?*const TableBlockViewport = null,
     float_viewport: ?TableFloatViewport = null,
+    /// Hide every row at or below this positive root CSS viewport width. Caption
+    /// and Table ownership persist. This is not a row-group or disclosure model;
+    /// the producer proves all stored rows share the condition. Hidden rows keep
+    /// their complete semantic data and budgets, but have no layout/paint/hit/AX.
+    rows_hidden_max_width_px: ?u32 = null,
 
     pub fn jsonStringify(self: Table, jw: anytype) !void {
         try jw.beginObject();
@@ -1216,6 +1689,7 @@ pub const Table = struct {
             try jw.write(style);
         }
         if (self.block_viewport) |viewport| { try jw.objectField("block_viewport"); try jw.write(viewport.*); }
+        if (self.rows_hidden_max_width_px) |bound| { try jw.objectField("rows_hidden_max_width_px"); try jw.write(bound); }
         try jw.endObject();
     }
 };
@@ -1710,14 +2184,55 @@ pub const ContainerScreenMaxWidth = struct {
     }
 };
 pub const max_container_screen_rules = 16;
-/// Computed pair: visible/visible or auto/auto. Auto is a scroll BFC.
-/// Auto is a local padding-box scrollport and BFC, not document scrolling.
-/// Native offsets/clips belong to its real owner; Stored contains no UI state.
-pub const ContainerOverflow = enum { visible, auto };
+/// Computed pair on both axes. Auto and hidden are local padding-box scrollports
+/// and BFCs, not document scrolling. Hidden suppresses user scrolling/scrollbars
+/// while retaining programmatic scroll/reveal; it is not clip-only overflow.
+/// Native offsets/clips belong to the real owner; Stored contains no UI state.
+pub const ContainerOverflow = enum(u8) { visible = 0, auto = 1, hidden = 2 };
 /// Auto-height balanced fragmentation of one ordered child flow. Gap em is
 /// computed once at this owner into normal-body units, never from a child span.
 pub const ContainerColumns = struct { count: u16, gap: StyleLength };
 pub const ContainerPositioning = enum(u8) { relative_auto = 0 };
+/// DPRZ Container-only absolute offsets. Values locate the margin box from the
+/// nearest represented relative Container's padding edge. Em is already resolved
+/// once into original NormalBody units; px keeps the ordinary CSS-pixel basis.
+/// No static-position, percentage, opposing-edge or viewport anchoring is implied.
+pub const ContainerAbsolutePosition = struct { left: StyleLength, top: StyleLength };
+/// Direction of the actual containing native paragraph for sole-inline static
+/// positioning. Inherit is not an LTR default or the child's first strong text.
+pub const ContainerStaticDirection = enum(u8) {
+    inherit = 0,
+    ltr = 1,
+    rtl = 2,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
+/// All four insets auto. The sole immediate relative parent supplies a real
+/// hypothetical inline first box. This payload never means fixed zero offsets.
+pub const ContainerAbsoluteStaticPosition = struct { direction: ContainerStaticDirection = .inherit };
+/// Computed inherited wrapping. Null inherits the enclosing Container's policy;
+/// independent section/reference roots start at normal. Explicit normal resets
+/// an inherited nowrap value; this does not change whitespace collapsing.
+pub const ContainerTextWrap = enum(u8) {
+    normal = 0,
+    nowrap = 1,
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        if (try source.peekNextTokenType() != .string) return error.UnexpectedToken;
+        const name = try std.json.innerParse([]const u8, a, source, options);
+        return std.meta.stringToEnum(@This(), name) orelse error.InvalidEnumTag;
+    }
+    pub fn jsonParseFromValue(_: std.mem.Allocator, source: std.json.Value, _: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        if (source != .string) return error.UnexpectedToken;
+        return std.meta.stringToEnum(@This(), source.string) orelse error.InvalidEnumTag;
+    }
+};
 pub const GenericFontFamily = enum(u8) { sans_serif = 0, serif = 1 };
 pub const FontFamilyStack = struct {
     names: []const []const u8,
@@ -1834,7 +2349,7 @@ pub const SectionHeadingStyle = struct {
 pub fn validSectionHeadingStyle(value: SectionHeadingStyle) bool {
     if (value.anchor_reveal) |reveal| if (!validHeadingAnchorReveal(reveal)) return false;
     const box = value.box;
-    if (!validContainerStyle(box) or box.margins == null or box.padding == null or box.border == null or
+    if (!validContainerStyle(box) or box.owner_font != null or box.margins == null or box.padding == null or box.border == null or
         box.owner_font_scale == null or box.line_height == null or box.clear == null or box.font_family == null) return false;
     const font = value.font;
     if (font.font_family != null and !sameFontFamilyRequest(font.font_family, box.font_family)) return false;
@@ -1845,7 +2360,8 @@ pub fn validSectionHeadingStyle(value: SectionHeadingStyle) bool {
     return (box.width == null or box.width.? == .auto) and (box.max_width == null or box.max_width.? == .none) and
         (box.layout == null or box.layout.? == .flow) and (box.overflow == null or box.overflow.? == .visible) and
         box.float_side == null and box.flex_item == null and box.align_items == null and box.columns == null and
-        box.positioning == null and box.screen_max_width == null and box.height == null and box.min_height == null and box.margin_values == null;
+        box.positioning == null and box.absolute_position == null and box.absolute_static == null and box.text_wrap == null and
+        box.screen_max_width == null and box.height == null and box.min_height == null and box.margin_values == null;
 }
 pub fn validSectionHeadingCompanion(section: anytype) bool {
     // Legacy build Sections have no authored heading capability. Decline at
@@ -1873,7 +2389,7 @@ pub fn validSectionHeadingCompanion(section: anytype) bool {
     for (heading.spans) |span| {
         // Generic build spans without ruby must not instantiate its stricter
         // child/decoration contract, even when this runtime arm is unreachable.
-        if (comptime @hasField(@TypeOf(span), "ruby") or @hasField(@TypeOf(span), "inline_padding_group") or @hasField(@TypeOf(span), "inline_action_group")) if (spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span)) {
+        if (comptime @hasField(@TypeOf(span), "ruby") or @hasField(@TypeOf(span), "inline_padding_group") or @hasField(@TypeOf(span), "inline_action_group") or @hasField(@TypeOf(span), "inline_box_group") or @hasField(@TypeOf(span), "clipped_absolute")) if (spanHasRuby(span) or spanHasInlinePaddingGroup(span) or spanHasInlineActionGroup(span) or spanHasInlineBoxGroup(span) or spanHasClippedAbsolute(span)) {
             const Match = struct {
                 title: []const u8, offset: usize,
                 fn emit(self: *@This(), child: @TypeOf(span)) error{InvalidPresentation}!void {
@@ -1939,12 +2455,145 @@ pub const ContainerStyle = struct {
     // formatting context. Exclusive with numeric margins; null preserves old bytes.
     margin_values: ?ContainerMargins = null,
     font_family: ?ContainerFontFamily = null,
+    // W: complete declaring metric, independent of child overrides. No line is
+    // created by this context; normalized box lengths do not scale again.
+    owner_font: ?InlineFontSnapshot = null,
+    // DPRZ-only; separate from the shared Figure relative_auto enum. Absolute
+    // boxes retain original child order but have no normal-flow contribution.
+    // A following represented relative Container may establish a new anchor;
+    // absolute boxes themselves are not supported descendant containing blocks.
+    absolute_position: ?ContainerAbsolutePosition = null,
+    text_wrap: ?ContainerTextWrap = null,
+    // DPRZ256 extension bit4, following fixed offsets and wrapping. Contextual
+    // validation requires a sole immediate relative parent and an ordinary
+    // rich paragraph. Width fit_content/height null mean shrink-to-fit/auto.
+    absolute_static: ?ContainerAbsoluteStaticPosition = null,
     pub fn jsonStringify(self: ContainerStyle, jw: anytype) !void {
         try writeOptionalStyleFields(self, jw);
     }
 };
+// The public Container owns the disclosure; geometry/style-only wrappers cannot.
+// Labels contain every visible character, including any authored brackets.
+pub const ContainerDisclosureFocusMode = TableScrollFocusMode;
+pub const ContainerDisclosureFocusPaint = TableScrollFocusPaint;
+pub const ContainerDisclosurePlacement = enum { inline_flow, float_left, float_right };
+// A BUTTON has no visited state; these are its four independent pointer states.
+// The complete label outside the selected run keeps the owner's inherited paint.
+pub const ContainerDisclosureTextPaint = struct {
+    normal: LinkState,
+    hover: LinkState,
+    active: LinkState,
+    hover_active: LinkState,
+    underline_on_focus: bool = false,
+};
+pub const ContainerDisclosureLabelRun = struct {
+    start: u32,
+    end: u32,
+    paint: ContainerDisclosureTextPaint,
+};
+pub fn validContainerDisclosureTextPaint(value: ContainerDisclosureTextPaint) bool {
+    inline for (.{ "normal", "hover", "active", "hover_active" }) |name|
+        if (!isCanonicalRgb(@field(value, name).foreground)) return false;
+    return true;
+}
+fn validContainerDisclosureRun(label: []const u8, value: ContainerDisclosureLabelRun) bool {
+    if (value.start >= value.end or value.end > label.len or !validContainerDisclosureTextPaint(value.paint)) return false;
+    // Offsets are original UTF-8 byte boundaries, never native UTF-16 indices.
+    return (value.start == 0 or label[value.start] & 0xc0 != 0x80) and
+        (value.end == label.len or label[value.end] & 0xc0 != 0x80);
+}
+pub fn containerDisclosureTextState(value: ContainerDisclosureTextPaint, hover: bool, active: bool, focused: bool) LinkState {
+    var state = if (active) (if (hover) value.hover_active else value.active) else if (hover) value.hover else value.normal;
+    if (focused and value.underline_on_focus) state.underline = true;
+    return state;
+}
+pub fn containerDisclosureItems(value: ContainerDisclosure) usize {
+    return 1 + @as(usize, @intFromBool(value.focus != null)) +
+        @as(usize, @intFromBool(value.expand_run != null)) + @as(usize, @intFromBool(value.collapse_run != null));
+}
+pub const ContainerDisclosure = struct {
+    content_index: u32,
+    initially_collapsed: bool,
+    expand_label: []const u8,
+    collapse_label: []const u8,
+    focus: ?ContainerDisclosureFocusPaint = null,
+    placement: ContainerDisclosurePlacement = .inline_flow,
+    foreground: ?FigureColor = null,
+    direction: ?BidiResolvedDirection = null,
+    expand_run: ?ContainerDisclosureLabelRun = null,
+    collapse_run: ?ContainerDisclosureLabelRun = null,
+    const JsonFields = struct {
+        content_index: u32,
+        initially_collapsed: bool,
+        expand_label: []const u8,
+        collapse_label: []const u8,
+        focus: ?ContainerDisclosureFocusPaint = null,
+        placement: ContainerDisclosurePlacement = .inline_flow,
+        foreground: ?FigureColor = null,
+        direction: ?BidiResolvedDirection = null,
+        expand_run: ?ContainerDisclosureLabelRun = null,
+        collapse_run: ?ContainerDisclosureLabelRun = null,
+    };
+    pub fn jsonParse(a: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) std.json.ParseError(@TypeOf(source.*))!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParse(JsonFields, a, source, strict));
+    }
+    pub fn jsonParseFromValue(a: std.mem.Allocator, source: std.json.Value, options: std.json.ParseOptions) std.json.ParseFromValueError!@This() {
+        var strict = options; strict.ignore_unknown_fields = false; strict.duplicate_field_behavior = .@"error";
+        return fromJson(try std.json.innerParseFromValue(JsonFields, a, source, strict));
+    }
+    fn fromJson(value: JsonFields) error{UnexpectedToken}!@This() {
+        const result: @This() = .{ .content_index = value.content_index, .initially_collapsed = value.initially_collapsed,
+            .expand_label = value.expand_label, .collapse_label = value.collapse_label, .focus = value.focus,
+            .placement = value.placement, .foreground = value.foreground, .direction = value.direction,
+            .expand_run = value.expand_run, .collapse_run = value.collapse_run };
+        if (!validContainerDisclosure(result)) return error.UnexpectedToken;
+        return result;
+    }
+};
+fn validContainerDisclosureLabel(value: []const u8) bool {
+    if (value.len == 0 or value.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(value)) return false;
+    for (value) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    return true;
+}
+pub fn validContainerDisclosure(value: ContainerDisclosure) bool {
+    if (!validContainerDisclosureLabel(value.expand_label) or !validContainerDisclosureLabel(value.collapse_label)) return false;
+    if (value.foreground) |color| if (!validFigureColor(color) or (color.kind != .rgb and color.kind != .transparent)) return false;
+    if (value.expand_run) |run| if (!validContainerDisclosureRun(value.expand_label, run)) return false;
+    if (value.collapse_run) |run| if (!validContainerDisclosureRun(value.collapse_label, run)) return false;
+    if (value.focus) |focus| {
+        if (!validTableScrollFocusPaint(focus)) return false;
+        if (focus.color) |color| if (color.kind != .rgb and color.kind != .transparent) return false;
+    }
+    return true;
+}
+pub fn containerDisclosure(value: anytype) ?ContainerDisclosure {
+    return if (comptime @hasField(@TypeOf(value), "disclosure")) value.disclosure else null;
+}
+pub fn validContainerDisclosureOwner(value: anytype) bool {
+    const disclosure = containerDisclosure(value) orelse return true;
+    if (!validContainerDisclosure(disclosure) or disclosure.content_index >= value.blocks.len) return false;
+    const child = value.blocks[disclosure.content_index];
+    if (!std.mem.eql(u8, @tagName(child.kind), "container")) return false;
+    if (comptime @hasField(@TypeOf(child), "container")) return child.container != null;
+    return false;
+}
+pub fn containerRequiresExtension(value: anytype) bool {
+    return containerStyleRequiresPositionedCapability(value.style) or containerDisclosure(value) != null;
+}
 pub fn ContainerFor(comptime BlockType: type) type {
-    return struct { blocks: []const BlockType, style: ContainerStyle = .{} };
+    return struct {
+        blocks: []const BlockType,
+        style: ContainerStyle = .{},
+        disclosure: ?ContainerDisclosure = null,
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            try jw.beginObject();
+            try jw.objectField("blocks"); try jw.write(self.blocks);
+            try jw.objectField("style"); try jw.write(self.style);
+            if (self.disclosure) |value| { try jw.objectField("disclosure"); try jw.write(value); }
+            try jw.endObject();
+        }
+    };
 }
 pub const Container = ContainerFor(Block);
 
@@ -2144,6 +2793,17 @@ pub const BodyAdjoiningPolicy = enum(u8) {
         return std.meta.stringToEnum(@This(), value.string) orelse error.InvalidEnumTag;
     }
 };
+/// Declaring metrics for section body lines; no hierarchy or spacing changes.
+/// Heading, display, reference and caption owners remain independent.
+pub const BodyTypography = struct {
+    owner_font: InlineFontSnapshot,
+    line_height: ?ContainerLineHeight = null,
+};
+pub fn validBodyTypography(value: BodyTypography) bool {
+    if (!validContainerOwnerFont(value.owner_font)) return false;
+    if (value.line_height) |height| if (!validContainerLineHeight(height)) return false;
+    return true;
+}
 pub const Entry = struct {
     organization: Layout = .{},
     title: []const u8,
@@ -2158,12 +2818,13 @@ pub const Entry = struct {
     redirect: ?Redirect = null,
     alias: ?AliasTarget = null,
     body_adjoining: ?BodyAdjoiningPolicy = null,
+    body_typography: ?BodyTypography = null,
 
     pub fn jsonStringify(self: Entry, jw: anytype) !void {
         try jw.beginObject();
         inline for (@typeInfo(Entry).@"struct".field_names) |name| {
-            if (comptime std.mem.eql(u8, name, "body_adjoining")) {
-                if (self.body_adjoining) |present| {
+            if (comptime std.mem.eql(u8, name, "body_adjoining") or std.mem.eql(u8, name, "body_typography")) {
+                if (@field(self, name)) |present| {
                     try jw.objectField(name); try jw.write(present);
                 }
             } else { try jw.objectField(name); try jw.write(@field(self, name)); }
@@ -2279,6 +2940,9 @@ pub fn validStaticPosterIdentity(value: StaticPoster) bool {
     return day <= month_days[month - 1] + @as(u8, if (month == 2 and leap) 1 else 0);
 }
 pub fn validInlineImage(value: InlineImage) bool {
+    if (value.occurrence_layout) |layout| {
+        if (!validInlineImageOccurrenceLayout(layout) or value.map != null or value.static_poster != null) return false;
+    }
     if (value.svg_language) |language| if (!validSvgLanguageIdentity(language)) return false;
     if (!validInlineImageFile(value.file)) return false;
     if (value.width_px) |width| if (width == 0) return false;
@@ -2295,6 +2959,16 @@ pub fn validInlineImage(value: InlineImage) bool {
         switch (poster.policy) { .three_d_stl_v1 => {} }
     }
     return true;
+}
+/// Ordinary internal links retain the explicit fragment-only destination
+/// domain. Specialized image/style/group validators remain independently
+/// stricter; this does not turn other span kinds into actions.
+pub fn validSpanActionDestination(span: anytype) bool {
+    const kind = @tagName(span.kind);
+    if (std.mem.eql(u8, kind, "external_link")) return span.target.len != 0;
+    if (!std.mem.eql(u8, kind, "link") or span.target.len != 0) return true;
+    if (comptime @hasField(@TypeOf(span), "target_fragment")) return span.target_fragment != null;
+    return false;
 }
 // This new optional component has the same string ceiling/UTF8 contract as wire strings.
 pub fn validTargetFragment(value: []const u8) bool {
@@ -2447,6 +3121,12 @@ pub const ImageCatalogIndex = struct {
         self.values.deinit(a);
         self.* = .{};
     }
+    pub fn supportsAudioControl(self: *const ImageCatalogIndex, span: anytype) bool {
+        if (spanAudioControl(span) == null) return true;
+        if (!validSpanAudioControl(span)) return false;
+        const value = inlineTableMediaValue(self.values, span) orelse return false;
+        return !value.image and !value.duplicate;
+    }
     pub fn supportsInlineTableAudio(self: *const ImageCatalogIndex, span: anytype) bool {
         if (!inlineTableEmbeddedMedia(span)) return true;
         const value = inlineTableMediaValue(self.values, span) orelse return false;
@@ -2471,18 +3151,62 @@ pub const ImageCatalogIndex = struct {
 /// collection and Figure/Ruby-owner charges used by the nested wire encoder.
 /// Codec runs this before wider capability walks; validation shares one budget
 /// across first-depth17 subtrees. Historical shallow validation is unchanged.
+// The initial clipped carrier is anchored to the native article root. Any
+// represented nonstatic box in its ancestor chain needs a different contract.
+fn containerCreatesClippedContainingBlock(style: ContainerStyle) bool {
+    return style.positioning != null or style.absolute_position != null or style.absolute_static != null;
+}
+fn figureStateCreatesClippedContainingBlock(value: anytype) bool {
+    if (containerCreatesClippedContainingBlock(value.wrapper) or value.media.positioning != null) return true;
+    if (comptime @hasField(@TypeOf(value), "caption_before")) if (value.caption_before) |style|
+        if (containerCreatesClippedContainingBlock(style)) return true;
+    return false;
+}
+fn figureLayoutCreatesClippedContainingBlock(value: anytype) bool {
+    if (figureStateCreatesClippedContainingBlock(value) or value.viewport_states.len > max_figure_viewport_states) return true;
+    for (value.viewport_states) |state| if (figureStateCreatesClippedContainingBlock(state)) return true;
+    return false;
+}
+
 pub const DeepTableWork = struct {
     remaining: usize = max_presentation_items,
     inline_group_found: bool = false,
     inline_action_group_found: bool = false,
+    inline_box_group_found: bool = false,
+    clipped_absolute_found: bool = false,
+    discover_clipped_absolute: bool = false,
+    clipped_nonstatic_ancestor: bool = false,
+    image_occurrence_found: bool = false,
+    audio_control_found: bool = false,
+    discover_audio_control: bool = false,
+    discover_image_occurrence: bool = false,
+    container_owner_font_found: bool = false,
+    discover_container_owner_font: bool = false,
+    // Existing header256 Container extension census, including disclosure.
+    positioned_container_found: bool = false,
+    discover_positioned_container: bool = false,
+    table_min_width_found: bool = false,
+    discover_table_min_width: bool = false,
+    table_rows_visibility_found: bool = false,
+    discover_table_rows_visibility: bool = false,
+    // Saved/restored at each Container. Absolute descendants may not borrow an
+    // outer relative anchor across another absolute box; explicit relative resets.
+    relative_container_anchor: bool = false,
+    static_inline_parent: bool = false,
     inline_group_font_family: bool = false,
     inline_group_text_flow: bool = false,
     discover_inline_group: bool = false,
     discover_inline_action_group: bool = false,
+    discover_inline_box_group: bool = false,
     const Error = error{ InvalidPresentation, PresentationTooLarge };
     fn take(self: *DeepTableWork, count: usize) Error!void {
         if (count > self.remaining) return error.PresentationTooLarge;
         self.remaining -= count;
+    }
+    pub fn bodyTypography(self: *DeepTableWork, value: BodyTypography) Error!void {
+        if (!validBodyTypography(value)) return error.InvalidPresentation;
+        try self.take(1);
+        self.inlineFeatures(value.owner_font);
     }
     fn inlineFeatures(self: *DeepTableWork, value: anytype) void {
         if (comptime @hasField(@TypeOf(value), "font_family"))
@@ -2499,6 +3223,37 @@ pub const DeepTableWork = struct {
         try self.take(values.len);
         for (values) |value| {
             self.inlineFeatures(value);
+            if (spanAudioControl(value)) |control| {
+                self.audio_control_found = true;
+                if (self.discover_audio_control) return error.InvalidPresentation;
+                if (!validSpanAudioControl(value)) return error.InvalidPresentation;
+                try self.take(1 + @as(usize, @intFromBool(control.focus != null)));
+            }
+            if (comptime @hasField(@TypeOf(value), "image")) if (value.image) |image| if (image.occurrence_layout) |layout| {
+                self.image_occurrence_found = true;
+                if (self.discover_image_occurrence) return error.InvalidPresentation;
+                if (!validInlineImageOccurrenceLayout(layout)) return error.InvalidPresentation;
+                try self.take(1);
+            };
+            if (comptime @hasField(@TypeOf(value), "clipped_absolute")) if (value.clipped_absolute) |group| {
+                self.clipped_absolute_found = true;
+                if (self.discover_clipped_absolute) return error.InvalidPresentation;
+                if (self.clipped_nonstatic_ancestor) return error.InvalidPresentation;
+                try validateClippedAbsoluteInlineTree(value, content_depth, ruby_depth);
+                try self.spans(group.children, content_depth + 1, ruby_depth);
+            };
+            if (comptime @hasField(@TypeOf(value), "inline_box_group")) if (value.inline_box_group) |group| {
+                self.inline_box_group_found = true;
+                if (self.discover_inline_box_group) return error.InvalidPresentation;
+                if (content_depth >= max_content_depth or !validInlineBoxGroupOwner(value)) return error.InvalidPresentation;
+                try self.take(group.overlays.len);
+                for (group.overlays) |overlay| if (overlay.content) |content| {
+                    self.inlineFeatures(content.owner_font);
+                    if (content.line_height) |height| if (height == .font_relative) self.inlineFeatures(height.font_relative.font);
+                    try self.spans(content.spans, content_depth + 2, ruby_depth);
+                };
+                try self.spans(group.spans, content_depth + 1, ruby_depth);
+            };
             if (comptime @hasField(@TypeOf(value), "inline_action_group")) if (value.inline_action_group) |group| {
                 self.inline_action_group_found = true;
                 if (self.discover_inline_action_group) return error.InvalidPresentation;
@@ -2541,6 +3296,55 @@ pub const DeepTableWork = struct {
     /// Discovery never changes historical group-free validation/count semantics.
     /// A group beyond this budget cannot form a valid U entry; the legacy encoder
     /// still refuses that unsupported field if it reaches it later.
+    /// Model work admission shares the existing table-minimum discovery walk.
+    /// The separate public minimum census retains its exact wire512 meaning.
+    pub fn hasTablePolicyWork(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_table_min_width = true, .discover_table_rows_visibility = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.table_min_width_found or work.table_rows_visibility_found;
+    }
+    pub fn hasTableMinWidths(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_table_min_width = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.table_min_width_found;
+    }
+    fn tableStyleMinimum(self: *DeepTableWork, style: TableStyle) Error!void {
+        if (style.min_width) |minimum| {
+            self.table_min_width_found = true;
+            if (self.discover_table_min_width) return error.InvalidPresentation;
+            if (!validStyleWidth(minimum)) return error.InvalidPresentation;
+        }
+    }
+    pub fn hasPositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_positioned_container = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.positioned_container_found;
+    }
+    pub fn hasContainerOwnerFonts(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_container_owner_font = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.container_owner_font_found;
+    }
+    pub fn hasImageOccurrences(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_image_occurrence = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.image_occurrence_found;
+    }
+    pub fn hasAudioControls(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_audio_control = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.audio_control_found;
+    }
+    pub fn hasClippedAbsolutes(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_clipped_absolute = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.clipped_absolute_found;
+    }
+    pub fn hasInlineBoxGroups(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_inline_box_group = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.inline_box_group_found;
+    }
     pub fn hasInlineActionGroups(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_inline_action_group = true };
         work.entry(display, sections, preamble, references) catch {};
@@ -2552,6 +3356,24 @@ pub const DeepTableWork = struct {
         return work.inline_group_found;
     }
     fn figure(self: *DeepTableWork, value: anytype, table_depth: usize, content_depth: usize) Error!void {
+        const old_clipped = self.clipped_nonstatic_ancestor;
+        if (comptime @hasField(@TypeOf(value), "table_caption_layout")) {
+            if (value.table_caption_layout) |layout| {
+                self.clipped_nonstatic_ancestor = self.clipped_nonstatic_ancestor or figureLayoutCreatesClippedContainingBlock(layout);
+            }
+        }
+        if (comptime @hasField(@TypeOf(value), "block_media_layout")) {
+            if (value.block_media_layout) |layout| {
+                self.clipped_nonstatic_ancestor = self.clipped_nonstatic_ancestor or figureLayoutCreatesClippedContainingBlock(layout);
+            }
+        }
+        defer self.clipped_nonstatic_ancestor = old_clipped;
+        const old_static = self.static_inline_parent;
+        self.static_inline_parent = false;
+        defer self.static_inline_parent = old_static;
+        const old_anchor = self.relative_container_anchor;
+        self.relative_container_anchor = false;
+        defer self.relative_container_anchor = old_anchor;
         // Encoder.chargeFigureContent charges the subject Span exactly once.
         const subject = [_]@TypeOf(value.content.span()){value.content.span()};
         try self.spans(&subject, content_depth, 0);
@@ -2574,8 +3396,36 @@ pub const DeepTableWork = struct {
         try self.take(values.len);
         for (values) |value| {
             try self.spans(value.spans, content_depth, 0);
-            if (comptime @hasField(@TypeOf(value), "container")) if (value.container) |box|
+            if (comptime @hasField(@TypeOf(value), "container")) if (value.container) |box| {
+                if (containerRequiresExtension(box)) {
+                    self.positioned_container_found = true;
+                    if (self.discover_positioned_container) return error.InvalidPresentation;
+                    if (!validContainerStyle(box.style)) return error.InvalidPresentation;
+                }
+                if (containerDisclosure(box)) |disclosure| {
+                    if (!validContainerDisclosureOwner(box)) return error.InvalidPresentation;
+                    try self.take(containerDisclosureItems(disclosure));
+                }
+                if (box.style.absolute_position != null and !self.relative_container_anchor) return error.InvalidPresentation;
+                if (box.style.absolute_static != null and
+                    (!self.static_inline_parent or !validContainerAbsoluteStaticBody(box))) return error.InvalidPresentation;
+                const old_anchor = self.relative_container_anchor;
+                const old_static = self.static_inline_parent;
+                const old_clipped = self.clipped_nonstatic_ancestor;
+                self.clipped_nonstatic_ancestor = old_clipped or containerCreatesClippedContainingBlock(box.style);
+                defer self.clipped_nonstatic_ancestor = old_clipped;
+                if (box.style.positioning != null) self.relative_container_anchor = true
+                else if (box.style.absolute_position != null or box.style.absolute_static != null) self.relative_container_anchor = false;
+                self.static_inline_parent = box.blocks.len == 1 and validContainerStaticParentStyle(box.style);
+                defer { self.relative_container_anchor = old_anchor; self.static_inline_parent = old_static; }
+                if (box.style.owner_font) |font| {
+                    self.container_owner_font_found = true;
+                    if (self.discover_container_owner_font) return error.InvalidPresentation;
+                    try self.take(1);
+                    self.inlineFeatures(font);
+                }
                 try self.blocks(box.blocks, table_depth, content_depth + 1);
+            };
             if (comptime @hasField(@TypeOf(value), "flow")) if (value.flow) |flow|
                 try self.parts(flow, table_depth, content_depth + 1);
             if (comptime @hasField(@TypeOf(value), "figure")) if (value.figure) |child|
@@ -2584,7 +3434,31 @@ pub const DeepTableWork = struct {
         }
     }
     pub fn table(self: *DeepTableWork, value: anytype, table_depth: usize, content_depth: usize) Error!void {
+        const old_static = self.static_inline_parent;
+        self.static_inline_parent = false;
+        defer self.static_inline_parent = old_static;
+        const old_anchor = self.relative_container_anchor;
+        self.relative_container_anchor = false;
+        defer self.relative_container_anchor = old_anchor;
         if (table_depth > max_table_depth or content_depth > max_content_depth) return error.InvalidPresentation;
+        if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style|
+            try self.tableStyleMinimum(style);
+        // Census includes unsupported responsive locations, so neither a hidden
+        // field nor an exhausted discovery walk can escape capability validation.
+        if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport) |policy| {
+            try self.tableStyleMinimum(policy.box_style);
+            try self.tableStyleMinimum(policy.grid_style);
+            if (policy.box_style.min_width != null or policy.grid_style.min_width != null) return error.InvalidPresentation;
+            if (value.style) |style| if (style.min_width != null) return error.InvalidPresentation;
+        };
+        if (comptime @hasField(@TypeOf(value), "float_viewport")) if (value.float_viewport != null)
+            if (value.style) |style| if (style.min_width != null) return error.InvalidPresentation;
+        if (comptime @hasField(@TypeOf(value), "rows_hidden_max_width_px")) if (value.rows_hidden_max_width_px != null) {
+            self.table_rows_visibility_found = true;
+            if (self.discover_table_rows_visibility) return error.InvalidPresentation;
+            try self.take(1);
+        };
+        if (!validTableRowsVisibility(value)) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "caption")) try self.spans(value.caption, content_depth, 0);
         if (comptime @hasField(@TypeOf(value), "caption_blocks")) if (value.caption_blocks) |children|
             try self.blocks(children, table_depth, content_depth + 1);
@@ -2601,12 +3475,21 @@ pub const DeepTableWork = struct {
         }
     }
     pub fn entry(self: *DeepTableWork, display: anytype, sections: anytype, preamble: anytype, references: anytype) Error!void {
+        self.clipped_nonstatic_ancestor = false;
         try self.spans(display, 0, 0);
         try self.take(sections.len);
-        for (sections) |section| try self.blocks(section.blocks, 0, 0);
+        for (sections) |section| {
+            self.static_inline_parent = false;
+            self.relative_container_anchor = false;
+            self.clipped_nonstatic_ancestor = false;
+            try self.blocks(section.blocks, 0, 0);
+        }
         try self.spans(preamble, 0, 0);
         try self.take(references.len);
         for (references) |reference| {
+            self.static_inline_parent = false;
+            self.relative_container_anchor = false;
+            self.clipped_nonstatic_ancestor = false;
             try self.spans(reference.spans, 0, 0);
             if (comptime @hasField(@TypeOf(reference), "blocks")) if (reference.blocks) |children|
                 try self.blocks(children, 0, 0);
@@ -2614,7 +3497,21 @@ pub const DeepTableWork = struct {
     }
 };
 
+/// Complete bounded semantic walk. Out-of-flow boxes and their rich children
+/// consume the same item/depth budget as in-flow content; nothing is skipped.
+pub fn validatePositionedContainers(display: anytype, sections: anytype, preamble: anytype, references: anytype) error{ InvalidPresentation, PresentationTooLarge }!void {
+    var work: DeepTableWork = .{};
+    try work.entry(display, sections, preamble, references);
+}
+
 const ImageValidation = struct {
+    // Discovery can exhaust before the first W owner. Only a completed entry
+    // budget walk permits an owner at the real validation encounter below.
+    container_owner_work_checked: bool = false,
+    positioned_container_work_checked: bool = false,
+    table_min_width_work_checked: bool = false,
+    table_rows_visibility_work_checked: bool = false,
+    clipped_absolute_work_checked: bool = false,
     a: std.mem.Allocator,
     media: []const Media,
     index: ?ImageCatalogIndex = null,
@@ -2626,10 +3523,18 @@ const ImageValidation = struct {
     inline_padding_action: ?InlinePaddingGroupAction = null,
     in_inline_padding_group: bool = false,
     in_inline_action_group: bool = false,
+    in_inline_box_group: bool = false,
+    in_clipped_absolute: bool = false,
     link_paint: ?FigureLinkPaint = null,
 
     fn deinit(self: *ImageValidation) void {
         if (self.index) |*index| index.deinit(self.a);
+    }
+    fn validateAudioControl(self: *ImageValidation, span: Span) ValidationError!void {
+        const control = span.audio_control orelse return;
+        if (!validSpanAudioControl(span) or !self.maps.items(1 + @as(usize, @intFromBool(control.focus != null)))) return error.InvalidPresentation;
+        if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
+        if (!self.index.?.supportsAudioControl(span)) return error.InvalidPresentation;
     }
     fn validateInlineTableMedia(self: *ImageValidation, table: Table) ValidationError!void {
         for (table.rows) |row| for (row.cells) |cell| for (cell.spans) |span| {
@@ -2639,6 +3544,7 @@ const ImageValidation = struct {
         };
     }
     fn validate(self: *ImageValidation, image: InlineImage) ValidationError!void {
+        if (image.occurrence_layout != null and !self.container_owner_work_checked) return error.InvalidPresentation;
         if (image.map) |map| if (!self.maps.map(map)) return error.InvalidPresentation;
         // Media-only records retain their historical admission and allocate no index.
         if (self.index == null) self.index = try ImageCatalogIndex.init(self.a, self.media);
@@ -2677,12 +3583,50 @@ fn validateRubyContent(value: Ruby(Span), media: *ImageValidation) ValidationErr
 
 fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationError!void {
     for (spans) |span| {
+        try media.validateAudioControl(span);
+        if (media.in_clipped_absolute and !validClippedAbsoluteInlineChild(span)) return error.InvalidPresentation;
         if ((media.in_inline_padding_group or media.in_inline_action_group) and !validRubyBodyChild(span)) return error.InvalidPresentation;
-        if (media.in_inline_action_group) if (media.inline_padding_action) |action| try action.check(span);
+        if (media.in_inline_box_group and !validRubyChild(span)) return error.InvalidPresentation;
+        if (media.in_inline_action_group or media.in_inline_box_group or media.in_clipped_absolute) if (media.inline_padding_action) |action| try action.check(span);
         if (media.inline_padding_action != null and (span.kind != .text or span.target.len != 0)) return error.InvalidPresentation;
-        if (span.inline_action_group) |group| {
+        if (span.clipped_absolute) |group| {
+            if (!media.clipped_absolute_work_checked) return error.InvalidPresentation;
+            if (media.in_inline_box_group or media.in_inline_padding_group or media.in_inline_action_group or media.in_clipped_absolute or
+                media.ruby_depth != 0 or media.content_depth >= max_content_depth or !media.maps.items(1) or
+                !media.maps.items(group.children.len)) return error.InvalidPresentation;
+            try validateClippedAbsoluteInlineTree(span, media.content_depth, media.ruby_depth);
+            const previous_action = media.inline_padding_action;
+            media.inline_padding_action = InlinePaddingGroupAction.from(span) orelse previous_action;
+            media.in_clipped_absolute = true;
+            media.content_depth += 1;
+            defer media.content_depth -= 1;
+            defer media.in_clipped_absolute = false;
+            defer media.inline_padding_action = previous_action;
+            try validateSpanColors(group.children, media);
+        } else if (span.inline_box_group) |group| {
+            if (!validInlineBoxGroupOwner(span) or media.content_depth >= max_content_depth or
+                (!media.in_inline_box_group and !media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
+                !media.maps.items(group.overlays.len) or !media.maps.items(group.spans.len)) return error.InvalidPresentation;
+            try validateInlineBoxGroupTree(span, media.content_depth, media.ruby_depth);
+            const previous_action = media.inline_padding_action;
+            const previous_group = media.in_inline_box_group;
+            media.inline_padding_action = InlinePaddingGroupAction.from(span) orelse previous_action;
+            media.in_inline_box_group = true;
+            media.content_depth += 1;
+            defer media.content_depth -= 1;
+            defer media.in_inline_box_group = previous_group;
+            defer media.inline_padding_action = previous_action;
+            for (group.overlays) |overlay| if (overlay.content) |content| {
+                if (media.inline_padding_action != null or media.content_depth >= max_content_depth or
+                    !media.maps.items(content.spans.len)) return error.InvalidPresentation;
+                media.content_depth += 1;
+                defer media.content_depth -= 1;
+                try validateSpanColors(content.spans, media);
+            };
+            try validateSpanColors(group.spans, media);
+        } else if (span.inline_action_group) |group| {
             if (!validInlineActionGroupOwner(span) or media.content_depth >= max_content_depth or
-                (!media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
+                (!media.in_inline_box_group and !media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
                 !media.maps.items(group.spans.len)) return error.InvalidPresentation;
             const previous_action = media.inline_padding_action;
             const previous_group = media.in_inline_action_group;
@@ -2695,7 +3639,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             try validateSpanColors(group.spans, media);
         } else if (span.inline_padding_group) |group| {
             if (!validInlinePaddingGroupOwner(span) or media.content_depth >= max_content_depth or
-                (!media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
+                (!media.in_inline_box_group and !media.in_inline_padding_group and !media.in_inline_action_group and media.ruby_depth == 0 and !media.maps.items(1)) or
                 !media.maps.items(group.spans.len)) return error.InvalidPresentation;
             const previous_action = media.inline_padding_action;
             const previous_group = media.in_inline_padding_group;
@@ -2710,7 +3654,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
             _ = try action.project(span);
         };
         if (span.ruby) |ruby| {
-            if (!validRubyOwner(span) or (media.ruby_depth == 0 and !media.in_inline_action_group and !media.maps.items(1))) return error.InvalidPresentation;
+            if (!validRubyOwner(span) or (media.ruby_depth == 0 and !media.in_inline_box_group and !media.in_inline_action_group and !media.maps.items(1))) return error.InvalidPresentation;
             try validateRubyContent(ruby.*, media);
         }
         if (span.font_family) |family| if (!validContainerFontFamily(family)) return error.InvalidPresentation;
@@ -2722,7 +3666,7 @@ fn validateSpanColors(spans: []const Span, media: *ImageValidation) ValidationEr
                 !validInlineImageAction(span.kind, span.target)) return error.InvalidPresentation;
             try media.validate(image);
         }
-        if (!validSpanInlineStyle(span) or !validSpanLinkPaint(span) or !validSpanFontScale(span.font_scale, span.font_scale_basis)) return error.InvalidPresentation;
+        if (!validSpanActionDestination(span) or !validSpanInlineStyle(span) or !validSpanLinkPaint(span) or !validSpanFontScale(span.font_scale, span.font_scale_basis)) return error.InvalidPresentation;
         if (span.foreground) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
         if (span.background) |color| if (!isCanonicalRgb(color)) return error.InvalidPresentation;
     }
@@ -2753,6 +3697,27 @@ pub fn validBorder(value: StyleBorder) bool {
 }
 pub fn tableStyleIsInline(style: ?TableStyle) bool {
     return if (style) |value| if (value.display) |display| display != .table else false else false;
+}
+/// Initial conditional-row domain is one ordinary nonfloating Table. Generic
+/// build shapes without this field retain exactly their existing domain.
+pub fn validTableRowsVisibility(value: anytype) bool {
+    if (comptime !@hasField(@TypeOf(value), "rows_hidden_max_width_px")) return true;
+    const bound = value.rows_hidden_max_width_px orelse return true;
+    if (bound == 0 or value.rows.len == 0) return false;
+    if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport != null) return false;
+    if (comptime @hasField(@TypeOf(value), "float_viewport")) if (value.float_viewport != null) return false;
+    if (comptime @hasField(@TypeOf(value), "style")) {
+        if (tableStyleIsInline(value.style)) return false;
+        if (value.style) |style| if (!validTableStyle(style) or style.float_side != null) return false;
+    }
+    return true;
+}
+/// Root viewport only: a cell/column allocation is never the media-query width.
+pub fn resolveTableRowsHidden(value: Table, viewport_css_px: f64) error{InvalidPresentation}!bool {
+    if (!validTableRowsVisibility(value) or !std.math.isFinite(viewport_css_px) or viewport_css_px < 0)
+        return error.InvalidPresentation;
+    const bound = value.rows_hidden_max_width_px orelse return false;
+    return viewport_css_px <= @as(f64, @floatFromInt(bound));
 }
 pub fn validInlineTableContent(style: ?TableStyle, caption_len: usize, has_caption_blocks: bool, has_cells: bool) bool {
     return !tableStyleIsInline(style) or (caption_len == 0 and !has_caption_blocks and has_cells);
@@ -2790,12 +3755,13 @@ pub fn validTableStyle(value: TableStyle) bool {
 /// bound. This predicate never grants Stored/codec/native table admission.
 pub fn validUnboundTableStyle(value: TableStyle) bool {
     if (value.vertical_align) |alignment| if (alignment == .top and !tableStyleIsInline(value)) return false;
-    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null and value.corner_radii == null) return false;
+    if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null and value.corner_radii == null and value.min_width == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
     if (value.border) |border| if (!validBorder(border)) return false;
     if (value.margins) |margins| if (!validStyleEdges(margins)) return false;
     if (value.margin_values) |margins| if (value.margins != null or !validTableMarginValues(margins)) return false;
     if (value.width) |width| if (!validStyleWidth(width)) return false;
+    if (value.min_width) |minimum| if (!validStyleWidth(minimum)) return false;
     if (value.padding) |padding| if (!validStyleEdges(padding)) return false;
     if (value.line_height) |height| if (!validComputedLineHeight(height)) return false;
     if (value.display) |display| if (display != .table and value.float_side != null) return false;
@@ -2815,6 +3781,7 @@ pub fn validTableScrollViewport(value: TableBlockViewport) bool {
     return validTableBlockViewportIn(value, true);
 }
 fn validTableBlockViewportIn(value: TableBlockViewport, paired: bool) bool {
+    if (value.box_style.min_width != null or value.grid_style.min_width != null) return false;
     if (value.intrinsic_containing_direction != null) return false;
     if (value.grid_style.corner_radii != null) return false;
     if (paired) {
@@ -2842,6 +3809,7 @@ pub fn validTableCornerBlockViewport(value: TableBlockViewport) bool {
 /// Build-only local wire-shape discriminator, before required Q focus is read.
 /// The complete policy and enclosing Table geometry still require validation.
 pub fn tableCornerBlockViewportShape(value: TableBlockViewport) bool {
+    if (value.box_style.min_width != null or value.grid_style.min_width != null) return false;
     if (value.intrinsic_containing_direction != null) return false;
     if (value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or
         !std.unicode.utf8ValidateSlice(value.language)) return false;
@@ -2878,9 +3846,12 @@ pub fn validTableIntrinsicViewport(value: TableBlockViewport) bool {
 }
 fn validTableIntrinsicViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, value: TableBlockViewport) bool {
     if (!validTableIntrinsicViewport(value)) return false;
-    const hints = geometry orelse return false;
-    if (!validTableGeometry(hints) or hints.width != null or hints.border == null or
-        hints.cell_spacing == null or hints.cell_padding == null) return false;
+    // R already carries nullable legacy geometry. Absence supplies no HTML
+    // hints; a supplied record still owes every original intrinsic hint check.
+    if (geometry) |hints| {
+        if (!validTableGeometry(hints) or hints.width != null or hints.border == null or
+            hints.cell_spacing == null or hints.cell_padding == null) return false;
+    }
     const wide = style orelse return false;
     return validTableStyle(wide) and wide.width == null and wide.float_side == null and
         wide.display == null and wide.vertical_align == null and wide.line_height == null and
@@ -2890,6 +3861,7 @@ fn validTableIntrinsicViewportHeader(geometry: ?TableGeometry, style: ?TableStyl
 
 pub fn validTableBlockViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, viewport: ?*const TableBlockViewport) bool {
     const value = viewport orelse return true;
+    if (style) |wide| if (wide.min_width != null) return false;
     if (value.intrinsic_containing_direction != null)
         return validTableIntrinsicViewportHeader(geometry, style, value.*);
     if (validTableCornerBlockViewport(value.*)) {
@@ -3039,7 +4011,7 @@ pub fn validSpanLinkPaint(span: anytype) bool {
             (if (image.alt) |alt| alt.len != 0 else false)) return false;
     };
     if (comptime @hasField(@TypeOf(span), "foreground")) if (span.foreground) |ink| if (!std.mem.eql(u8, ink, paint.normal.foreground)) return false;
-    const underline = if (comptime @hasField(@TypeOf(span), "flags")) span.flags.underline else span.underline;
+    const underline = RubyFallbackDecoration.flag(span, .underline);
     return underline == paint.normal.underline;
 }
 pub fn validFigureMediaLayout(value: FigureMediaLayout) bool {
@@ -3267,7 +4239,7 @@ pub fn validTableFloatViewportHeader(geometry: ?TableGeometry, style: ?TableStyl
     if (geometry != null or policy.max_viewport_width_px == 0 or policy.language.len == 0 or
         policy.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(policy.language)) return false;
     const base = style orelse return false;
-    return validTableStyle(base) and base.float_side == .right and base.margins != null and
+    return validTableStyle(base) and base.min_width == null and base.float_side == .right and base.margins != null and
         base.margin_values == null and base.containing_direction == null and
         (base.width == null or base.width.?.unit != .percent) and
         base.padding == null and base.display == null and base.vertical_align == null and base.line_height == null;
@@ -3291,6 +4263,8 @@ pub fn resolveTableFloatStyle(table: Table, viewport_css_px: f32) error{InvalidP
 }
 
 fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
+    if (!validTableRowsVisibility(table) or (table.rows_hidden_max_width_px != null and !media.table_rows_visibility_work_checked)) return error.InvalidPresentation;
+    if (table.style) |style| if (style.min_width != null and !media.table_min_width_work_checked) return error.InvalidPresentation;
     if (!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport)) return error.InvalidPresentation;
     if (depth > max_table_depth) return error.InvalidPresentation;
     if (depth == legacy_table_depth + 1) {
@@ -3448,15 +4422,134 @@ pub fn validContainerFontScale(value: f32) bool {
 }
 pub fn resolveContainerFontScale(style: ContainerStyle, inherited: f32) error{InvalidPresentation}!f32 {
     if (!validContainerStyle(style) or !validContainerFontScale(inherited)) return error.InvalidPresentation;
+    if (style.owner_font) |font| {
+        // This legacy helper has no CSS-pixel/body conversion context.
+        if (font.font_scale_basis != .normal_body) return error.InvalidPresentation;
+        return font.font_scale.?;
+    }
     return style.owner_font_scale orelse inherited;
 }
+/// W uses a resolved original size basis. The snapshot is a metric, never a
+/// second baseline displacement or an inherited child boolean override.
+pub fn validContainerOwnerFont(value: InlineFontSnapshot) bool {
+    return validInlineFontSnapshot(value) and value.font_normalized and
+        value.font_scale != null and value.font_scale_basis != .context;
+}
+pub fn validContainerAbsolutePosition(value: ContainerAbsolutePosition) bool {
+    return std.math.isFinite(value.left.value) and std.math.isFinite(value.top.value);
+}
+pub fn containerStyleRequiresPositionedCapability(value: ContainerStyle) bool {
+    return value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or
+        (value.owner_font != null and value.positioning != null);
+}
+// Both sides of the initial sole-inline static anchor have neutral physical
+// edges. Other formatting contexts need a separately qualified source/native
+// domain; this predicate does not broaden the existing fixed-offset capability.
+fn containerStaticNeutralStyle(value: ContainerStyle) bool {
+    if (value.float_side != null or value.clear != null or value.columns != null or value.layout != null or
+        value.align_items != null or value.flex_item != null or value.max_width != null or value.min_height != null or
+        value.screen_max_width != null or value.overflow != null) return false;
+    if (value.padding) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (!validStyleLength(@field(edges, side)) or @field(edges, side).value != 0) return false;
+    };
+    if (value.margins) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        if (!validContainerMarginLength(@field(edges, side)) or @field(edges, side).value != 0) return false;
+    };
+    if (value.margin_values) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const margin = @field(edges, side);
+        if (margin != .length or !validContainerMarginLength(margin.length) or margin.length.value != 0) return false;
+    };
+    if (value.border) |border| if (border != .none) return false;
+    if (value.background) |color| if (color != .transparent) return false;
+    if (value.box_sizing) |sizing| if (sizing != .content_box) return false;
+    return true;
+}
+pub fn validContainerStaticParentStyle(value: ContainerStyle) bool {
+    if (value.positioning != .relative_auto or value.absolute_position != null or value.absolute_static != null or
+        value.height != null or (value.width != null and value.width.? != .auto)) return false;
+    return containerStaticNeutralStyle(value) and validContainerStyle(value);
+}
+fn containerStaticText(value: []const u8) bool {
+    if (!std.unicode.utf8ValidateSlice(value)) return false;
+    for (value) |byte| if (byte < 0x20 or byte == 0x7f) return false;
+    return true;
+}
+pub fn validContainerAbsoluteStaticBody(value: anytype) bool {
+    if (value.style.absolute_static == null or value.blocks.len != 1) return false;
+    const block = value.blocks[0];
+    if (!std.mem.eql(u8, @tagName(block.kind), "paragraph") or block.depth != 0 or block.spans.len == 0 or block.spans.len > max_presentation_items or
+        block.feature != null or block.table != null or block.list_path.len != 0 or block.number.len != 0 or
+        block.level != 0 or block.anchor.len != 0 or block.anchor_fallback.len != 0) return false;
+    inline for (.{ "style", "figure", "flow", "container", "rule_style" }) |field|
+        if (comptime @hasField(@TypeOf(block), field)) if (@field(block, field) != null) return false;
+    // The compiler may materialize the already-proved child's alignment on its
+    // paragraph. It must not introduce a different or otherwise unproved one.
+    if (comptime @hasField(@TypeOf(block), "text_align")) {
+        if (block.text_align) |alignment| {
+            if (value.style.text_align == null or alignment != value.style.text_align.?) return false;
+        }
+    }
+    var real_text = false;
+    for (block.spans) |span| {
+        const kind = @tagName(span.kind);
+        if (!std.mem.eql(u8, kind, "text") and !std.mem.eql(u8, kind, "link") and !std.mem.eql(u8, kind, "external_link")) return false;
+        inline for (.{ "image", "ruby", "inline_padding_group", "inline_action_group", "inline_box_group", "clipped_absolute", "citation_marker" }) |field|
+            if (comptime @hasField(@TypeOf(span), field)) if (@field(span, field) != null) return false;
+        const trail: []const u8 = if (comptime @hasField(@TypeOf(span), "trail")) span.trail else "";
+        if (!containerStaticText(span.text) or !containerStaticText(trail)) return false;
+        real_text = real_text or span.text.len != 0 or trail.len != 0;
+    }
+    return real_text;
+}
+/// Compiler-side shape check for an already parsed generic parent Container.
+/// No source or cascade authority is inferred here; the caller proves those.
+pub fn validSoleStaticInlineContainer(parent: anytype) bool {
+    if (!validContainerStaticParentStyle(parent.style) or parent.blocks.len != 1) return false;
+    const child = parent.blocks[0];
+    if (comptime !@hasField(@TypeOf(child), "container")) return false;
+    if (!validContainerContext(child)) return false;
+    const box = child.container.?;
+    return validContainerStyle(box.style) and validContainerAbsoluteStaticBody(box);
+}
 pub fn validContainerStyle(value: ContainerStyle) bool {
+    if (value.absolute_static != null) {
+        if (value.absolute_position != null or value.positioning != null or value.width == null or
+            value.width.? != .fit_content or value.height != null or !containerStaticNeutralStyle(value)) return false;
+    }
+    if (value.absolute_position) |position| {
+        if (!validContainerAbsolutePosition(position) or value.positioning != null or value.width == null or value.height == null) return false;
+        const width = value.width.?;
+        if (width != .length or width.length.unit == .percent or !validStyleWidth(width.length) or !validStyleLength(value.height.?)) return false;
+        // Initial definite-box domain has zero edges and no responsive,
+        // floating, flex, scroll, shrink-to-fit or fragmented geometry.
+        if (value.float_side != null or value.clear != null or value.columns != null or value.layout != null or
+            value.align_items != null or value.flex_item != null or value.max_width != null or value.min_height != null or
+            value.screen_max_width != null or value.overflow != null) return false;
+        if (value.padding) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            if (!validStyleLength(@field(edges, side)) or @field(edges, side).value != 0) return false;
+        };
+        if (value.margins) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            if (!validContainerMarginLength(@field(edges, side)) or @field(edges, side).value != 0) return false;
+        };
+        if (value.margin_values) |edges| inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            const margin = @field(edges, side);
+            if (margin != .length or !validContainerMarginLength(margin.length) or margin.length.value != 0) return false;
+        };
+        if (value.border) |border| if (border != .none) return false;
+        if (value.background) |color| if (color != .transparent) return false;
+        if (value.box_sizing) |sizing| if (sizing != .content_box) return false;
+    }
+    if (value.owner_font) |font| {
+        if (!validContainerOwnerFont(font)) return false;
+        if (value.owner_font_scale) |scale| if (font.font_scale_basis != .normal_body or font.font_scale.? != scale) return false;
+        if (value.font_family != null and (font.font_family == null or !sameFontFamilyRequest(font.font_family, value.font_family))) return false;
+    }
     if (value.font_family) |family| if (!validContainerFontFamily(family)) return false;
     if (value.columns) |columns| {
         if (columns.count == 0 or !validStyleLength(columns.gap)) return false;
         // Initial semantic domain has automatic balanced block extent. Do not
         // coerce definite-height, scroll or flex fragmentation into this policy.
-        if (value.height != null or value.min_height != null or value.layout == .flex_row or value.overflow == .auto or value.positioning != null) return false;
+        if (value.height != null or value.min_height != null or value.layout == .flex_row or value.overflow == .auto or value.overflow == .hidden or value.positioning != null or value.absolute_position != null) return false;
     }
     if (value.height) |height| if (!validStyleLength(height)) return false;
     if (value.min_height) |height| if (!validStyleLength(height) or value.layout == .flex_row) return false;
@@ -3478,7 +4571,7 @@ pub fn validContainerStyle(value: ContainerStyle) bool {
 pub fn containerAutoScrollportStyleSupported(value: ContainerStyle) bool {
     if (!validContainerStyle(value) or value.overflow != .auto) return false;
     if (value.height != null or value.min_height != null or value.columns != null or
-        value.positioning != null or value.layout == .flex_row or value.flex_item != null or
+        value.positioning != null or value.absolute_position != null or value.absolute_static != null or value.text_wrap != null or value.layout == .flex_row or value.flex_item != null or
         value.float_side != null or value.screen_max_width != null) return false;
     if (value.width) |width| if (width != .auto) return false;
     if (value.max_width) |width| switch (width) {
@@ -3558,6 +4651,8 @@ pub fn containerRequiresMForMargins(value: anytype) bool {
 }
 fn containerStructureSupported(value: anytype, depth: usize) bool {
     if (depth > max_content_depth or value.blocks.len > max_presentation_items or !validContainerStyle(value.style)) return false;
+    if (!validContainerDisclosureOwner(value)) return false;
+    if (value.style.absolute_static != null and !validContainerAbsoluteStaticBody(value)) return false;
     for (value.blocks) |block| {
         // Margin support does not create nested organization/heading paths.
         if (std.mem.eql(u8, @tagName(block.kind), "heading")) return false;
@@ -3608,6 +4703,8 @@ fn validateBlock(block: Block, table_depth: usize, media: *ImageValidation) Vali
     if (block.rule_style) |style| if (!validRuleStyle(style) or !validRuleStyleContext(block)) return error.InvalidPresentation;
     if (block.kind == .container or block.container != null) {
         if (!validContainerContext(block) or !validContainerHeader(block.container.?) or media.content_depth >= max_content_depth) return error.InvalidPresentation;
+        if (block.container.?.style.owner_font != null and !media.container_owner_work_checked) return error.InvalidPresentation;
+        if (containerRequiresExtension(block.container.?) and !media.positioned_container_work_checked) return error.InvalidPresentation;
         media.content_depth += 1; defer media.content_depth -= 1;
         for (block.container.?.blocks) |child| try validateBlock(child, table_depth, media);
         return;
@@ -3645,6 +4742,13 @@ pub fn validateStored(
 ) ValidationError!void {
     if (!std.mem.eql(u8, stored.schema, schema)) return error.InvalidPresentation;
     const entry = stored.entry;
+    var owner_work_checked = false;
+    if (DeepTableWork.hasImageOccurrences(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or entry.body_typography != null or DeepTableWork.hasClippedAbsolutes(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasInlineBoxGroups(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasContainerOwnerFonts(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasPositionedContainers(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasTablePolicyWork(entry.display_title, entry.sections, entry.preamble_spans, entry.references)) {
+        var work: DeepTableWork = .{};
+        if (entry.body_typography) |body| work.bodyTypography(body) catch return error.InvalidPresentation;
+        work.entry(entry.display_title, entry.sections, entry.preamble_spans, entry.references) catch return error.InvalidPresentation;
+        owner_work_checked = true;
+    }
     if (!std.mem.eql(u8, entry.title, expected_title) or entry.kind != expected_kind) return error.InvalidPresentation;
 
     if (expected_kind == .language) {
@@ -3676,7 +4780,7 @@ pub fn validateStored(
         }
     }
 
-    var media: ImageValidation = .{ .a = a, .media = entry.media };
+    var media: ImageValidation = .{ .a = a, .media = entry.media, .container_owner_work_checked = owner_work_checked, .positioned_container_work_checked = owner_work_checked, .table_min_width_work_checked = owner_work_checked, .table_rows_visibility_work_checked = owner_work_checked, .clipped_absolute_work_checked = owner_work_checked };
     defer media.deinit();
     try validateSpanColors(entry.display_title, &media);
     try validateSpanColors(entry.preamble_spans, &media);
@@ -6767,7 +7871,10 @@ test "intrinsic Table rejects missing hints float pairing fabricated widths and 
             11 => policy.box_style.containing_direction = .rtl,
             else => unreachable,
         }
-        try std.testing.expect(!validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport));
+        // Mode1 is the CSS-only R domain: no legacy hint record is required.
+        // Every supplied partial record and all other policy conflicts refuse.
+        const accepted = validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport);
+        if (mode == 1) try std.testing.expect(accepted) else try std.testing.expect(!accepted);
     }
 }
 
@@ -7322,10 +8429,10 @@ test "inline padding inherited action projects only to semantic leaves and refus
     group.spans = &children;
     var budget: RubyFallbackBudget = .{ .remaining = 2 };
     try std.testing.expectError(error.InvalidPresentation,
-        visitRubyFallbackInner(&[_]Span{owner}, &result, Collector.emit, 0, 0, false, .{}, null, false, &budget));
+        visitRubyFallbackInner(&[_]Span{owner}, &result, Collector.emit, 0, 0, false, .{}, null, false, &budget, false));
     budget.remaining = max_presentation_items;
     try std.testing.expectError(error.InvalidPresentation,
-        visitRubyFallbackInner(&[_]Span{owner}, &result, Collector.emit, max_content_depth, 0, false, .{}, null, false, &budget));
+        visitRubyFallbackInner(&[_]Span{owner}, &result, Collector.emit, max_content_depth, 0, false, .{}, null, false, &budget, false));
 }
 
 test "inline padding group shape refuses unsupported owner and edge combinations" {
@@ -7618,12 +8725,12 @@ test "inline action groups share bounded content work and reject recursive child
     var group = InlineActionGroup(Span){ .spans = &plain };
     const owner = Span{ .kind = .link, .target = "Owner", .inline_action_group = &group };
     var budget: RubyFallbackBudget = .{ .remaining = 3 };
-    try visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget);
+    try visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget, false);
     try std.testing.expectEqual(@as(usize, 0), budget.remaining);
     try std.testing.expectEqual(@as(usize, 0), budget.action_group_depth);
     budget.remaining = 2;
     try std.testing.expectError(error.InvalidPresentation,
-        visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget));
+        visitRubyFallbackInner(&[_]Span{owner}, {}, Noop.emit, 0, 0, false, .{}, null, false, &budget, false));
     try std.testing.expectEqual(@as(usize, 0), budget.action_group_depth);
     try validateInlineActionGroupTree(owner, max_content_depth - 1, 0);
     try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, max_content_depth, 0));
@@ -7645,4 +8752,1534 @@ test "inline action groups share bounded content work and reject recursive child
     const ruby_span = [_]Span{.{ .ruby = &ruby }};
     group.spans = &ruby_span;
     try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(owner, 0, max_ruby_depth));
+}
+
+
+test "W container declaring font retains independent traits zero and agreeing aliases" {
+    const font: InlineFontSnapshot = .{ .font_scale = 1.25, .font_scale_basis = .normal_body,
+        .font_normalized = true, .bold = true, .italic = true, .language = "de", .font_family = .sans_serif };
+    const style: ContainerStyle = .{ .owner_font = font, .owner_font_scale = 1.25, .font_family = .sans_serif,
+        .margins = .{ .top = .{ .unit = .em, .value = 0.4 }, .bottom = .{ .unit = .em, .value = -0.5 },
+            .left = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 } } };
+    try std.testing.expect(validContainerStyle(style));
+    try std.testing.expectEqual(@as(f32, 1.25), try resolveContainerFontScale(style, 2));
+    const empty: Container = .{ .blocks = &.{}, .style = style };
+    try std.testing.expect(validContainerHeader(empty));
+    try std.testing.expectEqual(@as(usize, 0), empty.blocks.len);
+    const child: Span = .{ .text = "normal child", .font_scale = 2, .font_scale_basis = .normal_body };
+    const full: Container = .{ .style = style, .blocks = &.{.{ .kind = .paragraph, .spans = &.{child} }} };
+    try std.testing.expect(validContainerHeader(full));
+    try std.testing.expect(full.style.owner_font.?.bold);
+    try std.testing.expect(!full.blocks[0].spans[0].bold and !full.blocks[0].spans[0].italic);
+    var zero = style; zero.owner_font.?.font_scale = 0; zero.owner_font_scale = 0;
+    try std.testing.expect(validContainerStyle(zero));
+    try std.testing.expectEqual(@as(f32, 0), try resolveContainerFontScale(zero, 2));
+    try std.testing.expectEqual(@as(f32, -0.5), zero.margins.?.bottom.value);
+    var pixels = style; pixels.owner_font_scale = null;
+    pixels.owner_font.?.font_scale_basis = .css_px; pixels.owner_font.?.font_scale = 17;
+    try std.testing.expect(validContainerStyle(pixels));
+    try std.testing.expectError(error.InvalidPresentation, resolveContainerFontScale(pixels, 1));
+}
+
+test "W container owner refuses unresolved bases conflicting aliases and special owners" {
+    const font: InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_normalized = true };
+    const good: ContainerStyle = .{ .owner_font = font };
+    for (0..8) |mode| {
+        var bad = good;
+        switch (mode) {
+            0 => bad.owner_font.?.font_scale = null,
+            1 => bad.owner_font.?.font_scale_basis = .context,
+            2 => bad.owner_font.?.font_normalized = false,
+            3 => bad.owner_font.?.font_scale = -1,
+            4 => bad.owner_font.?.font_scale = std.math.nan(f32),
+            5 => bad.owner_font_scale = 2,
+            6 => bad.font_family = .sans_serif,
+            7 => bad.positioning = .relative_auto,
+            else => unreachable,
+        }
+        if (mode == 7) {
+            try std.testing.expect(validContainerStyle(bad));
+            try std.testing.expect(containerStyleRequiresPositionedCapability(bad));
+        } else try std.testing.expect(!validContainerStyle(bad));
+    }
+    try std.testing.expect(!validFigureViewportWrapper(good));
+    try std.testing.expect(!validFigureCaptionBefore(good));
+    const names = [_][]const u8{"serif face"};
+    var family = good; family.owner_font.?.font_family = .{ .stack = .{ .names = &names, .fallback = .serif } };
+    family.font_family = .sans_serif;
+    try std.testing.expect(!validContainerStyle(family));
+    family.font_family = family.owner_font.?.font_family;
+    try std.testing.expect(validContainerStyle(family));
+    const block = [_]Block{.{ .kind = .container, .container = .{ .style = good, .blocks = &.{} } }};
+    const sections = [_]Section{.{ .level = 2, .title = "", .blocks = &block }};
+    var work: DeepTableWork = .{ .remaining = 2 };
+    try std.testing.expectError(error.PresentationTooLarge, work.entry(@as([]const Span, &.{}), &sections,
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    work = .{ .remaining = 3 };
+    try work.entry(@as([]const Span, &.{}), &sections, @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+}
+
+
+test "W direct validation refuses a late owner after inconclusive discovery without changing legacy blocks" {
+    const ordinary: Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "legacy" }} };
+    const owner: Block = .{ .kind = .container, .container = .{ .blocks = &.{}, .style = .{
+        .owner_font = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_normalized = true } } } };
+    const sections = [_]Section{
+        .{ .level = 2, .title = "first", .blocks = &.{ordinary} },
+        .{ .level = 2, .title = "late", .blocks = &.{owner} },
+    };
+    var discovery: DeepTableWork = .{ .remaining = 2, .discover_container_owner_font = true };
+    try std.testing.expectError(error.PresentationTooLarge, discovery.entry(@as([]const Span, &.{}), &sections,
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expect(!discovery.container_owner_font_found);
+    var validation: ImageValidation = .{ .a = std.testing.allocator, .media = &.{} };
+    defer validation.deinit();
+    try validateBlock(ordinary, 0, &validation);
+    try std.testing.expectError(error.InvalidPresentation, validateBlock(owner, 0, &validation));
+    validation.container_owner_work_checked = true;
+    try validateBlock(owner, 0, &validation);
+    // The ordinary entry boundary supplies that permit only after its complete
+    // bounded walk, including every preceding block and the owner itself.
+    try validateStored(std.testing.allocator, .{ .entry = .{ .title = "late", .kind = .supplemental,
+        .sections = &sections } }, "late", .supplemental, null);
+}
+
+
+test "inline box overlays preserve explicit auto signed inset color and edge domains" {
+    const zero: InlineBoxInset = .{ .unit = .px, .value = 0 };
+    var border = InlineBoxBorderEdges.all(.none);
+    border.right = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } };
+    var overlay: InlineBoxOverlay = .{ .insets = .{ .top = zero, .right = zero, .bottom = .{ .unit = .percent, .value = 67 } }, .border = border };
+    try std.testing.expect(validInlineBoxOverlay(overlay));
+    try std.testing.expect(overlay.insets.left == null and overlay.insets.right.?.value == 0);
+    overlay.insets.left = .{ .unit = .em, .value = -0.5 };
+    try std.testing.expect(validInlineBoxOverlay(overlay));
+    overlay.insets.left = .{ .unit = .percent, .value = -125 };
+    try std.testing.expect(validInlineBoxOverlay(overlay));
+    const good = overlay;
+    overlay.insets.left = null; overlay.insets.right = null;
+    try std.testing.expect(!validInlineBoxOverlay(overlay));
+    overlay = good; overlay.insets.top = null; overlay.insets.bottom = null;
+    try std.testing.expect(!validInlineBoxOverlay(overlay));
+    inline for (.{ "top", "right", "bottom", "left" }) |edge| {
+        overlay = good; @field(overlay.insets, edge) = .{ .unit = .px, .value = std.math.inf(f32) };
+        try std.testing.expect(!validInlineBoxOverlay(overlay));
+        @field(overlay.insets, edge) = .{ .unit = .percent, .value = std.math.nan(f32) };
+        try std.testing.expect(!validInlineBoxOverlay(overlay));
+    }
+    overlay = good; overlay.border.right.solid.width.value = -1;
+    try std.testing.expect(!validInlineBoxOverlay(overlay));
+    try std.testing.expect(validInlineBoxColor(.transparent));
+    try std.testing.expect(validInlineBoxColor(.{ .light_dark = .{ .light = "#123456", .dark = "#abcdef" } }));
+    try std.testing.expect(!validInlineBoxColor(.{ .rgb = "currentColor" }));
+    try std.testing.expect(!validInlineBoxColor(.{ .light_dark = .{ .light = "#123456", .dark = "unknown" } }));
+}
+
+test "inline box rich text actions overlays and bounded fallback retain distinct semantics" {
+    const children = [_]Span{.{ .text = "ずれ ", .bold = true }, .{ .text = "る", .italic = true }};
+    var border = InlineBoxBorderEdges.all(.none);
+    border.top = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } };
+    var overlay_border = InlineBoxBorderEdges.all(.none);
+    overlay_border.right = border.top;
+    const overlays = [_]InlineBoxOverlay{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .percent, .value = 67 } }, .border = overlay_border }};
+    const group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }), .border = border, .overlays = &overlays, .spans = &children };
+    const owner: Span = .{ .kind = .link, .target = "崩れる", .language = "ja", .inline_box_group = &group };
+    try validateInlineBoxGroupTree(owner, 0, 0);
+    const Sink = struct {
+        count: usize = 0,
+        fn emit(self: *@This(), span: Span) error{InvalidPresentation}!void {
+            if (span.kind != .link or !std.mem.eql(u8, span.target, "崩れる")) return error.InvalidPresentation;
+            if (self.count == 0 and (!std.mem.eql(u8, span.text, "ずれ ") or !span.bold)) return error.InvalidPresentation;
+            if (self.count == 1 and (!std.mem.eql(u8, span.text, "る") or !span.italic)) return error.InvalidPresentation;
+            if (self.count >= 2) return error.InvalidPresentation;
+            self.count += 1;
+        }
+    };
+    var sink: Sink = .{};
+    try visitRubyFallback(&[_]Span{owner}, &sink, Sink.emit);
+    try std.testing.expectEqual(@as(usize, 2), sink.count);
+    try std.testing.expectEqual(InlineKind.text, children[0].kind);
+    try std.testing.expectEqualStrings("", children[1].target);
+    var work: DeepTableWork = .{};
+    try work.entry(&[_]Span{owner}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.inline_box_group_found);
+    try std.testing.expectEqual(max_presentation_items - 4, work.remaining);
+    var too_small: DeepTableWork = .{ .remaining = 3 };
+    try std.testing.expectError(error.PresentationTooLarge, too_small.entry(&[_]Span{owner}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, max_content_depth, 0));
+    var conflicting_children = children;
+    conflicting_children[1].kind = .link; conflicting_children[1].target = "other";
+    var conflicting = group; conflicting.spans = &conflicting_children;
+    var invalid = owner; invalid.inline_box_group = &conflicting;
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(invalid, 0, 0));
+    const padding: InlinePaddingGroup(Span) = .{ .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 }, .spans = &children };
+    invalid = owner; invalid.inline_padding_group = &padding;
+    try std.testing.expect(!validInlineBoxGroupOwner(invalid));
+    try std.testing.expect(!validInlinePaddingGroupOwner(invalid));
+    invalid = owner; invalid.text = "duplicate";
+    try std.testing.expect(!validInlineBoxGroupOwner(invalid));
+    var blank = group; blank.spans = &.{}; invalid = owner; invalid.inline_box_group = &blank;
+    try std.testing.expect(!validInlineBoxGroupOwner(invalid));
+}
+
+
+test "inline box rejects decorative-only empty rich trees including nested padding and boxes" {
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .border = InlineBoxBorderEdges.all(.none), .spans = &.{.{}} };
+    var owner: Span = .{ .inline_box_group = &group };
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+    const empty_padding: InlinePaddingGroup(Span) = .{ .left = .{ .unit = .px, .value = 1 },
+        .right = .{ .unit = .px, .value = 0 }, .spans = &.{.{}} };
+    group.spans = &.{.{ .inline_padding_group = &empty_padding }};
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+    var nested = group; nested.spans = &.{.{}};
+    group.spans = &.{.{ .inline_box_group = &nested }};
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+    group.spans = &.{.{ .text = " " }};
+    try validateInlineBoxGroupTree(owner, 0, 0);
+    group.spans = &.{.{ .text = "", .trail = "actual" }};
+    try validateInlineBoxGroupTree(owner, 0, 0);
+    owner.text = "duplicate";
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+}
+
+
+test "inline box fallback preserves original-root child font scales and explicit resets" {
+    const children = [_]Span{
+        .{ .text = "inherited", .font_scale = 1.35, .font_scale_basis = .context },
+        .{ .text = "reset", .font_scale = 1, .font_scale_basis = .normal_body, .bold = false },
+        .{ .text = "absolute", .font_scale = 20, .font_scale_basis = .css_px },
+    };
+    const group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .border = InlineBoxBorderEdges.all(.none), .spans = &children };
+    const owner: Span = .{ .font_scale = 1.35, .bold = true, .inline_box_group = &group };
+    const Sink = struct {
+        index: usize = 0,
+        expected: []const Span,
+        fn emit(self: *@This(), child: Span) error{InvalidPresentation}!void {
+            if (self.index >= self.expected.len) return error.InvalidPresentation;
+            const expected = self.expected[self.index];
+            if (child.font_scale != expected.font_scale or child.font_scale_basis != expected.font_scale_basis or
+                child.bold != expected.bold or !std.mem.eql(u8, child.text, expected.text)) return error.InvalidPresentation;
+            self.index += 1;
+        }
+    };
+    var sink: Sink = .{ .expected = &children };
+    try visitRubyFallback(&[_]Span{owner}, &sink, Sink.emit);
+    try std.testing.expectEqual(children.len, sink.index);
+}
+
+
+test "Ruby fallback preserves canonical opaque byte flags through inheritance and action projection" {
+    inline for (.{ u8, packed struct(u8) { bits: u8 = 0 }, packed struct(u8) { bold: bool = false, rest: u7 = 0 },
+        packed struct(u8) { underline: bool = false, strike: bool = false, rest: u6 = 0 } }) |Flags| {
+        const Child = struct {
+            kind: enum { text, link, external_link } = .text,
+            text: []const u8 = "", target: []const u8 = "",
+            flags: Flags = @bitCast(@as(u8, 0)), ruby: ?*const Ruby(@This()) = null,
+        };
+        const Collector = struct {
+            values: [4]Child = undefined, len: usize = 0,
+            fn emit(self: *@This(), value: Child) !void {
+                if (self.len == self.values.len) return error.InvalidPresentation;
+                self.values[self.len] = value; self.len += 1;
+            }
+        };
+        const leaf: Child = .{ .kind = .link, .text = "base", .target = "Kept", .flags = @bitCast(@as(u8, 0x03)) };
+        const reading: Child = .{ .text = "reading", .flags = @bitCast(@as(u8, 0x04)) };
+        const payload: Ruby(Child) = .{ .segments = &.{.{
+            .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{leaf} }},
+            .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{reading} }},
+        }} };
+        const owner: Child = .{ .ruby = &payload, .flags = @bitCast(@as(u8, 0xc1)) };
+        var out: Collector = .{};
+        try visitRubyFallback(&[_]Child{owner}, &out, Collector.emit);
+        try std.testing.expectEqual(@as(usize, 4), out.len);
+        for (out.values, [_][]const u8{ "base", "\xef\xbc\x88", "reading", "\xef\xbc\x89" }, [_]u8{ 0xc3, 0x01, 0x04, 0x01 }) |actual, text, bits| {
+            try std.testing.expectEqualStrings(text, actual.text);
+            try std.testing.expectEqual(bits, @as(u8, @bitCast(actual.flags)));
+        }
+        try std.testing.expect(out.values[0].kind == .link);
+        try std.testing.expectEqualStrings("Kept", out.values[0].target);
+        for (out.values[1..]) |actual| {
+            try std.testing.expect(actual.kind == .text);
+            try std.testing.expectEqualStrings("", actual.target);
+        }
+        try std.testing.expectEqualDeep(leaf, payload.segments[0].bases[0].spans[0]);
+        try std.testing.expectEqualDeep(reading, payload.segments[0].annotations[0].spans[0]);
+        const action_owner: Child = .{ .kind = .link, .target = "Action", .flags = @bitCast(@as(u8, 0x85)) };
+        const action = InlinePaddingGroupAction.from(action_owner) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(action.underline);
+        const child: Child = .{ .text = "action body", .flags = @bitCast(@as(u8, 0x42)) };
+        const projected = try action.project(child);
+        try std.testing.expect(projected.kind == .link);
+        try std.testing.expectEqualStrings("Action", projected.target);
+        try std.testing.expectEqualStrings(child.text, projected.text);
+        try std.testing.expectEqual(@as(u8, 0xc2), @as(u8, @bitCast(projected.flags)));
+        try std.testing.expectEqual(@as(u8, 0x42), @as(u8, @bitCast(child.flags)));
+    }
+}
+
+test "Ruby fallback refuses inherited decoration when generic destination has no semantic flag" {
+    const Opaque = struct { kind: InlineKind = .text, text: []const u8 = "kept", target: []const u8 = "", flags: u16 = 0x8080 };
+    const value: Opaque = .{};
+    try std.testing.expectEqualDeep(value, try (RubyFallbackDecoration{}).project(value));
+    try std.testing.expectEqualDeep(value, RubyFallbackDecoration.clear(value));
+    try std.testing.expectError(error.InvalidPresentation, (RubyFallbackDecoration{ .underline = true }).project(value));
+    try std.testing.expectError(error.InvalidPresentation, (RubyFallbackDecoration{ .strike = true }).project(value));
+}
+
+
+const ClippedAbsoluteTypeTest = struct {
+    const margin: ContainerMargins = .{ .top = .{ .length = .{ .unit = .px, .value = -1 } },
+        .right = .{ .length = .{ .unit = .px, .value = -1 } }, .bottom = .{ .length = .{ .unit = .px, .value = -1 } },
+        .left = .{ .length = .{ .unit = .px, .value = -1 } } };
+    fn group(children: []const Span) ClippedAbsoluteInline {
+        return .{ .static_parent_direction = .ltr, .width = .{ .unit = .px, .value = 1 }, .height = .{ .unit = .px, .value = 1 },
+            .margin = margin, .children = children };
+    }
+    const Collector = struct {
+        a: std.mem.Allocator, values: std.ArrayList(Span) = .empty,
+        fn emit(self: *@This(), span: Span) !void { try self.values.append(self.a, span); }
+    };
+};
+test "clipped absolute inline retains HU authored box and ordered semantic text without visual emission" {
+    const F = ClippedAbsoluteTypeTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const children = [_]Span{.{ .text = "Tooltip time to peak concentrations", .language = "hu", .italic = true }};
+    const group = F.group(&children);
+    const owner: Span = .{ .language = "hu", .clipped_absolute = &group };
+    try validateClippedAbsoluteInlineTree(owner, 0, 0);
+    const ordered = [_]Span{ .{ .text = "before" }, owner, .{ .text = "after" } };
+    var semantic: F.Collector = .{ .a = a }; var visual: F.Collector = .{ .a = a };
+    try visitRubyFallback(&ordered, &semantic, F.Collector.emit);
+    try visitRubyVisualFallback(&ordered, &visual, F.Collector.emit);
+    try std.testing.expectEqualDeep(@as([]const Span, &.{ ordered[0], children[0], ordered[2] }), semantic.values.items);
+    try std.testing.expectEqualDeep(@as([]const Span, &.{ ordered[0], ordered[2] }), visual.values.items);
+    try std.testing.expectEqualDeep(F.margin, owner.clipped_absolute.?.margin);
+    try std.testing.expectEqualDeep(StyleLength{ .unit = .px, .value = 1 }, group.width);
+    try std.testing.expectEqualDeep(group.width, group.height);
+    const plain_json = try std.json.Stringify.valueAlloc(a, Span{ .text = "ordinary" }, .{});
+    try std.testing.expect(std.mem.indexOf(u8, plain_json, "clipped_absolute") == null);
+    const json = try std.json.Stringify.valueAlloc(a, owner, .{});
+    const decoded = try std.json.parseFromSliceLeaky(Span, a, json, .{ .allocate = .alloc_always, .ignore_unknown_fields = false, .duplicate_field_behavior = .@"error" });
+    try std.testing.expectEqualDeep(owner, decoded);
+    var work: DeepTableWork = .{ .remaining = 4 };
+    try work.entry(&ordered, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.clipped_absolute_found);
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    var bounded: DeepTableWork = .{ .remaining = 3 };
+    try std.testing.expectError(error.PresentationTooLarge, bounded.entry(&ordered, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+}
+test "clipped absolute inline preserves rich independent and owner actions and rejects unsupported geometry children and depth" {
+    const F = ClippedAbsoluteTypeTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const children = [_]Span{ .{ .text = "rich", .bold = true }, .{ .kind = .link, .text = "local", .target = "Target", .target_fragment = "part", .italic = true },
+        .{ .kind = .external_link, .text = "remote", .target = "https://example.test/", .underline = true } };
+    var group = F.group(&children); var owner: Span = .{ .clipped_absolute = &group };
+    var collector: F.Collector = .{ .a = a };
+    try visitRubyFallback(&[_]Span{owner}, &collector, F.Collector.emit);
+    try std.testing.expectEqualDeep(@as([]const Span, &children), collector.values.items);
+    const action_children = [_]Span{ .{ .text = "one", .bold = true }, .{ .text = " action", .italic = true } };
+    group.children = &action_children; owner.kind = .link; owner.target = "owned"; owner.target_fragment = "section"; owner.underline = true;
+    collector.values.clearRetainingCapacity();
+    try visitRubyFallback(&[_]Span{owner}, &collector, F.Collector.emit);
+    try std.testing.expectEqual(@as(usize, 2), collector.values.items.len);
+    for (collector.values.items, action_children) |projected, child| {
+        try std.testing.expectEqualStrings(child.text, projected.text);
+        try std.testing.expectEqual(.link, projected.kind);
+        try std.testing.expectEqualStrings("owned", projected.target);
+        try std.testing.expectEqualStrings("section", projected.target_fragment.?);
+        try std.testing.expect(projected.underline);
+    }
+    try std.testing.expectEqualDeep(action_children, group.children[0..2].*);
+    group.children = &children;
+    try std.testing.expect(!validClippedAbsoluteInlineOwner(owner));
+    owner.kind = .text; owner.target = ""; owner.target_fragment = null;
+    inline for (.{ "width", "height" }) |field| {
+        const saved = @field(group, field);
+        for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |value| {
+            @field(group, field).value = value; try std.testing.expect(!validClippedAbsoluteInlineOwner(owner));
+        }
+        @field(group, field) = saved;
+    }
+    group.margin.left = .auto; try std.testing.expect(!validClippedAbsoluteInlineOwner(owner)); group.margin = F.margin;
+    group.margin.top.length.value = std.math.inf(f32); try std.testing.expect(!validClippedAbsoluteInlineOwner(owner)); group.margin = F.margin;
+    const refused = [_]Span{ .{ .kind = .line_break }, .{ .kind = .external_link, .text = "missing target" }, .{ .text = "line\nbreak" }, .{ .text = "" }, .{ .clipped_absolute = &group } };
+    for (refused) |child| {
+        const invalid = F.group(&.{child}); const invalid_owner: Span = .{ .clipped_absolute = &invalid };
+        try std.testing.expect(!validClippedAbsoluteInlineOwner(invalid_owner));
+    }
+    try std.testing.expectError(error.InvalidPresentation, validateClippedAbsoluteInlineTree(owner, max_content_depth, 0));
+    try std.testing.expectError(error.InvalidPresentation, validateClippedAbsoluteInlineTree(owner, 0, 1));
+    const original = group; group.width.value = 0; group.height.value = 0;
+    try std.testing.expect(validClippedAbsoluteInlineOwner(owner)); group = original;
+}
+
+
+test "inline image occurrence preserves signed displacement zero positioning and rejects unsupported lengths" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const ur: InlineImageOccurrenceLayout = .{ .x = .{ .unit = .px, .value = -10 }, .y = .{ .unit = .px, .value = -10 }, .padding_left = zero, .padding_right = zero };
+    const id: InlineImageOccurrenceLayout = .{ .x = zero, .y = .{ .unit = .px, .value = -1 }, .padding_left = zero, .padding_right = .{ .unit = .em, .value = 0.4 } };
+    try std.testing.expect(validInlineImageOccurrenceLayout(ur));
+    try std.testing.expect(validInlineImageOccurrenceLayout(id));
+    try std.testing.expect(validInlineImageOccurrenceLayout(.{ .x = zero, .y = zero, .padding_left = zero, .padding_right = zero }));
+    inline for (.{ "x", "y", "padding_left", "padding_right" }) |name| {
+        var invalid = ur; @field(invalid, name).value = std.math.nan(f32);
+        try std.testing.expect(!validInlineImageOccurrenceLayout(invalid));
+        @field(invalid, name).value = std.math.inf(f32);
+        try std.testing.expect(!validInlineImageOccurrenceLayout(invalid));
+    }
+    var negative_padding = id; negative_padding.padding_right.value = -0.4;
+    try std.testing.expect(!validInlineImageOccurrenceLayout(negative_padding));
+    const occurrence: InlineImage = .{ .file = "Writing star.svg", .width_px = 62, .occurrence_layout = ur };
+    try std.testing.expect(validInlineImage(occurrence));
+    var work: DeepTableWork = .{ .remaining = 1 };
+    const spans = [_]Span{.{ .kind = .link, .target = "word", .image = occurrence }};
+    try std.testing.expectError(error.PresentationTooLarge, work.entry(&spans, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    var discovery: DeepTableWork = .{ .remaining = 0, .discover_image_occurrence = true };
+    try std.testing.expectError(error.PresentationTooLarge, discovery.entry(&spans, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expect(!discovery.image_occurrence_found);
+    var validation: ImageValidation = .{ .a = std.testing.allocator, .media = &.{.{ .kind = .image, .file = "Writing star.svg", .caption = "" }} };
+    defer validation.deinit();
+    try std.testing.expectError(error.InvalidPresentation, validation.validate(occurrence));
+    validation.container_owner_work_checked = true;
+    try validation.validate(occurrence);
+}
+
+
+const PositionedContainerZTest = struct {
+    const font: InlineFontSnapshot = .{ .font_scale = 18, .font_scale_basis = .css_px, .font_normalized = true };
+    const leaf = [_]Block{.{ .kind = .paragraph, .spans = &.{
+        .{ .text = "FR retained label ", .font_scale = 18, .font_scale_basis = .css_px },
+        .{ .kind = .link, .text = "action", .target = "Target", .language = "fr", .bold = true },
+    } }};
+    fn absoluteStyle() ContainerStyle {
+        return .{ .absolute_position = .{ .left = .{ .unit = .px, .value = -2 }, .top = .{ .unit = .em, .value = 0.25 } },
+            .width = .{ .length = .{ .unit = .px, .value = 80 } }, .height = .{ .unit = .px, .value = 20 },
+            .owner_font = font, .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_wrap = .nowrap };
+    }
+    fn check(blocks: []const Block) !void {
+        const sections = [_]Section{.{ .level = 2, .title = "French", .blocks = blocks }};
+        try validatePositionedContainers(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    }
+};
+
+test "DPRZ Container geometry retains declaring CSS pixels signed offsets and explicit wrap resets" {
+    const T = PositionedContainerZTest;
+    const style = T.absoluteStyle();
+    try std.testing.expect(validContainerStyle(style));
+    try std.testing.expect(containerStyleRequiresPositionedCapability(style));
+    try std.testing.expectEqual(@as(f32, 18), style.owner_font.?.font_scale.?);
+    try std.testing.expectEqual(FontScaleBasis.css_px, style.owner_font.?.font_scale_basis);
+    try std.testing.expectEqual(@as(f32, 20), style.line_height.?.length.value);
+    try std.testing.expectEqual(@as(f32, -2), style.absolute_position.?.left.value);
+    try std.testing.expectEqual(@as(f32, 0.25), style.absolute_position.?.top.value);
+    const relative: ContainerStyle = .{ .positioning = .relative_auto, .owner_font = T.font, .text_wrap = .nowrap };
+    try std.testing.expect(validContainerStyle(relative));
+    try std.testing.expect(containerStyleRequiresPositionedCapability(relative));
+    try std.testing.expect(!containerStyleRequiresPositionedCapability(.{ .positioning = .relative_auto }));
+    try std.testing.expect(!containerStyleRequiresPositionedCapability(.{ .owner_font = T.font }));
+    try std.testing.expect(containerStyleRequiresPositionedCapability(.{ .text_wrap = .normal }));
+    var no_font = relative; no_font.owner_font = null;
+    try std.testing.expect(no_font.owner_font == null);
+    const a = std.testing.allocator;
+    const old_json = try std.json.Stringify.valueAlloc(a, ContainerStyle{}, .{}); defer a.free(old_json);
+    try std.testing.expectEqualStrings("{}", old_json);
+    const encoded = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(encoded);
+    const parsed = try std.json.parseFromSlice(ContainerStyle, a, encoded, .{ .ignore_unknown_fields = false }); defer parsed.deinit();
+    try std.testing.expectEqualDeep(style, parsed.value);
+    try std.testing.expectError(error.InvalidEnumTag, std.json.parseFromSlice(ContainerTextWrap, a, "\"break_word\"", .{}));
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(ContainerTextWrap, a, "1", .{}));
+}
+
+test "DPRZ Container anchors cross ordinary containers but never siblings roots or an intervening absolute" {
+    const T = PositionedContainerZTest;
+    const absolute = [_]Block{.{ .kind = .container, .container = .{ .style = T.absoluteStyle(), .blocks = &T.leaf } }};
+    const middle = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .text_wrap = .normal }, .blocks = &absolute } }};
+    const root = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto, .owner_font = T.font, .text_wrap = .nowrap }, .blocks = &middle } }};
+    try T.check(&root);
+    try std.testing.expectEqualDeep(@as([]const Block, &T.leaf), absolute[0].container.?.blocks);
+    try std.testing.expectEqualStrings("Target", absolute[0].container.?.blocks[0].spans[1].target);
+    try std.testing.expectError(error.InvalidPresentation, T.check(&absolute));
+    const siblings = [_]Block{ root[0], absolute[0] };
+    try std.testing.expectError(error.InvalidPresentation, T.check(&siblings));
+    const split_sections = [_]Section{ .{ .level = 2, .title = "one", .blocks = &root }, .{ .level = 2, .title = "two", .blocks = &absolute } };
+    try std.testing.expectError(error.InvalidPresentation, validatePositionedContainers(&[_]Span{}, &split_sections, &[_]Span{}, &[_]Reference{}));
+    const references = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &absolute }};
+    const section = [_]Section{.{ .level = 2, .title = "one", .blocks = &root }};
+    try std.testing.expectError(error.InvalidPresentation, validatePositionedContainers(&[_]Span{}, &section, &[_]Span{}, &references));
+    const nested_absolute = [_]Block{.{ .kind = .container, .container = .{ .style = T.absoluteStyle(), .blocks = &absolute } }};
+    const outer = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &nested_absolute } }};
+    try std.testing.expectError(error.InvalidPresentation, T.check(&outer));
+    const reset = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &absolute } }};
+    const absolute_reset = [_]Block{.{ .kind = .container, .container = .{ .style = T.absoluteStyle(), .blocks = &reset } }};
+    const root_reset = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &absolute_reset } }};
+    try T.check(&root_reset);
+    // Table cells do not borrow the surrounding relative scope, but a real
+    // relative Container inside the cell establishes its own independent one.
+    const cell_orphan = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &absolute }} }} } }};
+    const across_cell = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &cell_orphan } }};
+    try std.testing.expectError(error.InvalidPresentation, T.check(&across_cell));
+    const cell_owned = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &root }} }} } }};
+    try T.check(&cell_owned);
+    // Exercise the existing generic Figure walk's anchor boundary directly;
+    // this minimal content fixture supplies no additional Figure layout grant.
+    const FigureScope = struct {
+        content: struct { fn span(_: @This()) Span { return .{}; } } = .{},
+        caption_blocks: ?[]const Block = null,
+    };
+    var figure_orphan: DeepTableWork = .{ .relative_container_anchor = true };
+    try std.testing.expectError(error.InvalidPresentation, figure_orphan.figure(FigureScope{ .caption_blocks = &absolute }, 0, 0));
+    try std.testing.expect(figure_orphan.relative_container_anchor);
+    var figure_owned: DeepTableWork = .{ .relative_container_anchor = true };
+    try figure_owned.figure(FigureScope{ .caption_blocks = &root }, 0, 0);
+    try std.testing.expect(figure_owned.relative_container_anchor);
+    var work: DeepTableWork = .{ .remaining = 2 };
+    try std.testing.expectError(error.PresentationTooLarge, work.entry(&[_]Span{}, &section, &[_]Span{}, &[_]Reference{}));
+    try std.testing.expect(DeepTableWork.hasPositionedContainers(&[_]Span{}, &section, &[_]Span{}, &[_]Reference{}));
+    var chain: [max_content_depth + 2]Block = undefined;
+    chain[chain.len - 1] = T.leaf[0];
+    var i = chain.len - 1;
+    while (i > 0) { i -= 1; chain[i] = .{ .kind = .container, .container = .{ .style = .{ .text_wrap = .nowrap }, .blocks = chain[i + 1 ..][0..1] } }; }
+    try std.testing.expectError(error.InvalidPresentation, T.check(chain[0..1]));
+}
+
+test "DPRZ Container rejects unrepresented geometry and keeps narrow Figure and heading domains" {
+    const T = PositionedContainerZTest;
+    const good = T.absoluteStyle();
+    for ([_]f32{ std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |bad| {
+        var value = good; value.absolute_position.?.left.value = bad;
+        try std.testing.expect(!validContainerStyle(value));
+        value = good; value.absolute_position.?.top.value = bad;
+        try std.testing.expect(!validContainerStyle(value));
+    }
+    var value = good; value.width = .auto; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.width = .{ .length = .{ .unit = .percent, .value = 50 } }; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.height = null; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.height.?.value = -1; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.positioning = .relative_auto; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.columns = .{ .count = 2, .gap = .{ .unit = .px, .value = 0 } }; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.layout = .flex_row; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.overflow = .auto; try std.testing.expect(!validContainerStyle(value));
+    value = good; value.width = .{ .length = .{ .unit = .px, .value = 0 } }; value.height = .{ .unit = .em, .value = 0 };
+    try std.testing.expect(validContainerStyle(value));
+    try std.testing.expect(!validFigureViewportWrapper(.{ .text_wrap = .nowrap }));
+    try std.testing.expect(!validFigureCaptionBefore(good));
+    try std.testing.expect(!containerAutoScrollportStyleSupported(.{ .overflow = .auto, .text_wrap = .nowrap }));
+    try std.testing.expect(!validSectionHeadingStyle(.{ .box = good, .font = T.font, .direction = .ltr }));
+}
+
+
+const AbsoluteStaticInlineZTest = struct {
+    const font: InlineFontSnapshot = .{ .font_scale = 18, .font_scale_basis = .css_px, .font_normalized = true, .language = "fr" };
+    const spans = [_]Span{ .{ .text = "vrai ", .bold = true }, .{ .kind = .link, .text = "Kept", .target = "Kept", .target_fragment = "French" },
+        .{ .kind = .external_link, .text = "source", .target = "https://example.org/" } };
+    const paragraph: Block = .{ .kind = .paragraph, .spans = &spans };
+    const child_style: ContainerStyle = .{ .absolute_static = .{}, .width = .fit_content, .owner_font = font,
+        .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_wrap = .nowrap };
+    const child: Block = .{ .kind = .container, .container = .{ .style = child_style, .blocks = &.{paragraph} } };
+    const parent_style: ContainerStyle = .{ .positioning = .relative_auto, .owner_font = font,
+        .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_wrap = .nowrap, .text_align = .center };
+    fn check(blocks: []const Block) !void {
+        const sections = [_]Section{.{ .level = 2, .title = "French", .blocks = blocks }};
+        try validatePositionedContainers(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    }
+};
+
+test "DPRZ sole inline static child preserves direction owner metrics and complete rich body" {
+    const T = AbsoluteStaticInlineZTest;
+    for ([_]ContainerStaticDirection{ .inherit, .ltr, .rtl }) |direction| {
+        var child = T.child; child.container.?.style.absolute_static.?.direction = direction;
+        const root: Block = .{ .kind = .container, .container = .{ .style = T.parent_style, .blocks = &.{child} } };
+        try T.check(&.{root});
+        try std.testing.expect(validSoleStaticInlineContainer(root.container.?));
+        try std.testing.expect(validContainerStaticParentStyle(root.container.?.style));
+        try std.testing.expect(validContainerAbsoluteStaticBody(child.container.?));
+        try std.testing.expect(containerStyleRequiresPositionedCapability(child.container.?.style));
+        try std.testing.expectEqual(direction, child.container.?.style.absolute_static.?.direction);
+        try std.testing.expectEqual(@as(f32, 18), root.container.?.style.owner_font.?.font_scale.?);
+        try std.testing.expectEqual(@as(f32, 20), root.container.?.style.line_height.?.length.value);
+        try std.testing.expect(child.container.?.style.width.? == .fit_content and child.container.?.style.height == null);
+        try std.testing.expectEqualDeep(@as([]const Span, &T.spans), child.container.?.blocks[0].spans);
+        const a = std.testing.allocator;
+        const json = try std.json.Stringify.valueAlloc(a, child.container.?.style, .{}); defer a.free(json);
+        const parsed = try std.json.parseFromSlice(ContainerStyle, a, json, .{ .ignore_unknown_fields = false }); defer parsed.deinit();
+        try std.testing.expectEqualDeep(child.container.?.style, parsed.value);
+    }
+    try std.testing.expectError(error.InvalidEnumTag, std.json.parseFromSlice(ContainerStaticDirection, std.testing.allocator, "\"auto\"", .{}));
+    try std.testing.expectError(error.UnexpectedToken, std.json.parseFromSlice(ContainerStaticDirection, std.testing.allocator, "0", .{}));
+    var no_font = T.child; no_font.container.?.style.owner_font = null;
+    try std.testing.expect(validContainerStyle(no_font.container.?.style));
+    try std.testing.expect(no_font.container.?.style.owner_font == null);
+}
+
+test "DPRZ sole inline static child requires immediate sole parent and original root custody" {
+    const T = AbsoluteStaticInlineZTest;
+    const root: Block = .{ .kind = .container, .container = .{ .style = T.parent_style, .blocks = &.{T.child} } };
+    try T.check(&.{root});
+    try std.testing.expectError(error.InvalidPresentation, T.check(&.{T.child}));
+    for ([_][]const Block{ &.{ T.child, T.paragraph }, &.{ T.paragraph, T.child } }) |siblings| {
+        var parent = root; parent.container.?.blocks = siblings;
+        try std.testing.expect(!validSoleStaticInlineContainer(parent.container.?));
+        try std.testing.expectError(error.InvalidPresentation, T.check(&.{parent}));
+    }
+    const middle: Block = .{ .kind = .container, .container = .{ .blocks = &.{T.child} } };
+    var parent = root; parent.container.?.blocks = &.{middle};
+    try std.testing.expectError(error.InvalidPresentation, T.check(&.{parent}));
+    const table: Block = .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{T.child} }} }} } };
+    parent = root; parent.container.?.blocks = &.{table};
+    try std.testing.expectError(error.InvalidPresentation, T.check(&.{parent}));
+    const inside: Block = .{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{root} }} }} } };
+    try T.check(&.{inside});
+    const split = [_]Section{ .{ .level = 2, .title = "one", .blocks = &.{root} }, .{ .level = 2, .title = "two", .blocks = &.{T.child} } };
+    try std.testing.expectError(error.InvalidPresentation, validatePositionedContainers(&[_]Span{}, &split, &[_]Span{}, &[_]Reference{}));
+    const sections = [_]Section{.{ .level = 2, .title = "French", .blocks = &.{root} }};
+    var full: DeepTableWork = .{}; try full.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    const charged = max_presentation_items - full.remaining;
+    try std.testing.expectEqual(@as(usize, 9), charged); // section + three blocks + two owner metrics + three rich leaves
+    var exact: DeepTableWork = .{ .remaining = charged }; try exact.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = charged - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{}));
+}
+
+test "DPRZ sole inline static shape rejects invented dimensions controls and structural payloads" {
+    const T = AbsoluteStaticInlineZTest;
+    for (0..8) |mode| {
+        var style = T.child_style;
+        switch (mode) {
+            0 => style.absolute_position = .{ .left = .{ .unit = .px, .value = 0 }, .top = .{ .unit = .px, .value = 0 } },
+            1 => style.positioning = .relative_auto,
+            2 => style.width = .auto,
+            3 => style.width = .{ .length = .{ .unit = .px, .value = 20 } },
+            4 => style.height = .{ .unit = .px, .value = 0 },
+            5 => style.float_side = .left,
+            6 => style.layout = .flow,
+            else => style.max_width = .none,
+        }
+        try std.testing.expect(!validContainerStyle(style));
+    }
+    var parent_style = T.parent_style; parent_style.width = .{ .length = .{ .unit = .px, .value = 20 } };
+    try std.testing.expect(!validContainerStaticParentStyle(parent_style));
+    parent_style = T.parent_style; parent_style.height = .{ .unit = .px, .value = 0 };
+    try std.testing.expect(!validContainerStaticParentStyle(parent_style));
+    for ([_][]const u8{ "a\tb", "a\nb", "a\rb", "a\x0cb", "a\x0bb", "a\x00b", "a\x7fb" }) |text| {
+        const leaf = [_]Span{.{ .text = text }};
+        const body = [_]Block{.{ .kind = .paragraph, .spans = &leaf }};
+        var child = T.child.container.?; child.blocks = &body;
+        try std.testing.expect(!validContainerAbsoluteStaticBody(child));
+    }
+    const forced = [_]Span{.{ .kind = .line_break }};
+    const forced_body = [_]Block{.{ .kind = .paragraph, .spans = &forced }};
+    var child = T.child.container.?; child.blocks = &forced_body;
+    try std.testing.expect(!validContainerAbsoluteStaticBody(child));
+    const empty = [_]Span{.{}}; const empty_body = [_]Block{.{ .kind = .paragraph, .spans = &empty }};
+    child.blocks = &empty_body; try std.testing.expect(!validContainerAbsoluteStaticBody(child));
+    child.blocks = &.{T.child}; try std.testing.expect(!validContainerAbsoluteStaticBody(child));
+    const group: InlinePaddingGroup(Span) = .{ .spans = &T.spans, .left = .{ .unit = .px, .value = 1 }, .right = .{ .unit = .px, .value = 0 } };
+    const grouped = [_]Span{.{ .inline_padding_group = &group }};
+    const grouped_body = [_]Block{.{ .kind = .paragraph, .spans = &grouped }};
+    child.blocks = &grouped_body; try std.testing.expect(!validContainerAbsoluteStaticBody(child));
+    try std.testing.expect(!validFigureViewportWrapper(T.child_style));
+    try std.testing.expect(!validFigureCaptionBefore(T.child_style));
+}
+
+
+const TableMinWidth512Test = struct {
+    const body = [_]Span{
+        .{ .text = "minimum body", .bold = true },
+        .{ .kind = .link, .text = "linked", .target = "Target", .target_fragment = "part" },
+    };
+    fn table() Table {
+        return .{ .style = .{ .min_width = .{ .unit = .percent, .value = 70 } },
+            .rows = &.{.{ .cells = &.{.{ .spans = &body }} }} };
+    }
+    fn stored(blocks: []const Block, references: []const Reference, sections: *[1]Section) Stored {
+        sections.* = .{.{ .level = 2, .title = "minimum", .blocks = blocks }};
+        return .{ .entry = .{ .title = "minimum", .kind = .supplemental, .sections = sections, .references = references } };
+    }
+};
+
+test "DPRZ table minimum preserves independent px em percent and absent JSON" {
+    const a = std.testing.allocator;
+    for ([_]StyleWidthUnit{ .px, .em, .percent }) |unit| for ([_]f32{ 0, 0.5, 70, 125 }) |number| {
+        const minimum: StyleWidth = .{ .unit = unit, .value = number };
+        const style: TableStyle = .{ .width = .{ .unit = .px, .value = 12 }, .min_width = minimum };
+        try std.testing.expect(validTableStyle(.{ .min_width = minimum }));
+        try std.testing.expect(validUnboundTableStyle(style));
+        try std.testing.expect(validTableStyle(style));
+        try std.testing.expectEqual(@as(f32, 12), style.width.?.value);
+        const encoded = try std.json.Stringify.valueAlloc(a, style, .{}); defer a.free(encoded);
+        const decoded = try std.json.parseFromSlice(TableStyle, a, encoded, .{ .ignore_unknown_fields = false }); defer decoded.deinit();
+        try std.testing.expectEqualDeep(style, decoded.value);
+    };
+    for ([_]f32{ -1, std.math.nan(f32), std.math.inf(f32), -std.math.inf(f32) }) |bad| {
+        try std.testing.expect(!validTableStyle(.{ .min_width = .{ .unit = .percent, .value = bad } }));
+    }
+    const cell: CellStyle = .{ .min_width = .{ .unit = .em, .value = 2 } };
+    try std.testing.expect(validCellStyle(cell));
+    try std.testing.expectEqual(@as(f32, 2), cell.min_width.?.value);
+    const old_json = try std.json.Stringify.valueAlloc(a, TableStyle{ .width = .{ .unit = .px, .value = 12 } }, .{}); defer a.free(old_json);
+    const legacy_json = try std.json.Stringify.valueAlloc(a, struct { width: StyleWidth }{ .width = .{ .unit = .px, .value = 12 } }, .{}); defer a.free(legacy_json);
+    try std.testing.expectEqualStrings(legacy_json, old_json);
+    try std.testing.expect(std.mem.indexOf(u8, old_json, "min_width") == null);
+}
+
+test "DPRZ table minimum census preserves nested caption reference bodies and bounded work" {
+    const T = TableMinWidth512Test;
+    const a = std.testing.allocator;
+    const table = T.table();
+    const direct = [_]Block{.{ .kind = .table, .table = table }};
+    const nested = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} } }};
+    const caption = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{}, .caption_blocks = &direct } }};
+    for ([_][]const Block{ &direct, &nested, &caption }) |blocks| {
+        var sections: [1]Section = undefined;
+        const stored = T.stored(blocks, &.{}, &sections);
+        try std.testing.expect(DeepTableWork.hasTableMinWidths(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+        try std.testing.expect(!DeepTableWork.hasPositionedContainers(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+        try validateStored(a, stored, "minimum", .supplemental, null);
+        const encoded = try std.json.Stringify.valueAlloc(a, stored, .{}); defer a.free(encoded);
+        const decoded = try std.json.parseFromSlice(Stored, a, encoded, .{}); defer decoded.deinit();
+        try std.testing.expectEqualDeep(stored, decoded.value);
+    }
+    const references = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &direct }};
+    var sections: [1]Section = undefined;
+    const reference_only = T.stored(&.{}, &references, &sections);
+    try validateStored(a, reference_only, "minimum", .supplemental, null);
+    try std.testing.expect(DeepTableWork.hasTableMinWidths(&[_]Span{}, reference_only.entry.sections, &[_]Span{}, &references));
+    const stored = T.stored(&direct, &.{}, &sections);
+    var work: DeepTableWork = .{ .remaining = 6 };
+    try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    try std.testing.expect(work.table_min_width_found and !work.positioned_container_found);
+    work = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+    try std.testing.expectEqualDeep(@as([]const Span, &T.body), table.rows[0].cells[0].spans);
+    try std.testing.expectEqualStrings("Target", table.rows[0].cells[0].spans[1].target);
+    try std.testing.expectEqualStrings("part", table.rows[0].cells[0].spans[1].target_fragment.?);
+    // An inconclusive discovery never permits a late uncharged new feature.
+    var validation: ImageValidation = .{ .a = a, .media = &.{} }; defer validation.deinit();
+    try std.testing.expectError(error.InvalidPresentation, validateTable(table, 1, &validation));
+    validation.table_min_width_work_checked = true;
+    try validateTable(table, 1, &validation);
+}
+
+test "DPRZ table minimum refuses responsive wrapper grid and wide policy reinterpretation" {
+    const minimum: StyleWidth = .{ .unit = .percent, .value = 70 };
+    const good = PairedTableScrollTest.block();
+    const ordinary = TableMinWidth512Test.table();
+    try std.testing.expect(validTableViewportHeaders(ordinary.geometry, ordinary.style, null, null));
+    try std.testing.expectEqualDeep(ordinary.style, try resolveTableFloatStyle(ordinary, 300));
+    for (0..3) |mutation| {
+        var block = good;
+        var table = PairedTableScrollTest.table(&block);
+        try std.testing.expect(validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport));
+        switch (mutation) {
+            0 => table.style.?.min_width = minimum,
+            1 => block.box_style.min_width = minimum,
+            2 => block.grid_style.min_width = minimum,
+            else => unreachable,
+        }
+        try std.testing.expect(!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableFloatStyle(table, 300));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableBlockViewport(table, 300));
+        var census: DeepTableWork = .{};
+        try std.testing.expectError(error.InvalidPresentation, census.table(table, 1, 0));
+        try std.testing.expect(census.table_min_width_found);
+    }
+    var box = good; box.box_style.min_width = minimum;
+    try std.testing.expect(!validTableScrollViewport(box));
+    box = good; box.grid_style.min_width = minimum;
+    try std.testing.expect(!validTableScrollViewport(box));
+}
+
+
+test "image occurrence and fixed positioned siblings retain independent census and one shared work budget" {
+    const T = PositionedContainerZTest;
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const image: InlineImage = .{ .file = "Writing star.svg", .width_px = 62, .occurrence_layout = .{
+        .x = .{ .unit = .px, .value = -10 }, .y = .{ .unit = .px, .value = -10 }, .padding_left = zero, .padding_right = zero } };
+    const picture = [_]Span{.{ .kind = .link, .target = "Picture", .image = image }};
+    const positioned = [_]Block{.{ .kind = .container, .container = .{ .style = T.absoluteStyle(), .blocks = &T.leaf } }};
+    const siblings = [_]Block{
+        .{ .kind = .paragraph, .spans = &picture },
+        .{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto, .owner_font = T.font }, .blocks = &positioned } },
+    };
+    const sections = [_]Section{.{ .level = 2, .title = "Body", .blocks = &siblings }};
+    var work: DeepTableWork = .{}; try work.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    try std.testing.expect(work.image_occurrence_found and work.positioned_container_found and work.container_owner_font_found);
+    const charged = max_presentation_items - work.remaining;
+    try std.testing.expectEqual(@as(usize, 11), charged);
+    var exact: DeepTableWork = .{ .remaining = charged }; try exact.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{});
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = charged - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&[_]Span{}, &sections, &[_]Span{}, &[_]Reference{}));
+    const stored: Stored = .{ .entry = .{ .title = "Combined", .kind = .supplemental, .sections = &sections,
+        .media = &.{.{ .kind = .image, .file = "Writing star.svg", .caption = "" }} } };
+    try validateStored(std.testing.allocator, stored, "Combined", .supplemental, null);
+    const orphan_blocks = [_]Block{ siblings[0], positioned[0] };
+    const orphan_sections = [_]Section{.{ .level = 2, .title = "Body", .blocks = &orphan_blocks }};
+    var orphan = stored; orphan.entry.sections = &orphan_sections;
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, orphan, "Combined", .supplemental, null));
+    var bad_image = image; bad_image.occurrence_layout.?.padding_right.value = -1;
+    const bad_spans = [_]Span{.{ .image = bad_image }};
+    const bad_blocks = [_]Block{ .{ .kind = .paragraph, .spans = &bad_spans }, siblings[1] };
+    const bad_sections = [_]Section{.{ .level = 2, .title = "Body", .blocks = &bad_blocks }};
+    var invalid = stored; invalid.entry.sections = &bad_sections;
+    try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, invalid, "Combined", .supplemental, null));
+    try std.testing.expectEqualDeep(image, picture[0].image.?);
+    try std.testing.expectEqualDeep(@as([]const Block, &T.leaf), positioned[0].container.?.blocks);
+}
+
+
+test "shared static minimum and image features retain distinct siblings one budget and strict scope" {
+    const Static = AbsoluteStaticInlineZTest;
+    const a = std.testing.allocator;
+    const static_root: Block = .{ .kind = .container, .container = .{ .style = Static.parent_style, .blocks = &.{Static.child} } };
+    const minimum: Block = .{ .kind = .table, .table = TableMinWidth512Test.table() };
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const image: InlineImage = .{ .file = "Writing star.svg", .width_px = 62, .occurrence_layout = .{
+        .x = .{ .unit = .px, .value = -10 }, .y = .{ .unit = .em, .value = -0.5 },
+        .padding_left = zero, .padding_right = .{ .unit = .em, .value = 0.4 } } };
+    const picture: Block = .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .target = "Picture", .image = image }} };
+    const blocks = [_]Block{ static_root, minimum, picture };
+    const sections = [_]Section{.{ .level = 2, .title = "Mixed", .blocks = &blocks }};
+    const stored: Stored = .{ .entry = .{ .title = "Mixed", .kind = .supplemental, .sections = &sections,
+        .media = &.{.{ .kind = .image, .file = "Writing star.svg", .caption = "" }} } };
+    try validateStored(a, stored, "Mixed", .supplemental, null);
+    var work: DeepTableWork = .{};
+    try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    try std.testing.expect(work.positioned_container_found and work.table_min_width_found and work.image_occurrence_found and work.container_owner_font_found);
+    const used = max_presentation_items - work.remaining;
+    // section + five blocks + six rich leaves + two owner fonts + row/cell + occurrence
+    try std.testing.expectEqual(@as(usize, 17), used);
+    var exact: DeepTableWork = .{ .remaining = used };
+    try exact.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+    const encoded = try std.json.Stringify.valueAlloc(a, stored, .{}); defer a.free(encoded);
+    const parsed = try std.json.parseFromSlice(Stored, a, encoded, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(stored, parsed.value);
+    try std.testing.expectEqualDeep(@as([]const Span, &Static.spans), parsed.value.entry.sections[0].blocks[0].container.?.blocks[0].container.?.blocks[0].spans);
+    try std.testing.expectEqualDeep(@as([]const Span, &TableMinWidth512Test.body), parsed.value.entry.sections[0].blocks[1].table.?.rows[0].cells[0].spans);
+    try std.testing.expectEqualDeep(image, parsed.value.entry.sections[0].blocks[2].spans[0].image.?);
+    const orphan = [_]Block{ minimum, Static.child, picture };
+    const orphan_sections = [_]Section{.{ .level = 2, .title = "Mixed", .blocks = &orphan }};
+    var bad = stored; bad.entry.sections = &orphan_sections;
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad, "Mixed", .supplemental, null));
+    // Independent image support never broadens the static plain-rich child domain.
+    var image_child = Static.child; image_child.container.?.blocks = &.{picture};
+    var image_parent = static_root; image_parent.container.?.blocks = &.{image_child};
+    try std.testing.expect(!validSoleStaticInlineContainer(image_parent.container.?));
+    const image_sections = [_]Section{.{ .level = 2, .title = "Mixed", .blocks = &.{image_parent, minimum} }};
+    bad = stored; bad.entry.sections = &image_sections;
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad, "Mixed", .supplemental, null));
+}
+
+test "DPRZ static paragraph alignment repeats only its proved child alignment" {
+    const T = AbsoluteStaticInlineZTest;
+    for ([_]CellTextAlign{ .left, .center, .right }) |alignment| {
+        var paragraph = T.paragraph; paragraph.text_align = alignment;
+        var child = T.child; child.container.?.style.text_align = alignment;
+        child.container.?.blocks = &.{paragraph};
+        var root: Block = .{ .kind = .container, .container = .{ .style = T.parent_style, .blocks = &.{child} } };
+        try std.testing.expect(validContainerAbsoluteStaticBody(child.container.?));
+        try std.testing.expect(validSoleStaticInlineContainer(root.container.?));
+        try T.check(&.{root});
+        try std.testing.expectEqual(alignment, child.container.?.blocks[0].text_align.?);
+        try std.testing.expectEqualDeep(@as([]const Span, &T.spans), child.container.?.blocks[0].spans);
+        try std.testing.expectError(error.InvalidPresentation, T.check(&.{child}));
+
+        paragraph.text_align = if (alignment == .left) .right else .left;
+        child.container.?.blocks = &.{paragraph}; root.container.?.blocks = &.{child};
+        try std.testing.expect(!validContainerAbsoluteStaticBody(child.container.?));
+        try std.testing.expect(!validSoleStaticInlineContainer(root.container.?));
+        try std.testing.expectError(error.InvalidPresentation, T.check(&.{root}));
+
+        // The surrounding relative owner's alignment cannot supply a missing
+        // proof on the child. Only that child's explicit computed value counts.
+        paragraph.text_align = alignment; child.container.?.style.text_align = null;
+        child.container.?.blocks = &.{paragraph}; root.container.?.blocks = &.{child};
+        try std.testing.expect(!validContainerAbsoluteStaticBody(child.container.?));
+        try std.testing.expectError(error.InvalidPresentation, T.check(&.{root}));
+
+        child.container.?.style.text_align = alignment; paragraph.text_align = null;
+        child.container.?.blocks = &.{paragraph}; root.container.?.blocks = &.{child};
+        try std.testing.expect(validContainerAbsoluteStaticBody(child.container.?));
+        try T.check(&.{root});
+
+        paragraph.text_align = alignment; paragraph.depth = 1;
+        child.container.?.blocks = &.{paragraph}; root.container.?.blocks = &.{child};
+        try std.testing.expect(!validContainerAbsoluteStaticBody(child.container.?));
+        try std.testing.expectError(error.InvalidPresentation, T.check(&.{root}));
+    }
+}
+
+
+test "CSS-only intrinsic R keeps complete policy body actions and refuses unsupported hinted or styled variants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = IntrinsicTableViewportTest;
+    const policy = F.policy(); const hinted = F.table(&policy); var value = hinted; value.geometry = null;
+    try std.testing.expect(validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport));
+    try std.testing.expectEqual(@as(?*const TableBlockViewport, &policy), try resolveTableBlockViewport(value, 639));
+    try std.testing.expectEqual(@as(?*const TableBlockViewport, null), try resolveTableBlockViewport(value, 640));
+    try std.testing.expectEqualDeep(hinted.rows, value.rows);
+    try std.testing.expectEqualDeep(hinted.style, value.style);
+    try std.testing.expectEqualStrings("part", value.rows[0].cells[0].spans[0].target_fragment.?);
+    const json = try std.json.Stringify.valueAlloc(a, value, .{});
+    const parsed = try std.json.parseFromSliceLeaky(Table, a, json, .{ .ignore_unknown_fields = false });
+    try std.testing.expectEqualDeep(value, parsed);
+    try std.testing.expect(validTableViewportHeaders(parsed.geometry, parsed.style, parsed.block_viewport, parsed.float_viewport));
+    // Optional absence is different from an empty or partial nonnull hint set.
+    var zero_hints = value; zero_hints.geometry = .{ .border = 0, .cell_spacing = 0, .cell_padding = 0 };
+    try std.testing.expect(validTableViewportHeaders(zero_hints.geometry, zero_hints.style, zero_hints.block_viewport, zero_hints.float_viewport));
+    for (0..8) |mode| {
+        var changed_policy = F.policy(); var changed = F.table(&changed_policy); changed.geometry = null;
+        switch (mode) {
+            0 => changed.geometry = .{},
+            1 => changed.geometry = .{ .border = 0 },
+            2 => changed.style = null,
+            3 => changed.style.?.width = .{ .unit = .px, .value = 0 },
+            4 => changed.style.?.float_side = .right,
+            5 => changed_policy.focus_paint = null,
+            6 => changed_policy.grid_style.width = .{ .unit = .px, .value = 0 },
+            else => changed_policy.box_style.float_side = .right,
+        }
+        try std.testing.expect(!validTableViewportHeaders(changed.geometry, changed.style, changed.block_viewport, changed.float_viewport));
+    }
+}
+
+const AudioControlDataTest = struct {
+    const file = "Voice.ogg";
+    const classes = "wikidict-media wikidict-media-file-566f6963652e6f6767";
+    fn span(control: AudioControl) Span {
+        return .{ .kind = .link, .text = "Voice.ogg", .target = "File:Voice.ogg", .classes = classes,
+            .direction = "ltr", .audio_control = control };
+    }
+    fn rejectedJson(a: std.mem.Allocator, raw: []const u8) !void {
+        if (std.json.parseFromSlice(AudioControl, a, raw, .{})) |parsed| {
+            parsed.deinit();
+            return error.TestUnexpectedResult;
+        } else |err| if (err == error.OutOfMemory) return error.OutOfMemory;
+    }
+};
+test "audio control JSON retains auto dimensions and rejects unknown duplicate and unresolved policy values" {
+    const a = std.testing.allocator;
+    const automatic = try std.json.parseFromSlice(AudioControl, a, "{}", .{}); defer automatic.deinit();
+    try std.testing.expectEqualDeep(AudioControl{}, automatic.value);
+    const raw = "{\"width\":{\"unit\":\"px\",\"value\":250},\"height\":{\"unit\":\"px\",\"value\":30},\"focus\":{\"mode\":\"ua_auto\",\"color\":{\"kind\":\"rgb\",\"value\":\"#3366cc\"}}}";
+    const parsed = try std.json.parseFromSlice(AudioControl, a, raw, .{}); defer parsed.deinit();
+    try std.testing.expect(validAudioControl(parsed.value));
+    try std.testing.expectEqual(@as(f32, 250), parsed.value.width.?.value);
+    try std.testing.expectEqual(@as(f32, 30), parsed.value.height.?.value);
+    try std.testing.expectEqualStrings("#3366cc", parsed.value.focus.?.color.?.value.?);
+    for ([_][]const u8{
+        "{\"unknown\":1}", "{\"width\":null,\"width\":null}",
+        "{\"width\":{\"unit\":\"px\",\"value\":0}}", "{\"height\":{\"unit\":\"px\",\"value\":-1}}",
+        "{\"focus\":{\"mode\":\"unknown\"}}", "{\"focus\":{\"mode\":0}}",
+        "{\"focus\":{\"mode\":\"ua_auto\",\"extra\":1}}",
+        "{\"focus\":{\"mode\":\"ua_auto\",\"color\":{\"kind\":\"native_theme\"}}}",
+        "{\"focus\":{\"mode\":\"authored_none\",\"color\":{\"kind\":\"transparent\"}}}",
+        "{\"focus\":{\"mode\":\"ua_auto\",\"color\":{\"kind\":\"rgb\",\"value\":\"red\"}}}",
+    }) |bad| try AudioControlDataTest.rejectedJson(a, bad);
+    try std.testing.expect(!validAudioControl(.{ .width = .{ .unit = .em, .value = std.math.nan(f32) } }));
+    try std.testing.expect(!validAudioControl(.{ .height = .{ .unit = .px, .value = std.math.inf(f32) } }));
+    try std.testing.expect(validAudioControl(.{ .width = .{ .unit = .percent, .value = 50 },
+        .height = .{ .unit = .em, .value = 2 }, .focus = .{ .mode = .authored_none } }));
+}
+test "audio control requires one explicit exact audio resource owner without changing legacy media links" {
+    const T = AudioControlDataTest;
+    var owner = T.span(.{});
+    try std.testing.expect(validSpanAudioControl(owner));
+    var catalog = try ImageCatalogIndex.init(std.testing.allocator, [_]Media{.{ .file = T.file, .kind = .audio, .caption = "voice" }});
+    defer catalog.deinit(std.testing.allocator);
+    try std.testing.expect(catalog.supportsAudioControl(owner));
+    var wrong_kind = try ImageCatalogIndex.init(std.testing.allocator, [_]Media{.{ .file = T.file, .kind = .image, .caption = "" }});
+    defer wrong_kind.deinit(std.testing.allocator);
+    try std.testing.expect(!wrong_kind.supportsAudioControl(owner));
+    var duplicate = try ImageCatalogIndex.init(std.testing.allocator, [_]Media{
+        .{ .file = T.file, .kind = .audio, .caption = "" }, .{ .file = T.file, .kind = .audio, .caption = "" } });
+    defer duplicate.deinit(std.testing.allocator);
+    try std.testing.expect(!duplicate.supportsAudioControl(owner));
+    for (0..8) |mode| {
+        var changed = owner;
+        switch (mode) {
+            0 => changed.classes = "wikidict-media",
+            1 => changed.classes = T.classes ++ " wikidict-media-file-566f6963652e6f6767",
+            2 => changed.target = "File:Other.ogg",
+            3 => changed.target_fragment = "part",
+            4 => changed.kind = .text,
+            5 => changed.trail = "s",
+            6 => changed.classes = "wikidict-media wikidict-media-file-566F6963652e6f6767",
+            7 => changed.image = .{ .file = T.file, .width_px = 250 },
+            else => unreachable,
+        }
+        try std.testing.expect(!validSpanAudioControl(changed));
+        try std.testing.expect(!catalog.supportsAudioControl(changed));
+    }
+    var vertical_tab_owner = owner;
+    vertical_tab_owner.classes = "wikidict-media\x0bwikidict-media-file-566f6963652e6f6767";
+    try std.testing.expect(validSpanAudioControl(vertical_tab_owner));
+    try std.testing.expect(catalog.supportsAudioControl(vertical_tab_owner));
+    try std.testing.expect(!validRubyChild(vertical_tab_owner));
+    try std.testing.expect(!validRubyBodyChild(vertical_tab_owner));
+    // Compiler spans emit trails separately; the shared generic validator
+    // must instantiate without introducing a stored-only field dependency.
+    const native_owner = .{ .kind = owner.kind, .text = owner.text,
+        .target = owner.target, .classes = owner.classes, .audio_control = owner.audio_control };
+    try std.testing.expect(validSpanAudioControl(native_owner));
+    owner.text = "";
+    try std.testing.expect(validSpanAudioControl(owner));
+    try std.testing.expect(catalog.supportsAudioControl(owner));
+    owner.audio_control = null;
+    owner.classes = "wikidict-media";
+    try std.testing.expect(inlineTableMediaOwner(owner) != null);
+    try std.testing.expect(validSpanAudioControl(owner));
+    const legacy = try std.json.Stringify.valueAlloc(std.testing.allocator, owner, .{});
+    defer std.testing.allocator.free(legacy);
+    try std.testing.expect(std.mem.indexOf(u8, legacy, "audio_control") == null);
+}
+
+test "audio8192 and clipped128 keep distinct owners children and shared bounded census" {
+    const children = [_]Span{.{ .text = "Tooltip " }, .{ .kind = .link, .text = "detail", .target = "Detail" }};
+    const margin: ContainerMargin = .{ .length = .{ .unit = .px, .value = -1 } };
+    const clip: ClippedAbsoluteInline = .{ .static_parent_direction = .ltr, .width = .{ .unit = .px, .value = 1 }, .height = .{ .unit = .px, .value = 1 },
+        .margin = .{ .top = margin, .right = margin, .bottom = margin, .left = margin }, .children = &children };
+    const owner: Span = .{ .clipped_absolute = &clip };
+    const audio = AudioControlDataTest.span(.{});
+    try std.testing.expect(validSpanAudioControl(audio));
+    try std.testing.expect(validClippedAbsoluteInlineOwner(owner));
+    var both = audio; both.text = ""; both.clipped_absolute = &clip;
+    try std.testing.expect(!validSpanAudioControl(both));
+    try std.testing.expect(!validClippedAbsoluteInlineOwner(both));
+    var nested = clip; nested.children = &.{audio};
+    try std.testing.expect(!validClippedAbsoluteInline(nested));
+    try std.testing.expect(!validClippedAbsoluteInlineChild(audio));
+    const display = [_]Span{audio, owner};
+    var work: DeepTableWork = .{ .remaining = 5 };
+    try work.entry(&display, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.audio_control_found and work.clipped_absolute_found);
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    var too_small: DeepTableWork = .{ .remaining = 4 };
+    try std.testing.expectError(error.PresentationTooLarge, too_small.entry(&display, @as([]const Section, &.{}),
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expect(DeepTableWork.hasAudioControls(&display, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expect(DeepTableWork.hasClippedAbsolutes(&display, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+}
+
+
+test "clipped absolute requires explicit static parent direction and refuses conflicting or unresolved owner direction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var group = ClippedAbsoluteTypeTest.group(&.{.{ .kind = .link, .text = "retained", .target = "Target" }});
+    for ([_]ContainerStaticDirection{ .ltr, .rtl }) |direction| {
+        group.static_parent_direction = direction;
+        var owner: Span = .{ .clipped_absolute = &group };
+        try std.testing.expect(validClippedAbsoluteInlineOwner(owner));
+        owner.direction = @tagName(direction);
+        try std.testing.expect(validClippedAbsoluteInlineOwner(owner));
+        owner.direction = if (direction == .ltr) "rtl" else "ltr";
+        try std.testing.expect(!validClippedAbsoluteInlineOwner(owner));
+        owner.direction = "auto";
+        try std.testing.expect(!validClippedAbsoluteInlineOwner(owner));
+        const json = try std.json.Stringify.valueAlloc(a, group, .{});
+        const parsed = try std.json.parseFromSliceLeaky(ClippedAbsoluteInline, a, json, .{ .ignore_unknown_fields = false });
+        try std.testing.expectEqualDeep(group, parsed);
+    }
+    group.static_parent_direction = .inherit;
+    try std.testing.expect(!validClippedAbsoluteInline(group));
+    // Missing direction has no default even when the remaining typed fields
+    // are supplied through the normal JSON encoder.
+    group.static_parent_direction = .ltr;
+    const json = try std.json.Stringify.valueAlloc(a, group, .{});
+    const marker = "\"static_parent_direction\":\"ltr\",";
+    const start = std.mem.indexOf(u8, json, marker) orelse return error.TestUnexpectedResult;
+    const missing = try std.mem.concat(a, u8, &.{ json[0..start], json[start + marker.len ..] });
+    try std.testing.expectError(error.MissingField, std.json.parseFromSliceLeaky(ClippedAbsoluteInline, a, missing, .{ .ignore_unknown_fields = false }));
+}
+
+test "clipped root containing block debt survives tables figures and ordinary containers but not sibling roots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const group = ClippedAbsoluteTypeTest.group(&.{ .{ .text = "Tooltip " }, .{ .kind = .link, .text = "kept", .target = "Kept" } });
+    const clipped = [_]Span{.{ .clipped_absolute = &group }};
+    const table: Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &clipped }} }} };
+    const table_block = [_]Block{.{ .kind = .table, .table = table }};
+    const static_wrapper = [_]Block{.{ .kind = .container, .container = .{ .blocks = &table_block } }};
+    const section = [_]Section{.{ .level = 2, .title = "Body", .blocks = &static_wrapper }};
+    var work: DeepTableWork = .{};
+    try work.entry(&[_]Span{}, &section, &[_]Span{}, &[_]Reference{});
+    try std.testing.expect(work.clipped_absolute_found);
+    const used = max_presentation_items - work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used };
+    try exact.entry(&[_]Span{}, &section, &[_]Span{}, &[_]Reference{});
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&[_]Span{}, &section, &[_]Span{}, &[_]Reference{}));
+    const relative = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &static_wrapper } }};
+    const rejected = [_]Section{.{ .level = 2, .title = "Body", .blocks = &relative }};
+    var invalid: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, invalid.entry(&[_]Span{}, &rejected, &[_]Span{}, &[_]Reference{}));
+    try std.testing.expect(invalid.clipped_absolute_found);
+    const stored: Stored = .{ .entry = .{ .title = "root", .kind = .supplemental, .sections = &rejected } };
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "root", .supplemental, null));
+    const ordinary = [_]Block{.{ .kind = .paragraph, .spans = &.{.{ .text = "ordinary" }} }};
+    const siblings = [_]Block{ .{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &ordinary } }, table_block[0] };
+    const allowed = [_]Section{.{ .level = 2, .title = "Body", .blocks = &siblings }};
+    var sibling_work: DeepTableWork = .{};
+    try sibling_work.entry(&[_]Span{}, &allowed, &[_]Span{}, &[_]Reference{});
+    var valid = stored; valid.entry.sections = &allowed;
+    try validateStored(a, valid, "root", .supplemental, null);
+    var figure = TableCaptionModelFixture.figure();
+    figure.caption_blocks = &table_block;
+    const figure_blocks = [_]Block{.{ .kind = .paragraph, .figure = figure }};
+    const figure_section = [_]Section{.{ .level = 2, .title = "Body", .blocks = &figure_blocks }};
+    var figure_work: DeepTableWork = .{};
+    try figure_work.entry(&[_]Span{}, &figure_section, &[_]Span{}, &[_]Reference{});
+    const figure_under_relative = [_]Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &figure_blocks } }};
+    const figure_rejected = [_]Section{.{ .level = 2, .title = "Body", .blocks = &figure_under_relative }};
+    var bad_figure_work: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, bad_figure_work.entry(&[_]Span{}, &figure_rejected, &[_]Span{}, &[_]Reference{}));
+    figure.table_caption_layout.?.media.positioning = .relative_auto;
+    const own_positioned_figure = [_]Block{.{ .kind = .paragraph, .figure = figure }};
+    const own_positioned_section = [_]Section{.{ .level = 2, .title = "Body", .blocks = &own_positioned_figure }};
+    var bad_own_work: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, bad_own_work.entry(&[_]Span{}, &own_positioned_section, &[_]Span{}, &[_]Reference{}));
+    var unchecked: ImageValidation = .{ .a = a, .media = &.{} }; defer unchecked.deinit();
+    try std.testing.expectError(error.InvalidPresentation, validateSpanColors(&clipped, &unchecked));
+    unchecked.clipped_absolute_work_checked = true;
+    try validateSpanColors(&clipped, &unchecked);
+}
+
+test "uniform inline box radius preserves square JSON and distinguishes explicit zero" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const children = [_]Span{.{ .text = "rounded", .italic = true }};
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .border = InlineBoxBorderEdges.all(.{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#c8ccd1" } } }),
+        .spans = &children };
+    const Legacy = struct { padding: StyleEdges, border: InlineBoxBorderEdges, overlays: []const InlineBoxOverlay, spans: []const Span };
+    const legacy: Legacy = .{ .padding = group.padding, .border = group.border, .overlays = group.overlays, .spans = group.spans };
+    const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expectEqualStrings(old_json, try std.json.Stringify.valueAlloc(a, group, .{}));
+    try std.testing.expect(inlineBoxRadius(legacy) == null and validInlineBoxGroup(legacy));
+    const parsed_square = try std.json.parseFromSliceLeaky(InlineBoxGroup(Span), a, old_json, .{ .ignore_unknown_fields = false });
+    try std.testing.expectEqualDeep(group, parsed_square);
+    for ([_]f32{ 0, 2 }) |radius| {
+        group.radius = .{ .unit = .px, .value = radius };
+        try std.testing.expect(validInlineBoxGroup(group));
+        const json = try std.json.Stringify.valueAlloc(a, group, .{});
+        const expected = try std.fmt.allocPrint(a, "{s},\"radius\":{s}}}", .{ old_json[0 .. old_json.len - 1], try std.json.Stringify.valueAlloc(a, group.radius.?, .{}) });
+        try std.testing.expectEqualStrings(expected, json);
+        const parsed = try std.json.parseFromSliceLeaky(InlineBoxGroup(Span), a, json, .{ .ignore_unknown_fields = false });
+        try std.testing.expectEqualDeep(group, parsed);
+    }
+    for ([_]StyleLength{
+        .{ .unit = .px, .value = -1 }, .{ .unit = .px, .value = std.math.inf(f32) },
+        .{ .unit = .px, .value = std.math.nan(f32) }, .{ .unit = .em, .value = 0 }, .{ .unit = .em, .value = 2 },
+    }) |invalid| {
+        group.radius = invalid;
+        try std.testing.expect(!validInlineBoxRadius(invalid) and !validInlineBoxGroup(group));
+    }
+    group.radius = .{ .unit = .px, .value = 2 };
+    const uniform = group.border;
+    for (0..7) |mode| {
+        group.border = uniform;
+        switch (mode) {
+            0 => group.border.right = .none,
+            1 => group.border.right = .hidden,
+            2 => group.border.right = .{ .dotted = uniform.right.solid },
+            3 => group.border.right.solid.width.value = 2,
+            4 => group.border.right.solid.width.unit = .em,
+            5 => group.border.right.solid.color = .{ .rgb = "#ffffff" },
+            6 => group.border = InlineBoxBorderEdges.all(.{ .solid = .{ .width = uniform.top.solid.width, .color = .current_color } }),
+            else => unreachable,
+        }
+        try std.testing.expect(!validInlineBoxGroup(group));
+        group.radius = null;
+        try std.testing.expect(validInlineBoxGroup(group));
+        group.radius = .{ .unit = .px, .value = 0 };
+        try std.testing.expect(!validInlineBoxGroup(group));
+        group.radius = .{ .unit = .px, .value = 2 };
+    }
+    group.border = uniform;
+    group.overlays = &.{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } }, .border = uniform }};
+    try std.testing.expect(!validInlineBoxGroup(group));
+    group.radius = null;
+    try std.testing.expect(validInlineBoxGroup(group));
+    group.overlays = &.{};
+    group.border = InlineBoxBorderEdges.all(.{ .solid = .{ .width = .{ .unit = .px, .value = 0 }, .color = .{ .rgb = "#c8ccd1" } } });
+    group.radius = .{ .unit = .px, .value = 0 };
+    try std.testing.expect(validInlineBoxGroup(group));
+}
+
+test "uniform inline box radius retains action nesting and exact shared work budget" {
+    const children = [_]Span{.{ .text = "first", .italic = true }, .{ .text = " second", .bold = true }};
+    var rounded: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        .border = InlineBoxBorderEdges.all(.{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#c8ccd1" } } }),
+        .spans = &children, .radius = .{ .unit = .px, .value = 2 } };
+    const linked: Span = .{ .kind = .link, .target = "Target", .target_fragment = "Part", .background = "#f8f9fa", .inline_box_group = &rounded };
+    try validateInlineBoxGroupTree(linked, 0, 0);
+    const Sink = struct {
+        count: usize = 0,
+        fn emit(self: *@This(), span: Span) error{InvalidPresentation}!void {
+            if (span.kind != .link or !std.mem.eql(u8, span.target, "Target") or
+                span.target_fragment == null or !std.mem.eql(u8, span.target_fragment.?, "Part")) return error.InvalidPresentation;
+            if (self.count == 0 and (!std.mem.eql(u8, span.text, "first") or !span.italic)) return error.InvalidPresentation;
+            if (self.count == 1 and (!std.mem.eql(u8, span.text, " second") or !span.bold)) return error.InvalidPresentation;
+            if (self.count >= 2) return error.InvalidPresentation;
+            self.count += 1;
+        }
+    };
+    var sink: Sink = .{};
+    try visitRubyFallback(&[_]Span{linked}, &sink, Sink.emit);
+    try std.testing.expectEqual(@as(usize, 2), sink.count);
+    try std.testing.expectEqual(InlineKind.text, children[0].kind);
+    try std.testing.expectEqualStrings("", children[1].target);
+    var square = rounded; square.radius = null; square.spans = &.{linked};
+    const outer: Span = .{ .inline_box_group = &square };
+    try validateInlineBoxGroupTree(outer, 0, 0);
+    var work: DeepTableWork = .{ .remaining = 4 };
+    try work.entry(&[_]Span{outer}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.inline_box_group_found and inlineBoxRadius(linked.inline_box_group.?.*) != null);
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    var exhausted: DeepTableWork = .{ .remaining = 3 };
+    try std.testing.expectError(error.PresentationTooLarge, exhausted.entry(&[_]Span{outer}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    rounded.radius = null;
+    work = .{};
+    try work.entry(&[_]Span{outer}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.inline_box_group_found and inlineBoxRadius(linked.inline_box_group.?.*) == null);
+    rounded.radius = .{ .unit = .px, .value = 0 };
+    work = .{};
+    try work.entry(&[_]Span{outer}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(inlineBoxRadius(linked.inline_box_group.?.*).?.value == 0);
+    var conflicting = children; conflicting[1].kind = .link; conflicting[1].target = "Target";
+    rounded.spans = &conflicting;
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(linked, 0, 0));
+    rounded.spans = &children;
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(linked, max_content_depth, 0));
+}
+
+const ContainerDisclosureDataTesting = struct {
+    const header: Block = .{ .kind = .paragraph, .spans = &.{.{ .text = "Notes outside content" }} };
+    const content: Block = .{ .kind = .container, .container = .{ .blocks = &.{.{ .kind = .paragraph,
+        .spans = &.{.{ .kind = .link, .text = "preserved", .target = "Target" }} }} } };
+    const children = [_]Block{ header, content };
+    const policy: ContainerDisclosure = .{ .content_index = 1, .initially_collapsed = true,
+        .expand_label = "[expand]", .collapse_label = "[collapse]", .focus = .{ .mode = .ua_auto,
+            .color = .{ .kind = .rgb, .value = "#3366cc" } } };
+    const owner: Container = .{ .blocks = &children, .disclosure = policy };
+};
+
+test "Container disclosure retains original direct child and complete labels independent of geometry" {
+    const T = ContainerDisclosureDataTesting;
+    try std.testing.expect(validContainerHeader(T.owner));
+    try std.testing.expect(containerRequiresExtension(T.owner));
+    try std.testing.expect(!containerStyleRequiresPositionedCapability(T.owner.style));
+    try std.testing.expectEqual(@as(u32, 1), T.owner.disclosure.?.content_index);
+    try std.testing.expectEqualStrings("Notes outside content", T.owner.blocks[0].spans[0].text);
+    try std.testing.expectEqualStrings("Target", T.owner.blocks[1].container.?.blocks[0].spans[0].target);
+    const legacy = .{ .blocks = @as([]const Block, &T.children), .style = @as(ContainerStyle, .{}) };
+    try std.testing.expect(containerDisclosure(legacy) == null);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const json = try std.json.Stringify.valueAlloc(a, T.owner, .{});
+    try std.testing.expectEqualDeep(T.owner, try std.json.parseFromSliceLeaky(Container, a, json, .{}));
+    const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expectEqualStrings(old_json, try std.json.Stringify.valueAlloc(a, @as(Container, .{ .blocks = &T.children }), .{}));
+    const sections = [_]Section{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .container, .container = T.owner }} }};
+    try std.testing.expect(DeepTableWork.hasPositionedContainers(@as([]const Span, &.{}), &sections,
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    var work: DeepTableWork = .{};
+    try work.entry(@as([]const Span, &.{}), &sections, @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.positioned_container_found);
+    var zero_budget: DeepTableWork = .{ .remaining = 0 };
+    try std.testing.expectError(error.PresentationTooLarge, zero_budget.entry(@as([]const Span, &.{}), &sections,
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+}
+
+test "Container disclosure refuses invalid child labels focus and unknown JSON without weakening legacy style" {
+    const T = ContainerDisclosureDataTesting;
+    for (0..9) |mode| {
+        var owner = T.owner;
+        switch (mode) {
+            0 => owner.disclosure.?.content_index = 2,
+            1 => owner.disclosure.?.content_index = 0,
+            2 => owner.disclosure.?.expand_label = "",
+            3 => owner.disclosure.?.collapse_label = "bad\nlabel",
+            4 => owner.disclosure.?.expand_label = "\xff",
+            5 => owner.disclosure.?.focus = .{ .mode = .authored_none, .color = .{ .kind = .rgb, .value = "#3366cc" } },
+            6 => owner.disclosure.?.focus = .{ .mode = .ua_auto, .color = .{ .kind = .rgb, .value = "bad" } },
+            7 => owner.disclosure.?.focus = .{ .mode = .ua_auto, .color = .{ .kind = .native_theme } },
+            else => owner.blocks = &.{T.header},
+        }
+        try std.testing.expect(!validContainerHeader(owner));
+    }
+    var valid = T.owner;
+    valid.disclosure.?.initially_collapsed = false;
+    valid.disclosure.?.focus = .{ .mode = .authored_none };
+    try std.testing.expect(validContainerHeader(valid));
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const malformed = "{\"content_index\":1,\"initially_collapsed\":true,\"expand_label\":\"x\",\"collapse_label\":\"y\",\"unknown\":1}";
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSliceLeaky(ContainerDisclosure, a, malformed, .{ .ignore_unknown_fields = true }));
+    const duplicate = "{\"content_index\":1,\"content_index\":0,\"initially_collapsed\":true,\"expand_label\":\"x\",\"collapse_label\":\"y\"}";
+    try std.testing.expectError(error.DuplicateField, std.json.parseFromSliceLeaky(ContainerDisclosure, a, duplicate, .{}));
+}
+
+test "Container disclosure separates floated toggle base paint and inner label pointer states" {
+    const T = ContainerDisclosureDataTesting;
+    const paint: ContainerDisclosureTextPaint = .{
+        .normal = .{ .foreground = "#3366cc", .underline = false },
+        .hover = .{ .foreground = "#4477dd", .underline = true },
+        .active = .{ .foreground = "#223388", .underline = false },
+        .hover_active = .{ .foreground = "#112255", .underline = true },
+        .underline_on_focus = true };
+    var owner = T.owner;
+    owner.disclosure.?.placement = .float_right;
+    owner.disclosure.?.foreground = .{ .kind = .rgb, .value = "#202122" };
+    owner.disclosure.?.direction = .ltr;
+    owner.disclosure.?.expand_run = .{ .start = 1, .end = 7, .paint = paint };
+    owner.disclosure.?.collapse_run = .{ .start = 1, .end = 9, .paint = paint };
+    owner.style.owner_font = .{ .font_scale = 0.85, .font_scale_basis = .normal_body, .font_normalized = true, .bold = true };
+    try std.testing.expect(validContainerHeader(owner));
+    try std.testing.expectEqualStrings("#112255", containerDisclosureTextState(paint, true, true, false).foreground);
+    try std.testing.expect(containerDisclosureTextState(paint, false, false, true).underline);
+    try std.testing.expectEqual(@as(usize, 4), containerDisclosureItems(owner.disclosure.?));
+    for (0..5) |mode| {
+        var bad = owner;
+        switch (mode) {
+            0 => bad.disclosure.?.expand_run.?.end = 99,
+            1 => bad.disclosure.?.expand_run.?.start = 7,
+            2 => bad.disclosure.?.expand_run.?.paint.hover_active.foreground = "#abc",
+            3 => bad.disclosure.?.foreground = .{ .kind = .native_theme },
+            else => { bad.disclosure.?.expand_label = "[\xc3\xa9]"; bad.disclosure.?.expand_run.?.start = 2; bad.disclosure.?.expand_run.?.end = 3; },
+        }
+        try std.testing.expect(!validContainerHeader(bad));
+    }
+    owner.disclosure.?.placement = .float_left; owner.disclosure.?.direction = .rtl;
+    try std.testing.expect(validContainerHeader(owner));
+}
+
+test "overlay text keeps original source order separate from the required inline body" {
+    const font: InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body,
+        .font_normalized = true, .language = "ja" };
+    const body = [_]Span{.{ .text = "\xe2\x80\x8b", .font_scale = 1, .font_scale_basis = .normal_body, .language = "ja" }};
+    const first: InlineBoxOverlayContent(Span) = .{ .before_child = 1, .owner_font = font,
+        .text_align = .left, .spans = &body };
+    var second = first; second.spans = &.{.{ .text = "x", .font_scale = 1, .font_scale_basis = .normal_body, .language = "ja" }};
+    const zero: InlineBoxInset = .{ .unit = .px, .value = 0 };
+    const edge: InlineBoxBorderEdges = .{ .top = .none, .left = .none, .bottom = .none,
+        .right = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#000000" } } } };
+    const overlays = [_]InlineBoxOverlay{
+        .{ .insets = .{ .top = zero, .right = zero, .bottom = .{ .unit = .percent, .value = 67 } }, .border = edge, .content = &first },
+        .{ .insets = .{ .top = zero, .right = zero }, .border = edge, .content = &second },
+    };
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .border = InlineBoxBorderEdges.all(.none), .overlays = &overlays,
+        .spans = &.{.{ .text = "スリ" }, .{ .kind = .link, .text = "ユビ", .target = "指" }} };
+    const owner: Span = .{ .inline_box_group = &group };
+    const Sink = struct {
+        texts: [4][]const u8 = undefined,
+        targets: [4][]const u8 = undefined,
+        count: usize = 0,
+        fn emit(self: *@This(), span: Span) error{InvalidPresentation}!void {
+            if (self.count >= self.texts.len) return error.InvalidPresentation;
+            self.texts[self.count] = span.text; self.targets[self.count] = span.target; self.count += 1;
+        }
+    };
+    var logical: Sink = .{}; try visitRubyFallback(&[_]Span{owner}, &logical, Sink.emit);
+    var terminal: Sink = .{}; try visitRubyVisualFallback(&[_]Span{owner}, &terminal, Sink.emit);
+    try std.testing.expectEqual(@as(usize, 4), logical.count);
+    try std.testing.expectEqualDeep(logical, terminal);
+    try std.testing.expectEqualStrings("スリ", logical.texts[0]);
+    try std.testing.expectEqualStrings("\xe2\x80\x8b", logical.texts[1]);
+    try std.testing.expectEqualStrings("x", logical.texts[2]);
+    try std.testing.expectEqualStrings("ユビ", logical.texts[3]);
+    try std.testing.expectEqualStrings("", logical.targets[1]);
+    try std.testing.expectEqualStrings("指", logical.targets[3]);
+    try std.testing.expectEqual(@as(usize, 2), group.spans.len);
+    try std.testing.expectEqualStrings("スリ", group.spans[0].text);
+    var work: DeepTableWork = .{};
+    try work.entry(&[_]Span{owner}, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expectEqual(max_presentation_items - 7, work.remaining);
+    var limited: DeepTableWork = .{ .remaining = 6 };
+    try std.testing.expectError(error.PresentationTooLarge, limited.entry(&[_]Span{owner}, @as([]const Section, &.{}),
+        @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    group.spans = &.{.{}, .{}};
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+}
+
+test "overlay content rejects incomplete metrics invalid source boundaries and inherited actions" {
+    const font: InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_normalized = true };
+    const body = [_]Span{.{ .text = "\xe2\x80\x8b", .font_scale = 1, .font_scale_basis = .normal_body }};
+    const original: InlineBoxOverlayContent(Span) = .{ .before_child = 1, .owner_font = font, .text_align = .left, .spans = &body };
+    var content = original;
+    const overlay: InlineBoxOverlay = .{ .insets = .{ .top = .{ .unit = .px, .value = 0 },
+        .right = .{ .unit = .percent, .value = 0 } }, .border = InlineBoxBorderEdges.all(.none), .content = &content };
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        .border = InlineBoxBorderEdges.all(.none), .overlays = &.{overlay}, .spans = &.{.{ .text = "body" }} };
+    var owner: Span = .{ .inline_box_group = &group };
+    try validateInlineBoxGroupTree(owner, 0, 0);
+    for (0..9) |case_index| {
+        content = original;
+        switch (case_index) {
+            0 => content.before_child = 2,
+            1 => content.owner_font.font_normalized = false,
+            2 => content.owner_font.font_scale_basis = .context,
+            3 => content.spans = &.{},
+            4 => content.spans = &.{.{ .text = "", .font_scale = 1, .font_scale_basis = .normal_body }},
+            5 => content.spans = &.{.{ .kind = .link, .text = "x", .target = "other", .font_scale = 1, .font_scale_basis = .normal_body }},
+            6 => content.line_height = .{ .computed = .{ .value = std.math.nan(f32), .font_scale_basis = .css_px } },
+            7 => content.spans = &.{.{ .text = "x", .font_scale = 2, .font_scale_basis = .normal_body }},
+            8 => content.spans = &.{.{ .text = "x", .direction = "rtl", .font_scale = 1, .font_scale_basis = .normal_body }},
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+    }
+    content = original;
+    owner.kind = .link; owner.target = "inherited";
+    try std.testing.expectError(error.InvalidPresentation, validateInlineBoxGroupTree(owner, 0, 0));
+    owner.kind = .text; owner.target = "";
+    const action: InlineActionGroup(Span) = .{ .spans = &.{owner} };
+    const action_owner: Span = .{ .kind = .link, .target = "inherited", .inline_action_group = &action };
+    try std.testing.expectError(error.InvalidPresentation, validateInlineActionGroupTree(action_owner, 0, 0));
+    var earlier = original; earlier.before_child = 0;
+    const wrong_order = [_]InlineBoxOverlay{ overlay, .{ .insets = overlay.insets, .border = overlay.border, .content = &earlier } };
+    group.overlays = &wrong_order;
+    try std.testing.expect(!validInlineBoxGroup(group));
+}
+
+test "inline overlay validation reads canonical opaque flags without losing forbidden traits" {
+    inline for (.{ u8, packed struct(u8) { bits: u8 = 0 },
+        packed struct(u8) { bold: bool = false, rest: u7 = 0 },
+        packed struct(u8) { underline: bool = false, strike: bool = false, rest: u6 = 0 } }) |Flags| {
+        const Child = struct {
+            kind: InlineKind = .text,
+            text: []const u8 = "overlay", target: []const u8 = "",
+            flags: Flags = @bitCast(@as(u8, 0)),
+            font_scale: ?f32 = 1, font_scale_basis: FontScaleBasis = .normal_body,
+        };
+        for (0..256) |raw| {
+            const bits: u8 = @intCast(raw);
+            const child: Child = .{ .flags = @bitCast(bits) };
+            const original = child;
+            var content: InlineBoxOverlayContent(Child) = .{ .before_child = 0, .text_align = .left,
+                .owner_font = .{ .font_scale = 1, .font_scale_basis = .normal_body,
+                    .font_normalized = true, .bold = bits & 1 != 0,
+                    .italic = bits & 2 != 0, .code = bits & 4 != 0 },
+                .spans = &.{child} };
+            const allowed = bits & 0xf8 == 0;
+            try std.testing.expectEqual(allowed, validInlineBoxOverlayTextChild(child));
+            try std.testing.expectEqual(allowed, validInlineBoxOverlayContent(content));
+            if (allowed) {
+                content.owner_font.bold = !content.owner_font.bold;
+                try std.testing.expect(!validInlineBoxOverlayContent(content));
+            }
+            try std.testing.expectEqualDeep(original, child);
+            try std.testing.expectEqual(bits, @as(u8, @bitCast(child.flags)));
+        }
+    }
+    // Named flags outside the codec-byte domain retain their semantic fields.
+    const Named = struct {
+        kind: InlineKind = .text, text: []const u8 = "named", target: []const u8 = "",
+        flags: struct { underline: bool = false } = .{},
+    };
+    try std.testing.expect(validInlineBoxOverlayTextChild(Named{}));
+    try std.testing.expect(!validInlineBoxOverlayTextChild(Named{ .flags = .{ .underline = true } }));
+}
+
+test "conditional table rows preserve caption actions JSON and strict ordinary owner domain" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const rows = [_]Row{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "kept row", .target = "Row" }} }} }};
+    const plain: Table = .{ .caption = &.{.{ .kind = .link, .text = "kept caption", .target = "Caption" }}, .rows = &rows };
+    var value = plain; value.rows_hidden_max_width_px = 639;
+    try std.testing.expect(validTableRowsVisibility(value));
+    try std.testing.expect(try resolveTableRowsHidden(value, 0));
+    try std.testing.expect(try resolveTableRowsHidden(value, 639));
+    try std.testing.expect(!try resolveTableRowsHidden(value, 639.5));
+    try std.testing.expect(!try resolveTableRowsHidden(value, 640));
+    try std.testing.expect(!try resolveTableRowsHidden(value, 900));
+    try std.testing.expect(!try resolveTableRowsHidden(plain, 600));
+    for ([_]f64{ -1, std.math.inf(f64), std.math.nan(f64) }) |viewport|
+        try std.testing.expectError(error.InvalidPresentation, resolveTableRowsHidden(value, viewport));
+    try std.testing.expectEqualDeep(plain.rows, value.rows);
+    try std.testing.expectEqualDeep(plain.caption, value.caption);
+    const old_json = try std.json.Stringify.valueAlloc(a, .{ .caption = plain.caption, .rows = plain.rows }, .{});
+    try std.testing.expectEqualStrings(old_json, try std.json.Stringify.valueAlloc(a, plain, .{}));
+    const expected = try std.fmt.allocPrint(a, "{s},\"rows_hidden_max_width_px\":639}}", .{old_json[0 .. old_json.len - 1]});
+    const json = try std.json.Stringify.valueAlloc(a, value, .{});
+    try std.testing.expectEqualStrings(expected, json);
+    const parsed = try std.json.parseFromSlice(Table, a, json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(value, parsed.value);
+    const sections = [_]Section{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = value }} }};
+    try std.testing.expect(DeepTableWork.hasTablePolicyWork(@as([]const Span, &.{}), &sections, @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try validateStored(a, .{ .entry = .{ .title = "rows", .kind = .supplemental, .sections = &sections } }, "rows", .supplemental, null);
+    const viewport_policy = IntrinsicTableViewportTest.policy();
+    for (0..6) |mode| {
+        var bad = value;
+        switch (mode) {
+            0 => bad.rows_hidden_max_width_px = 0,
+            1 => bad.rows = &.{},
+            2 => bad.style = .{ .display = .inline_table },
+            3 => bad.style = .{ .display = .inline_block },
+            4 => bad.style = .{ .float_side = .left },
+            else => bad.block_viewport = &viewport_policy,
+        }
+        try std.testing.expect(!validTableRowsVisibility(bad));
+        try std.testing.expectError(error.InvalidPresentation, resolveTableRowsHidden(bad, 600));
+        const bad_stored: Stored = .{ .entry = .{ .title = "rows", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = bad }} }} } };
+        try std.testing.expectError(error.InvalidPresentation, validateStored(a, bad_stored, "rows", .supplemental, null));
+    }
+    var floating = value;
+    floating.float_viewport = .{ .max_viewport_width_px = 639, .containing_direction = .ltr, .grid_direction = .ltr, .language = "zh" };
+    try std.testing.expect(!validTableRowsVisibility(floating));
+    const legacy = .{ .caption = plain.caption, .rows = plain.rows };
+    try std.testing.expect(validTableRowsVisibility(legacy));
+}
+
+test "conditional table rows charge policy and retain complete recursive work" {
+    const nested: Table = .{ .rows_hidden_max_width_px = 639, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .target = "Nested", .text = "nested row" }} }} }} };
+    const value: Table = .{ .rows_hidden_max_width_px = 639,
+        .caption_blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .target = "Caption", .text = "caption" }} }},
+        .rows = &.{.{ .cells = &.{.{ .nested_table = nested }} }} };
+    var work: DeepTableWork = .{}; try work.table(value, 1, 0);
+    const used = max_presentation_items - work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used }; try exact.table(value, 1, 0);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.table(value, 1, 0));
+    var plain = value; plain.rows_hidden_max_width_px = null;
+    var old: DeepTableWork = .{}; try old.table(plain, 1, 0);
+    try std.testing.expectEqual(work.remaining + 1, old.remaining);
+    var bad_nested = nested; bad_nested.rows_hidden_max_width_px = 0;
+    var bad = value; bad.rows = &.{.{ .cells = &.{.{ .nested_table = bad_nested }} }};
+    var invalid: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, invalid.table(bad, 1, 0));
+}
+
+test "hidden overflow is a distinct scroll BFC and does not widen column or auto policy" {
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(ContainerOverflow.visible));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(ContainerOverflow.auto));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(ContainerOverflow.hidden));
+    try std.testing.expect(validContainerStyle(.{ .overflow = .hidden, .width = .fit_content }));
+    try std.testing.expect(!containerAutoScrollportStyleSupported(.{ .overflow = .hidden }));
+    try std.testing.expect(containerAutoScrollportStyleSupported(.{ .overflow = .auto }));
+    const columns: ContainerColumns = .{ .count = 2, .gap = .{ .unit = .em, .value = 1 } };
+    try std.testing.expect(!validContainerStyle(.{ .overflow = .hidden, .columns = columns }));
+    try std.testing.expect(validContainerStyle(.{ .overflow = .visible, .columns = columns }));
+}
+
+test "ordinary action destination distinguishes absent and explicit fragment with legacy generic shapes" {
+    const Legacy = struct { kind: enum { text, link, external_link }, target: []const u8 = "" };
+    try std.testing.expect(!validSpanActionDestination(Legacy{ .kind = .link }));
+    try std.testing.expect(!validSpanActionDestination(Legacy{ .kind = .external_link }));
+    try std.testing.expect(validSpanActionDestination(Legacy{ .kind = .link, .target = "Target" }));
+    try std.testing.expect(validSpanActionDestination(Legacy{ .kind = .text }));
+    var span: Span = .{ .kind = .link, .text = "local" };
+    try std.testing.expect(!validSpanActionDestination(span));
+    span.target_fragment = ""; try std.testing.expect(validSpanActionDestination(span));
+    span.target_fragment = "section"; try std.testing.expect(validSpanActionDestination(span));
+    span.kind = .external_link; try std.testing.expect(!validSpanActionDestination(span));
+    span.target_fragment = null; span.target = "https://example.test/";
+    try std.testing.expect(validSpanActionDestination(span));
 }

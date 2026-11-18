@@ -36,6 +36,25 @@ pub const deep_tables_magic = "DPRT";
 /// Full S/T Span fields plus a data-only inline padding group.
 pub const inline_padding_groups_magic = "DPRU";
 pub const inline_action_groups_magic = "DPRV";
+/// Final pending successor. Private W/X prototypes are deliberately unsupported.
+pub const owner_geometry_magic = "DPRY";
+const owner_font_feature: u8 = 1;
+const body_typography_feature: u8 = 2;
+const inline_box_feature: u8 = 4;
+// Local to each overlay byte; unrelated to global features and Span font_fields.
+const inline_box_overlay_content_flag: u8 = 0x10;
+const image_occurrence_feature: u8 = 32;
+const clipped_absolute_feature: u8 = 128;
+const owner_geometry_features: u8 = 7 | image_occurrence_feature | clipped_absolute_feature;
+/// Positioned containers have a distinct header; DPRY retains its one-byte word.
+pub const positioned_containers_magic = "DPRZ";
+const positioned_containers_feature: u16 = 256;
+const table_min_width_feature: u16 = 512;
+const audio_control_feature: u16 = 8192;
+const z_high_features: u16 = positioned_containers_feature | table_min_width_feature | audio_control_feature;
+const positioned_containers_features: u16 = owner_geometry_features | z_high_features;
+// Bit23 remains reserved; DPRZ uses a separate style extension.
+const container_owner_snapshot_flag: u32 = 0x1000000;
 const container_owner_font_flag: u32 = 0x10000;
 const container_height_flag: u32 = 0x20000;
 const container_columns_flag: u32 = 0x40000;
@@ -95,6 +114,16 @@ const Encoder = struct {
     capability_t: bool = false,
     capability_u: bool = false,
     capability_v: bool = false,
+    capability_w: bool = false,
+    positioned_containers_enabled: bool = false,
+    table_min_width_enabled: bool = false,
+    body_typography_enabled: bool = false,
+    inline_box_groups: bool = false,
+    clipped_absolute_enabled: bool = false,
+    in_clipped_absolute: bool = false,
+    image_occurrences: bool = false,
+    audio_controls: bool = false,
+    in_inline_box_group: bool = false,
     in_inline_action_group: bool = false,
     in_inline_padding_group: bool = false,
     inline_padding_action: ?types.InlinePaddingGroupAction = null,
@@ -179,6 +208,14 @@ const Encoder = struct {
         try self.writeU32(@bitCast(value.value));
         try self.enumByte(types.FontScaleBasis, value.font_scale_basis);
     }
+    fn bodyTypography(self: *Encoder, value: types.BodyTypography) !void {
+        if (!self.body_typography_enabled or !types.validBodyTypography(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.inlineFontSnapshot(value.owner_font);
+        try self.byte(@intFromBool(value.line_height != null));
+        if (value.line_height) |height| try self.containerLineHeight(height);
+    }
     fn inlineFontSnapshot(self: *Encoder, value: types.InlineFontSnapshot) !void {
         if (!types.validInlineFontSnapshot(value) or (value.font_family != null and !self.capability_p)) return error.InvalidPresentation;
         const scale = spanScale(value);
@@ -198,6 +235,25 @@ const Encoder = struct {
         if (value.font_features) |features| try self.enumByte(types.FontFeaturePolicy, features);
         if (value.font_family) |family| try self.containerFontFamily(family);
     }
+    fn audioControl(self: *Encoder, value: types.AudioControl) !void {
+        if (!self.audio_controls or !types.validAudioControl(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        const fields: u8 = @as(u8, @intFromBool(value.width != null)) |
+            (@as(u8, @intFromBool(value.height != null)) << 1) |
+            (@as(u8, @intFromBool(value.focus != null)) << 2);
+        try self.byte(fields);
+        if (value.width) |width| try self.styleWidth(width);
+        if (value.height) |height| try self.styleLength(height);
+        if (value.focus) |focus| {
+            if (self.remaining_items == 0) return error.PresentationTooLarge;
+            self.remaining_items -= 1;
+            try self.enumByte(types.AudioControlFocusMode, focus.mode);
+            try self.byte(@intFromBool(focus.color != null));
+            if (focus.color) |color| try self.figureColor(color);
+        }
+    }
+
     fn inlineTextStyle(self: *Encoder, value: types.InlineTextStyle) !void {
         if (!self.inline_styles or self.version != .container_fonts or !types.validInlineTextStyle(value)) return error.InvalidPresentation;
         if (value.wrap != null and (!self.capability_p or !self.text_flow)) return error.InvalidPresentation;
@@ -231,12 +287,23 @@ const Encoder = struct {
         if (self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(value) else types.validRubyBodyChild(value))) return error.InvalidPresentation;
         if (types.spanHasRuby(value) and (!self.capability_s or !types.validRubyOwner(value))) return error.InvalidPresentation;
         if (self.in_inline_padding_group and !types.validRubyBodyChild(value)) return error.InvalidPresentation;
+        if (self.in_inline_box_group and !types.validRubyChild(value)) return error.InvalidPresentation;
+        if (self.in_clipped_absolute and !types.validClippedAbsoluteInlineChild(value)) return error.InvalidPresentation;
+        if (types.spanHasClippedAbsolute(value)) {
+            if (!self.clipped_absolute_enabled or self.ruby_depth != 0 or self.in_inline_padding_group or
+                self.in_inline_action_group or self.in_inline_box_group or self.in_clipped_absolute) return error.InvalidPresentation;
+            try types.validateClippedAbsoluteInlineTree(value, self.content_depth, self.ruby_depth);
+        }
+        if (types.spanHasInlineBoxGroup(value)) {
+            if (!self.inline_box_groups) return error.InvalidPresentation;
+            try types.validateInlineBoxGroupTree(value, self.content_depth, self.ruby_depth);
+        }
         if (self.inline_padding_action != null and (!std.mem.eql(u8, @tagName(value.kind), "text") or value.target.len != 0)) return error.InvalidPresentation;
         if (types.spanHasInlinePaddingGroup(value) and (!self.capability_u or !types.validInlinePaddingGroupOwner(value))) return error.InvalidPresentation;
         if (types.spanHasInlineActionGroup(value) and (!self.capability_v or !types.validInlineActionGroupOwner(value))) return error.InvalidPresentation;
-        if (self.in_inline_action_group or (!types.spanHasRuby(value) and !types.spanHasInlinePaddingGroup(value) and !types.spanHasInlineActionGroup(value)))
+        if (self.in_clipped_absolute or self.in_inline_action_group or self.in_inline_box_group or (!types.spanHasRuby(value) and !types.spanHasInlinePaddingGroup(value) and !types.spanHasInlineActionGroup(value) and !types.spanHasInlineBoxGroup(value) and !types.spanHasClippedAbsolute(value)))
             if (self.inline_padding_action) |action| try action.check(value);
-        if (!types.validSpanInlineStyle(value) or !types.validSpanLinkPaint(value)) return error.InvalidPresentation;
+        if (!types.validSpanActionDestination(value) or !types.validSpanInlineStyle(value) or !types.validSpanLinkPaint(value)) return error.InvalidPresentation;
         if (spanImage(value) != null and spanLinkPaint(value) != null and !self.capability_r) return error.InvalidPresentation;
         if (self.link_paint) |paint| if (!types.validFigureLinkPaintSpan(paint, value)) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "pending_container"))
@@ -305,6 +372,9 @@ const Encoder = struct {
         const link_paint = spanLinkPaint(value);
         const inline_style = spanInlineStyle(value);
         const family = spanFontFamily(value);
+        const box_radius: ?types.StyleLength = if (comptime @hasField(@TypeOf(value), "inline_box_group"))
+            (if (value.inline_box_group) |group| types.inlineBoxRadius(group.*) else null) else null;
+        if (box_radius != null and (!self.capability_p or !self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
         if (family != null and (!self.capability_p or self.version != .container_fonts)) return error.InvalidPresentation;
         if (inline_style != null and (!self.inline_styles or self.version != .container_fonts)) return error.InvalidPresentation;
         if ((features != null or link_paint != null) and self.version != .container_fonts) return error.InvalidPresentation;
@@ -313,7 +383,8 @@ const Encoder = struct {
         if (hasFontScaleFields(self.version)) {
             const font_fields: u8 = @as(u8, @intFromBool(scale != null)) |
                 (if (features != null) @as(u8, 2) else 0) | (if (link_paint != null) @as(u8, 4) else 0) |
-                (if (inline_style != null) @as(u8, 8) else 0) | (if (family != null) @as(u8, 16) else 0);
+                (if (inline_style != null) @as(u8, 8) else 0) | (if (family != null) @as(u8, 16) else 0) |
+                (if (box_radius != null) @as(u8, 0x20) else 0);
             try self.byte(font_fields);
             if (scale) |n| {
                 try self.writeU32(@bitCast(n));
@@ -355,6 +426,114 @@ const Encoder = struct {
             if (comptime @hasField(@TypeOf(value), "inline_action_group")) if (value.inline_action_group) |group|
                 try self.inlineActionGroup(group.*, types.InlinePaddingGroupAction.from(value) orelse return error.InvalidPresentation);
         }
+        if (self.inline_box_groups) {
+            try self.byte(@intFromBool(types.spanHasInlineBoxGroup(value)));
+            if (comptime @hasField(@TypeOf(value), "inline_box_group")) if (value.inline_box_group) |group|
+                try self.inlineBoxGroup(group.*, types.InlinePaddingGroupAction.from(value));
+        }
+        const audio = types.spanAudioControl(value);
+        if (audio != null and (!self.audio_controls or !types.validSpanAudioControl(value))) return error.InvalidPresentation;
+        if (audio != null) {
+            const catalog = self.inline_media_catalog orelse return error.InvalidPresentation;
+            if (!catalog.supportsAudioControl(value)) return error.InvalidPresentation;
+        }
+        if (self.audio_controls) {
+            try self.byte(@intFromBool(audio != null));
+            if (audio) |control| try self.audioControl(control);
+        }
+        if (self.clipped_absolute_enabled) {
+            try self.byte(@intFromBool(types.spanHasClippedAbsolute(value)));
+            if (comptime @hasField(@TypeOf(value), "clipped_absolute")) if (value.clipped_absolute) |clipped|
+                try self.clippedAbsolute(clipped.*, types.InlinePaddingGroupAction.from(value));
+        }
+    }
+    fn clippedAbsolute(self: *Encoder, value: anytype, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!self.clipped_absolute_enabled or !types.validClippedAbsoluteInline(value) or
+            self.content_depth >= types.max_content_depth or self.in_clipped_absolute or self.ruby_depth != 0 or
+            self.in_inline_padding_group or self.in_inline_action_group or self.in_inline_box_group) return error.InvalidPresentation;
+        const previous_action = self.inline_padding_action;
+        self.inline_padding_action = action orelse previous_action;
+        self.in_clipped_absolute = true;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_clipped_absolute = false;
+        defer self.inline_padding_action = previous_action;
+        try self.enumByte(types.ContainerStaticDirection, value.static_parent_direction);
+        try self.styleLength(value.width);
+        try self.styleLength(value.height);
+        // This carrier has definite signed margins. Auto has no wire spelling.
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| switch (@field(value.margin, edge)) {
+            .length => |length| try self.containerMarginLength(length),
+            .auto => return error.InvalidPresentation,
+        };
+        try self.spans(value.children);
+    }
+    fn inlineBoxColor(self: *Encoder, value: types.InlineBoxColor) !void {
+        if (!types.validInlineBoxColor(value)) return error.InvalidPresentation;
+        switch (value) {
+            .current_color => try self.byte(0),
+            .transparent => try self.byte(1),
+            .rgb => |rgb| { try self.byte(2); try self.string(rgb); },
+            .light_dark => |pair| { try self.byte(3); try self.string(pair.light); try self.string(pair.dark); },
+        }
+    }
+    fn inlineBoxBorders(self: *Encoder, value: types.InlineBoxBorderEdges) !void {
+        if (!types.validInlineBoxBorderEdges(value)) return error.InvalidPresentation;
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| switch (@field(value, edge)) {
+            .none => try self.byte(0),
+            .hidden => try self.byte(1),
+            .solid, .dotted => |line| {
+                try self.byte(if (@field(value, edge) == .solid) 2 else 3);
+                try self.styleLength(line.width); try self.inlineBoxColor(line.color);
+            },
+        };
+    }
+    fn inlineBoxOverlayContent(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!types.validInlineBoxOverlayContent(value) or self.inline_padding_action != null or
+            self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        try self.writeU32(value.before_child);
+        try self.inlineFontSnapshot(value.owner_font);
+        if (value.line_height) |height| switch (height) {
+            .computed => |length| { try self.byte(1); try self.inlineComputedLength(length); },
+            .font_relative => |relative| {
+                try self.byte(2); try self.writeU32(@bitCast(relative.factor));
+                try self.inlineFontSnapshot(relative.font);
+            },
+        } else try self.byte(0);
+        try self.enumByte(types.InlineBoxOverlayTextAlign, value.text_align);
+        try self.spans(value.spans);
+    }
+
+    fn inlineBoxGroup(self: *Encoder, value: anytype, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
+        if (!self.inline_box_groups or !types.validInlineBoxGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        const previous_group = self.in_inline_box_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_box_group = true;
+        self.inline_padding_action = action orelse previous_action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_box_group = previous_group;
+        defer self.inline_padding_action = previous_action;
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| try self.styleLength(@field(value.padding, edge));
+        try self.inlineBoxBorders(value.border);
+        try self.count(value.overlays.len);
+        for (value.overlays) |overlay| {
+            var flags: u8 = if (overlay.content != null) inline_box_overlay_content_flag else 0;
+            inline for (.{ "top", "right", "bottom", "left" }, 0..) |edge, edge_index|
+                if (@field(overlay.insets, edge) != null) { flags |= @as(u8, 1) << edge_index; };
+            try self.byte(flags);
+            inline for (.{ "top", "right", "bottom", "left" }) |edge| if (@field(overlay.insets, edge)) |inset| {
+                try self.enumByte(types.StyleWidthUnit, inset.unit); try self.writeU32(@bitCast(inset.value));
+            };
+            try self.inlineBoxBorders(overlay.border);
+            if (overlay.content) |content| try self.inlineBoxOverlayContent(content.*);
+        }
+        try self.spans(value.spans);
+        // Same-owner font_fields bit 0x20 announces this exact five-byte suffix.
+        // A null radius writes no byte and retains the historical square shape.
+        if (types.inlineBoxRadius(value)) |radius| try self.styleLength(radius);
     }
     fn inlineActionGroup(self: *Encoder, value: anytype, action: types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!types.validInlineActionGroup(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
@@ -469,6 +648,7 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
+        if (value.occurrence_layout != null and !self.image_occurrences) return error.InvalidPresentation;
         if (value.static_poster != null and self.version != .container_fonts) return error.InvalidPresentation;
         if (value.vertical_align != null and (self.version != .container_fonts or !self.capability_q)) return error.InvalidPresentation;
         if (value.svg_language != null and !hasKFields(self.version)) return error.InvalidPresentation;
@@ -500,6 +680,17 @@ const Encoder = struct {
             try self.string(poster.file_timestamp);
         }
         if (value.vertical_align) |alignment| try self.enumByte(types.InlineImageVerticalAlign, alignment);
+        if (self.image_occurrences) {
+            try self.byte(@intFromBool(value.occurrence_layout != null));
+            if (value.occurrence_layout) |occurrence_layout| try self.imageOccurrence(occurrence_layout);
+        }
+    }
+    fn imageOccurrence(self: *Encoder, value: types.InlineImageOccurrenceLayout) !void {
+        if (!self.image_occurrences or !types.validInlineImageOccurrenceLayout(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.containerMarginLength(value.x); try self.containerMarginLength(value.y);
+        try self.styleLength(value.padding_left); try self.styleLength(value.padding_right);
     }
     fn spans(self: *Encoder, values: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         try self.count(values.len);
@@ -836,6 +1027,7 @@ const Encoder = struct {
             try self.byte(0);
             return;
         };
+        if (value.min_width != null and (!self.table_min_width_enabled or self.version != .container_fonts)) return error.InvalidPresentation;
         if (value.corner_radii != null and !self.capability_q) return error.InvalidPresentation;
         if (tableStyleHasInlineFields(value) and !hasKFields(self.version)) return error.InvalidPresentation;
         if (value.margin_values != null and self.version != .container_fonts) return error.InvalidPresentation;
@@ -858,7 +1050,8 @@ const Encoder = struct {
                 (@as(u8, @intFromBool(value.line_height != null)) << 2) |
                 (@as(u8, @intFromBool(value.margin_values != null)) << 3) |
                 (@as(u8, @intFromBool(value.containing_direction != null)) << 4) |
-                (@as(u8, @intFromBool(value.corner_radii != null)) << 5));
+                (@as(u8, @intFromBool(value.corner_radii != null)) << 5) |
+                (@as(u8, @intFromBool(value.min_width != null)) << 6));
         }
         if (value.background) |color| try self.string(color);
         if (value.border) |border| try self.styleBorder(border);
@@ -878,6 +1071,8 @@ const Encoder = struct {
         if (value.containing_direction) |direction| try self.enumByte(types.TableContainingDirection, direction);
         if (value.corner_radii) |corners| inline for (.{ "top_left", "top_right", "bottom_right", "bottom_left" }) |name|
             try self.styleLength(@field(corners, name));
+        // DPRZ bit512 owns this appended field; absent values preserve all old bytes.
+        if (value.min_width) |width| try self.styleWidth(width);
     }
     fn cell(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         try self.byte(@intFromBool(value.header));
@@ -967,6 +1162,12 @@ const Encoder = struct {
             const viewport_geometry: ?types.TableGeometry = if (comptime @hasField(@TypeOf(table_value), "geometry")) table_value.geometry else null;
             const viewport_style: ?types.TableStyle = if (comptime @hasField(@TypeOf(table_value), "style")) table_value.style else null;
             const float_viewport: ?types.TableFloatViewport = if (comptime @hasField(@TypeOf(table_value), "float_viewport")) table_value.float_viewport else null;
+            const rows_hidden: ?u32 = if (comptime @hasField(@TypeOf(table_value), "rows_hidden_max_width_px")) table_value.rows_hidden_max_width_px else null;
+            if (!types.validTableRowsVisibility(table_value) or (rows_hidden != null and self.version != .container_fonts)) return error.InvalidPresentation;
+            if (rows_hidden != null) {
+                if (self.remaining_items == 0) return error.PresentationTooLarge;
+                self.remaining_items -= 1;
+            }
             const paired = viewport != null and float_viewport != null;
             const intrinsic = if (viewport) |policy| policy.intrinsic_containing_direction != null else false;
             if (intrinsic and !self.capability_r) return error.InvalidPresentation;
@@ -976,7 +1177,8 @@ const Encoder = struct {
             const extended_clear = if (float_viewport) |policy| policy.narrow_clear != null else false;
             if (extended_clear and !self.capability_p) return error.InvalidPresentation;
             try self.byte(1 | (@as(u8, @intFromBool(viewport != null)) << 1) | (@as(u8, @intFromBool(float_viewport != null)) << 2) |
-                (@as(u8, @intFromBool(extended_clear)) << 3) | (@as(u8, @intFromBool(intrinsic)) << 4));
+                (@as(u8, @intFromBool(extended_clear)) << 3) | (@as(u8, @intFromBool(intrinsic)) << 4) |
+                (@as(u8, @intFromBool(rows_hidden != null)) << 5));
             if (hasNestedFields(self.version)) {
                 const geometry: ?types.TableGeometry = if (comptime @hasField(@TypeOf(table_value), "geometry")) table_value.geometry else null;
                 try self.tableGeometry(geometry);
@@ -1017,6 +1219,8 @@ const Encoder = struct {
                 try self.string(policy.language);
                 if (policy.narrow_clear) |clear| try self.enumByte(types.FigureClear, clear);
             }
+            // Same Table owner, after every preexisting viewport tail.
+            if (rows_hidden) |bound| try self.writeU32(bound);
         } else try self.byte(0);
     }
     fn containerWidth(self: *Encoder, value: types.ContainerWidth) !void {
@@ -1137,11 +1341,66 @@ const Encoder = struct {
             }
         };
     }
+    fn containerDisclosureLabelRun(self: *Encoder, value: types.ContainerDisclosureLabelRun) !void {
+        if (!types.validContainerDisclosureTextPaint(value.paint)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.writeU32(value.start); try self.writeU32(value.end);
+        var flags: u8 = @as(u8, @intFromBool(value.paint.underline_on_focus)) << 4;
+        inline for (.{ "normal", "hover", "active", "hover_active" }, 0..) |name, state_index| {
+            const state = @field(value.paint, name);
+            try self.string(state.foreground);
+            flags |= @as(u8, @intFromBool(state.underline)) << state_index;
+        }
+        try self.byte(flags);
+    }
+    fn containerDisclosure(self: *Encoder, value: types.ContainerDisclosure) !void {
+        if (!self.positioned_containers_enabled or self.version != .container_fonts or
+            !types.validContainerDisclosure(value)) return error.InvalidPresentation;
+        if (self.remaining_items == 0) return error.PresentationTooLarge;
+        self.remaining_items -= 1;
+        try self.writeU32(value.content_index);
+        try self.byte(@intFromBool(value.initially_collapsed));
+        try self.string(value.expand_label);
+        try self.string(value.collapse_label);
+        try self.byte(@intFromBool(value.focus != null));
+        if (value.focus) |focus| {
+            if (self.remaining_items == 0) return error.PresentationTooLarge;
+            self.remaining_items -= 1;
+            try self.enumByte(types.ContainerDisclosureFocusMode, focus.mode);
+            try self.byte(@intFromBool(focus.color != null));
+            if (focus.color) |color| try self.figureColor(color);
+        }
+        try self.enumByte(types.ContainerDisclosurePlacement, value.placement);
+        const fields: u8 = @as(u8, @intFromBool(value.foreground != null)) |
+            (@as(u8, @intFromBool(value.direction != null)) << 1) |
+            (@as(u8, @intFromBool(value.expand_run != null)) << 2) |
+            (@as(u8, @intFromBool(value.collapse_run != null)) << 3);
+        try self.byte(fields);
+        if (value.foreground) |color| try self.figureColor(color);
+        if (value.direction) |direction| try self.enumByte(types.BidiResolvedDirection, direction);
+        if (value.expand_run) |run| try self.containerDisclosureLabelRun(run);
+        if (value.collapse_run) |run| try self.containerDisclosureLabelRun(run);
+    }
     fn containerStyle(self: *Encoder, value: types.ContainerStyle) !void {
+        return self.containerStyleWithDisclosure(value, null);
+    }
+    fn containerStyleWithDisclosure(self: *Encoder, value: types.ContainerStyle, disclosure: ?types.ContainerDisclosure) !void {
+        if (disclosure != null and (!self.positioned_containers_enabled or self.version != .container_fonts)) return error.InvalidPresentation;
         if (!hasLFields(self.version) or !types.validContainerStyle(value)) return error.InvalidPresentation;
-        if ((value.owner_font_scale != null or value.height != null or value.columns != null or value.positioning != null or value.min_height != null or value.margin_values != null or value.font_family != null) and self.version != .container_fonts) return error.InvalidPresentation;
+        if ((value.owner_font_scale != null or value.height != null or value.columns != null or value.positioning != null or value.min_height != null or value.margin_values != null or value.font_family != null or value.owner_font != null or value.overflow == .hidden) and self.version != .container_fonts) return error.InvalidPresentation;
+        if (value.owner_font != null and !self.capability_w) return error.InvalidPresentation;
+        if (types.containerStyleRequiresPositionedCapability(value) and
+            (!self.positioned_containers_enabled or self.version != .container_fonts)) return error.InvalidPresentation;
         var flags: u32 = 0;
-        inline for (@typeInfo(types.ContainerStyle).@"struct".field_names, 0..) |name, bit| if (@field(value, name) != null) { flags |= @as(u32, 1) << bit; };
+        inline for (@typeInfo(types.ContainerStyle).@"struct".field_names, 0..) |name, bit| {
+            // Extension fields have no legacy mask bit. In particular, ordinal
+            // 24 must not collide with the explicit owner-font snapshot bit.
+            if (comptime std.mem.eql(u8, name, "absolute_position") or std.mem.eql(u8, name, "text_wrap") or
+                std.mem.eql(u8, name, "absolute_static")) continue;
+            if (@field(value, name) != null)
+                flags |= if (comptime std.mem.eql(u8, name, "owner_font")) container_owner_snapshot_flag else @as(u32, 1) << bit;
+        }
         if (self.version == .container_fonts) try self.writeU32(flags) else try self.writeU16(@intCast(flags));
         if (value.margins) |edges| try self.containerMarginEdges(edges);
         if (value.padding) |edges| try self.styleEdges(edges);
@@ -1166,12 +1425,31 @@ const Encoder = struct {
         if (value.min_height) |height| try self.styleLength(height);
         if (value.margin_values) |margins| try self.containerMargins(margins);
         if (value.font_family) |family| try self.containerFontFamily(family);
+        if (value.owner_font) |font| {
+            if (self.remaining_items == 0) return error.PresentationTooLarge;
+            self.remaining_items -= 1;
+            try self.inlineFontSnapshot(font);
+        }
+        if (self.positioned_containers_enabled) {
+            const extension: u8 = @as(u8, @intFromBool(value.absolute_position != null)) |
+                (@as(u8, @intFromBool(value.text_wrap != null)) << 1) |
+                (@as(u8, @intFromBool(value.absolute_static != null)) << 2) |
+                (@as(u8, @intFromBool(disclosure != null)) << 3);
+            try self.byte(extension);
+            if (value.absolute_position) |position| {
+                try self.containerMarginLength(position.left);
+                try self.containerMarginLength(position.top);
+            }
+            if (value.text_wrap) |wrap| try self.enumByte(types.ContainerTextWrap, wrap);
+            if (value.absolute_static) |position| try self.enumByte(types.ContainerStaticDirection, position.direction);
+            if (disclosure) |present| try self.containerDisclosure(present);
+        }
     }
     fn container(self: *Encoder, value: anytype) error{ OutOfMemory, InvalidPresentation, PresentationTooLarge, UncompiledTemplate }!void {
         if (!hasLFields(self.version) or !types.validContainerHeader(value) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
         if (self.version != .container_fonts and !types.legacyContainerMarginsSupported(value)) return error.InvalidPresentation;
         self.content_depth += 1; defer self.content_depth -= 1;
-        try self.containerStyle(value.style);
+        try self.containerStyleWithDisclosure(value.style, types.containerDisclosure(value));
         try self.blocks(value.blocks);
     }
     fn childPath(self: *Encoder, path: []const usize) !void {
@@ -1558,6 +1836,16 @@ const Reader = struct {
     capability_t: bool = false,
     capability_u: bool = false,
     capability_v: bool = false,
+    capability_w: bool = false,
+    positioned_containers_enabled: bool = false,
+    table_min_width_enabled: bool = false,
+    body_typography_enabled: bool = false,
+    inline_box_groups: bool = false,
+    clipped_absolute_enabled: bool = false,
+    in_clipped_absolute: bool = false,
+    image_occurrences: bool = false,
+    audio_controls: bool = false,
+    in_inline_box_group: bool = false,
     in_inline_action_group: bool = false,
     in_inline_padding_group: bool = false,
     inline_padding_action: ?types.InlinePaddingGroupAction = null,
@@ -1666,6 +1954,26 @@ const Reader = struct {
         if (!types.validInlineFontSnapshot(value)) return error.InvalidPresentation;
         return value;
     }
+    fn audioControl(self: *Reader) !types.AudioControl {
+        if (!self.audio_controls or self.remaining_items == 0 or self.remaining() < 1) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const fields = try self.byte();
+        if (fields & ~@as(u8, 7) != 0) return error.InvalidPresentation;
+        var value: types.AudioControl = .{};
+        if (fields & 1 != 0) value.width = try self.styleWidth();
+        if (fields & 2 != 0) value.height = try self.styleLength();
+        if (fields & 4 != 0) {
+            if (self.remaining_items == 0 or self.remaining() < 2) return error.InvalidPresentation;
+            self.remaining_items -= 1;
+            if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+            value.focus = .{ .mode = try self.enumValue(types.AudioControlFocusMode),
+                .color = if (try self.presence()) try self.figureColor() else null };
+        }
+        if (!types.validAudioControl(value)) return error.InvalidPresentation;
+        return value;
+    }
+
     fn inlineTextStyle(self: *Reader) !types.InlineTextStyle {
         if (!self.inline_styles or self.version != .container_fonts) return error.InvalidPresentation;
         const flags = try self.byte();
@@ -1723,10 +2031,13 @@ const Reader = struct {
                 break :background value;
             } else null,
         };
+        var inline_box_radius = false;
         if (hasFontScaleFields(self.version)) {
             const font_fields = try self.byte();
-            const unknown_mask: u8 = if (self.capability_p) 0xe0 else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
+            const unknown_mask: u8 = if (self.capability_p) (if (self.inline_box_groups) @as(u8, 0xc0) else 0xe0) else if (self.version == .container_fonts) (if (self.inline_styles) @as(u8, 0xf0) else 0xf8) else 0xfe;
             if (font_fields & unknown_mask != 0) return error.InvalidPresentation;
+            inline_box_radius = font_fields & 0x20 != 0;
+            if (inline_box_radius and (!self.inline_box_groups or self.version != .container_fonts)) return error.InvalidPresentation;
             if (font_fields & 1 != 0) {
                 const n: f32 = @bitCast(try self.readU32());
                 if (!std.math.isFinite(n) or n < 0) return error.InvalidPresentation;
@@ -1749,16 +2060,142 @@ const Reader = struct {
         if (self.capability_s and try self.presence()) result.ruby = try self.ruby();
         if (self.capability_u and try self.presence()) result.inline_padding_group = try self.inlinePaddingGroup(types.InlinePaddingGroupAction.from(result));
         if (self.capability_v and try self.presence()) result.inline_action_group = try self.inlineActionGroup(types.InlinePaddingGroupAction.from(result) orelse return error.InvalidPresentation);
+        if (self.inline_box_groups and try self.presence()) result.inline_box_group = try self.inlineBoxGroupWithRadius(types.InlinePaddingGroupAction.from(result), inline_box_radius);
+        if (inline_box_radius and result.inline_box_group == null) return error.InvalidPresentation;
+        if (self.audio_controls and try self.presence()) result.audio_control = try self.audioControl();
+        if (!types.validSpanAudioControl(result)) return error.InvalidPresentation;
+        if (self.clipped_absolute_enabled and try self.presence()) result.clipped_absolute = try self.clippedAbsolute(types.InlinePaddingGroupAction.from(result));
+        if (self.in_clipped_absolute and !types.validClippedAbsoluteInlineChild(result)) return error.InvalidPresentation;
+        if (result.clipped_absolute != null) {
+            if (self.ruby_depth != 0 or self.in_inline_padding_group or self.in_inline_action_group or
+                self.in_inline_box_group or self.in_clipped_absolute) return error.InvalidPresentation;
+            try types.validateClippedAbsoluteInlineTree(result, self.content_depth, self.ruby_depth);
+        }
+        if (self.in_inline_box_group and !types.validRubyChild(result)) return error.InvalidPresentation;
+        if (result.inline_box_group != null) try types.validateInlineBoxGroupTree(result, self.content_depth, self.ruby_depth);
         if (self.in_inline_padding_group and !types.validRubyBodyChild(result)) return error.InvalidPresentation;
         if (result.inline_padding_group != null and !types.validInlinePaddingGroupOwner(result)) return error.InvalidPresentation;
         if (result.inline_action_group != null and !types.validInlineActionGroupOwner(result)) return error.InvalidPresentation;
-        if (self.in_inline_action_group or (result.ruby == null and result.inline_padding_group == null and result.inline_action_group == null))
+        if (self.in_clipped_absolute or self.in_inline_action_group or self.in_inline_box_group or (result.ruby == null and result.inline_padding_group == null and result.inline_action_group == null and result.inline_box_group == null and result.clipped_absolute == null))
             if (self.inline_padding_action) |action| try action.check(result);
         if ((self.ruby_depth != 0 and !(if (self.ruby_gap) types.validRubyChild(result) else types.validRubyBodyChild(result))) or (result.ruby != null and !types.validRubyOwner(result))) return error.InvalidPresentation;
         if (result.image != null and (result.text.len != 0 or result.trail.len != 0 or
             !types.validInlineImageAction(result.kind, result.target))) return error.InvalidPresentation;
         if (result.image != null and result.link_paint != null and !self.capability_r) return error.InvalidPresentation;
-        if (!types.validSpanInlineStyle(result) or !types.validSpanLinkPaint(result)) return error.InvalidPresentation;
+        if (!types.validSpanActionDestination(result) or !types.validSpanInlineStyle(result) or !types.validSpanLinkPaint(result)) return error.InvalidPresentation;
+        return result;
+    }
+    fn clippedAbsolute(self: *Reader, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.ClippedAbsoluteInline {
+        if (!self.clipped_absolute_enabled or self.content_depth >= types.max_content_depth or self.remaining() < 35 or
+            self.in_clipped_absolute or self.ruby_depth != 0 or self.in_inline_padding_group or
+            self.in_inline_action_group or self.in_inline_box_group) return error.InvalidPresentation;
+        const previous_action = self.inline_padding_action;
+        self.inline_padding_action = action orelse previous_action;
+        self.in_clipped_absolute = true;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_clipped_absolute = false;
+        defer self.inline_padding_action = previous_action;
+        const static_parent_direction = try self.enumValue(types.ContainerStaticDirection);
+        if (static_parent_direction != .ltr and static_parent_direction != .rtl) return error.InvalidPresentation;
+        const width = try self.styleLength();
+        const height = try self.styleLength();
+        var margin: types.ContainerMargins = undefined;
+        inline for (.{ "top", "right", "bottom", "left" }) |edge|
+            @field(margin, edge) = .{ .length = try self.containerMarginLength() };
+        const children = try self.spans();
+        const value: types.ClippedAbsoluteInline = .{ .static_parent_direction = static_parent_direction, .width = width, .height = height, .margin = margin, .children = children };
+        if (!types.validClippedAbsoluteInline(value)) return error.InvalidPresentation;
+        const result = try self.a.create(types.ClippedAbsoluteInline); result.* = value;
+        return result;
+    }
+    fn inlineBoxColor(self: *Reader) !types.InlineBoxColor {
+        const value: types.InlineBoxColor = switch (try self.byte()) {
+            0 => .current_color,
+            1 => .transparent,
+            2 => .{ .rgb = try self.string() },
+            3 => .{ .light_dark = .{ .light = try self.string(), .dark = try self.string() } },
+            else => return error.InvalidPresentation,
+        };
+        if (!types.validInlineBoxColor(value)) return error.InvalidPresentation;
+        return value;
+    }
+    fn inlineBoxBorders(self: *Reader) !types.InlineBoxBorderEdges {
+        var value = types.InlineBoxBorderEdges.all(.none);
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| {
+            const tag = try self.byte();
+            @field(value, edge) = switch (tag) {
+                0 => .none,
+                1 => .hidden,
+                2 => .{ .solid = .{ .width = try self.styleLength(), .color = try self.inlineBoxColor() } },
+                3 => .{ .dotted = .{ .width = try self.styleLength(), .color = try self.inlineBoxColor() } },
+                else => return error.InvalidPresentation,
+            };
+        }
+        if (!types.validInlineBoxBorderEdges(value)) return error.InvalidPresentation;
+        return value;
+    }
+    fn inlineBoxOverlayContent(self: *Reader) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxOverlayContent(types.Span) {
+        if (self.inline_padding_action != null or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        const boundary = try self.readU32();
+        const font = try self.inlineFontSnapshot();
+        const height: ?types.InlineLineHeight = switch (try self.byte()) {
+            0 => null,
+            1 => .{ .computed = try self.inlineComputedLength() },
+            2 => .{ .font_relative = .{ .factor = @bitCast(try self.readU32()), .font = try self.inlineFontSnapshot() } },
+            else => return error.InvalidPresentation,
+        };
+        const alignment = try self.enumValue(types.InlineBoxOverlayTextAlign);
+        const children = try self.spans();
+        const value: types.InlineBoxOverlayContent(types.Span) = .{ .before_child = boundary, .owner_font = font,
+            .line_height = height, .text_align = alignment, .spans = children };
+        if (!types.validInlineBoxOverlayContent(value)) return error.InvalidPresentation;
+        const result = try self.a.create(types.InlineBoxOverlayContent(types.Span)); result.* = value;
+        return result;
+    }
+
+    fn inlineBoxGroup(self: *Reader, action: ?types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
+        return self.inlineBoxGroupWithRadius(action, false);
+    }
+    fn inlineBoxGroupWithRadius(self: *Reader, action: ?types.InlinePaddingGroupAction, radius_present: bool) error{ OutOfMemory, InvalidPresentation }!*const types.InlineBoxGroup(types.Span) {
+        const minimum: usize = 32 + (if (radius_present) @as(usize, 5) else 0);
+        if (!self.inline_box_groups or self.content_depth >= types.max_content_depth or self.remaining() < minimum) return error.InvalidPresentation;
+        const previous_group = self.in_inline_box_group;
+        const previous_action = self.inline_padding_action;
+        self.in_inline_box_group = true;
+        self.inline_padding_action = action orelse previous_action;
+        self.content_depth += 1;
+        defer self.content_depth -= 1;
+        defer self.in_inline_box_group = previous_group;
+        defer self.inline_padding_action = previous_action;
+        var padding: types.StyleEdges = undefined;
+        inline for (.{ "top", "right", "bottom", "left" }) |edge| @field(padding, edge) = try self.styleLength();
+        const border = try self.inlineBoxBorders();
+        const len = try self.count(15); // mask + two positioned axes + four edge tags
+        const overlays = try self.a.alloc(types.InlineBoxOverlay, len);
+        for (overlays) |*overlay| {
+            const flags = try self.byte();
+            if (flags & ~@as(u8, 15 | inline_box_overlay_content_flag) != 0 or flags & 5 == 0 or flags & 10 == 0) return error.InvalidPresentation;
+            var insets: types.InlineBoxInsets = .{};
+            inline for (.{ "top", "right", "bottom", "left" }, 0..) |edge, edge_index| if (flags & (@as(u8, 1) << edge_index) != 0) {
+                const unit = try self.enumValue(types.StyleWidthUnit);
+                const inset_value: f32 = @bitCast(try self.readU32());
+                if (!std.math.isFinite(inset_value)) return error.InvalidPresentation;
+                @field(insets, edge) = .{ .unit = unit, .value = inset_value };
+            };
+            const overlay_border = try self.inlineBoxBorders();
+            overlay.* = .{ .insets = insets, .border = overlay_border,
+                .content = if (flags & inline_box_overlay_content_flag != 0) try self.inlineBoxOverlayContent() else null };
+            if (!types.validInlineBoxOverlay(overlay.*)) return error.InvalidPresentation;
+        }
+        const children = try self.spans();
+        const radius: ?types.StyleLength = if (radius_present) try self.styleLength() else null;
+        if (radius) |present| if (!types.validInlineBoxRadius(present)) return error.InvalidPresentation;
+        const value: types.InlineBoxGroup(types.Span) = .{ .padding = padding, .border = border, .overlays = overlays, .spans = children, .radius = radius };
+        if (!types.validInlineBoxGroup(value)) return error.InvalidPresentation;
+        const result = try self.a.create(types.InlineBoxGroup(types.Span)); result.* = value;
         return result;
     }
     fn inlineActionGroup(self: *Reader, action: types.InlinePaddingGroupAction) error{ OutOfMemory, InvalidPresentation }!*const types.InlineActionGroup(types.Span) {
@@ -1951,12 +2388,23 @@ const Reader = struct {
                 .file_timestamp = try self.string(),
             } else null,
             .vertical_align = if (tag == 3) try self.enumValue(types.InlineImageVerticalAlign) else null,
+            .occurrence_layout = if (self.image_occurrences and try self.presence()) try self.imageOccurrence() else null,
         };
         if (!types.validInlineImage(value)) return error.InvalidPresentation;
         return value;
     }
+    fn imageOccurrence(self: *Reader) !types.InlineImageOccurrenceLayout {
+        if (!self.image_occurrences or self.remaining_items == 0 or self.remaining() < 20) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const value: types.InlineImageOccurrenceLayout = .{ .x = try self.containerMarginLength(), .y = try self.containerMarginLength(),
+            .padding_left = try self.styleLength(), .padding_right = try self.styleLength() };
+        if (!types.validInlineImageOccurrenceLayout(value)) return error.InvalidPresentation;
+        return value;
+    }
     fn spans(self: *Reader) error{ OutOfMemory, InvalidPresentation }![]const types.Span {
-        const len = try self.count(if (self.capability_v) 40 else if (self.capability_u) 39 else if (self.capability_s) 38 else if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27);
+        const base_minimum: usize = if (self.inline_box_groups) 41 else if (self.capability_v) 40 else if (self.capability_u) 39 else if (self.capability_s) 38 else if ((self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))) 37 else if ((self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version))))))) 36 else if (hasReferenceBlockFields(self.version)) 35 else if (hasFontScaleFields(self.version)) 34 else if (hasSpanBackgroundFields(self.version)) 33 else if (hasRgb(self.version)) 32 else if (self.version == .explained) 31 else 27;
+        const len = try self.count(@as(usize, @intFromBool(self.audio_controls)) + @as(usize, @intFromBool(self.clipped_absolute_enabled)) + base_minimum);
         const out = try self.a.alloc(types.Span, len);
         for (out) |*value| value.* = try self.span();
         return out;
@@ -2275,7 +2723,9 @@ const Reader = struct {
         if (!try self.presence()) return null;
         const flags = try self.byte();
         const inline_flags = if (hasKFields(self.version)) try self.byte() else 0;
-        if (inline_flags & (if (self.capability_q) @as(u8, 0xc0) else if (self.version == .container_fonts) @as(u8, 0xe0) else @as(u8, 0xf8)) != 0) return error.InvalidPresentation;
+        var inline_reserved_mask: u8 = if (self.capability_q) 0xc0 else if (self.version == .container_fonts) 0xe0 else 0xf8;
+        if (self.table_min_width_enabled and self.version == .container_fonts) inline_reserved_mask &= ~@as(u8, 0x40);
+        if (inline_flags & inline_reserved_mask != 0) return error.InvalidPresentation;
         if ((inline_flags & 8 != 0) != (inline_flags & 16 != 0) and
             !(self.capability_q and inline_flags & 0x38 == 0x30)) return error.InvalidPresentation;
         const reserved_mask: u8 = if ((self.version == .image_maps or hasKFields(self.version))) 0 else if ((self.version == .block_layout or (self.version == .explicit_targets or (self.version == .dynamic_catalog or (self.version == .tooltips or (self.version == .block_geometry or (self.version == .image_maps or hasKFields(self.version)))))))) 0xe0 else 0xf0;
@@ -2301,6 +2751,7 @@ const Reader = struct {
                 .top_left = try self.styleLength(), .top_right = try self.styleLength(),
                 .bottom_right = try self.styleLength(), .bottom_left = try self.styleLength(),
             } else null,
+            .min_width = if (inline_flags & 0x40 != 0) try self.styleWidth() else null,
         };
         if (value.vertical_align) |alignment| if (alignment == .top and self.version != .container_fonts) return error.InvalidPresentation;
         if (!types.validTableStyle(value)) return error.InvalidPresentation;
@@ -2371,8 +2822,11 @@ const Reader = struct {
         return value;
     }
     fn table(self: *Reader) error{ OutOfMemory, InvalidPresentation }!?types.Table {
-        const flags = try self.byte();
-        if (flags == 0) return null;
+        const wire_flags = try self.byte();
+        if (wire_flags == 0) return null;
+        const rows_hidden = wire_flags & 0x20 != 0;
+        if (wire_flags & 0xc0 != 0 or (rows_hidden and self.version != .container_fonts)) return error.InvalidPresentation;
+        const flags = wire_flags & ~@as(u8, 0x20);
         if (flags != 1 and !(self.version == .container_fonts and (flags == 3 or flags == 5 or (self.capability_p and (flags == 7 or flags == 13)) or (self.capability_r and flags == 19)))) return error.InvalidPresentation;
         if (self.table_depth >= (if (self.capability_t or self.capability_u) types.max_table_depth else types.legacy_table_depth)) return error.InvalidPresentation;
         self.table_depth += 1;
@@ -2387,7 +2841,14 @@ const Reader = struct {
             .float_viewport = if (flags == 5 or flags == 7 or flags == 13) .{ .max_viewport_width_px = try self.readU32(),
             .containing_direction = try self.enumValue(types.TableContainingDirection),
             .grid_direction = try self.enumValue(types.TableContainingDirection), .language = try self.string(),
-            .narrow_clear = if (flags == 13) try self.enumValue(types.FigureClear) else null } else null };
+            .narrow_clear = if (flags == 13) try self.enumValue(types.FigureClear) else null } else null,
+            .rows_hidden_max_width_px = if (rows_hidden) bound: {
+                if (self.remaining_items == 0) return error.InvalidPresentation;
+                self.remaining_items -= 1;
+                if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+                break :bound try self.readU32();
+            } else null };
+        if (!types.validTableRowsVisibility(value)) return error.InvalidPresentation;
         if (!types.validTableViewportHeaders(value.geometry, value.style, value.block_viewport, value.float_viewport)) return error.InvalidPresentation;
         if (value.caption_blocks != null and value.caption.len != 0) return error.InvalidPresentation;
         var has_cells = false;
@@ -2531,11 +2992,60 @@ const Reader = struct {
             @constCast(sections_value)[index_value].heading_style = style;
         }
     }
+    fn containerDisclosureLabelRun(self: *Reader) !types.ContainerDisclosureLabelRun {
+        // Two u32 bounds, four canonical RGB strings, and one paint flags byte.
+        if (self.remaining_items == 0 or self.remaining() < 53) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const start = try self.readU32(); const end = try self.readU32();
+        var paint: types.ContainerDisclosureTextPaint = undefined;
+        inline for (.{ "normal", "hover", "active", "hover_active" }) |name|
+            @field(paint, name) = .{ .foreground = try self.string(), .underline = false };
+        const flags = try self.byte(); if (flags & ~@as(u8, 31) != 0) return error.InvalidPresentation;
+        inline for (.{ "normal", "hover", "active", "hover_active" }, 0..) |name, state_index|
+            @field(paint, name).underline = flags & (@as(u8, 1) << state_index) != 0;
+        paint.underline_on_focus = flags & 16 != 0;
+        if (!types.validContainerDisclosureTextPaint(paint)) return error.InvalidPresentation;
+        return .{ .start = start, .end = end, .paint = paint };
+    }
+    fn containerDisclosure(self: *Reader) !types.ContainerDisclosure {
+        // u32 index, bool, two nonempty length-prefixed labels, focus presence.
+        if (!self.positioned_containers_enabled or self.version != .container_fonts or
+            self.remaining_items == 0 or self.remaining() < 18) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const content_index = try self.readU32();
+        const initially_collapsed = try self.presence();
+        const expand_label = try self.string();
+        const collapse_label = try self.string();
+        var value: types.ContainerDisclosure = .{ .content_index = content_index, .initially_collapsed = initially_collapsed,
+            .expand_label = expand_label, .collapse_label = collapse_label };
+        if (try self.presence()) {
+            if (self.remaining_items == 0 or self.remaining() < 2) return error.InvalidPresentation;
+            self.remaining_items -= 1;
+            if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+            value.focus = .{ .mode = try self.enumValue(types.ContainerDisclosureFocusMode),
+                .color = if (try self.presence()) try self.figureColor() else null };
+        }
+        value.placement = try self.enumValue(types.ContainerDisclosurePlacement);
+        const fields = try self.byte(); if (fields & ~@as(u8, 15) != 0) return error.InvalidPresentation;
+        if (fields & 1 != 0) value.foreground = try self.figureColor();
+        if (fields & 2 != 0) value.direction = try self.enumValue(types.BidiResolvedDirection);
+        if (fields & 4 != 0) value.expand_run = try self.containerDisclosureLabelRun();
+        if (fields & 8 != 0) value.collapse_run = try self.containerDisclosureLabelRun();
+        if (!types.validContainerDisclosure(value)) return error.InvalidPresentation;
+        return value;
+    }
     fn containerStyle(self: *Reader) !types.ContainerStyle {
+        return self.containerStyleWithDisclosure(null);
+    }
+    fn containerStyleWithDisclosure(self: *Reader, disclosure: ?*?types.ContainerDisclosure) !types.ContainerStyle {
+        if (disclosure) |slot| slot.* = null;
         if (!hasLFields(self.version)) return error.InvalidPresentation;
         const flags: u32 = if (self.version == .container_fonts) try self.readU32() else try self.readU16();
-        if (flags & ~container_style_known_flags != 0) return error.InvalidPresentation;
-        const value: types.ContainerStyle = .{
+        const known = container_style_known_flags | (if (self.capability_w) container_owner_snapshot_flag else @as(u32, 0));
+        if (flags & ~known != 0) return error.InvalidPresentation;
+        var value: types.ContainerStyle = .{
             .margins = if (flags & 1 != 0) try self.containerMarginEdges() else null,
             .padding = if (flags & 2 != 0) try self.styleEdges() else null,
             .width = if (flags & 4 != 0) try self.containerWidth() else null,
@@ -2559,14 +3069,47 @@ const Reader = struct {
             .min_height = if (flags & container_min_height_flag != 0) try self.styleLength() else null,
             .margin_values = if (flags & container_margin_values_flag != 0) try self.containerMargins() else null,
             .font_family = if (flags & container_font_family_flag != 0) try self.containerFontFamily() else null,
+            .owner_font = if (flags & container_owner_snapshot_flag != 0) try self.containerOwnerFont() else null,
         };
+        if (self.positioned_containers_enabled) {
+            const extension = try self.byte();
+            // A generic style/Figure wrapper cannot own a disclosure.
+            if (extension & ~@as(u8, if (disclosure != null) 15 else 7) != 0) return error.InvalidPresentation;
+            if (extension & 1 != 0) value.absolute_position = .{
+                .left = try self.containerMarginLength(), .top = try self.containerMarginLength() };
+            if (extension & 2 != 0) value.text_wrap = try self.enumValue(types.ContainerTextWrap);
+            if (extension & 4 != 0) value.absolute_static = .{ .direction = try self.enumValue(types.ContainerStaticDirection) };
+            if (extension & 8 != 0) disclosure.?.* = try self.containerDisclosure();
+        }
+        if (value.overflow == .hidden and self.version != .container_fonts) return error.InvalidPresentation;
+        if (types.containerStyleRequiresPositionedCapability(value) and !self.positioned_containers_enabled) return error.InvalidPresentation;
         if (!types.validContainerStyle(value)) return error.InvalidPresentation;
         return value;
+    }
+    fn bodyTypography(self: *Reader) !types.BodyTypography {
+        if (!self.body_typography_enabled or self.remaining_items == 0) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        const font = try self.inlineFontSnapshot();
+        const flag = try self.byte();
+        if (flag > 1) return error.InvalidPresentation;
+        const value: types.BodyTypography = .{ .owner_font = font,
+            .line_height = if (flag == 1) try self.containerLineHeight() else null };
+        if (!types.validBodyTypography(value)) return error.InvalidPresentation;
+        return value;
+    }
+    fn containerOwnerFont(self: *Reader) !types.InlineFontSnapshot {
+        if (!self.capability_w or self.remaining_items == 0) return error.InvalidPresentation;
+        self.remaining_items -= 1;
+        if (self.metrics) |metrics| metrics.total_items = std.math.add(u64, metrics.total_items, 1) catch return error.InvalidPresentation;
+        return self.inlineFontSnapshot();
     }
     fn container(self: *Reader) error{ OutOfMemory, InvalidPresentation }!types.Container {
         if (!hasLFields(self.version) or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
         self.content_depth += 1; defer self.content_depth -= 1;
-        const value: types.Container = .{ .style = try self.containerStyle(), .blocks = try self.blocks() };
+        var disclosure: ?types.ContainerDisclosure = null;
+        const style = try self.containerStyleWithDisclosure(&disclosure);
+        const value: types.Container = .{ .style = style, .blocks = try self.blocks(), .disclosure = disclosure };
         if (!types.validContainerHeader(value)) return error.InvalidPresentation;
         if (self.version != .container_fonts and !types.legacyContainerMarginsSupported(value)) return error.InvalidPresentation;
         return value;
@@ -3162,7 +3705,7 @@ fn contentBlocksHaveFeature(values: anytype, comptime feature: TreeFeature, tabl
         if (comptime @hasField(@TypeOf(value), "container")) if (value.container) |box| {
             if (feature == .containers) return true;
             if (feature == .extended_font_families and stackFontFamily(box.style)) return true;
-            if (feature == .container_fonts and (box.style.font_family != null or box.style.owner_font_scale != null or box.style.height != null or box.style.columns != null or box.style.positioning != null or box.style.min_height != null or (box.style.border != null and box.style.border.? == .edges) or types.containerRequiresMForMargins(box))) return true;
+            if (feature == .container_fonts and (box.style.overflow == .hidden or box.style.font_family != null or box.style.owner_font_scale != null or box.style.height != null or box.style.columns != null or box.style.positioning != null or box.style.min_height != null or (box.style.border != null and box.style.border.? == .edges) or types.containerRequiresMForMargins(box))) return true;
             if (content_depth < types.max_content_depth and contentBlocksHaveFeature(box.blocks, feature, table_depth, content_depth + 1)) return true;
         };
         if (comptime @hasField(@TypeOf(value), "flow")) if (value.flow) |parts| {
@@ -3205,6 +3748,7 @@ fn contentTableHasFeature(value: anytype, comptime feature: TreeFeature, table_d
             if (policy.narrow_clear != null) return true;
     }
     if (feature == .container_fonts) {
+        if (comptime @hasField(@TypeOf(value), "rows_hidden_max_width_px")) if (value.rows_hidden_max_width_px != null) return true;
         if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport != null) return true;
         if (comptime @hasField(@TypeOf(value), "float_viewport")) if (value.float_viewport != null) return true;
         if (types.inlineTableRequiresM(value)) return true;
@@ -3651,11 +4195,32 @@ fn inlineGroupPendingFeatures(work: DeepTableWork) u8 {
 
 pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     if (!std.mem.eql(u8, stored.schema, types.schema)) return error.InvalidPresentation;
-    const v_required = DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const body_typography = stored.entry.body_typography;
+    const body_required = body_typography != null;
+    const w_required = DeepTableWork.hasContainerOwnerFonts(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const box_required = DeepTableWork.hasInlineBoxGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const clipped_required = DeepTableWork.hasClippedAbsolutes(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const occurrence_required = DeepTableWork.hasImageOccurrences(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const y_required = w_required or body_required or box_required or occurrence_required or clipped_required;
+    const positioned_required = DeepTableWork.hasPositionedContainers(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const table_min_width_required = DeepTableWork.hasTableMinWidths(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const audio_required = DeepTableWork.hasAudioControls(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const z_required = positioned_required or table_min_width_required or audio_required;
+    const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
     var work: DeepTableWork = .{};
+    if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
+        (if (body_required) body_typography_feature else @as(u8, 0)) |
+        (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
+        (if (work.image_occurrence_found) image_occurrence_feature else @as(u8, 0)) |
+        (if (work.clipped_absolute_found) clipped_absolute_feature else @as(u8, 0));
+    if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
+        positioned_required != work.positioned_container_found or
+        table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
+        clipped_required != work.clipped_absolute_found) return error.InvalidPresentation;
     if (layoutHasPaths(stored.entry.organization) and !buildLayoutPathsValid(stored.entry.organization, stored.entry.sections)) return error.InvalidPresentation;
     const s_required = u_required or t_required or hasRuby(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const images = hasInlineImages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
@@ -3670,10 +4235,15 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     const version: Version = if (rule_styles or hasMSpanFonts(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or hasMFields(stored.entry.sections, stored.entry.references) or hasStaticPosters(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .container_fonts else if (hasContainers(stored.entry.sections, stored.entry.references) or layoutHasPaths(stored.entry.organization)) .block_containers else if (hasSvgLanguages(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references) or hasMissingFigures(stored.entry.sections, stored.entry.references) or hasInlineTableStyle(stored.entry.sections, stored.entry.references) or hasImageDarkModeFilters(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .inline_table_styles else if (hasTableBoxStyle(stored.entry.sections, stored.entry.references) or hasRichContent(stored.entry.sections, stored.entry.references) or hasFigures(stored.entry.sections, stored.entry.references) or hasImageMaps(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_maps else if (hasBlockGeometry(stored.entry.sections, stored.entry.references)) .block_geometry else if (hasTooltips(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .tooltips else if (images and stored.entry.media.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explicit_targets else if (stored.entry.media.len > types.legacy_inline_image_assets or hasBlockLayout(stored.entry.sections, stored.entry.references)) .block_layout else if (hasImageBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .image_border else if (images or hasReferenceBlocks(stored.entry.references) or hasStyles(stored.entry.sections, stored.entry.references)) .reference_blocks else if (hasBodyFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale_basis else if (hasFontScale(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .font_scale else if (hasReferenceFragments(stored.entry.references)) .reference_items else if (hasCellBlocks(stored.entry.sections, stored.entry.references)) .cell_blocks else if (hasNestedTables(stored.entry.sections, stored.entry.references)) .nested_tables else if (hasSpanBackground(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .span_background else if (hasAnchors(stored.entry.sections, stored.entry.references)) .anchored else if (hasColor(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .colored else if (hasExplanation(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references)) .explained else .plain;
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
-    if (hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    if (audio_required or hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (z_required) try encoder.writeU16(@as(u16, y_features) |
+        (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
+        (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
+        (if (audio_required) audio_control_feature else @as(u16, 0)))
+    else if (y_required) try encoder.byte(y_features);
     try encoder.spans(stored.entry.display_title);
     try encoder.sections(stored.entry.sections);
     try encoder.spans(stored.entry.preamble_spans);
@@ -3684,6 +4254,7 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
         try encoder.byte(pending_features);
         if (pending_features & 2 != 0) try encoder.sectionHeadingStyles(stored.entry.sections);
     }
+    if (body_typography) |body| try encoder.bodyTypography(body);
     return encoder.out.toOwnedSlice(a);
 }
 
@@ -3708,11 +4279,39 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
     media_value: anytype,
     body_adjoining: ?types.BodyAdjoiningPolicy,
 ) ![]u8 {
-    const v_required = DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    return encodeBuildWithBodyTypographyAlloc(a, display_title, sections, layout_value, references_value, media_value, body_adjoining, null);
+}
+pub fn encodeBuildWithBodyTypographyAlloc(
+    a: A, display_title: anytype, sections: anytype, layout_value: anytype,
+    references_value: anytype, media_value: anytype,
+    body_adjoining: ?types.BodyAdjoiningPolicy,
+    body_typography: ?types.BodyTypography,
+) ![]u8 {
+    const body_required = body_typography != null;
+    const w_required = DeepTableWork.hasContainerOwnerFonts(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const box_required = DeepTableWork.hasInlineBoxGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const clipped_required = DeepTableWork.hasClippedAbsolutes(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const occurrence_required = DeepTableWork.hasImageOccurrences(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const y_required = w_required or body_required or box_required or occurrence_required or clipped_required;
+    const positioned_required = DeepTableWork.hasPositionedContainers(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const table_min_width_required = DeepTableWork.hasTableMinWidths(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const audio_required = DeepTableWork.hasAudioControls(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const z_required = positioned_required or table_min_width_required or audio_required;
+    const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
     var work: DeepTableWork = .{};
+    if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
+        (if (body_required) body_typography_feature else @as(u8, 0)) |
+        (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
+        (if (work.image_occurrence_found) image_occurrence_feature else @as(u8, 0)) |
+        (if (work.clipped_absolute_found) clipped_absolute_feature else @as(u8, 0));
+    if (y_required != (y_features != 0) or w_required != work.container_owner_font_found or box_required != work.inline_box_group_found or
+        positioned_required != work.positioned_container_found or
+        table_min_width_required != work.table_min_width_found or occurrence_required != work.image_occurrence_found or audio_required != work.audio_control_found or
+        clipped_required != work.clipped_absolute_found) return error.InvalidPresentation;
     if (layoutHasPaths(layout_value) and !buildLayoutPathsValid(layout_value, sections)) return error.InvalidPresentation;
     const s_required = u_required or t_required or hasRuby(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const images = hasInlineImages(display_title, sections, @as([]const types.Span, &.{}), references_value);
@@ -3727,10 +4326,15 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
     const version: Version = if (rule_styles or hasMSpanFonts(display_title, sections, @as([]const types.Span, &.{}), references_value) or hasMFields(sections, references_value) or hasStaticPosters(display_title, sections, @as([]const types.Span, &.{}), references_value)) .container_fonts else if (hasContainers(sections, references_value) or layoutHasPaths(layout_value)) .block_containers else if (hasSvgLanguages(display_title, sections, @as([]const types.Span, &.{}), references_value) or hasMissingFigures(sections, references_value) or hasInlineTableStyle(sections, references_value) or hasImageDarkModeFilters(display_title, sections, @as([]const types.Span, &.{}), references_value)) .inline_table_styles else if (hasTableBoxStyle(sections, references_value) or hasRichContent(sections, references_value) or hasFigures(sections, references_value) or hasImageMaps(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_maps else if (hasBlockGeometry(sections, references_value)) .block_geometry else if (hasTooltips(display_title, sections, @as([]const types.Span, &.{}), references_value)) .tooltips else if (images and media_value.len > types.legacy_extended_image_assets) .dynamic_catalog else if (hasExplicitTargets(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explicit_targets else if (media_value.len > types.legacy_inline_image_assets or hasBlockLayout(sections, references_value)) .block_layout else if (hasImageBorders(display_title, sections, @as([]const types.Span, &.{}), references_value)) .image_border else if (images or hasReferenceBlocks(references_value) or hasStyles(sections, references_value)) .reference_blocks else if (hasBodyFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale_basis else if (hasFontScale(display_title, sections, @as([]const types.Span, &.{}), references_value)) .font_scale else if (hasReferenceFragments(references_value)) .reference_items else if (hasCellBlocks(sections, references_value)) .cell_blocks else if (hasNestedTables(sections, references_value)) .nested_tables else if (hasSpanBackground(display_title, sections, @as([]const types.Span, &.{}), references_value)) .span_background else if (hasAnchors(sections, references_value)) .anchored else if (hasColor(display_title, sections, @as([]const types.Span, &.{}), references_value)) .colored else if (hasExplanation(display_title, sections, @as([]const types.Span, &.{}), references_value)) .explained else .plain;
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
-    if (hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    if (audio_required or hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    try encoder.out.appendSlice(a, if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (z_required) try encoder.writeU16(@as(u16, y_features) |
+        (if (positioned_required) positioned_containers_feature else @as(u16, 0)) |
+        (if (table_min_width_required) table_min_width_feature else @as(u16, 0)) |
+        (if (audio_required) audio_control_feature else @as(u16, 0)))
+    else if (y_required) try encoder.byte(y_features);
     try encoder.spans(display_title);
     try encoder.sections(sections);
     try encoder.count(0); // no preamble is emitted by the bundle compiler
@@ -3741,6 +4345,7 @@ pub fn encodeBuildWithBodyAdjoiningAlloc(
         try encoder.byte(pending_features);
         if (pending_features & 2 != 0) try encoder.sectionHeadingStyles(sections);
     }
+    if (body_typography) |body| try encoder.bodyTypography(body);
     return encoder.out.toOwnedSlice(a);
 }
 
@@ -3780,7 +4385,29 @@ fn decodeImpl(
     metrics: ?*DecodeMetrics,
 ) !types.Stored {
     if (payload.len < magic.len) return error.InvalidPresentation;
-    const action_groups_header = std.mem.eql(u8, payload[0..magic.len], inline_action_groups_magic);
+    const owner_geometry_header = std.mem.eql(u8, payload[0..magic.len], owner_geometry_magic);
+    const z_header = std.mem.eql(u8, payload[0..magic.len], positioned_containers_magic);
+    const z_features: u16 = if (z_header) blk: {
+        if (payload.len < magic.len + 2) return error.InvalidPresentation;
+        const flags = std.mem.readInt(u16, payload[magic.len..][0..2], .little);
+        if (flags & z_high_features == 0 or flags & ~positioned_containers_features != 0) return error.InvalidPresentation;
+        break :blk flags;
+    } else 0;
+    const y_features: u8 = if (owner_geometry_header) blk: {
+        if (payload.len <= magic.len) return error.InvalidPresentation;
+        const flags = payload[magic.len];
+        if (flags == 0 or flags & ~owner_geometry_features != 0) return error.InvalidPresentation;
+        break :blk flags;
+    } else @truncate(z_features);
+    const positioned_header = z_features & positioned_containers_feature != 0;
+    const table_min_width_header = z_features & table_min_width_feature != 0;
+    const audio_control_header = z_features & audio_control_feature != 0;
+    const owner_fonts_header = y_features & owner_font_feature != 0;
+    const body_typography_header = y_features & body_typography_feature != 0;
+    const inline_box_header = y_features & inline_box_feature != 0;
+    const clipped_absolute_header = y_features & clipped_absolute_feature != 0;
+    const image_occurrence_header = y_features & image_occurrence_feature != 0;
+    const action_groups_header = z_header or owner_geometry_header or std.mem.eql(u8, payload[0..magic.len], inline_action_groups_magic);
     const inline_groups_header = action_groups_header or std.mem.eql(u8, payload[0..magic.len], inline_padding_groups_magic);
     const deep_tables_header = std.mem.eql(u8, payload[0..magic.len], deep_tables_magic);
     const ruby_header = inline_groups_header or deep_tables_header or std.mem.eql(u8, payload[0..magic.len], ruby_magic);
@@ -3795,7 +4422,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .bytes = payload, .pos = magic.len, .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -3806,11 +4433,22 @@ fn decodeImpl(
     if (body_adjoining_header and ((!ruby_header and !intrinsic_header and !table_corners_header and pending_features == 0) or pending_features & ~@as(u8, 191) != 0)) return error.InvalidPresentation;
     reader.text_flow = pending_features & 16 != 0;
     if (pending_features & 2 != 0) try reader.sectionHeadingStyles(sections);
+    const body_typography: ?types.BodyTypography = if (body_typography_header) try reader.bodyTypography() else null;
     const body_adjoining: ?types.BodyAdjoiningPolicy = if (pending_features & 1 != 0) .ordinary else null;
     var inline_work: DeepTableWork = .{};
     if (inline_groups_header) {
+        if (body_typography) |body| inline_work.bodyTypography(body) catch return error.InvalidPresentation;
         inline_work.entry(display_title, sections, preamble, references) catch return error.InvalidPresentation;
-        if (action_groups_header) {
+        if (owner_geometry_header or z_header) {
+            if (positioned_header != inline_work.positioned_container_found or
+                table_min_width_header != inline_work.table_min_width_found or
+                owner_fonts_header != inline_work.container_owner_font_found or
+                inline_box_header != inline_work.inline_box_group_found or
+                clipped_absolute_header != inline_work.clipped_absolute_found or
+                image_occurrence_header != inline_work.image_occurrence_found or
+                audio_control_header != inline_work.audio_control_found or
+                body_typography_header != (body_typography != null)) return error.InvalidPresentation;
+        } else if (action_groups_header) {
             if (!inline_work.inline_action_group_found) return error.InvalidPresentation;
         } else if (!inline_work.inline_group_found) return error.InvalidPresentation;
     }
@@ -3840,6 +4478,7 @@ fn decodeImpl(
         .sections = sections,
         .preamble_spans = preamble,
         .body_adjoining = body_adjoining,
+        .body_typography = body_typography,
         .references = references,
         .media = media,
     } };
@@ -11097,7 +11736,7 @@ test "DPRN Rule capability recursively follows existing body caption reference a
 test "complete unknown DPR capability differs from malformed known and truncated framing" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
     const a = arena.allocator();
-    for ([_][]const u8{ "DPRW", "DPRZ", "DPR0", "DPRWpayload" }) |bytes| {
+    for ([_][]const u8{ "DPRW", "DPRX", "DPR0", "DPRXpayload" }) |bytes| {
         var metrics: DecodeMetrics = .{ .total_items = 99, .largest_string_bytes = 77 };
         try std.testing.expectError(error.UnsupportedPresentationVersion, decodeWithMetricsAlloc(a, bytes, "x", .supplemental, null, &metrics));
         try std.testing.expectEqual(@as(u64, 99), metrics.total_items);
@@ -11109,7 +11748,7 @@ test "complete unknown DPR capability differs from malformed known and truncated
         cell_blocks_magic, reference_items_magic, font_scale_magic, font_scale_basis_magic, reference_blocks_magic,
         image_border_magic, block_layout_magic, explicit_targets_magic, dynamic_catalog_magic, tooltips_magic,
         block_geometry_magic, image_maps_magic, inline_table_styles_magic, block_containers_magic, container_fonts_magic, rule_styles_magic, inline_styles_magic,
-        body_adjoining_magic, table_corners_magic, intrinsic_table_magic, ruby_magic, deep_tables_magic, inline_padding_groups_magic, inline_action_groups_magic }) |header|
+        body_adjoining_magic, table_corners_magic, intrinsic_table_magic, ruby_magic, deep_tables_magic, inline_padding_groups_magic, inline_action_groups_magic, owner_geometry_magic, positioned_containers_magic }) |header|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, header, "x", .supplemental, null));
     const bytes = try encodeAlloc(a, types.Stored{ .entry = .{ .title = "x", .kind = .supplemental,
         .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{RuleCodecTest.block()} }} } });
@@ -11332,7 +11971,7 @@ test "DPRP null keeps exact prior headers payloads and mandatory capability reje
     try std.testing.expect((try decodeAlloc(a, bytes, "body", .citations, null)).entry.body_adjoining == null);
     for ([_][]const u8{ "DPRP", "DPRPpayload" }) |bad|
         try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "body", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "body", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "body", .citations, null));
 }
 
 const StyledSectionCodecTest = struct {
@@ -12073,7 +12712,7 @@ test "DPRQ rejects old header corner flags missing owner census and truncated pa
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, absent, "corners", .citations, null));
     for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
         decodeAlloc(a, bytes[0..end], "corners", .citations, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "corners", .citations, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "corners", .citations, null));
 }
 
 test "Table corner tail has strict old reader masks units flags and exact legacy null bytes" {
@@ -12507,7 +13146,7 @@ test "DPRR local tag nineteen rejects old headers malformed direction missing fo
     const invented = try a.dupe(u8, old_q); @memcpy(invented[0..4], intrinsic_table_magic);
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invented, "corners", .citations, null));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, intrinsic_table_magic, "intrinsic", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "intrinsic", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "intrinsic", .supplemental, null));
 }
 
 test "DPRR combines Q and P cell owner families without adding a P feature or weakening Q census" {
@@ -13059,7 +13698,7 @@ test "DPRS Ruby recursive Stored build JSON and fallback preserve rich children 
     try std.testing.expectEqualSlices(u8, raw.out.items, old);
     const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
     try std.testing.expect(std.mem.indexOf(u8, old_json, "\"ruby\":") == null);
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "ruby", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "ruby", .supplemental, null));
 }
 
 test "DPRS Ruby discovery covers heading cell caption reference and combined R Q policies" {
@@ -13582,7 +14221,7 @@ test "DPRU preserves inline boundary font child actions full Stored JSON and leg
     var old_encoder = RubyCodecTest.encoder(a); defer old_encoder.deinit();
     try std.testing.expectError(error.InvalidPresentation, old_encoder.span(T.owner));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, "DPRU", "padding", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "padding", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "padding", .supplemental, null));
 }
 
 test "DPRU group census covers complete carriers and coexists with exact16 17 20 32 Tables" {
@@ -13944,7 +14583,7 @@ test "DPRV rejects malformed presence counts truncation forged headers and absen
     var legacy = InlinePaddingCodecTest.encoder(a); defer legacy.deinit();
     try std.testing.expectError(error.InvalidPresentation, legacy.span(owner));
     try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, "DPRV", "action", .supplemental, null));
-    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRW", "action", .supplemental, null));
+    try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, "DPRX", "action", .supplemental, null));
 }
 
 test "DPRV inherited action checks composite declaring paint and rejects every descendant action" {
@@ -14031,5 +14670,2398 @@ test "DPRV owner shape and unchanged shared content depth remain strict" {
             const original = T.stored(&.{owner});
             try std.testing.expectEqualDeep(original, try decodeAlloc(a, try encodeAlloc(a, original), "action", .supplemental, null));
         } else try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
+}
+
+
+const ContainerOwnerWTest = struct {
+    const font: types.InlineFontSnapshot = .{ .font_scale = 1.25, .font_scale_basis = .normal_body,
+        .font_normalized = true, .bold = true, .italic = true, .language = "de", .font_family = .sans_serif,
+        .font_features = .seven_on };
+    const child: types.Span = .{ .kind = .link, .text = "normal child", .target = "Target", .target_fragment = "sense",
+        .font_scale = 2, .font_scale_basis = .normal_body, .font_features = .normal };
+    fn stored(blocks: []const types.Block, sections: *[1]types.Section) types.Stored {
+        sections.* = .{.{ .level = 2, .title = "Body", .blocks = blocks }};
+        return .{ .entry = .{ .title = "owner", .kind = .supplemental, .sections = sections } };
+    }
+    fn encoder(a: A) Encoder {
+        var value = InlineActionCodecTest.encoder(a); value.capability_w = true; return value;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var value = InlineActionCodecTest.reader(a, bytes); value.capability_w = true; return value;
+    }
+};
+
+test "DPRY full owner and child data roundtrip preserves signed margins resets and legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerOwnerWTest;
+    const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &.{T.child, .{ .text = " end", .italic = true }} }};
+    const blocks = [_]types.Block{.{ .kind = .container, .container = .{ .blocks = &paragraph,
+        .style = .{ .owner_font = T.font, .owner_font_scale = 1.25, .font_family = .sans_serif,
+            .margins = .{ .top = .{ .unit = .em, .value = 0.4 }, .right = .{ .unit = .px, .value = 0 },
+                .bottom = .{ .unit = .em, .value = -0.5 }, .left = .{ .unit = .px, .value = 0 } } } } }};
+    var sections: [1]types.Section = undefined;
+    const value = T.stored(&blocks, &sections);
+    try types.validateStored(a, value, "owner", .supplemental, null);
+    const bytes = try encodeAlloc(a, value);
+    try std.testing.expectEqualStrings(owner_geometry_magic, bytes[0..4]);
+    const decoded = try decodeAlloc(a, bytes, "owner", .supplemental, null);
+    try std.testing.expectEqualDeep(value, decoded);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, value, .{}), try std.json.Stringify.valueAlloc(a, decoded, .{}));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const build = try encodeBuildAlloc(a, value.entry.display_title, value.entry.sections, value.entry.organization,
+        value.entry.references, value.entry.media);
+    try std.testing.expectEqualSlices(u8, bytes, build);
+    const box = decoded.entry.sections[0].blocks[0].container.?;
+    try std.testing.expect(box.style.owner_font.?.bold and box.style.owner_font.?.italic);
+    try std.testing.expect(!box.blocks[0].spans[0].bold and !box.blocks[0].spans[0].italic);
+    try std.testing.expectEqual(@as(f32, 2), box.blocks[0].spans[0].font_scale.?);
+    try std.testing.expectEqualStrings("sense", box.blocks[0].spans[0].target_fragment.?);
+    // Existing V entries use their independently maintained forced V encoder.
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, legacy), try encodeAlloc(a, legacy));
+    var old = blocks; old[0].container.?.style.owner_font = null;
+    var legacy_sections: [1]types.Section = undefined;
+    const old_value = T.stored(&old, &legacy_sections);
+    const old_bytes = try encodeAlloc(a, old_value);
+    try std.testing.expect(!std.mem.eql(u8, old_bytes[0..4], owner_geometry_magic));
+    try std.testing.expectEqualDeep(old_value, try decodeAlloc(a, old_bytes, "owner", .supplemental, null));
+}
+
+test "DPRY empty real line zero font and nested legacy aliases remain distinct" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerOwnerWTest;
+    var zero = T.font; zero.font_scale = 0;
+    const children = [_]types.Block{
+        .{ .kind = .container, .container = .{ .style = .{ .owner_font = zero }, .blocks = &.{} } },
+        .{ .kind = .container, .container = .{ .style = .{ .owner_font = T.font },
+            .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .line_break }} }} } },
+        .{ .kind = .container, .container = .{ .style = .{ .owner_font_scale = 2, .font_family = .sans_serif },
+            .blocks = &.{.{ .kind = .paragraph, .spans = &.{T.child} }} } },
+    };
+    const blocks = [_]types.Block{.{ .kind = .container, .container = .{ .style = .{ .owner_font = T.font }, .blocks = &children } }};
+    var sections: [1]types.Section = undefined;
+    const value = T.stored(&blocks, &sections);
+    const bytes = try encodeAlloc(a, value);
+    const decoded = try decodeAlloc(a, bytes, "owner", .supplemental, null);
+    try std.testing.expectEqualDeep(value, decoded);
+    const nested = decoded.entry.sections[0].blocks[0].container.?.blocks;
+    try std.testing.expectEqual(@as(usize, 0), nested[0].container.?.blocks.len);
+    try std.testing.expectEqual(@as(f32, 0), nested[0].container.?.style.owner_font.?.font_scale.?);
+    try std.testing.expectEqual(types.InlineKind.line_break, nested[1].container.?.blocks[0].spans[0].kind);
+    try std.testing.expect(nested[2].container.?.style.owner_font == null);
+    try std.testing.expectEqual(@as(f32, 2), nested[2].container.?.style.owner_font_scale.?);
+    var reference_value: types.Stored = .{ .entry = .{ .title = "owner", .kind = .supplemental,
+        .references = &.{.{ .number = 1, .group_number = 1, .blocks = &blocks }} } };
+    const reference_bytes = try encodeAlloc(a, reference_value);
+    try std.testing.expectEqualStrings(owner_geometry_magic, reference_bytes[0..4]);
+    try std.testing.expectEqualDeep(reference_value, try decodeAlloc(a, reference_bytes, "owner", .supplemental, null));
+    reference_value.entry.references = &.{};
+    try std.testing.expect(!std.mem.eql(u8, (try encodeAlloc(a, reference_value))[0..4], owner_geometry_magic));
+}
+
+test "DPRY flag budget malformed owner and noncanonical header refuse without consuming reserved bit23" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerOwnerWTest;
+    var encoder = T.encoder(a); defer encoder.deinit();
+    try encoder.containerStyle(.{ .owner_font = T.font });
+    try std.testing.expectEqual(@as(u32, 0x1000000), std.mem.readInt(u32, encoder.out.items[0..4], .little));
+    var reader = T.reader(a, encoder.out.items);
+    try std.testing.expectEqualDeep(@as(types.ContainerStyle, .{ .owner_font = T.font }), try reader.containerStyle());
+    var old_reader = InlineActionCodecTest.reader(a, encoder.out.items);
+    try std.testing.expectError(error.InvalidPresentation, old_reader.containerStyle());
+    var old_encoder = InlineActionCodecTest.encoder(a); defer old_encoder.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old_encoder.containerStyle(.{ .owner_font = T.font }));
+    const reserved = [_]u8{ 0, 0, 0x80, 0 };
+    var reserved_reader = T.reader(a, &reserved);
+    try std.testing.expectError(error.InvalidPresentation, reserved_reader.containerStyle());
+    const corrupt = try a.dupe(u8, encoder.out.items);
+    std.mem.writeInt(u32, corrupt[0..4], 0x1800000, .little);
+    var corrupt_reader = T.reader(a, corrupt);
+    try std.testing.expectError(error.InvalidPresentation, corrupt_reader.containerStyle());
+    var exhausted = T.reader(a, encoder.out.items); exhausted.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, exhausted.containerStyle());
+    var invalid = T.font; invalid.font_normalized = false;
+    try std.testing.expectError(error.InvalidPresentation, encoder.containerStyle(.{ .owner_font = invalid }));
+    invalid = T.font; invalid.font_scale_basis = .css_px;
+    try std.testing.expectError(error.InvalidPresentation, encoder.containerStyle(.{ .owner_font = invalid, .owner_font_scale = 1.25 }));
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    const noncanonical = try encodeAlloc(a, legacy);
+    @memcpy(noncanonical[0..4], owner_geometry_magic);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, noncanonical, "action", .supplemental, null));
+}
+
+test "body typography Y retains block addresses heading policy and complete data roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const body: types.BodyTypography = .{
+        .owner_font = .{ .font_scale = 1.25, .font_scale_basis = .normal_body, .font_normalized = true,
+            .bold = true, .font_family = .sans_serif },
+        .line_height = .{ .multiplier = 1.6 },
+    };
+    const spans = [_]types.Span{.{ .kind = .text, .text = "reset child", .bold = false, .font_scale = 20, .font_scale_basis = .css_px }};
+    const blocks = [_]types.Block{
+        .{ .kind = .paragraph, .spans = &spans },
+        .{ .kind = .definition, .spans = &spans },
+    };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Noun", .blocks = &blocks }};
+    const definitions = [_]types.Sense{.{ .block = 1 }};
+    const lexemes = [_]types.Lexeme{.{ .section = 0, .kind = "noun", .definitions = &definitions, .introduction = &.{0} }};
+    const stored: types.Stored = .{ .entry = .{ .title = "body", .kind = .citations, .sections = &sections,
+        .organization = .{ .lexemes = &lexemes }, .body_typography = body } };
+    const encoded = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(owner_geometry_magic, encoded[0..4]);
+    const decoded = try decodeAlloc(a, encoded, "body", .citations, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildWithBodyTypographyAlloc(a,
+        stored.entry.display_title, stored.entry.sections, stored.entry.organization,
+        stored.entry.references, stored.entry.media, stored.entry.body_adjoining, body));
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes[0].definitions[0].block);
+    try std.testing.expect(!decoded.entry.sections[0].blocks[0].spans[0].bold);
+    try std.testing.expectEqual(@as(f32, 20), decoded.entry.sections[0].blocks[0].spans[0].font_scale.?);
+    try std.testing.expect(decoded.entry.sections[0].heading_style == null);
+    var legacy = stored; legacy.entry.body_typography = null;
+    const old_bytes = try encodeAlloc(a, legacy);
+    try std.testing.expect(!std.mem.eql(u8, old_bytes[0..4], owner_geometry_magic));
+    try std.testing.expectEqualSlices(u8, old_bytes, try encodeBuildWithBodyTypographyAlloc(a,
+        legacy.entry.display_title, legacy.entry.sections, legacy.entry.organization,
+        legacy.entry.references, legacy.entry.media, null, null));
+}
+
+test "body typography Y preserves zero empty ownership and refuses malformed trailers" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const value: types.BodyTypography = .{ .owner_font = .{
+        .font_scale = 0, .font_scale_basis = .css_px, .font_normalized = true },
+        .line_height = .{ .multiplier = 0 } };
+    const stored: types.Stored = .{ .entry = .{ .title = "empty", .kind = .citations, .body_typography = value } };
+    const encoded = try encodeAlloc(a, stored);
+    const decoded = try decodeAlloc(a, encoded, "empty", .citations, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.sections.len);
+    for (4..encoded.len) |end| try std.testing.expectError(error.InvalidPresentation,
+        decodeAlloc(a, encoded[0..end], "empty", .citations, null));
+    const trailing = try std.mem.concat(a, u8, &.{ encoded, "x" });
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "empty", .citations, null));
+    var invalid = stored;
+    invalid.entry.body_typography.?.owner_font.font_normalized = false;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+    invalid = stored; invalid.entry.body_typography.?.owner_font.font_scale_basis = .context;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+    invalid = stored; invalid.entry.body_typography.?.line_height = .{ .multiplier = -1 };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+}
+
+
+const InlineBoxYCodecTest = struct {
+    const Group = types.InlineBoxGroup(types.Span);
+    const children = [_]types.Span{.{ .text = "ずれ", .language = "ja", .bold = true }, .{ .kind = .link, .text = "る", .target = "崩れる", .target_fragment = "Japanese" }};
+    const border: types.InlineBoxBorderEdges = .{ .top = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } }, .right = .none, .bottom = .none, .left = .none };
+    const overlays = [_]types.InlineBoxOverlay{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .percent, .value = 67 } },
+        .border = .{ .top = .none, .right = border.top, .bottom = .none, .left = .none } }};
+    const group: Group = .{ .padding = types.StyleEdges.all(.{ .unit = .px, .value = 1 }), .border = border, .overlays = &overlays, .spans = &children };
+    const owner: types.Span = .{ .inline_box_group = &group, .language = "ja", .classes = "Jpan" };
+    fn stored() types.Stored { return .{ .entry = .{ .title = "box", .kind = .supplemental, .display_title = &.{owner} } }; }
+};
+test "DPRY exact optional feature census rich inline box body owner font and legacy isolation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineBoxYCodecTest;
+    for ([_]u8{ 1, 2, 3, 4, 5, 6, 7 }) |flags| {
+        var original = T.stored();
+        if (flags & 4 == 0) original.entry.display_title = &.{.{ .text = "ordinary" }};
+        if (flags & 2 != 0) original.entry.body_typography = .{ .owner_font = ContainerOwnerWTest.font, .line_height = .{ .multiplier = 1.5 } };
+        const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = &.{ContainerOwnerWTest.child} }};
+        const blocks = [_]types.Block{.{ .kind = .container, .container = .{ .blocks = &paragraph, .style = .{ .owner_font = ContainerOwnerWTest.font } } }};
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+        if (flags & 1 != 0) original.entry.sections = &sections;
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(owner_geometry_magic, bytes[0..4]);
+        try std.testing.expectEqual(flags, bytes[4]);
+        const decoded = try decodeAlloc(a, bytes, "box", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildWithBodyTypographyAlloc(a, original.entry.display_title, original.entry.sections, original.entry.organization, original.entry.references, original.entry.media, original.entry.body_adjoining, original.entry.body_typography));
+        for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "box", .supplemental, null));
+        const tail = try a.alloc(u8, bytes.len + 1); @memcpy(tail[0..bytes.len], bytes); tail[bytes.len] = 0;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, tail, "box", .supplemental, null));
+        for ([_]u8{ 0, 8, 0xff }) |bad| {
+            const corrupt = try a.dupe(u8, bytes); corrupt[4] = bad;
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, corrupt, "box", .supplemental, null));
+        }
+        for ([_][]const u8{ "DPRW", "DPRX" }) |old| {
+            const private = try a.dupe(u8, bytes); @memcpy(private[0..4], old);
+            try std.testing.expectError(error.UnsupportedPresentationVersion, decodeAlloc(a, private, "box", .supplemental, null));
+        }
+    }
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, legacy), try encodeAlloc(a, legacy));
+    var old = InlineActionCodecTest.encoder(a); defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.span(T.owner));
+}
+
+test "DPRY inline box refuses absent body unsupported axes invalid paint and shared budget exhaustion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineBoxYCodecTest;
+    var group = T.group; var owner = T.owner; owner.inline_box_group = &group;
+    var original = T.stored(); original.entry.display_title = &.{owner};
+    group.spans = &.{.{}};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    group.spans = T.group.spans;
+    var overlays = T.overlays; group.overlays = &overlays;
+    overlays[0].insets.right = null;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    overlays = T.overlays; overlays[0].insets.top = null; overlays[0].insets.bottom = null;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    overlays = T.overlays; overlays[0].insets.right.?.value = std.math.inf(f32);
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    overlays = T.overlays; overlays[0].border.right.solid.color = .{ .rgb = "unresolved" };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, original));
+    overlays = T.overlays;
+    var enc = InlineActionCodecTest.encoder(a); defer enc.deinit(); enc.inline_box_groups = true; enc.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, enc.span(owner));
+    const bytes = try encodeAlloc(a, T.stored());
+    const absent = try a.dupe(u8, bytes); absent[4] = owner_font_feature;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, absent, "box", .supplemental, null));
+    const debt = try a.dupe(u8, bytes); debt[4] |= owner_font_feature;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "box", .supplemental, null));
+}
+
+
+test "DPRY rejects announced but absent geometry and retains signed overlay paint roundtrips" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]u8{ 1, 4, 5 }) |flags| {
+        var raw = InlineActionCodecTest.encoder(a); defer raw.deinit();
+        raw.capability_w = flags & owner_font_feature != 0;
+        raw.inline_box_groups = flags & inline_box_feature != 0;
+        try raw.out.appendSlice(a, owner_geometry_magic); try raw.byte(flags);
+        try raw.spans(@as([]const types.Span, &.{}));
+        try raw.sections(@as([]const types.Section, &.{}));
+        try raw.spans(@as([]const types.Span, &.{}));
+        try raw.layout(@as(types.Layout, .{}));
+        try raw.references(@as([]const types.Reference, &.{}));
+        try raw.media(@as([]const types.Media, &.{})); try raw.byte(0);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, raw.out.items, "empty", .supplemental, null));
+    }
+    const T = InlineBoxYCodecTest;
+    var group = T.group; var owner = T.owner; owner.inline_box_group = &group;
+    var overlays = T.overlays; group.overlays = &overlays;
+    overlays[0].insets.left = .{ .unit = .em, .value = -1.25 };
+    overlays[0].insets.bottom = .{ .unit = .percent, .value = -20 };
+    overlays[0].border.top = .{ .dotted = .{ .width = .{ .unit = .em, .value = 0.1 }, .color = .{ .light_dark = .{ .light = "#abcdef", .dark = "#123456" } } } };
+    overlays[0].border.bottom = .hidden;
+    overlays[0].border.left = .{ .solid = .{ .width = .{ .unit = .px, .value = 0 }, .color = .transparent } };
+    group.border.left = .{ .solid = .{ .width = .{ .unit = .px, .value = 2 }, .color = .{ .rgb = "#13579b" } } };
+    var original = T.stored(); original.entry.display_title = &.{owner};
+    const bytes = try encodeAlloc(a, original);
+    const decoded = try decodeAlloc(a, bytes, "box", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, original, .{}), try std.json.Stringify.valueAlloc(a, decoded, .{}));
+}
+
+// The generic build fast path carries exactly the established eight-bit wire
+// flags. These test models deliberately do not invent named decoration fields.
+const OpaqueFlagsCodec40Test = struct {
+    const cases = [_]struct { bits: u8, value: types.Span }{
+        .{ .bits = 0x43, .value = .{ .kind = .link, .role = .headword,
+            .text = "internal body", .target = "Target", .target_fragment = "reading", .trail = "tail",
+            .language = "ja", .classes = "Latn", .direction = "ltr", .explanation = "internal explanation",
+            .tooltip = "internal title", .bold = true, .italic = true, .strike = true } },
+        .{ .bits = 0x85, .value = .{ .kind = .external_link, .role = .pronunciation,
+            .text = "external reading", .target = "https://example.test/reading", .language = "ja",
+            .classes = "reading", .direction = "ltr", .explanation = "external explanation",
+            .tooltip = "external title", .bold = true, .code = true, .underline = true } },
+        .{ .bits = 0xc1, .value = .{ .text = "plain body", .language = "en", .classes = "plain",
+            .explanation = "plain explanation", .bold = true, .strike = true, .underline = true } },
+    };
+    fn Model(comptime Flags: type) type {
+        return struct {
+            const Span = struct {
+                kind: types.InlineKind = .text,
+                role: types.Role = .normal,
+                text: []const u8 = "",
+                target: []const u8 = "",
+                target_fragment: ?[]const u8 = null,
+                trail: []const u8 = "",
+                language: []const u8 = "",
+                classes: []const u8 = "",
+                direction: []const u8 = "",
+                explanation: []const u8 = "",
+                tooltip: ?[]const u8 = null,
+                flags: Flags = @bitCast(@as(u8, 0)),
+                ruby: ?*const types.Ruby(@This()) = null,
+            };
+            const Block = struct {
+                kind: types.BlockKind = .paragraph,
+                depth: u8 = 0,
+                level: u8 = 0,
+                spans: []const Span = &.{},
+                feature: ?types.Feature = null,
+                list_path: []const u8 = "",
+                number: []const u8 = "",
+                table: ?types.Table = null,
+            };
+            const Section = struct {
+                level: u8 = 2,
+                title: []const u8 = "Meaning",
+                blocks: []const Block,
+            };
+            fn from(value: types.Span, bits: u8) Span {
+                return .{ .kind = value.kind, .role = value.role, .text = value.text, .target = value.target,
+                    .target_fragment = value.target_fragment, .trail = value.trail, .language = value.language,
+                    .classes = value.classes, .direction = value.direction, .explanation = value.explanation,
+                    .tooltip = value.tooltip, .flags = @bitCast(bits) };
+            }
+        };
+    }
+    fn Collector(comptime S: type) type {
+        return struct {
+            values: [8]S = undefined,
+            count: usize = 0,
+            fn emit(self: *@This(), span: S) !void {
+                if (self.count == self.values.len) return error.TestUnexpectedResult;
+                self.values[self.count] = span;
+                self.count += 1;
+            }
+        };
+    }
+    fn equalSpan(a: A, build_value: anytype, stored_value: types.Span, expected_bits: u8) !void {
+        var build = RubyCodecTest.encoder(a); defer build.deinit();
+        var stored = RubyCodecTest.encoder(a); defer stored.deinit();
+        try build.span(build_value);
+        try stored.span(stored_value);
+        try std.testing.expectEqual(expected_bits, build.out.items[2]);
+        try std.testing.expectEqual(expected_bits, stored.out.items[2]);
+        try std.testing.expectEqualSlices(u8, stored.out.items, build.out.items);
+        var reader = RubyCodecTest.reader(a, build.out.items);
+        try std.testing.expectEqualDeep(stored_value, try reader.span());
+        try std.testing.expectEqual(build.out.items.len, reader.pos);
+    }
+};
+
+test "generic opaque eight bit flags preserve nonzero wire bytes complete text and actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OpaqueFlagsCodec40Test;
+    inline for (.{ u8, packed struct(u8) { bits: u8 = 0 }, packed struct(u8) { bold: bool = false, rest: u7 = 0 },
+        packed struct(u8) { underline: bool = false, strike: bool = false, rest: u6 = 0 } }) |Flags| {
+        const M = T.Model(Flags);
+        for (T.cases) |case| {
+            const span = M.from(case.value, case.bits);
+            const before: u8 = @bitCast(span.flags);
+            try T.equalSpan(a, span, case.value, case.bits);
+            try std.testing.expectEqual(case.bits, before);
+            try std.testing.expectEqual(before, @as(u8, @bitCast(span.flags)));
+        }
+    }
+}
+
+test "generic opaque flag Ruby body codec and fallback retain decorations actions and original payload" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = OpaqueFlagsCodec40Test;
+    const ruby: types.Ruby(types.Span) = .{ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{T.cases[0].value} }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+            .spans = &.{T.cases[1].value} }},
+    }} };
+    const owner = types.Span{ .ruby = &ruby, .bold = true, .strike = true, .underline = true };
+    const body = [_]types.Span{ T.cases[2].value, owner };
+    const display = [_]types.Span{.{ .text = "opaque flags" }};
+    const blocks = [_]types.Block{.{ .kind = .paragraph, .spans = &body }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Meaning", .blocks = &blocks }};
+    const source = types.Stored{ .entry = .{ .title = "opaque flags", .kind = .supplemental,
+        .display_title = &display, .sections = &sections } };
+    const normal_bytes = try encodeAlloc(a, source);
+    try std.testing.expectEqualStrings(ruby_magic, normal_bytes[0..4]);
+    var normal_fallback: T.Collector(types.Span) = .{};
+    try types.visitRubyFallback(&body, &normal_fallback, T.Collector(types.Span).emit);
+    try std.testing.expectEqual(@as(usize, 5), normal_fallback.count);
+    const projected_masks = [_]u8{ 0xc1, 0xc3, 0x01, 0x85, 0x01 };
+    inline for (.{ u8, packed struct(u8) { bits: u8 = 0 }, packed struct(u8) { bold: bool = false, rest: u7 = 0 },
+        packed struct(u8) { underline: bool = false, strike: bool = false, rest: u6 = 0 } }) |Flags| {
+        const M = T.Model(Flags);
+        const build_base = M.from(T.cases[0].value, 0x43);
+        const build_reading = M.from(T.cases[1].value, 0x85);
+        const build_ruby: types.Ruby(M.Span) = .{ .segments = &.{.{
+            .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{build_base} }},
+            .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+                .spans = &.{build_reading} }},
+        }} };
+        var build_owner = M.from(owner, 0xc1); build_owner.ruby = &build_ruby;
+        const build_body = [_]M.Span{ M.from(T.cases[2].value, 0xc1), build_owner };
+        const build_display = [_]M.Span{M.from(display[0], 0)};
+        const build_blocks = [_]M.Block{.{ .spans = &build_body }};
+        const build_sections = [_]M.Section{.{ .blocks = &build_blocks }};
+        const bytes = try encodeBuildAlloc(a, &build_display, &build_sections, source.entry.organization,
+            source.entry.references, source.entry.media);
+        try std.testing.expectEqualSlices(u8, normal_bytes, bytes);
+        const decoded = try decodeAlloc(a, bytes, source.entry.title, source.entry.kind, null);
+        try std.testing.expectEqualDeep(source, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        var fallback: T.Collector(M.Span) = .{};
+        try types.visitRubyFallback(&build_body, &fallback, T.Collector(M.Span).emit);
+        try std.testing.expectEqual(normal_fallback.count, fallback.count);
+        for (fallback.values[0..fallback.count], normal_fallback.values[0..normal_fallback.count], projected_masks) |actual, expected, mask|
+            try T.equalSpan(a, actual, expected, mask);
+        // Projection must not mutate stored owner/child flags or Ruby actions.
+        try std.testing.expectEqual(@as(u8, 0xc1), @as(u8, @bitCast(build_body[1].flags)));
+        try std.testing.expectEqual(@as(u8, 0x43), @as(u8, @bitCast(build_ruby.segments[0].bases[0].spans[0].flags)));
+        try std.testing.expectEqual(@as(u8, 0x85), @as(u8, @bitCast(build_ruby.segments[0].annotations[0].spans[0].flags)));
+        try std.testing.expectEqualDeep(build_base, build_ruby.segments[0].bases[0].spans[0]);
+        try std.testing.expectEqualDeep(build_reading, build_ruby.segments[0].annotations[0].spans[0]);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, &build_display, &build_sections,
+            source.entry.organization, source.entry.references, source.entry.media));
+    }
+}
+
+const ClippedAbsoluteYCodecTest = struct {
+    // Retained HU tooltip text/geometry model; this is not a producer-page proof.
+    const children = [_]types.Span{.{ .text = "Tooltip time to peak concentrations" }};
+    const value: types.ClippedAbsoluteInline = .{ .static_parent_direction = .ltr, .width = .{ .unit = .px, .value = 1 },
+        .height = .{ .unit = .px, .value = 1 }, .margin = margins(-1), .children = &children };
+    const owner: types.Span = .{ .clipped_absolute = &value };
+    fn margins(value_px: f32) types.ContainerMargins {
+        const edge: types.ContainerMargin = .{ .length = .{ .unit = .px, .value = value_px } };
+        return .{ .top = edge, .right = edge, .bottom = edge, .left = edge };
+    }
+    fn stored(spans: []const types.Span) types.Stored {
+        return .{ .entry = .{ .title = "clipped", .kind = .supplemental, .display_title = spans } };
+    }
+    fn encoder(a: A) Encoder { var out = InlineActionCodecTest.encoder(a); out.clipped_absolute_enabled = true; return out; }
+    fn reader(a: A, bytes: []const u8) Reader { var out = InlineActionCodecTest.reader(a, bytes); out.clipped_absolute_enabled = true; return out; }
+};
+
+test "DPRY clipped absolute retained HU text geometry and rich actions roundtrip with exact optional census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    for (0..8) |other| {
+        var original = T.stored(&.{T.owner});
+        if (other & 2 != 0) original.entry.body_typography = .{ .owner_font = ContainerOwnerWTest.font, .line_height = .{ .multiplier = 1.5 } };
+        const paragraph = [_]types.Block{.{ .kind = .paragraph, .spans = if (other & 4 != 0) &.{InlineBoxYCodecTest.owner} else &.{ContainerOwnerWTest.child} }};
+        const blocks = [_]types.Block{.{ .kind = .container, .container = .{ .blocks = &paragraph,
+            .style = .{ .owner_font = if (other & 1 != 0) ContainerOwnerWTest.font else null } } }};
+        original.entry.sections = &.{.{ .level = 2, .title = "body", .blocks = &blocks }};
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(owner_geometry_magic, bytes[0..4]);
+        try std.testing.expectEqual(@as(u8, @intCast(other)) | clipped_absolute_feature, bytes[4]);
+        const decoded = try decodeAlloc(a, bytes, "clipped", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildWithBodyTypographyAlloc(a, original.entry.display_title,
+            original.entry.sections, original.entry.organization, original.entry.references, original.entry.media,
+            original.entry.body_adjoining, original.entry.body_typography));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+    }
+    const rich = [_]types.Span{
+        .{ .text = "rich ", .bold = true, .foreground = "#123456", .font_scale = 1.25, .font_scale_basis = .normal_body, .font_family = .sans_serif },
+        .{ .kind = .link, .text = "entry", .target = "Keep", .target_fragment = "Meaning", .tooltip = "local", .inline_style = .{ .wrap = .break_word } },
+        .{ .kind = .external_link, .text = "source", .target = "https://example.org/", .italic = true },
+    };
+    var payload = T.value; payload.children = &rich;
+    var owner = T.owner; owner.clipped_absolute = &payload;
+    const original = T.stored(&.{owner});
+    const bytes = try encodeAlloc(a, original);
+    const decoded = try decodeAlloc(a, bytes, "clipped", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(u8, 4 | 16), bytes[bytes.len - 1]);
+    try std.testing.expectEqualDeep(@as([]const types.Span, &rich), decoded.entry.display_title[0].clipped_absolute.?.children);
+    const action_children = [_]types.Span{.{ .text = "same " }, .{ .text = "action", .bold = true }};
+    payload.children = &action_children; owner.kind = .link; owner.target = "Keep";
+    owner.link_paint = InlineActionCodecTest.paint;
+    const action = T.stored(&.{owner});
+    const action_bytes = try encodeAlloc(a, action);
+    try std.testing.expectEqualDeep(action, try decodeAlloc(a, action_bytes, "clipped", .supplemental, null));
+}
+
+test "DPRY clipped absolute zero geometry remains present and legacy null bytes stay exact" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    var payload = T.value; payload.width.value = 0; payload.height.value = 0; payload.margin = T.margins(0);
+    var owner = T.owner; owner.clipped_absolute = &payload;
+    const original = T.stored(&.{owner});
+    const bytes = try encodeAlloc(a, original);
+    const decoded = try decodeAlloc(a, bytes, "clipped", .supplemental, null);
+    try std.testing.expect(decoded.entry.display_title[0].clipped_absolute != null);
+    try std.testing.expectEqualDeep(original, decoded);
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, legacy), try encodeAlloc(a, legacy));
+    try std.testing.expect(std.mem.indexOf(u8, try std.json.Stringify.valueAlloc(a, legacy, .{}), "clipped_absolute") == null);
+    var old = InlineActionCodecTest.encoder(a); defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.span(T.owner));
+    const json = try std.json.Stringify.valueAlloc(a, T.value, .{});
+    const unknown = try std.fmt.allocPrint(a, "{s},\"not_a_clipped_field\":true}}", .{json[0 .. json.len - 1]});
+    try std.testing.expectError(error.UnknownField, std.json.parseFromSlice(types.ClippedAbsoluteInline, a, unknown, .{ .ignore_unknown_fields = false }));
+}
+
+test "DPRY clipped absolute rejects invalid geometry child ownership counts and nested contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    var payload = T.value; var owner = T.owner; owner.clipped_absolute = &payload;
+    for (0..10) |mode| {
+        payload = T.value; owner = T.owner; owner.clipped_absolute = &payload;
+        switch (mode) {
+            0 => payload.width.value = -1,
+            1 => payload.height.value = std.math.inf(f32),
+            2 => payload.margin.left = .auto,
+            3 => payload.margin.right.length.value = std.math.nan(f32),
+            4 => payload.children = &.{.{ .kind = .line_break }},
+            5 => payload.children = &.{InlineBoxYCodecTest.owner},
+            6 => payload.children = &.{InlineActionCodecTest.owner},
+            7 => payload.children = &.{T.owner},
+            8 => owner.text = "duplicate",
+            else => { owner.kind = .link; owner.target = "Owner"; payload.children = &.{.{ .kind = .link, .text = "child", .target = "Different" }}; },
+        }
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
+    for (0..4) |mode| {
+        var enc = T.encoder(a); defer enc.deinit();
+        switch (mode) { 0 => enc.ruby_depth = 1, 1 => enc.in_inline_padding_group = true,
+            2 => enc.in_inline_action_group = true, else => enc.in_inline_box_group = true }
+        try std.testing.expectError(error.InvalidPresentation, enc.span(T.owner));
+    }
+    var exhausted = T.encoder(a); defer exhausted.deinit(); exhausted.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, exhausted.span(T.owner));
+    var raw = T.encoder(a); defer raw.deinit(); try raw.clippedAbsolute(T.value, null);
+    var no_budget = T.reader(a, raw.out.items); no_budget.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, no_budget.clippedAbsolute(null));
+    for (0..raw.out.items.len) |end| {
+        var truncated = T.reader(a, raw.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, truncated.clippedAbsolute(null));
+    }
+    for (0..5) |mode| {
+        const invalid = try a.dupe(u8, raw.out.items);
+        switch (mode) {
+            0 => invalid[1] = 0xff,
+            1 => std.mem.writeInt(u32, invalid[2..6], @bitCast(@as(f32, -1)), .little),
+            2 => std.mem.writeInt(u32, invalid[7..11], @bitCast(std.math.inf(f32)), .little),
+            3 => std.mem.writeInt(u32, invalid[12..16], @bitCast(std.math.nan(f32)), .little),
+            else => std.mem.writeInt(u32, invalid[31..35], std.math.maxInt(u32), .little),
+        }
+        var rejected = T.reader(a, invalid);
+        try std.testing.expectError(error.InvalidPresentation, rejected.clippedAbsolute(null));
+    }
+}
+
+test "DPRY clipped absolute rejects flag debt invalid presence truncation and trailing payload" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    const original = T.stored(&.{T.owner}); const bytes = try encodeAlloc(a, original);
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "clipped", .supplemental, null));
+    const trailing = try a.alloc(u8, bytes.len + 1); @memcpy(trailing[0..bytes.len], bytes); trailing[bytes.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "clipped", .supplemental, null));
+    for ([_]u8{ 0, 8, 64, 129, 255 }) |flags| {
+        const invalid = try a.dupe(u8, bytes); invalid[4] = flags;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, invalid, "clipped", .supplemental, null));
+    }
+    var span_wire = T.encoder(a); defer span_wire.deinit(); try span_wire.span(@as(types.Span, .{ .text = "plain" }));
+    span_wire.out.items[span_wire.out.items.len - 1] = 2;
+    var bad_presence = T.reader(a, span_wire.out.items);
+    try std.testing.expectError(error.InvalidPresentation, bad_presence.span());
+    var absent = T.encoder(a); defer absent.deinit();
+    try absent.out.appendSlice(a, owner_geometry_magic); try absent.byte(clipped_absolute_feature);
+    try absent.spans(@as([]const types.Span, &.{.{ .text = "plain" }}));
+    try absent.sections(@as([]const types.Section, &.{})); try absent.spans(@as([]const types.Span, &.{}));
+    try absent.layout(@as(types.Layout, .{})); try absent.references(@as([]const types.Reference, &.{}));
+    try absent.media(@as([]const types.Media, &.{})); try absent.byte(0);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, absent.out.items, "clipped", .supplemental, null));
+}
+
+const PositionedContainerZCodecTest = struct {
+    const font: types.InlineFontSnapshot = .{ .font_scale = 18, .font_scale_basis = .css_px,
+        .font_normalized = true, .language = "fr", .classes = "owner" };
+    const text = [_]types.Span{.{ .text = "absolute ", .font_scale = 18, .font_scale_basis = .css_px },
+        .{ .kind = .link, .text = "child", .target = "Keep", .target_fragment = "French", .bold = true }};
+    const paragraph: types.Block = .{ .kind = .paragraph, .spans = &text };
+    const absolute_style: types.ContainerStyle = .{ .width = .{ .length = .{ .unit = .px, .value = 120 } },
+        .height = .{ .unit = .px, .value = 20 }, .absolute_position = .{
+            .left = .{ .unit = .px, .value = 10 }, .top = .{ .unit = .px, .value = -2 } }, .text_wrap = .nowrap };
+    const absolute: types.Block = .{ .kind = .container, .container = .{ .style = absolute_style, .blocks = &.{paragraph} } };
+    const relative_style: types.ContainerStyle = .{ .positioning = .relative_auto, .owner_font = font,
+        .line_height = .{ .length = .{ .unit = .px, .value = 20 } }, .text_wrap = .nowrap,
+        .width = .{ .length = .{ .unit = .px, .value = 200 } }, .height = .{ .unit = .px, .value = 40 } };
+    const root: types.Block = .{ .kind = .container, .container = .{ .style = relative_style, .blocks = &.{absolute} } };
+    fn stored(sections: []const types.Section) types.Stored {
+        return .{ .entry = .{ .title = "positioned", .kind = .supplemental, .sections = sections } };
+    }
+    fn encoder(a: A) Encoder { var out = ContainerOwnerWTest.encoder(a); out.positioned_containers_enabled = true; return out; }
+    fn reader(a: A, bytes: []const u8) Reader { var out = ContainerOwnerWTest.reader(a, bytes); out.positioned_containers_enabled = true; return out; }
+};
+
+test "DPRZ definite absolute child retains nearest relative owner font line height wrap and complete data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.root} }};
+    const original = T.stored(&sections);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u16, 257), std.mem.readInt(u16, bytes[4..6], .little));
+    const decoded = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+    const root = decoded.entry.sections[0].blocks[0].container.?;
+    try std.testing.expectEqual(@as(f32, 18), root.style.owner_font.?.font_scale.?);
+    try std.testing.expect(root.style.owner_font.?.font_scale_basis == .css_px);
+    try std.testing.expectEqual(@as(f32, 20), root.style.line_height.?.length.value);
+    try std.testing.expect(root.style.text_wrap == .nowrap);
+    try std.testing.expectEqual(@as(f32, -2), root.blocks[0].container.?.style.absolute_position.?.top.value);
+    try std.testing.expectEqualDeep(@as([]const types.Span, &T.text), root.blocks[0].container.?.blocks[0].spans);
+    // An explicit nested relative owner establishes its own valid anchor.
+    var nested = T.absolute; nested.container.?.blocks = &.{T.root};
+    var outer = T.root; outer.container.?.blocks = &.{nested};
+    const nested_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{outer} }};
+    const nested_value = T.stored(&nested_sections);
+    const nested_bytes = try encodeAlloc(a, nested_value);
+    try std.testing.expectEqualDeep(nested_value, try decodeAlloc(a, nested_bytes, "positioned", .supplemental, null));
+}
+
+test "DPRZ positioned census recognizes wrap and font relative combination without changing legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    for (0..3) |mode| {
+        var root = T.root;
+        root.container.?.blocks = &.{T.paragraph};
+        root.container.?.style = switch (mode) {
+            0 => .{ .text_wrap = .normal },
+            1 => .{ .text_wrap = .nowrap },
+            else => .{ .positioning = .relative_auto, .owner_font = T.font },
+        };
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{root} }};
+        const original = T.stored(&sections); const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+        try std.testing.expectEqual(@as(u16, if (mode == 2) 257 else 256), std.mem.readInt(u16, bytes[4..6], .little));
+        try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "positioned", .supplemental, null));
+    }
+    var old: Encoder = .{ .a = a, .version = .container_fonts }; defer old.deinit();
+    try old.containerStyle(.{ .positioning = .relative_auto });
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 8, 0, 0 }, old.out.items);
+    var old_y = ContainerOwnerWTest.encoder(a); defer old_y.deinit();
+    try old_y.containerStyle(.{ .owner_font = T.font });
+    try std.testing.expectEqual(@as(u32, 0x1000000), std.mem.readInt(u32, old_y.out.items[0..4], .little));
+    var new_absent = T.encoder(a); defer new_absent.deinit();
+    try new_absent.containerStyle(.{ .owner_font = T.font });
+    try std.testing.expectEqualSlices(u8, old_y.out.items, new_absent.out.items[0 .. new_absent.out.items.len - 1]);
+    try std.testing.expectEqual(@as(u8, 0), new_absent.out.items[new_absent.out.items.len - 1]);
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, legacy), try encodeAlloc(a, legacy));
+    for ([_]types.ContainerStyle{ T.absolute_style, .{ .text_wrap = .nowrap },
+        .{ .owner_font = T.font, .positioning = .relative_auto } }) |style|
+        try std.testing.expectError(error.InvalidPresentation, old_y.containerStyle(style));
+    // These already-known old bits must not gain new meaning in a DPRY reader.
+    var combo = T.encoder(a); defer combo.deinit();
+    try combo.containerStyle(.{ .owner_font = T.font, .positioning = .relative_auto });
+    var legacy_reader = ContainerOwnerWTest.reader(a, combo.out.items[0 .. combo.out.items.len - 1]);
+    try std.testing.expectError(error.InvalidPresentation, legacy_reader.containerStyle());
+}
+
+test "DPRZ refuses orphan and nested absolute owners malformed fields reserved bits and budget exhaustion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const orphan = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.absolute} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&orphan)));
+    var nested = T.absolute; nested.container.?.blocks = &.{T.absolute};
+    var root = T.root; root.container.?.blocks = &.{nested};
+    const nested_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{root} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&nested_sections)));
+    for (0..8) |mode| {
+        var style = T.absolute_style;
+        switch (mode) {
+            0 => style.absolute_position.?.left.value = std.math.nan(f32),
+            1 => style.absolute_position.?.top.value = std.math.inf(f32),
+            2 => style.positioning = .relative_auto,
+            3 => style.width = .auto,
+            4 => style.width.?.length.unit = .percent,
+            5 => style.height = null,
+            6 => style.height.?.value = -1,
+            else => style.overflow = .auto,
+        }
+        var invalid = T.encoder(a); defer invalid.deinit();
+        try std.testing.expectError(error.InvalidPresentation, invalid.containerStyle(style));
+    }
+    const reserved = [_]u8{ 0, 0, 0x80, 0, 0 };
+    var reserved_reader = T.reader(a, &reserved);
+    try std.testing.expectError(error.InvalidPresentation, reserved_reader.containerStyle());
+    const unknown_mask = [_]u8{ 0, 0, 0, 0, 4 };
+    var unknown_reader = T.reader(a, &unknown_mask);
+    try std.testing.expectError(error.InvalidPresentation, unknown_reader.containerStyle());
+    const unknown_wrap = [_]u8{ 0, 0, 0, 0, 2, 2 };
+    var bad_wrap = T.reader(a, &unknown_wrap);
+    try std.testing.expectError(error.InvalidPresentation, bad_wrap.containerStyle());
+    var valid = T.encoder(a); defer valid.deinit(); try valid.containerStyle(T.absolute_style);
+    for (0..valid.out.items.len) |end| {
+        var short = T.reader(a, valid.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, short.containerStyle());
+    }
+    var zero_budget = T.encoder(a); defer zero_budget.deinit(); zero_budget.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, zero_budget.container(T.root.container.?));
+    var font_wire = T.encoder(a); defer font_wire.deinit(); try font_wire.containerStyle(T.relative_style);
+    var reader_budget = T.reader(a, font_wire.out.items); reader_budget.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, reader_budget.containerStyle());
+}
+
+test "DPRZ rejects missing capability feature debt cross root anchors truncation and trailing data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.root} }};
+    const original = T.stored(&sections); const bytes = try encodeAlloc(a, original);
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "positioned", .supplemental, null));
+    for ([_]u16{ 0, 1, 7, 256 | 8, 256 | 512, 0xffff }) |flags| {
+        const bad = try a.dupe(u8, bytes); std.mem.writeInt(u16, bad[4..6], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "positioned", .supplemental, null));
+    }
+    const trailing = try a.alloc(u8, bytes.len + 1); @memcpy(trailing[0..bytes.len], bytes); trailing[bytes.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "positioned", .supplemental, null));
+    var debt = T.encoder(a); defer debt.deinit();
+    try debt.out.appendSlice(a, positioned_containers_magic); try debt.writeU16(positioned_containers_feature);
+    try debt.spans(@as([]const types.Span, &.{})); try debt.sections(@as([]const types.Section, &.{}));
+    try debt.spans(@as([]const types.Span, &.{})); try debt.layout(@as(types.Layout, .{}));
+    try debt.references(@as([]const types.Reference, &.{})); try debt.media(@as([]const types.Media, &.{})); try debt.byte(0);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt.out.items, "positioned", .supplemental, null));
+    // A relative scope in a different section is never a containing ancestor.
+    const across = [_]types.Section{.{ .level = 2, .title = "scope", .blocks = &.{T.root} },
+        .{ .level = 2, .title = "orphan", .blocks = &.{T.absolute} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&across)));
+    // Low-level writing cannot claim ancestor custody. Public decoding performs
+    // the same whole-tree check even for a complete, correctly framed stream.
+    const orphan = [_]types.Section{.{ .level = 2, .title = "orphan", .blocks = &.{T.absolute} }};
+    for ([_][]const types.Section{ &orphan, &across }, 0..) |unowned, case_index| {
+        var raw = T.encoder(a); defer raw.deinit();
+        try raw.out.appendSlice(a, positioned_containers_magic);
+        try raw.writeU16(positioned_containers_feature | (if (case_index == 1) @as(u16, 1) else 0));
+        try raw.spans(@as([]const types.Span, &.{})); try raw.sections(unowned);
+        try raw.spans(@as([]const types.Span, &.{})); try raw.layout(@as(types.Layout, .{}));
+        try raw.references(@as([]const types.Reference, &.{})); try raw.media(@as([]const types.Media, &.{})); try raw.byte(0);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, raw.out.items, "positioned", .supplemental, null));
+    }
+}
+
+const AbsoluteStaticZCodecTest = struct {
+    const fixed = PositionedContainerZCodecTest;
+    const style: types.ContainerStyle = .{ .width = .fit_content, .absolute_static = .{} };
+    const child: types.Block = .{ .kind = .container, .container = .{ .style = style, .blocks = &.{fixed.paragraph} } };
+    const parent_style: types.ContainerStyle = .{ .positioning = .relative_auto };
+    const parent: types.Block = .{ .kind = .container, .container = .{ .style = parent_style, .blocks = &.{child} } };
+    fn forced(a: A, sections: []const types.Section, owner_font: bool) ![]u8 {
+        var raw = fixed.encoder(a); defer raw.deinit();
+        try raw.out.appendSlice(a, positioned_containers_magic);
+        try raw.writeU16(positioned_containers_feature | (if (owner_font) @as(u16, 1) else 0));
+        try raw.spans(@as([]const types.Span, &.{})); try raw.sections(sections);
+        try raw.spans(@as([]const types.Span, &.{})); try raw.layout(@as(types.Layout, .{}));
+        try raw.references(@as([]const types.Reference, &.{})); try raw.media(@as([]const types.Media, &.{}));
+        try raw.byte(0); return raw.out.toOwnedSlice(a);
+    }
+};
+
+test "DPRZ static inline inherit LTR RTL retain sole child body optional real metrics and complete roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AbsoluteStaticZCodecTest;
+    for ([_]types.ContainerStaticDirection{ .inherit, .ltr, .rtl }) |direction| for ([_]bool{ false, true }) |metrics| {
+        var child = T.child; child.container.?.style.absolute_static.?.direction = direction;
+        var parent = T.parent; parent.container.?.blocks = &.{child};
+        if (metrics) {
+            parent.container.?.style.owner_font = T.fixed.font;
+            parent.container.?.style.line_height = .{ .length = .{ .unit = .px, .value = 20 } };
+            parent.container.?.style.text_wrap = .nowrap;
+            parent.container.?.style.text_align = .center;
+        }
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{parent} }};
+        const original = T.fixed.stored(&sections); const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+        try std.testing.expectEqual(@as(u16, if (metrics) 257 else 256), std.mem.readInt(u16, bytes[4..6], .little));
+        const decoded = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+        const actual_parent = decoded.entry.sections[0].blocks[0].container.?;
+        const actual_child = actual_parent.blocks[0].container.?;
+        try std.testing.expectEqual(direction, actual_child.style.absolute_static.?.direction);
+        try std.testing.expect(actual_child.style.absolute_position == null and actual_child.style.positioning == null);
+        try std.testing.expect(actual_child.style.width.? == .fit_content and actual_child.style.height == null);
+        try std.testing.expectEqualDeep(@as([]const types.Block, &.{T.fixed.paragraph}), actual_child.blocks);
+        try std.testing.expectEqual(metrics, actual_parent.style.owner_font != null);
+        try std.testing.expect(actual_parent.style.height == null);
+    };
+}
+
+test "DPRZ static direction extension is exact and preserves fixed relative and legacy bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AbsoluteStaticZCodecTest;
+    for ([_]types.ContainerStaticDirection{ .inherit, .ltr, .rtl }) |direction| {
+        var style = T.style; style.absolute_static.?.direction = direction;
+        var wire = T.fixed.encoder(a); defer wire.deinit(); try wire.containerStyle(style);
+        const expected = [_]u8{ 4, 0, 0, 0, 2, 4, @intFromEnum(direction) };
+        try std.testing.expectEqualSlices(u8, &expected, wire.out.items);
+        var reader = T.fixed.reader(a, wire.out.items);
+        try std.testing.expectEqualDeep(style, try reader.containerStyle());
+        try std.testing.expectEqual(wire.out.items.len, reader.pos);
+        for (0..wire.out.items.len) |end| {
+            var short = T.fixed.reader(a, wire.out.items[0..end]);
+            try std.testing.expectError(error.InvalidPresentation, short.containerStyle());
+        }
+    }
+    var wrapped = T.style; wrapped.text_wrap = .nowrap; wrapped.absolute_static.?.direction = .rtl;
+    var wrap_wire = T.fixed.encoder(a); defer wrap_wire.deinit(); try wrap_wire.containerStyle(wrapped);
+    try std.testing.expectEqualSlices(u8, &.{ 4, 0, 0, 0, 2, 6, 1, 2 }, wrap_wire.out.items);
+    var fixed_wire = T.fixed.encoder(a); defer fixed_wire.deinit(); try fixed_wire.containerStyle(T.fixed.absolute_style);
+    // Frozen fixed-position schema: width120px/height20px,left10px/top-2px,nowrap.
+    const fixed_bytes = [_]u8{ 4, 0, 2, 0, 1, 0, 0, 0, 240, 66, 0, 0, 0, 160, 65,
+        3, 0, 0, 0, 32, 65, 0, 0, 0, 0, 192, 1 };
+    try std.testing.expectEqualSlices(u8, &fixed_bytes, fixed_wire.out.items);
+    var old: Encoder = .{ .a = a, .version = .container_fonts }; defer old.deinit();
+    try old.containerStyle(.{ .positioning = .relative_auto });
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 8, 0, 0 }, old.out.items);
+    var legacy = ContainerOwnerWTest.encoder(a); defer legacy.deinit();
+    try std.testing.expectError(error.InvalidPresentation, legacy.containerStyle(T.style));
+    const action = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, action), try encodeAlloc(a, action));
+    for ([_][]const u8{ &.{ 4, 0, 0, 0, 2, 4, 3 }, &.{ 4, 0, 0, 0, 2, 4, 255 },
+        &.{ 0, 0, 0, 0, 8 }, &.{ 0, 0, 0x80, 0, 0 } }) |invalid| {
+        var reader = T.fixed.reader(a, invalid);
+        try std.testing.expectError(error.InvalidPresentation, reader.containerStyle());
+    }
+    const both = try a.alloc(u8, fixed_bytes.len + 1); @memcpy(both[0..fixed_bytes.len], &fixed_bytes);
+    both[15] = 7; both[fixed_bytes.len] = 0;
+    var conflicting = T.fixed.reader(a, both);
+    try std.testing.expectError(error.InvalidPresentation, conflicting.containerStyle());
+    var style = T.fixed.absolute_style; style.absolute_static = .{};
+    var conflict_encoder = T.fixed.encoder(a); defer conflict_encoder.deinit();
+    try std.testing.expectError(error.InvalidPresentation, conflict_encoder.containerStyle(style));
+}
+
+test "DPRZ static inline refuses orphan siblings intervening owner and unsupported body in complete wire" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AbsoluteStaticZCodecTest;
+    var siblings = T.parent; siblings.container.?.blocks = &.{ T.child, T.fixed.paragraph };
+    const intermediate: types.Block = .{ .kind = .container, .container = .{ .blocks = &.{T.child} } };
+    var indirect = T.parent; indirect.container.?.blocks = &.{intermediate};
+    for ([_]types.Block{ T.child, siblings, indirect }) |unowned| {
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{unowned} }};
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.fixed.stored(&sections)));
+        const raw = try T.forced(a, &sections, false);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, raw, "positioned", .supplemental, null));
+    }
+    for (0..7) |mode| {
+        var child = T.child;
+        switch (mode) {
+            0 => child.container.?.blocks = &.{ T.fixed.paragraph, T.fixed.paragraph },
+            1 => child.container.?.blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .line_break }} }},
+            2 => child.container.?.blocks = &.{.{ .kind = .paragraph, .spans = &.{InlineBoxYCodecTest.owner} }},
+            3 => child.container.?.blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "body\nnext" }} }},
+            4 => child.container.?.blocks = &.{.{ .kind = .paragraph, .spans = &.{} }},
+            5 => child.container.?.style.height = .{ .unit = .px, .value = 0 },
+            else => child.container.?.style.width = .auto,
+        }
+        var parent = T.parent; parent.container.?.blocks = &.{child};
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{parent} }};
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.fixed.stored(&sections)));
+    }
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.parent} }};
+    const bytes = try encodeAlloc(a, T.fixed.stored(&sections));
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "positioned", .supplemental, null));
+    const trailing = try a.alloc(u8, bytes.len + 1); @memcpy(trailing[0..bytes.len], bytes); trailing[bytes.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "positioned", .supplemental, null));
+    var exhausted = T.fixed.encoder(a); defer exhausted.deinit(); exhausted.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, exhausted.container(T.parent.container.?));
+}
+
+const TableMinWidthZCodecTest = struct {
+    const text = [_]types.Span{ .{ .text = "complete body ", .italic = true },
+        .{ .kind = .link, .text = "entry", .target = "Keep", .target_fragment = "French", .bold = true },
+        .{ .kind = .external_link, .text = " source", .target = "https://example.org/dict" } };
+    const caption = [_]types.Span{.{ .text = "authored caption" }};
+    const cells = [_]types.Cell{.{ .header = true, .colspan = 2, .spans = &text }};
+    const rows = [_]types.Row{.{ .cells = &cells }};
+    const paragraph: types.Block = .{ .kind = .paragraph, .spans = &text };
+    const ordinary_container: types.Block = .{ .kind = .container, .container = .{
+        .style = .{ .positioning = .relative_auto }, .blocks = &.{paragraph} } };
+    fn table(width: types.StyleWidth) types.Table {
+        return .{ .caption = &caption, .rows = &rows, .style = .{ .min_width = width } };
+    }
+    fn stored(sections: []const types.Section) types.Stored {
+        return .{ .entry = .{ .title = "table minimum", .kind = .supplemental, .sections = sections } };
+    }
+    fn encoder(a: A) Encoder {
+        var value = InlineActionCodecTest.encoder(a); value.table_min_width_enabled = true; return value;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var value = InlineActionCodecTest.reader(a, bytes); value.table_min_width_enabled = true; return value;
+    }
+    // Deliberately bypass capability discovery only, never field validation.
+    // This writes complete streams for independent feature-debt rejection.
+    fn forced(a: A, value: types.Stored, features: u16) ![]u8 {
+        var out = encoder(a); defer out.deinit();
+        out.table_min_width_enabled = features & table_min_width_feature != 0;
+        out.positioned_containers_enabled = features & positioned_containers_feature != 0;
+        out.capability_w = features & owner_font_feature != 0;
+        try out.out.appendSlice(a, positioned_containers_magic); try out.writeU16(features);
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections);
+        try out.spans(value.entry.preamble_spans); try out.layout(value.entry.organization);
+        try out.references(value.entry.references); try out.media(value.entry.media); try out.byte(0);
+        return out.out.toOwnedSlice(a);
+    }
+};
+
+test "DPRZ table min width512 alone preserves all units zero above100 body actions and ordinary Container bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = TableMinWidthZCodecTest;
+    for ([_]types.StyleWidth{ .{ .unit = .px, .value = 0 }, .{ .unit = .px, .value = 37 },
+        .{ .unit = .em, .value = 2 }, .{ .unit = .percent, .value = 150 } }) |width| {
+        const blocks = [_]types.Block{.{ .kind = .table, .table = T.table(width) }, T.ordinary_container};
+        const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+        const original = T.stored(&sections);
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+        try std.testing.expectEqual(@as(u16, 512), std.mem.readInt(u16, bytes[4..6], .little));
+        const decoded = try decodeAlloc(a, bytes, "table minimum", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualDeep(width, decoded.entry.sections[0].blocks[0].table.?.style.?.min_width.?);
+        try std.testing.expectEqualDeep(@as([]const types.Span, &T.text), decoded.entry.sections[0].blocks[0].table.?.rows[0].cells[0].spans);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        try std.testing.expectEqualSlices(u8, bytes, try T.forced(a, original, 512));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+        try types.validateStored(a, parsed, "table minimum", .supplemental, null);
+        try std.testing.expectEqualDeep(original, parsed);
+    }
+    // Global512 changes no Container wire byte: no extension mask is inserted.
+    var min_encoder = T.encoder(a); defer min_encoder.deinit();
+    try min_encoder.containerStyle(.{ .positioning = .relative_auto });
+    try std.testing.expectEqualSlices(u8, &.{ 0, 0, 8, 0, 0 }, min_encoder.out.items);
+    var min_reader = T.reader(a, min_encoder.out.items);
+    try std.testing.expectEqualDeep(@as(types.ContainerStyle, .{ .positioning = .relative_auto }), try min_reader.containerStyle());
+    try std.testing.expectEqual(min_encoder.out.items.len, min_reader.pos);
+    try std.testing.expectError(error.InvalidPresentation, min_encoder.containerStyle(PositionedContainerZCodecTest.absolute_style));
+}
+
+test "DPRZ table min width census includes nested caption and reference tables and distinct positioned siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = TableMinWidthZCodecTest;
+    const leaf = T.table(.{ .unit = .em, .value = 3 });
+    const leaf_block: types.Block = .{ .kind = .table, .table = leaf };
+    const nested_cells = [_]types.Cell{.{ .nested_table = leaf }};
+    const nested_rows = [_]types.Row{.{ .cells = &nested_cells }};
+    const nested: types.Table = .{ .rows = &nested_rows };
+    const caption_table: types.Table = .{ .caption_blocks = &.{leaf_block}, .rows = &T.rows };
+    for (0..3) |location| {
+        const blocks = [_]types.Block{.{ .kind = .table, .table = if (location == 0) nested else caption_table }};
+        const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+        const refs = [_]types.Reference{.{ .number = 1, .group_number = 1, .blocks = &.{leaf_block} }};
+        var original = T.stored(if (location == 2) &.{} else &sections);
+        if (location == 2) original.entry.references = &refs;
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqual(@as(u16, 512), std.mem.readInt(u16, bytes[4..6], .little));
+        try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "table minimum", .supplemental, null));
+    }
+    const blocks = [_]types.Block{ leaf_block, PositionedContainerZCodecTest.root };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const combined = T.stored(&sections);
+    const bytes = try encodeAlloc(a, combined);
+    try std.testing.expectEqual(@as(u16, 769), std.mem.readInt(u16, bytes[4..6], .little));
+    try std.testing.expectEqualDeep(combined, try decodeAlloc(a, bytes, "table minimum", .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, combined.entry.display_title, combined.entry.sections,
+        combined.entry.organization, combined.entry.references, combined.entry.media));
+    try std.testing.expectEqualSlices(u8, bytes, try T.forced(a, combined, 769));
+    // Each high bit owes its own occurrence, even in otherwise complete framing.
+    const only_min_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{leaf_block} }};
+    const debt256 = try T.forced(a, T.stored(&only_min_sections), 768);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt256, "table minimum", .supplemental, null));
+    const only_pos_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{PositionedContainerZCodecTest.root} }};
+    const debt512 = try T.forced(a, T.stored(&only_pos_sections), 769);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt512, "table minimum", .supplemental, null));
+    const neither = try T.forced(a, T.stored(&.{}), 512);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, neither, "table minimum", .supplemental, null));
+}
+
+test "DPRZ table min width second flag payload order preserves absent legacy and fixedZ bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = TableMinWidthZCodecTest;
+    const widths = [_]types.StyleWidth{ .{ .unit = .px, .value = 0 }, .{ .unit = .em, .value = 2 }, .{ .unit = .percent, .value = 150 } };
+    const vectors = [_][8]u8{ .{ 1, 0, 64, 0, 0, 0, 0, 0 }, .{ 1, 0, 64, 1, 0, 0, 0, 64 }, .{ 1, 0, 64, 2, 0, 0, 22, 67 } };
+    for (widths, vectors) |width, vector| {
+        var out = T.encoder(a); defer out.deinit(); try out.tableStyle(.{ .min_width = width });
+        try std.testing.expectEqualSlices(u8, &vector, out.out.items);
+        var reader = T.reader(a, out.out.items);
+        try std.testing.expectEqualDeep(@as(?types.TableStyle, .{ .min_width = width }), try reader.tableStyle());
+        try std.testing.expectEqual(out.out.items.len, reader.pos);
+        for (1..out.out.items.len) |end| {
+            var short = T.reader(a, out.out.items[0..end]);
+            try std.testing.expectError(error.InvalidPresentation, short.tableStyle());
+        }
+        var old = InlineActionCodecTest.reader(a, out.out.items);
+        try std.testing.expectError(error.InvalidPresentation, old.tableStyle());
+        var legacy_out = InlineActionCodecTest.encoder(a); defer legacy_out.deinit();
+        try std.testing.expectError(error.InvalidPresentation, legacy_out.tableStyle(.{ .min_width = width }));
+    }
+    const style: types.TableStyle = .{ .border = .none, .margins = .{
+        .top = .{ .unit = .px, .value = 0 }, .right = .{ .unit = .px, .value = 0 },
+        .bottom = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } },
+        .containing_direction = .ltr, .corner_radii = .{
+        .top_left = .{ .unit = .px, .value = 1 }, .top_right = .{ .unit = .px, .value = 2 },
+        .bottom_right = .{ .unit = .px, .value = 3 }, .bottom_left = .{ .unit = .px, .value = 4 } },
+        .min_width = .{ .unit = .percent, .value = 150 } };
+    var out = T.encoder(a); defer out.deinit(); try out.tableStyle(style);
+    try std.testing.expectEqual(@as(u8, 0x70), out.out.items[2]);
+    try std.testing.expectEqualSlices(u8, vectors[2][3..], out.out.items[out.out.items.len - 5 ..]);
+    var reader = T.reader(a, out.out.items); try std.testing.expectEqualDeep(@as(?types.TableStyle, style), try reader.tableStyle());
+    var no_q = T.reader(a, out.out.items); no_q.capability_q = false;
+    try std.testing.expectError(error.InvalidPresentation, no_q.tableStyle());
+    const old_style: types.TableStyle = .{ .width = .{ .unit = .px, .value = 10 } };
+    var old = InlineActionCodecTest.encoder(a); defer old.deinit(); try old.tableStyle(old_style);
+    var new = T.encoder(a); defer new.deinit(); try new.tableStyle(old_style);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 32, 0, 0, 0, 0, 32, 65 }, old.out.items);
+    try std.testing.expectEqualSlices(u8, old.out.items, new.out.items);
+    var absent = T.encoder(a); defer absent.deinit(); try absent.tableStyle(null);
+    try std.testing.expectEqualSlices(u8, &.{0}, absent.out.items);
+    var fixed = PositionedContainerZCodecTest.encoder(a); defer fixed.deinit();
+    try fixed.containerStyle(PositionedContainerZCodecTest.absolute_style);
+    try std.testing.expectEqualSlices(u8, &.{ 4, 0, 2, 0, 1, 0, 0, 0, 240, 66, 0, 0, 0, 160, 65,
+        3, 0, 0, 0, 32, 65, 0, 0, 0, 0, 192, 1 }, fixed.out.items);
+    const legacy = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, legacy), try encodeAlloc(a, legacy));
+}
+
+test "DPRZ table min width rejects malformed flags lengths feature debt truncation and budget exhaustion" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = TableMinWidthZCodecTest;
+    for ([_]f32{ -1, std.math.inf(f32), -std.math.inf(f32), std.math.nan(f32) }) |bad_width| {
+        var out = T.encoder(a); defer out.deinit();
+        try std.testing.expectError(error.InvalidPresentation, out.tableStyle(.{ .min_width = .{ .unit = .percent, .value = bad_width } }));
+        var raw = [_]u8{ 1, 0, 64, 2, 0, 0, 0, 0 }; std.mem.writeInt(u32, raw[4..8], @bitCast(bad_width), .little);
+        var reader = T.reader(a, &raw); try std.testing.expectError(error.InvalidPresentation, reader.tableStyle());
+    }
+    for ([_][8]u8{ .{ 1, 0, 64, 3, 0, 0, 0, 0 }, .{ 1, 0, 128, 0, 0, 0, 0, 0 },
+        .{ 1, 0, 192, 0, 0, 0, 0, 0 } }) |raw| {
+        var reader = T.reader(a, &raw); try std.testing.expectError(error.InvalidPresentation, reader.tableStyle());
+    }
+    const table = T.table(.{ .unit = .px, .value = 0 });
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .table, .table = table }} }};
+    const original = T.stored(&sections); const bytes = try encodeAlloc(a, original);
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
+        decodeAlloc(a, bytes[0..end], "table minimum", .supplemental, null));
+    for ([_]u16{ 0, 7, 512 | 8, 512 | 1024, 0xffff }) |flags| {
+        const bad = try a.dupe(u8, bytes); std.mem.writeInt(u16, bad[4..6], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "table minimum", .supplemental, null));
+    }
+    const missing512 = try a.dupe(u8, bytes); std.mem.writeInt(u16, missing512[4..6], 256, .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, missing512, "table minimum", .supplemental, null));
+    const extra = try a.alloc(u8, bytes.len + 1); @memcpy(extra[0..bytes.len], bytes); extra[bytes.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, extra, "table minimum", .supplemental, null));
+    var work: DeepTableWork = .{}; try work.entry(original.entry.display_title, original.entry.sections,
+        original.entry.preamble_spans, original.entry.references);
+    try std.testing.expect(work.table_min_width_found);
+    const used = max_items - work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used }; try exact.entry(original.entry.display_title, original.entry.sections,
+        original.entry.preamble_spans, original.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(original.entry.display_title, original.entry.sections,
+        original.entry.preamble_spans, original.entry.references));
+    var no_budget = T.encoder(a); defer no_budget.deinit(); no_budget.remaining_items = 0;
+    try std.testing.expectError(error.PresentationTooLarge, no_budget.table(@as(?types.Table, table)));
+    var table_wire = T.encoder(a); defer table_wire.deinit(); try table_wire.table(@as(?types.Table, table));
+    var reader_budget = T.reader(a, table_wire.out.items); reader_budget.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, reader_budget.table());
+}
+
+
+test "DPRY image occurrence layout retains exact body actions and normalized signed geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
+    var spans = [_]types.Span{
+        .{ .text = "before" },
+        .{ .kind = .link, .target = "word", .image = .{ .file = "Writing star.svg", .width_px = 62, .occurrence_layout = .{
+            .x = .{ .unit = .px, .value = -10 }, .y = .{ .unit = .px, .value = -10 }, .padding_left = zero, .padding_right = zero } } },
+        .{ .image = .{ .file = "OOjs UI icon book-ltr-progressive.svg", .width_px = 12, .occurrence_layout = .{
+            .x = zero, .y = .{ .unit = .px, .value = -1 }, .padding_left = zero, .padding_right = .{ .unit = .em, .value = 0.4 } } } },
+        .{ .text = "after" },
+    };
+    const media = [_]types.Media{ .{ .file = "Writing star.svg", .kind = .image, .caption = "" }, .{ .file = "OOjs UI icon book-ltr-progressive.svg", .kind = .image, .caption = "" } };
+    const stored: types.Stored = .{ .entry = .{ .title = "occurrences", .kind = .supplemental, .display_title = &spans, .media = &media } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(owner_geometry_magic, bytes[0..4]);
+    try std.testing.expectEqual(image_occurrence_feature, bytes[4]);
+    const decoded = try decodeAlloc(a, bytes, "occurrences", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, &spans, stored.entry.sections, stored.entry.organization, stored.entry.references, &media));
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "occurrences", .supplemental, null));
+    const surplus = try std.mem.concat(a, u8, &.{ bytes, &.{0} });
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, surplus, "occurrences", .supplemental, null));
+    var debt = try a.dupe(u8, bytes); debt[4] |= owner_font_feature;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "occurrences", .supplemental, null));
+    debt[4] = 0; try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "occurrences", .supplemental, null));
+    spans[1].image.?.occurrence_layout = null; spans[2].image.?.occurrence_layout = null;
+    const legacy = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(reference_blocks_magic, legacy[0..4]);
+    var old: Encoder = .{ .a = a, .version = .reference_blocks }; defer old.deinit();
+    try old.out.appendSlice(a, reference_blocks_magic); try old.spans(&spans); try old.sections(stored.entry.sections);
+    try old.spans(stored.entry.preamble_spans); try old.layout(stored.entry.organization); try old.references(stored.entry.references); try old.media(&media);
+    try std.testing.expectEqualSlices(u8, old.out.items, legacy);
+}
+
+test "DPRY image occurrence nullable payload rejects missing capability invalid presence and budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
+    const layout: types.InlineImageOccurrenceLayout = .{ .x = zero, .y = zero, .padding_left = zero, .padding_right = zero };
+    var plain: Encoder = .{ .a = a, .version = .container_fonts }; defer plain.deinit();
+    try std.testing.expectError(error.InvalidPresentation, plain.inlineImage(.{ .file = "Icon.svg", .occurrence_layout = layout }));
+    var enc: Encoder = .{ .a = a, .version = .container_fonts, .image_occurrences = true }; defer enc.deinit();
+    try enc.inlineImage(.{ .file = "Icon.svg", .occurrence_layout = layout });
+    const marker = enc.out.items.len - 21;
+    var metrics: DecodeMetrics = .{};
+    var measured: Reader = .{ .a = a, .version = .container_fonts, .image_occurrences = true, .bytes = enc.out.items, .metrics = &metrics };
+    try std.testing.expectEqualDeep(@as(?types.InlineImage, .{ .file = "Icon.svg", .occurrence_layout = layout }), try measured.inlineImage());
+    try std.testing.expectEqual(@as(u64, 1), metrics.total_items);
+    try std.testing.expectEqual(@as(usize, 0), measured.remaining());
+    var malformed = try a.dupe(u8, enc.out.items); malformed[marker] = 2;
+    var reader: Reader = .{ .a = a, .version = .container_fonts, .image_occurrences = true, .bytes = malformed };
+    try std.testing.expectError(error.InvalidPresentation, reader.inlineImage());
+    enc.remaining_items = 0; try std.testing.expectError(error.PresentationTooLarge, enc.imageOccurrence(layout));
+    reader = .{ .a = a, .version = .container_fonts, .image_occurrences = true, .remaining_items = 0, .bytes = enc.out.items[marker+1..] };
+    try std.testing.expectError(error.InvalidPresentation, reader.imageOccurrence());
+}
+
+test "DPRZ image occurrence and fixed positioned Container compose as distinct siblings with exact low feature census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const zero: types.StyleLength = .{ .unit = .px, .value = 0 };
+    const occurrence: types.InlineImageOccurrenceLayout = .{ .x = .{ .unit = .px, .value = -10 },
+        .y = .{ .unit = .px, .value = -1 }, .padding_left = zero, .padding_right = .{ .unit = .em, .value = 0.4 } };
+    const image_spans = [_]types.Span{.{ .text = "before" },
+        .{ .kind = .link, .target = "Kept", .target_fragment = "Image", .tooltip = "retained action",
+            .image = .{ .file = "Occurrence.svg", .width_px = 12, .occurrence_layout = occurrence } }, .{ .text = "after" }};
+    const media = [_]types.Media{.{ .file = "Occurrence.svg", .kind = .image, .caption = "" }};
+    const paragraph: types.Block = .{ .kind = .paragraph, .spans = &image_spans };
+    for ([_]bool{ false, true }) |font| {
+        var relative = T.root; if (!font) relative.container.?.style.owner_font = null;
+        // The image has its own ordinary-flow sibling paragraph. It is never
+        // placed inside the restricted absolute-positioned child body.
+        const blocks = [_]types.Block{ relative, paragraph };
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+        var original = T.stored(&sections); original.entry.media = &media;
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+        const flags: u16 = positioned_containers_feature | image_occurrence_feature | (if (font) @as(u16, 1) else 0);
+        try std.testing.expectEqual(flags, std.mem.readInt(u16, bytes[4..6], .little));
+        const decoded = try decodeAlloc(a, bytes, "positioned", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+        try std.testing.expectEqualDeep(T.root.container.?.blocks, decoded.entry.sections[0].blocks[0].container.?.blocks);
+        try std.testing.expectEqualDeep(@as([]const types.Span, &image_spans), decoded.entry.sections[0].blocks[1].spans);
+        const missing = try a.dupe(u8, bytes);
+        std.mem.writeInt(u16, missing[4..6], flags & ~@as(u16, image_occurrence_feature), .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, missing, "positioned", .supplemental, null));
+        for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..end], "positioned", .supplemental, null));
+    }
+}
+
+test "DPRZ image occurrence flag debt rejects a fully framed nullable image and preserves original positioned bytes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = PositionedContainerZCodecTest;
+    const spans = [_]types.Span{.{ .image = .{ .file = "Occurrence.svg", .width_px = 12 } }};
+    const media = [_]types.Media{.{ .file = "Occurrence.svg", .kind = .image, .caption = "" }};
+    const blocks = [_]types.Block{ T.root, .{ .kind = .paragraph, .spans = &spans } };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &blocks }};
+    var original = T.stored(&sections); original.entry.media = &media;
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqual(@as(u16, 257), std.mem.readInt(u16, bytes[4..6], .little));
+    var old = T.encoder(a); defer old.deinit();
+    try old.out.appendSlice(a, positioned_containers_magic); try old.writeU16(257);
+    try old.spans(original.entry.display_title); try old.sections(original.entry.sections); try old.spans(original.entry.preamble_spans);
+    try old.layout(original.entry.organization); try old.references(original.entry.references); try old.media(original.entry.media); try old.byte(0);
+    try std.testing.expectEqualSlices(u8, old.out.items, bytes);
+    // Unlike changing just the header, this stream includes the required null
+    // occurrence byte on its real image, reaching the exact final census.
+    var debt = T.encoder(a); defer debt.deinit(); debt.image_occurrences = true;
+    try debt.out.appendSlice(a, positioned_containers_magic); try debt.writeU16(@as(u16, 257) | image_occurrence_feature);
+    try debt.spans(original.entry.display_title); try debt.sections(original.entry.sections); try debt.spans(original.entry.preamble_spans);
+    try debt.layout(original.entry.organization); try debt.references(original.entry.references); try debt.media(original.entry.media); try debt.byte(0);
+    try std.testing.expectEqual(bytes.len + 1, debt.out.items.len);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt.out.items, "positioned", .supplemental, null));
+    var invalid_spans = spans;
+    invalid_spans[0].image.?.occurrence_layout = .{ .x = .{ .unit = .px, .value = 0 }, .y = .{ .unit = .px, .value = 0 },
+        .padding_left = .{ .unit = .px, .value = -1 }, .padding_right = .{ .unit = .px, .value = 0 } };
+    var invalid_blocks = blocks; invalid_blocks[1].spans = &invalid_spans;
+    const invalid_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &invalid_blocks }};
+    var invalid = T.stored(&invalid_sections); invalid.entry.media = &media;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+}
+
+const StaticMinImageUnionCodecTest = struct {
+    const static = AbsoluteStaticZCodecTest;
+    const image_spans = [_]types.Span{.{ .text = "before image " },
+        .{ .kind = .link, .target = "Preserved", .target_fragment = "Image", .tooltip = "kept action", .image = .{
+            .file = "Union occurrence.svg", .width_px = 14, .occurrence_layout = .{
+                .x = .{ .unit = .px, .value = -3 }, .y = .{ .unit = .em, .value = 0.25 },
+                .padding_left = .{ .unit = .px, .value = 0 }, .padding_right = .{ .unit = .em, .value = 0.4 } } } },
+        .{ .text = " after image", .italic = true } };
+    const media = [_]types.Media{.{ .file = "Union occurrence.svg", .kind = .image, .caption = "" }};
+    const image_paragraph: types.Block = .{ .kind = .paragraph, .spans = &image_spans };
+    const minimum: types.Block = .{ .kind = .table, .table = TableMinWidthZCodecTest.table(.{ .unit = .percent, .value = 150 }) };
+    fn stored(sections: []const types.Section) types.Stored {
+        var value = TableMinWidthZCodecTest.stored(sections); value.entry.media = &media; return value;
+    }
+    fn forced(a: A, value: types.Stored, flags: u16) ![]u8 {
+        var out = TableMinWidthZCodecTest.encoder(a); defer out.deinit();
+        out.capability_w = flags & owner_font_feature != 0;
+        out.positioned_containers_enabled = flags & positioned_containers_feature != 0;
+        out.table_min_width_enabled = flags & table_min_width_feature != 0;
+        out.image_occurrences = flags & image_occurrence_feature != 0;
+        try out.out.appendSlice(a, positioned_containers_magic); try out.writeU16(flags);
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections); try out.spans(value.entry.preamble_spans);
+        try out.layout(value.entry.organization); try out.references(value.entry.references); try out.media(value.entry.media); try out.byte(0);
+        return out.out.toOwnedSlice(a);
+    }
+};
+
+test "DPRZ union static sole child table minimum and image occurrence siblings retain complete body and independent metrics" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = StaticMinImageUnionCodecTest;
+    for ([_]bool{ false, true }) |owner_font| {
+        var relative = T.static.parent;
+        if (owner_font) relative.container.?.style.owner_font = PositionedContainerZCodecTest.font;
+        const blocks = [_]types.Block{ relative, T.minimum, T.image_paragraph };
+        const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+        const original = T.stored(&sections);
+        const bytes = try encodeAlloc(a, original);
+        try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+        const expected_flags: u16 = if (owner_font) 801 else 800;
+        try std.testing.expectEqual(expected_flags, std.mem.readInt(u16, bytes[4..6], .little));
+        const decoded = try decodeAlloc(a, bytes, "table minimum", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualDeep(relative.container.?.blocks, decoded.entry.sections[0].blocks[0].container.?.blocks);
+        try std.testing.expectEqualDeep(T.minimum.table.?, decoded.entry.sections[0].blocks[1].table.?);
+        try std.testing.expectEqualDeep(@as([]const types.Span, &T.image_spans), decoded.entry.sections[0].blocks[2].spans);
+        try std.testing.expectEqualDeep(@as([]const types.Media, &T.media), decoded.entry.media);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        try std.testing.expectEqualSlices(u8, bytes, try T.forced(a, original, expected_flags));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+        try types.validateStored(a, parsed, "table minimum", .supplemental, null);
+        try std.testing.expectEqualDeep(original, parsed);
+        var work: DeepTableWork = .{};
+        try work.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+        try std.testing.expect(work.positioned_container_found and work.table_min_width_found and work.image_occurrence_found);
+        try std.testing.expectEqual(owner_font, work.container_owner_font_found);
+        const used = max_items - work.remaining;
+        var exact: DeepTableWork = .{ .remaining = used };
+        try exact.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+        try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+        var short: DeepTableWork = .{ .remaining = used - 1 };
+        try std.testing.expectError(error.PresentationTooLarge, short.entry(original.entry.display_title, original.entry.sections,
+            original.entry.preamble_spans, original.entry.references));
+    }
+    // A real legacy relative Container beside512+32 still receives no256 mask.
+    const blocks = [_]types.Block{ TableMinWidthZCodecTest.ordinary_container, T.minimum, T.image_paragraph };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const value = T.stored(&sections); const bytes = try encodeAlloc(a, value);
+    try std.testing.expectEqual(@as(u16, 544), std.mem.readInt(u16, bytes[4..6], .little));
+    try std.testing.expectEqualSlices(u8, bytes, try T.forced(a, value, 544));
+    try std.testing.expectEqualDeep(value, try decodeAlloc(a, bytes, "table minimum", .supplemental, null));
+}
+
+test "DPRZ union rejects separately owed static min image features unknown bits and complete stream truncation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = StaticMinImageUnionCodecTest;
+    const blocks = [_]types.Block{ T.static.parent, T.minimum, T.image_paragraph };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const value = T.stored(&sections); const bytes = try encodeAlloc(a, value);
+    for (0..3) |missing| {
+        var changed = blocks;
+        var plain_image = T.image_spans;
+        switch (missing) {
+            0 => changed[0] = TableMinWidthZCodecTest.paragraph,
+            1 => changed[1].table.?.style = null,
+            else => { plain_image[1].image.?.occurrence_layout = null; changed[2].spans = &plain_image; },
+        }
+        const changed_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &changed }};
+        const debt_value = T.stored(&changed_sections);
+        // Flags and all conditional slots agree structurally; only the complete
+        // feature census may discharge the missing occurrence independently.
+        const raw = try T.forced(a, debt_value, 800);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, raw, "table minimum", .supplemental, null));
+        const honest = try encodeAlloc(a, debt_value);
+        const honest_flags: u16 = switch (missing) { 0 => 544, 1 => 288, else => 768 };
+        try std.testing.expectEqual(honest_flags, std.mem.readInt(u16, honest[4..6], .little));
+        try std.testing.expectEqualDeep(debt_value, try decodeAlloc(a, honest, "table minimum", .supplemental, null));
+    }
+    for ([_]u16{ 0, 32, 7 | 32, 800 | 8, 800 | 1024, 0xffff, 544, 288, 768 }) |flags| {
+        const bad = try a.dupe(u8, bytes); std.mem.writeInt(u16, bad[4..6], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "table minimum", .supplemental, null));
+    }
+    for (0..bytes.len) |end| try std.testing.expectError(error.InvalidPresentation,
+        decodeAlloc(a, bytes[0..end], "table minimum", .supplemental, null));
+    const trailing = try a.alloc(u8, bytes.len + 1); @memcpy(trailing[0..bytes.len], bytes); trailing[bytes.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "table minimum", .supplemental, null));
+}
+
+
+test "DPRR CSS-only intrinsic Table preserves complete Stored build JSON actions caption and list path" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const policy = IntrinsicTableCodecTest.policy(); var table = IntrinsicTableCodecTest.table(&policy); table.geometry = null;
+    const blocks = [_]types.Block{.{ .kind = .table, .depth = 1, .list_path = ":", .table = table }};
+    for ([_]bool{ false, true }) |in_fragment| {
+        const stored: types.Stored = .{ .entry = .{ .title = "CSS-only intrinsic", .kind = .supplemental,
+            .sections = if (in_fragment) &.{} else &.{.{ .level = 0, .title = "", .blocks = &blocks }},
+            .references = if (in_fragment) &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &blocks }} else &.{} } };
+        try types.validateStored(a, stored, stored.entry.title, .supplemental, null);
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(intrinsic_table_magic, bytes[0..4]);
+        try std.testing.expectEqual(@as(u8, 0), bytes[bytes.len - 1]);
+        const decoded = try decodeAlloc(a, bytes, stored.entry.title, .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+        const actual = if (in_fragment) decoded.entry.references[0].blocks.?[0] else decoded.entry.sections[0].blocks[0];
+        try std.testing.expect(actual.table.?.geometry == null);
+        try std.testing.expectEqualStrings(":", actual.list_path);
+        try std.testing.expectEqual(@as(u8, 1), actual.depth);
+        try std.testing.expectEqualDeep(table.caption, actual.table.?.caption);
+        try std.testing.expectEqualDeep(table.rows, actual.table.?.rows);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title,
+            stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+        try std.testing.expectEqualDeep(stored, parsed);
+        try types.validateStored(a, parsed, stored.entry.title, .supplemental, null);
+        for ([_][]const u8{ body_adjoining_magic, table_corners_magic, container_fonts_magic }) |header| {
+            const bad = try a.dupe(u8, bytes); @memcpy(bad[0..4], header);
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, stored.entry.title, .supplemental, null));
+        }
+        const trailing = try a.alloc(u8, bytes.len + 1); @memcpy(trailing[0..bytes.len], bytes); trailing[bytes.len] = 0;
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, stored.entry.title, .supplemental, null));
+    }
+}
+
+test "DPRR CSS-only geometry changes only nullable hint bytes and preserves partial hint refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const policy = IntrinsicTableCodecTest.policy(); const hinted = IntrinsicTableCodecTest.table(&policy);
+    var css_only = hinted; css_only.geometry = null;
+    var old: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer old.deinit();
+    try old.table(@as(?types.Table, hinted));
+    var css: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer css.deinit();
+    try css.table(@as(?types.Table, css_only));
+    try std.testing.expectEqualSlices(u8, &.{ 19, 7, 1, 0, 0, 0, 4, 0 }, old.out.items[0..8]);
+    try std.testing.expectEqualSlices(u8, &.{ 19, 0 }, css.out.items[0..2]);
+    try std.testing.expectEqual(old.out.items.len, css.out.items.len + 6);
+    try std.testing.expectEqualSlices(u8, old.out.items[8..], css.out.items[2..]);
+    var old_reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = old.out.items };
+    try std.testing.expectEqualDeep(@as(?types.Table, hinted), try old_reader.table());
+    var css_reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = css.out.items };
+    try std.testing.expectEqualDeep(@as(?types.Table, css_only), try css_reader.table());
+    for (0..css.out.items.len) |end| {
+        var short: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = css.out.items[0..end] };
+        try std.testing.expectError(error.InvalidPresentation, short.table());
+    }
+    for (0..4) |mode| {
+        var hints = hinted.geometry.?;
+        switch (mode) { 0 => hints.border = null, 1 => hints.cell_spacing = null,
+            2 => hints.cell_padding = null, else => hints.width = .{ .unit = .px, .value = 0 } }
+        var invalid = hinted; invalid.geometry = hints;
+        var refused: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer refused.deinit();
+        try std.testing.expectError(error.InvalidPresentation, refused.table(@as(?types.Table, invalid)));
+        // Correctly frame the independent generic geometry, then retain the
+        // complete old body and policy. The intrinsic header must reject it.
+        var forged: Encoder = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true }; defer forged.deinit();
+        try forged.byte(19); try forged.tableGeometry(hints); try forged.out.appendSlice(a, old.out.items[8..]);
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = true, .capability_r = true, .bytes = forged.out.items };
+        try std.testing.expectError(error.InvalidPresentation, reader.table());
+    }
+    for ([_]bool{ false, true }) |q| {
+        var legacy: Reader = .{ .a = a, .version = .container_fonts, .capability_p = true, .capability_q = q, .bytes = css.out.items };
+        try std.testing.expectError(error.InvalidPresentation, legacy.table());
+    }
+}
+
+const AudioControlWireTest = struct {
+    const file = "Voice.ogg";
+    const classes = "wikidict-media wikidict-media-file-566f6963652e6f6767";
+    fn owner(value: types.AudioControl) types.Span {
+        return .{ .kind = .link, .text = "Voice.ogg", .target = "File:Voice.ogg", .classes = classes,
+            .direction = "ltr", .audio_control = value };
+    }
+    fn reader(bytes: []const u8) Reader {
+        return .{ .a = std.testing.allocator, .bytes = bytes, .audio_controls = true,
+            .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+            .capability_p = true, .capability_q = true, .capability_r = true,
+            .capability_s = true, .capability_u = true, .capability_v = true };
+    }
+};
+test "DPRZ audio controls preserve same file distinct occurrence geometry focus complete body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = AudioControlWireTest;
+    const blue: types.AudioControl = .{ .width = .{ .unit = .px, .value = 250 }, .height = .{ .unit = .px, .value = 30 },
+        .focus = .{ .mode = .ua_auto, .color = .{ .kind = .rgb, .value = "#3366cc" } } };
+    const none: types.AudioControl = .{ .width = .{ .unit = .percent, .value = 50 },
+        .height = .{ .unit = .em, .value = 2 }, .focus = .{ .mode = .authored_none } };
+    const first = T.owner(blue); const second = T.owner(none);
+    var automatic = T.owner(.{}); automatic.text = "";
+    const first_spans = [_]types.Span{.{ .text = "before " }, first, .{ .text = " after" }};
+    const cell_spans = [_]types.Span{.{ .text = "table " }, second, .{ .kind = .link, .text = "kept", .target = "Kept" }};
+    const table: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &cell_spans }} }} };
+    const blocks = [_]types.Block{ .{ .kind = .paragraph, .spans = &first_spans }, .{ .kind = .table, .table = table } };
+    const media = [_]types.Media{.{ .file = T.file, .kind = .audio, .caption = "shared resource" }};
+    const references = [_]types.Reference{.{ .number = 1, .group_number = 1, .spans = &.{automatic} }};
+    const stored: types.Stored = .{ .entry = .{ .title = "Audio", .kind = .citations,
+        .sections = &.{.{ .level = 2, .title = "recordings", .blocks = &blocks }}, .references = &references, .media = &media } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqual(audio_control_feature, std.mem.readInt(u16, bytes[4..6], .little));
+    const decoded = try decodeAlloc(a, bytes, "Audio", .citations, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.media.len);
+    const actual_first = decoded.entry.sections[0].blocks[0].spans[1];
+    const actual_second = decoded.entry.sections[0].blocks[1].table.?.rows[0].cells[0].spans[1];
+    try std.testing.expectEqualDeep(blue, actual_first.audio_control.?);
+    try std.testing.expectEqualDeep(none, actual_second.audio_control.?);
+    try std.testing.expectEqualDeep(types.AudioControl{}, decoded.entry.references[0].spans[0].audio_control.?);
+    try std.testing.expectEqual(@as(usize, 0), decoded.entry.references[0].spans[0].text.len);
+    const again = try encodeAlloc(a, decoded); try std.testing.expectEqualSlices(u8, bytes, again);
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+    try types.validateStored(a, parsed.value, "Audio", .citations, null);
+    try std.testing.expectEqualDeep(stored, parsed.value);
+    const corrupted = try a.dupe(u8, bytes);
+    std.mem.writeInt(u16, corrupted[4..6], audio_control_feature | @as(u16, 32768), .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, corrupted, "Audio", .citations, null));
+    var duplicate_media = stored; duplicate_media.entry.media = &.{media[0], media[0]};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, duplicate_media));
+    var wrong_media = stored; wrong_media.entry.media = &.{.{ .file = T.file, .kind = .image, .caption = "" }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, wrong_media));
+}
+test "DPRZ audio control payload rejects invalid flags lengths focus and item or capability omission" {
+    const a = std.testing.allocator;
+    for ([_][]const u8{
+        &.{8}, &.{4,2,0}, &.{4,1,2}, &.{4,1,1,0}, &.{4,0,1,1},
+        &.{1,3,0,0,0,0x43}, &.{1,0,0,0,0,0}, &.{2,0,0,0,0x80,0xbf},
+        &.{1,0,0,0,0xc0,0x7f}, &.{1,0,0},
+    }) |bad| {
+        var input = AudioControlWireTest.reader(bad);
+        try std.testing.expectError(error.InvalidPresentation, input.audioControl());
+    }
+    var missing_capability = AudioControlWireTest.reader(&.{0}); missing_capability.audio_controls = false;
+    try std.testing.expectError(error.InvalidPresentation, missing_capability.audioControl());
+    var no_item = AudioControlWireTest.reader(&.{0}); no_item.remaining_items = 0;
+    try std.testing.expectError(error.InvalidPresentation, no_item.audioControl());
+    var one_item = AudioControlWireTest.reader(&.{4,1,0}); one_item.remaining_items = 1;
+    try std.testing.expectError(error.InvalidPresentation, one_item.audioControl());
+    var two_items = AudioControlWireTest.reader(&.{4,1,0}); two_items.remaining_items = 2;
+    try std.testing.expectEqualDeep(types.AudioControl{ .focus = .{ .mode = .ua_auto } }, try two_items.audioControl());
+    try std.testing.expectEqual(@as(usize, 0), two_items.remaining_items);
+    var encoded: Encoder = .{ .a = a, .audio_controls = true }; defer encoded.deinit();
+    try encoded.audioControl(.{}); try std.testing.expectEqualSlices(u8, &.{0}, encoded.out.items);
+    var catalog = try types.ImageCatalogIndex.init(a, [_]types.Media{.{ .file = AudioControlWireTest.file, .kind = .audio, .caption = "" }});
+    defer catalog.deinit(a);
+    var span_encoder: Encoder = .{ .a = a, .version = .container_fonts, .rule_styles = true, .inline_styles = true,
+        .capability_p = true, .capability_q = true, .capability_r = true, .capability_s = true,
+        .capability_u = true, .capability_v = true, .audio_controls = true, .inline_media_catalog = &catalog };
+    defer span_encoder.deinit();
+    const owner = AudioControlWireTest.owner(.{});
+    try span_encoder.span(owner);
+    const payload = try a.dupe(u8, span_encoder.out.items); defer a.free(payload);
+    var input = AudioControlWireTest.reader(payload);
+    try std.testing.expectEqualDeep(owner, try input.span());
+    try std.testing.expectEqual(payload.len, input.pos);
+    try std.testing.expectEqualSlices(u8, &.{1,0}, payload[payload.len-2..]);
+    var vertical_tab_owner = owner;
+    vertical_tab_owner.classes = "wikidict-media\x0bwikidict-media-file-566f6963652e6f6767";
+    span_encoder.out.clearRetainingCapacity();
+    try span_encoder.span(vertical_tab_owner);
+    for (0..3) |nested_kind| {
+        var nested = AudioControlWireTest.reader(span_encoder.out.items);
+        switch (nested_kind) {
+            0 => nested.in_inline_box_group = true,
+            1 => nested.in_inline_padding_group = true,
+            2 => nested.ruby_depth = 1,
+            else => unreachable,
+        }
+        try std.testing.expectError(error.InvalidPresentation, nested.span());
+    }
+    payload[payload.len-2] = 2;
+    input = AudioControlWireTest.reader(payload);
+    try std.testing.expectError(error.InvalidPresentation, input.span());
+    span_encoder.audio_controls = false;
+    try std.testing.expectError(error.InvalidPresentation, span_encoder.span(owner));
+}
+
+test "DPRZ clipped128 static256 minimum512 image32 siblings preserve full data and independent feature census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = StaticMinImageUnionCodecTest;
+    const Clip = ClippedAbsoluteYCodecTest;
+    const Forced = struct {
+        fn payload(allocator: A, value: types.Stored, flags: u16) ![]u8 {
+            var out = TableMinWidthZCodecTest.encoder(allocator); defer out.deinit();
+            out.capability_w = flags & owner_font_feature != 0;
+            out.positioned_containers_enabled = flags & positioned_containers_feature != 0;
+            out.table_min_width_enabled = flags & table_min_width_feature != 0;
+            out.image_occurrences = flags & image_occurrence_feature != 0;
+            out.clipped_absolute_enabled = flags & clipped_absolute_feature != 0;
+            try out.out.appendSlice(allocator, positioned_containers_magic); try out.writeU16(flags);
+            try out.spans(value.entry.display_title); try out.sections(value.entry.sections); try out.spans(value.entry.preamble_spans);
+            try out.layout(value.entry.organization); try out.references(value.entry.references); try out.media(value.entry.media); try out.byte(0);
+            return out.out.toOwnedSlice(allocator);
+        }
+    };
+    const clipped_paragraph: types.Block = .{ .kind = .paragraph, .spans = &.{Clip.owner} };
+    const blocks = [_]types.Block{ T.static.parent, T.minimum, T.image_paragraph, clipped_paragraph };
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+    const original = T.stored(&sections);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u16, 928), std.mem.readInt(u16, bytes[4..6], .little));
+    const decoded = try decodeAlloc(a, bytes, "table minimum", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualDeep(Clip.value, decoded.entry.sections[0].blocks[3].spans[0].clipped_absolute.?.*);
+    try std.testing.expectEqualDeep(@as([]const types.Span, &T.image_spans), decoded.entry.sections[0].blocks[2].spans);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try Forced.payload(a, original, 928));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+    try types.validateStored(a, parsed, "table minimum", .supplemental, null);
+    try std.testing.expectEqualDeep(original, parsed);
+    var work: DeepTableWork = .{};
+    try work.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    try std.testing.expect(work.clipped_absolute_found and work.positioned_container_found and work.table_min_width_found and work.image_occurrence_found);
+    const used = max_items - work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used };
+    try exact.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var exhausted: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, exhausted.entry(original.entry.display_title, original.entry.sections,
+        original.entry.preamble_spans, original.entry.references));
+    for (0..4) |missing| {
+        var changed = blocks; var plain_image = T.image_spans;
+        switch (missing) {
+            0 => changed[0] = TableMinWidthZCodecTest.paragraph,
+            1 => changed[1].table.?.style = null,
+            2 => { plain_image[1].image.?.occurrence_layout = null; changed[2].spans = &plain_image; },
+            else => changed[3] = TableMinWidthZCodecTest.paragraph,
+        }
+        const changed_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &changed }};
+        const changed_value = T.stored(&changed_sections);
+        // Fully framed conditional slots must still earn each feature from
+        // actual occurrences, independently of the other three siblings.
+        const debt = try Forced.payload(a, changed_value, 928);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "table minimum", .supplemental, null));
+        const honest = try encodeAlloc(a, changed_value);
+        const expected: u16 = switch (missing) { 0 => 672, 1 => 416, 2 => 896, else => 800 };
+        try std.testing.expectEqual(expected, std.mem.readInt(u16, honest[4..6], .little));
+        try std.testing.expectEqualDeep(changed_value, try decodeAlloc(a, honest, "table minimum", .supplemental, null));
+    }
+    // Each source/model domain retains its own nested-owner restrictions.
+    var image_inside = Clip.value; image_inside.children = T.image_spans[1..2];
+    var clip_owner = Clip.owner; clip_owner.clipped_absolute = &image_inside;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, Clip.stored(&.{clip_owner})));
+    var static_child = T.static.child; static_child.container.?.blocks = &.{clipped_paragraph};
+    var static_parent = T.static.parent; static_parent.container.?.blocks = &.{static_child};
+    const nested_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{static_parent} }};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&nested_sections)));
+    for ([_]u16{ 928 | 8, 928 | 64, 928 | 1024, 928 | 2048, 928 | 4096 }) |flags| {
+        const bad = try a.dupe(u8, bytes); std.mem.writeInt(u16, bad[4..6], flags, .little);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "table minimum", .supplemental, null));
+    }
+}
+
+const AudioClippedUnionCodecTest = struct {
+    fn forced(a: A, value: types.Stored, flags: u16) ![]u8 {
+        var catalog = try types.ImageCatalogIndex.init(a, value.entry.media); defer catalog.deinit(a);
+        var out = ClippedAbsoluteYCodecTest.encoder(a); defer out.deinit();
+        out.clipped_absolute_enabled = flags & clipped_absolute_feature != 0;
+        out.audio_controls = flags & audio_control_feature != 0;
+        out.inline_media_catalog = &catalog;
+        const z = flags & audio_control_feature != 0;
+        try out.out.appendSlice(a, if (z) positioned_containers_magic else owner_geometry_magic);
+        if (z) try out.writeU16(flags) else try out.byte(@intCast(flags));
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections); try out.spans(value.entry.preamble_spans);
+        try out.layout(value.entry.organization); try out.references(value.entry.references); try out.media(value.entry.media); try out.byte(0);
+        return out.out.toOwnedSlice(a);
+    }
+};
+test "DPRZ audio8192 clipped128 siblings preserve body actions bytes and independent feature debt" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const Clip = ClippedAbsoluteYCodecTest;
+    const children = [_]types.Span{
+        .{ .text = "Tooltip time to peak concentrations", .bold = true },
+        .{ .kind = .link, .text = "entry", .target = "Entry" },
+        .{ .kind = .external_link, .text = "source", .target = "https://example.org/" },
+    };
+    var clipped = Clip.value; clipped.children = &children;
+    var clip_owner = Clip.owner; clip_owner.clipped_absolute = &clipped;
+    const audio = AudioControlWireTest.owner(.{ .width = .{ .unit = .px, .value = 250 },
+        .height = .{ .unit = .px, .value = 30 }, .focus = .{ .mode = .ua_auto } });
+    const spans = [_]types.Span{.{ .text = "before " }, audio, clip_owner, .{ .kind = .link, .text = "after", .target = "After" }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .spans = &spans }} }};
+    const original: types.Stored = .{ .entry = .{ .title = "audio and clipped", .kind = .supplemental, .sections = &sections,
+        .media = &.{.{ .file = AudioControlWireTest.file, .kind = .audio, .caption = "shared recording" }} } };
+    const flags: u16 = audio_control_feature | clipped_absolute_feature;
+    try std.testing.expectEqual(@as(u16, 8320), flags);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqual(flags, std.mem.readInt(u16, bytes[4..6], .little));
+    const decoded = try decodeAlloc(a, bytes, "audio and clipped", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualDeep(audio, decoded.entry.sections[0].blocks[0].spans[1]);
+    try std.testing.expectEqualDeep(clipped, decoded.entry.sections[0].blocks[0].spans[2].clipped_absolute.?.*);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try AudioClippedUnionCodecTest.forced(a, original, flags));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+    try types.validateStored(a, parsed, "audio and clipped", .supplemental, null);
+    try std.testing.expectEqualDeep(original, parsed);
+    for (0..2) |missing| {
+        var changed_spans = spans;
+        if (missing == 0) changed_spans[1].audio_control = null else changed_spans[2] = .{ .text = "visible replacement" };
+        const changed_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .paragraph, .spans = &changed_spans }} }};
+        var changed = original; changed.entry.sections = &changed_sections;
+        const debt = try AudioClippedUnionCodecTest.forced(a, changed, flags);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "audio and clipped", .supplemental, null));
+        const expected: u16 = if (missing == 0) clipped_absolute_feature else audio_control_feature;
+        const honest = try encodeAlloc(a, changed);
+        if (missing == 0) {
+            try std.testing.expectEqualStrings(owner_geometry_magic, honest[0..4]);
+            try std.testing.expectEqual(@as(u8, @intCast(expected)), honest[4]);
+        } else {
+            try std.testing.expectEqualStrings(positioned_containers_magic, honest[0..4]);
+            try std.testing.expectEqual(expected, std.mem.readInt(u16, honest[4..6], .little));
+        }
+        try std.testing.expectEqualSlices(u8, honest, try AudioClippedUnionCodecTest.forced(a, changed, expected));
+        try std.testing.expectEqualDeep(changed, try decodeAlloc(a, honest, "audio and clipped", .supplemental, null));
+    }
+    var work: DeepTableWork = .{};
+    try work.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    try std.testing.expect(work.audio_control_found and work.clipped_absolute_found);
+    const used = max_items - work.remaining;
+    var exact: DeepTableWork = .{ .remaining = used };
+    try exact.entry(original.entry.display_title, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining);
+    var short: DeepTableWork = .{ .remaining = used - 1 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(original.entry.display_title, original.entry.sections,
+        original.entry.preamble_spans, original.entry.references));
+    var nested = clipped; nested.children = &.{audio};
+    var invalid = clip_owner; invalid.clipped_absolute = &nested;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, Clip.stored(&.{invalid})));
+    var both = audio; both.text = ""; both.clipped_absolute = &clipped;
+    var overlap = original; overlap.entry.display_title = &.{both};
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, overlap));
+    const bad = try a.dupe(u8, bytes); std.mem.writeInt(u16, bad[4..6], flags | @as(u16, 32768), .little);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bad, "audio and clipped", .supplemental, null));
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, bytes[0..bytes.len - 1], "audio and clipped", .supplemental, null));
+}
+
+test "combined audio8192 clipped128 Span tail is literally audio then clipped" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const owner = AudioControlWireTest.owner(.{});
+    var catalog = try types.ImageCatalogIndex.init(a, [_]types.Media{.{ .file = AudioControlWireTest.file, .kind = .audio, .caption = "" }});
+    defer catalog.deinit(a);
+    var out = ClippedAbsoluteYCodecTest.encoder(a); defer out.deinit();
+    out.audio_controls = true; out.inline_media_catalog = &catalog;
+    try out.span(owner);
+    const payload = out.out.items;
+    // Independently literal framing: audio presence=1, audio fields=0,
+    // clipped presence=0. Reversed order would be [0,1,0], not these bytes.
+    try std.testing.expectEqualSlices(u8, &.{1, 0, 0}, payload[payload.len - 3 ..]);
+    var reader = AudioControlWireTest.reader(payload); reader.a = a; reader.clipped_absolute_enabled = true;
+    try std.testing.expectEqualDeep(owner, try reader.span());
+    try std.testing.expectEqual(payload.len, reader.pos);
+    const reversed = try a.dupe(u8, payload);
+    @memcpy(reversed[reversed.len - 3 ..], &[_]u8{0, 1, 0});
+    var wrong = AudioControlWireTest.reader(reversed); wrong.a = a; wrong.clipped_absolute_enabled = true;
+    try std.testing.expectError(error.InvalidPresentation, wrong.span());
+}
+
+
+const ClippedRootCodecTest = struct {
+    fn forced(a: A, value: types.Stored) ![]u8 {
+        var out = ClippedAbsoluteYCodecTest.encoder(a); defer out.deinit();
+        const pending = pendingBodyFeatures(value.entry.display_title, value.entry.sections,
+            value.entry.preamble_spans, value.entry.references, value.entry.body_adjoining);
+        out.text_flow = pending & 16 != 0;
+        try out.out.appendSlice(a, owner_geometry_magic); try out.byte(clipped_absolute_feature);
+        try out.spans(value.entry.display_title); try out.sections(value.entry.sections); try out.spans(value.entry.preamble_spans);
+        try out.layout(value.entry.organization); try out.references(value.entry.references); try out.media(value.entry.media);
+        try out.byte(pending);
+        if (pending & 2 != 0) try out.sectionHeadingStyles(value.entry.sections);
+        return out.out.toOwnedSlice(a);
+    }
+};
+test "clipped128 payload pins required static parent direction before geometry and rejects missing or invalid tag" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    for ([_]types.ContainerStaticDirection{ .ltr, .rtl }) |direction| {
+        var value = T.value; value.static_parent_direction = direction;
+        var out = T.encoder(a); defer out.deinit(); try out.clippedAbsolute(value, null);
+        try std.testing.expectEqual(@as(u8, if (direction == .ltr) 1 else 2), out.out.items[0]);
+        var reader = T.reader(a, out.out.items);
+        try std.testing.expectEqualDeep(value, (try reader.clippedAbsolute(null)).*);
+        try std.testing.expectEqual(out.out.items.len, reader.pos);
+        for ([_]u8{ 0, 3, 255 }) |tag| {
+            const invalid = try a.dupe(u8, out.out.items); invalid[0] = tag;
+            var refused = T.reader(a, invalid);
+            try std.testing.expectError(error.InvalidPresentation, refused.clippedAbsolute(null));
+        }
+        var missing = T.reader(a, out.out.items[1..]);
+        try std.testing.expectError(error.InvalidPresentation, missing.clippedAbsolute(null));
+        var owner = T.owner; owner.clipped_absolute = &value;
+        const stored = T.stored(&.{owner});
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "clipped", .supplemental, null));
+        owner.direction = @tagName(direction);
+        _ = try encodeAlloc(a, T.stored(&.{owner}));
+        owner.direction = "auto";
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+        owner.direction = if (direction == .ltr) "rtl" else "ltr";
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{owner})));
+    }
+}
+
+test "clipped128 below relative table ancestor refuses encode decode and typed validation while ordinary sibling survives" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ClippedAbsoluteYCodecTest;
+    const children = [_]types.Span{.{ .text = "Tooltip " }, .{ .kind = .link, .text = "kept", .target = "Kept", .bold = true }};
+    var clipped = T.value; clipped.children = &children;
+    const owner: types.Span = .{ .clipped_absolute = &clipped };
+    const table: types.Table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{owner} }} }} };
+    const leaf = [_]types.Block{.{ .kind = .table, .table = table }};
+    const root = [_]types.Block{.{ .kind = .container, .container = .{ .blocks = &leaf } }};
+    const sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &root }};
+    const stored: types.Stored = .{ .entry = .{ .title = "clipped root", .kind = .supplemental, .sections = &sections } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualSlices(u8, bytes, try ClippedRootCodecTest.forced(a, stored));
+    const decoded = try decodeAlloc(a, bytes, "clipped root", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    const retained = decoded.entry.sections[0].blocks[0].container.?.blocks[0].table.?.rows[0].cells[0].spans[0].clipped_absolute.?;
+    try std.testing.expectEqualDeep(clipped, retained.*);
+    var bad_root = root; bad_root[0].container.?.style.positioning = .relative_auto;
+    const bad_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &bad_root }};
+    var bad = stored; bad.entry.sections = &bad_sections;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, bad));
+    try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, bad.entry.display_title, bad.entry.sections,
+        bad.entry.organization, bad.entry.references, bad.entry.media));
+    try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, bad, "clipped root", .supplemental, null));
+    const forced = try ClippedRootCodecTest.forced(a, bad);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forced, "clipped root", .supplemental, null));
+    const plain = [_]types.Block{.{ .kind = .paragraph, .spans = &.{.{ .text = "ordinary" }} }};
+    const siblings = [_]types.Block{.{ .kind = .container, .container = .{ .style = .{ .positioning = .relative_auto }, .blocks = &plain } }, leaf[0] };
+    const sibling_sections = [_]types.Section{.{ .level = 2, .title = "Body", .blocks = &siblings }};
+    var sibling = stored; sibling.entry.sections = &sibling_sections;
+    const sibling_bytes = try encodeAlloc(a, sibling);
+    try std.testing.expectEqualDeep(sibling, try decodeAlloc(a, sibling_bytes, "clipped root", .supplemental, null));
+}
+
+const RoundedInlineBox39CodecTest = struct {
+    const Group = types.InlineBoxGroup(types.Span);
+    const edge: types.InlineBoxBorderEdge = .{ .solid = .{
+        .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#123456" } } };
+    const square: Group = .{ .padding = types.StyleEdges.all(.{ .unit = .px, .value = 1 }),
+        .border = .{ .top = edge, .right = edge, .bottom = edge, .left = edge },
+        .spans = &.{.{ .text = "rounded body", .language = "nl", .bold = true }} };
+    fn owner(group: *const Group) types.Span {
+        return .{ .inline_box_group = group, .background = "#eef0f2" };
+    }
+    fn encoder(a: A) Encoder {
+        var out = InlineActionCodecTest.encoder(a); out.inline_box_groups = true; return out;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var out = InlineActionCodecTest.reader(a, bytes); out.inline_box_groups = true; return out;
+    }
+    fn stored(spans: []const types.Span) types.Stored {
+        return .{ .entry = .{ .title = "rounded", .kind = .supplemental, .display_title = spans } };
+    }
+    fn fontFieldsOffset(a: A, bytes: []const u8) !usize {
+        var input = reader(a, bytes);
+        _ = try input.take(3); // kind, role, eight legacy decoration flags
+        for (0..7) |_| _ = try input.string();
+        if (try input.presence()) _ = try input.string(); // foreground
+        if (try input.presence()) _ = try input.string(); // background
+        return input.pos;
+    }
+};
+
+test "local inline box radius preserves square bytes and appends one literal px suffix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RoundedInlineBox39CodecTest;
+    // Independent legacy group framing: no new helper, presence byte, or suffix.
+    var legacy = T.encoder(a); defer legacy.deinit();
+    inline for (.{ "top", "right", "bottom", "left" }) |name| try legacy.styleLength(@field(T.square.padding, name));
+    try legacy.inlineBoxBorders(T.square.border);
+    try legacy.count(0);
+    try legacy.spans(T.square.spans);
+    var square_wire = T.encoder(a); defer square_wire.deinit();
+    try square_wire.inlineBoxGroup(T.square, null);
+    try std.testing.expectEqualSlices(u8, legacy.out.items, square_wire.out.items);
+    // A pre-extension generic build group has no radius field at all.
+    const LegacyGroup = struct { padding: types.StyleEdges, border: types.InlineBoxBorderEdges,
+        overlays: []const types.InlineBoxOverlay, spans: []const types.Span };
+    const old_group: LegacyGroup = .{ .padding = T.square.padding, .border = T.square.border,
+        .overlays = &.{}, .spans = T.square.spans };
+    var generic_old = T.encoder(a); defer generic_old.deinit();
+    try generic_old.inlineBoxGroup(old_group, null);
+    try std.testing.expectEqualSlices(u8, legacy.out.items, generic_old.out.items);
+    for ([_]f32{ 0, 2 }) |radius_value| {
+        var group = T.square; group.radius = .{ .unit = .px, .value = radius_value };
+        var group_wire = T.encoder(a); defer group_wire.deinit(); try group_wire.inlineBoxGroup(group, null);
+        try std.testing.expectEqual(legacy.out.items.len + 5, group_wire.out.items.len);
+        try std.testing.expectEqualSlices(u8, legacy.out.items, group_wire.out.items[0..legacy.out.items.len]);
+        try std.testing.expectEqual(@as(u8, 0), @intFromEnum(types.StyleLengthUnit.px));
+        const literal = if (radius_value == 0) [_]u8{ 0, 0, 0, 0, 0 } else [_]u8{ 0, 0, 0, 0, 0x40 };
+        try std.testing.expectEqualSlices(u8, &literal, group_wire.out.items[legacy.out.items.len..]);
+        var raw = T.encoder(a); defer raw.deinit(); try raw.span(T.owner(&group));
+        const local_flag = try T.fontFieldsOffset(a, raw.out.items);
+        try std.testing.expectEqual(@as(u8, 0x20), raw.out.items[local_flag]);
+        var input = T.reader(a, raw.out.items);
+        try std.testing.expectEqualDeep(T.owner(&group), try input.span());
+        try std.testing.expectEqual(raw.out.items.len, input.pos);
+        var old_span = T.encoder(a); defer old_span.deinit(); try old_span.span(T.owner(&T.square));
+        try std.testing.expectEqual(@as(u8, 0), old_span.out.items[try T.fontFieldsOffset(a, old_span.out.items)]);
+        const stripped = try a.dupe(u8, raw.out.items[0 .. raw.out.items.len - 5]); stripped[local_flag] &= ~@as(u8, 0x20);
+        try std.testing.expectEqualSlices(u8, old_span.out.items, stripped);
+    }
+}
+
+test "rounded nested inline boxes preserve action Ruby body and generic build cursor framing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RoundedInlineBox39CodecTest;
+    var rounded = T.square; rounded.radius = .{ .unit = .px, .value = 2 };
+    const rounded_owner = T.owner(&rounded);
+    var parent = T.square;
+    parent.spans = &.{ rounded_owner, .{ .kind = .link, .text = "entry", .target = "Entry", .target_fragment = "sense" }, RubyCodecTest.owner };
+    const action_group: types.InlineActionGroup(types.Span) = .{ .spans = &.{ .{ .text = "before " }, rounded_owner } };
+    const action_owner: types.Span = .{ .kind = .external_link, .target = "https://example.test/rounded",
+        .tooltip = "action owner", .inline_action_group = &action_group };
+    const values = [_]types.Span{ T.owner(&parent), action_owner, InlineBoxYCodecTest.owner };
+    const original = T.stored(&values);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(owner_geometry_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u8, 4), bytes[4]); // existing box census, no new global bit
+    const decoded = try decodeAlloc(a, bytes, "rounded", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildWithBodyTypographyAlloc(a, values[0..], original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media, original.entry.body_adjoining, original.entry.body_typography));
+    try std.testing.expect(decoded.entry.display_title[0].inline_box_group.?.radius == null);
+    try std.testing.expectEqual(@as(f32, 2), decoded.entry.display_title[0].inline_box_group.?.spans[0].inline_box_group.?.radius.?.value);
+    try std.testing.expectEqualStrings("Entry", decoded.entry.display_title[0].inline_box_group.?.spans[1].target);
+    try std.testing.expect(decoded.entry.display_title[0].inline_box_group.?.spans[2].ruby != null);
+    try std.testing.expectEqualStrings(action_owner.target, decoded.entry.display_title[1].target);
+    try std.testing.expectEqual(@as(f32, 2), decoded.entry.display_title[1].inline_action_group.?.spans[1].inline_box_group.?.radius.?.value);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.display_title[2].inline_box_group.?.overlays.len);
+    // Runtime generic Span has the established packed flags and the same child type.
+    const BuildSpan = struct {
+        kind: types.InlineKind = .text, role: types.Role = .normal, flags: u8 = 0,
+        text: []const u8 = "", target: []const u8 = "", language: []const u8 = "",
+        classes: []const u8 = "", direction: []const u8 = "",
+        inline_box_group: ?*const types.InlineBoxGroup(@This()) = null,
+    };
+    const build_group: types.InlineBoxGroup(BuildSpan) = .{ .padding = T.square.padding,
+        .border = T.square.border, .spans = &.{.{ .text = "generic body" }}, .radius = .{ .unit = .px, .value = 2 } };
+    const build_spans = [_]BuildSpan{.{ .inline_box_group = &build_group }};
+    var stored_group = rounded; stored_group.spans = &.{.{ .text = "generic body" }};
+    const stored_spans = [_]types.Span{.{ .inline_box_group = &stored_group }};
+    const expected = T.stored(&stored_spans);
+    try std.testing.expectEqualSlices(u8, try encodeAlloc(a, expected), try encodeBuildAlloc(a, &build_spans,
+        expected.entry.sections, expected.entry.organization, expected.entry.references, expected.entry.media));
+    var work: DeepTableWork = .{};
+    try work.entry(&values, original.entry.sections, original.entry.preamble_spans, original.entry.references);
+    const used = max_items - work.remaining;
+    var exact = T.encoder(a); defer exact.deinit(); exact.remaining_items = used;
+    try exact.spans(&values); try std.testing.expectEqual(@as(usize, 0), exact.remaining_items);
+    var short = T.encoder(a); defer short.deinit(); short.remaining_items = used - 1;
+    try std.testing.expectError(error.PresentationTooLarge, short.spans(&values));
+    var input = T.reader(a, exact.out.items); input.remaining_items = used;
+    try std.testing.expectEqualDeep(values[0..], try input.spans());
+    try std.testing.expectEqual(@as(usize, 0), input.remaining_items);
+    try std.testing.expectEqual(exact.out.items.len, input.pos);
+    var short_input = T.reader(a, exact.out.items); short_input.remaining_items = used - 1;
+    try std.testing.expectError(error.InvalidPresentation, short_input.spans());
+}
+
+test "local rounded box bit refuses orphan capability unknown flags and malformed suffixes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RoundedInlineBox39CodecTest;
+    var group = T.square; group.radius = .{ .unit = .px, .value = 2 };
+    const owner = T.owner(&group);
+    var raw = T.encoder(a); defer raw.deinit(); try raw.span(owner);
+    const local_flag = try T.fontFieldsOffset(a, raw.out.items);
+    for ([_]u8{ 0x40, 0x80 }) |reserved| {
+        const bad = try a.dupe(u8, raw.out.items); bad[local_flag] |= reserved;
+        var input = T.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, input.span());
+    }
+    var plain = T.encoder(a); defer plain.deinit(); try plain.span(types.Span{ .text = "orphan" });
+    const orphan = try a.dupe(u8, plain.out.items); orphan[try T.fontFieldsOffset(a, orphan)] |= 0x20;
+    var orphan_input = T.reader(a, orphan); try std.testing.expectError(error.InvalidPresentation, orphan_input.span());
+    for (0..3) |mode| {
+        var absent = T.encoder(a); defer absent.deinit();
+        switch (mode) { 0 => absent.inline_box_groups = false, 1 => absent.capability_p = false, else => absent.version = .font_scale_basis }
+        try std.testing.expectError(error.InvalidPresentation, absent.span(owner));
+    }
+    var no_box_input = T.reader(a, raw.out.items); no_box_input.inline_box_groups = false;
+    try std.testing.expectError(error.InvalidPresentation, no_box_input.span());
+    var no_p_input = T.reader(a, raw.out.items); no_p_input.capability_p = false;
+    try std.testing.expectError(error.InvalidPresentation, no_p_input.span());
+    for (1..6) |missing| {
+        var input = T.reader(a, raw.out.items[0 .. raw.out.items.len - missing]);
+        try std.testing.expectError(error.InvalidPresentation, input.span());
+    }
+    for (0..4) |mode| {
+        const bad = try a.dupe(u8, raw.out.items);
+        const suffix = bad.len - 5;
+        switch (mode) {
+            0 => bad[suffix] = @intFromEnum(types.StyleLengthUnit.em),
+            1 => std.mem.writeInt(u32, bad[suffix + 1 ..][0..4], @bitCast(@as(f32, -1)), .little),
+            2 => std.mem.writeInt(u32, bad[suffix + 1 ..][0..4], @bitCast(std.math.inf(f32)), .little),
+            else => std.mem.writeInt(u32, bad[suffix + 1 ..][0..4], @bitCast(std.math.nan(f32)), .little),
+        }
+        var input = T.reader(a, bad); try std.testing.expectError(error.InvalidPresentation, input.span());
+    }
+    const original = T.stored(&.{owner}); const bytes = try encodeAlloc(a, original);
+    const whole_flag = 9 + try T.fontFieldsOffset(a, bytes[9..]); // DPRY+u8 flags+u32 display count
+    try std.testing.expectEqual(@as(u8, 0x20), bytes[whole_flag]);
+    const cleared = try a.dupe(u8, bytes); cleared[whole_flag] &= ~@as(u8, 0x20);
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, cleared, "rounded", .supplemental, null));
+    const missing_box = try a.dupe(u8, bytes); missing_box[4] = owner_font_feature;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, missing_box, "rounded", .supplemental, null));
+    const debt = try a.dupe(u8, bytes); debt[4] |= owner_font_feature;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, debt, "rounded", .supplemental, null));
+    // The local flag never widens the supported uniform-border geometry.
+    var asymmetric = group; asymmetric.border.right = .none;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{T.owner(&asymmetric)})));
+    var overlay = group; overlay.overlays = &InlineBoxYCodecTest.overlays;
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&.{T.owner(&overlay)})));
+}
+
+const ContainerDisclosureCodecTesting = struct {
+    const policy: types.ContainerDisclosure = .{ .content_index = 1, .initially_collapsed = true,
+        .expand_label = "[expand]", .collapse_label = "[collapse]", .focus = .{ .mode = .ua_auto,
+            .color = .{ .kind = .rgb, .value = "#3366cc" } } };
+    const content: types.Block = .{ .kind = .container, .container = .{ .blocks = &.{.{ .kind = .paragraph,
+        .spans = &.{.{ .text = "hidden text ", .italic = true }, .{ .kind = .link, .text = "action", .target = "Target" }} }} } };
+    const owner: types.Block = .{ .kind = .container, .container = .{ .disclosure = policy, .blocks = &.{
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "Notes outside content" }} }, content } } };
+    fn stored(sections: []const types.Section, references: []const types.Reference) types.Stored {
+        return .{ .entry = .{ .title = "disclosure", .kind = .supplemental, .sections = sections, .references = references } };
+    }
+    fn encoder(a: A) Encoder { return PositionedContainerZCodecTest.encoder(a); }
+    fn reader(a: A, bytes: []const u8) Reader { return PositionedContainerZCodecTest.reader(a, bytes); }
+};
+
+test "DPRZ Container disclosure stores whole content labels actions and original child index without geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerDisclosureCodecTesting;
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{T.owner} }};
+    const original = T.stored(&sections, &.{});
+    try types.validateStored(a, original, "disclosure", .supplemental, null);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings(positioned_containers_magic, bytes[0..4]);
+    try std.testing.expectEqual(@as(u16, 256), std.mem.readInt(u16, bytes[4..6], .little));
+    const decoded = try decodeAlloc(a, bytes, "disclosure", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title,
+        original.entry.sections, original.entry.organization, original.entry.references, original.entry.media));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+    // Absence keeps the established byte order and omits the new JSON key.
+    var legacy = T.owner.container.?; legacy.disclosure = null;
+    var old = ContainerOwnerWTest.encoder(a); defer old.deinit();
+    try old.containerStyle(legacy.style); try old.blocks(legacy.blocks);
+    var absent = ContainerOwnerWTest.encoder(a); defer absent.deinit(); try absent.container(legacy);
+    try std.testing.expectEqualSlices(u8, old.out.items, absent.out.items);
+    const legacy_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expect(std.mem.indexOf(u8, legacy_json, "disclosure") == null);
+    const old_value = InlineActionCodecTest.stored(&.{InlineActionCodecTest.owner});
+    try std.testing.expectEqualSlices(u8, try InlineActionCodecTest.forced(a, old_value), try encodeAlloc(a, old_value));
+}
+
+test "DPRZ Container disclosure discovery visits table captions cells and reference blocks" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerDisclosureCodecTesting;
+    const table: types.Block = .{ .kind = .table, .table = .{ .caption_blocks = &.{T.owner},
+        .rows = &.{.{ .cells = &.{.{ .blocks = &.{T.owner} }} }} } };
+    const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{table} }};
+    const references = [_]types.Reference{.{ .number = 1, .group_number = 1, .blocks = &.{T.owner} }};
+    const original = T.stored(&sections, &references);
+    const bytes = try encodeAlloc(a, original);
+    try std.testing.expect(std.mem.readInt(u16, bytes[4..6], .little) & positioned_containers_feature != 0);
+    try std.testing.expectEqualDeep(original, try decodeAlloc(a, bytes, "disclosure", .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, try decodeAlloc(a, bytes, "disclosure", .supplemental, null)));
+    for (0..3) |case_index| {
+        var bad = T.owner; bad.container.?.disclosure.?.content_index = 99;
+        const bad_table: types.Block = .{ .kind = .table, .table = .{
+            .caption_blocks = if (case_index == 0) &.{bad} else &.{T.owner},
+            .rows = &.{.{ .cells = &.{.{ .blocks = if (case_index == 1) &.{bad} else &.{T.owner} }} }} } };
+        const bad_sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{bad_table} }};
+        const bad_references = [_]types.Reference{.{ .number = 1, .group_number = 1,
+            .blocks = if (case_index == 2) &.{bad} else &.{T.owner} }};
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, T.stored(&bad_sections, &bad_references)));
+    }
+}
+
+test "DPRZ disclosure extension refuses Figure style contexts absent capability malformed payload and budgets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerDisclosureCodecTesting;
+    var encoded = T.encoder(a); defer encoded.deinit(); try encoded.container(T.owner.container.?);
+    try std.testing.expectEqual(@as(u8, 8), encoded.out.items[4]);
+    // Every generic style-only consumer, including Figure wrappers, uses this wrapper.
+    var style_only = T.reader(a, encoded.out.items);
+    try std.testing.expectError(error.InvalidPresentation, style_only.containerStyle());
+    var no_capability = ContainerOwnerWTest.encoder(a); defer no_capability.deinit();
+    try std.testing.expectError(error.InvalidPresentation, no_capability.container(T.owner.container.?));
+    var no_header = ContainerOwnerWTest.reader(a, encoded.out.items);
+    try std.testing.expectError(error.InvalidPresentation, no_header.container());
+    const bad_extension = try a.dupe(u8, encoded.out.items); bad_extension[4] = 16;
+    var unknown = T.reader(a, bad_extension);
+    try std.testing.expectError(error.InvalidPresentation, unknown.container());
+    const bad_target = try a.dupe(u8, encoded.out.items); std.mem.writeInt(u32, bad_target[5..9], 0, .little);
+    var wrong_child = T.reader(a, bad_target);
+    try std.testing.expectError(error.InvalidPresentation, wrong_child.container());
+    // Existing readers mask ext & ~7 and therefore reject the new value8.
+    try std.testing.expect(encoded.out.items[4] & ~@as(u8, 7) != 0);
+    var leaf = T.encoder(a); defer leaf.deinit(); try leaf.containerDisclosure(T.policy);
+    const focus_at = 4 + 1 + 4 + T.policy.expand_label.len + 4 + T.policy.collapse_label.len;
+    for (0..6) |mode| {
+        const corrupt = try a.dupe(u8, leaf.out.items);
+        switch (mode) {
+            0 => corrupt[4] = 2,
+            1 => corrupt[9] = 0xff,
+            2 => corrupt[focus_at] = 2,
+            3 => corrupt[focus_at + 1] = 99,
+            4 => corrupt[focus_at + 2] = 2,
+            else => corrupt[9] = 0,
+        }
+        var invalid = T.reader(a, corrupt);
+        try std.testing.expectError(error.InvalidPresentation, invalid.containerDisclosure());
+    }
+    for (0..leaf.out.items.len) |end| {
+        var truncated = T.reader(a, leaf.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, truncated.containerDisclosure());
+    }
+    var metrics: DecodeMetrics = .{};
+    var exact = T.reader(a, leaf.out.items); exact.metrics = &metrics; exact.remaining_items = 2;
+    try std.testing.expectEqualDeep(T.policy, try exact.containerDisclosure());
+    try std.testing.expectEqual(@as(usize, 0), exact.remaining_items);
+    try std.testing.expectEqual(@as(u64, 2), metrics.total_items);
+    try std.testing.expectEqual(T.policy.collapse_label.len, metrics.largest_string_bytes);
+    for (0..2) |remaining_items| {
+        var limited = T.reader(a, leaf.out.items); limited.remaining_items = remaining_items;
+        try std.testing.expectError(error.InvalidPresentation, limited.containerDisclosure());
+        var limited_encoder = T.encoder(a); defer limited_encoder.deinit(); limited_encoder.remaining_items = remaining_items;
+        try std.testing.expectError(error.PresentationTooLarge, limited_encoder.containerDisclosure(T.policy));
+    }
+}
+
+test "DPRZ disclosure retains physical float inherited font bracket paint and independent label states" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ContainerDisclosureCodecTesting;
+    const paint: types.ContainerDisclosureTextPaint = .{
+        .normal = .{ .foreground = "#3366cc", .underline = false },
+        .hover = .{ .foreground = "#4477dd", .underline = true },
+        .active = .{ .foreground = "#223388", .underline = false },
+        .hover_active = .{ .foreground = "#112255", .underline = true }, .underline_on_focus = true };
+    for ([_]types.ContainerDisclosurePlacement{ .inline_flow, .float_left, .float_right }) |placement| {
+        var owner = T.owner;
+        owner.container.?.style.owner_font = ContainerOwnerWTest.font;
+        var policy = T.policy; policy.placement = placement;
+        policy.foreground = .{ .kind = .rgb, .value = "#202122" }; policy.direction = .rtl;
+        policy.expand_run = .{ .start = 1, .end = 7, .paint = paint };
+        policy.collapse_run = .{ .start = 1, .end = 9, .paint = paint };
+        owner.container.?.disclosure = policy;
+        const sections = [_]types.Section{.{ .level = 2, .title = "body", .blocks = &.{owner} }};
+        const original = T.stored(&sections, &.{});
+        const bytes = try encodeAlloc(a, original);
+        const decoded = try decodeAlloc(a, bytes, "disclosure", .supplemental, null);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{}));
+        var encoded = T.encoder(a); defer encoded.deinit(); try encoded.containerDisclosure(policy);
+        var metrics: DecodeMetrics = .{};
+        var exact = T.reader(a, encoded.out.items); exact.metrics = &metrics; exact.remaining_items = 4;
+        try std.testing.expectEqualDeep(policy, try exact.containerDisclosure());
+        try std.testing.expectEqual(@as(usize, 0), exact.remaining_items);
+        try std.testing.expectEqual(@as(u64, 4), metrics.total_items);
+        var limited = T.reader(a, encoded.out.items); limited.remaining_items = 3;
+        try std.testing.expectError(error.InvalidPresentation, limited.containerDisclosure());
+        for (0..encoded.out.items.len) |end| {
+            var short = T.reader(a, encoded.out.items[0..end]);
+            try std.testing.expectError(error.InvalidPresentation, short.containerDisclosure());
+        }
+        // Flags follow the optional focus mode/color. All offset calculation
+        // uses one encoded prefix, never a guessed color's string byte length.
+        var prefix = T.encoder(a); defer prefix.deinit();
+        try prefix.writeU32(policy.content_index); try prefix.byte(@intFromBool(policy.initially_collapsed));
+        try prefix.string(policy.expand_label); try prefix.string(policy.collapse_label);
+        try prefix.byte(1); try prefix.enumByte(types.ContainerDisclosureFocusMode, policy.focus.?.mode);
+        try prefix.byte(1); try prefix.figureColor(policy.focus.?.color.?);
+        for (0..2) |mode| {
+            const corrupt = try a.dupe(u8, encoded.out.items);
+            corrupt[prefix.out.items.len + mode] = if (mode == 0) 99 else 16;
+            var invalid = T.reader(a, corrupt);
+            try std.testing.expectError(error.InvalidPresentation, invalid.containerDisclosure());
+        }
+    }
+}
+
+test "overlay content local flag preserves complete text actions metrics and ordinary codec roundtrip" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = InlineBoxYCodecTest;
+    const font: types.InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body,
+        .font_normalized = true, .language = "ja", .font_family = .sans_serif };
+    const content: types.InlineBoxOverlayContent(types.Span) = .{ .before_child = 1, .owner_font = font,
+        .line_height = .{ .font_relative = .{ .factor = 1.25, .font = font } }, .text_align = .center,
+        .spans = &.{.{ .text = "\xe2\x80\x8b", .language = "ja", .font_scale = 1,
+            .font_scale_basis = .normal_body, .font_family = .sans_serif }} };
+    var overlays = T.overlays; overlays[0].content = &content;
+    var group = T.group; group.overlays = &overlays;
+    var owner = T.owner; owner.inline_box_group = &group;
+    var stored = T.stored(); stored.entry.display_title = &.{owner};
+    const encoded = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(owner_geometry_magic, encoded[0..4]);
+    try std.testing.expectEqual(@as(u8, inline_box_feature), encoded[4]);
+    const decoded = try decodeAlloc(a, encoded, "box", .supplemental, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encodeAlloc(a, decoded));
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildWithBodyTypographyAlloc(a,
+        stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references,
+        stored.entry.media, stored.entry.body_adjoining, stored.entry.body_typography));
+    const restored = decoded.entry.display_title[0].inline_box_group.?.overlays[0].content.?;
+    try std.testing.expectEqualStrings("\xe2\x80\x8b", restored.spans[0].text);
+    try std.testing.expectEqual(@as(u32, 1), restored.before_child);
+    try std.testing.expectEqual(types.InlineBoxOverlayTextAlign.center, restored.text_align);
+    try std.testing.expectEqualStrings("崩れる", decoded.entry.display_title[0].inline_box_group.?.spans[1].target);
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    try std.testing.expect(std.mem.indexOf(u8, json, "\xe2\x80\x8b") != null);
+    for (0..encoded.len) |end| try std.testing.expectError(error.InvalidPresentation,
+        decodeAlloc(a, encoded[0..end], "box", .supplemental, null));
+    const trailing = try std.mem.concat(a, u8, &.{ encoded, "x" });
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, trailing, "box", .supplemental, null));
+}
+
+test "overlay content framing leaves the legacy empty tail exact and rejects malformed local flags" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const font: types.InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body, .font_normalized = true };
+    var content: types.InlineBoxOverlayContent(types.Span) = .{ .before_child = 1, .owner_font = font,
+        .text_align = .left, .spans = &.{.{ .text = "\xe2\x80\x8b", .font_scale = 1, .font_scale_basis = .normal_body }} };
+    var overlays = [_]types.InlineBoxOverlay{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 },
+        .right = .{ .unit = .px, .value = 0 } }, .border = types.InlineBoxBorderEdges.all(.none) }};
+    const group: types.InlineBoxGroup(types.Span) = .{ .padding = types.StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        .border = types.InlineBoxBorderEdges.all(.none), .overlays = &overlays, .spans = &.{.{ .text = "flow" }} };
+    var legacy = InlineActionCodecTest.encoder(a); defer legacy.deinit(); legacy.inline_box_groups = true;
+    try legacy.inlineBoxGroup(group, null);
+    // Four zero px edges, four no-border tags, one overlay, two zero px
+    // insets and four no-border tags: this is the pre-extension wire prefix.
+    var legacy_prefix: [43]u8 = @splat(0); legacy_prefix[24] = 1; legacy_prefix[28] = 3;
+    try std.testing.expectEqualSlices(u8, &legacy_prefix, legacy.out.items[0..43]);
+    var legacy_input = InlineActionCodecTest.reader(a, legacy.out.items); legacy_input.inline_box_groups = true;
+    const legacy_decoded = try legacy_input.inlineBoxGroup(null);
+    try std.testing.expect(legacy_decoded.overlays[0].content == null);
+    var repeated = InlineActionCodecTest.encoder(a); defer repeated.deinit(); repeated.inline_box_groups = true;
+    try repeated.inlineBoxGroup(legacy_decoded.*, null);
+    try std.testing.expectEqualSlices(u8, legacy.out.items, repeated.out.items);
+    overlays[0].content = &content;
+    var extended = InlineActionCodecTest.encoder(a); defer extended.deinit(); extended.inline_box_groups = true;
+    try extended.inlineBoxGroup(group, null);
+    try std.testing.expectEqualSlices(u8, legacy.out.items[0..28], extended.out.items[0..28]);
+    try std.testing.expectEqual(@as(u8, 0x13), extended.out.items[28]);
+    try std.testing.expect(extended.out.items[28] & ~@as(u8, 0x0f) != 0); // frozen old-reader rejection
+    try std.testing.expectEqualSlices(u8, legacy.out.items[29..43], extended.out.items[29..43]);
+    for ([_]u8{ 0x23, 0x53, 0x93, 0x10 }) |flags| {
+        const corrupt = try a.dupe(u8, extended.out.items); corrupt[28] = flags;
+        var input = InlineActionCodecTest.reader(a, corrupt); input.inline_box_groups = true;
+        try std.testing.expectError(error.InvalidPresentation, input.inlineBoxGroup(null));
+    }
+    const bad_boundary = try a.dupe(u8, extended.out.items); std.mem.writeInt(u32, bad_boundary[43..47], 2, .little);
+    var bad_input = InlineActionCodecTest.reader(a, bad_boundary); bad_input.inline_box_groups = true;
+    try std.testing.expectError(error.InvalidPresentation, bad_input.inlineBoxGroup(null));
+    content.spans = &.{};
+    var invalid = InlineActionCodecTest.encoder(a); defer invalid.deinit(); invalid.inline_box_groups = true;
+    try std.testing.expectError(error.InvalidPresentation, invalid.inlineBoxGroup(group, null));
+}
+
+test "M hidden overflow has strict enum framing while all old L and M bytes stay exact" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const styles = [_]types.ContainerStyle{ .{}, .{ .overflow = .visible }, .{ .overflow = .auto }, .{ .overflow = .hidden } };
+    const expected = [_][]const u8{ &.{0, 0, 0, 0}, &.{0, 128, 0, 0, 0}, &.{0, 128, 0, 0, 1}, &.{0, 128, 0, 0, 2} };
+    for (styles, expected) |style, golden| {
+        var encoder: Encoder = .{ .a = a, .version = .container_fonts }; defer encoder.deinit();
+        try encoder.containerStyle(style); try std.testing.expectEqualSlices(u8, golden, encoder.out.items);
+        var reader: Reader = .{ .a = a, .version = .container_fonts, .bytes = golden };
+        try std.testing.expectEqualDeep(style, try reader.containerStyle());
+        try std.testing.expectEqual(golden.len, reader.pos);
+    }
+    var old: Encoder = .{ .a = a, .version = .block_containers }; defer old.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old.containerStyle(.{ .overflow = .hidden }));
+    var old_reader: Reader = .{ .a = a, .version = .block_containers, .bytes = &.{0, 128, 2} };
+    try std.testing.expectError(error.InvalidPresentation, old_reader.containerStyle());
+    for ([_][]const u8{ &.{0, 128, 0, 0}, &.{0, 128, 0, 0, 3}, &.{0, 128, 0, 0, 255} }) |bytes| {
+        var refused: Reader = .{ .a = a, .version = .container_fonts, .bytes = bytes };
+        try std.testing.expectError(error.InvalidPresentation, refused.containerStyle());
+    }
+    const stored: types.Stored = .{ .entry = .{ .title = "hidden owner", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "Body", .blocks = &.{.{ .kind = .container, .container = .{
+            .style = .{ .overflow = .hidden }, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .target = "Kept", .text = "hidden overflow keeps data" }} }} } }} }} } };
+    const bytes = try encodeAlloc(a, stored);
+    try std.testing.expectEqualStrings(container_fonts_magic, bytes[0..4]);
+    try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, stored.entry.title, .supplemental, null));
+    try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections, stored.entry.organization, stored.entry.references, stored.entry.media));
+}
+
+test "M conditional rows pin legacy bytes policy suffix cursor versions flags and budgets" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const plain: types.Table = .{ .rows = &.{.{}} };
+    var value = plain; value.rows_hidden_max_width_px = 639;
+    const legacy_bytes = [_]u8{ 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    const expected = [_]u8{ 33, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127, 2, 0, 0 };
+    var old: Encoder = .{ .a = a, .version = .container_fonts }; defer old.deinit();
+    try old.table(@as(?types.Table, plain)); try std.testing.expectEqualSlices(u8, &legacy_bytes, old.out.items);
+    const LegacyTable = struct { caption: []const types.Span = &.{}, rows: []const types.Row };
+    var legacy: Encoder = .{ .a = a, .version = .container_fonts }; defer legacy.deinit();
+    try legacy.table(@as(?LegacyTable, .{ .rows = plain.rows }));
+    try std.testing.expectEqualSlices(u8, old.out.items, legacy.out.items);
+    var encoder: Encoder = .{ .a = a, .version = .container_fonts, .remaining_items = 2 }; defer encoder.deinit();
+    try encoder.table(@as(?types.Table, value)); try std.testing.expectEqualSlices(u8, &expected, encoder.out.items);
+    try std.testing.expectEqual(@as(usize, 0), encoder.remaining_items);
+    var metrics: DecodeMetrics = .{};
+    var reader: Reader = .{ .a = a, .version = .container_fonts, .bytes = &expected, .remaining_items = 2, .metrics = &metrics };
+    try std.testing.expectEqualDeep(@as(?types.Table, value), try reader.table());
+    try std.testing.expectEqual(expected.len, reader.pos);
+    try std.testing.expectEqual(@as(usize, 0), reader.remaining_items);
+    try std.testing.expectEqual(@as(u64, 2), metrics.total_items);
+    var limited: Encoder = .{ .a = a, .version = .container_fonts, .remaining_items = 1 }; defer limited.deinit();
+    try std.testing.expectError(error.PresentationTooLarge, limited.table(@as(?types.Table, value)));
+    var short_budget: Reader = .{ .a = a, .version = .container_fonts, .bytes = &expected, .remaining_items = 1 };
+    try std.testing.expectError(error.InvalidPresentation, short_budget.table());
+    for (0..expected.len) |end| {
+        var short: Reader = .{ .a = a, .version = .container_fonts, .bytes = expected[0..end] };
+        try std.testing.expectError(error.InvalidPresentation, short.table());
+    }
+    inline for (comptime std.meta.tags(Version)) |version| {
+        if (comptime version == .container_fonts) continue;
+        var wrong: Encoder = .{ .a = a, .version = version }; defer wrong.deinit();
+        try std.testing.expectError(error.InvalidPresentation, wrong.table(@as(?types.Table, value)));
+        var wrong_reader: Reader = .{ .a = a, .version = version, .bytes = &expected };
+        try std.testing.expectError(error.InvalidPresentation, wrong_reader.table());
+    }
+    for ([_]u8{ 0x20, 0x22, 0x29, 0x41, 0x81, 0xe1 }) |flag| {
+        var invalid = expected; invalid[0] = flag;
+        var bad: Reader = .{ .a = a, .version = .container_fonts, .bytes = &invalid };
+        try std.testing.expectError(error.InvalidPresentation, bad.table());
+    }
+    var zero = expected; @memset(zero[zero.len - 4 ..], 0);
+    var zero_reader: Reader = .{ .a = a, .version = .container_fonts, .bytes = &zero };
+    try std.testing.expectError(error.InvalidPresentation, zero_reader.table());
+    const followed = expected ++ legacy_bytes;
+    var next: Reader = .{ .a = a, .version = .container_fonts, .bytes = &followed };
+    try std.testing.expectEqualDeep(@as(?types.Table, value), try next.table());
+    try std.testing.expectEqualDeep(@as(?types.Table, plain), try next.table());
+    try std.testing.expectEqual(followed.len, next.pos);
+    var missing_flag = followed; missing_flag[0] = 1;
+    var orphan_tail: Reader = .{ .a = a, .version = .container_fonts, .bytes = &missing_flag };
+    _ = try orphan_tail.table();
+    try std.testing.expectError(error.InvalidPresentation, orphan_tail.table());
+}
+
+test "conditional row discovery reaches every semantic table holder without hiding payload or action work" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const table: types.Table = .{ .rows_hidden_max_width_px = 639,
+        .caption = &.{.{ .kind = .link, .text = "caption action", .target = "Caption" }},
+        .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .kind = .external_link, .text = "complete row", .target = "https://example.test/row" }} }} }} };
+    const blocks = [_]types.Block{.{ .kind = .table, .table = table }, .{ .kind = .paragraph, .spans = &.{.{ .kind = .link, .text = "following action", .target = "After" }} }};
+    var figure = MissingFigureCodecTest.make(); figure.caption_blocks = &blocks;
+    const cases = [_]types.Entry{
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "direct", .blocks = &blocks }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "caption", .blocks = &.{.{ .kind = .table, .table = .{ .caption_blocks = &blocks } }} }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "nested", .blocks = &.{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} } }} }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "cell blocks", .blocks = &.{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &blocks }} }} } }} }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Figure", .blocks = &.{.{ .kind = .paragraph, .figure = figure }} }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "Flow", .blocks = &.{.{ .kind = .paragraph, .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr, .parts = &.{.{ .kind = .figure, .figure = figure }} } }} }} }} },
+        .{ .title = "row sinks", .kind = .supplemental, .references = &.{.{ .number = 1, .group_number = 1, .blocks = &blocks }} },
+        .{ .title = "row sinks", .kind = .supplemental, .sections = &.{.{ .level = 2, .title = "wrapper", .blocks = &.{.{ .kind = .container, .container = .{ .style = .{ .overflow = .hidden, .width = .fit_content,
+            .screen_max_width = .{ .max_width_px = 639, .width = .auto, .max_width = .{ .length = .{ .unit = .percent, .value = 100 } } } }, .blocks = &blocks } }} }} },
+    };
+    for (cases) |entry| {
+        const stored: types.Stored = .{ .entry = entry };
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualStrings(container_fonts_magic, bytes[0..4]);
+        const decoded = try decodeAlloc(a, bytes, entry.title, .supplemental, null);
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, entry.display_title, entry.sections, entry.organization, entry.references, entry.media));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expect(std.mem.indexOf(u8, json, "rows_hidden_max_width_px") != null);
+        const parsed = try std.json.parseFromSlice(types.Stored, a, json, .{}); defer parsed.deinit();
+        try std.testing.expectEqualDeep(stored, parsed.value);
+    }
+    const invalid_rows = [_]types.Row{.{ .cells = &.{.{ .spans = &.{.{ .kind = .link, .text = "invalid hidden action", .target = "" }} }} }};
+    var invalid = table; invalid.rows = &invalid_rows;
+    const invalid_stored: types.Stored = .{ .entry = .{ .title = "invalid hidden data", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = invalid }} }} } };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid_stored));
+    try std.testing.expect(try types.resolveTableRowsHidden(invalid, 600));
+    const nested_invalid: types.Stored = .{ .entry = .{ .title = "invalid nested hidden data", .kind = .supplemental,
+        .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .table, .table = .{
+            .rows_hidden_max_width_px = 639, .rows = &.{.{ .cells = &.{.{ .nested_table = invalid }} }} } }} }} } };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, nested_invalid));
+}
+
+test "ordinary action destinations reject missing links while preserving fragment-only wire domains" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    for ([_]types.Span{
+        .{ .kind = .link, .text = "internal", .target = "Target" },
+        .{ .kind = .link, .text = "local", .target_fragment = "reference-1" },
+        .{ .kind = .link, .text = "explicit empty fragment", .target_fragment = "" },
+        .{ .kind = .external_link, .text = "external", .target = "https://example.test/target" },
+    }) |span| {
+        const stored: types.Stored = .{ .entry = .{ .title = "action domains", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .paragraph, .spans = &.{span} }} }} } };
+        try types.validateStored(a, stored, stored.entry.title, .supplemental, null);
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, stored.entry.title, .supplemental, null));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, stored.entry.display_title, stored.entry.sections,
+            stored.entry.organization, stored.entry.references, stored.entry.media));
+    }
+    for ([_]types.InlineKind{ .link, .external_link }) |kind| {
+        const span: types.Span = .{ .kind = kind, .text = "missing destination" };
+        const invalid: types.Stored = .{ .entry = .{ .title = "missing destination", .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .paragraph, .spans = &.{span} }} }} } };
+        try std.testing.expectError(error.InvalidPresentation, types.validateStored(a, invalid, invalid.entry.title, .supplemental, null));
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+        try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, invalid.entry.display_title, invalid.entry.sections,
+            invalid.entry.organization, invalid.entry.references, invalid.entry.media));
+        // Remove only the destination string from a valid packet. All other
+        // framing and the explicitly absent fragment remain unchanged.
+        const target = "DistinctDestinationForWireForgery";
+        var valid_span = span; valid_span.target = target;
+        const valid: types.Stored = .{ .entry = .{ .title = invalid.entry.title, .kind = .supplemental,
+            .sections = &.{.{ .level = 2, .title = "body", .blocks = &.{.{ .kind = .paragraph, .spans = &.{valid_span} }} }} } };
+        const bytes = try encodeAlloc(a, valid);
+        const at = std.mem.indexOf(u8, bytes, target) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(at >= 4 and std.mem.indexOfPos(u8, bytes, at + target.len, target) == null);
+        try std.testing.expectEqual(@as(u32, target.len), std.mem.readInt(u32, bytes[at - 4 ..][0..4], .little));
+        const forged = try a.alloc(u8, bytes.len - target.len);
+        @memcpy(forged[0..at], bytes[0..at]);
+        std.mem.writeInt(u32, forged[at - 4 ..][0..4], 0, .little);
+        @memcpy(forged[at..], bytes[at + target.len ..]);
+        try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, forged, valid.entry.title, .supplemental, null));
     }
 }
