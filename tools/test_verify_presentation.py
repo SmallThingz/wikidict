@@ -14,6 +14,9 @@ class PresentationDiagnosticTests(unittest.TestCase):
         for text in ('__NOEDITSECTION__', '__noeditsection__', '__لاتحريرقسم__', '__NO_CONTENT_CONVERT__'):
             with self.subTest(text=text):
                 self.assertIn('behavior-switch', audit.diagnostic_categories(text))
+        for source_rule in ('________________', 'approx________________', '_' * 8192):
+            self.assertNotIn('behavior-switch', audit.diagnostic_categories(source_rule))
+        self.assertIn('behavior-switch', audit.diagnostic_categories('______________ __NOTOC__'))
 
     def test_existing_source_markup_remains_a_candidate(self):
         for text in ('[[cat]]', '{{missing}}', '<span>literal</span>', '{| table |}'):
