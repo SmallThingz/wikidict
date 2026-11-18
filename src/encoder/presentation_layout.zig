@@ -2129,6 +2129,20 @@ fn exactNumberedHeading(title: []const u8, label: []const u8) bool {
 
 // These H3s come from the Quechua Wiktionary's own POS templates. On
 // amañachiy, -pron- also labels IPA-only material. Require a numbered definition.
+// The Afrikaans participle template places its senses in a child heading.
+// The following Voorbeeldsinne heading can also contain numbered lines.
+fn afParticipleMeanings(sections: anytype, index: usize) bool {
+    const section = sections[index];
+    if (section.level != 4 or !std.mem.eql(u8, section.title, "Betekenisse") or index == 0) return false;
+    const parent = sections[index - 1];
+    if (parent.level != 3 or !std.mem.eql(u8, parent.title, "Deelwoord")) return false;
+    for (section.blocks, 0..) |block, i| {
+        if (block.kind == .definition and std.mem.eql(u8, block.list_path, "#") and
+            !standaloneEmptyDefinition(section.blocks, i)) return true;
+    }
+    return false;
+}
+
 fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
     if (section.level != 3) return null;
     const headings = .{
@@ -2154,6 +2168,7 @@ fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
 
 pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
+    const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
     var origin: ?usize = null;
@@ -2178,6 +2193,7 @@ pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[
         const czech_parent = if (own_kind == null) czechMeaningParent(sections, i, owner) else null;
         const meaning_parent = if (own_kind == null) slovakMeaningParent(sections, i) orelse kyrgyzMeaningParent(sections, i) else null;
         const nested_kind: ?[]const u8 = if (czech_parent) |parent| sections[parent].title else if (meaning_parent) |parent| partOfSpeech(sections[parent].title) else if (own_kind == null) nested: {
+            if (af_dictionary and afParticipleMeanings(sections, i)) break :nested "Participle";
             const parent = lemma_parent orelse break :nested null;
             break :nested if (lemma and section.level > parent.level and section.level - parent.level == 1) parent.kind else null;
         } else null;
@@ -2434,6 +2450,39 @@ test "classified layout owner survives support labels without changing lexical s
     try std.testing.expectEqualStrings("Unknown support", legacy.lexemes[1].language);
     try std.testing.expectEqualDeep(legacy.other_sections, owned.other_sections);
 }
+test "Afrikaans participle meanings use their own numbered blocks and keep examples separate" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    var r: wiki.Renderer = .{ .a = a, .context = .{} };
+    var sections = [_]Section{
+        .{ .title = "Deelwoord", .level = 3, .blocks = &.{} },
+        .{ .title = "Betekenisse", .level = 4, .blocks = try r.renderBody(":''Negatiewe naawoordelike verlede deelwoord''\n# wat nie verbrand is of word nie") },
+        .{ .title = "Voorbeeldsinne", .level = 4, .blocks = try r.renderBody("# '''onverbrande''' habitatte") },
+    };
+    for ([_]?[]const u8{ "Afrikaans", "Nederlands", null }) |owner| {
+        const layout = try buildForDictionary(a, &sections, owner == null, owner, null, "afwiktionary");
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const lexical = layout.lexemes[0];
+        try std.testing.expectEqualStrings(owner orelse "", lexical.language);
+        try std.testing.expectEqualStrings("Participle", lexical.kind);
+        try std.testing.expectEqual(@as(usize, 1), lexical.section);
+        try std.testing.expectEqual(@as(usize, 1), lexical.definitions.len);
+        try std.testing.expectEqualStrings("#", sections[lexical.section].blocks[lexical.definitions[0].block].list_path);
+        try std.testing.expectEqualSlices(usize, &.{2}, lexical.related_sections);
+    }
+    try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, false, "Afrikaans", null, "enwiktionary")).lexemes.len);
+    sections[0].title = "Verwysings";
+    try std.testing.expect(!afParticipleMeanings(&sections, 1));
+    sections[0].title = "Deelwoord";
+    sections[1].level = 3;
+    try std.testing.expect(!afParticipleMeanings(&sections, 1));
+    sections[1].level = 4;
+    sections[1].blocks = &.{};
+    try std.testing.expect(!afParticipleMeanings(&sections, 1));
+}
+
 test "Quechua dictionary POS headings organize authored definitions and preserve owners and actions" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

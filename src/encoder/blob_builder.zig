@@ -7217,6 +7217,16 @@ test "Afrikaans unsectioned POS categories preserve captured whole entry and cit
     const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
     try std.testing.expectEqualStrings("Afrikaans", decoded.entry.language.?);
     try std.testing.expectEqualStrings("af", decoded.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+    const participle = decoded.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Participle", participle.kind);
+    try std.testing.expectEqualStrings("Afrikaans", participle.language);
+    const meanings = decoded.entry.sections[participle.section];
+    try std.testing.expectEqualStrings("Betekenisse", meanings.title);
+    try std.testing.expectEqual(@as(usize, 1), participle.definitions.len);
+    try std.testing.expectEqualStrings("#", meanings.blocks[participle.definitions[0].block].list_path);
+    try std.testing.expectEqual(@as(usize, 1), participle.related_sections.len);
+    try std.testing.expectEqualStrings("Voorbeeldsinne", decoded.entry.sections[participle.related_sections[0]].title);
     for ([_][]const u8{
         "Voltooide deelwoord",                       "Werkwoordelik",     "Naamwoordelik",                   "Negatief",
         "on•ver•bran•de",
