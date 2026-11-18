@@ -500,40 +500,40 @@ def attempt_phase_seconds(row):
 
 
 def summarize(attempt_results, editions, preparations=()):
+    histories = {edition: [] for edition in edition_order(editions)}
     unique = {}
     for row in attempt_results:
         key = row['attempt_id']
-        require(key not in unique or unique[key] == row, 'Conflicting attempt identity')
+        if key in unique:
+            require(unique[key] == row, 'Conflicting attempt identity')
+            continue
+        require(row['edition'] in histories, 'Attempt outside configured corpus')
         unique[key] = row
+        histories[row['edition']].append(row)
     preparation_by_id = {}
+    preparations_by_edition = {}
     for prep in preparations:
         key = prep['preparation_id']
         require(key not in unique, 'Preparation interval is also an attempt')
         require(key not in preparation_by_id or preparation_by_id[key] == prep, 'Conflicting preparation identity')
-        require(prep['edition'] in editions and prep['outcome'] in ('passed', 'failed', 'superseded'), 'Preparation outside configured corpus')
+        require(prep['edition'] in histories and prep['outcome'] in ('passed', 'failed', 'superseded'), 'Preparation outside configured corpus')
         seconds = prep['elapsed_seconds']
         require(type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0, 'Invalid preparation interval')
-        preparation_by_id[key] = prep
-    latest, accepted = {}, {}
-    for row in sorted(unique.values(), key=lambda x: x['sequence']):
-        require(row['edition'] in editions, 'Attempt outside configured corpus')
-        latest[row['edition']] = row
-        if row.get('accepted') is not None:
-            accepted[row['edition']] = row['accepted']
+        if key not in preparation_by_id:
+            preparation_by_id[key] = prep
+            preparations_by_edition.setdefault(prep['edition'], []).append(prep)
     rows = []
     unknown = []
-    for edition in edition_order(editions):
-        history = [x for x in unique.values() if x['edition'] == edition]
+    for edition, history in histories.items():
         measured = [attempt_phase_seconds(x) for x in history if x.get('execution_mode') != 'existing_output']
-        for seconds in measured:
-            require(seconds is None or (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0), 'Invalid interval')
         timing_unknown = any(x is None for x in measured)
         known_build_seconds = sum(seconds for seconds in measured if seconds is not None)
-        own_preparations = [x for x in preparation_by_id.values() if x['edition'] == edition]
+        own_preparations = preparations_by_edition.get(edition, [])
         preparation_seconds = sum(x['elapsed_seconds'] for x in own_preparations)
-        accepted_value = accepted.get(edition)
-        # A later failed revalidation cannot export an old acceptance as current.
-        current = accepted_value if latest.get(edition, {}).get('accepted') is not None else None
+        # Equal sequence numbers retain the last distinct input, as in the stable sequence sort.
+        latest = max(reversed(history), key=lambda x: x['sequence'], default={})
+        current = latest.get('accepted')
+        verification = [attempt_phase_seconds(x) for x in history if x.get('execution_mode') == 'existing_output'] if edition not in EXCLUDED else []
         original_unknown = bool(current and not any(x.get('accepted') and x.get('execution_mode') != 'existing_output' for x in history))
         if edition not in EXCLUDED and (timing_unknown or original_unknown):
             unknown.append(edition)
@@ -544,8 +544,8 @@ def summarize(attempt_results, editions, preparations=()):
             production_preparations=own_preparations,
             observed_preparation_seconds=None if edition in EXCLUDED else preparation_seconds,
             observed_total_seconds=None if edition in EXCLUDED or timing_unknown else known_build_seconds + preparation_seconds,
-            verification_seconds=None if edition in EXCLUDED else sum(attempt_phase_seconds(x) or 0 for x in history if x.get('execution_mode') == 'existing_output'),
-            original_build_time_unknown=original_unknown, latest_outcome=latest.get(edition, {}).get('outcome')))
+            verification_seconds=None if edition in EXCLUDED or None in verification else sum(verification),
+            original_build_time_unknown=original_unknown, latest_outcome=latest.get('outcome')))
     cohort = [x for x in rows if not x['timing_excluded']]
     complete = len(rows) == 198 and len(cohort) == 191 and all(x['accepted'] is not None for x in rows)
     pages = sum(x['accepted']['input_pages'] for x in cohort if x['accepted'])

@@ -307,6 +307,17 @@ class ControllerPureTests(unittest.TestCase):
         self.assertFalse(row['original_build_time_unknown'])
         self.assertEqual(2, row['attempt_count'])
 
+    def test_missing_verification_duration_does_not_erase_known_build_or_become_zero(self):
+        built = attempt('build', 1, seconds=20)
+        measured = attempt('verified', 2, seconds=3, mode='existing_output')
+        unknown = attempt('interrupted', 2, seconds=None, mode='existing_output', accepted=False)
+        row = controller.summarize([built, measured, unknown, dict(measured)], ['enwiktionary'])['editions'][0]
+        self.assertEqual(3, row['attempt_count'])
+        self.assertIsNone(row['verification_seconds'])
+        self.assertEqual(20, row['observed_build_seconds'])
+        self.assertEqual('failed', row['latest_outcome'])
+        self.assertIsNone(row['accepted'])
+
     def test_final_rate_requires_all_198_current_acceptances_and_excludes_original_seven(self):
         editions = all_editions()
         rows = [attempt(str(i), i, edition=e, seconds=999 if e in controller.EXCLUDED else 2)
