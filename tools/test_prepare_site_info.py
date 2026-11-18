@@ -109,6 +109,99 @@ class SiteInfoCaptureTests(unittest.TestCase):
                 (root/name).write_bytes(s.evidence.encoded(value)); self.rebind(root)
                 with self.assertRaises(ValueError): s.verify(root)
 
+    def source_refusal(self, name='refused'):
+        unknown = copy.deepcopy(self.data)
+        unknown['query']['general']['git-hash'] = '1' * 40
+        args = self.args(name)
+        with self.assertRaisesRegex(ValueError, 'source mismatch'):
+            self.collect(name, data=unknown)
+        return args.output, unknown
+
+    def test_revalidation_preserves_original_failed_http_and_observation(self):
+        root, data = self.source_refusal()
+        saved = {p.name: p.read_bytes() for p in root.iterdir()}
+        failure_hash = s.evidence.digest(saved['site-info.failure.json'])
+        with patch.object(s, 'CORE_PROFILES', (*s.CORE_PROFILES, '1' * 40)), \
+                patch.object(s.evidence, 'get_response', side_effect=AssertionError('no HTTP')):
+            manifest = s.revalidate(root, failure_hash)
+            self.assertEqual(manifest, s.verify(root))
+            self.assertEqual(data['query'], s.evidence.decode((root/s.SNAPSHOT).read_bytes())['query'])
+            old_receipt = s.evidence.decode(saved['site-info.01.receipt.json'])
+            self.assertFalse(old_receipt['accepted'])
+            self.assertEqual(old_receipt['ended_utc'], manifest['retrieved_utc'])
+            self.assertEqual('1' * 40, manifest['core'])
+            self.assertEqual('retained-source-profile-refusal', manifest['revalidation']['kind'])
+            for name, raw in saved.items():
+                self.assertEqual(raw, (root/name).read_bytes())
+            before = {p.name: p.read_bytes() for p in root.iterdir()}
+            with self.assertRaises(ValueError): s.revalidate(root, failure_hash)
+            self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+        with self.assertRaises(ValueError): s.verify(root)
+
+    def test_revalidation_refuses_unreviewed_source_and_changed_failure_without_writes(self):
+        root, _ = self.source_refusal()
+        saved = {p.name: p.read_bytes() for p in root.iterdir()}
+        failure_hash = s.evidence.digest(saved['site-info.failure.json'])
+        with self.assertRaisesRegex(ValueError, 'source mismatch'):
+            s.revalidate(root, failure_hash)
+        with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+            s.revalidate(root, '0' * 64)
+        self.assertEqual(saved, {p.name: p.read_bytes() for p in root.iterdir()})
+
+    def test_revalidation_requires_original_http_request_identity_and_refusal(self):
+        changes = [
+            ('site-info.01.receipt.json', lambda d: d.update(status=403)),
+            ('site-info.01.receipt.json', lambda d: d.update(accepted=True)),
+            ('site-info.01.receipt.json', lambda d: d.update(error='HTTP status 403')),
+            ('site-info.01.receipt.json', lambda d: d.update(response_sha256='0' * 64)),
+            ('site-info.01.receipt.json', lambda d: d.update(response='../foreign.json')),
+            ('site-info.request.json', lambda d: d['query'].update(siprop='general')),
+            ('site-info.request.json', lambda d: d.update(content_language='fr')),
+            ('site-info.failure.json', lambda d: d.update(error='HTTP status 403')),
+        ]
+        for index, (name, change) in enumerate(changes):
+            with self.subTest(name=name, index=index):
+                root, _ = self.source_refusal('bad-'+str(index))
+                data = s.evidence.decode((root/name).read_bytes()); change(data)
+                (root/name).write_bytes(s.evidence.encoded(data))
+                saved = {p.name: p.read_bytes() for p in root.iterdir()}
+                failure_hash = s.evidence.digest(saved['site-info.failure.json'])
+                with patch.object(s, 'CORE_PROFILES', (*s.CORE_PROFILES, '1' * 40)):
+                    with self.assertRaises(ValueError): s.revalidate(root, failure_hash)
+                self.assertEqual(saved, {p.name: p.read_bytes() for p in root.iterdir()})
+
+    def test_revalidated_manifest_cannot_rewrite_original_acceptance_or_omit_refusal(self):
+        root, _ = self.source_refusal()
+        with patch.object(s, 'CORE_PROFILES', (*s.CORE_PROFILES, '1' * 40)):
+            s.revalidate(root, s.evidence.digest((root/'site-info.failure.json').read_bytes()))
+            saved = {p.name: p.read_bytes() for p in root.iterdir()}
+            for key in ('accepted', 'error', 'status'):
+                for name, raw in saved.items(): (root/name).write_bytes(raw)
+                receipt = s.evidence.decode(saved['site-info.01.receipt.json'])
+                receipt[key] = {'accepted': True, 'error': 'HTTP status 503', 'status': 503}[key]
+                (root/'site-info.01.receipt.json').write_bytes(s.evidence.encoded(receipt))
+                manifest = s.evidence.decode(saved[s.MANIFEST])
+                manifest['revalidation']['receipt_sha256'] = s.evidence.digest((root/'site-info.01.receipt.json').read_bytes())
+                (root/s.MANIFEST).write_bytes(s.evidence.encoded(manifest)); self.rebind(root)
+                with self.assertRaises(ValueError): s.verify(root)
+            for name, raw in saved.items(): (root/name).write_bytes(raw)
+            (root/'site-info.failure.json').unlink()
+            self.rebind(root)
+            with self.assertRaises((OSError, ValueError)): s.verify(root)
+
+    def test_retained_992ad_response_keeps_actual_core_and_same_response_default(self):
+        raw = (Path(__file__).parent/'testdata/ik-figure-defaults992ad/site-info.01.raw.json').read_bytes()
+        self.assertEqual(s.evidence.digest(raw), 'f132be95ae9e9f9e9eac6d1c6f1a1159ced0be17cdbd14ea52f21a1e451fdece')
+        data = s.evidence.decode(raw)
+        result = s.response(data, 'ikwiktionary', 'ik', s.FIGURE_PROFILE)
+        self.assertEqual(result['general']['git-hash'], '992ad5e3679f848254828e823860ba8b3ad3b39b')
+        self.assertEqual(s.figure_thumbnail_width(result), 250)
+        for wiki, language in [('aswiktionary', 'ik'), ('ikwiktionary', 'as')]:
+            with self.assertRaises(ValueError): s.response(data, wiki, language, s.FIGURE_PROFILE)
+        changed = copy.deepcopy(data)
+        changed['query']['general']['git-hash'] = '0' * 40
+        with self.assertRaises(ValueError): s.response(changed, 'ikwiktionary', 'ik', s.FIGURE_PROFILE)
+
     def test_complete_one_response_and_legacy_evidence_immutable(self):
         before = {p.name: p.read_bytes() for p in self.original.iterdir()}
         root, manifest = self.collect()

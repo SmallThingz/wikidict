@@ -8355,6 +8355,72 @@ class EqualMediaBehaviorMemberTests(unittest.TestCase):
                                 self.fixture.wiki, self.fixture.date, site)
 
 
+class ReviewedDeployment992adTests(EqualMediaBehaviorMemberTests):
+    def test_revalidated_defaults_survive_real_five_role_capture_and_offline_reuse(self):
+        f = self.fixture
+        inputs = f.normal_build_inputs()
+        (f.root/'figure-defaults').rename(f.root/'original-defaults')
+        data = copy.deepcopy(f.data)
+        data['query']['general']['git-hash'] = self.core
+        args = argparse.Namespace(wiki=f.wiki, date=f.date, namespace_registry=f.namespace,
+            primary_sources=f.primary, output=f.root/'figure-defaults', delay=0, wall_seconds=30, figure_defaults=True)
+        site = figure.site_info
+        with patch.object(site, 'CORE_PROFILES', tuple(x for x in site.CORE_PROFILES if x != self.core)):
+            with self.assertRaisesRegex(ValueError, 'source mismatch'):
+                site.capture(args, transport=lambda *_:(200, {}, figure.encoded(data)), sleep=lambda _:None)
+        original = {p.name:p.read_bytes() for p in args.output.iterdir()}
+        site.revalidate(args.output, figure.digest(original['site-info.failure.json']))
+        calls = []
+        def transport(url, timeout):
+            calls.append(url)
+            self.assertIn('imageinfo', url)
+            return 200, {}, figure.encoded(self.response('\u0645\u0644\u0641:Example.svg', self.core))
+        with patch.object(figure.evidence, 'get_response', side_effect=transport):
+            paths = builder.resolve_figure_snapshot_options(f.root, inputs['manifest'],
+                inputs['selected_inputs'], inputs['downloads'], f.namespace, {}, metadata_network='allow')
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(set(paths), {*figure.ROLES, 'file-metadata'})
+        result = figure.verify(f.root/'figure-inputs')
+        self.assertEqual(result['coverage']['files'], 1)
+        for name, raw in original.items():
+            self.assertEqual(raw, (args.output/name).read_bytes())
+            self.assertEqual(raw, (f.root/'figure-inputs'/name).read_bytes())
+        with patch.object(figure.evidence, 'get_response', side_effect=AssertionError('no recapture')):
+            reused = builder.resolve_figure_snapshot_options(f.root, inputs['manifest'],
+                inputs['selected_inputs'], inputs['downloads'], f.namespace, {}, metadata_network='offline')
+        self.assertEqual(paths, reused)
+
+    core = '992ad5e3679f848254828e823860ba8b3ad3b39b'
+    prior = '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c'
+
+    def test_normal_resolver_selects_existing_v4_after_offline_defaults_revalidation(self):
+        f = self.fixture
+        inputs = f.normal_build_inputs()
+        (f.root/'figure-defaults').rename(f.root/'original-defaults')
+        data = copy.deepcopy(f.data)
+        data['query']['general']['git-hash'] = self.core
+        args = argparse.Namespace(wiki=f.wiki, date=f.date, namespace_registry=f.namespace,
+            primary_sources=f.primary, output=f.root/'figure-defaults', delay=0, wall_seconds=30, figure_defaults=True)
+        site = figure.site_info
+        with patch.object(site, 'CORE_PROFILES', tuple(x for x in site.CORE_PROFILES if x != self.core)):
+            with self.assertRaisesRegex(ValueError, 'source mismatch'):
+                site.capture(args, transport=lambda *_:(200, {}, figure.encoded(data)), sleep=lambda _:None)
+        retained = {p.name:p.read_bytes() for p in args.output.iterdir()}
+        with patch.object(site.evidence, 'get_response', side_effect=AssertionError('no defaults refetch')):
+            site.revalidate(args.output, figure.digest(retained['site-info.failure.json']))
+        def capture(call):
+            self.assertEqual(call.figure_profile, figure.FIGURE_PROFILE_V4)
+            self.assertEqual(call.defaults, args.output)
+            self.assertEqual(call.metadata_mode, 'full')
+            self.assertEqual({p.name:p.read_bytes() for p in args.output.iterdir() if p.name in retained}, retained)
+            return f.normal_capture_result(call, inputs['selected_inputs'])
+        with patch.object(site, 'capture', side_effect=AssertionError('no defaults refetch')), \
+                patch.object(figure, 'capture_files', side_effect=capture) as collect:
+            selected = figure.prepare_for_build(**inputs, network=True)
+        collect.assert_called_once()
+        self.assertEqual(set(selected), {*figure.ROLES, 'file-metadata'})
+
+
 class CaptureReplayContractTests(unittest.TestCase):
     def setUp(self):
         self.donor = DefaultPageReplayReprojectionTests()

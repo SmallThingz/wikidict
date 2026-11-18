@@ -147,10 +147,13 @@ FIGURE_REGISTRATION_EPOCHS = (FIGURE_REGISTRATION_CORE, FIGURE_LATEST_REGISTRATI
 # video presets changed, so the reference source pins remain model anchors,
 # not a claim that every current source body is byte-identical.
 FIGURE_WMF4_CORE = 'd45799ff7a503ab18523e720d5e3686761c84c87'
-# These observed revisions have the same qualified V4 behavior; raw echoes stay exact.
+# These reviewed revisions preserve the V4 geometry model; raw echoes stay exact.
+# At 992ad, SVG metadata-map storage, description short URLs and unrelated log
+# configuration differ. Extension registrations must still match independently.
 # The twenty retained 93f1cd leaves and four media IDs match bb3b67 exactly.
 FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d',
-                    '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c')
+                    '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c',
+                    '992ad5e3679f848254828e823860ba8b3ad3b39b')
 FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
@@ -4895,7 +4898,7 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
         if record.get('namespace_registry_sha256') != digest(namespace_raw):
             raise ValueError('Figure defaults namespace differs from the normal selected registry')
         if record.get('profile') == site_info.FIGURE_PROFILE:
-            if record.get('core') not in FIGURE_SOURCE_PROFILES:
+            if record.get('core') not in (*FIGURE_SOURCE_PROFILES, *FIGURE_WMF4_CORES):
                 raise ValueError('Figure defaults require a reviewed matching handler source version')
             defaults = candidate
             break
@@ -4954,8 +4957,12 @@ def prepare_for_build(capture_root, manifest, selected_inputs, downloads, namesp
     default_record = site_info.validate_snapshot(defaults/site_info.SNAPSHOT, wiki, date)
     if (default_record.get('profile') != site_info.FIGURE_PROFILE
             or default_record.get('namespace_registry_sha256') != digest(namespace_raw)
-            or default_record.get('core') not in FIGURE_SOURCE_PROFILES):
+            or default_record.get('core') not in (*FIGURE_SOURCE_PROFILES, *FIGURE_WMF4_CORES)):
         raise ValueError('Figure defaults require a reviewed matching handler source version')
+    # Later reviewed deployments use the existing V4 contract. Preserve any
+    # explicitly inherited V5 profile and all per-response registration checks.
+    if selected_profile == FIGURE_PROFILE_V3 and default_record['core'] in FIGURE_WMF4_CORES:
+        selected_profile = FIGURE_PROFILE_V4
     if (evidence.stamp(namespace) != namespace_stamp or evidence.stamp(dumpstatus) != status_stamp
             or any(evidence.stamp(path) != stamp for path,stamp in stamps.items())):
         raise ValueError('Official Figure preparation inputs changed before acquisition')

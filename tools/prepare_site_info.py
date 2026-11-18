@@ -33,7 +33,8 @@ CORE = '0d3b507d19ae860ed8a1d22c73fa4bc5abf8dfcc'
 CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
                  '0470f6c99a6456a366635bf25a517a1f951de6f5',
                  'ead780177c5a02aa63ac6fd3a50977df9719fe63',
-                 'f45897451256aa3799aecc5d7ee320ade22beaec')
+                 'f45897451256aa3799aecc5d7ee320ade22beaec',
+                 '992ad5e3679f848254828e823860ba8b3ad3b39b')
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024
@@ -251,6 +252,72 @@ def capture(args, transport=None, sleep=time.sleep):
         raise
 
 
+def revalidate(root, failure_sha256):
+    """Qualify one retained HTTP 200 after a source-profile review, without HTTP.
+
+    The failed receipt and failure record remain immutable. Acceptance belongs to
+    this verifier and is explicit in the new manifest, not the original receipt.
+    """
+    root = Path(root)
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError('Unsafe capture directory')
+    expected_files = {PREFIX+'request.json', PREFIX+'namespace-registry.tsv',
+                      *(PREFIX+'source-'+name for name in SOURCE_PINS),
+                      PREFIX+'01.raw.json', PREFIX+'01.receipt.json', PREFIX+'failure.json'}
+    if {p.name for p in root.iterdir()} != expected_files:
+        raise ValueError('Revalidation requires an untouched first-attempt source refusal')
+    before = payload(root)
+    failure_raw = evidence.small(root/(PREFIX+'failure.json'), MAX_MANIFEST)
+    if evidence.digest(failure_raw) != failure_sha256:
+        raise ValueError('Retained failure identity mismatch')
+    receipt_raw = evidence.small(root/(PREFIX+'01.receipt.json'), MAX_MANIFEST)
+    receipt = evidence.decode(receipt_raw)
+    failure = evidence.decode(failure_raw)
+    if (receipt.get('accepted') is not False or receipt.get('status') != 200
+            or receipt.get('error') != 'Site-info edition/language/source mismatch'
+            or failure.get('error') != receipt['error']):
+        raise ValueError('Only a retained HTTP 200 source-profile refusal may be revalidated')
+    request = evidence.decode(evidence.small(root/(PREFIX+'request.json'), MAX_MANIFEST))
+    config = {key: request[key] for key in ('wiki', 'date', 'content_language', 'namespace_registry_sha256', 'profile')}
+    namespace = evidence.small(root/(PREFIX+'namespace-registry.tsv'), MAX_RESPONSE)
+    if (namespace_identity(namespace, config['wiki'], config['date']) != config['content_language']
+            or evidence.digest(namespace) != config['namespace_registry_sha256']):
+        raise ValueError('Revalidation namespace binding mismatch')
+    primary_sources(root, PREFIX+'source-')
+    url = evidence.wiktionary_api(config['wiki'])+'?'+urllib.parse.urlencode(sorted(query(config['profile']).items()))
+    if request != {'url': url, 'query': query(config['profile']), **config}:
+        raise ValueError('Unrequested site-info query')
+    if receipt.get('request') != PREFIX+'request.json' or receipt.get('response') != PREFIX+'01.raw.json':
+        raise ValueError('Revalidation receipt path mismatch')
+    raw = evidence.small(root/receipt['response'], MAX_RESPONSE)
+    if receipt.get('response_bytes') != len(raw) or receipt.get('response_sha256') != evidence.digest(raw):
+        raise ValueError('Response receipt hash mismatch')
+    if not stamp(receipt['started_utc']) <= stamp(receipt['ended_utc']) <= stamp(failure['ended_utc']):
+        raise ValueError('Invalid retained refusal chronology')
+    data = evidence.decode(raw)
+    output = render(data, config, receipt['ended_utc'], evidence.digest(raw))
+    reviewed = evidence.utc()
+    if stamp(reviewed) < stamp(failure['ended_utc']):
+        raise ValueError('Revalidation predates retained refusal')
+    identity = producer()
+    manifest = {'schema': SCHEMA, **config, **identity, 'core': data['query']['general']['git-hash'], 'scribunto': SCRIBUNTO,
+        'temporal_scope': 'current-api-observation', 'dump_date': None,
+        'started_utc': receipt['started_utc'], 'retrieved_utc': receipt['ended_utc'],
+        'accepted_receipt': PREFIX+'01.receipt.json',
+        'revalidation': {'kind': 'retained-source-profile-refusal', 'reviewed_utc': reviewed,
+            'receipt_sha256': evidence.digest(receipt_raw), 'failure_sha256': failure_sha256},
+        'source_url': url, 'output_sha256': evidence.digest(output), 'output_bytes': len(output)}
+    if payload(root) != before or producer() != identity:
+        raise ValueError('Retained capture or revalidation producer changed')
+    evidence.put(root/SNAPSHOT, output)
+    manifest['artifacts'] = payload(root)
+    evidence.document(root/MANIFEST, manifest)
+    verify(root, require_complete=False)
+    evidence.document(root/COMPLETE, {'schema': SCHEMA,
+        'manifest_sha256': evidence.digest(evidence.small(root/MANIFEST, MAX_MANIFEST))})
+    return manifest
+
+
 def verify(root, require_complete=True, *, embedded=False):
     root = Path(root)
     if root.is_symlink() or not root.is_dir():
@@ -281,8 +348,24 @@ def verify(root, require_complete=True, *, embedded=False):
     if not isinstance(accepted, str) or not re.fullmatch(r'site-info\.0[1-4]\.receipt\.json', accepted):
         raise ValueError('Invalid accepted receipt')
     number = int(accepted.split('.')[1])
+    revalidation = manifest.get('revalidation')
+    if revalidation is not None:
+        if (not isinstance(revalidation, dict) or set(revalidation) != {
+                'kind', 'reviewed_utc', 'receipt_sha256', 'failure_sha256'}
+                or revalidation.get('kind') != 'retained-source-profile-refusal' or number != 1):
+            raise ValueError('Invalid retained-response revalidation')
+        failure_raw = evidence.small(root/(PREFIX+'failure.json'), MAX_MANIFEST)
+        failure = evidence.decode(failure_raw)
+        original_receipt = evidence.small(root/accepted, MAX_MANIFEST)
+        if (evidence.digest(failure_raw) != revalidation['failure_sha256']
+                or evidence.digest(original_receipt) != revalidation['receipt_sha256']
+                or failure.get('error') != 'Site-info edition/language/source mismatch'
+                or not stamp(manifest['retrieved_utc']) <= stamp(failure['ended_utc']) <= stamp(revalidation['reviewed_utc'])):
+            raise ValueError('Revalidation differs from original refusal')
     expected_files = {SNAPSHOT, PREFIX+'request.json', PREFIX+'namespace-registry.tsv',
                       *(PREFIX+'source-'+name for name in SOURCE_PINS)}
+    if revalidation is not None:
+        expected_files.add(PREFIX+'failure.json')
     previous = stamp(manifest['started_utc'])
     for attempt in range(1, number+1):
         name = PREFIX + f'{attempt:02d}'
@@ -290,7 +373,11 @@ def verify(root, require_complete=True, *, embedded=False):
         expected_files.add(receipt_name)
         receipt = evidence.decode(evidence.small(root / receipt_name, MAX_MANIFEST))
         start, end = stamp(receipt.get('started_utc')), stamp(receipt.get('ended_utc'))
-        if start < previous or end < start or receipt.get('request') != PREFIX+'request.json' or receipt.get('accepted') is not (attempt == number):
+        expected_acceptance = attempt == number and revalidation is None
+        if (revalidation is not None and (receipt.get('error') != 'Site-info edition/language/source mismatch'
+                or receipt.get('status') != 200)):
+            raise ValueError('Revalidation lacks original HTTP 200 source refusal')
+        if start < previous or end < start or receipt.get('request') != PREFIX+'request.json' or receipt.get('accepted') is not expected_acceptance:
             raise ValueError('Invalid receipt order or acceptance')
         previous = end
         if 'response' in receipt:
@@ -340,6 +427,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     check = sub.add_parser('verify'); check.add_argument('output', type=Path)
+    recover = sub.add_parser('revalidate', help='Qualify a retained HTTP 200 after source review without another request')
+    recover.add_argument('output', type=Path)
+    recover.add_argument('--failure-sha256', required=True)
     collect = sub.add_parser('capture')
     for name in ('wiki', 'date'):
         collect.add_argument('--'+name, required=True)
@@ -352,7 +442,8 @@ def main():
     args = parser.parse_args()
     if args.command == 'capture' and args.delay < 1:
         parser.error('Network retries require at least one second of spacing')
-    result = capture(args) if args.command == 'capture' else verify(args.output)
+    result = (capture(args) if args.command == 'capture' else
+              revalidate(args.output, args.failure_sha256) if args.command == 'revalidate' else verify(args.output))
     print(json.dumps({key: result[key] for key in ('wiki','date','output_sha256','retrieved_utc')}))
 
 
