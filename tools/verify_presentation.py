@@ -21,7 +21,7 @@ MARKUP = re.compile(r'\[\[|\]\]|\{\{|\}\}|</?[A-Za-z][^>]*>|\{\||\|}')
 # literal spellings need source-backed disposition, including code=true spans.
 BEHAVIOR_SWITCH = re.compile(r'__\w+__')
 ERROR_PROSE = re.compile(r'\b(?:Lua|Script|Parser|Scribunto)\s+error\b', re.IGNORECASE)
-UNAVAILABLE_TEMPLATE = re.compile(r'\[unavailable template:', re.IGNORECASE)
+UNAVAILABLE_TEMPLATE = re.compile(r'\[(?:missing template\]|unavailable template:)', re.IGNORECASE)
 FEATURE_KINDS = ('thesaurus', 'citations', 'reconstruction', 'rhymes',
                  'sign-gloss', 'supplemental')
 SUPPORTED_KINDS = ('language', *FEATURE_KINDS)

@@ -30,6 +30,14 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual(['unavailable-template'],
                          audit.diagnostic_categories('[unavailable template: Missing]'))
 
+    def test_visible_missing_template_marker_from_native_writer(self):
+        spans = [dict(kind='text', text='cat', trail=''),
+                 dict(kind='text', text=' [missing template]', trail='')]
+        [(path, text)] = audit.text_fields({'blocks': [{'spans': spans}]})
+        self.assertEqual(path, 'entry.blocks[0].spans')
+        self.assertEqual(['unavailable-template'], audit.diagnostic_categories(text))
+        self.assertEqual([], audit.diagnostic_categories('a missing template name'))
+
     def test_ordinary_prose_has_no_candidate(self):
         for text in ('cat and dog', 'Lua programming language', 'a script without an error', 'NOEDITSECTION'):
             with self.subTest(text=text):
