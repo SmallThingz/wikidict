@@ -117,7 +117,9 @@ returns the same UTF-8 JSON as the plain report.
 The audit verifies each compressed member against its recorded size and SHA-1.
 It checks plain text and internal links under literal language headings
 on template-free pages. A match requires the expected language, definition
-order, visible text and destination of each linked range. For example, swapping
+order, numbering depth, visible text and destination of each linked range.
+A nested sense written with `##` must still be a second-level definition in the
+Reader. The audit skips numbered examples and quotations (`#:`, `##*`). Swapping
 two links with the same display text fails the check. A single balanced italic
 or bold passage must cover the same Unicode character range in the decoded spans.
 In the Albanian entry for English `foot`, this checks both linked translations

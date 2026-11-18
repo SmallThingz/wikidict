@@ -12,6 +12,12 @@ import verify_presentation as audit
 
 
 class PresentationDiagnosticTests(unittest.TestCase):
+    def test_category_prescreen_preserves_multiple_matches_and_unicode(self):
+        self.assertEqual(audit.diagnostic_categories('ſcript ERROR: [[猫]] __NOTOC__ [MISSING TEMPLATE]'),
+                         ['source-markup', 'behavior-switch', 'error-prose', 'unavailable-template'])
+        for markup in (']]', '}}', '|}', '{|', '<b>'):
+            self.assertEqual(audit.diagnostic_categories(markup), ['source-markup'])
+
     def test_behavior_markers_include_localized_word_spelling(self):
         for text in ('__NOEDITSECTION__', '__noeditsection__', '__لاتحريرقسم__', '__NO_CONTENT_CONVERT__'):
             with self.subTest(text=text):

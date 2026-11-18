@@ -13,7 +13,10 @@ from source_definition_audit import SourceDefinitions, compiled_emphasis, compil
 class SourceDefinitionTests(unittest.TestCase):
     def test_source_boundaries(self):
         text = '==English==\n===Noun===\n# [[cat|cats]]\n#: Example\n## subsense\n# [[self]]\n==Unknown==\n# stray meaning'
-        self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', ((0, 4, 'cat'),), None)])
+        self.assertEqual(list(definitions(text, 'self', {'English'})), [
+            ('English', 3, '#', 'cats', ((0, 4, 'cat'),), None),
+            ('English', 5, '##', 'subsense', (), None),
+        ])
         for prefix in ('{{header}}', '<nowiki>', '{|', '__TOC__'):
             self.assertEqual(list(definitions(prefix + '\n' + text, 'self', {'English'})), [])
         self.assertEqual(list(definitions(text + '\n# ________________', 'self', {'English'})),
@@ -72,7 +75,7 @@ class SourceDefinitionTests(unittest.TestCase):
             dump = root / 'wiki-date-pages-meta-current1.xml-p1p3.bz2'
             xml = ET.fromstring('<mediawiki><page><title>word</title><id>1</id><ns>0</ns>'
                                 '<revision><id>2</id><text/></revision></page></mediawiki>')
-            xml.find('page/revision/text').text = "==French==\n# first\n# [[second]]\n# first\n# prose\n# ''[[chat]]''"
+            xml.find('page/revision/text').text = "==French==\n# first\n# [[second]]\n# first\n# prose\n# ''[[chat]]''\n## kitten\n##: example\n##* quotation\n### young kitten"
             dump.write_bytes(bz2.compress(ET.tostring(xml)))
             checksum = hashlib.sha1(dump.read_bytes()).hexdigest()
             member = ['wiki', 'date', dump.name, dump.stat().st_size, checksum]
@@ -88,17 +91,20 @@ class SourceDefinitionTests(unittest.TestCase):
             blocks = [block('definition', 'first'), block('definition', 'second', 'link', target='second'),
                       block('example', 'first'), block('definition', 'prose', 'external_link', target='elsewhere'),
                       block('definition', 'prose', inline_action_group={'spans': [dict(kind='link', text='hidden', target='wrong')]}),
-                      block('definition', 'chat', 'link', target='chat', bold=True)]
+                      block('definition', 'chat', 'link', target='chat', bold=True),
+                      block('definition', 'kitten'), block('definition', 'young kitten')]
             with closing(SourceDefinitions('', root, [dump])) as audit:
+                self.assertTrue(audit.has_definitions)
                 record = dict(kind='language', title='word', language='English', sections=[dict(blocks=blocks)])
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 0)
                 record['language'] = 'French'
                 audit.observe(record)
                 report = audit.report()
-                self.assertEqual((report['eligible'], report['matched']), (5, 2))
-                self.assertEqual([row['line'] for row in report['examples']], [4, 5, 6])
-                self.assertEqual(report['examples'][-1]['emphasis'], [0, 4, 'italic'])
+                self.assertEqual((report['eligible'], report['matched']), (7, 2))
+                self.assertEqual([row['line'] for row in report['examples']], [4, 5, 6, 7, 10])
+                self.assertEqual(report['examples'][2]['emphasis'], [0, 4, 'italic'])
+                self.assertEqual([row['list_path'] for row in report['examples'][-2:]], ['##', '###'])
             registry = root / 'language-registry.tsv'
             registry.write_text('# wikidict-language-registry-v2\n# mediawiki\nfr\tFrench\tFrançais\n')
             manifest['build_inputs']['auxiliary_snapshot_sha256'] = {
@@ -108,14 +114,20 @@ class SourceDefinitionTests(unittest.TestCase):
             with closing(SourceDefinitions('', root, [dump], registry)) as audit:
                 record['language_code'] = 'en'
                 audit.observe(record)
-                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (5, 0))
+                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (7, 0))
                 record.update(language='Français', language_code='fr')
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 2)
-                blocks[-1]['spans'][0].update(bold=False, italic=True)
+                blocks[-3]['spans'][0].update(bold=False, italic=True)
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 3)
+                blocks[-2]['list_path'], blocks[-1]['list_path'] = '##', '###'
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 5)
             registry.write_text(registry.read_text() + '\n')
+            with closing(SourceDefinitions('', root, [dump])) as audit:
+                self.assertFalse(audit.has_definitions)
+                self.assertEqual(audit.report()['dump_sha1'], {dump.name: checksum})
             with self.assertRaisesRegex(ValueError, 'registry differs'):
                 SourceDefinitions('', root, [dump], registry)
             member[-1] = '0' * 40

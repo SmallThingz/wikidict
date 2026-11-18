@@ -133,11 +133,15 @@ def definitions(text, title, headings):
         if line.startswith('==') and not line.startswith('==='):
             heading = HEADING.fullmatch(line.rstrip())
             owner = heading[1] if heading and heading[1] in headings else None
-        if not owner or not line.startswith('#') or line.startswith(('##', '#:', '#*', '#;')):
+        if not owner or not line.startswith('#'):
             continue
-        witness = source_line(line[1:].strip(), title)
+        body = line.lstrip('#')
+        if body.startswith((':', '*', ';')):
+            continue
+        list_path = line[:len(line) - len(body)]
+        witness = source_line(body.strip(), title)
         if witness is not None:
-            yield owner, number, *witness
+            yield owner, number, list_path, *witness
 
 
 def localized_language_codes(raw):
@@ -166,7 +170,7 @@ class SourceDefinitions:
     def __init__(self, database, root, dumps, registry=None):
         self.db = sqlite3.connect(database)
         try:
-            self.db.execute('CREATE TABLE sense (title, owner, code, line, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
+            self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
@@ -204,6 +208,7 @@ class SourceDefinitions:
                         raise ValueError(f'Dump SHA-1 differs: {path.name}')
                     self.inputs[path.name] = expected
             self.db.commit()
+            self.has_definitions = self.db.execute('SELECT 1 FROM sense LIMIT 1').fetchone() is not None
         except (ET.ParseError, EOFError, sqlite3.Error) as error:
             self.close()
             raise ValueError(f'Could not index source definitions: {error}') from error
@@ -222,16 +227,16 @@ class SourceDefinitions:
                 revision = page.find('{*}revision')
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
-                self.db.executemany('INSERT INTO sense (title,owner,code,line,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?)',
-                    ((title, owner, self.codes.get(owner), n, text, json.dumps(links, ensure_ascii=False), json.dumps(emphasis) if emphasis else None,
+                self.db.executemany('INSERT INTO sense (title,owner,code,line,list_path,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    ((title, owner, self.codes.get(owner), n, list_path, text, json.dumps(links, ensure_ascii=False), json.dumps(emphasis) if emphasis else None,
                       page.findtext('{*}id'), revision.findtext('{*}id'))
-                     for owner, n, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings)))
+                     for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings)))
             root.remove(page)
 
     def observe(self, entry):
         if entry['kind'] != 'language':
             return
-        expected = self.db.execute('SELECT rowid,text,links,emphasis FROM sense WHERE title=? AND '
+        expected = self.db.execute('SELECT rowid,list_path,text,links,emphasis FROM sense WHERE title=? AND '
                                    '(code=? OR (code IS NULL AND owner=?)) ORDER BY line',
                                    (entry['title'], entry.get('language_code'), entry['language'])).fetchall()
         if not expected:
@@ -239,21 +244,22 @@ class SourceDefinitions:
         # Plain and directly linked senses must occupy a definition block in
         # order. A coincidental match in a translation or example cannot pass.
         positions = defaultdict(list)
-        styled = any(emphasis is not None for _, _, _, emphasis in expected)
+        styled = any(row[-1] is not None for row in expected)
         position = 0
         for section in entry['sections']:
             for block in section['blocks']:
-                if block['kind'] == 'definition' and block.get('list_path') == '#':
+                if block['kind'] == 'definition':
+                    list_path = block.get('list_path')
                     witness = compiled_line(block['spans'])
                     if witness is not None:
-                        positions[(*witness, None)].append(position)
+                        positions[(list_path, *witness, None)].append(position)
                         if styled and (emphasis := compiled_emphasis(block['spans'])) is not None:
-                            positions[(*witness, emphasis)].append(position)
+                            positions[(list_path, *witness, emphasis)].append(position)
                     position += 1
         cursor = 0
-        for rowid, text, links, emphasis in expected:
+        for rowid, list_path, text, links, emphasis in expected:
             actions = tuple(tuple(action) for action in json.loads(links))
-            candidates = positions.get((text, actions, tuple(json.loads(emphasis)) if emphasis else None), ())
+            candidates = positions.get((list_path, text, actions, tuple(json.loads(emphasis)) if emphasis else None), ())
             index = bisect_left(candidates, cursor)
             if index < len(candidates):
                 self.db.execute('UPDATE sense SET matched=1 WHERE rowid=?', (rowid,))
@@ -261,17 +267,17 @@ class SourceDefinitions:
 
     def report(self):
         count, matched = self.db.execute('SELECT count(*),coalesce(sum(matched),0) FROM sense').fetchone()
-        missing = self.db.execute('SELECT title,owner,line,text,links,emphasis,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
+        missing = self.db.execute('SELECT title,owner,line,list_path,text,links,emphasis,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
         examples = []
-        for title, owner, line, text, links, emphasis, page, revision in missing:
+        for title, owner, line, list_path, text, links, emphasis, page, revision in missing:
             actions = json.loads(links)
             target = actions[0][2] if len(actions) == 1 and actions[0][:2] == [0, len(text)] else None
-            examples.append(dict(title=title, owner=owner, line=line, text=text, links=actions, emphasis=json.loads(emphasis) if emphasis else None, target=target, page=page, revision=revision))
+            examples.append(dict(title=title, owner=owner, line=line, list_path=list_path, text=text, links=actions, emphasis=json.loads(emphasis) if emphasis else None, target=target, page=page, revision=revision))
         return dict(eligible=count, matched=matched, unmatched=count-matched, dump_sha1=self.inputs,
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples,
-                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def close(self):
         self.db.close()

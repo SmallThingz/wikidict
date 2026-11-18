@@ -38,10 +38,16 @@ class ScanError(ValueError):
 
 
 def diagnostic_categories(text):
-    return [name for name, pattern in (
-        ('source-markup', MARKUP), ('behavior-switch', BEHAVIOR_SWITCH),
-        ('error-prose', ERROR_PROSE), ('unavailable-template', UNAVAILABLE_TEMPLATE)
-    ) if pattern.search(text)]
+    found = []
+    if ('[' in text or ']' in text or '{' in text or '}' in text or '<' in text) and MARKUP.search(text):
+        found.append('source-markup')
+    if '__' in text and BEHAVIOR_SWITCH.search(text):
+        found.append('behavior-switch')
+    if 'error' in text.lower() and ERROR_PROSE.search(text):
+        found.append('error-prose')
+    if '[' in text and UNAVAILABLE_TEMPLATE.search(text):
+        found.append('unavailable-template')
+    return found
 
 
 def inline_text_parts(spans, path, start=0):
@@ -702,7 +708,7 @@ def main():
                 from source_definition_audit import SourceDefinitions
                 review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
                 resources.callback(review.close)
-            result = scan(args.root, query, exports, observe_record=review.observe if review else None,
+            result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
                           audit_references=args.audit_reference_hints)
             if review is not None:
                 result['source_definitions'] = review.report()
