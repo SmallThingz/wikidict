@@ -466,7 +466,20 @@ component of the dated XML/SQL dump.
 
 Set `EDITION_DIR` to the edition's dated output directory containing `complete.json`
 and `languages.tsv`. A build with `--out data/dictionaries` writes to
-`data/dictionaries/<wiki>/<dump-date>/`. This command verifies the selected directory.
+`data/dictionaries/<wiki>/<dump-date>/`.
+
+For the locally built October 2026 corpus, `data/corpus-campaign-current01/local-editions.tsv`
+lists each edition's status, output directory relative to the checkout, and SHA-256
+of `complete.json`. Use a `built` row to read entries. An `empty` row has a complete
+catalog with no lexical entries. This command opens the Assamese edition from the
+checkout root.
+
+```sh
+EDITION_DIR=data/build-artifacts-retained-small7-20261118-01/published/aswiktionary/20261001
+zig-out/bin/wikidict tui --root "$EDITION_DIR"
+```
+
+The native verifier checks the selected directory.
 
 ```sh
 zig build -Doptimize=fast verify-blobs -- "$EDITION_DIR"
