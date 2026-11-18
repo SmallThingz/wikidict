@@ -479,6 +479,12 @@ EDITION_DIR=data/build-artifacts-retained-small7-20261118-01/published/aswiktion
 zig-out/bin/wikidict tui --root "$EDITION_DIR"
 ```
 
+[Local edition diagnostics](data/corpus-campaign-current01/local-edition-diagnostics.tsv)
+lists the pages sent for expansion and the pages with a recorded fallback for
+each selected build. The reason counts can overlap on a single page. The
+manifest hash ties each row to the corresponding directory in the output index.
+An edition without a completed build has blank counts.
+
 The native verifier checks the selected directory.
 
 ```sh
