@@ -2,6 +2,7 @@
 """Render a source-selected entry from a compiled edition in a disposable terminal."""
 
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -16,10 +17,10 @@ class NativeCellReaderPty(ReaderPty):
     def snapshot(self, label):
         super().snapshot(label)
         snapshot = self.snapshots[-1]
-        path = self.output / Path(snapshot['file']).with_suffix('.cells.json')
-        path.write_text(json.dumps(dict(projection='libvterm', columns=self.width,
-                                        rows=self.rows, cells=self.screen.cell_rows()),
-                                   ensure_ascii=False, indent=2) + '\n')
+        path = self.output / Path(snapshot['file']).with_suffix('.cells.json.gz')
+        grid = dict(projection='libvterm', columns=self.width, rows=self.rows, cells=self.screen.cell_rows())
+        payload = json.dumps(grid, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        path.write_bytes(gzip.compress(payload, compresslevel=1, mtime=0))
         snapshot['cells_file'] = path.name
 
 

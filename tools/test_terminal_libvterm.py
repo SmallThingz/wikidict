@@ -1,4 +1,5 @@
 import ctypes.util
+import gzip
 import importlib.util
 import json
 from pathlib import Path
@@ -68,7 +69,9 @@ class NativeCellTests(unittest.TestCase):
             reader.screen, reader.width, reader.rows = self.screen, 20, 3
             reader.output, reader.snapshots = Path(temp), []
             reader.snapshot('unicode')
-            captured = json.loads((reader.output / reader.snapshots[0]['cells_file']).read_text())
+            path = reader.output / reader.snapshots[0]['cells_file']
+            self.assertEqual(path.suffixes, ['.cells', '.json', '.gz'])
+            captured = json.loads(gzip.decompress(path.read_bytes()))
             self.assertEqual(captured['cells'], self.screen.cell_rows())
             self.assertEqual(captured['columns'], 20)
             self.assertEqual((reader.output / '00-unicode.txt').read_text(), '  \u0789\u07a6\u0790\u07b0\n\n\n')
