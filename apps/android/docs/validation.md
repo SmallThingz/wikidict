@@ -1,6 +1,52 @@
 # Android validation
 
-## Current canonical source and host qualification — 2026-11-18
+## Current full-suite and unsigned-package qualification — 2026-11-18
+
+The current Android product is commit
+`a22f5f12b1928421762907e5b6e5f50cb7c3c67d`. Host144 ran the complete discovered
+suite: **1,149 fresh passes, zero failures, errors, skips or carried cases**.
+This includes 1,147 correctness cases and two benchmark-named cases, with no
+performance claim. Main and unit Kotlin compilation were up to date on the exact
+Host143 source paths. Host143's instrumentation compilation remains qualified on
+identical inputs; no instrumentation task or device test was repeated. Its earlier
+17 selected passes remain a separate result. The [full-suite audit][host144]
+binds the raw cases, canonical source comparison and physical closure.
+
+**Package145 is the current verified unsigned host artifact**, built from that
+integrated FR source. Ordinary `assembleRelease`, release Kotlin compilation,
+R8, packaging and release vital checks passed. Unchanged resource work stayed up
+to date. The 497 native inputs and four optimized JNI libraries were verified and
+reused. Packaging ran no JVM tests, instrumentation tests, JNI compilation or full
+lint. The [saved package audit][package145] records:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, non-debuggable;
+  **minimum API 31, target API 37**.
+- **10,882,017 bytes (10.38 MiB)**, 32,768 bytes larger than Package142.
+  SHA-256: `1f758496c90fe012efcbc1f91cd81a8777cc8e5ec5f98c24b0026ce55aa0ce9d`.
+- The same 99 ZIP members, with only `classes.dex` and the two baseline-profile
+  members changed. JNI libraries, fonts and licences retain their verified bytes.
+- **Unsigned**: no APK signing block or JAR signatures. The signature verifier
+  exits 1 with `DOES NOT VERIFY` and `Missing META-INF/MANIFEST.MF`. This artifact
+  is not installable as-is; no signing, installation or signer qualification is
+  claimed.
+
+The retained build is [Package145's release-unsigned.apk][apk145]. Package142 and
+the earlier unsigned archives, signed102, installed62 and user data are preserved.
+The pre-ADB namespace `EACCES` still has no established access recovery. Current
+phone rendering and interaction require permitted physical access and an authorized
+compatible signed installation. Genuine complete FR producer/Writer/reader
+interoperability and physical pixels, hover, selection and accessibility remain
+separate from these host results. No publication is authorized by this qualification.
+
+[host144]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host144/saved-result-peer-reader01.json
+[package145]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package145/saved-result-peer-reader01.json
+[apk145]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package145/artifacts/release-unsigned.apk
+
+## Historical scoped FR integration and Package142 — 2026-11-18
+
+This section preserves the earlier scoped integration and package evidence.
+References to current qualification here apply to that earlier boundary; Host144
+and Package145 above supersede its full-suite and unsigned-artifact roles.
 
 The canonical Android implementation now includes commit
 `a22f5f12b1928421762907e5b6e5f50cb7c3c67d`, **Support detached inline overlay
