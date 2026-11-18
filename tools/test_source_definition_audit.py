@@ -7,15 +7,26 @@ from contextlib import closing
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from source_definition_audit import SourceDefinitions, definitions
+from source_definition_audit import SourceDefinitions, compiled_line, definitions, simple_line
 
 
 class SourceDefinitionTests(unittest.TestCase):
     def test_source_boundaries(self):
         text = '==English==\n===Noun===\n# [[cat|cats]]\n#: Example\n## subsense\n# [[self]]\n==Unknown==\n# stray meaning'
-        self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', 'cat')])
+        self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', ((0, 4, 'cat'),))])
         for prefix in ('{{header}}', '<nowiki>', '{|', '__TOC__'):
             self.assertEqual(list(definitions(prefix + '\n' + text, 'self', {'English'})), [])
+
+    def test_links_bind_each_visible_range_with_its_own_destination(self):
+        expected = simple_line('A [[猫|cat]] or [[mačka|cat]].', 'other')
+        self.assertEqual(expected, ('A cat or cat.', ((2, 5, '猫'), (9, 12, 'mačka'))))
+        spans = [dict(kind='text', text='  A '), dict(kind='link', text='cat', target='猫'),
+                 dict(kind='text', text=' or '), dict(kind='link', text='cat', target='mačka'), dict(kind='text', text='. ')]
+        self.assertEqual(compiled_line(spans), expected)
+        spans[1], spans[3] = spans[3], spans[1]
+        self.assertNotEqual(compiled_line(spans), expected)
+        for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part|cat]]'):
+            self.assertIsNone(simple_line(source, 'other'))
 
     def test_real_dump_hash_owner_definition_actions_and_order(self):
         with tempfile.TemporaryDirectory() as directory:

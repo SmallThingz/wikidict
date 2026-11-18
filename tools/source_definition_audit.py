@@ -14,6 +14,51 @@ LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
 PLAIN = re.compile(r"[^\[\]{}<>|&'#=]+")
 
 
+def simple_line(source, title):
+    """Return visible prose and the code-point range of each authored link."""
+    parts, links = [], []
+    end = offset = 0
+    for match in LINK.finditer(source):
+        literal = source[end:match.start()]
+        if literal and not PLAIN.fullmatch(literal):
+            return None
+        target, label = match[1], match[2] or match[1]
+        if (target.strip() != target or target.casefold() == title.casefold() or "''" in label
+                or (match.end() < len(source) and source[match.end()].isalpha())):
+            # A self-link may lose its action. Link trails depend on the edition.
+            return None
+        parts.extend((literal, label))
+        offset += len(literal)
+        links.append((offset, offset + len(label), target))
+        offset += len(label)
+        end = match.end()
+    tail = source[end:]
+    if tail and not PLAIN.fullmatch(tail):
+        return None
+    parts.append(tail)
+    text = ''.join(parts)
+    return (text, tuple(links)) if links or any(c.isalpha() for c in text) else None
+
+
+def compiled_line(spans):
+    parts, links = [], []
+    offset = 0
+    for span in spans:
+        if span['kind'] not in ('text', 'link') or any(span.get(key) is not None for key in (
+                'inline_action_group', 'inline_padding_group', 'inline_box_group', 'ruby', 'image')):
+            return None
+        text = span['text'] + span.get('trail', '')
+        if span['kind'] == 'link':
+            if span.get('target_fragment') or span.get('trail'):
+                return None
+            links.append((offset, offset + len(text), span['target']))
+        parts.append(text)
+        offset += len(text)
+    text = ''.join(parts)
+    leading = len(text) - len(text.lstrip())
+    return text.strip(), tuple((start - leading, end - leading, target) for start, end, target in links)
+
+
 def definitions(text, title, headings):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
@@ -26,22 +71,16 @@ def definitions(text, title, headings):
             owner = heading[1] if heading and heading[1] in headings else None
         if not owner or not line.startswith('#') or line.startswith(('##', '#:', '#*', '#;')):
             continue
-        content = line[1:].strip()
-        link = LINK.fullmatch(content)
-        if link:
-            target, display = link[1], link[2] or link[1]
-            if target.strip() != target or target.casefold() == title.casefold():
-                continue
-            yield owner, number, display, target
-        elif PLAIN.fullmatch(content) and any(c.isalpha() for c in content):
-            yield owner, number, content, None
+        witness = simple_line(line[1:].strip(), title)
+        if witness is not None:
+            yield owner, number, *witness
 
 
 class SourceDefinitions:
     def __init__(self, database, root, dumps):
         self.db = sqlite3.connect(database)
         try:
-            self.db.execute('CREATE TABLE sense (title, owner, line, text, target, page, revision, matched INTEGER DEFAULT 0)')
+            self.db.execute('CREATE TABLE sense (title, owner, line, text, links, page, revision, matched INTEGER DEFAULT 0)')
             self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
@@ -88,15 +127,15 @@ class SourceDefinitions:
                 revision = page.find('{*}revision')
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
-                self.db.executemany('INSERT INTO sense (title,owner,line,text,target,page,revision) VALUES (?,?,?,?,?,?,?)',
-                    ((title, owner, n, text, target, page.findtext('{*}id'), revision.findtext('{*}id'))
-                     for owner, n, text, target in definitions(revision.findtext('{*}text', ''), title, headings)))
+                self.db.executemany('INSERT INTO sense (title,owner,line,text,links,page,revision) VALUES (?,?,?,?,?,?,?)',
+                    ((title, owner, n, text, json.dumps(links, ensure_ascii=False), page.findtext('{*}id'), revision.findtext('{*}id'))
+                     for owner, n, text, links in definitions(revision.findtext('{*}text', ''), title, headings)))
             root.remove(page)
 
     def observe(self, entry):
         if entry['kind'] != 'language':
             return
-        expected = self.db.execute('SELECT rowid,text,target FROM sense WHERE title=? AND owner=? ORDER BY line',
+        expected = self.db.execute('SELECT rowid,text,links FROM sense WHERE title=? AND owner=? ORDER BY line',
                                    (entry['title'], entry['language'])).fetchall()
         if not expected:
             return
@@ -107,24 +146,14 @@ class SourceDefinitions:
         for section in entry['sections']:
             for block in section['blocks']:
                 if block['kind'] == 'definition' and block.get('list_path') == '#':
-                    spans = block['spans']
-                    # The exported text of an outer span omits its nested children.
-                    # A simple source line cannot attest those extra words or actions.
-                    if any(s.get(key) is not None for s in spans for key in (
-                        'inline_action_group', 'inline_padding_group', 'inline_box_group', 'ruby', 'image'
-                    )):
-                        continue
-                    text = ''.join(s['text'] + s.get('trail', '') for s in spans).strip()
-                    links = [s for s in spans if s['kind'] == 'link']
-                    if all(s['kind'] == 'text' for s in spans):
-                        positions[text, None].append(position)
-                    elif (len(links) == 1 and all(s['kind'] in ('text', 'link') for s in spans)
-                          and links[0]['text'] == text and not links[0].get('target_fragment')):
-                        positions[text, links[0]['target']].append(position)
+                    witness = compiled_line(block['spans'])
+                    if witness is not None:
+                        positions[witness].append(position)
                     position += 1
         cursor = 0
-        for rowid, text, target in expected:
-            candidates = positions.get((text, target), ())
+        for rowid, text, links in expected:
+            actions = tuple(tuple(action) for action in json.loads(links))
+            candidates = positions.get((text, actions), ())
             index = bisect_left(candidates, cursor)
             if index < len(candidates):
                 self.db.execute('UPDATE sense SET matched=1 WHERE rowid=?', (rowid,))
@@ -132,10 +161,15 @@ class SourceDefinitions:
 
     def report(self):
         count, matched = self.db.execute('SELECT count(*),coalesce(sum(matched),0) FROM sense').fetchone()
-        missing = self.db.execute('SELECT title,owner,line,text,target,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
+        missing = self.db.execute('SELECT title,owner,line,text,links,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
+        examples = []
+        for title, owner, line, text, links, page, revision in missing:
+            actions = json.loads(links)
+            target = actions[0][2] if len(actions) == 1 and actions[0][:2] == [0, len(text)] else None
+            examples.append(dict(title=title, owner=owner, line=line, text=text, links=actions, target=target, page=page, revision=revision))
         return dict(eligible=count, matched=matched, unmatched=count-matched, dump_sha1=self.inputs,
                     has_source_evidence=count > 0,
-                    examples=[dict(zip(('title','owner','line','text','target','page','revision'), row)) for row in missing],
+                    examples=examples,
                     scope='Compare simple numbered source lines under literal emitted language headings on template-free pages to ordered definition blocks. Unmatched items require source review; a numbered example or related term can be intentional.')
 
     def close(self):
