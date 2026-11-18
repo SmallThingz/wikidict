@@ -6,11 +6,24 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import choose_startup_language, copy_publication, main, reading_body, source_witness_visible
+from verify_edition_terminal import choose_startup_language, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
 from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_library_route_uses_only_keys_offered_by_the_rendered_chooser(self):
+        names = [f'Heading {i}' for i in range(138)]
+        display = [''] * 30
+        display[5:25] = names[:20]
+        display[-2] = 'PgUp/PgDn page  Home/End'
+        self.assertEqual(library_selection_keys(display, names, names[137]), b'\x1b[F' + ENTER)
+        self.assertEqual(library_selection_keys(display, names, names[40]), b'\x1b[H' + b'\x1b[6~' * 2 + ENTER)
+        self.assertEqual(library_selection_keys(display, names, names[117]), b'\x1b[F\x1b[5~' + ENTER)
+        display[5] = 'truncated…'
+        self.assertEqual(library_selection_keys(display, names, names[2]), b'\x1b[H' + DOWN * 2 + ENTER)
+        display[-2] = 'Use arrows'
+        self.assertEqual(library_selection_keys(display, names, names[2]), DOWN * 2 + ENTER)
+
     def test_implicit_startup_selects_the_requested_catalog_heading(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

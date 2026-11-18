@@ -161,6 +161,25 @@ def binary_identity(stat):
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
+def library_selection_keys(display, headings, target):
+    index = headings.index(target)
+    if len(display) < 12 or 'Home/End' not in display[-2]:
+        return DOWN * index + ENTER
+
+    # Read the actual page size from the first rendered catalog page. Older
+    # or truncated layouts can still use the two advertised endpoints.
+    visible = [normalized(line.strip()) for line in display[5:-4] if line.strip()]
+    page = len(visible) if 'PgUp/' in display[-2] and visible == [normalized(h) for h in headings[:len(visible)]] else 0
+
+    def route(distance, anchor, page_key, arrow):
+        pages, singles = divmod(distance, page) if page > 1 else (0, distance)
+        return pages + singles + 1, anchor + page_key * pages + arrow * singles
+
+    forward = route(index, b'\x1b[H', b'\x1b[6~', DOWN)
+    backward = route(len(headings) - 1 - index, b'\x1b[F', b'\x1b[5~', b'\x1b[A')
+    return min(forward, backward, key=lambda path: path[0])[1] + ENTER
+
+
 def choose_startup_language(reader, root, language):
     header, *headings = (root / 'languages.tsv').read_text(encoding='utf-8').splitlines()
     require(header == 'heading' and language in headings, 'Selected language is missing from the catalog')
@@ -181,7 +200,8 @@ def choose_startup_language(reader, root, language):
     else:
         reader.wait(library_visible, 'offered installed languages at startup')
     reader.snapshot('language-chooser')
-    reader.action(DOWN * headings.index(language) + ENTER, lambda: selected(language), 'opened chosen language')
+    keys = library_selection_keys(reader.screen.display, headings, language)
+    reader.action(keys, lambda: selected(language), 'opened chosen language')
 
 
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False):

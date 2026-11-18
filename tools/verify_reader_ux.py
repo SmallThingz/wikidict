@@ -221,12 +221,22 @@ class ReaderPty:
         if isinstance(data, str):
             data = data.encode("utf-8")
         view = memoryview(data)
+        deadline = min(time.monotonic() + self.timeout, self.budget_end)
         while view:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise CheckFailure(f"Timed out sending Reader input ({len(view)} bytes remaining)")
             try:
                 written = os.write(self.master, view)
                 view = view[written:]
             except BlockingIOError:
-                select.select([], [self.master], [], self.timeout)
+                # A Reader flushing its frame cannot consume more keystrokes
+                # until the master drains output. Keep complete frames for wait().
+                readable, _, _ = select.select([self.master], [self.master], [], remaining)
+                if readable:
+                    self.read(0)
+                if self.process.poll() is not None:
+                    raise CheckFailure(f"Reader exited {self.process.returncode} while receiving input")
         return before
 
     def action(self, keys: bytes | str, predicate, label: str) -> None:

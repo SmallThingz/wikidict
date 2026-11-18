@@ -10,6 +10,34 @@ spec = importlib.util.spec_from_file_location("reader_ux", Path(__file__).with_n
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
+class ReaderInputTests(unittest.TestCase):
+    def test_blocked_send_drains_output_and_resumes_at_first_unsent_byte(self):
+        reader = m.ReaderPty.__new__(m.ReaderPty)
+        reader.master, reader.frames, reader.timeout, reader.budget_end = 31, 4, 2, 20
+        reader.process = unittest.mock.Mock()
+        reader.process.poll.return_value = None
+        reader.read = unittest.mock.Mock()
+        with patch.object(m.time, 'monotonic', return_value=10), \
+                patch.object(m.os, 'write', side_effect=[1, BlockingIOError(), 2]) as write, \
+                patch.object(m.select, 'select', return_value=([31], [], [])) as select:
+            self.assertEqual(reader.send('abc'), 4)
+        select.assert_called_once_with([31], [31], [], 2)
+        reader.read.assert_called_once_with(0)
+        self.assertEqual([bytes(call.args[1]) for call in write.call_args_list], [b'abc', b'bc', b'bc'])
+
+    def test_send_uses_remaining_review_budget_when_peer_never_reads(self):
+        reader = m.ReaderPty.__new__(m.ReaderPty)
+        reader.master, reader.frames, reader.timeout, reader.budget_end = 31, 0, 60, 10.5
+        reader.process = unittest.mock.Mock()
+        reader.process.poll.return_value = None
+        with patch.object(m.time, 'monotonic', side_effect=[10, 10, 10.5]), \
+                patch.object(m.os, 'write', side_effect=BlockingIOError()), \
+                patch.object(m.select, 'select', return_value=([], [], [])) as select:
+            with self.assertRaisesRegex(m.CheckFailure, '1 bytes remaining'):
+                reader.send(b'x')
+        select.assert_called_once_with([31], [31], [], 0.5)
+
+
 class OwnedReaderTests(unittest.TestCase):
     def setUp(self):
         self.identity = (900, 11, 42, 42, 1000)
