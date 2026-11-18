@@ -7907,7 +7907,7 @@ def main():
     p.add_argument('--output','--out',type=Path,metavar='DIR')
     p.add_argument('--continue-failed-shards',action='store_true',help='With an audit bound, continue only authenticated presentation rejections; retain verified shards and refuse merge/publication if any shard fails')
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
-    p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard before building the next; merged output remains raw until verified')
+    p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack input directory for exactly one edition; validates existing marker and bytes, never copies or retires it')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
