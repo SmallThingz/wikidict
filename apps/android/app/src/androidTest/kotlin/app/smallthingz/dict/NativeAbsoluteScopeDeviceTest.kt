@@ -534,4 +534,193 @@ class NativeAbsoluteScopeDeviceTest {
             compose.onAllNodesWithText("Unable to display this layout.", useUnmergedTree = true).assertCountEquals(0)
         }
     }
+
+    @Test fun ordinaryHiddenTableRetainsOnlyProgrammaticRevealAcrossRootBandsAndNestedWidths() {
+        // Direct typed constructor control, not a captured ZH record. The original Table
+        // and Hidden owner survive every viewport phase; no positioned-scope substitute.
+        fun text(value: String) = Span("text", value, fontScale = 14f,
+            fontScaleBasis = FontScaleBasis.CssPx, fontFamily = ContainerFontFamily.SansSerif)
+        fun link(value: String) = text(value).copy(kind = "link", target = "hidden-$value")
+        val near = link("NEAR"); val far = link("FAR"); val caption = link("CAPTION")
+        val heading = Block("heading", 0, listOf(far), level = 3, anchor = "hidden-far")
+        val cellStyle = CellStyle(border = StyleBorder.None, padding = zero(),
+            width = StyleWidth(StyleWidthUnit.Px, 200f), minWidth = px(200f))
+        val rows = listOf(listOf(Cell(listOf(near), false, 1, 1, style = cellStyle),
+            Cell(listOf(text("first")), false, 1, 1, style = cellStyle))) +
+            List(28) { index -> listOf(Cell(listOf(text("left $index")), false, 1, 1, style = cellStyle),
+                Cell(listOf(text("right $index")), false, 1, 1, style = cellStyle)) } +
+            listOf(listOf(Cell(listOf(text("last")), false, 1, 1, style = cellStyle),
+                Cell(emptyList(), false, 1, 1, blocks = listOf(heading),
+                    style = cellStyle.copy(textAlign = CellTextAlign.Right))))
+        val table = Table(listOf(caption), rows,
+            geometry = TableGeometry(border = 0, cellSpacing = 0, cellPadding = 0),
+            style = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 400f), border = StyleBorder.None,
+                padding = zero(), margins = zero()), rowsHiddenMaxWidthPx = 639L)
+        val source = Container(listOf(Block("table", 0, emptyList(), table = table)),
+            ContainerStyle(width = ContainerWidth.FitContent,
+                maxWidth = ContainerMaxWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f)),
+                boxSizing = ContainerBoxSizing.BorderBox, overflow = ContainerOverflow.Hidden,
+                positioning = ContainerPositioning.RelativeAuto, margins = zero(),
+                padding = StyleEdges(px(4f), px(8f), px(4f), px(8f)),
+                border = ContainerBorder.Solid(px(2f), ContainerColor.Rgb("#ff0000")),
+                background = ContainerColor.Rgb("#ddffdd"),
+                screenMaxWidth = ContainerScreenMaxWidth(639L, width = ContainerWidth.Auto)))
+        fun sourceEntry(containing: Float) = Entry("Hidden Table constructor", emptyList(), "language", "English", "en",
+            listOf(Section(0, "", listOf(box(Container(listOf(box(source)), ContainerStyle(
+                width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, containing))))),
+                paragraph(listOf(text("after hidden table")))))), emptyList(),
+            bodyAdjoining = BodyAdjoiningPolicy.Ordinary)
+        val value = mutableStateOf(sourceEntry(200f), referentialEqualityPolicy())
+        val rootCss = mutableStateOf(640.0); val width = mutableStateOf(420); val zoom = mutableStateOf(1f)
+        val request = mutableStateOf<EntryAnchorRequest?>(null, referentialEqualityPolicy())
+        val reading = EntryReadingState(); val actions = mutableListOf<EntryLink>()
+        val consumed = mutableListOf<EntryAnchorRequest>(); val failures = mutableListOf<String>()
+        fun owner(label: String): NativeFloatTextView = ui { views().single { view ->
+            view.currentMeasuredGeometry?.nodes?.any { it.kind == FloatInteractionKind.LINK && it.label == label } == true
+        } }
+        fun has(label: String) = ui { views().any { view ->
+            view.currentMeasuredGeometry?.nodes?.any { it.kind == FloatInteractionKind.LINK && it.label == label } == true
+        } }
+        fun port() = compose.onNodeWithTag("compiled-hidden-scrollport", useUnmergedTree = true)
+        fun root() = compose.onNodeWithTag("ordinary-hidden-root")
+        fun visible(label: String): Boolean = ui {
+            if (!has(label)) return@ui false
+            val view = owner(label); val item = node(view, label)
+            val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(item.id))
+            try { info.isVisibleToUser } finally { info.recycle() }
+        }
+        fun ready(shown: Boolean) {
+            compose.waitUntil(5000) { has("CAPTION") && has("NEAR") == shown && has("FAR") == shown }
+            compose.waitForIdle()
+            compose.onAllNodesWithText("layout unavailable", substring = true, ignoreCase = true,
+                useUnmergedTree = true).assertCountEquals(0)
+            assertSame(rows, table.rows); assertSame(table, source.blocks.single().table)
+        }
+        fun assertSource(label: String) = ui {
+            val view = owner(label); val item = node(view, label)
+            assertEquals(label, view.logicalText.subSequence(item.start, item.end).toString())
+            view.setSelection(item.start, item.end); assertEquals(label, view.selectedTextForCopy()); clearSelection(view)
+            val info = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(item.id))
+            try { assertEquals(label, info.text.toString()); assertTrue(info.isClickable) } finally { info.recycle() }
+        }
+        fun noUserScroll() {
+            val semantic = port().fetchSemanticsNode()
+            assertNull(semantic.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange))
+            assertNull(semantic.config.getOrNull(SemanticsActions.ScrollBy))
+            val id = semantic.id
+            compose.runOnIdle {
+                val providers = allViews().filterNot { it is NativeFloatTextView }.mapNotNull { it.accessibilityNodeProvider }.distinct()
+                assertTrue(providers.isNotEmpty())
+                assertFalse(providers.any { it.performAction(id, AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, null) })
+                assertFalse(providers.any { it.performAction(id, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD, null) })
+            }
+        }
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, zoom.value),
+                    LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalTableDocumentViewportCssWidth provides rootCss.value,
+                    LocalNativeFloatContextFailureObserver provides { failures += it }) {
+                    DictTheme("light") {
+                        MaterialTheme(typography = Typography(bodyLarge = TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+                            fontFamily = FontFamily.SansSerif, letterSpacing = 0.sp))) {
+                            Box(Modifier.size(width.value.dp, 420.dp).background(Color.White).testTag("ordinary-hidden-root")) {
+                                EntryView(value.value, false, {}, onLink = { actions += it }, settings = settings,
+                                    readingState = reading, anchorRequest = request.value,
+                                    onAnchorConsumed = {
+                                        if (rootCss.value > 639.0) {
+                                            val placed = owner("FAR"); val item = node(placed, "FAR")
+                                            assertTrue(placed.isAttachedToWindow && placed.isLaidOut)
+                                            assertNotNull(placed.currentMeasuredGeometry)
+                                            assertEquals(far.text, placed.logicalText.subSequence(item.start, item.end).toString())
+                                            assertTrue(item.bounds.any { !it.isEmpty })
+                                        }
+                                        consumed += it; if (request.value === it) request.value = null
+                                    })
+                            }
+                        }
+                    }
+                }
+            } }
+            ready(true); noUserScroll()
+            assertEquals(196f, windowBox(port()).width(), .01f)
+            val originalHeight = windowBox(port()).height()
+            assertTrue("The real final cell lies below the reader viewport", originalHeight > windowBox(root()).height())
+            assertFalse(visible("FAR")); assertSource("NEAR"); assertSource("FAR"); assertSource("CAPTION")
+            val nearView = owner("NEAR"); val nearStart = node(nearView, "NEAR").start
+            val before = caretWindow(nearView, nearStart).left
+            val nearBand = caretWindow(nearView, nearStart)
+            val shell = windowBox(port())
+            compose.runOnIdle {
+                inputGuard(); val now = SystemClock.uptimeMillis()
+                // Dispatch through the real activity/Compose hierarchy, not directly to
+                // the child View (which would miss an accidentally installed draggable).
+                val x = shell.left + 30f; val y = nearBand.centerY()
+                for ((dt, action, dx) in listOf(Triple(0L, MotionEvent.ACTION_DOWN, 0f),
+                    Triple(20L, MotionEvent.ACTION_MOVE, -50f), Triple(21L, MotionEvent.ACTION_CANCEL, -50f))) {
+                    val event = MotionEvent.obtain(now, now + dt, action, x + dx, y, 0)
+                    try { compose.activity.dispatchTouchEvent(event) } finally { event.recycle() }
+                }
+                val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE }
+                val coordinates = MotionEvent.PointerCoords().apply { this.x = x; this.y = y; setAxisValue(MotionEvent.AXIS_HSCROLL, 1f) }
+                val wheel = MotionEvent.obtain(now + 30, now + 30, MotionEvent.ACTION_SCROLL, 1,
+                    arrayOf(properties), arrayOf(coordinates), 0, 0, 1f, 1f, 0, 0,
+                    android.view.InputDevice.SOURCE_MOUSE, 0)
+                try { compose.activity.dispatchGenericMotionEvent(wheel) } finally { wheel.recycle() }
+            }
+            compose.waitForIdle(); assertEquals(before, caretWindow(owner("NEAR"), node(owner("NEAR"), "NEAR").start).left, .01f)
+            assertTrue(actions.isEmpty())
+            // A genuine child native View asks its ancestors to reveal this action.
+            val farView = owner("FAR"); val farId = node(farView, "FAR").id
+            compose.runOnIdle {
+                // The bridge launches real descendant requests; latest same-value and
+                // opposite-target replacements must not cancel the final placement.
+                assertTrue(farView.revealLogicalOffset(node(farView, "FAR").start))
+                assertTrue(farView.revealLogicalOffset(node(farView, "FAR").start))
+                assertTrue(nearView.revealLogicalOffset(nearStart))
+                assertTrue(farView.accessibilityNodeProvider.performAction(farId,
+                    AccessibilityNodeInfo.ACTION_FOCUS, null))
+            }
+            compose.waitUntil(5000) { visible("FAR") }
+            compose.waitForIdle(); noUserScroll()
+            assertTrue(caretWindow(owner("NEAR"), node(owner("NEAR"), "NEAR").start).left < before)
+            assertEquals(originalHeight, windowBox(port()).height(), .01f)
+            assertSame(farView, owner("FAR")); assertEquals(farId, node(farView, "FAR").id)
+            assertSource("FAR"); click(farView, "FAR")
+            assertEquals(listOf(EntryLink("hidden-FAR", null)), actions)
+            // Changing root allocation alone does not change the nested containing C.
+            compose.runOnIdle { width.value = 360 }; ready(true)
+            assertEquals(196f, windowBox(port()).width(), .01f)
+            compose.runOnIdle { value.value = sourceEntry(160f); zoom.value = 1.5f }; ready(true)
+            assertEquals(156f, windowBox(port()).width(), .01f); noUserScroll(); assertSource("FAR")
+            // ROOT CSS threshold is inclusive despite C=160 and a different actual UI width.
+            compose.runOnIdle { rootCss.value = 639.0 }; ready(false)
+            assertTrue(windowBox(port()).height() < originalHeight)
+            assertSource("CAPTION"); noUserScroll()
+            val hiddenScroll = ui { reading.scroll.firstVisibleItemIndex to reading.scroll.firstVisibleItemScrollOffset }
+            val denied = EntryAnchorRequest(value.value.key, "hidden-far")
+            compose.runOnIdle { request.value = denied }
+            compose.waitUntil(5000) { ui { consumed.any { it === denied } } }
+            compose.onNodeWithText(SourceHeadingRevealUnavailable, useUnmergedTree = true).assertExists()
+            assertEquals(1, consumed.count { it === denied })
+            assertEquals(hiddenScroll, ui { reading.scroll.firstVisibleItemIndex to reading.scroll.firstVisibleItemScrollOffset })
+            assertFalse(has("FAR")); assertSame(heading, table.rows.last()[1].blocks!!.single())
+            // The original allowed Table-cell heading recovers, including vertical root
+            // reveal. Consumption is placement-backed; visibility is checked separately.
+            compose.runOnIdle { rootCss.value = 640.0; zoom.value = 1f; value.value = sourceEntry(200f) }; ready(true)
+            val recovered = EntryAnchorRequest(value.value.key, "hidden-far")
+            compose.runOnIdle { request.value = recovered }
+            compose.waitUntil(5000) { ui { consumed.any { it === recovered } } }
+            compose.waitUntil(5000) { visible("FAR") }
+            assertEquals(1, consumed.count { it === recovered }); assertSource("FAR"); noUserScroll()
+            assertEquals(196f, windowBox(port()).width(), .01f)
+            assertEquals(originalHeight, windowBox(port()).height(), .01f)
+            assertTrue(failures.isEmpty())
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent { } }; compose.waitForIdle() }
+            catch (failure: Throwable) { if (primary != null) primary.addSuppressed(failure) else throw failure }
+        }
+    }
 }

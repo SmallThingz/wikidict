@@ -500,7 +500,8 @@ internal fun blockIndentDp(block: Block): Int =
 internal enum class HeadingAnchorKind { Primary, Fallback }
 internal data class HeadingAnchorSelection(val id: String, val kind: HeadingAnchorKind, val revealTop: StyleLength?)
 internal data class HeadingDestination(val rowKey: String, val path: String?, val compiledId: Boolean,
-    val referenceIndex: Int? = null, val anchorMatch: HeadingAnchorSelection? = null)
+    val referenceIndex: Int? = null, val anchorMatch: HeadingAnchorSelection? = null,
+    val rowsHiddenMaxWidthPx: Long? = null, val nativeNavigationUnavailable: Boolean = false)
 private data class HeadingCandidate(val destination: HeadingDestination, val anchor: String, val fallback: String,
     val label: String, val reveal: HeadingAnchorReveal? = null)
 
@@ -517,34 +518,65 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
     if (!target.startsWith("#") || target.length == 1) return null
     val headings = mutableListOf<HeadingCandidate>()
     fun includeContent(rowKey: String, blocks: List<Pair<Block, String>>, referenceIndex: Int? = null) {
-        lateinit var includeBlock: (Block, String, Boolean, Boolean) -> Unit
-        fun includeTable(table: Table, path: String, disclosureAncestor: Boolean) {
+        lateinit var includeBlock: (Block, String, Boolean, Boolean, Long?, Boolean) -> Unit
+        fun includeTable(table: Table, path: String, disclosureAncestor: Boolean, inheritedRowsHidden: Long?, rowPolicyAncestor: Boolean) {
+            val rowPolicyOwner = rowPolicyAncestor || table.rowsHiddenMaxWidthPx != null
+            val extendedOwner = disclosureAncestor || table.rowsHiddenMaxWidthPx != null
+            val rowsHidden = table.rowsHiddenMaxWidthPx?.let { maxOf(it, inheritedRowsHidden ?: it) }
+                ?: inheritedRowsHidden
             table.captionBlocks?.forEachIndexed { index, block ->
-                if (disclosureAncestor || block.hasContainerDisclosure())
-                    includeBlock(block, "$path/caption/block-$index", true, disclosureAncestor)
+                if (extendedOwner || block.hasContainerDisclosure() || block.hasTableRowVisibilityPolicy())
+                    includeBlock(block, "$path/caption/block-$index", true, extendedOwner, inheritedRowsHidden, rowPolicyOwner)
             }
             var index = 0
             table.rows.forEach { cells -> cells.forEach { cell ->
                 val cellPath = "$path/cell-${index++}"
                 val content = cell.blocks
-                if (content != null) content.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true, disclosureAncestor) }
-                else cell.nestedTable?.let { includeTable(it, "$cellPath/nested", disclosureAncestor) }
+                if (content != null) content.forEachIndexed { blockIndex, block -> includeBlock(block, "$cellPath/block-$blockIndex", true, extendedOwner, rowsHidden, rowPolicyOwner) }
+                else cell.nestedTable?.let { includeTable(it, "$cellPath/nested", extendedOwner, rowsHidden, rowPolicyOwner) }
             } }
         }
-        includeBlock = { block, path, nested, disclosureAncestor ->
+        includeBlock = { block, path, nested, disclosureAncestor, rowsHidden, rowPolicyAncestor ->
             if (block.kind == "heading") headings.add(HeadingCandidate(HeadingDestination(rowKey, path.takeIf { nested },
-                block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty(), referenceIndex), block.anchor, block.anchorFallback, textOf(block.spans)))
+                block.anchor.isNotEmpty() || block.anchorFallback.isNotEmpty(), referenceIndex,
+                rowsHiddenMaxWidthPx = rowsHidden), block.anchor, block.anchorFallback, textOf(block.spans)))
             val container = block.container
-            if (container != null && (disclosureAncestor || block.hasContainerDisclosure())) {
-                // Only the new source owner opens this path. Container heading validity stays
-                // unchanged; real Table/cell descendants keep their established heading domain.
+            if (container != null && (disclosureAncestor || block.hasContainerDisclosure() || block.hasTableRowVisibilityPolicy())) {
+                // Only a disclosure or row-policy source owner opens this path. Container
+                // heading validity and original Table/cell paths remain unchanged.
                 container.blocks.forEachIndexed { index, child ->
-                    includeBlock(child, "$path/container/block-$index", true, true)
+                    includeBlock(child, "$path/container/block-$index", true, true, rowsHidden, rowPolicyAncestor)
                 }
             }
-            block.table?.let { includeTable(it, "$path/table", disclosureAncestor) }
+            block.table?.let { includeTable(it, "$path/table", disclosureAncestor, rowsHidden, rowPolicyAncestor) }
+            if ((block.figure != null || block.flow != null) &&
+                (rowPolicyAncestor || block.hasTableRowVisibilityPolicy())) {
+                // Figure caption headings are source identities, but the current caption
+                // renderer lowers them to paragraph text without a heading reveal path.
+                // Keep them in this new policy's namespace as explicit refusal witnesses.
+                val rowPolicies = java.util.IdentityHashMap<Block, Long>()
+                val visitor = PresentationSpanVisitor { _, _ -> }
+                visitor.onTable = { table, tableDepth, contentDepth -> table.rowsHiddenMaxWidthPx?.let { maximum ->
+                    val rows = PresentationSpanVisitor { _, _ -> }.apply { onBlock = { source ->
+                        if (source.kind == "heading") rowPolicies[source] = maxOf(maximum, rowPolicies[source] ?: maximum)
+                    } }
+                    table.rows.forEach { cells -> cells.forEach { cell -> when {
+                        cell.blocks != null -> rows.blocks(cell.blocks, tableDepth, contentDepth)
+                        cell.nestedTable != null -> rows.table(cell.nestedTable, tableDepth + 1, contentDepth)
+                        else -> rows.spans(cell.spans, contentDepth = contentDepth)
+                    } } }
+                } }
+                visitor.onBlock = { source -> if (source !== block && source.kind == "heading") {
+                    val maximum = rowPolicies[source]?.let { maxOf(it, rowsHidden ?: it) } ?: rowsHidden
+                    headings.add(HeadingCandidate(HeadingDestination(rowKey, null,
+                        source.anchor.isNotEmpty() || source.anchorFallback.isNotEmpty(), referenceIndex,
+                        rowsHiddenMaxWidthPx = maximum, nativeNavigationUnavailable = true),
+                        source.anchor, source.anchorFallback, textOf(source.spans)))
+                } }
+                visitor.block(block)
+            }
         }
-        blocks.forEach { (block, path) -> includeBlock(block, path, referenceIndex != null, false) }
+        blocks.forEach { (block, path) -> includeBlock(block, path, referenceIndex != null, false, null, false) }
     }
     entry.readingRows.forEach { row ->
         row.heading?.let { heading -> headings.add(HeadingCandidate(HeadingDestination(row.key, null,
@@ -570,10 +602,14 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
         }
         selected?.let { candidate.destination.copy(anchorMatch = it) }
     }
+    // An unsupported source identity blocks namespace fallback even when another
+    // owner has the same anchor. This is a refusal witness, never a selected path.
+    fun select(values: List<HeadingDestination>) =
+        values.firstOrNull { it.nativeNavigationUnavailable } ?: values.singleOrNull()
     val exact = matches(fragment)
-    if (exact.isNotEmpty()) return exact.singleOrNull()
+    if (exact.isNotEmpty()) return select(exact)
     val spaced = matches(fragment.replace(' ', '_'))
-    if (spaced.isNotEmpty()) return spaced.singleOrNull()
+    if (spaced.isNotEmpty()) return select(spaced)
     return headings.filter { it.label == fragment.replace('_', ' ') }.singleOrNull()
         ?.takeIf { it.anchor.isEmpty() && it.fallback.isEmpty() }?.destination
 }

@@ -412,7 +412,7 @@ class RubyModelCodecTest {
                 }
             }
             value.textAlign?.let { mark("$label.textAlign"); byte(it.ordinal) }
-            value.overflow?.let { byte(it.ordinal) }
+            value.overflow?.let { mark("$label.overflow"); byte(it.ordinal) }
             value.ownerFontScale?.let(::f32)
             value.height?.let { positionedLength(it, "$label.height") }
             value.columns?.let { columns ->
@@ -537,7 +537,8 @@ class RubyModelCodecTest {
         }
         private fun positionedTable(value: Table, label: String) {
             require(value.geometry == null && value.blockViewport == null && value.floatViewport == null)
-            byte(1); byte(0); spans(value.caption, "$label.caption"); u32(value.rows.size.toLong())
+            mark("$label.flags"); byte(if (value.rowsHiddenMaxWidthPx == null) 1 else 0x21)
+            byte(0); spans(value.caption, "$label.caption"); mark("$label.rows"); u32(value.rows.size.toLong())
             value.rows.forEachIndexed { rowIndex, row ->
                 u32(row.size.toLong())
                 row.forEachIndexed { cellIndex, cell ->
@@ -555,6 +556,8 @@ class RubyModelCodecTest {
             minimumTableStyle(value.style, "$label.style"); byte(if (value.captionBlocks == null) 0 else 1)
             value.captionBlocks?.let { blocks -> u32(blocks.size.toLong())
                 blocks.forEachIndexed { index, child -> positionedBlock(child, "$label.captionBlock$index") } }
+            mark("$label.oldEnd")
+            value.rowsHiddenMaxWidthPx?.let { mark("$label.rowsHiddenMaxWidth"); u32(it) }
         }
         fun audioPrefixTable(value: Table) {
             prefix(12, true); positionedTable(value, "audioPrefix.table"); tail(); columnLayoutTail()
@@ -858,11 +861,12 @@ class RubyModelCodecTest {
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
-        fun tableChain(depth: Int, mixed: Boolean = false, captionAt: Int = 0) {
+        fun tableChain(depth: Int, mixed: Boolean = false, captionAt: Int = 0,
+            rowsHiddenMaxWidthPx: Long? = null) {
             require(depth > 0 && (captionAt == 0 || captionAt in 1 until depth))
             fun emit(level: Int, block: Boolean) {
                 if (block) prefix(12)
-                byte(1); byte(0) // ordinary table, no legacy geometry
+                byte(if (rowsHiddenMaxWidthPx == null) 1 else 0x21); byte(0) // ordinary table, no legacy geometry
                 spans(emptyList(), "deep.$level.caption")
                 val caption = level == captionAt
                 mark("deep.$level.rows"); u32(if (caption) 0 else 1)
@@ -878,6 +882,7 @@ class RubyModelCodecTest {
                 byte(0) // table style
                 byte(if (caption) 1 else 0)
                 if (caption) { u32(1); emit(level + 1, true) }
+                rowsHiddenMaxWidthPx?.let(::u32)
                 if (block) { tail(); columnLayoutTail() }
             }
             emit(1, true)
@@ -5160,5 +5165,197 @@ class RubyModelCodecTest {
             val bytes = wire.document(listOf(Span("link", "deep hidden", "Deep target")), Sink.Body)
             if (depth == 32) assertNotNull(read(bytes)) else reject("Shared hidden table depth33", bytes)
         }
+    }
+
+    @Test fun tableRowVisibilityRetainsFullGraphAcrossBlockSinksAndNullWireBytes() {
+        val caption = Span("link", "caption", "Caption", targetFragment = "section", tooltip = "tip")
+        val nestedAction = Span("external_link", "nested", "https://example.org/nested")
+        val blockAction = Span("link", "ordered", "Ordered", explanation = "kept")
+        val nested = Table(emptyList(), listOf(listOf(Cell(listOf(nestedAction), false, 1, 1))), rowsHiddenMaxWidthPx = 1)
+        val rows = listOf(listOf(Cell(listOf(text("plain")), true, 1, 1),
+            Cell(emptyList(), false, 1, 1, nestedTable = nested),
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("paragraph", 0, listOf(blockAction))))))
+        val source = Table(listOf(caption), rows, style = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 240f)),
+            rowsHiddenMaxWidthPx = 720)
+        val block = Block("table", 0, emptyList(), table = source)
+        val seen = mutableListOf<Span>()
+        val tables = mutableListOf<Table>()
+        PresentationSpanVisitor { _, _ -> }.apply {
+            onSpan = { seen.add(it) }; onTable = { value, _, _ -> tables.add(value) }
+        }.table(source)
+        assertSame(source, tables.first()); assertSame(rows, source.rows)
+        assertSame(caption, seen.first()); assertSame(nestedAction, seen[2]); assertSame(blockAction, seen[3])
+        assertSame(rows, source.copy(caption = emptyList()).rows)
+        assertEquals(720L, source.copy(caption = emptyList()).rowsHiddenMaxWidthPx)
+        for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val wire = Wire('O').apply { paragraphOverride = { positionedBlock(block, "rowsPolicy") } }
+            val decoded = read(wire.document(emptyList(), sink))
+            val found = mutableListOf<Table>()
+            val visitor = PresentationSpanVisitor { _, _ -> }.apply {
+                onTable = { value, _, _ -> if (value.rowsHiddenMaxWidthPx != null) found.add(value) }
+            }
+            decoded.sections.forEach { visitor.blocks(it.blocks) }
+            decoded.references.forEach { it.blocks?.let { blocks -> visitor.blocks(blocks) } }
+            assertEquals(sink.name, listOf(source, nested), found)
+            assertEquals(listOf(caption), found.first().caption)
+            assertEquals(listOf(blockAction), found.first().rows.single()[2].blocks!!.single().spans)
+        }
+        val rich = source.copy(caption = emptyList(), captionBlocks = listOf(Block("paragraph", 0, listOf(caption))))
+        val richWire = Wire('M').apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = rich)) } }
+        assertEquals(rich, read(richWire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+        // Null does not add a presence byte or a feature trailer; the new scalar follows the entire old Table.
+        val square = Table(listOf(caption), listOf(emptyList()))
+        for (bound in listOf(1L, 720L, 0xffff_ffffL)) {
+            val flagged = square.copy(rowsHiddenMaxWidthPx = bound)
+            val current = Wire('M').apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = flagged), "bounded") } }
+            val bytes = current.document(emptyList(), Sink.Body)
+            val plain = Wire('M').apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = square), "bounded") } }
+                .document(emptyList(), Sink.Body)
+            assertEquals(0x21, bytes[current.at.getValue("bounded.table.flags")].toInt() and 255)
+            val tail = current.at.getValue("bounded.table.rowsHiddenMaxWidth")
+            assertEquals(current.at.getValue("bounded.table.oldEnd"), tail)
+            assertArrayEquals(ByteArray(4) { (bound ushr (it * 8)).toByte() }, bytes.copyOfRange(tail, tail + 4))
+            val stripped = changed(replace(bytes, tail, tail + 4, byteArrayOf()), current.at.getValue("bounded.table.flags"), 1)
+            assertArrayEquals(plain, stripped)
+            assertEquals(square, read(plain).sections.single().blocks.single().table)
+            assertEquals(flagged, read(bytes).sections.single().blocks.single().table)
+        }
+        val audio = Span("link", "Play", "File:Tone.ogg", classes = "wikidict-media wikidict-media-file-546f6e652e6f6767",
+            audioControl = AudioControl())
+        val audioTable = Table(emptyList(), listOf(listOf(Cell(listOf(audio), false, 1, 1))), rowsHiddenMaxWidthPx = 720)
+        val mixed = Block("container", 0, emptyList(), container = Container(listOf(
+            Block("table", 0, emptyList(), table = audioTable),
+            Block("paragraph", 0, listOf(text("outside")), columnBreakInside = ColumnBreakInside.Auto)),
+            ContainerStyle(overflow = ContainerOverflow.Hidden, textWrap = TextWrap.Normal)))
+        fun mixedWire(catalog: List<Media>) = Wire('Z', 256 or 4096 or 8192).apply {
+            paragraphOverride = { positionedBlock(mixed, "mixedRows") }
+        }.document(emptyList(), Sink.Body, mediaValues = catalog)
+        assertEquals(mixed, read(mixedWire(listOf(Media("Tone.ogg", "audio", "Tone")))).sections.single().blocks.single())
+        reject("Hidden rows still require the complete AUDIO catalog", mixedWire(emptyList()))
+    }
+
+    @Test fun tableRowVisibilityRejectsMalformedFlagsBoundsAndIncompatiblePolicies() {
+        val cell = Cell(listOf(text("stored")), false, 1, 1)
+        val source = Table(emptyList(), listOf(listOf(cell)), rowsHiddenMaxWidthPx = 720)
+        for (bound in listOf(0L, -1L, 0x1_0000_0000L)) invalid("Positive u32 bound $bound") {
+            source.copy(rowsHiddenMaxWidthPx = bound)
+        }
+        invalid("No source rows") { source.copy(rows = emptyList()) }
+        assertEquals(720L, source.copy(rows = listOf(emptyList())).rowsHiddenMaxWidthPx)
+        for (display in listOf(TableDisplay.InlineTable, TableDisplay.InlineBlock)) invalid("Inline policy $display") {
+            source.copy(style = TableStyle(display = display))
+        }
+        for (side in TableFloatSide.entries) invalid("Floated table policy $side") { source.copy(style = TableStyle(floatSide = side)) }
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val margins = ContainerMargins(ContainerMargin.Length(zero), ContainerMargin.Auto, ContainerMargin.Length(zero), ContainerMargin.Auto)
+        val box = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f), marginValues = margins, containingDirection = TableContainingDirection.Ltr)
+        val grid = TableStyle(collapse = TableCollapse.Collapse)
+        val viewport = TableBlockViewport(100, box, ContainerBoxSizing.ContentBox, StyleWidth(StyleWidthUnit.Percent, 100f),
+            grid, TableContainingDirection.Ltr, "ja")
+        invalid("Block viewport and hidden rows") { source.copy(blockViewport = viewport) }
+        invalid("Float viewport and hidden rows") {
+            source.copy(floatViewport = TableFloatViewport(100, TableContainingDirection.Ltr, TableContainingDirection.Ltr, "ja"))
+        }
+        val mutableRows = mutableListOf(listOf(cell))
+        val mutable = source.copy(rows = mutableRows)
+        mutableRows.clear()
+        invalid("Mutated row policy custody is revalidated") { PresentationSpanVisitor { _, _ -> }.table(mutable) }
+        mutableRows.add(listOf(cell))
+        PresentationSpanVisitor { _, _ -> }.table(mutable)
+        val wire = Wire('M').apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = source), "badRows") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val flag = wire.at.getValue("badRows.table.flags")
+        val tail = wire.at.getValue("badRows.table.rowsHiddenMaxWidth")
+        reject("Zero serialized bound", changed32(bytes, tail, 0))
+        reject("Pre-M table policy", changed(bytes, 3, 'L'.code))
+        for (value in listOf(0x20, 0x22, 0x23, 0x25, 0x27, 0x2d, 0x33, 0x40, 0x41, 0x80, 0x81, 0xff))
+            reject("Illegal local table flags $value", changed(bytes, flag, value))
+        for (length in 0..3) reject("Truncated u32 tail $length", bytes.copyOf(tail + length))
+        reject("Missing policy tail", replace(bytes, tail, tail + 4, byteArrayOf()))
+        reject("Unflagged extra policy tail", changed(bytes, flag, 1))
+        reject("Trailing bytes", bytes + byteArrayOf(0))
+        // Forge a policy onto otherwise valid old source shapes, without constructing an invalid Table first.
+        for (style in listOf(TableStyle(display = TableDisplay.InlineTable), TableStyle(floatSide = TableFloatSide.Left))) {
+            val plain = source.copy(rowsHiddenMaxWidthPx = null, style = style)
+            val raw = Wire('M').apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = plain), "forgedRows") } }
+            val data = raw.document(emptyList(), Sink.Body)
+            val end = raw.at.getValue("forgedRows.table.oldEnd")
+            val forged = changed(replace(data, end, end, byteArrayOf(-48, 2, 0, 0)), raw.at.getValue("forgedRows.table.flags"), 0x21)
+            reject("Serialized incompatible style $style", forged)
+        }
+    }
+
+    @Test fun hiddenContainerOverflowUsesExistingMStyleFieldAndPreservesOldNullVisibleAutoBytes() {
+        assertEquals(2, ContainerOverflow.Hidden.ordinal)
+        for (overflow in listOf(null, ContainerOverflow.Visible, ContainerOverflow.Auto, ContainerOverflow.Hidden)) {
+            val style = ContainerStyle(overflow = overflow)
+            val source = Block("container", 0, emptyList(), container = Container(emptyList(), style))
+            val wire = Wire('M').apply { paragraphOverride = { positionedBlock(source, "overflow") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            assertEquals(source, read(bytes).sections.single().blocks.single())
+            val isolated = Wire('M').isolatedPositionedStyle(style)
+            assertArrayEquals(if (overflow == null) byteArrayOf(0, 0, 0, 0)
+                else byteArrayOf(0, -128, 0, 0, overflow.ordinal.toByte()), isolated)
+            if (overflow != null) {
+                val at = wire.at.getValue("overflow.style.overflow")
+                assertEquals(overflow.ordinal, bytes[at].toInt() and 255)
+                reject("Unknown M overflow", changed(bytes, at, 3))
+                val flags = wire.at.getValue("overflow.style.flags")
+                val legacy = changed(replace(bytes, flags + 2, flags + 4, byteArrayOf()), 3, 'L'.code)
+                if (overflow == ContainerOverflow.Hidden) reject("Hidden retains pre-M refusal", legacy)
+                else assertEquals(source, read(legacy).sections.single().blocks.single())
+            }
+        }
+        val hidden = ContainerStyle(overflow = ContainerOverflow.Hidden)
+        assertTrue(hidden.atViewport(100f).ownsFormattingContext)
+        assertFalse(ContainerStyle(overflow = ContainerOverflow.Visible).atViewport(100f).ownsFormattingContext)
+        for (columns in listOf(ContainerColumns(2, StyleLength(StyleLengthUnit.Px, 0f)),
+                ContainerColumns(null, StyleLength(StyleLengthUnit.Em, 1f), StyleLength(StyleLengthUnit.Em, 26f))))
+            invalid("Hidden cannot silently become a column scrollport") { hidden.copy(columns = columns) }
+    }
+
+    @Test fun tableRowVisibilityUsesCompleteSharedItemContentAndTableLimits() {
+        val caption = Span("link", "caption", "Caption")
+        val child = Span("external_link", "hidden row", "https://example.org/row")
+        val first = listOf(Cell(listOf(child), false, 1, 1))
+        fun source(totalRows: Int, bound: Long? = 720) = Table(listOf(caption),
+            listOf(first) + java.util.Collections.nCopies(totalRows - 1, emptyList<Cell>()), rowsHiddenMaxWidthPx = bound)
+        val limit = 1 shl 20
+        val modelRows = limit - 4 // Policy, caption, original cell and its span; every row is counted.
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(source(modelRows))
+        assertEquals(listOf(caption, child), seen); assertSame(caption, seen[0]); assertSame(child, seen[1])
+        invalid("Hidden policy shares M+1 model work") { PresentationSpanVisitor { _, _ -> }.table(source(modelRows + 1)) }
+        PresentationSpanVisitor { _, _ -> }.table(source(modelRows + 1, null))
+        val decoderRows = modelRows - 2 // Section + Table Block, with no extra item for the scalar's four bytes.
+        fun literal(rows: Int) = Wire('M').apply {
+            paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = source(rows)), "rowBudget") }
+        }.document(emptyList(), Sink.Body)
+        val decoded = read(literal(decoderRows)).sections.single().blocks.single().table!!
+        assertEquals(decoderRows, decoded.rows.size); assertEquals(720L, decoded.rowsHiddenMaxWidthPx)
+        assertEquals(listOf(caption), decoded.caption); assertEquals(listOf(child), decoded.rows.first().single().spans)
+        reject("Hidden policy shares M+1 wire work", literal(decoderRows + 1))
+        val leaf = Block("table", 0, emptyList(), table = source(1))
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('O').apply { paragraphOverride = { positionedBlock(leaf, "contentBound") } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 16) assertEquals(1, read(bytes).sections.size)
+            else reject("Hidden rows do not reset content depth", bytes)
+        }
+        for ((header, depths) in listOf('M' to listOf(16, 17), 'T' to listOf(32, 33))) for (depth in depths) {
+            val bytes = Wire(header).apply { paragraphOverride = { tableChain(depth, mixed = true, rowsHiddenMaxWidthPx = 720) } }
+                .document(listOf(child), Sink.Body)
+            if (depth == depths.first()) {
+                val bounds = mutableListOf<Long?>()
+                PresentationSpanVisitor { _, _ -> }.apply { onTable = { value, _, _ -> bounds.add(value.rowsHiddenMaxWidthPx) } }
+                    .blocks(read(bytes).sections.single().blocks)
+                assertEquals(List(depth) { 720L }, bounds)
+            } else reject("Hidden rows do not reset table depth $header", bytes)
+        }
+        val cycleBlocks = mutableListOf<Block>()
+        val cyclic = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = cycleBlocks))), rowsHiddenMaxWidthPx = 720)
+        cycleBlocks.add(Block("table", 0, emptyList(), table = cyclic))
+        invalid("Cyclic hidden rows remain bounded") { PresentationSpanVisitor { _, _ -> }.table(cyclic) }
     }
 }

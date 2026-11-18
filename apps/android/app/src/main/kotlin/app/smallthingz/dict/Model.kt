@@ -1066,8 +1066,10 @@ data class TableFloatViewport(val maxViewportWidthPx: Long,
 
 data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geometry: TableGeometry? = null,
     val style: TableStyle? = null, val captionBlocks: List<Block>? = null,
-    val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null) {
+    val blockViewport: TableBlockViewport? = null, val floatViewport: TableFloatViewport? = null,
+    val rowsHiddenMaxWidthPx: Long? = null) {
     init {
+        validateRowsHiddenPolicy()
         require(style?.minWidth == null || blockViewport == null && floatViewport == null) { "Responsive tables cannot carry minimum width" }
         require(style?.cornerRadii == null || style.collapse == TableCollapse.Separate) {
             "Ordinary table corners require explicit separate borders"
@@ -1125,6 +1127,15 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
         require(style?.isInline != true || caption.isEmpty() && captionBlocks == null) { "Inline table cannot have a caption" }
         require(style?.isInline != true || rows.any { it.isNotEmpty() }) { "Inline table requires a cell" }
         require(style?.isInline != true || rows.all { row -> row.all(::inlineTableCellShape) }) { "Unsupported inline table cell shape" }
+    }
+}
+
+/** Row visibility never removes source rows, captions or their actions from validation. */
+private fun Table.validateRowsHiddenPolicy() {
+    val bound = rowsHiddenMaxWidthPx ?: return
+    require(bound in 1..0xffff_ffffL && rows.isNotEmpty() && style?.isInline != true &&
+        style?.floatSide == null && blockViewport == null && floatViewport == null) {
+        "Row visibility requires a nonempty ordinary nonfloating table and a positive CSS viewport bound"
     }
 }
 
@@ -1445,6 +1456,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun table(value: Table, tableDepth: Int = 1, contentDepth: Int = 0): Unit = withoutRelativeContainer {
         require(tableDepth <= MaxTableDepth) { "Table nesting is too deep" }
+        value.validateRowsHiddenPolicy()
+        if (value.rowsHiddenMaxWidthPx != null) charge(1)
         onTable(value, tableDepth, contentDepth)
         val rich = value.captionBlocks
         if (rich == null) spans(value.caption, contentDepth = contentDepth) else blocks(rich, tableDepth, descend(contentDepth))

@@ -20,18 +20,38 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 
+internal fun Block.hasTableRowVisibilityPolicy(): Boolean {
+    var found = false
+    PresentationSpanVisitor { _, _ -> }.apply { onTable = { table, _, _ ->
+        if (table.rowsHiddenMaxWidthPx != null) found = true
+    } }.block(this)
+    return found
+}
+
+/** Only activates the new policy's source-epoch navigation; it never filters source. */
+internal fun Entry.hasTableRowVisibilityPolicy(): Boolean {
+    var found = false
+    val visitor = PresentationSpanVisitor { _, _ -> }.apply { onTable = { table, _, _ ->
+        if (table.rowsHiddenMaxWidthPx != null) found = true
+    } }
+    sections.forEach { visitor.blocks(it.blocks) }
+    references.forEach { reference -> reference.blocks?.let { visitor.blocks(it) } }
+    return found
+}
+
 internal enum class CitationSourceSlot { Title, Preamble, Section, Reference }
 
 /** Source ownership locates the lazy item; only its measured native range supplies pixels. */
 internal data class CitationDestination(val marker: CitationMarker, val span: Span,
     val slot: CitationSourceSlot, val rowKey: String? = null, val referenceIndex: Int? = null,
-    val graphical: Boolean = false)
+    val graphical: Boolean = false, val rowsHiddenMaxWidthPx: Long? = null)
 
 internal fun citationDestinations(entry: Entry): Map<String, CitationDestination> {
     val result = linkedMapOf<String, CitationDestination>()
     var slot = CitationSourceSlot.Title
     var rowKey: String? = null
     var referenceIndex: Int? = null
+    val rowPolicies = java.util.IdentityHashMap<Span, Long>()
     val visitor = PresentationSpanVisitor { spans, _ ->
         for (range in rubyGraphicalProjection(spans).ranges) {
             val source = range.span ?: continue
@@ -41,9 +61,25 @@ internal fun citationDestinations(entry: Entry): Map<String, CitationDestination
                 result[marker.anchor] = found.copy(graphical = true)
         }
     }
+    visitor.onTable = { table, tableDepth, contentDepth ->
+        table.rowsHiddenMaxWidthPx?.let { maximum ->
+            // A table's caption stays outside its row policy. Descendants of each
+            // original cell retain the outer policy, including nested captions.
+            val rows = PresentationSpanVisitor { _, _ -> }.apply { onSpan = { source ->
+                if (source.citationMarker != null)
+                    rowPolicies[source] = maxOf(maximum, rowPolicies[source] ?: maximum)
+            } }
+            table.rows.forEach { cells -> cells.forEach { cell -> when {
+                cell.blocks != null -> rows.blocks(cell.blocks, tableDepth, contentDepth)
+                cell.nestedTable != null -> rows.table(cell.nestedTable, tableDepth + 1, contentDepth)
+                else -> rows.spans(cell.spans, contentDepth = contentDepth)
+            } } }
+        }
+    }
     visitor.onSpan = { source -> source.citationMarker?.let { marker ->
         require(marker.anchor !in result) { "Duplicate citation range anchor" }
-        result[marker.anchor] = CitationDestination(marker, source, slot, rowKey, referenceIndex)
+        result[marker.anchor] = CitationDestination(marker, source, slot, rowKey, referenceIndex,
+            rowsHiddenMaxWidthPx = rowPolicies[source])
     } }
     visitor.spans(entry.displayTitle)
     slot = CitationSourceSlot.Preamble

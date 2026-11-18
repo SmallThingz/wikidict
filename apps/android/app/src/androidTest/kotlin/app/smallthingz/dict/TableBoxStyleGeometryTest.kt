@@ -392,4 +392,197 @@ class TableBoxStyleGeometryTest {
             }
         }
     }
+
+    @Test fun rootRowVisibilityKeepsTheActualCaptionBoxAndOriginalCellsAcrossNestedWidthsAndRecovery() {
+        val caption = Span("link", "MMMMMMMM MMMM", target = "caption-target", fontScale = 20f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val body = Span("link", "Visible body", target = "body-target", fontScale = 20f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val cell = Cell(listOf(body), false, 1, 1, background = "#ff0000",
+            style = CellStyle(border = StyleBorder.None, padding = StyleEdges(px(0f), px(0f), px(0f), px(0f)),
+                width = StyleWidth(StyleWidthUnit.Px, 180f)))
+        val original = Table(listOf(caption), listOf(listOf(cell)),
+            geometry = TableGeometry(cellSpacing = 4, cellPadding = 0),
+            style = TableStyle(background = "#123456", border = StyleBorder.Solid(px(2f), "#00ff00"),
+                collapse = TableCollapse.Separate, padding = StyleEdges(px(3f), px(2f), px(5f), px(2f))),
+            rowsHiddenMaxWidthPx = 639)
+        val noCaption = original.copy(caption = emptyList())
+        val nestedCaption = Span("link", "Nested caption", target = "nested-caption", fontScale = 12f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val inner = original.copy(caption = listOf(nestedCaption), rowsHiddenMaxWidthPx = 800)
+        val outer = original.copy(rows = listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = inner,
+            style = CellStyle(border = StyleBorder.None, padding = StyleEdges(px(0f), px(0f), px(0f), px(0f)))))))
+        data class Phase(val table: Table, val root: Double, val containing: Int, val hidden: Boolean,
+            val rtl: Boolean = false)
+        val phases = listOf(
+            Phase(original, 640.0, 240, false), Phase(original, 639.0, 240, true),
+            Phase(original, 639.0, 80, true), Phase(original, Math.nextUp(639.0), 80, false),
+            Phase(original, 639.0, 240, true, true), Phase(noCaption, 639.0, 240, true),
+            Phase(original, 640.0, 240, false), Phase(outer, 639.0, 240, true),
+            Phase(outer, 640.0, 240, false), Phase(outer, 801.0, 240, false),
+            Phase(original, 640.0, 240, false))
+        val phase = mutableStateOf(0)
+        val followed = mutableListOf<EntryLink>()
+        fun raw(node: SemanticsNodeInteraction): androidx.compose.ui.geometry.Rect {
+            val value = node.fetchSemanticsNode()
+            return androidx.compose.ui.geometry.Rect(value.positionInRoot,
+                androidx.compose.ui.geometry.Size(value.size.width.toFloat(), value.size.height.toFloat()))
+        }
+        fun grid(path: String = "root") = compose.onNodeWithTag(
+            if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path", useUnmergedTree = true)
+        fun textLayout(label: String): androidx.compose.ui.text.TextLayoutResult {
+            val results = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithText(label, useUnmergedTree = true).performSemanticsAction(
+                androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(results) }
+            return results.single()
+        }
+        val paint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 20f; typeface = android.graphics.Typeface.MONOSPACE
+        }
+        val captionMinimum = kotlin.math.ceil(paint.measureText("MMMMMMMM").toDouble()).toFloat()
+        assertTrue(paint.measureText(caption.text) > captionMinimum + 20f)
+        var recoveredWidth = 0f
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                val selected = phases[phase.value]
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f), LocalCssPixelTextZoom provides 1f,
+                    LocalLayoutDirection provides if (selected.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                    LocalTableDocumentViewportCssWidth provides selected.root) {
+                    DictTheme("light") {
+                        androidx.compose.material3.MaterialTheme(typography = androidx.compose.material3.MaterialTheme.typography.copy(
+                            bodyLarge = androidx.compose.ui.text.TextStyle(fontSize = 20.sp, lineHeight = 24.sp,
+                                letterSpacing = 0.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))) {
+                            Box(Modifier.width(selected.containing.dp).testTag("row-policy-containing")) {
+                                CompiledTableView(selected.table, if (phase.value == 1)
+                                    Feature("color_swatch", "", "#ffff00", "none", "") else null) { followed += it }
+                            }
+                        }
+                    }
+                }
+            } }
+            for (index in phases.indices) {
+                compose.runOnIdle { phase.value = index }
+                compose.waitForIdle()
+                val selected = phases[index]
+                val bounds = raw(grid())
+                assertEquals(selected.containing.toFloat(), raw(compose.onNodeWithTag("row-policy-containing", useUnmergedTree = true)).width, .01f)
+                if (selected.table === original || selected.table === noCaption) {
+                    val expected = if (!selected.hidden) 196f else if (selected.table === noCaption) 12f else captionMinimum
+                    assertEquals(expected, bounds.width, 1f)
+                    if (selected.hidden) {
+                        assertEquals(16f, bounds.height, .01f)
+                        compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true).assertDoesNotExist()
+                        compose.onNodeWithText(body.text, useUnmergedTree = true).assertDoesNotExist()
+                    } else {
+                        compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true).assertExists()
+                        assertEquals(body.text, textLayout(body.text).layoutInput.text.text)
+                        if (index == 0) recoveredWidth = bounds.width else assertEquals(recoveredWidth, bounds.width, .01f)
+                    }
+                    if (selected.table === original) {
+                        assertEquals(caption.text, textLayout(caption.text).layoutInput.text.text)
+                        if (selected.containing == 240) {
+                            val captionNode = compose.onNodeWithText(caption.text, useUnmergedTree = true)
+                            val hit = textLayout(caption.text).getBoundingBox(0).center
+                            captionNode.assertIsDisplayed().performTouchInput { click(hit) }
+                        }
+                    } else compose.onNodeWithText(caption.text, useUnmergedTree = true).assertDoesNotExist()
+                    if (selected.containing == 240 && selected.hidden) {
+                        val image = grid().captureToImage().asAndroidBitmap()
+                        try {
+                            assertEquals(0xff00ff00.toInt(), image.getPixel(image.width / 2, 0))
+                            assertEquals(0xff123456.toInt(), image.getPixel(image.width / 2, 8))
+                        } finally { image.recycle() }
+                    }
+                } else {
+                    assertSame(outer, selected.table)
+                    if (selected.hidden) {
+                        grid("root/0").assertDoesNotExist()
+                        compose.onNodeWithText(nestedCaption.text, useUnmergedTree = true).assertDoesNotExist()
+                    } else {
+                        grid("root/0").assertExists()
+                        compose.onNodeWithText(nestedCaption.text, useUnmergedTree = true).assertIsDisplayed()
+                        if (selected.root == 640.0) {
+                            assertEquals(16f, raw(grid("root/0")).height, .01f)
+                            compose.onNodeWithText(body.text, useUnmergedTree = true).assertDoesNotExist()
+                        } else assertEquals(body.text, textLayout(body.text).layoutInput.text.text)
+                    }
+                }
+                assertSame(cell, original.rows.single().single())
+                assertSame(caption, original.caption.single())
+                assertSame(inner, outer.rows.single().single().nestedTable)
+            }
+            compose.runOnIdle {
+                assertEquals(5, followed.size)
+                assertTrue(followed.all { it.target == "caption-target" })
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
+    @Test fun rowVisibilityCaptionSelectionKeepsItsAllocatedLaneRtlOriginAndExactVisibleSource() {
+        val heading = Span("link", "captioncaptioncaption", target = "caption-action", fontScale = 16f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val body = Span("link", "body", target = "body-action", fontScale = 16f,
+            fontScaleBasis = FontScaleBasis.CssPx)
+        val table = Table(listOf(heading), listOf(listOf(Cell(listOf(body), false, 1, 1,
+            style = CellStyle(border = StyleBorder.None, padding = StyleEdges(px(0f), px(0f), px(0f), px(0f)),
+                width = StyleWidth(StyleWidthUnit.Px, 160f))))),
+            geometry = TableGeometry(cellPadding = 0, cellSpacing = 0),
+            style = TableStyle(border = StyleBorder.Solid(px(2f), "#00ff00")), rowsHiddenMaxWidthPx = 639)
+        val root = mutableStateOf(640.0)
+        val rtl = mutableStateOf(false)
+        var geometry: FloatTextGeometry? = null
+        val clicked = mutableListOf<String>()
+        var firstBorderWidth: Int? = null
+        val captionPaint = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = 16f; typeface = android.graphics.Typeface.MONOSPACE
+        }
+        val captionMinimum = kotlin.math.ceil(captionPaint.measureText(heading.text).toDouble()).toInt()
+        assertTrue(captionMinimum > 164) // Caption MIN dominates the visible body's 160px + borders too.
+        val reader = FigureReaderContext(emptyList(), AppSettings(allowImages = false, allowAudio = false),
+            "", { clicked += it.target }, table)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    LocalLayoutDirection provides if (rtl.value) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                    LocalTableDocumentViewportCssWidth provides root.value) {
+                    DictTheme("light") {
+                        val style = androidx.compose.ui.text.TextStyle(fontSize = 16.sp, lineHeight = 20.sp,
+                            letterSpacing = 0.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace)
+                        androidx.compose.material3.MaterialTheme(typography = androidx.compose.material3.MaterialTheme.typography.copy(bodyLarge = style)) {
+                            Box(Modifier.width(240.dp).testTag("selection-table-lane")) {
+                                FigureCaptionTable(table, AnonymousFlowContext(if (rtl.value) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr,
+                                    "en", null), style, reader) { geometry = it }
+                            }
+                        }
+                    }
+                }
+            } }
+            for ((wide, rightToLeft) in listOf(true to false, false to false, false to true, true to true, true to false)) {
+                compose.runOnIdle { root.value = if (wide) 640.0 else 639.0; rtl.value = rightToLeft }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    val actual = checkNotNull(geometry)
+                    assertEquals(240, actual.width)
+                    assertEquals(if (wide) heading.text + "\n" + body.text else heading.text, actual.text.toString())
+                    val links = actual.nodes.filter { it.kind == FloatInteractionKind.LINK }
+                    assertEquals(if (wide) listOf(heading.text, body.text) else listOf(heading.text), links.map { it.label.toString() })
+                    val first = links.first()
+                    assertEquals(0, first.start)
+                    assertEquals(heading.text.length, first.end)
+                    checkNotNull(first.onClick).invoke()
+                }
+                val lane = compose.onNodeWithTag("selection-table-lane", useUnmergedTree = true).fetchSemanticsNode()
+                val grid = compose.onNodeWithTag("compiled-table-grid-figure-caption", useUnmergedTree = true).fetchSemanticsNode()
+                if (firstBorderWidth == null) firstBorderWidth = grid.size.width
+                assertEquals(checkNotNull(firstBorderWidth), grid.size.width)
+                assertEquals(captionMinimum.toFloat(), grid.size.width.toFloat(), 1f)
+                val left = grid.positionInRoot.x - lane.positionInRoot.x
+                assertEquals(if (rightToLeft) 240f - grid.size.width else 0f, left, .01f)
+                if (!wide) compose.onNodeWithTag("compiled-table-cell-figure-caption-0", useUnmergedTree = true).assertDoesNotExist()
+                assertSame(body, table.rows.single().single().spans.single())
+                assertSame(heading, table.caption.single())
+            }
+            compose.runOnIdle { assertEquals(List(5) { "caption-action" }, clicked) }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
 }

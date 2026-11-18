@@ -224,9 +224,10 @@ internal fun nativeContainerSpec(id: Int, resolved: ContainerViewportStyle,
     absolutePosition: NativeAbsolutePosition? = null,
     absoluteContainingBlock: NativeAbsoluteContainingBlock? = null,
     absoluteStatic: NativeAbsoluteStaticPosition? = null,
-    columnBreakWordMinimum: Boolean = false): NativeFloatContextSpec.Container = try {
+    columnBreakWordMinimum: Boolean = false,
+    ordinaryHidden: NativeOrdinaryHiddenScrollportPolicy? = null): NativeFloatContextSpec.Container = try {
     supportedNativeContainerSpec(id, resolved, children, density, normalBodyFont, rtl, dark, flexItem, positioned, absolute,
-        absolutePosition, absoluteContainingBlock, absoluteStatic, columnBreakWordMinimum)
+        absolutePosition, absoluteContainingBlock, absoluteStatic, columnBreakWordMinimum, ordinaryHidden)
 } catch (error: UnsupportedFloatLayout) {
     // Keep the real leaves available to the existing visible fallback. Geometry
     // limits must not discard the body by throwing out of composition.
@@ -246,8 +247,11 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     rtl: Boolean, dark: Boolean, flexItem: Boolean,
     positioned: NativePositionedScrollportPolicy?, absolute: NativeAbsoluteTextPlacement?,
     absolutePosition: NativeAbsolutePosition?, absoluteContainingBlock: NativeAbsoluteContainingBlock?,
-    absoluteStatic: NativeAbsoluteStaticPosition?, columnBreakWordMinimum: Boolean): NativeFloatContextSpec.Container {
+    absoluteStatic: NativeAbsoluteStaticPosition?, columnBreakWordMinimum: Boolean,
+    ordinaryHidden: NativeOrdinaryHiddenScrollportPolicy?): NativeFloatContextSpec.Container {
     val style = resolved.box
+    if ((style.overflow == ContainerOverflow.Hidden) != (ordinaryHidden != null))
+        throw UnsupportedFloatLayout("Hidden overflow requires its original ordinary Container owner")
     if ((style.positionedScope != null) != (positioned != null) ||
         (style.positioning is ContainerPositioning.Absolute) != (absolute != null))
         throw UnsupportedFloatLayout("Positioned content requires its own direct source scope")
@@ -260,7 +264,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     if (positioned == null) nativeScrollportUnavailable(style, flexItem)?.let { throw UnsupportedFloatLayout(it) }
     if (positioned != null && (flexItem || style.height != null || style.minHeight != null))
         throw UnsupportedFloatLayout("This positioned scrollport needs an ordinary auto-height owner")
-    val scrolling = style.overflow == ContainerOverflow.Auto || positioned != null
+    val scrolling = style.overflow == ContainerOverflow.Auto || ordinaryHidden != null || positioned != null
     fun length(value: StyleLength): Float {
         val result = value.value.toDouble() * if (value.unit == StyleLengthUnit.Px) density else normalBodyFont
         if (!result.isFinite() || result !in 0.0..TablePixelLimit.toDouble())
@@ -311,7 +315,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         }).takeIf { it.background != null || it.edges!!.any { edge -> edge.color != null && edge.width > 0f } }
     val relativeAuto = style.positioning == ContainerPositioning.RelativeAuto
     if (relativeAuto && positioned == null && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
-            style.columns != null || absoluteContainingBlock == null && children.any { it !is NativeFloatContextSpec.Text }))
+            style.columns != null || ordinaryHidden == null && absoluteContainingBlock == null && children.any { it !is NativeFloatContextSpec.Text }))
         throw UnsupportedFloatLayout("Positioned groups require one ordinary plaintext owner")
     if (positioned != null && children.any { it !is NativeFloatContextSpec.Text &&
             (it !is NativeFloatContextSpec.Container || it.absolute == null) })
@@ -353,7 +357,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     val renderedChildren = if (!scrolling || positioned != null) children else {
         require(id >= 0) { "Authored Container source IDs must be nonnegative" }
         listOf(NativeFloatContextSpec.Child(-id - 1, { it }, 0f,
-            requiresUnobstructedText = true, scrollport = NativeScrollportSpec(children, scrollPadding)))
+            requiresUnobstructedText = true, scrollport = NativeScrollportSpec(children, scrollPadding, ordinaryHidden = ordinaryHidden)))
     }
     return NativeFloatContextSpec.Container(id,
         contentWidth = { width, intrinsic -> pixels(solved(width.toFloat(), intrinsic).content +
@@ -642,7 +646,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         container.blocks.indices.map { "${grids[first]}/container/block-$it" },
                         List(container.blocks.size) { 0f }, next, nextAlign, true,
                         resolved.box.layout == ContainerLayout.FlexRow, List(container.blocks.size) { null },
-                        inScrollport || resolved.box.overflow == ContainerOverflow.Auto || scope != null,
+                        inScrollport || resolved.box.overflow == ContainerOverflow.Auto || resolved.box.overflow == ContainerOverflow.Hidden || scope != null,
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
                         nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign,
                         nextClippedScope, hiddenChild)
@@ -689,7 +693,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     density.density, if (absolute != null || scope != null) positionedBodyPixels else bodyPixels,
                     columnRtl, dark, row, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor,
                     immediateStatic?.let { NativeAbsoluteStaticPosition(it.containingBlockId) },
-                    columnBreakWordMinimum = columnBreakWordMinimum)
+                    columnBreakWordMinimum = columnBreakWordMinimum,
+                    ordinaryHidden = NativeOrdinaryHiddenScrollportPolicy(container).takeIf { resolved.box.overflow == ContainerOverflow.Hidden })
                 val failure = textFailure ?: (if (scope == null && absolute == null)
                     nativeScrollportUnavailable(container.style, row) else null)
                 val domainFailure = clippedDomainFailure ?: failure ?: when {

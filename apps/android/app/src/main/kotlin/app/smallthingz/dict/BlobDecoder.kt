@@ -943,8 +943,10 @@ object BlobDecoder {
                 if (flags and 4096 != 0) containerLineHeight() else null,
                 if (flags and 8192 != 0) CellTextAlign.entries.getOrNull(byte()) ?: error("Unknown container text alignment") else null,
                 if (flags and 16384 != 0) containerScreen() else null,
-                if (flags and 32768 != 0) ContainerOverflow.entries.getOrNull(byte())
-                    ?: error("Unknown container overflow") else null,
+                if (flags and 32768 != 0) (ContainerOverflow.entries.getOrNull(byte())
+                    ?: error("Unknown container overflow")).also {
+                    require(containerFonts || it != ContainerOverflow.Hidden) { "Hidden container overflow requires M" }
+                } else null,
                 if (flags and 65536 != 0) buffer.float else null,
                 if (flags and 131072 != 0) styleLength() else null,
                 if (flags and 262144 != 0) {
@@ -1185,9 +1187,12 @@ object BlobDecoder {
         private fun table(depth: Int): Table? = positionedRoot {
             val tableFlags = byte()
             if (tableFlags == 0) return@positionedRoot null
-            require(tableFlags == 1 || containerFonts && (tableFlags == 3 || tableFlags == 5) ||
-                tableFloatClears && tableFlags == 13 || tableScrollPairs && tableFlags == 7 ||
-                tableIntrinsicViewports && tableFlags == 19) { "Invalid table presence flags" }
+            val hiddenRows = tableFlags and 0x20 != 0
+            val baseFlags = tableFlags and 0x20.inv()
+            require(!hiddenRows || containerFonts) { "Table row visibility requires M" }
+            require(baseFlags == 1 || containerFonts && (baseFlags == 3 || baseFlags == 5) ||
+                tableFloatClears && baseFlags == 13 || tableScrollPairs && baseFlags == 7 ||
+                tableIntrinsicViewports && baseFlags == 19) { "Invalid table presence flags" }
             require(depth <= tableDepthLimit) { "Table nesting is too deep" }
             maximumTableDepth = maxOf(maximumTableDepth, depth)
             val geometry = if (!nestedTables) null else {
@@ -1217,16 +1222,21 @@ object BlobDecoder {
                 Cell(content, header, cols, rowspan, background, child, blocks, cellStyle())
             } }
             val style = tableStyle(); val rich = captionBlocks(caption, depth)
-            val paired = tableFlags == 7
-            val intrinsic = tableFlags == 19
+            val paired = baseFlags == 7
+            val intrinsic = baseFlags == 19
             val blockViewport = if (tableFlags and 2 != 0) tableBlockViewport(paired, intrinsic) else null
             if (paired) hasTableScrollFeature = true
             if (intrinsic) hasTableIntrinsicViewport = true
             val floatViewport = if (tableFlags and 4 != 0) tableFloatViewport(tableFlags and 8 != 0) else null
+            val rowsHiddenMaxWidthPx = if (hiddenRows) {
+                require(remainingItems > 0) { "Table row visibility exceeds the presentation budget" }
+                remainingItems--
+                u32()
+            } else null
             require(containerFonts || style?.isInline != true || rows.all { row ->
                 row.all { cell -> cell.spans.none { it.image != null } }
             }) { "Inline table images require M" }
-            Table(caption, rows, geometry, style, rich, blockViewport, floatViewport).also { tableGrid(it) }
+            Table(caption, rows, geometry, style, rich, blockViewport, floatViewport, rowsHiddenMaxWidthPx).also { tableGrid(it) }
         }
         fun block(tableDepth: Int = 0): Block {
             val kind = enum(if (containers) kinds else kinds.dropLast(1)); val depth = byte(); val level = byte()

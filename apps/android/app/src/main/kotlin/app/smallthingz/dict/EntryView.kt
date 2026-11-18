@@ -143,11 +143,13 @@ internal fun inheritedCellTextStyle(style: TextStyle): TextStyle {
 internal class CellHeadingRequest(val path: String, val anchorMatch: HeadingAnchorSelection? = null,
     val externalRequest: EntryAnchorRequest? = null, val referenceIndex: Int? = null,
     val disclosureReveal: Boolean = false,
-    val disclosureOwners: List<NativeContainerDisclosureOwner> = emptyList())
+    val disclosureOwners: List<NativeContainerDisclosureOwner> = emptyList(),
+    val rowsHiddenMaxWidthPx: Long? = null)
 
 internal fun referenceHeadingRequest(request: CellHeadingRequest?, referenceIndex: Int?,
     disclosureReferenceIndex: Int? = referenceIndex): CellHeadingRequest? = request?.takeIf {
-        if (it.disclosureReveal) disclosureReferenceIndex != null && it.referenceIndex == disclosureReferenceIndex
+        if (it.disclosureReveal || it.rowsHiddenMaxWidthPx != null)
+            disclosureReferenceIndex != null && it.referenceIndex == disclosureReferenceIndex
         else referenceIndex == null || it.referenceIndex == referenceIndex
     }
 internal val LocalCellHeadingRequest = staticCompositionLocalOf<CellHeadingRequest?> { null }
@@ -220,10 +222,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
       key(entry.key) {
         val disclosureEpoch = NativeContainerDisclosureSourceIdentity(entry)
         val disclosureIndex = remember(disclosureEpoch) { NativeContainerDisclosureIndex(entry) }
+        val rowVisibilityNavigation = remember(disclosureEpoch) { entry.hasTableRowVisibilityPolicy() }
+        val guardedSourceNavigation = disclosureIndex.owners.isNotEmpty() || rowVisibilityNavigation
         val disclosureState = remember(readingState, disclosureEpoch) {
             readingState?.disclosure?.stateFor(entry) ?: NativeContainerDisclosureState()
         }
-        val disclosureNavigationKey: Any = if (disclosureIndex.owners.isEmpty()) entry else disclosureEpoch
+        val disclosureNavigationKey: Any = if (guardedSourceNavigation) disclosureEpoch else entry
         val pendingDisclosureAnchor = remember(disclosureEpoch) { mutableStateOf<NativeDisclosureAnchorRequest?>(null) }
         DisposableEffect(disclosureEpoch) {
             onDispose {
@@ -231,7 +235,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 pendingDisclosureAnchor.value = null
             }
         }
-        var referenceLayoutTarget by remember(entry) { mutableStateOf<Int?>(null) }
+        var referenceLayoutTarget by remember(disclosureNavigationKey) { mutableStateOf<Int?>(null) }
         val scroll = readingState?.scroll ?: rememberLazyListState()
         val documentScroll = readingState?.documentScroll ?: remember { NativeDocumentScrollState() }
         val reportScroll by rememberUpdatedState(onScrollDirection)
@@ -291,7 +295,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             }
         }
         val entryTextSections = remember(entry, foldedKeys) { foldedEntryTextSections(entry.readingRows, foldedKeys) }
-        var cellHeadingRequest by remember(if (disclosureIndex.owners.isEmpty()) Unit else disclosureEpoch) {
+        var cellHeadingRequest by remember(if (guardedSourceNavigation) disclosureEpoch else Unit) {
             mutableStateOf<CellHeadingRequest?>(null)
         }
         var sourceRevealFailed by remember { mutableStateOf(false) }
@@ -299,9 +303,19 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         val citationEnabled = entry.references.any { it.backlinks.isNotEmpty() }
         val citationLocations = remember(disclosureNavigationKey) { if (citationEnabled) citationDestinations(entry) else emptyMap() }
         val citationNavigation = remember(disclosureNavigationKey, readingState) { NativeCitationNavigation() }
+        val rowVisibilityViewport = tableDocumentViewportCssWidth()
+        val currentRowVisibilityViewport by rememberUpdatedState(rowVisibilityViewport)
+        fun rowsHidden(maximum: Long?) = maximum != null && nativeTableRowsHiddenAt(maximum, currentRowVisibilityViewport)
         val citationRequest = citationNavigation.request
-        LaunchedEffect(citationNavigation, citationRequest, citationNavigation.revision) {
+        LaunchedEffect(citationNavigation, citationRequest, citationNavigation.revision, rowVisibilityViewport) {
             val request = citationRequest ?: return@LaunchedEffect
+            if (rowsHidden(citationLocations[request.marker.anchor]?.rowsHiddenMaxWidthPx)) {
+                if (citationNavigation.complete(request)) {
+                    citationRevealFailed = true
+                    request.externalRequest?.let(onAnchorConsumed)
+                }
+                return@LaunchedEffect
+            }
             val currentOwner = citationNavigation.owner(request.marker)
             if (currentOwner == null && citationNavigation.failure(request.marker.anchor) != null) {
                 if (citationNavigation.complete(request)) {
@@ -314,21 +328,29 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             if (currentOwner == null) return@LaunchedEffect
             withFrameNanos { }
             if (citationNavigation.request === request) {
+                if (rowsHidden(citationLocations[request.marker.anchor]?.rowsHiddenMaxWidthPx)) {
+                    if (citationNavigation.complete(request)) {
+                        citationRevealFailed = true
+                        request.externalRequest?.let(onAnchorConsumed)
+                    }
+                    return@LaunchedEffect
+                }
                 val owner = citationNavigation.owner(request.marker) ?: return@LaunchedEffect
                 val completed: (Boolean) -> Unit = { success ->
                     if (citationNavigation.complete(request)) {
-                        citationRevealFailed = !success
+                        citationRevealFailed = !success || rowsHidden(citationLocations[request.marker.anchor]?.rowsHiddenMaxWidthPx)
                         request.externalRequest?.let(onAnchorConsumed)
                     }
                 }
                 if (!owner.view.revealCitation(owner.geometry, request,
-                    current = { citationNavigation.request === request }, completed = completed)) completed(false)
+                    current = { citationNavigation.request === request &&
+                        !rowsHidden(citationLocations[request.marker.anchor]?.rowsHiddenMaxWidthPx) }, completed = completed)) completed(false)
             }
         }
         fun clearCitationRequest(replacingExternal: EntryAnchorRequest? = null) {
             pendingDisclosureAnchor.value?.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
             pendingDisclosureAnchor.value = null
-            cellHeadingRequest?.takeIf { it.disclosureReveal }?.let { request ->
+            cellHeadingRequest?.takeIf { it.disclosureReveal || it.rowsHiddenMaxWidthPx != null }?.let { request ->
                 cellHeadingRequest = null
                 request.externalRequest?.takeIf { it !== replacingExternal }?.let(onAnchorConsumed)
             }
@@ -348,6 +370,12 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             citationRevealFailed = false
             val citation = target.takeIf { it.startsWith("#") }?.substring(1)?.let(citationLocations::get)
             val destination = if (citation == null) headingDestination(entry, target) else null
+            if (destination?.nativeNavigationUnavailable == true ||
+                rowsHidden(citation?.rowsHiddenMaxWidthPx ?: destination?.rowsHiddenMaxWidthPx)) {
+                clearHeadingRequest(externalRequest)
+                if (citation != null) citationRevealFailed = true else sourceRevealFailed = true
+                return false
+            }
             val disclosureOwners = if (citation != null) disclosureIndex.enclosingSpan(
                 citation.span, citation.rowKey, citation.referenceIndex) else destination?.path?.let {
                 disclosureIndex.enclosingPath(it, destination.referenceIndex)
@@ -390,12 +418,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 cellHeadingRequest = if (referenceOrdinal != null && entry.referenceBatches?.any {
                     it.layout != null && referenceOrdinal in it.referenceIndices } == true)
                     CellHeadingRequest("compiled-reference-$referenceOrdinal",
-                        externalRequest = externalRequest.takeIf { afterDisclosure }, referenceIndex = referenceOrdinal,
-                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList())
+                        externalRequest = externalRequest.takeIf { afterDisclosure || destination?.rowsHiddenMaxWidthPx != null }, referenceIndex = referenceOrdinal,
+                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList(),
+                        rowsHiddenMaxWidthPx = destination?.rowsHiddenMaxWidthPx)
                 else destination?.path?.let { CellHeadingRequest(it, destination.anchorMatch,
-                    externalRequest = externalRequest.takeIf { afterDisclosure },
-                    referenceIndex = if (entry.referenceBatches != null || afterDisclosure) destination.referenceIndex else null,
-                    disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList()) }
+                    externalRequest = externalRequest.takeIf { afterDisclosure || destination.rowsHiddenMaxWidthPx != null },
+                    referenceIndex = if (entry.referenceBatches != null || afterDisclosure || destination.rowsHiddenMaxWidthPx != null) destination.referenceIndex else null,
+                    disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList(),
+                        rowsHiddenMaxWidthPx = destination?.rowsHiddenMaxWidthPx) }
                 // Apply the destination in the next remeasure, after References opens.
                 scroll.requestScrollToItem(referenceIndex)
             } else if (headingRow != null) {
@@ -413,8 +443,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     return false
                 }
                 cellHeadingRequest = (destination?.path ?: headingRow.key.takeIf { containingRun != null })?.let {
-                    CellHeadingRequest(it, match, externalRequest.takeIf { match?.revealTop != null || afterDisclosure },
-                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList())
+                    CellHeadingRequest(it, match, externalRequest.takeIf { match?.revealTop != null || afterDisclosure || destination?.rowsHiddenMaxWidthPx != null },
+                        disclosureReveal = afterDisclosure, disclosureOwners = if (afterDisclosure) disclosureOwners else emptyList(),
+                        rowsHiddenMaxWidthPx = destination?.rowsHiddenMaxWidthPx)
                 }
                 scroll.requestScrollToItem((containingRun?.first ?: headingIndex) + entryReadingStartIndex(entry, folded.filterValues { it }.keys))
             } else return false
@@ -422,12 +453,19 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         DisposableEffect(disclosureEpoch, citationNavigation) {
             onDispose {
-                if (disclosureIndex.owners.isNotEmpty()) {
+                if (guardedSourceNavigation) {
                     val headingRequest = cellHeadingRequest
                     cellHeadingRequest = null
                     headingRequest?.externalRequest?.let(onAnchorConsumed)
                     citationNavigation.clear()?.externalRequest?.let(onAnchorConsumed)
                 }
+            }
+        }
+        val hiddenRowHeading = cellHeadingRequest?.takeIf { rowsHidden(it.rowsHiddenMaxWidthPx) }
+        LaunchedEffect(hiddenRowHeading) {
+            if (hiddenRowHeading != null && cellHeadingRequest === hiddenRowHeading) {
+                sourceRevealFailed = true
+                clearHeadingRequest()
             }
         }
         val concealedHeading = cellHeadingRequest?.takeIf { request -> request.disclosureReveal &&
@@ -461,7 +499,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
             onNavigate()
             if (target.local) jumpToAnchor("#${target.fragment}") else { clearCitationRequest(); onLink(target) }
         }
-        LaunchedEffect(if (disclosureIndex.owners.isEmpty()) entry.key else disclosureEpoch, anchorRequest) {
+        LaunchedEffect(if (guardedSourceNavigation) disclosureEpoch else entry.key, anchorRequest) {
             anchorRequest?.takeIf { it.entryKey == entry.key }?.let {
                 jumpToAnchor(it.target, it)
                 // Source positioning completes after its measured scroll (or explicit refusal).
@@ -488,6 +526,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
         }
         val revealSourceHeading: suspend (CellHeadingRequest, Float?) -> Unit = reveal@ { request, targetTop ->
             if (cellHeadingRequest !== request) return@reveal
+            if (rowsHidden(request.rowsHiddenMaxWidthPx)) {
+                sourceRevealFailed = true
+                clearHeadingRequest()
+                return@reveal
+            }
             val coordinates = viewportCoordinates
             val outset = request.anchorMatch?.revealTop
             val delta = if (targetTop != null && coordinates?.isAttached == true && outset != null)
@@ -503,13 +546,15 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                 }
             }
         }
-        CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner, LocalCellHeadingRequest provides cellHeadingRequest,
+        CompositionLocalProvider(LocalTextCache provides cache, LocalInlineImageOwner provides imageOwner,
+            LocalCellHeadingRequest provides cellHeadingRequest?.takeUnless { rowsHidden(it.rowsHiddenMaxWidthPx) },
             LocalNativeContainerDisclosureState provides disclosureState,
             LocalNativeClippedAbsoluteCoordinateScope provides clippedCoordinateOwner?.rootScope,
             LocalNativeCitationNavigation provides citationNavigation.takeIf { citationEnabled },
             LocalNativeCitationTargetAnchor provides citationNavigation.targetAnchor,
             LocalSourceHeadingReveal provides revealSourceHeading,
             LocalCellHeadingReached provides { request -> if (cellHeadingRequest === request) {
+                if (rowsHidden(request.rowsHiddenMaxWidthPx)) sourceRevealFailed = true
                 cellHeadingRequest = null
                 request.externalRequest?.let(onAnchorConsumed)
             } }) {
@@ -943,13 +988,13 @@ private fun tableHasMinimumWidth(table: Table): Boolean {
 }
 
 private fun tableLayoutFeature(table: Table, feature: Feature?): Feature? =
-    feature?.takeUnless { tableHasMinimumWidth(table) }
+    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) }
 
 @Composable
 private fun TableCaptionContext(table: Table, content: @Composable () -> Unit) {
     // A caption establishes the nested table's actual containing width. The outer
     // table's percentage input cannot replace that nearer measured constraint.
-    if (remember(table) { tableHasMinimumWidth(table) }) {
+    if (remember(table) { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) }) {
         CompositionLocalProvider(LocalFloatTableWidthReference provides null) {
             WithoutBodyTypography(content)
         }
@@ -1170,10 +1215,11 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
       AutoMarginTableView(table, onLink, path, nested, semanticPath)
       return
   }
-  if (table.style?.isInline != true && (table.blockViewport?.isSeparateCornerGrid == true || tableUsesContentWidths(table, LocalTableContentWidths.current))) {
+  if (table.style?.isInline != true && (table.rowsHiddenMaxWidthPx != null || table.blockViewport?.isSeparateCornerGrid == true || tableUsesContentWidths(table, LocalTableContentWidths.current))) {
       ContentSizedTableView(table, onLink, path, nested, semanticPath)
       return
   }
+  val rootViewportCssWidth = tableDocumentViewportCssWidth()
   val phaseObserver = LocalTablePhaseObserver.current
   val window = LocalWindowInfo.current.containerSize
   val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -1193,12 +1239,12 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
     val density = LocalDensity.current
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     var decorationProjection by remember(table, density.density, fontPixels, decorationWidth, decorationHeight) { mutableDoubleStateOf(1.0) }
-    val natural = remember(table, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver, rtl) {
+    val natural = remember(table, rootViewportCssWidth, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver, rtl) {
       observeTablePhase(phaseObserver, TablePhase.Preparation) {
         tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = fontPixels,
             decorationScale = decorationProjection, decorationViewportWidth = decorationWidth,
-            decorationViewportHeight = decorationHeight, rtl = rtl)
+            decorationViewportHeight = decorationHeight, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
       }
     }
     val margin = natural?.style?.margins.takeUnless { LocalFloatMarginsConsumed.current }
@@ -1253,10 +1299,11 @@ private fun UnavailableTableLanguage(table: Table, direction: TableContainingDir
 private fun BlockViewportTableView(table: Table, policy: TableBlockViewport,
     onLink: (EntryLink) -> Unit, path: String, semanticPath: String) {
     val density = LocalDensity.current
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val rtl = policy.gridDirection == TableContainingDirection.Rtl
-    val natural = remember(table, policy, density.density, bodyPixels) {
-        anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl)
+    val natural = remember(table, policy, rootViewportCssWidth, density.density, bodyPixels) {
+        anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table, authoredStyle = policy.gridStyle)?.takeIf {
         it.isFinite() && it > 0f && it <= TablePixelLimit
@@ -1285,12 +1332,13 @@ private fun BlockViewportTableView(table: Table, policy: TableBlockViewport,
 private fun PairedViewportTableView(table: Table, policy: TableBlockViewport, narrow: Boolean,
     onLink: (EntryLink) -> Unit, path: String, semanticPath: String) {
     val density = LocalDensity.current
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val rtl = policy.gridDirection == TableContainingDirection.Rtl
-    val natural = remember(table, policy, narrow, density.density, bodyPixels) {
-        if (narrow) anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl)
+    val natural = remember(table, policy, narrow, rootViewportCssWidth, density.density, bodyPixels) {
+        if (narrow) anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
         else tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() }, 0,
-            density.density, containerFontPixels = bodyPixels, rtl = rtl, marginsConsumed = true)
+            density.density, containerFontPixels = bodyPixels, rtl = rtl, marginsConsumed = true, rootViewportCssWidth = rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table, authoredStyle = if (narrow) policy.gridStyle else table.style)
     val minimum = remember(table) { NativeLayoutInput(0) }
@@ -1311,11 +1359,12 @@ private fun FloatViewportTableView(table: Table, onLink: (EntryLink) -> Unit, pa
     semanticPath: String) {
     val density = LocalDensity.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, density.density, bodyPixels, rtl) {
+    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels,
-            rtl = rtl, marginsConsumed = true)
+            rtl = rtl, marginsConsumed = true, rootViewportCssWidth = rootViewportCssWidth)
     }
     val minimum = remember(table) { NativeLayoutInput(0) }
     CompositionLocalProvider(LocalTableContentWidths provides true,
@@ -1333,10 +1382,11 @@ private fun AutoMarginTableView(table: Table, onLink: (EntryLink) -> Unit, path:
     nested: Boolean, semanticPath: String) {
     val density = LocalDensity.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, density.density, bodyPixels, rtl) {
+    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
-            with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl)
+            with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table)
     val marginValues = checkNotNull(table.style?.marginValues)
@@ -1366,11 +1416,12 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
     nested: Boolean, semanticPath: String) {
     val density = LocalDensity.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, density.density, bodyPixels, rtl) {
+    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
         // This prepares decoration only. Content widths come from the real cells below.
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
-            with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl)
+            with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table)
     if (table.style?.minWidth == null && lineHeight != null && (!lineHeight.isFinite() || lineHeight <= 0f || lineHeight > TablePixelLimit)) {
@@ -1385,7 +1436,24 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
     CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight?.takeUnless {
         table.style?.minWidth != null && (!it.isFinite() || it <= 0f || it > TablePixelLimit)
     }) {
-        TableContentColumn(marginModifier, 6.dp) {
+        if (table.rowsHiddenMaxWidthPx != null) {
+            val captionMinimum = remember(table) { NativeLayoutInput(0) }
+            val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
+            TableContentViewport(scrolling = !nested && !LocalNativeContainerScrollport.current) {
+                NativeTableVisibilityColumn(table, nativeTableRowsHiddenAt(table, rootViewportCssWidth), captionMinimum,
+                    with(density) { 6.dp.roundToPx() }, if (rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr,
+                    modifier = marginModifier, caption = if (!hasCaption) null else ({ _ ->
+                        TableContentColumn(Modifier, 0.dp) { TableCaptionContext(table) {
+                            if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
+                                gapDp = 6f, trailingGap = false)
+                            else StyledText(table.caption, onLink = onLink)
+                        } }
+                    })) { _ ->
+                    TableGridView(table, onLink, path, null, semanticPath, natural, 1.0, { }, contentWidths = true,
+                        captionMinimumWidth = captionMinimum)
+                }
+            }
+        } else TableContentColumn(marginModifier, 6.dp) {
             TableCaptionContext(table) {
             if (table.captionBlocks != null) FloatBlockSequence(table.captionBlocks, onLink, "$semanticPath/caption",
                 gapDp = 6f, trailingGap = false)
@@ -1402,7 +1470,9 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
 private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, path: String,
     semanticPath: String, cells: List<CaptionCellSlot>?, sink: SelectionGeometrySink?, reason: String,
     refuseIntrinsicQueries: Boolean = false, showWarning: Boolean = false) {
-    val bodyGeometry = remember(table) { arrayOfNulls<FloatTextGeometry>(1) }
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
+    val projection = remember(table, rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    val bodyGeometry = remember(table, projection.rowsHidden) { arrayOfNulls<FloatTextGeometry>(1) }
     val failure = LocalTableBlockLayoutFailure.current
     val direction = if (LocalLayoutDirection.current == LayoutDirection.Rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr
     Layout(modifier = (failure?.tableExtentModifier ?: Modifier).testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path"), content = {
@@ -1417,7 +1487,8 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
             }
             SelectionColumn(parts, direction, if (showWarning) { value -> bodyGeometry[0] = value } else sink)
         } else TableContentColumn(Modifier, 0.dp) {
-            table.rows.flatten().forEachIndexed { index, cell ->
+            projection.grid.cells.forEachIndexed { index, placed ->
+                val cell = placed.cell
                 when {
                     cell.blocks != null -> FloatBlockSequence(cell.blocks, onLink, "$semanticPath/cell-$index",
                         inCell = true, gridPath = "$path/$index", gapDp = 4f, trailingGap = false)
@@ -1495,7 +1566,11 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val widthInput = LocalFloatTableWidthReference.current
     val resolvedWidthReference = widthInput?.value ?: widthReference
     val phaseObserver = LocalTablePhaseObserver.current
-    val grid = remember(table, phaseObserver) { observeTablePhase(phaseObserver, TablePhase.Preparation) { tableGrid(table) } }
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
+    val projection = remember(table, rootViewportCssWidth, phaseObserver) {
+        observeTablePhase(phaseObserver, TablePhase.Preparation) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    }
+    val grid = projection.grid
     val intrinsicTable = table.blockViewport?.intrinsicContainingDirection != null
     val pairedIntrinsicContent = !pairedHeightIntrinsics || grid.cells.all {
         pairedTableCellHasIntrinsicHeight(it.cell) || intrinsicTable && intrinsicTableSingleParagraph(it.cell) != null
@@ -1531,7 +1606,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val authoredColors = remember(table) { grid.cells.map { placed ->
+    val authoredColors = remember(table, projection.rowsHidden) { grid.cells.map { placed ->
         canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
     } }
     val fallbackMessage = remember { NativeLayoutInput<String?>(null) }
@@ -1539,7 +1614,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val cellColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outline
-    if (table.style?.minWidth == null && !hasCorners && !pairedHeightIntrinsics && anonymousGridStyle == null && natural == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) {
+    if (table.rowsHiddenMaxWidthPx == null && table.style?.minWidth == null && !hasCorners && !pairedHeightIntrinsics && anonymousGridStyle == null && natural == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) {
         LaunchedEffect(table, decorationProjection) { removeDecorations() }
         return
     }
@@ -2576,12 +2651,13 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                     decorationViewportWidth = originalWidth, decorationViewportHeight = windowHeight,
                     rtl = (floatViewport?.gridDirection ?: table.blockViewport?.gridDirection.takeIf { cornerFocusTable || intrinsicTable != null })
                         ?.let { it == TableContainingDirection.Rtl } ?: rtl,
-                    marginsConsumed = floatViewport != null || cornerFocusTable || intrinsicTable != null)
+                    marginsConsumed = floatViewport != null || cornerFocusTable || intrinsicTable != null,
+                    rootViewportCssWidth = documentViewport)
             }
             listOf(nativeTableBodyAdjoiningSpec(block, bodyAdjoining,
                 leaf.rootIndex != null && !leaf.inContainer, NativeFloatContextSpec.Child(index, { originalWidth ->
                 if (!nativeTableAdmitted || table == null || tableFeature != null || table.style?.isInline == true) originalWidth else {
-                    val metrics = natural(originalWidth)?.let { tableMetricsInWidth(table, it, tableGrid(table).columns, originalWidth) }
+                    val metrics = natural(originalWidth)?.let { tableMetricsInWidth(table, it, nativeTableRowProjection(table, documentViewport).grid.columns, originalWidth) }
                     val margins = if (!externalMargins) metrics?.style?.margins?.horizontal ?: 0 else 0
                     val markerWidth = if (block.kind == "list_item") with(density) { 28.dp.roundToPx() } else 0
                     val width = metrics?.let { it.width.toLong() + margins + markerWidth + (blockIndentDp(block) * density.density).toInt() }
@@ -2605,7 +2681,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             }, requiresUnobstructedText = table == null, gapBefore = box?.before ?: 0f, clear = activeStyle?.clear.takeUnless { activeStyle?.isInline == true },
                 atomicInline = table?.style?.isInline == true,
                 widthFromContent = nativeTableAdmitted && table != null && tableFeature == null &&
-                    (blockViewport != null || table.blockViewport?.isSeparateCornerGrid == true || intrinsicTable != null || floatViewport != null || table.style?.marginValues != null || tableUsesContentWidths(table, leaf.inScrollport || contentWidths)),
+                    (table.rowsHiddenMaxWidthPx != null || blockViewport != null || table.blockViewport?.isSeparateCornerGrid == true || intrinsicTable != null || floatViewport != null || table.style?.marginValues != null || tableUsesContentWidths(table, leaf.inScrollport || contentWidths)),
                 preferredWidth = { originalWidth ->
                     val css = if (pairedTable != null) activeStyle?.width else table?.style?.width
                     val legacy = table?.geometry?.width.takeIf { css == null }
@@ -2624,7 +2700,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 }, minimumWidth = { containingWidth -> table?.style?.minWidth?.let {
                     tableMinimumWidthPixels(it, density.density, normalBodyPixels, containingWidth)
                 } }, overflowViewport = nativeTableAdmitted && table != null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && !inCell && !leaf.inScrollport,
-                delegatedTable = table?.takeIf { nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && tableFeature == null && !inCell && !leaf.inScrollport && (nativeDelegatedFigureTable(it) || nativeDelegatedAbsoluteTable(it)) },
+                delegatedTable = table?.takeIf { !nativeTableRowsHiddenAt(it, documentViewport) && nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && tableFeature == null && !inCell && !leaf.inScrollport && (nativeDelegatedFigureTable(it) || nativeDelegatedAbsoluteTable(it)) },
                 autoMarginTable = automaticTable, autoMargins = automaticMargins.takeIf { automaticTable != null },
                 fixedMarginTable = fixedTable, pairedMarginTable = pairedTable,
                 blockViewport = blockViewport,
@@ -2701,7 +2777,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         documentSurface = documentSurface, bodyAdjoining = bodyAdjoining,
         sourceReveal = if (request?.anchorMatch?.revealTop != null && revealIndex != null)
             { top -> sourceReveal(request, top) } else null,
-        revealUnavailable = if (request?.disclosureReveal == true && (revealIndex != null ||
+        revealUnavailable = if (request != null && (request.disclosureReveal || request.rowsHiddenMaxWidthPx != null) && (revealIndex != null ||
             (blockPaths ?: blocks.indices.map { "$path/block-$it" }).any {
                 request.path == it || request.path.startsWith(it + "/")
             })) ({ sourceReveal(request, null) }) else null,
@@ -2790,7 +2866,9 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                 it.bodyOrigin != null || it.resolvedLineHeight != null },
             bodyOrigin = it.bodyOrigin?.copy(lineHeightInherited = false))
     }
-    val grid = remember(table) { tableGrid(table) }
+    val rootViewportCssWidth = tableDocumentViewportCssWidth()
+    val projection = remember(table, rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    val grid = projection.grid
     val cells = grid.cells.map { placed -> CaptionCellSlot { cellSink ->
         val childContext = tableContext.copy(textAlign = placed.cell.style?.textAlign ?: tableContext.textAlign)
         val cellFormat = LocalNativeContainerTextContext.current?.takeIf { it.cellText != null }?.let {
@@ -2813,13 +2891,13 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                 style = childStyle, onGeometry = cellSink, interactionOwner = false, nativeLineHeight = cellFormat?.lineHeight)
         }
     } }
-    val contentWidths = blockViewport != null || table.blockViewport?.isSeparateCornerGrid == true || LocalTableContentWidths.current || tableHasComputedCellStyle(table) || table.style?.marginValues != null || table.style?.minWidth != null
+    val contentWidths = table.rowsHiddenMaxWidthPx != null || blockViewport != null || table.blockViewport?.isSeparateCornerGrid == true || LocalTableContentWidths.current || tableHasComputedCellStyle(table) || table.style?.marginValues != null || table.style?.minWidth != null
     val rtl = tableContext.direction == BidiResolvedDirection.Rtl
-    val natural = remember(table, blockViewport, contentWidths, density.density, bodyPixels, rtl) {
-        if (blockViewport != null) anonymousTableRenderMetrics(table, blockViewport.gridStyle, density.density, bodyPixels, rtl)
+    val natural = remember(table, rootViewportCssWidth, blockViewport, contentWidths, density.density, bodyPixels, rtl) {
+        if (blockViewport != null) anonymousTableRenderMetrics(table, blockViewport.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
         else tableRenderMetrics(table, if (contentWidths) 1 else with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
                 with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels,
-                rtl = rtl)
+                rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
     }
     CompositionLocalProvider(LocalTableContentWidths provides contentWidths,
         LocalNativeContainerTextContext provides tableCellContext,
@@ -2876,8 +2954,28 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
         val margin = natural?.style?.margins
         SelectionInsetsBox(margin?.left ?: 0, margin?.top ?: 0, margin?.right ?: 0, margin?.bottom ?: 0,
             context.direction, sink) { insideSink ->
+            val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
+            if (table.rowsHiddenMaxWidthPx != null) {
+                val captionMinimum = remember(table) { NativeLayoutInput(0) }
+                NativeTableVisibilityColumn(table, projection.rowsHidden, captionMinimum, with(density) { 6.dp.roundToPx() },
+                    context.direction, sink = insideSink, caption = if (!hasCaption) null else ({ captionSink ->
+                        TableCaptionContext(table) {
+                            if (table.captionBlocks != null) FigureCaptionBlocks(table.captionBlocks, context, tableStyle, reader, captionSink)
+                            else AnonymousBlockView(Block("paragraph", 0, table.caption), Modifier, reader.onLink,
+                                reader.media, reader.settings, reader.edition, inherited = context, style = tableStyle,
+                                onGeometry = captionSink, interactionOwner = false,
+                                nativeLineHeight = tableCellContext?.takeIf { it.cellText != null }?.let {
+                                    nativeContainerTextFormat(it, MaterialTheme.typography.bodyLarge.fontSize, tableStyle, density).lineHeight
+                                })
+                        }
+                    })) { gridSink ->
+                    TableGridView(table, reader.onLink, "figure-caption", null, "", natural, 1.0,
+                        { }, selectionCells = cells, selectionGeometry = gridSink, containerStyle = tableStyle,
+                        contentWidths = true, captionMinimumWidth = captionMinimum)
+                }
+            } else {
             val parts = mutableListOf<@Composable (SelectionGeometrySink) -> Unit>()
-            if (table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()) parts += { captionSink ->
+            if (hasCaption) parts += { captionSink ->
               TableCaptionContext(table) {
                 SelectionInsetsBox(0, 0, 0, with(density) { 6.dp.roundToPx() }, context.direction, captionSink) { textSink ->
                     if (table.captionBlocks != null) FigureCaptionBlocks(table.captionBlocks, context, tableStyle, reader, textSink)
@@ -2900,6 +2998,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
                 }
             }
             SelectionColumn(parts, context.direction, insideSink)
+            }
         }
         }
     }

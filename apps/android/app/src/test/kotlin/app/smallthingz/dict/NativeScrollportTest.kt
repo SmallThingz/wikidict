@@ -35,8 +35,11 @@ class NativeScrollportTest {
             // The M style word only inserts two zero high bytes; no new scroll state is serialized.
             assertEquals(legacy.size + 2, current.size)
         }
+        val hidden = read(frame('M', 2)).sections.single().blocks.single().container!!
+        assertEquals(ContainerOverflow.Hidden, hidden.style.overflow)
+        assertTrue(hidden.blocks.isEmpty())
         for (version in listOf('L', 'M')) {
-            assertThrows(Exception::class.java) { read(frame(version, 2)) }
+            assertThrows(Exception::class.java) { read(frame(version, if (version == 'L') 2 else 3)) }
             val bytes = frame(version, 1)
             for (length in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(length)) }
             assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
@@ -335,4 +338,74 @@ class NativeScrollportTest {
         assertEquals("Original audio label", audio.text)
         assertEquals("File:a.ogg", audio.target)
     }
+    @Test fun ordinaryHiddenPaddingKeepsExactAllocationAndNormalHeightWithoutAnInventedLine() {
+        val tiny = 1f / 33554432f
+        val fractional = FloatMargins(0f, tiny, 0f, 1f)
+        assertEquals(2, nativeOrdinaryHiddenIntrinsicWidth(0, fractional))
+        assertEquals(0, nativeOrdinaryHiddenContentWidth(2, fractional))
+        assertEquals(1, nativeOrdinaryHiddenContentWidth(3, fractional))
+        assertEquals(androidx.compose.ui.unit.Constraints.Infinity,
+            nativeOrdinaryHiddenIntrinsicWidth(androidx.compose.ui.unit.Constraints.Infinity, fractional))
+        val padding = FloatMargins(1.25f, 3.5f, 2.25f, 4.5f)
+        val actual = nativeOrdinaryHiddenScrollportAllocation(200, 30f,
+            NativeFloatBounds(0f, 0f, 320.5f, 30f), padding)
+        assertEquals(33.5f, actual.usedHeight, 0f); assertEquals(34, actual.height)
+        assertEquals(128.5f, actual.overflow, 0f)
+        assertEquals(4.5f, actual.originX, 0f); assertEquals(1.25f, actual.originY, 0f)
+        assertFalse(actual.leadingOverflow); assertFalse(actual.verticalOverflow)
+        val unsupported = nativeOrdinaryHiddenScrollportAllocation(200, 30f,
+            NativeFloatBounds(-20f, -4f, 320.5f, 90f), padding)
+        assertTrue(unsupported.leadingOverflow); assertTrue(unsupported.verticalOverflow)
+        assertEquals(33.5f, unsupported.usedHeight, 0f)
+        assertEquals(128.5f, unsupported.overflow, 0f)
+        val empty = nativeOrdinaryHiddenScrollportAllocation(200, 0f,
+            NativeFloatBounds(0f, 0f, 0f, 0f), zero)
+        assertEquals(0f, empty.usedHeight, 0f); assertEquals(0, empty.height); assertEquals(0f, empty.overflow, 0f)
+        assertThrows(UnsupportedFloatLayout::class.java) {
+            nativeOrdinaryHiddenScrollportAllocation(200, TablePixelLimit.toFloat(),
+                NativeFloatBounds(0f, 0f, 200f, TablePixelLimit.toFloat()), padding)
+        }
+    }
+
+    @Test fun ordinaryHiddenAdapterRetainsOriginalTableAndUsesActualContainingWidthBeforeViewportBand() {
+        val link = Span("link", "Original", "original-target")
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(link), false, 1, 1))))
+        val block = Block("table", 0, emptyList(), table = table)
+        val style = ContainerStyle(overflow = ContainerOverflow.Hidden, positioning = ContainerPositioning.RelativeAuto,
+            width = ContainerWidth.FitContent, maxWidth = ContainerMaxWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f)),
+            boxSizing = ContainerBoxSizing.BorderBox,
+            padding = StyleEdges(px(3f), px(8f), px(7f), px(12f)),
+            border = ContainerBorder.Solid(px(2f), ContainerColor.Transparent),
+            screenMaxWidth = ContainerScreenMaxWidth(639L, width = ContainerWidth.Auto))
+        val source = Container(listOf(block), style)
+        val children = listOf(NativeFloatContextSpec.Child(10, { 400 }, 0f, widthFromContent = true))
+        val policy = NativeOrdinaryHiddenScrollportPolicy(source)
+        assertNull(nativeScrollportUnavailable(style))
+        assertNotNull(nativeScrollportUnavailable(style.copy(overflow = ContainerOverflow.Auto)))
+        val cases = listOf(640.0 to 240, 639.0 to 240, 640.0 to 160, 639.0 to 160, 640.0 to 240)
+        for ((rootCssWidth, containingWidth) in cases) {
+            val resolved = style.atViewport(rootCssWidth)
+            assertEquals(if (rootCssWidth <= 639.0) ContainerWidth.Auto else ContainerWidth.FitContent, resolved.box.width)
+            val owner = nativeContainerSpec(7, resolved, children, 1f, 20f, false, false, false,
+                ordinaryHidden = policy)
+            assertNull(owner.unavailableReason); assertTrue(owner.isolatesFloats); assertTrue(owner.relativeAuto)
+            val viewport = owner.preparedParts!!.single() as NativeFloatContextSpec.Child
+            assertEquals(-8, viewport.id)
+            val scrollport = checkNotNull(viewport.scrollport)
+            assertSame(children, scrollport.parts); assertSame(source, scrollport.ordinaryHidden!!.source)
+            assertNull(scrollport.positioned)
+            assertEquals(FloatMargins(3f, 8f, 7f, 12f), scrollport.padding)
+            assertEquals(FloatMargins(2f, 2f, 2f, 2f), owner.padding(containingWidth))
+            val paddingWidth = owner.contentWidth(containingWidth, ContainerWidths(420f, 420f))
+            assertEquals(containingWidth - 4, paddingWidth)
+            assertEquals(containingWidth - 24, nativeOrdinaryHiddenContentWidth(paddingWidth, scrollport.padding))
+            val measured = nativeOrdinaryHiddenScrollportAllocation(paddingWidth, 30f,
+                NativeFloatBounds(0f, 0f, 400f, 30f), scrollport.padding)
+            assertEquals(40f, measured.usedHeight, 0f)
+            assertEquals((424 - containingWidth).toFloat(), measured.overflow, 0f)
+            assertSame(table, source.blocks.single().table)
+            assertSame(link, table.rows.single().single().spans.single())
+        }
+    }
+
 }

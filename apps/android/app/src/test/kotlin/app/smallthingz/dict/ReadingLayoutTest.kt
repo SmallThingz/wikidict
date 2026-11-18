@@ -1575,4 +1575,237 @@ class ReadingLayoutTest {
         assertNotNull(citationScrollIndex(entry, bodyDestination, emptySet()))
         assertNotNull(citationScrollIndex(entry, noteDestination, emptySet()))
     }
+
+    @Test fun citationRowVisibilityKeepsCaptionAndNestedRowAncestryWithoutFilteringSource() {
+        fun marker(occurrence: Long) = Span("link", "[$occurrence]", role = "reference", targetFragment = "reference-7",
+            citationMarker = CitationMarker(7, occurrence, "row-cite-$occurrence"))
+        val markers = (1L..9L).map(::marker)
+        fun paragraph(span: Span) = Block("paragraph", 0, listOf(span))
+        fun tableBlock(table: Table) = Block("table", 0, emptyList(), table = table)
+        val high = Table(listOf(markers[2]), listOf(listOf(Cell(listOf(markers[3]), false, 1, 1))),
+            rowsHiddenMaxWidthPx = 719L)
+        val low = Table(listOf(markers[4]), listOf(listOf(Cell(listOf(markers[5]), false, 1, 1))),
+            rowsHiddenMaxWidthPx = 500L)
+        val outer = Table(listOf(markers[0]), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, blocks = listOf(paragraph(markers[1]), tableBlock(high))),
+            Cell(emptyList(), false, 1, 1, nestedTable = low))), rowsHiddenMaxWidthPx = 639L)
+        val outside = paragraph(markers[6])
+        val reference = Reference(7, 1, "", listOf(markers[8]), backlinks = markers.map { source ->
+            val citation = checkNotNull(source.citationMarker)
+            ReferenceBacklink.withPolicies(citation.occurrence,
+                Span("link", "return-${citation.occurrence}", targetFragment = citation.anchor))
+        })
+        val entry = Entry("row visibility citations", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(tableBlock(outer), outside))), listOf(reference),
+            preamble = listOf(markers[7]))
+        val destinations = citationDestinations(entry)
+        val expected = listOf<Long?>(null, 639L, 639L, 719L, 639L, 639L, null, null, null)
+        assertEquals(listOf(8L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 9L), destinations.values.map { it.marker.occurrence })
+        markers.forEachIndexed { index, source ->
+            val destination = destinations.getValue("row-cite-${index + 1}")
+            assertSame(source, destination.span)
+            assertEquals(expected[index], destination.rowsHiddenMaxWidthPx)
+            assertTrue(destination.graphical) // Logical source participation is independent of current row visibility.
+        }
+        assertEquals("block-0-0", destinations.getValue("row-cite-1").rowKey)
+        assertEquals("block-0-0", destinations.getValue("row-cite-6").rowKey)
+        assertEquals("block-0-1", destinations.getValue("row-cite-7").rowKey)
+        assertEquals(CitationSourceSlot.Preamble, destinations.getValue("row-cite-8").slot)
+        assertEquals(CitationSourceSlot.Reference, destinations.getValue("row-cite-9").slot)
+        assertEquals(0, destinations.getValue("row-cite-9").referenceIndex)
+        assertTrue(entry.hasTableRowVisibilityPolicy())
+        assertTrue(nativeTableRowsHiddenAt(outer, 0.0))
+        assertTrue(nativeTableRowsHiddenAt(outer, 639.0))
+        assertFalse(nativeTableRowsHiddenAt(outer, 639.25))
+        val nestedRow = destinations.getValue("row-cite-4")
+        assertTrue(nativeTableRowsHiddenAt(nestedRow.rowsHiddenMaxWidthPx, 719.0))
+        assertFalse(nativeTableRowsHiddenAt(nestedRow.rowsHiddenMaxWidthPx, 719.25))
+        assertFalse(nativeTableRowsHiddenAt(destinations.getValue("row-cite-1").rowsHiddenMaxWidthPx, 0.0))
+        assertTrue(nativeTableRowsHiddenAt(0xffff_ffffL, 4294967295.0))
+        assertFalse(nativeTableRowsHiddenAt(0xffff_ffffL, 4294967295.5))
+        assertEquals(destinations, citationDestinations(entry))
+        assertSame(outer, entry.sections.single().blocks[0].table)
+        assertSame(outside, entry.sections.single().blocks[1])
+        assertSame(markers[0], outer.caption.single())
+        assertSame(markers[2], high.caption.single())
+        assertSame(markers[4], low.caption.single())
+        assertEquals(markers.map { it.citationMarker!!.occurrence }, reference.backlinks.map { it.occurrence })
+
+        val clearedHigh = high.copy(rowsHiddenMaxWidthPx = null)
+        val clearedLow = low.copy(rowsHiddenMaxWidthPx = null)
+        val clearedOuter = outer.copy(rowsHiddenMaxWidthPx = null, rows = listOf(listOf(
+            outer.rows.single()[0].copy(blocks = listOf(paragraph(markers[1]), tableBlock(clearedHigh))),
+            outer.rows.single()[1].copy(nestedTable = clearedLow))))
+        val legacy = entry.copy(sections = listOf(entry.sections.single().copy(blocks = listOf(tableBlock(clearedOuter), outside))))
+        val restored = citationDestinations(legacy)
+        assertFalse(legacy.hasTableRowVisibilityPolicy())
+        assertFalse(nativeTableRowsHiddenAt(clearedOuter, 0.0))
+        assertEquals(destinations.keys, restored.keys)
+        destinations.forEach { (anchor, destination) ->
+            assertEquals(destination.copy(rowsHiddenMaxWidthPx = null), restored.getValue(anchor))
+            assertSame(destination.span, restored.getValue(anchor).span)
+        }
+        assertEquals(719L, high.rowsHiddenMaxWidthPx)
+        assertEquals(639L, outer.rowsHiddenMaxWidthPx)
+    }
+
+    @Test fun headingRowVisibilityKeepsNestedPathsReferenceCustodyAndSourceAmbiguity() {
+        fun heading(anchor: String) = Block("heading", 0, listOf(Span("link", anchor, target = "action-$anchor")),
+            level = 3, anchor = anchor, anchorFallback = anchor.replace('-', '_'))
+        fun tableBlock(table: Table) = Block("table", 0, emptyList(), table = table)
+        fun grid(blocks: List<Block>, maximum: Long?) = Table(emptyList(),
+            listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = blocks))), rowsHiddenMaxWidthPx = maximum)
+        val own = heading("outer-heading")
+        val highHeading = heading("high-heading")
+        val lowHeading = heading("low-heading")
+        val outside = heading("outside-heading")
+        val referenceHeading = heading("note-heading")
+        val high = grid(listOf(highHeading), 719L)
+        val low = grid(listOf(lowHeading), 500L)
+        val outer = Table(emptyList(), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, blocks = listOf(own, tableBlock(high))),
+            Cell(emptyList(), false, 1, 1, nestedTable = low))), rowsHiddenMaxWidthPx = 639L)
+        val noteTable = grid(listOf(referenceHeading), 799L)
+        val reference = Reference(7, 1, "", emptyList(), blocks = listOf(tableBlock(noteTable)))
+        val entry = Entry("row visibility headings", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(tableBlock(outer), outside))), listOf(reference))
+        val expected = listOf(
+            Triple("outer-heading", "block-0-0/table/cell-0/block-0", 639L),
+            Triple("high-heading", "block-0-0/table/cell-0/block-1/table/cell-0/block-0", 719L),
+            Triple("low-heading", "block-0-0/table/cell-1/nested/cell-0/block-0", 639L))
+        expected.forEach { (anchor, path, maximum) ->
+            val destination = checkNotNull(headingDestination(entry, "#$anchor"))
+            assertEquals("block-0-0", destination.rowKey)
+            assertEquals(path, destination.path)
+            assertEquals(maximum, destination.rowsHiddenMaxWidthPx)
+            assertTrue(destination.compiledId)
+            assertEquals(HeadingAnchorSelection(anchor, HeadingAnchorKind.Primary, null), destination.anchorMatch)
+            assertEquals(destination.copy(anchorMatch = HeadingAnchorSelection(anchor.replace('-', '_'), HeadingAnchorKind.Fallback, null)),
+                headingDestination(entry, "#${anchor.replace('-', ' ')}"))
+            assertTrue(nativeTableRowsHiddenAt(destination.rowsHiddenMaxWidthPx, maximum.toDouble()))
+            assertFalse(nativeTableRowsHiddenAt(destination.rowsHiddenMaxWidthPx, maximum.toDouble() + 0.25))
+        }
+        assertNull(headingDestination(entry, "#outside-heading")!!.rowsHiddenMaxWidthPx)
+        val note = checkNotNull(headingDestination(entry, "#note-heading"))
+        assertEquals("reference-7/block-0/table/cell-0/block-0", note.path)
+        assertEquals(0, note.referenceIndex)
+        assertEquals(799L, note.rowsHiddenMaxWidthPx)
+        val request = CellHeadingRequest(checkNotNull(note.path), note.anchorMatch,
+            referenceIndex = note.referenceIndex, rowsHiddenMaxWidthPx = note.rowsHiddenMaxWidthPx)
+        assertSame(request, referenceHeadingRequest(request, null, 0))
+        assertNull(referenceHeadingRequest(request, null, 1))
+        assertNull(referenceHeadingRequest(request, null, null))
+        assertSame(referenceHeading, reference.blocks!!.single().table!!.rows.single().single().blocks!!.single())
+        assertSame(highHeading, high.rows.single().single().blocks!!.single())
+        assertEquals("action-high-heading", highHeading.spans.single().target)
+        assertTrue(entry.copy(sections = listOf(Section(3, "Body", emptyList()))).hasTableRowVisibilityPolicy())
+
+        val captionHeading = heading("caption-heading")
+        val nestedCaptionHeading = heading("nested-caption-heading")
+        val highWithCaption = high.copy(captionBlocks = listOf(nestedCaptionHeading))
+        val wrappedTable = outer.copy(captionBlocks = listOf(captionHeading), rows = listOf(listOf(
+            outer.rows.single()[0].copy(blocks = listOf(own, tableBlock(highWithCaption))),
+            outer.rows.single()[1])))
+        val wrapper = Container(listOf(tableBlock(wrappedTable)),
+            ContainerStyle(positioning = ContainerPositioning.RelativeAuto, overflow = ContainerOverflow.Hidden))
+        val wrappedBlock = Block("container", 0, emptyList(), container = wrapper)
+        val wrappedEntry = entry.copy(sections = listOf(entry.sections.single().copy(blocks = listOf(wrappedBlock, outside))))
+        assertNull(wrapper.disclosure)
+        assertTrue(wrappedBlock.hasTableRowVisibilityPolicy())
+        val wrappedHeading = checkNotNull(headingDestination(wrappedEntry, "#high-heading"))
+        assertEquals("block-0-0/container/block-0/table/cell-0/block-1/table/cell-0/block-0", wrappedHeading.path)
+        assertEquals(719L, wrappedHeading.rowsHiddenMaxWidthPx)
+        val ownCaption = checkNotNull(headingDestination(wrappedEntry, "#caption-heading"))
+        assertEquals("block-0-0/container/block-0/table/caption/block-0", ownCaption.path)
+        assertNull(ownCaption.rowsHiddenMaxWidthPx)
+        val nestedCaption = checkNotNull(headingDestination(wrappedEntry, "#nested-caption-heading"))
+        assertEquals("block-0-0/container/block-0/table/cell-0/block-1/table/caption/block-0", nestedCaption.path)
+        assertEquals(639L, nestedCaption.rowsHiddenMaxWidthPx)
+        assertSame(captionHeading, wrappedTable.captionBlocks!!.single())
+        assertSame(nestedCaptionHeading, highWithCaption.captionBlocks!!.single())
+
+        val duplicate = heading("same-heading")
+        val duplicateTable = grid(listOf(duplicate), 639L)
+        val ambiguous = entry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(duplicateTable), duplicate))), references = emptyList())
+        assertTrue(nativeTableRowsHiddenAt(duplicateTable, 639.0))
+        assertNull(headingDestination(ambiguous, "#same-heading"))
+        assertNull(headingDestination(ambiguous, "#same heading"))
+        assertSame(duplicate, ambiguous.sections.single().blocks[1])
+        assertSame(duplicate, duplicateTable.rows.single().single().blocks!!.single())
+
+        val blockedHeading = heading("figure-heading")
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val figure = Figure(
+            FigureContent.Missing(Span("text", "Missing"), StyleLength(StyleLengthUnit.Px, 20f), StyleLength(StyleLengthUnit.Em, 1f)),
+            FigureFormat.Thumbnail, FigurePlacement.None, FigureClear.None, edges, edges, edges, 1f,
+            StyleLength(StyleLengthUnit.Em, 1.2f), FigureColor.Transparent, FigureBorder.None,
+            FigureColor.Transparent, FigureBorder.None, FigureColor.NativeTheme, FigureColor.Transparent,
+            captionBlocks = listOf(blockedHeading))
+        val figureBlock = Block("paragraph", 0, emptyList(), figure = figure)
+        val figureTable = grid(listOf(figureBlock), 639L)
+        val figureEntry = entry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(figureTable)))))
+        val blocked = checkNotNull(headingDestination(figureEntry, "#figure-heading"))
+        assertTrue(blocked.nativeNavigationUnavailable)
+        assertTrue(blocked.compiledId)
+        assertNull(blocked.path)
+        assertEquals(639L, blocked.rowsHiddenMaxWidthPx)
+        assertEquals(HeadingAnchorSelection("figure-heading", HeadingAnchorKind.Primary, null), blocked.anchorMatch)
+        assertSame(blockedHeading, figure.captionBlocks!!.single())
+        assertEquals("action-figure-heading", blockedHeading.spans.single().target)
+        val flowScope = BidiScope(BidiMode.Isolate, BidiDirectionInput.Rtl, BidiResolvedDirection.Rtl, null,
+            listOf(FlowPart.ImageFigure(figure)))
+        val flowBlock = Block("paragraph", 0, emptyList(), flow = listOf(
+            FlowPart.Inline(listOf(Span("text", "before figure"))), FlowPart.Scope(flowScope)))
+        val flowTable = grid(listOf(flowBlock), 639L)
+        val flowEntry = figureEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(flowTable)))))
+        val flowTarget = checkNotNull(headingDestination(flowEntry, "#figure-heading"))
+        assertTrue(flowTarget.nativeNavigationUnavailable)
+        assertNull(flowTarget.path)
+        assertEquals(639L, flowTarget.rowsHiddenMaxWidthPx)
+        assertSame(figure, (flowScope.parts.single() as FlowPart.ImageFigure).figure)
+        val oldFlowEntry = flowEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(flowTable.copy(rowsHiddenMaxWidthPx = null))))))
+        assertNull(headingDestination(oldFlowEntry, "#figure-heading"))
+        val collision = figureEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(figureTable), blockedHeading))))
+        val collisionTarget = checkNotNull(headingDestination(collision, "#figure-heading"))
+        assertTrue(collisionTarget.nativeNavigationUnavailable)
+        assertNull(collisionTarget.path)
+        assertEquals(639L, collisionTarget.rowsHiddenMaxWidthPx)
+        val numericHeading = blockedHeading.copy(anchor = "reference-7", anchorFallback = "")
+        val numericFigure = figure.copy(captionBlocks = listOf(numericHeading))
+        val numericTable = grid(listOf(figureBlock.copy(figure = numericFigure)), 639L)
+        val numericEntry = figureEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(numericTable)))))
+        assertEquals(0, referenceTargetIndex(numericEntry, "#reference-7"))
+        val numericTarget = checkNotNull(headingDestination(numericEntry, "#reference-7"))
+        assertTrue(numericTarget.nativeNavigationUnavailable)
+        assertNull(numericTarget.path)
+        assertEquals(639L, numericTarget.rowsHiddenMaxWidthPx)
+        val oldFigureTable = figureTable.copy(rowsHiddenMaxWidthPx = null)
+        val oldFigureEntry = figureEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(oldFigureTable)))))
+        assertNull(headingDestination(oldFigureEntry, "#figure-heading"))
+        val oldCollision = oldFigureEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(oldFigureTable), blockedHeading))))
+        assertFalse(checkNotNull(headingDestination(oldCollision, "#figure-heading")).nativeNavigationUnavailable)
+        val oldNumericEntry = numericEntry.copy(sections = listOf(Section(3, "Body", listOf(tableBlock(numericTable.copy(rowsHiddenMaxWidthPx = null))))))
+        assertNull(headingDestination(oldNumericEntry, "#reference-7"))
+        assertEquals(0, referenceTargetIndex(oldNumericEntry, "#reference-7"))
+
+        val legacyOuter = outer.copy(rowsHiddenMaxWidthPx = null, rows = listOf(listOf(
+            outer.rows.single()[0].copy(blocks = listOf(own, tableBlock(high.copy(rowsHiddenMaxWidthPx = null)))),
+            outer.rows.single()[1].copy(nestedTable = low.copy(rowsHiddenMaxWidthPx = null)))))
+        val legacy = entry.copy(sections = listOf(entry.sections.single().copy(blocks = listOf(tableBlock(legacyOuter), outside))),
+            references = listOf(reference.copy(blocks = listOf(tableBlock(noteTable.copy(rowsHiddenMaxWidthPx = null))))))
+        assertFalse(legacy.hasTableRowVisibilityPolicy())
+        (expected.map { it.first } + "note-heading").forEach { anchor ->
+            assertEquals(headingDestination(entry, "#$anchor")!!.copy(rowsHiddenMaxWidthPx = null),
+                headingDestination(legacy, "#$anchor"))
+        }
+        assertEquals(639L, outer.rowsHiddenMaxWidthPx)
+        assertEquals(799L, noteTable.rowsHiddenMaxWidthPx)
+        val legacyWrapper = wrapper.copy(blocks = listOf(tableBlock(legacyOuter.copy(captionBlocks = listOf(captionHeading)))))
+        val legacyWrappedBlock = wrappedBlock.copy(container = legacyWrapper)
+        val legacyWrappedEntry = legacy.copy(sections = listOf(legacy.sections.single().copy(blocks = listOf(legacyWrappedBlock, outside))))
+        assertFalse(legacyWrappedBlock.hasTableRowVisibilityPolicy())
+        assertNull(headingDestination(legacyWrappedEntry, "#high-heading"))
+        assertNull(headingDestination(legacyWrappedEntry, "#caption-heading"))
+    }
 }

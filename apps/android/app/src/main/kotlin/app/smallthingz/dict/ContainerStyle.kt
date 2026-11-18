@@ -13,7 +13,7 @@ enum class ContainerBoxSizing { ContentBox, BorderBox }
 enum class ContainerLayout { Flow, FlexRow }
 enum class ContainerAlignItems { Stretch, Start, Center, End }
 enum class ContainerFlexItem { None }
-enum class ContainerOverflow { Visible, Auto }
+enum class ContainerOverflow { Visible, Auto, Hidden }
 sealed interface ContainerPositioning {
     data object RelativeAuto : ContainerPositioning
     data class Absolute(val top: StyleLength, val left: StyleLength,
@@ -262,6 +262,9 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
                 "Unsupported positioned containing scope"
             }
         }
+        require(overflow != ContainerOverflow.Hidden || columns == null) {
+            "Hidden overflow cannot carry column fragmentation"
+        }
         if (columns?.width != null || columns?.direction != null) {
             require(height == null && minHeight == null && layout != ContainerLayout.FlexRow &&
                 overflow != ContainerOverflow.Auto && positioning == null && absolutePosition == null) {
@@ -357,7 +360,8 @@ internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
 internal data class ContainerViewportStyle(val box: ContainerStyle, val margins: ContainerMargins?) {
     init { require(box.screenMaxWidth == null && box.margins == null && box.marginValues == null) }
     val ownsFormattingContext: Boolean get() = box.floatSide != null ||
-        box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto || box.columns != null
+        box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto ||
+        box.overflow == ContainerOverflow.Hidden || box.columns != null
 }
 internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || absoluteStatic != null || textWrap != null ||
     ownerFont != null && positioning == ContainerPositioning.RelativeAuto
