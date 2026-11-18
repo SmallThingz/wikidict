@@ -374,6 +374,9 @@ const State = struct {
         } else if (result.kind == .speech) "Speech finished." else "Opened in desktop player; m opens the next item.";
         return true;
     }
+    fn libraryPageSize(self: State) usize {
+        return @max(1, self.screen.rows -| 10);
+    }
     fn bodyHeight(self: State) usize {
         return self.screen.rows -| 8;
     }
@@ -496,8 +499,10 @@ const State = struct {
             switch (event.key) {
                 .up => self.library_selected -|= 1,
                 .down => self.library_selected = @min(self.library_names.items.len -| 1, self.library_selected + 1),
-                .page_up => self.library_selected -|= @max(1, self.bodyHeight()),
-                .page_down => self.library_selected = @min(self.library_names.items.len -| 1, self.library_selected +| self.bodyHeight()),
+                .page_up => self.library_selected -|= self.libraryPageSize(),
+                .page_down => self.library_selected = @min(self.library_names.items.len -| 1, self.library_selected +| self.libraryPageSize()),
+                .home => self.library_selected = 0,
+                .end => self.library_selected = self.library_names.items.len -| 1,
                 .enter => if (self.library_names.items.len != 0) {
                     const prefix_len = if (self.startup_library) self.len else 0;
                     self.switchDictionary(self.library_names.items[self.library_selected]) catch {
@@ -1032,14 +1037,14 @@ const State = struct {
             try self.put(w, 2, 3, sz.cols - 4, "Library", p.accent);
             try self.put(w, 3, 3, sz.cols - 4, if (self.notice.len == 0) self.db.root else self.notice, p.muted);
             try self.put(w, 4, 3, sz.cols - 4, "Installed dictionaries", p.muted);
-            const visible = @max(1, sz.rows -| 10);
+            const visible = self.libraryPageSize();
             const begin = self.library_selected / visible * visible;
             for (self.library_names.items[begin..@min(self.library_names.items.len, begin + visible)], begin..) |name, i| {
                 try self.put(w, 6 + i - begin, 3, sz.cols - 4, name, if (i == self.library_selected) p.selected else p.base);
             }
             try self.put(w, sz.rows - 3, 3, sz.cols - 4, "Add files: dict install --help", p.muted);
             try self.put(w, sz.rows - 2, 3, sz.cols - 4, "Downloads: dict catalog", p.muted);
-            try self.put(w, sz.rows - 1, 3, sz.cols - 4, "↑↓ choose  Enter open  Esc search", p.muted);
+            try self.put(w, sz.rows - 1, 3, sz.cols - 4, if (sz.cols < 72) "↑↓ PgUp/Dn Home/End  Enter  Esc" else "↑↓ choose  PgUp/PgDn page  Home/End  Enter open  Esc search", p.muted);
             try self.dock(w);
         } else if (self.nav == .settings and self.reading != null) {
             const r = self.reading.?;
@@ -2476,4 +2481,71 @@ test "terminal short help reaches every binding clamps resize and preserves read
     try std.testing.expectEqual(@as(usize, 3), state.selected);
     try std.testing.expectEqual(@as(usize, 2), state.section);
     try std.testing.expect(state.details and state.focus == .entry);
+}
+
+test "terminal Library paging uses displayed capacity and Home End preserve startup state" {
+    const a = std.testing.allocator;
+    var state: State = .{ .a = a, .db = undefined, .label = "", .theme = .terminal, .color = false,
+        .screen = .{ .cols = 40, .rows = 12 }, .nav = .library, .focus = .entry,
+        .startup_library = true, .len = 6, .cursor = 3, .selected = 19, .scroll = 27, .section = 2 };
+    @memcpy(state.query[0..6], "prefix");
+    defer state.library_names.deinit(a);
+    for ([_][]const u8{ "A", "B", "C", "D", "E", "F", "G" }) |name|
+        try state.library_names.append(a, name);
+    try std.testing.expectEqual(@as(usize, 2), state.libraryPageSize());
+    for ([_]struct { key: term.Key, index: usize }{
+        .{ .key = .page_down, .index = 2 }, .{ .key = .page_down, .index = 4 },
+        .{ .key = .page_down, .index = 6 }, .{ .key = .page_down, .index = 6 },
+        .{ .key = .page_up, .index = 4 }, .{ .key = .home, .index = 0 },
+        .{ .key = .up, .index = 0 }, .{ .key = .end, .index = 6 },
+        .{ .key = .down, .index = 6 },
+    }) |step| {
+        try std.testing.expect(try state.key(.{ .key = step.key }));
+        try std.testing.expectEqual(step.index, state.library_selected);
+        try std.testing.expect(state.nav == .library and state.focus == .entry and state.startup_library);
+        try std.testing.expectEqual(@as(usize, 19), state.selected);
+        try std.testing.expectEqual(@as(usize, 27), state.scroll);
+        try std.testing.expectEqual(@as(usize, 2), state.section);
+        try std.testing.expectEqual(@as(usize, 6), state.len);
+        try std.testing.expectEqual(@as(usize, 3), state.cursor);
+        try std.testing.expectEqualStrings("prefix", state.query[0..state.len]);
+    }
+    // The same source-selected item survives resizing; only the next step changes.
+    state.screen = .{ .cols = 90, .rows = 30 };
+    try std.testing.expectEqual(@as(usize, 20), state.libraryPageSize());
+    try std.testing.expectEqual(@as(usize, 6), state.library_selected);
+    try std.testing.expect(try state.key(.{ .key = .page_up }));
+    try std.testing.expectEqual(@as(usize, 0), state.library_selected);
+    try std.testing.expect(try state.key(.{ .key = .page_down }));
+    try std.testing.expectEqual(@as(usize, 6), state.library_selected);
+}
+
+test "terminal Library paging clamps empty singleton partial pages and large catalogs" {
+    const a = std.testing.allocator;
+    var state: State = .{ .a = a, .db = undefined, .label = "", .theme = .terminal, .color = false,
+        .screen = .{ .cols = 45, .rows = 24 }, .nav = .library };
+    defer state.library_names.deinit(a);
+    for ([_]usize{ 0, 1 }) |count| {
+        if (count != 0) try state.library_names.append(a, "only");
+        for ([_]term.Key{ .page_up, .page_down, .home, .end, .up, .down }) |key| {
+            try std.testing.expect(try state.key(.{ .key = key }));
+            try std.testing.expectEqual(@as(usize, 0), state.library_selected);
+        }
+    }
+    while (state.library_names.items.len < 31) try state.library_names.append(a, "heading");
+    try std.testing.expectEqual(@as(usize, 14), state.libraryPageSize());
+    for ([_]usize{ 14, 28, 30, 30 }) |index| {
+        try std.testing.expect(try state.key(.{ .key = .page_down }));
+        try std.testing.expectEqual(index, state.library_selected);
+    }
+    try std.testing.expect(try state.key(.{ .key = .page_up }));
+    try std.testing.expectEqual(@as(usize, 16), state.library_selected);
+    state.screen.rows = 12;
+    try std.testing.expect(try state.key(.{ .key = .page_up }));
+    try std.testing.expectEqual(@as(usize, 14), state.library_selected);
+    while (state.library_names.items.len < 1399) try state.library_names.append(a, "heading");
+    try std.testing.expect(try state.key(.{ .key = .end }));
+    try std.testing.expectEqual(@as(usize, 1398), state.library_selected);
+    try std.testing.expect(try state.key(.{ .key = .home }));
+    try std.testing.expectEqual(@as(usize, 0), state.library_selected);
 }
