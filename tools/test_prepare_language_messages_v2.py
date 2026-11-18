@@ -4,6 +4,7 @@ import contextlib
 import io
 import hashlib
 import json
+from http.client import HTTPMessage
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -376,7 +377,7 @@ class MessageV2Test(unittest.TestCase):
         self.assertTrue(capture.verify(args.output)['interface-messages']['candidate_queries_complete'])
 
 
-    def test_normal_cli_plans_native_phonos_keys_without_changing_historical_scope(self):
+    def test_normal_cli_plans_native_messages_without_changing_historical_scope(self):
         baseline, _, prior = self.collect(17, 'prior-explicit')
         before = {p.name: p.read_bytes() for p in baseline.output.iterdir()}
         output = self.base / 'normal-cli'
@@ -391,19 +392,30 @@ class MessageV2Test(unittest.TestCase):
         with mock.patch.object(capture.sys, 'argv', argv), mock.patch.object(capture, 'capture', side_effect=offline), contextlib.redirect_stdout(io.StringIO()):
             capture.main()
         records = capture.verify(output)
-        wanted = {'Phonos-aria-error', 'phonos-player-aria-description', 'Key-003', 'parser-template-loop-warning'}
+        wanted = {'Phonos-aria-error', 'phonos-player-aria-description', 'Key-003', 'parser-template-loop-warning',
+                  'scribunto-common-nosuchmodule'}
         self.assertEqual(set(records['interface-messages']['keys']), wanted)
-        self.assertEqual(records['interface-messages']['rows'], 8)
+        self.assertEqual(records['interface-messages']['rows'], 10)
         rows = (output / 'interface-messages.tsv').read_text()
         for language in ('bn', 'en'):
             self.assertIn(language + '\tphonos-aria-error\tV\tবাংলা Phonos-aria-error', rows)
             self.assertIn(language + '\tphonos-player-aria-description\tV\tবাংলা phonos-player-aria-description', rows)
+            self.assertIn(language + '\tscribunto-common-nosuchmodule\tV\tবাংলা scribunto-common-nosuchmodule', rows)
             self.assertIn(language + '\tkey-003\tM\n', rows)
         for kind in capture.KINDS:
             self.assertEqual(builder.validated_auxiliary_capture(kind, output / (kind + '.tsv'), WIKI, DATE)[0], records[kind])
         self.assertEqual(capture.verify(baseline.output), prior)
         self.assertEqual(before, {p.name: p.read_bytes() for p in baseline.output.iterdir()})
         self.assertNotIn('phonos-aria-error', prior['interface-messages']['keys'])
+        self.assertNotIn('scribunto-common-nosuchmodule', prior['interface-messages']['keys'])
+
+    def test_missing_module_message_preserves_full_profiles_and_existing_key_spelling(self):
+        key = 'scribunto-common-nosuchmodule'
+        full = keys(64)
+        self.assertEqual(set(capture.planned_capture_messages(full)), set(full) | capture.NATIVE_CAPTURE_MESSAGE_KEYS)
+        self.assertIn(key, capture.planned_capture_messages(full[:-1]))
+        self.assertEqual([k for k in capture.planned_capture_messages(['Scribunto-common-nosuchmodule'])
+                          if capture.normalize_key(k) == key], ['Scribunto-common-nosuchmodule'])
 
     def test_normal_cli_native_plan_preserves_bound_and_fails_before_transport(self):
         output = self.base / 'too-many-planned'
@@ -685,7 +697,7 @@ class CompleteMessageTest(unittest.TestCase):
         url = 'https://bn.wiktionary.org/w/api.php?action=query'
         response = mock.MagicMock()
         response.__enter__.return_value = response
-        response.url, response.status, response.headers = url, 200, {}
+        response.url, response.status, response.headers = url, 200, HTTPMessage()
         response.read.return_value = b'{}'
         with mock.patch.object(capture.evidence.urllib.request, 'urlopen', return_value=response) as opened:
             capture.evidence.get_response(url, 5)
@@ -697,7 +709,7 @@ class CompleteMessageTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'redirect endpoint'): capture.complete_response(url, 5)
 
 
-    def test_normal_complete_cli_supplements_both_native_phonos_dependencies(self):
+    def test_normal_complete_cli_supplements_native_dependencies(self):
         output = self.base / 'normal-complete-cli'
         transport = CompleteTransport()
         original = capture.capture
@@ -711,10 +723,11 @@ class CompleteMessageTest(unittest.TestCase):
             capture.main()
         records = capture.verify(output)
         self.assertEqual(set(records['interface-messages']['extra_keys']),
-                         {'parser-template-loop-warning', 'phonos-aria-error', 'phonos-player-aria-description'})
+                         {'parser-template-loop-warning', 'phonos-aria-error', 'phonos-player-aria-description',
+                          'scribunto-common-nosuchmodule'})
         rows = (output / 'interface-messages.tsv').read_text()
         for language in ('bn', 'en'):
-            for key in ('phonos-aria-error', 'phonos-player-aria-description'):
+            for key in ('phonos-aria-error', 'phonos-player-aria-description', 'scribunto-common-nosuchmodule'):
                 self.assertIn(language + '\t' + key + '\t', rows)
         for kind in capture.KINDS:
             self.assertEqual(builder.validated_auxiliary_capture(kind, output / (kind + '.tsv'), WIKI, DATE)[0], records[kind])

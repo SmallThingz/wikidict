@@ -929,8 +929,13 @@ NATIVE_CAPTURE_MESSAGE_KEYS = frozenset({
 def planned_capture_messages(messages):
     selected = set(messages)
     normalized = {normalize_key(key) for key in selected}
-    return sorted(selected | {key for key in NATIVE_CAPTURE_MESSAGE_KEYS
-                              if normalize_key(key) not in normalized})
+    selected.update(key for key in NATIVE_CAPTURE_MESSAGE_KEYS if normalize_key(key) not in normalized)
+    # A missing #invoke module renders this localized Scribunto message. Older
+    # full profiles keep their explicit keys and can use the additive collector.
+    missing_module = 'scribunto-common-nosuchmodule'
+    if missing_module not in normalized and len(selected | REQUIRED_MESSAGE_KEYS) < MAX_MESSAGE_KEYS:
+        selected.add(missing_module)
+    return sorted(selected)
 
 
 def main():
