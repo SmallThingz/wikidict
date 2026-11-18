@@ -3389,8 +3389,9 @@ class FallbackNamespaceHistogramTests(unittest.TestCase):
     def test_fallback_reason_counts_overlap_in_one_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'fallback-pages.jsonl'
+            # The same title identifies different pages in different namespaces.
             rows = [dict(namespace=0, title='one', reasons=['literal_markup', 'missing_language_heading']),
-                    dict(namespace=114, title='two', reasons=['literal_markup'])]
+                    dict(namespace=114, title='one', reasons=['literal_markup'])]
             path.write_text(''.join(json.dumps(row)+'\n' for row in rows))
             namespaces, reasons, opens = {999: 37}, {'old': 37}, []
             original_open = Path.open

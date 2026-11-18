@@ -11,7 +11,7 @@ try:
 except ImportError:
     zstd = None
 import concurrent.futures
-from collections import deque
+from collections import defaultdict, deque
 from contextlib import contextmanager, ExitStack
 import fcntl
 import hashlib
@@ -7163,10 +7163,8 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
 def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
     if not path.is_file():
         raise ValueError(f'Missing fallback report: {path}')
-    count = 0
-    counts = {}
     reasons_seen = {}
-    seen = set()
+    titles_by_namespace = defaultdict(set)
     with path.open(encoding='utf-8') as lines:
         for line_number, line in enumerate(lines, 1):
             if not line.strip():
@@ -7185,29 +7183,29 @@ def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
             if len(set(reasons)) != len(reasons):
                 raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
             for reason in reasons:
+                if not reason.startswith('expansion_error:'):
+                    continue
                 parts = reason.split(':')
-                if len(parts) in (2, 3) and parts[0] == 'expansion_error' and parts[-1] in ('Timeout', 'OutOfMemory'):
+                if len(parts) in (2, 3) and parts[-1] in ('Timeout', 'OutOfMemory'):
                     kind = 'timeout' if parts[-1] == 'Timeout' else 'out of memory'
                     raise ValueError(f'Operational expansion {kind} at {path}:{line_number}; rebuild this output')
-                if len(parts)==3 and parts[0]=='expansion_error' and parts[1]!='expand':
+                if len(parts) == 3 and parts[1] != 'expand':
                     raise ValueError(f'Infrastructure expansion failure at {path}:{line_number}; rebuild this output')
-            key = (namespace, title)
-            if key in seen:
+            titles = titles_by_namespace[namespace]
+            if title in titles:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
-            seen.add(key)
-            count += 1
-            counts[namespace] = counts.get(namespace, 0) + 1
+            titles.add(title)
             for reason in reasons:
                 reasons_seen[reason] = reasons_seen.get(reason, 0) + 1
     if namespace_counts is not None:
         # Commit the output only after the complete report is valid.
         namespace_counts.clear()
-        namespace_counts.update(counts)
+        namespace_counts.update((ns, len(titles)) for ns, titles in titles_by_namespace.items())
     if reason_counts is not None:
         # Reasons overlap across pages; these counts are not an acceptance verdict.
         reason_counts.clear()
         reason_counts.update(reasons_seen)
-    return count
+    return sum(map(len, titles_by_namespace.values()))
 
 BUILD_IDENTITY_NAME = '.build-inputs.json'
 VERIFIED_MARKER = '.verified-blobs'
