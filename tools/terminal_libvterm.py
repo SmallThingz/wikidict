@@ -13,11 +13,14 @@ class _Pos(C.Structure):
     _fields_ = [('row', C.c_int), ('col', C.c_int)]
 
 
+class _CellAttrs(C.Structure):
+    # Leading native bitfields of VTermScreenCellAttrs in the SONAME 0 ABI.
+    _fields_ = [('bold', C.c_uint, 1), ('underline', C.c_uint, 2), ('italic', C.c_uint, 1)]
+
+
 class _Cell(C.Structure):
-    # Public VTermScreenCell layout in libvterm's SONAME 0 API. Attributes and
-    # colours are opaque here; only the native character array/width are used.
     _fields_ = [('chars', C.c_uint32 * 6), ('width', C.c_byte),
-                ('attrs', C.c_uint), ('fg', C.c_ubyte * 4), ('bg', C.c_ubyte * 4)]
+                ('attrs', _CellAttrs), ('fg', C.c_ubyte * 4), ('bg', C.c_ubyte * 4)]
 
 
 _MoveCursor = C.CFUNCTYPE(C.c_int, _Pos, _Pos, C.c_int, C.c_void_p)
@@ -109,7 +112,14 @@ class Screen:
                         scalars.append(scalar)
                     continuation = scalars == [0xffffffff]
                     text = '' if continuation else ''.join(map(chr, scalars)) or ' '
-                    cells.append(dict(text=text, width=int(cell.width), continuation=continuation))
+                    projected = dict(text=text, width=int(cell.width), continuation=continuation)
+                    if cell.attrs.bold:
+                        projected['bold'] = True
+                    if cell.attrs.italic:
+                        projected['italic'] = True
+                    if cell.attrs.underline:
+                        projected['underline'] = cell.attrs.underline
+                    cells.append(projected)
                 rows.append(cells)
             self._cells = rows
         return self._cells

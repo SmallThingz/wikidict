@@ -62,6 +62,15 @@ class NativeCellTests(unittest.TestCase):
         self.stream.feed('\x1b[4;12HX')
         self.assertEqual(self.screen.cell_rows()[3][11]['text'], 'X')
 
+    def test_emphasis_is_captured_from_individual_cells_after_selective_resets(self):
+        self.stream.feed('A\x1b[1;3;4mB\x1b[23mC\x1b[22;24mD')
+        attrs = [{key: cell.get(key) for key in ('bold', 'italic', 'underline')}
+                 for cell in self.screen.cell_rows()[0][:4]]
+        self.assertEqual(attrs, [dict(bold=None, italic=None, underline=None),
+                                 dict(bold=True, italic=True, underline=1),
+                                 dict(bold=True, italic=None, underline=1),
+                                 dict(bold=None, italic=None, underline=None)])
+
     def test_capture_records_actual_cells_and_text(self):
         self.stream.feed('  \u0789\u07a6\u0790\u07b0')
         with tempfile.TemporaryDirectory() as temp:
