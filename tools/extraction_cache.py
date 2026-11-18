@@ -122,7 +122,7 @@ def completed_source_binding(root, dump):
     return _completed_source_binding(root, dump)
 
 
-def _completed_source_binding(root, dump, *, restored_source=None):
+def _completed_source_binding(root, dump, *, restored_source=None, restored_indexes=None):
     receipt_path = root / "extraction-source.json"
     regular(receipt_path)
     with receipt_path.open("rb") as stream:
@@ -134,9 +134,14 @@ def _completed_source_binding(root, dump, *, restored_source=None):
     redirects_path = root / "transclusion-redirects.tsv"
     redirects = (stable_file_digest(redirects_path, snapshot=True)[1]
                  if os.path.lexists(redirects_path) else None)
+    indexes = [_receipt_identity(root / name, index=True) for name in
+               ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")]
+    if restored_indexes is not None:
+        _require_restored_indexes(restored_indexes, root)
+        original = json.loads(restored_indexes[2])['receipt']['indexes']
+        indexes[:2] = original[:2]
     expected = dict(version=2, source=(_receipt_identity(dump) if restored_source is None else restored_source["receipt"]["source"]),
-                    indexes=[_receipt_identity(root / name, index=True) for name in
-                             ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")],
+                    indexes=indexes,
                     namespace_sha256=list(bytes.fromhex(namespace)),
                     redirects_sha256=list(bytes.fromhex(redirects)) if redirects else None)
     if receipt != expected:
@@ -175,7 +180,7 @@ def _require_restored_dump(binding, root, dump, expected_sha, source):
         raise ValueError('Restored dump custody changed')
 
 
-def restored_dump_binding(root, descriptor, expected_sha, *, previous=None):
+def restored_dump_binding(root, descriptor, expected_sha, *, previous=None, restored_indexes=None):
     """Authenticate exact original compressed bytes once, then retain their custody."""
     import stat
     root = Path(root)
@@ -229,12 +234,130 @@ def restored_dump_binding(root, descriptor, expected_sha, *, previous=None):
         if type(binding) is not _RestoredDumpBinding or len(binding) != 7 or binding[6] != selection:
             raise ValueError('Restored dump selection changed')
     _require_restored_dump(binding, root, dump, expected_sha, source)
-    if (_completed_source_binding(root, dump, restored_source=source) != source
+    if (_completed_source_binding(root, dump, restored_source=source, restored_indexes=restored_indexes) != source
             or _full_stamp(marker.stat()) != before):
         raise ValueError('Restored dump original source binding changed')
     _require_restored_dump(binding, root, dump, expected_sha, source)
     if json.dumps(selected_descriptor, sort_keys=True, separators=(',', ':')).encode() != selection:
         raise ValueError('Restored dump selection changed during authentication')
+    return binding
+
+
+RESTORED_INDEX_NAMES = ('page-index.tsv', 'page-title-index.bin')
+
+
+class _RestoredIndexBinding(tuple):
+    """Authenticated current aliases; never a replacement historical seal."""
+    __slots__ = ()
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+_RESTORED_INDEX_BINDINGS = {}
+
+
+def _index_alias_custody(path):
+    custody = _restored_dump_custody(path)
+    info = path.lstat()
+    return custody, (info.st_uid, info.st_gid, info.st_nlink)
+
+
+def _require_restored_indexes(binding, root, expected_sha=None):
+    if (type(binding) is not _RestoredIndexBinding
+            or _RESTORED_INDEX_BINDINGS.get(id(binding)) is not binding
+            or binding[0] != str(root)
+            or (expected_sha is not None and binding[1] != expected_sha)):
+        raise ValueError('Invalid restored index custody')
+    # Include both aliases, all parents, the original seal/receipt and the
+    # authenticated cache manifest on every reuse, including after hashing.
+    for path, before in binding[4]:
+        if _index_alias_custody(Path(path)) != before:
+            raise ValueError('Restored index custody changed: ' + path)
+
+
+def restored_index_binding(root, selection, expected_sha, *, previous=None):
+    """Explicitly rebind two losslessly restored indexes to their original bytes.
+
+    Default source/ready validation still requires original inode identities.
+    This opt-in is only for the two normal extraction aliases and authenticates
+    the original completed seal, cache identity and complete index payloads.
+    """
+    import stat
+    root = Path(root)
+    if (type(selection) is not dict
+            or set(selection) != {'original_seal_sha256', 'cache_manifest', 'names'}
+            or selection['original_seal_sha256'] != expected_sha
+            or selection['names'] != list(RESTORED_INDEX_NAMES)
+            or not isinstance(expected_sha, str) or not re.fullmatch('[0-9a-f]{64}', expected_sha)
+            or not root.is_absolute() or str(root) != os.path.normpath(str(root))):
+        raise ValueError('Invalid restored index selection')
+    selected = json.dumps(selection, sort_keys=True, separators=(',', ':')).encode()
+    if previous is not None:
+        _require_restored_indexes(previous, root, expected_sha)
+        if previous[3] != selected:
+            raise ValueError('Restored index selection changed')
+        return previous
+    reference = selection['cache_manifest']
+    if (type(reference) is not dict or set(reference) != {'path', 'bytes', 'sha256'}
+            or type(reference['path']) is not str):
+        raise ValueError('Invalid restored index manifest')
+    manifest = Path(reference['path']); backing = manifest.parent
+    if (manifest.name != '.complete.json' or str(manifest) != reference['path']
+            or not manifest.is_absolute() or str(manifest) != os.path.normpath(str(manifest))
+            or backing == root or backing.is_relative_to(root) or root.is_relative_to(backing)):
+        raise ValueError('Invalid restored index alias root')
+    marker = root / COMPLETED_EXPANDER
+    receipt = root / 'extraction-source.json'
+    proof = root / 'extraction-completion.json'
+    paths = [marker, receipt, manifest, proof, root / 'dump-streams.tsv', root / 'compiler-inputs.ready']
+    paths.extend(p / name for name in RESTORED_INDEX_NAMES for p in (root, backing))
+    held = tuple((str(path), _index_alias_custody(path)) for path in paths)
+    with marker.open('rb') as stream:
+        raw = stream.read(MAX_MARKER_BYTES + 1)
+    if not raw or len(raw) > MAX_MARKER_BYTES or hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError('Restored index original seal changed')
+    recorded = json.loads(raw); source = recorded['identity']['source']
+    cached = _frontend_reference(reference)
+    if (not extraction_ownership_proven(backing)
+            or cached['identity']['dump_sha256'] != recorded['identity']['verified_input'][0]
+            or cached['identity']['index_sha256'] != recorded['identity']['verified_input'][1]):
+        raise ValueError('Restored index cache input differs')
+    if stable_file_digest(receipt) != source['receipt_bytes'] or json.loads(receipt.read_bytes()) != source['receipt']:
+        raise ValueError('Restored index original SourceReceipt changed')
+    original_assets = {name: [size, digest] for name, size, digest in recorded['identity']['assets']}
+    cache_assets = {name: [size, digest] for name, size, digest in cached['assets']}
+    for number, name in enumerate(RESTORED_INDEX_NAMES):
+        old = recorded['runtime_stamps']['assets'][name]
+        pair = [_index_alias_custody(p / name) for p in (root, backing)]
+        current = pair[0][0][0]
+        if (len(old) != 6 or any(type(v) is not int for v in old) or not stat.S_ISREG(old[2])
+                or pair[0][0][0] != pair[1][0][0] or pair[0][1] != pair[1][1]
+                or pair[0][1][0] != os.geteuid() or pair[0][1][2] != 2
+                or list(current[2:5]) != old[2:5]
+                or recorded['runtime_stamps']['snapshot_links'].get(name) is not None
+                or original_assets[name] != cache_assets.get(name)
+                or source['receipt']['indexes'][number] != dict(
+                    device_major=os.major(old[0]), device_minor=os.minor(old[0]), inode=old[1],
+                    size=old[3], mtime_ns=old[4], ctime_ns=0)):
+            raise ValueError('Restored index alias or original identity differs: ' + name)
+        if stable_file_digest(root / name) != original_assets[name]:
+            raise ValueError('Restored index bytes differ: ' + name)
+    with (root / 'page-index.tsv').open('rb') as stream:
+        if stream.readline(128) != b'# dict-page-index-v3\tmultistream-zstd\n':
+            raise ValueError('Unsupported restored page index format')
+    with (root / 'page-title-index.bin').open('rb') as stream:
+        if int.from_bytes(stream.read(16)[8:16], 'little') != 2:
+            raise ValueError('Restored title/page index kinds differ')
+    validate_extraction_completion(root)
+    binding = _RestoredIndexBinding((str(root), expected_sha,
+        json.dumps(source, sort_keys=True, separators=(',', ':')).encode(), selected, held))
+    # Publish only after the complete transaction; no partial success survives.
+    if any(_index_alias_custody(Path(path)) != before for path, before in held):
+        raise ValueError('Restored index changed during authentication')
+    if json.dumps(selection, sort_keys=True, separators=(',', ':')).encode() != selected:
+        raise ValueError('Restored index selection changed during authentication')
+    _RESTORED_INDEX_BINDINGS[id(binding)] = binding
     return binding
 
 
@@ -746,7 +869,7 @@ def _extraction_metadata_refresh(root, recorded, expected_sha, selection):
     return successor
 
 
-def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None, extraction_metadata_refresh=None, restored_dump=None):
+def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, snapshot_metadata_refresh=None, metadata_custody_refresh=None, extraction_metadata_refresh=None, restored_dump=None, restored_indexes=None):
     """Validate an original completed seal, never the current compilation graph.
 
     None means the old/absent seal cannot authorize source-custody release.
@@ -795,6 +918,17 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
                 if set(metadata_custody_refresh.get('names', [])) & {row['name'] for row in legacy}:
                     raise ValueError('Snapshot and known-operation custody overlap')
             value = _closed_metadata_custody(root, value, expected_sha, metadata_custody_refresh)
+        if restored_indexes is not None:
+            if (provider_update or extraction_metadata_refresh is not None
+                    or set((metadata_custody_refresh or {}).get('names', [])) & set(RESTORED_INDEX_NAMES)):
+                raise ValueError('Restored indexes cannot mix overlapping custody changes')
+            _require_restored_indexes(restored_indexes, root, expected_sha)
+            if json.loads(restored_indexes[2]) != original['identity']['source']:
+                raise ValueError('Restored index original source differs')
+            value = dict(value); value['runtime_stamps'] = dict(value['runtime_stamps'])
+            value['runtime_stamps']['assets'] = dict(value['runtime_stamps']['assets'])
+            for name in RESTORED_INDEX_NAMES:
+                value['runtime_stamps']['assets'][name] = list(_full_stamp((root / name).stat()))
         return value
     recorded = refreshed_context(original_recorded)
     identity = recorded['identity']; stamps = recorded['runtime_stamps']
@@ -841,8 +975,10 @@ def frozen_runtime_context(root, dump, expected_sha, *, provider_update=False, s
             raise ValueError('Frozen native snapshot path changed')
     for name in stamps['plans']:
         regular(root.parent / name); same(root.parent / name, stamps['plans'][name])
-    source = (completed_source_binding(root, dump) if restored_dump is None else
-              _completed_source_binding(root, dump, restored_source=identity['source']))
+    source = (completed_source_binding(root, dump) if restored_dump is None and restored_indexes is None else
+              _completed_source_binding(root, dump,
+                  restored_source=identity['source'] if restored_dump is not None else None,
+                  restored_indexes=restored_indexes))
     if source != identity['source']:
         raise ValueError('Frozen extraction SourceReceipt changed')
     # Bracket SourceReceipt reads too; a same-name change must not escape.

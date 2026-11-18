@@ -4201,12 +4201,45 @@ def initial_sealed_context_options(selected, native_roles, *, root=None, seal_re
         observed = native_roles.bind_input(Path(reference['path']))
         if any(observed[key] != reference[key] for key in ('path', 'bytes', 'sha256')):
             raise ValueError('Initial metadata custody authority changed')
+    if 'restored_indexes' in selected:
+        import extraction_cache as cache
+        if root is None or seal_reference is None:
+            raise ValueError('Restored indexes require their original prepared context')
+        if any(name in selected for name in ('file_metadata_provider_update', 'sitelinks_provider_update', 'extraction_metadata_refresh')):
+            raise ValueError('Restored indexes cannot mix Provider or extraction refresh')
+        reference = selected['restored_indexes']
+        selection = prepared_metadata(reference)
+        binding = cache.restored_index_binding(root, selection, seal_reference['sha256'],
+            previous=getattr(native_roles, '_restored_index_binding', None))
+        for item in (reference, selection['cache_manifest']):
+            observed = native_roles.bind_input(Path(item['path']))
+            if any(observed[key] != item[key] for key in ('path', 'bytes', 'sha256')):
+                raise ValueError('Restored index authority changed')
+        seal = prepared_metadata(seal_reference)
+        assets = {name: (size, digest) for name, size, digest in seal['identity']['assets']}
+        # The binding has already hashed each unique inode. Carry both names in
+        # the ordinary dispatch readset without a second corpus-sized read.
+        for filename, custody in binding[4]:
+            path = Path(filename)
+            if path.name not in cache.RESTORED_INDEX_NAMES:
+                native_roles.bind_input(path)
+                continue
+            stamp = custody[0][0]
+            identity = dict(path=str(path), bytes=assets[path.name][0], sha256=assets[path.name][1], mode=stat.S_IMODE(stamp[2]))
+            if path in native_roles.inputs and (native_roles.inputs[path] != stamp
+                    or native_roles.input_identities[path] != identity):
+                raise ValueError('Restored index differs from an existing input binding')
+            native_roles.inputs[path] = stamp
+            native_roles.input_identities[path] = identity
+        cache._require_restored_indexes(binding, Path(root), seal_reference['sha256'])
+        native_roles._restored_index_binding = binding
+        options['restored_indexes'] = binding
     if 'restored_dump' in selected:
         import extraction_cache as cache
         if root is None or seal_reference is None or original_dump is None:
             raise ValueError('Restored dump requires its original prepared context')
         binding = cache.restored_dump_binding(root, selected['restored_dump'], seal_reference['sha256'],
-            previous=getattr(native_roles, '_restored_dump_binding', None))
+            previous=getattr(native_roles, '_restored_dump_binding', None), restored_indexes=options.get('restored_indexes'))
         source = json.loads(binding[3]); restored = json.loads(binding[6])
         if (original_dump['path'] != source['path']
                 or original_dump['bytes'] != restored['bytes']
@@ -4260,7 +4293,7 @@ def initial_sealed_generation(reference, native_roles):
     """Read a selected closed direct preparation, without inventing old shard state."""
     selected = prepared_metadata(reference)
     if (not {'preparation_result','preparation_closure'} <= set(selected)
-            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','extraction_metadata_refresh','file_metadata_provider_update','sitelinks_provider_update','restored_dump'}):
+            or not set(selected) <= {'preparation_result','preparation_closure','snapshot_metadata_refresh','metadata_custody_refresh','extraction_metadata_refresh','file_metadata_provider_update','sitelinks_provider_update','restored_dump','restored_indexes'}):
         raise ValueError('Invalid initial sealed generation selection')
     if 'file_metadata_provider_update' in selected and 'sitelinks_provider_update' in selected:
         raise ValueError('Mixed initial Provider update families')
@@ -5611,6 +5644,8 @@ class RetainedNativeToolRoles:
                 names.extend(options['metadata_custody_refresh']['names'])
             if 'extraction_metadata_refresh' in options:
                 names.extend(options['extraction_metadata_refresh']['names'])
+            if 'restored_indexes' in options:
+                names.extend(cache.RESTORED_INDEX_NAMES)
             for name in names:
                 comparable['runtime_stamps']['assets'][name] = ready_seal['runtime_stamps']['assets'][name]
         if seal.get('provenance')!='ordinary-linked-expander' or comparable != ready_seal:
@@ -5865,6 +5900,8 @@ class RetainedNativeToolRoles:
         self._closed_native_context_options=copy.deepcopy(getattr(derived,'_closed_native_context_options',{}))
         if 'restored_dump' in self._closed_native_context_options:
             self._restored_dump_binding = self._closed_native_context_options['restored_dump']
+        if 'restored_indexes' in self._closed_native_context_options:
+            self._restored_index_binding = self._closed_native_context_options['restored_indexes']
         self._closed_native_context=derived._closed_native_context
         self._closed_library_routes=derived._closed_library_routes
         self._closed_native_worker_stamp=derived._closed_native_worker_stamp

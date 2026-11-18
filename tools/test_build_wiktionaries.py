@@ -14144,13 +14144,25 @@ class InitialSealedToolLayoutTests(unittest.TestCase):
 
 class InitialSealedRestoredDumpTests(unittest.TestCase):
     @contextlib.contextmanager
-    def fixture(self):
+    def fixture(self, *, restore_indexes=False):
         # Keep the existing qualified native observations; source receipt,
         # compressed bytes, constructor and live-helper selection are real.
         with ReadonlyPreparedRetainedTests().fixture() as f:
             cache = f.native_cache
             for name in ('page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv', 'namespace-registry.tsv'):
                 (f.expander / name).write_bytes(name.encode())
+            if restore_indexes:
+                for name in cache.FILES:
+                    if not (f.expander / name).exists(): (f.expander / name).write_bytes(name.encode())
+                page = b'# dict-page-index-v3\tmultistream-zstd\n0\t0\t10\tTemplate:fixture\n'
+                (f.expander / 'page-index.tsv').write_bytes(page)
+                (f.expander / 'page-title-index.bin').write_bytes(b'DPTIDX01' + b''.join(
+                    n.to_bytes(8, 'little') for n in (2, 8, 1, 1, len(page))) + bytes(16 + 128))
+                (f.expander / 'dump-streams.tsv').write_bytes(b'0\t0\t100\n')
+                (f.expander / 'compiler-inputs.ready').write_bytes(b'complete\n')
+                _initial_sealed_write(f.expander / 'extraction-completion.json', dict(
+                    schema='wikidict.extraction-completion.v1', version=1,
+                    expected_stream_count=1, consumed_stream_count=1, pages=1))
             receipt = dict(version=2, source=cache._receipt_identity(f.dump),
                 indexes=[cache._receipt_identity(f.expander / name, index=True) for name in
                          ('page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv')],
@@ -14163,6 +14175,17 @@ class InitialSealedRestoredDumpTests(unittest.TestCase):
                 if name == 'extraction-source.json' else [name, size, digest]
                 for name, size, digest in f.seal['identity']['assets']]
             f.seal['identity']['source'] = cache.completed_source_binding(f.expander, f.dump)
+            if restore_indexes:
+                cache_identity = dict(version=4, extractor_args=list(cache.EXTRACTOR_ARGS),
+                    dump_sha256=f.seal['identity']['verified_input'][0], index_sha256=f.seal['identity']['verified_input'][1],
+                    namespace_registry_sha256='f'*64, transclusion_redirects_sha256=None,
+                    page_redirects_sha256=None, unicode_case={'libraries': []},
+                    tool={'extractor_sha256': 'c'*64, 'libraries': []})
+                key = hashlib.sha256(json.dumps(cache_identity, sort_keys=True).encode()).hexdigest()
+                backing = f.root / 'restored-cache' / key; backing.mkdir(parents=True)
+                for name in cache.FILES: os.link(f.expander / name, backing / name)
+                names = sorted({r[0] for r in f.seal['identity']['assets']} | set(cache.FILES) | {'extraction-completion.json'})
+                f.seal['identity']['assets'] = [[name, *cache.stable_file_digest(f.expander / name)] for name in names]
             # The constructor's optional-context comparison expects the same
             # stamp mapping supplied by every real frozen seal. Native inventory
             # remains the existing mocked fixture; these asset stamps are real.
@@ -14177,8 +14200,22 @@ class InitialSealedRestoredDumpTests(unittest.TestCase):
                      'page-index.tsv', 'page-title-index.bin', 'dump-streams.tsv')}
             restored = f.root / 'restored-pages.xml.zst'; restored.write_bytes(f.dump.read_bytes()); restored.chmod(0o644)
             descriptor = dict(_initial_sealed_reference(restored), mode=0o644)
+            extra_selection = {}
+            if restore_indexes:
+                manifest = _initial_sealed_write(backing / '.complete.json', dict(
+                    asset_ownership=cache.EXTRACTION_OWNERSHIP, identity=cache_identity,
+                    assets=[row for row in f.seal['identity']['assets'] if row[0] in cache.FILES]))
+                index_selection = _initial_sealed_write(f.root / 'restored-index-selection.json', dict(
+                    original_seal_sha256=f.f.seal_ref['sha256'], cache_manifest=manifest,
+                    names=list(cache.RESTORED_INDEX_NAMES)))
+                extra_selection['restored_indexes'] = index_selection
+                for name in cache.RESTORED_INDEX_NAMES:
+                    path = f.expander / name; before = path.stat(); fresh = f.root / ('fresh-' + name)
+                    fresh.write_bytes(path.read_bytes()); fresh.chmod(before.st_mode & 0o7777)
+                    os.utime(fresh, ns=(before.st_atime_ns, before.st_mtime_ns))
+                    (backing / name).unlink(); fresh.replace(path); os.link(path, backing / name)
             selection_ref = _initial_sealed_write(f.root / 'restored-selection.json',
-                dict(original_selected, restored_dump=descriptor))
+                dict(original_selected, restored_dump=descriptor, **extra_selection))
             selection, live_helper = InitialSealedLiveHelperTests().current(f)
             selection['dict-bundle-build']['initial_sealed_generation'] = selection_ref
             original_dump = f.dump
@@ -14191,9 +14228,16 @@ class InitialSealedRestoredDumpTests(unittest.TestCase):
                     cache.completed_source_binding(root, dump)
                 else:
                     cache._require_restored_dump(proof, root, dump, seal_sha, f.seal['identity']['source'])
-                    self.assertEqual(cache._completed_source_binding(root, dump, restored_source=f.seal['identity']['source']), f.seal['identity']['source'])
+                    self.assertEqual(cache._completed_source_binding(root, dump, restored_source=f.seal['identity']['source'],
+                        restored_indexes=options.get('restored_indexes')), f.seal['identity']['source'])
                     cache._require_restored_dump(proof, root, dump, seal_sha, f.seal['identity']['source'])
                 validations.append((Path(dump), proof))
+                if restore_indexes:
+                    cache._require_restored_indexes(options.get('restored_indexes'), root, seal_sha)
+                    value = copy.deepcopy(f.seal)
+                    for name in cache.RESTORED_INDEX_NAMES:
+                        value['runtime_stamps']['assets'][name] = list(cache._full_stamp((root / name).stat()))
+                    return value
                 return f.seal
             with patch.object(cache, '__file__', str(live_helper)), \
                     patch.object(cache, 'frozen_runtime_context', side_effect=frozen), \
@@ -14283,6 +14327,47 @@ class InitialSealedRestoredDumpTests(unittest.TestCase):
                     with self.assertRaises(ValueError): InitialSealedGenerationTests().adopt(fresh, native_roles=roles)
                     self.assertGreaterEqual(count[0], 2)
                 self.assertFalse((fresh.destination / 'state.json').exists())
+                self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
+
+
+class InitialSealedRestoredIndexTests(unittest.TestCase):
+    fixture = InitialSealedRestoredDumpTests.fixture
+
+    def test_constructor_adoption_and_dispatch_bind_both_restored_aliases(self):
+        with self.fixture(restore_indexes=True) as x:
+            f = x.fixture; cache = f.native_cache
+            roles = b.RetainedNativeToolRoles(x.selection, zig_sha256=f.identity['zig_sha256'])
+            for name in cache.RESTORED_INDEX_NAMES:
+                for path in (f.expander / name, x.backing / name):
+                    self.assertIn(path, roles.inputs)
+                    self.assertEqual(roles.input_identities[path]['sha256'], cache.sha256(path))
+            fresh = copy.copy(f.f); fresh.selection = x.selection_ref; fresh.dump = x.restored
+            fresh.identity = copy.deepcopy(f.identity); fresh.identity['native_tool_roles'] = roles.provenance()
+            fresh.destination = f.root / 'restored-index-output/viwiktionary/20261001.shards'
+            self.assertEqual(InitialSealedGenerationTests().adopt(fresh, native_roles=roles), 123)
+            roles.prepare(None, 'viwiktionary', '20261001'); roles.require_unchanged()
+            dispatch = roles.prepared_dispatch()
+            resumed = b.RetainedNativeToolRoles.from_prepared_dispatch(dispatch, _authenticated_origin=roles)
+            resumed.require_unchanged()
+            self.assertIs(resumed._restored_index_binding, roles._restored_index_binding)
+            self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
+            alias = x.backing / 'page-index.tsv'; body = alias.read_bytes(); alias.unlink(); alias.write_bytes(body)
+            with self.assertRaises(ValueError): roles.require_unchanged()
+            with self.assertRaises(ValueError): resumed.require_unchanged()
+            with self.assertRaises(ValueError): b.RetainedNativeToolRoles.from_prepared_dispatch(dispatch)
+
+    def test_missing_or_changed_explicit_index_authority_refuses(self):
+        for change in ('unselected', 'manifest', 'selection'):
+            with self.subTest(change=change), self.fixture(restore_indexes=True) as x:
+                f = x.fixture
+                selected = copy.deepcopy(x.selection)
+                if change == 'unselected':
+                    data = b.prepared_metadata(x.selection_ref); del data['restored_indexes']
+                    selected['dict-bundle-build']['initial_sealed_generation'] = _initial_sealed_write(f.root / 'without-index-custody.json', data)
+                elif change == 'manifest': (x.backing / '.complete.json').write_text('{}')
+                else: (f.root / 'restored-index-selection.json').write_text('{}')
+                with self.assertRaises((ValueError, OSError)):
+                    b.RetainedNativeToolRoles(selected, zig_sha256=f.identity['zig_sha256'])
                 self.assertEqual(x.held, {name:(f.expander / name).read_bytes() for name in x.held})
 
 

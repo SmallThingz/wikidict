@@ -4134,5 +4134,154 @@ class ExtractionMetadataRefreshTests(unittest.TestCase):
                     self.assertTrue(fired)
 
 
+class RestoredIndexCustodyTests(unittest.TestCase):
+    setUp = CompletedExpanderTests.setUp
+    fixture = CompletedExpanderTests.fixture
+    call = CompletedExpanderTests.call
+
+    def restored_fixture(self, *, restore=True, malformed=False):
+        root, dump, snapshots = self.fixture(ready=False)
+        page = b'# dict-page-index-v3\tmultistream-zstd\n0\t0\t10\tTemplate:fixture\n'
+        (root / 'page-index.tsv').write_bytes(page)
+        header = b'DPTIDX01' + b''.join(n.to_bytes(8, 'little') for n in (2, 8, 1, 1, len(page))) + bytes(16)
+        (root / 'page-title-index.bin').write_bytes(header + bytes(128))
+        (root / 'extraction-completion.json').write_text(json.dumps(dict(
+            schema='wikidict.extraction-completion.v1', version=1,
+            expected_stream_count=1, consumed_stream_count=1, pages=1)))
+        receipt = root / 'extraction-source.json'
+        value = json.loads(receipt.read_bytes())
+        value['indexes'] = [cache._receipt_identity(root / n, index=True) for n in (*cache.RESTORED_INDEX_NAMES, 'dump-streams.tsv')]
+        receipt.write_text(json.dumps(value))
+        identity = dict(version=4, extractor_args=list(cache.EXTRACTOR_ARGS),
+            dump_sha256=cache.sha256(dump), index_sha256='b'*64,
+            namespace_registry_sha256='f'*64, transclusion_redirects_sha256=None,
+            page_redirects_sha256=None, unicode_case={'libraries': []},
+            tool={'extractor_sha256': 'c'*64, 'libraries': []})
+        key = cache.hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        backing = self.base / ('restored-index-cache-' + str(self.sequence)) / key
+        (backing / 'modules').mkdir(parents=True)
+        names = sorted([*cache.FILES, 'modules/123.lua'])
+        for name in names:
+            cache._owned_extraction_link(root / name, backing / name)
+        self.assertEqual(0, self.call('seal-expander', root, dump, snapshots, dump_sha=cache.sha256(dump)))
+        cache.shutil.rmtree(root / 'llvm')
+        (root / '.incomplete').unlink(); (root.parent / '.incomplete').write_bytes(b'expander ready')
+        marker = root / cache.COMPLETED_EXPANDER
+        seal = json.loads(marker.read_bytes())
+        if malformed:
+            # Authenticate a legacy malformed title header to ensure the new
+            # route validates format as well as equal original hashes.
+            title = root / 'page-title-index.bin'; before = title.stat()
+            body = title.read_bytes()
+            title.write_bytes(body[:8] + (1).to_bytes(8, 'little') + body[16:] if malformed == 'kind' else b'INVALID!' + body[8:])
+            cache.os.utime(title, ns=(before.st_atime_ns, before.st_mtime_ns))
+            seal['identity']['assets'] = [[n, *cache.stable_file_digest(root / n)] if n == title.name else row
+                for row in seal['identity']['assets'] for n in [row[0]]]
+            seal['runtime_stamps']['assets'][title.name] = list(cache._full_stamp(title.stat()))
+            marker.write_text(json.dumps(seal))
+        original = marker.read_bytes()
+        manifest = backing / '.complete.json'
+        manifest.write_text(json.dumps(dict(asset_ownership=cache.EXTRACTION_OWNERSHIP,
+            identity=identity, assets=[r for r in seal['identity']['assets'] if r[0] in names])))
+        selection = dict(original_seal_sha256=cache.sha256(marker),
+            cache_manifest=dict(path=str(manifest), bytes=manifest.stat().st_size, sha256=cache.sha256(manifest)),
+            names=list(cache.RESTORED_INDEX_NAMES))
+        if restore:
+            for name in cache.RESTORED_INDEX_NAMES:
+                source = root / name; before = source.stat()
+                fresh = self.base / ('fresh-' + str(self.sequence) + '-' + name)
+                fresh.write_bytes(source.read_bytes()); fresh.chmod(before.st_mode & 0o7777)
+                cache.os.utime(fresh, ns=(before.st_atime_ns, before.st_mtime_ns))
+                (backing / name).unlink(); fresh.replace(source); cache.os.link(source, backing / name)
+                self.assertNotEqual(before.st_ino, source.stat().st_ino)
+        return root, dump, backing, original, selection
+
+    def test_restored_pair_reuses_original_context_with_one_hash_and_no_rewrite(self):
+        root, dump, backing, original, selection = self.restored_fixture()
+        sha = selection['original_seal_sha256']; receipt = (root / 'extraction-source.json').read_bytes()
+        with self.assertRaises(ValueError): cache.frozen_runtime_context(root, dump, sha)
+        reads = []; digest = cache.stable_file_digest
+        def counted(path, **kwargs):
+            if Path(path).name in cache.RESTORED_INDEX_NAMES: reads.append(str(path))
+            return digest(path, **kwargs)
+        with mock.patch.object(cache, 'stable_file_digest', side_effect=counted):
+            binding = cache.restored_index_binding(root, selection, sha)
+            self.assertIs(binding, cache.restored_index_binding(root, selection, sha, previous=binding))
+            first = cache.frozen_runtime_context(root, dump, sha, restored_indexes=binding)
+            self.assertEqual(first, cache.frozen_runtime_context(root, dump, sha, restored_indexes=binding))
+        self.assertEqual([str(root / n) for n in cache.RESTORED_INDEX_NAMES], reads)
+        for name in cache.RESTORED_INDEX_NAMES:
+            self.assertEqual((root / name).stat().st_ino, (backing / name).stat().st_ino)
+            first['runtime_stamps']['assets'][name] = json.loads(original)['runtime_stamps']['assets'][name]
+        self.assertEqual(json.loads(original), first)
+        self.assertEqual(original, (root / cache.COMPLETED_EXPANDER).read_bytes())
+        self.assertEqual(receipt, (root / 'extraction-source.json').read_bytes())
+        with self.assertRaises(ValueError): cache.completed_source_binding(root, dump)
+
+    def test_restored_indexes_and_dump_share_original_source(self):
+        root, dump, backing, original, selection = self.restored_fixture()
+        sha = selection['original_seal_sha256']
+        fresh = self.base / 'fresh-dump'; fresh.write_bytes(dump.read_bytes()); dump.unlink()
+        descriptor = dict(path=str(fresh), bytes=fresh.stat().st_size, sha256=cache.sha256(fresh))
+        with self.assertRaises(ValueError): cache.restored_dump_binding(root, descriptor, sha)
+        indexes = cache.restored_index_binding(root, selection, sha)
+        restored = cache.restored_dump_binding(root, descriptor, sha, restored_indexes=indexes)
+        context = cache.frozen_runtime_context(root, fresh, sha, restored_dump=restored, restored_indexes=indexes)
+        self.assertEqual(json.loads(original)['identity'], context['identity'])
+
+    def test_restored_indexes_refuse_unproven_aliases_bytes_and_selection(self):
+        for change in ('bytes', 'mode', 'mtime', 'alias-copy', 'alias-symlink', 'source-symlink',
+                       'extra-alias', 'name', 'source-receipt', 'manifest', 'manifest-input', 'seal', 'format', 'format-kind'):
+            with self.subTest(change=change):
+                root, dump, backing, original, selection = self.restored_fixture(malformed='kind' if change == 'format-kind' else change == 'format')
+                source = root / 'page-index.tsv'; alias = backing / source.name; old = source.stat()
+                if change == 'bytes': source.write_bytes(source.read_bytes().replace(b'fixture', b'changed')); cache.os.utime(source, ns=(old.st_atime_ns, old.st_mtime_ns))
+                elif change == 'mode': source.chmod(0o600)
+                elif change == 'mtime': cache.os.utime(source, ns=(old.st_atime_ns, old.st_mtime_ns + 1))
+                elif change == 'alias-copy': alias.unlink(); alias.write_bytes(source.read_bytes())
+                elif change == 'alias-symlink': alias.unlink(); alias.symlink_to(source)
+                elif change == 'source-symlink': source.unlink(); source.symlink_to(alias)
+                elif change == 'extra-alias': cache.os.link(source, self.base / ('third-' + str(self.sequence)))
+                elif change == 'name': selection['names'] = ['dump-streams.tsv']
+                elif change == 'source-receipt': (root / 'extraction-source.json').write_bytes(b'{}')
+                elif change == 'manifest': (backing / '.complete.json').write_bytes(b'{}')
+                elif change == 'manifest-input':
+                    p = backing / '.complete.json'; value = json.loads(p.read_bytes()); value['identity']['dump_sha256'] = '0'*64
+                    p.write_text(json.dumps(value)); selection['cache_manifest'].update(bytes=p.stat().st_size, sha256=cache.sha256(p))
+                elif change == 'seal': (root / cache.COMPLETED_EXPANDER).write_bytes(b'{}')
+                expected_error = (self.assertRaisesRegex(ValueError, 'Invalid page title index header') if change == 'format' else
+                                  self.assertRaisesRegex(ValueError, 'title/page index kinds differ') if change == 'format-kind' else
+                                  self.assertRaises((ValueError, OSError)))
+                with expected_error:
+                    cache.restored_index_binding(root, selection, selection['original_seal_sha256'])
+
+    def test_restored_index_custody_rejects_late_changes_and_forgery(self):
+        for change in ('late-first-alias', 'parent', 'receipt', 'unselected', 'plain-tuple', 'typed-tuple', 'provider'):
+            with self.subTest(change=change):
+                root, dump, backing, original, selection = self.restored_fixture(); sha = selection['original_seal_sha256']
+                binding = cache.restored_index_binding(root, selection, sha)
+                if change == 'late-first-alias':
+                    p = backing / 'page-index.tsv'; body = p.read_bytes(); p.unlink(); p.write_bytes(body)
+                elif change == 'parent': backing.chmod(0o700)
+                elif change == 'receipt': (root / 'extraction-source.json').write_bytes(b'{}')
+                elif change == 'unselected': (root / 'dict-bundle-expander').chmod(0o600)
+                elif change == 'plain-tuple': binding = tuple(binding)
+                elif change == 'typed-tuple': binding = cache._RestoredIndexBinding(tuple(binding))
+                with self.assertRaises((ValueError, OSError)):
+                    cache.frozen_runtime_context(root, dump, sha, restored_indexes=binding, provider_update=change == 'provider')
+
+    def test_final_hash_rechecks_first_alias(self):
+        root, dump, backing, original, selection = self.restored_fixture()
+        digest = cache.stable_file_digest; fired = []
+        def mutating(path, **kwargs):
+            result = digest(path, **kwargs)
+            if Path(path) == root / 'page-title-index.bin':
+                p = backing / 'page-index.tsv'; body = p.read_bytes(); p.unlink(); p.write_bytes(body); fired.append(True)
+            return result
+        with mock.patch.object(cache, 'stable_file_digest', side_effect=mutating):
+            with self.assertRaises(ValueError): cache.restored_index_binding(root, selection, selection['original_seal_sha256'])
+        self.assertTrue(fired)
+
+
 if __name__ == "__main__":
     unittest.main()
