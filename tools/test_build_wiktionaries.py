@@ -9851,8 +9851,11 @@ class FigureTupleGuardDigestTests(unittest.TestCase):
             self.assertEqual(replay.call_count, 1)
             self.assertEqual(len(calls), 3)
             reads, proof = calls[0]
-            self.assertEqual([path for path, _ in reads], sorted(proof[1]))
-            self.assertEqual(sum(size for _, size in reads), sum(row[1]['size'] for row in proof[1].values()))
+            destination = {name for name in proof[1] if Path(name).is_relative_to(self.args.output)}
+            self.assertTrue(destination)
+            self.assertEqual([path for path, _ in reads], sorted(set(proof[1]) - destination))
+            self.assertTrue(all(set(proof[1][path][1]) == {'size', 'sha256'} for path in destination))
+            self.assertTrue(all('sha1' in proof[1][path][1] for path, _ in reads))
             self.assertTrue(reads)
             self.assertEqual(calls[1][0], [])
             self.assertEqual(calls[2][0], [])
@@ -9917,11 +9920,33 @@ class FigureTupleGuardDigestTests(unittest.TestCase):
         try:
             with patch.object(self.figures.evidence, 'fingerprint', side_effect=hashed):
                 with self.assertRaisesRegex(ValueError, 'final boundary'):
-                    self.validate()
+                    b.figure_tuple_guard(self.figures, self.args.output)
             self.assertEqual(changed, [True])
             self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
         finally:
             first.write_bytes(original)
+
+    def test_same_size_destination_swap_after_semantic_replay_refuses_and_retry_replays(self):
+        raw = self.paths['figure-sizing-raw']
+        original = raw.read_bytes()
+        verify = self.figures.verify_tuple
+        def swapped(*args, **kwargs):
+            result = verify(*args, **kwargs)
+            stamp = raw.stat()
+            raw.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+            os.utime(raw, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            return result
+        try:
+            with patch.object(self.figures, 'verify_tuple', side_effect=swapped):
+                with self.assertRaisesRegex(ValueError, 'changed during validation'):
+                    self.validate()
+            self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        finally:
+            raw.write_bytes(original)
+        with patch.object(self.figures, 'verify_tuple', wraps=verify) as replay:
+            self.validate()
+            self.validate()
+            self.assertEqual(replay.call_count, 1)
 
     def test_reused_digest_end_sweep_detects_mutation_during_later_identity_check(self):
         proof = b.figure_tuple_guard(self.figures, self.args.output)
@@ -11500,7 +11525,7 @@ class PreparedFigureVerdictTests(unittest.TestCase):
                     else:
                         foreign=copy.deepcopy(next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[0])
                         foreign[0][0]['generator_sha256']='0'*64
-                        proof['guard_sha256']=b._prepared_figure_guard_digest(foreign)
+                        proof['guard_sha256']=b._prepared_figure_guard_digest(foreign,proof['version'])
                     b._FIGURE_TUPLE_REPLAYS.clear()
                     self.assertFalse(b.reuse_prepared_figure_verdict(cfg,proof))
                     self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
@@ -12970,13 +12995,13 @@ class CompactPreparedFigureVerdictTests(unittest.TestCase):
     def test_digest_schema_and_unknown_versions_cannot_publish_replay_authority(self):
         with self.selected() as (cfg,_):
             self.validate();proof=b.prepared_figure_verdict(cfg)
-            self.assertEqual(proof['version'],2)
+            self.assertEqual(proof['version'],3)
             self.assertNotIn('guard',proof)
             self.assertRegex(proof['guard_sha256'],r'^[0-9a-f]{64}$')
             malformed=[]
             for value in (None,True,0,'','0'*63,'0'*65,'G'*64,proof['guard_sha256'].upper()):
                 changed=copy.deepcopy(proof);changed['guard_sha256']=value;malformed.append(changed)
-            for version in (True,2.0,1,3):
+            for version in (True,2.0,1,4):
                 changed=copy.deepcopy(proof);changed['version']=version;malformed.append(changed)
             changed=copy.deepcopy(proof);changed['guard']=[];malformed.append(changed)
             changed=copy.deepcopy(proof);del changed['guard_sha256'];malformed.append(changed)
@@ -13002,6 +13027,16 @@ class CompactPreparedFigureVerdictTests(unittest.TestCase):
             with patch.object(self.figures,'verify_tuple',wraps=self.figures.verify_tuple) as replay:
                 self.assertEqual(self.validate(),expected)
                 self.assertEqual(replay.call_count,1)
+
+    def test_existing_v2_verdict_still_uses_original_digest_and_full_readset(self):
+        with self.selected() as (cfg,_):
+            expected=self.validate();proof=b.prepared_figure_verdict(cfg)
+            legacy=b.figure_tuple_guard(self.figures,self.args.output)
+            proof.update(version=2,guard_sha256=b._prepared_figure_guard_digest(legacy))
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            self.assertTrue(b.reuse_prepared_figure_verdict(cfg,proof))
+            with patch.object(self.figures,'verify_tuple',side_effect=AssertionError('Replay of accepted v2')):
+                self.assertEqual(self.validate(),expected)
 
     def test_large_guard_transport_stays_small_without_expanding_the_metadata_bound(self):
         # Metadata-only scale contrast; no synthetic guard is accepted as a

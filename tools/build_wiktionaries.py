@@ -1393,7 +1393,7 @@ def _figure_replay_identity(path, *, directory=False):
     return resolved, fields(lexical), fields(target)
 
 
-def figure_tuple_guard(helper, root, *, authenticated=None):
+def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=None):
     """Hash the initial readset; reuse its digests only under exact local guards."""
     evidence = helper.evidence
     files, directories, initial = set(), {}, {}
@@ -1424,6 +1424,8 @@ def figure_tuple_guard(helper, root, *, authenticated=None):
             payload_members = tuple(contained.values())
         else:
             payload_members = members
+        if deferred_capture is not None and directory == Path(root):
+            deferred_capture.update(payload_members)
         files.update(payload_members)
         initial.update((path, _figure_replay_identity(path)) for path in payload_members)
         inventory_path = directory / helper.INVENTORY
@@ -1571,7 +1573,9 @@ def figure_tuple_guard(helper, root, *, authenticated=None):
         before = _figure_replay_identity(path)
         if path in initial and before != initial[path]:
             raise ValueError('Figure replay authority changed while collecting inputs')
-        if authenticated is None:
+        if deferred_capture is not None and path in deferred_capture:
+            identity = None
+        elif authenticated is None:
             identity = evidence.fingerprint(path)
         else:
             previous, identity = authenticated[1][str(path)]
@@ -1603,7 +1607,10 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         return helper.verify_tuple(paths, edition, date)
     with _FIGURE_TUPLE_REPLAY_LOCK:
         previous = _FIGURE_TUPLE_REPLAYS.get(key)
-    guard = figure_tuple_guard(helper, roots.pop(), authenticated=None if previous is None else previous[0])
+    root = roots.pop()
+    deferred = set() if previous is None and callable(getattr(helper, 'capture_member_paths', None)) else None
+    guard = figure_tuple_guard(helper, root, authenticated=None if previous is None else previous[0],
+                               deferred_capture=deferred)
     if previous is not None:
         if guard is None or guard != previous[0]:
             with _FIGURE_TUPLE_REPLAY_LOCK:
@@ -1655,7 +1662,24 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         # This always replays the destination itself. Only exact absolute
         # external-parent and SQL keys can hit the helper's existing caches.
         result = helper.verify_tuple(paths, edition, date, **kwargs)
-        after = figure_tuple_guard(helper, Path(next(iter(paths.values()))).parent, authenticated=guard)
+        if guard is not None and deferred:
+            # The complete tuple validator authenticated the destination bytes.
+            # Use its exact inventory only after the original stamps survive the
+            # full sweep below. External authorities still have independent hashes.
+            members = {str(path.relative_to(root)): str(path) for path in deferred}
+            manifest, inventory = next(iter(result.values()))
+            if set(inventory) != set(members):
+                raise ValueError('Figure replay inventory differs from the capture readset')
+            for name, path in members.items():
+                stamp, _ = guard[1][path]
+                size = stamp[1][6]
+                digest = inventory[name]
+                if (not isinstance(digest, str) or re.fullmatch('[0-9a-f]{64}', digest) is None or
+                        (name not in (helper.MANIFEST, helper.COMPLETE) and
+                         manifest['artifacts'].get(name) != {'bytes': size, 'sha256': digest})):
+                    raise ValueError('Figure replay inventory differs from the captured bytes')
+                guard[1][path] = (stamp, {'size': size, 'sha256': digest})
+        after = figure_tuple_guard(helper, root, authenticated=guard)
         if guard != after:
             raise ValueError('Figure replay inputs changed during validation')
         if guard is not None:
@@ -1695,10 +1719,10 @@ def _prepared_figure_selection(cfg):
     return edition,paths,key
 
 
-def _prepared_figure_guard_digest(guard):
+def _prepared_figure_guard_digest(guard, version=2):
     # Commit to every field of the same complete guard, without copying its
     # large lexical/resolved path inventories into the generation a second time.
-    digest=hashlib.sha256(b'wikidict.prepared-figure-guard.v2\0')
+    digest=hashlib.sha256(f'wikidict.prepared-figure-guard.v{version}\0'.encode())
     encoder=json.JSONEncoder(default=os.fspath,sort_keys=True,separators=(',',':'),allow_nan=False)
     for part in encoder.iterencode(guard):digest.update(part.encode('utf-8'))
     return digest.hexdigest()
@@ -1718,9 +1742,10 @@ def prepared_figure_verdict(cfg):
     result=json.loads(prior[1])
     if (set(result)!=set(paths) or any(row[0].get('wiki')!=edition or row[0].get('date')!=cfg['date']
                                      for row in result.values())):return None
-    return dict(version=2,source=cfg['source'],python_tooling=cfg.get('python_tooling'),
+    version=3 if any('sha1' not in identity for _,identity in guard[1].values()) else 2
+    return dict(version=version,source=cfg['source'],python_tooling=cfg.get('python_tooling'),
                 edition=edition,date=cfg['date'],paths=dict(key),
-                guard_sha256=_prepared_figure_guard_digest(guard),result=result)
+                guard_sha256=_prepared_figure_guard_digest(guard,version),result=result)
 
 
 def reuse_prepared_figure_verdict(cfg, verdict):
@@ -1734,7 +1759,7 @@ def reuse_prepared_figure_verdict(cfg, verdict):
     if selected is None or not isinstance(verdict,dict):return False
     edition,paths,key=selected
     if (set(verdict)!={'version','source','python_tooling','edition','date','paths','guard_sha256','result'}
-            or type(verdict['version']) is not int or verdict['version']!=2 or verdict['source']!=cfg['source']
+            or type(verdict['version']) is not int or verdict['version'] not in (2,3) or verdict['source']!=cfg['source']
             or verdict['python_tooling']!=cfg.get('python_tooling')
             or verdict['edition']!=edition or verdict['date']!=cfg['date']
             or verdict['paths']!=dict(key)):
@@ -1763,8 +1788,13 @@ def reuse_prepared_figure_verdict(cfg, verdict):
     import prepare_figure_metadata as helper
     # Deliberately no authenticated=child_guard: the parent hashes the complete
     # helper/SQL/raw/parent readset itself before transporting semantic success.
-    guard=figure_tuple_guard(helper,next(iter(paths.values())).parent)
-    if guard is None or _prepared_figure_guard_digest(guard)!=verdict['guard_sha256']:return False
+    root=next(iter(paths.values())).parent
+    guard=figure_tuple_guard(helper,root)
+    if guard is None:return False
+    if verdict['version']==3:
+        for path,(_,identity) in guard[1].items():
+            if Path(path).is_relative_to(root):identity.pop('sha1')
+    if _prepared_figure_guard_digest(guard,verdict['version'])!=verdict['guard_sha256']:return False
     source.require_python()
     if figure_tuple_guard(helper,next(iter(paths.values())).parent,authenticated=guard)!=guard:return False
     encoded=json.dumps(result,sort_keys=True,separators=(',',':'))
@@ -6081,10 +6111,11 @@ class RetainedNativeToolRoles:
             proof=identities.get(str(path)) if figure_guard is not None else None
             identity=None if proof is None else proof[1]
             if (path not in self.inputs and isinstance(identity,dict)
-                    and set(identity)=={'size','sha1','sha256'}
+                    and set(identity) in ({'size','sha256'},{'size','sha1','sha256'})
                     and type(identity['size']) is int and identity['size']==proof[0][1][6]
-                    and all(isinstance(identity[key],str) and re.fullmatch(pattern,identity[key])
-                            for key,pattern in (('sha1','[0-9a-f]{40}'),('sha256','[0-9a-f]{64}')))):
+                    and ('sha1' not in identity or isinstance(identity['sha1'],str)
+                         and re.fullmatch('[0-9a-f]{40}',identity['sha1']))
+                    and isinstance(identity['sha256'],str) and re.fullmatch('[0-9a-f]{64}',identity['sha256'])):
                 # The completed Figure replay already hashed these exact bytes.
                 # Keep the normal borrower guard; publish only after final checks.
                 if (not path.is_absolute() or any(parent.is_symlink() for parent in (path,*path.parents))
