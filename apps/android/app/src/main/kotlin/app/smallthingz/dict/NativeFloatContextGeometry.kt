@@ -287,6 +287,14 @@ internal class NativeFloatContextGeometry private constructor(
     }
     private fun paragraphAt(offset: Int): Paragraph? = textParagraphs.lastOrNull { offset >= it.offset }
         ?.takeIf { offset <= it.offset + it.geometry.text.length }
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) {
+        require(caret.offset in 0..text.length)
+        val paragraph = if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            textParagraphs.lastOrNull { it.geometry.text.isNotEmpty() && it.offset + it.geometry.text.length == caret.offset }
+                ?: paragraphAt(caret.offset) else paragraphAt(caret.offset)
+        if (paragraph == null) revealOffset(caret.offset, onRevealed)
+        else paragraph.geometry.revealOffset(caret.translated(-paragraph.offset), onRevealed)
+    }
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
         require(offset in 0..text.length)
         paragraphAt(offset)?.let { it.geometry.revealOffset(offset - it.offset, onRevealed); return }
@@ -347,6 +355,40 @@ internal class NativeFloatContextGeometry private constructor(
             ?: return null
         return paragraph.geometry.horizontalScrollTargetAt(x - paragraph.x, y - paragraph.y)
     }
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        val paragraph = if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            textParagraphs.lastOrNull { it.geometry.text.isNotEmpty() && it.offset + it.geometry.text.length == caret.offset } ?: paragraphAt(caret.offset)
+            else paragraphAt(caret.offset)
+        return paragraph?.let { it.geometry.caretRect(caret.translated(-it.offset)).apply { offset(it.x, it.y) } }
+            ?: caretRect(caret.offset)
+    }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return NativeTextCaret(it.sourceOffset) }
+        children.lastOrNull { it.bounds.contains(x, y) }?.let { return NativeTextCaret(it.offset) }
+        paragraphs.lastOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
+            return it.geometry.caretAt(x - it.x, y - it.y).translated(it.offset)
+        }
+        val paragraph = if (hasColumnFragments) textParagraphs.minByOrNull { p ->
+            distanceForParagraph(p, x - p.x, y - p.y)
+        } else textParagraphs.minByOrNull { p -> when {
+            y < p.y -> p.y - y
+            y > p.y + p.textBottom -> y - p.y - p.textBottom
+            else -> 0f
+        } }
+        paragraph ?: return NativeTextCaret(0)
+        return paragraph.geometry.caretAt(x - paragraph.x, y - paragraph.y).translated(paragraph.offset)
+    }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret {
+        val paragraph = if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            textParagraphs.lastOrNull { it.geometry.text.isNotEmpty() && it.offset + it.geometry.text.length == caret.offset } ?: paragraphAt(caret.offset)
+            else paragraphAt(caret.offset)
+        paragraph?.let { p ->
+            val moved = p.geometry.visualCaret(caret.translated(-p.offset), direction).translated(p.offset)
+            if (moved != caret) return moved
+        }
+        return NativeTextCaret(visualOffset(caret.offset, direction))
+    }
+
     override fun caretRect(offset: Int): RectF {
         require(offset in 0..text.length)
         paragraphAt(offset)?.let { return it.geometry.caretRect(offset - it.offset).apply { offset(it.x, it.y) } }

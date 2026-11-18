@@ -123,6 +123,7 @@ internal class NativeFigureGeometry(
     override fun offsetForPosition(x: Float, y: Float): Int =
         positionedGroups.lastOrNull { it.contains(x, y) }?.sourceOffset ?: caption.offsetForPosition(x - captionX, y - captionY)
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = caption.revealOffset(offset, onRevealed)
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) = caption.revealOffset(caret, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = caption.clipForOffset(offset)
         ?.let { RectF(it).apply { offset(captionX, captionY) } }
     override val hasPreciseClips: Boolean get() = caption.hasPreciseClips
@@ -146,6 +147,10 @@ internal class NativeFigureGeometry(
         if (deferredMedia && mediaBounds().any { it.contains(x, y) }) return null
         return if (caption.containsInput(localX, localY)) caption.horizontalScrollTargetAt(localX, localY) else null
     }
+    override fun caretRect(caret: NativeTextCaret): RectF = RectF(caption.caretRect(caret)).apply { offset(captionX, captionY) }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret = caption.caretAt(x - captionX, y - captionY)
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret = caption.visualCaret(caret, direction)
+
     override fun caretRect(offset: Int): RectF = caption.caretRect(offset).apply { offset(captionX, captionY) }
     override fun lineRange(offset: Int): Pair<Int, Int> = caption.lineRange(offset)
     override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = caption.visualLineRanges(offset)

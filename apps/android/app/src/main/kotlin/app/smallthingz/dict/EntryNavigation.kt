@@ -48,6 +48,8 @@ internal class EntryNavigation(
     private val restore: ((WordHit, Entry) -> Unit)? = null,
     private val visitsChanged: (EntryVisitState) -> Unit = {},
     private val state: EntryNavigationState = EntryNavigationState(),
+    private val linkChoices: (suspend (EntryLink, Entry) -> List<WordHit>)? = null,
+    private val chooseLink: suspend (EntryLink, List<WordHit>) -> WordHit? = { _, _ -> null },
 ) {
     private data class Destination(val hit: WordHit, val target: EntryLink = EntryLink(""))
     private val owner = state.attach()
@@ -67,8 +69,20 @@ internal class EntryNavigation(
     fun open(hit: WordHit): Job = begin { Destination(hit) }
 
     fun openLink(target: EntryLink, entry: Entry): Job = begin(Intent.Link) {
-        val hit = link(target, entry)
-            ?: throw IllegalStateException("This word is not in your installed dictionaries.")
+        val choices = (linkChoices?.invoke(target, entry) ?: listOfNotNull(link(target, entry))).toList()
+        currentCoroutineContext().ensureActive()
+        if (!state.owns(owner)) return@begin null
+        if (choices.isEmpty()) throw IllegalStateException("This word is not in your installed dictionaries.")
+        val hit = choices.singleOrNull() ?: run {
+            // The original Link intent remains pending; choosing is not a new root visit.
+            loading(false)
+            val selected = chooseLink(target, choices) ?: return@begin null
+            currentCoroutineContext().ensureActive()
+            if (!state.owns(owner)) return@begin null
+            require(selected in choices) { "This dictionary choice is no longer available." }
+            loading(true)
+            selected
+        }
         Destination(hit, target)
     }
 

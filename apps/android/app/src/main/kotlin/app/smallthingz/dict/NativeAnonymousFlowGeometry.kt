@@ -207,6 +207,13 @@ internal class NativeAnonymousFlowGeometry private constructor(
         return selection.semanticOffset(native.offsetForPosition(x, y))
     }
 
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) {
+        require(caret.offset in 0..text.length)
+        val segment = caretSegment(caret)
+        if (segment is AnonymousSelectionSegment.Figure)
+            figureById.getValue(segment.anchor.event.id).measured.geometry.revealOffset(caret.translated(-segment.start), onRevealed)
+        else native.revealOffset(nativeCaret(caret, segment), onRevealed)
+    }
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
         require(offset in 0..text.length)
         val segment = selection.at(offset)
@@ -279,6 +286,102 @@ internal class NativeAnonymousFlowGeometry private constructor(
             it.measured.geometry.containsInput(x - it.bounds.left, y - it.bounds.top)
         } ?: return native.horizontalScrollTargetAt(x, y)
         return figure.measured.geometry.horizontalScrollTargetAt(x - figure.bounds.left, y - figure.bounds.top)
+    }
+
+    private fun caretSegment(caret: NativeTextCaret): AnonymousSelectionSegment? =
+        if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            selection.segments.lastOrNull { it.end > it.start && it.end == caret.offset } ?: selection.at(caret.offset)
+        else selection.at(caret.offset)
+    private fun nativeCaret(caret: NativeTextCaret, segment: AnonymousSelectionSegment?): NativeTextCaret =
+        caret.copy(offset = if (segment is AnonymousSelectionSegment.Inline)
+            segment.authored.nativeOffset(segment.authored.logicalStart + caret.offset - segment.start)
+        else selection.nativeOffset(caret.offset))
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        val segment = caretSegment(caret)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val placed = figureById.getValue(segment.anchor.event.id)
+            return placed.measured.geometry.caretRect(caret.translated(-segment.start))
+                .apply { offset(placed.bounds.left, placed.bounds.top) }
+        }
+        if (text.isEmpty()) return caretRect(caret.offset)
+        return native.caretRect(nativeCaret(caret, segment))
+    }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return NativeTextCaret(it.sourceOffset) }
+        figures.lastOrNull { it.measured.geometry.containsInteraction(x - it.bounds.left, y - it.bounds.top) }
+            ?.let { placed ->
+                val segment = figureSegments.getValue(placed.anchor.event.id)
+                return placed.measured.geometry.caretAt(x - placed.bounds.left, y - placed.bounds.top).translated(segment.start)
+            }
+        return native.caretAt(x, y).let { it.copy(offset = selection.semanticOffset(it.offset)) }
+    }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret {
+        require(caret.offset in 0..text.length && (direction == -1 || direction == 1))
+        val segment = caretSegment(caret)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val local = caret.translated(-segment.start)
+            val moved = figureById.getValue(segment.anchor.event.id).measured.geometry.visualCaret(local, direction)
+            val translated = moved.translated(segment.start)
+            if (moved.offset != local.offset) return translated.copy(affinity = when (translated.offset) {
+                segment.start -> NativeTextAffinity.Downstream
+                segment.end -> NativeTextAffinity.Upstream
+                else -> translated.affinity
+            })
+            if (moved != local && caretSegment(translated) === segment) return translated
+        }
+        fun mapped(value: NativeTextCaret, owner: AnonymousSelectionSegment.Inline): NativeTextCaret =
+            NativeTextCaret(owner.start + owner.authored.logicalOffset(value.offset) - owner.authored.logicalStart,
+                when (value.offset) {
+                    owner.nativeStart -> NativeTextAffinity.Downstream
+                    owner.nativeEnd -> NativeTextAffinity.Upstream
+                    else -> value.affinity
+                })
+        var at = nativeCaret(caret, segment)
+        if (segment is AnonymousSelectionSegment.Figure) {
+            val forward = (direction > 0) == (segment.anchor.event.captionContext.direction == BidiResolvedDirection.Ltr)
+            at = NativeTextCaret(if (forward) segment.nativeEnd else segment.nativeStart,
+                if (forward) NativeTextAffinity.Downstream else NativeTextAffinity.Upstream)
+        }
+        val inline = selection.segments.filterIsInstance<AnonymousSelectionSegment.Inline>()
+            .filter { it.end > it.start }
+        val visited = mutableSetOf<NativeTextCaret>()
+        while (visited.add(at)) {
+            val moved = native.visualCaret(at, direction)
+            if (segment is AnonymousSelectionSegment.Inline && moved.offset in segment.nativeStart..segment.nativeEnd) {
+                val logical = mapped(moved, segment)
+                if (logical != caret) return logical
+            } else {
+                // A caption exit follows the outer native bidi walk. Keep the entered
+                // inline edge before consuming the character used to establish that route.
+                if (segment is AnonymousSelectionSegment.Figure && moved.offset != at.offset) {
+                    inline.firstOrNull { at.offset in it.nativeStart..it.nativeEnd &&
+                        moved.offset in it.nativeStart..it.nativeEnd }?.let { entered ->
+                        val edge = mapped(at, entered)
+                        if (edge != caret) return edge
+                    }
+                }
+                val entered = figureSegments.values.firstOrNull { it !== segment && it.end > it.start &&
+                    (moved.offset == it.nativeStart || moved.offset == it.nativeEnd ||
+                        at.offset == it.nativeStart && moved.offset == it.nativeEnd ||
+                        at.offset == it.nativeEnd && moved.offset == it.nativeStart) }
+                if (entered != null) {
+                    val start = (direction > 0) == (entered.anchor.event.captionContext.direction == BidiResolvedDirection.Ltr)
+                    return NativeTextCaret(if (start) entered.start else entered.end,
+                        if (start) NativeTextAffinity.Downstream else NativeTextAffinity.Upstream)
+                }
+                val owner = (if (moved.affinity == NativeTextAffinity.Upstream)
+                    inline.lastOrNull { it.nativeEnd == moved.offset } else null)
+                    ?: inline.firstOrNull { moved.offset >= it.nativeStart && moved.offset < it.nativeEnd }
+                    ?: inline.lastOrNull { moved.offset == it.nativeEnd }
+                owner?.let {
+                    val logical = mapped(moved, it)
+                    if (logical != caret) return logical
+                }
+            }
+            if (moved == at) return caret
+            at = moved
+        }
+        return caret
     }
 
     override fun caretRect(offset: Int): RectF {

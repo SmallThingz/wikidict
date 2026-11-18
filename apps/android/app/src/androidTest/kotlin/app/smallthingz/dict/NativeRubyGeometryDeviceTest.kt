@@ -4971,4 +4971,285 @@ class NativeRubyGeometryDeviceTest {
                 ownerPaint = zero, bodyPaint = zero).build(0f)
         }
     }
+
+    @Test fun atomicInlineBoxesKeepFloatFitRealInnerBaselineSourceCaretsAndVisibleOverflow() {
+        val root = paint(color = Color.BLACK)
+        val declaring = paint(.81f).apply { bgColor = Color.GREEN }
+        val childPaint = TextPaint(declaring).apply { bgColor = 0 }
+        val pad = NativeInlineBoxEdges(.75f, .5f, .25f, .5f)
+        val margins = NativeInlineBoxEdges(1.25f, .375f, .5f, .125f)
+        val border = NativeInlineBoxBorder(1f, Color.BLACK)
+        val borders = NativeInlineBoxBorders(border, border, border, border)
+        val contentWidth = declaring.textSize * 1.5f
+        val contentHeight = 3.5f
+        val expectedAdvance = contentWidth + 1f + 2f + .5f
+        data class AtomicFixture(val source: Spanned, val prepared: NativeRubyPreparedSource,
+            val projection: RubyTextProjection, val owner: Span, val child: Span,
+            val range: RubyTextRange, val key: NativeInlineBoxOwner,
+            val direction: android.text.TextDirectionHeuristic, val paint: TextPaint) {
+            fun shape(width: Float): NativeFloatGeometry = NativeFloatGeometry.build(source, paint,
+                kotlin.math.floor(width).toInt(), emptyList(), textDirection = direction, exactAvailableWidth = width)
+        }
+        fun fixture(body: String = "\u00a0", before: String = "P ", after: String = " Q",
+            width: Float = contentWidth, height: Float = contentHeight,
+            wrap: TextWrap = TextWrap.BreakWord, innerHeight: Float? = null,
+            explicitDirection: String = "", parent: android.text.TextDirectionHeuristic = TextDirectionHeuristics.LTR,
+            childBackground: String? = null, afterBackground: String? = null,
+            afterUnderlineState: BooleanArray? = null): AtomicFixture {
+            val lh = innerHeight?.let { InlineLineHeight.Computed(InlineComputedLength(it, FontScaleBasis.CssPx)) }
+            val style = InlineTextStyle(fontNormalized = true)
+            val child = Span("text", body, fontScale = .81f, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = "ja", direction = explicitDirection, inlineStyle = style, background = childBackground)
+            val model = InlineBoxAtomicLayout(StyleLength(StyleLengthUnit.Px, width), StyleLength(StyleLengthUnit.Px, height),
+                StyleEdges(StyleLength(StyleLengthUnit.Px, margins.top), StyleLength(StyleLengthUnit.Px, margins.right),
+                    StyleLength(StyleLengthUnit.Px, margins.bottom), StyleLength(StyleLengthUnit.Px, margins.left)),
+                ContainerBoxSizing.ContentBox, InlineBoxOverlayTextAlign.Start, wrap, lh)
+            val solid = InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.Rgb("#000000"))
+            val owner = Span("text", "", fontScale = .81f, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = "ja", direction = explicitDirection, inlineStyle = style, background = "#00ff00",
+                inlineBoxGroup = InlineBoxGroup(StyleEdges(StyleLength(StyleLengthUnit.Px, pad.top),
+                    StyleLength(StyleLengthUnit.Px, pad.right), StyleLength(StyleLengthUnit.Px, pad.bottom),
+                    StyleLength(StyleLengthUnit.Px, pad.left)), InlineBoxBorderEdges(solid, solid, solid, solid),
+                    emptyList(), listOf(child), atomicLayout = model))
+            val spans = listOf(Span("text", before), owner, Span("text", after, background = afterBackground))
+            val projection = rubyGraphicalProjection(spans)
+            val range = projection.ranges.single { it.role == RubyTextRole.BoxGroup }
+            val key = NativeInlineBoxOwner(owner, range.path)
+            val atomic = NativeInlineAtomicBoxFormat(nativeInlineAtomicBoxAllocation(width, height, pad,
+                NativeInlineBoxEdges(1f, 1f, 1f, 1f), margins, ContainerBoxSizing.ContentBox),
+                InlineBoxOverlayTextAlign.Start, wrap,
+                innerHeight?.let { NativeLineHeightPolicy.Pixels(it) } ?: NativeLineHeightPolicy.Normal)
+            val format = NativeRubyGroupFormat(declaring, parent, NativeLineHeightPolicy.Pixels(48f),
+                sourceDirection = explicitDirection, box = NativeInlineBoxFormat(key, pad, borders, emptyList(), atomicLayout = atomic))
+            val source = SpannableString(projection.text)
+            source.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(root), NativeLineHeightPolicy.Pixels(48f), strut = true),
+                0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            projection.ranges.filter { it.span != null && it.role != RubyTextRole.BoxGroup && it.start < it.end }.forEach { part ->
+                source.setSpan(SourcePaint(if (part.span === child) TextPaint(childPaint).apply {
+                    bgColor = childBackground?.let(Color::parseColor) ?: 0
+                } else TextPaint(root).apply { bgColor = part.span?.background?.let(Color::parseColor) ?: 0 }), part.start, part.end,
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            if (afterUnderlineState != null && after.isNotEmpty()) source.setSpan(
+                object : android.text.style.CharacterStyle(), NativeInlineSafePaintSpan, NativeMayUnderline {
+                    override val mayUnderline = true
+                    override fun updateDrawState(paint: TextPaint) { paint.isUnderlineText = afterUnderlineState[0] }
+                }, source.length - after.length, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val prepared = NativeRubyPreparedSource(projection, SpannedString(source), root, parent, mapOf(range.path to format))
+            source.setSpan(prepared, 0, source.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            return AtomicFixture(SpannedString(source), prepared, projection, owner, child, range, key, parent, root)
+        }
+        fun atom(geometry: NativeFloatGeometry): NativeInlineAtomicBox = geometry.nativeRubyShapingSource
+            .getSpans(0, geometry.nativeRubyShapingSource.length, NativeInlineAtomicBox::class.java).single()
+        fun ownerBox(value: AtomicFixture, geometry: NativeFloatGeometry) =
+            checkNotNull(geometry.inlineBoxGroupRects(value.key, value.range.start, value.range.end)).single()
+        fun outerLine(value: AtomicFixture, geometry: NativeFloatGeometry) =
+            geometry.nativeRubyRaw.nativeLineAt(geometry.nativeRubyRawOffset(value.range.start))
+        val value = fixture()
+        val threshold = root.measureText("P ") + expectedAdvance
+        val wide = value.shape(threshold + .03125f)
+        val tight = value.shape(threshold - .03125f)
+        assertEquals(0, outerLine(value, wide))
+        assertEquals(1, outerLine(value, tight))
+        assertSame(atom(wide).child.geometry, atom(tight).child.geometry)
+        assertFalse((atom(wide) as Any) is android.text.style.ReplacementSpan)
+        assertEquals(expectedAdvance, atom(wide).advance, .00001f)
+        assertEquals(contentWidth + 3f, ownerBox(value, wide).width(), .0001f)
+        assertEquals(value.projection.text, wide.text.toString())
+        assertEquals("P \u00a0 Q", wide.text.toString())
+        assertSame(value.child, value.projection.ranges.single { it.span === value.child }.span)
+        assertTrue(wide.nodes.isEmpty())
+        assertEquals(1, atom(wide).child.geometry.let { it as NativeFloatGeometry }.shapedLineCount)
+        val raw = wide.nativeRubyRaw
+        val parentBaseline = raw.nativeRubyLineBaseline(outerLine(value, wide))
+        val expectedChildBaseline = -childPaint.fontMetrics.ascent
+        assertEquals(parentBaseline - (1f + pad.top + expectedChildBaseline), ownerBox(value, wide).top, .01f)
+        assertEquals(0f, (atom(wide).child.geometry as NativeFloatGeometry).nativeRubyLineTop(0), .01f)
+        val overflowValue = fixture(body = "A")
+        val overflow = overflowValue.shape(300.5f)
+        val ink = raster(overflow).getValue(Color.BLUE)
+        assertTrue(ink.count > 0)
+        assertTrue(checkNotNull(ink.bounds).bottom > ownerBox(overflowValue, overflow).bottom)
+        assertEquals(value.projection.text.length, wide.characterRects(0, value.projection.text.length).size)
+        val interior = wide.caretRect(NativeTextCaret(value.range.start))
+        assertEquals(value.range.start, wide.caretAt(interior.left, interior.centerY()).offset)
+        val end = NativeTextCaret(value.range.end, NativeTextAffinity.Upstream)
+        sameRect(RectF(atom(wide).child.geometry.caretRect(NativeTextCaret(1, NativeTextAffinity.Upstream))).apply {
+            offset(atom(wide).child.x + raw.nativeReplacementOrigin(wide.nativeRubyRawOffset(value.range.start)).first,
+                atom(wide).child.y + parentBaseline)
+        }, wide.caretRect(end))
+        assertEquals(value.range.end, wide.caretAt(wide.caretRect(end).left, wide.caretRect(end).centerY()).offset)
+        assertEquals(value.projection.text, value.shape(threshold + .03125f).text.toString())
+        sameRect(ownerBox(value, wide), ownerBox(value, value.shape(threshold + .03125f)))
+
+        // Real inner soft lines, independently selected by the public native breaker.
+        val body = "ABCDEFGHIJKLMNO"
+        val innerWidth = childPaint.measureText("ABC") + .125f
+        val multiline = fixture(body = body, before = "", after = "Z", width = innerWidth, innerHeight = 10.25f)
+        val actual = multiline.shape(300.5f)
+        val child = atom(actual).child.geometry as NativeFloatGeometry
+        val measured = android.graphics.text.MeasuredText.Builder(body.toCharArray()).setComputeLayout(true)
+            .appendStyleRun(childPaint, body.length, false).build()
+        val lines = android.graphics.text.LineBreaker.Builder().setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
+            .computeLineBreaks(measured, android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(innerWidth) }, 0)
+        assertTrue(lines.lineCount > 1)
+        assertEquals(lines.lineCount, child.shapedLineCount)
+        val fm = childPaint.fontMetrics
+        val halfLeading = (10.25f - (fm.descent - fm.ascent)) / 2f
+        val expectedLastBaseline = -fm.ascent + halfLeading + (lines.lineCount - 1) * 10.25f
+        assertEquals(expectedLastBaseline, checkNotNull(child.textBaselines?.last), .01f)
+        val multilineParentBaseline = actual.nativeRubyRaw.nativeRubyLineBaseline(outerLine(multiline, actual))
+        assertEquals(multilineParentBaseline - (1f + pad.top + expectedLastBaseline), ownerBox(multiline, actual).top, .01f)
+        assertTrue(atom(actual).metrics.bottom < 0f)
+        var first = 0
+        for (line in 0 until lines.lineCount) {
+            val last = lines.getLineBreakOffset(line)
+            assertEquals(first to last, child.nativeRangeOfLine(line))
+            if (line + 1 < lines.lineCount) {
+                val upstream = NativeTextCaret(last, NativeTextAffinity.Upstream)
+                val downstream = NativeTextCaret(last)
+                assertTrue(child.caretRect(upstream).top < child.caretRect(downstream).top)
+                assertEquals(listOf(first to last), actual.visualLineRanges(upstream.translated(multiline.range.start)))
+                assertEquals(NativeTextAffinity.Upstream, actual.caretAt(actual.caretRect(upstream).left,
+                    actual.caretRect(upstream).centerY()).affinity)
+            }
+            first = last
+        }
+        val trailing = NativeTextCaret(multiline.range.end, NativeTextAffinity.Upstream)
+        assertEquals(multiline.range.end, actual.caretAt(actual.caretRect(trailing).left, actual.caretRect(trailing).centerY()).offset)
+        val entersFollowing = actual.visualCaret(trailing, 1)
+        assertEquals(multiline.range.end, entersFollowing.offset)
+        assertEquals(NativeTextAffinity.Downstream, entersFollowing.affinity)
+        assertEquals(multiline.range.end + 1, actual.visualCaret(entersFollowing, 1).offset)
+        val normal = fixture(body = body, before = "", after = "Z", width = innerWidth, wrap = TextWrap.Normal).shape(300.5f)
+        assertEquals(1, (atom(normal).child.geometry as NativeFloatGeometry).shapedLineCount)
+        assertEquals(body + "Z", normal.text.toString())
+
+        // Full outer paragraph authority excludes the atom's own strong text.
+        val inheritedRtl = fixture(body = "Latin", before = "אב ", parent = TextDirectionHeuristics.FIRSTSTRONG_LTR)
+        val rtl = inheritedRtl.shape(300.5f)
+        assertEquals(-1, rtl.nativeRubyParagraphDirection)
+        assertEquals(-1, (atom(rtl).child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection)
+        val explicitLtr = fixture(body = "Latin", before = "אב ", explicitDirection = "ltr", parent = TextDirectionHeuristics.FIRSTSTRONG_LTR)
+        val mixed = explicitLtr.shape(300.5f)
+        assertEquals(-1, mixed.nativeRubyParagraphDirection)
+        assertEquals(1, (atom(mixed).child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection)
+        val neutralParent = fixture(body = "אב", before = " ", after = "A", parent = TextDirectionHeuristics.FIRSTSTRONG_LTR)
+        val ltr = neutralParent.shape(300.5f)
+        assertEquals(1, ltr.nativeRubyParagraphDirection)
+        assertEquals(1, (atom(ltr).child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection)
+        val reused = fixture(body = "Latin", before = "", after = "", parent = TextDirectionHeuristics.FIRSTSTRONG_LTR)
+        fun outsideParent(prefix: String): NativeFloatGeometry {
+            val source = android.text.SpannableStringBuilder(prefix).append(reused.source)
+            return NativeFloatGeometry.build(SpannedString(source), root, 300, emptyList(),
+                textDirection = TextDirectionHeuristics.FIRSTSTRONG_LTR, exactAvailableWidth = 300.5f)
+        }
+        val outsideLtr = outsideParent("A ")
+        val outsideRtl = outsideParent("אב ")
+        assertEquals(1, (atom(outsideLtr).child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection)
+        assertEquals(-1, (atom(outsideRtl).child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection)
+        assertNotSame(atom(outsideLtr).child.geometry, atom(outsideRtl).child.geometry)
+        assertSame(atom(outsideLtr).child.geometry, atom(outsideParent("A ")).child.geometry)
+        assertEquals("אב Latin", outsideRtl.text.toString())
+        val spaces = fixture(body = "  A   B  ", before = "", after = "")
+        val collapsed = spaces.shape(300.5f)
+        assertEquals("  A   B  ", collapsed.text.toString())
+        assertEquals(childPaint.measureText("A B"), (atom(collapsed).child.geometry as NativeFloatGeometry)
+            .nativeRubyRaw.nativeSingleLineAdvance(), .001f)
+        assertEquals("\u00a0", atom(wide).child.geometry.text.toString())
+        assertNotSame(atom(wide).child.geometry, atom(fixture().shape(threshold + .03125f)).child.geometry)
+
+        val painted = fixture(body = "MMMM", before = "", after = "", width = 1f,
+            wrap = TextWrap.Normal, childBackground = "#ff0000")
+        val paintedGeometry = painted.shape(300.5f)
+        val paintedInk = raster(paintedGeometry)
+        assertTrue(checkNotNull(paintedInk.getValue(Color.RED).bounds).right > ownerBox(painted, paintedGeometry).right)
+        assertTrue(checkNotNull(paintedInk.getValue(Color.BLUE).bounds).right > ownerBox(painted, paintedGeometry).right)
+        val green = checkNotNull(paintedInk.getValue(Color.GREEN).bounds)
+        assertTrue(green.right <= ceil(ownerBox(painted, paintedGeometry).right.toDouble()).toFloat())
+
+        fun combined(first: Spanned, second: Spanned): NativeFloatGeometry {
+            val source = android.text.SpannableStringBuilder(first).append(second)
+            return NativeFloatGeometry.build(SpannedString(source), root, 300, emptyList(),
+                textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 300.5f)
+        }
+        val adjacentA = fixture(body = "A", before = "", after = "", width = 13.75f)
+        val adjacentB = fixture(body = "B", before = "", after = "", width = 13.75f)
+        val adjacent = combined(adjacentA.source, adjacentB.source)
+        assertEquals("AB", adjacent.text.toString())
+        val firstEnd = NativeTextCaret(1, NativeTextAffinity.Upstream)
+        val nextStart = NativeTextCaret(1)
+        assertTrue(adjacent.caretRect(firstEnd).left < adjacent.caretRect(nextStart).left)
+        assertEquals(nextStart, adjacent.visualCaret(firstEnd, 1))
+        assertEquals(NativeTextCaret(2, NativeTextAffinity.Upstream), adjacent.visualCaret(nextStart, 1))
+        assertEquals(firstEnd, adjacent.visualCaret(nextStart, -1))
+
+        // The later painted ordinary or Ruby run wins an earlier child's overflowing ink.
+        val overflowing = fixture(body = "MMMM", before = "", after = "", width = 1f, wrap = TextWrap.Normal)
+        val ordinary = fixture(body = "MMMM", before = "", after = "X", width = 1f, wrap = TextWrap.Normal)
+        val ordinaryGeometry = ordinary.shape(300.5f)
+        val x = 4.5f + root.measureText("X") * .6f
+        val y = ordinaryGeometry.nativeRubyRaw.nativeRubyLineBaseline(0) + root.fontMetrics.ascent * .5f
+        assertTrue(ordinaryGeometry.caretAt(x, y).offset in 4..5)
+        assertTrue(ordinaryGeometry.offsetForPosition(x, y) in 4..5)
+        val rubySibling = prepare(listOf(ruby(listOf(base(listOf(leaf("X")))), listOf(reading(listOf(leaf("x", scale = .5f)))))))
+        val rubyCombined = combined(overflowing.source, rubySibling.source)
+        val rubyRect = checkNotNull(rubyCombined.characterRects(4, 1).single())
+        val rubyHit = rubyCombined.caretAt(rubyRect.centerX(), rubyRect.centerY())
+        assertTrue(rubyHit.offset >= 4)
+        val laterRtlAtom = fixture(body = "MMMM", before = "", after = "", width = 1f,
+            wrap = TextWrap.Normal, explicitDirection = "rtl")
+        val reverse = combined(rubySibling.source, laterRtlAtom.source)
+        val earlierBase = checkNotNull(reverse.characterRects(0, 1).single())
+        val reverseAtom = atom(reverse)
+        val reverseStart = rubySibling.projection.text.length
+        val (reverseX, reverseBaseline) = reverse.nativeRubyRaw.nativeReplacementOrigin(reverse.nativeRubyRawOffset(reverseStart))
+        val overlap = reverseAtom.child.geometry.rectsForRange(0, 4).map { RectF(it).apply {
+            offset(reverseX + reverseAtom.child.x, reverseBaseline + reverseAtom.child.y)
+        } }.any { it.contains(earlierBase.centerX(), earlierBase.centerY()) }
+        assertTrue("Reverse-order fixture must actually overlap the earlier base", overlap)
+        assertTrue(reverse.caretAt(earlierBase.centerX(), earlierBase.centerY()).offset >= reverseStart)
+        val backgroundOnly = fixture(body = "MMMM", before = "", after = " \u00a0", width = 1f,
+            wrap = TextWrap.Normal, afterBackground = "#ff0000")
+        val backgroundGeometry = backgroundOnly.shape(300.5f)
+        val backgroundY = backgroundGeometry.nativeRubyRaw.nativeRubyLineBaseline(0) + root.fontMetrics.ascent * .5f
+        assertTrue(raster(backgroundGeometry).getValue(Color.RED).count > 0)
+        val spaceX = 4.5f + root.measureText(" ") * .5f
+        assertTrue("The later run's background paints before the atomic glyph", backgroundGeometry.caretAt(spaceX, backgroundY).offset < 4)
+
+        // A synthetic hover-capable ordinary run reserves underline ink while idle.
+        // Only the live stroke paints in the final phase and may win this overlap.
+        val underlineState = booleanArrayOf(false)
+        val hoverUnderline = fixture(body = "MMMM", before = "", after = " \u00a0", width = 1f,
+            wrap = TextWrap.Normal, afterUnderlineState = underlineState)
+        val hoverGeometry = hoverUnderline.shape(300.5f)
+        val underlineY = hoverGeometry.nativeRubyRaw.nativeRubyLineBaseline(0) + root.underlinePosition +
+            maxOf(root.underlineThickness, 1f) * .5f
+        assertTrue(hoverGeometry.caretAt(spaceX, underlineY).offset < 4)
+        underlineState[0] = true
+        assertTrue(hoverGeometry.caretAt(spaceX, underlineY).offset >= 4)
+        underlineState[0] = false
+        assertTrue(hoverGeometry.caretAt(spaceX, underlineY).offset < 4)
+
+        // Opaque callback dispatch does not expose inner glyph offsets to an outer replay canvas.
+        val onlyAtom = fixture(before = "", after = "").shape(300.5f)
+        var callbacks = 0
+        val capture = object : Canvas(), NativeRubyAtomicCanvas {
+            override fun paintRubyAtom(x: Float, y: Float, draw: (Canvas) -> Unit) { callbacks++ }
+        }
+        onlyAtom.paint(capture)
+        assertEquals(1, callbacks)
+
+        val carry = listOf(NativeFloatExclusion(TableFloatSide.Left, NativeFloatBounds(0f, 0f, 4.25f, 1000f)))
+        fun withCarry(drain: Boolean) = NativeFloatGeometry.build(value.source, root, 300, emptyList(),
+            textDirection = TextDirectionHeuristics.LTR, exactAvailableWidth = 300.5f,
+            carriedExclusions = carry, requireDrainedAtBoundary = drain)
+        assertTrue(withCarry(false).hasResidualFloats)
+        var refused = false
+        try { withCarry(true) } catch (_: UnsupportedFloatLayout) { refused = true }
+        assertTrue(refused)
+        assertEquals(value.projection.text, withCarry(false).text.toString())
+        sameRect(ownerBox(value, wide), ownerBox(value, value.shape(threshold + .03125f)))
+    }
 }

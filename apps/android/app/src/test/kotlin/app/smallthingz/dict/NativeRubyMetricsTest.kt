@@ -80,4 +80,52 @@ class NativeRubyMetricsTest {
         assertEquals(1f, numericSup.local + nativeRubyBaselinePlacement(sup, -4f, .75f, numericSup.state).local, 0f)
         assertThrows(IllegalArgumentException::class.java) { nativeRubyBaselinePlacement(sup, Float.NaN, null, root) }
     }
+
+    @Test fun atomicInlineBoxUsesFractionalPhysicalBoxesAndLastLineBaselineBeyondItsHeight() {
+        // Independent scalar geometry only: these values are not Android font metrics.
+        val padding = NativeInlineBoxEdges(1.25f, 2.5f, .75f, .5f)
+        val border = NativeInlineBoxEdges(.5f, .75f, 1.25f, .25f)
+        val margins = NativeInlineBoxEdges(3f, 4f, 5f, 6f)
+        val content = nativeInlineAtomicBoxAllocation(10.25f, 5.5f, padding, border, margins,
+            ContainerBoxSizing.ContentBox)
+        assertEquals(NativeInlineAtomicBoxAllocation(contentWidth = 10.25f, contentHeight = 5.5f,
+            borderWidth = 14.25f, borderHeight = 9.25f, marginWidth = 24.25f, marginHeight = 17.25f,
+            contentLeft = 6.75f, contentTop = 4.75f, borderLeft = 6f, borderTop = 3f), content)
+        val borderSized = nativeInlineAtomicBoxAllocation(14.25f, 9.25f, padding, border, margins,
+            ContainerBoxSizing.BorderBox)
+        assertEquals(content, borderSized)
+        val oneLine = nativeInlineAtomicBoxBaseline(content, 4f)
+        assertEquals(8.75f, oneLine.baselineFromMarginTop, 0f)
+        assertEquals(NativeUsedLineMetrics(-8.75f, 8.5f), oneLine.metrics)
+        // A real later inner line can lie below the definite content height. Moving its
+        // baseline changes the parent-relative top/bottom, never the atom's advance/height.
+        val laterLine = nativeInlineAtomicBoxBaseline(content, 20f)
+        assertEquals(24.75f, laterLine.baselineFromMarginTop, 0f)
+        assertEquals(NativeUsedLineMetrics(-24.75f, -7.5f), laterLine.metrics)
+        assertEquals(17.25f, laterLine.metrics.bottom - laterLine.metrics.top, 0f)
+        assertEquals(24.25f, content.marginWidth, 0f)
+        assertEquals(9.25f, content.borderHeight, 0f)
+    }
+
+    @Test fun atomicBorderBoxFloorsOnlyContentAndRejectsNonfiniteOrUnrepresentableGeometry() {
+        val padding = NativeInlineBoxEdges(1.25f, 2.5f, .75f, .5f)
+        val border = NativeInlineBoxEdges(.5f, .75f, 1.25f, .25f)
+        val margins = NativeInlineBoxEdges(3f, 4f, 5f, 6f)
+        val minimum = nativeInlineAtomicBoxAllocation(.5f, .25f, padding, border, margins,
+            ContainerBoxSizing.BorderBox)
+        assertEquals(NativeInlineAtomicBoxAllocation(contentWidth = 0f, contentHeight = 0f,
+            borderWidth = 4f, borderHeight = 3.75f, marginWidth = 14f, marginHeight = 11.75f,
+            contentLeft = 6.75f, contentTop = 4.75f, borderLeft = 6f, borderTop = 3f), minimum)
+        assertEquals(NativeUsedLineMetrics(-8.75f, 3f), nativeInlineAtomicBoxBaseline(minimum, 4f).metrics)
+        for (invalid in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY, Float.MAX_VALUE)) {
+            assertThrows(UnsupportedFloatLayout::class.java) {
+                nativeInlineAtomicBoxAllocation(invalid, 1f, padding, border, margins, ContainerBoxSizing.ContentBox)
+            }
+            assertThrows(UnsupportedFloatLayout::class.java) {
+                nativeInlineAtomicBoxAllocation(1f, invalid, padding, border, margins, ContainerBoxSizing.ContentBox)
+            }
+        }
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeInlineAtomicBoxBaseline(minimum, Float.NaN) }
+        assertThrows(UnsupportedFloatLayout::class.java) { nativeInlineAtomicBoxBaseline(minimum, Float.MAX_VALUE) }
+    }
 }

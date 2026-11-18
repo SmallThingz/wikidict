@@ -36,7 +36,8 @@ internal data class NativeInlineBoxOverlay(val insets: NativeInlineBoxInsets, va
 
 internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val padding: NativeInlineBoxEdges,
     val border: NativeInlineBoxBorders, overlays: List<NativeInlineBoxOverlay>,
-    val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null) {
+    val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null,
+    val atomicLayout: NativeInlineAtomicBoxFormat? = null) {
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
     val rightAdvance = nativeInlineBoxCoordinate(padding.right.toDouble() + border.right.width)

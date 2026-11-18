@@ -771,16 +771,32 @@ internal fun prepareNativeFloatText(
                 val action = actionGroupRanges.lastOrNull { it.path == path || path.startsWith(it.path + "/") }
                 if (model.radius != null && action != null && action.path != path)
                     throw UnsupportedFloatLayout("Rounded inline box inside a separate action group is unavailable")
-                NativeInlineBoxFormat(boxOwners.getValue(path), NativeInlineBoxEdges(
-                    length(model.padding.top), length(model.padding.right),
-                    length(model.padding.bottom), length(model.padding.left)), borders(model.border),
+                val resolvedPadding = NativeInlineBoxEdges(length(model.padding.top), length(model.padding.right),
+                    length(model.padding.bottom), length(model.padding.left))
+                val resolvedBorders = borders(model.border)
+                val atomic = model.atomicLayout?.let { atomic ->
+                    val policy = when (val value = atomic.lineHeight) {
+                        null -> NativeLineHeightPolicy.Normal
+                        is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(inlineLength(value.value))
+                        // Shared admission binds this snapshot to the complete declaring font.
+                        is InlineLineHeight.FontRelative -> NativeLineHeightPolicy.Pixels(
+                            nativeInlineBoxCoordinate(paint.textSize.toDouble() * value.factor))
+                    }
+                    NativeInlineAtomicBoxFormat(nativeInlineAtomicBoxAllocation(length(atomic.width), length(atomic.height),
+                        resolvedPadding, NativeInlineBoxEdges(resolvedBorders.top.width, resolvedBorders.right.width,
+                            resolvedBorders.bottom.width, resolvedBorders.left.width),
+                        NativeInlineBoxEdges(length(atomic.margins.top), length(atomic.margins.right),
+                            length(atomic.margins.bottom), length(atomic.margins.left)), atomic.boxSizing),
+                        atomic.textAlign, atomic.wrap, policy)
+                }
+                NativeInlineBoxFormat(boxOwners.getValue(path), resolvedPadding, resolvedBorders,
                     model.overlays.map { overlay -> NativeInlineBoxOverlay(NativeInlineBoxInsets(
                         inset(overlay.insets.top), inset(overlay.insets.right),
                         inset(overlay.insets.bottom), inset(overlay.insets.left)), borders(overlay.border)) },
                     currentColorPaint = action?.let(::groupPaintAt), radius = model.radius?.let {
                         if (it.unit != StyleLengthUnit.Px) throw UnsupportedFloatLayout("Rounded inline radius must be CSS pixels")
                         length(it)
-                    })
+                    }, atomicLayout = atomic)
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
@@ -978,7 +994,7 @@ internal fun prepareNativeFloatText(
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
             group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
             group.padding, group.actionPaint, group.actionOwner, group.clippedAbsolute?.let { listOf(it.width, it.height, it.margins) },
-            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint) })
+            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint, it.atomicLayout) })
     }
     val shapeKey = listOf(annotated, nativeAnnotation, clippedAbsoluteScope?.revisionKey, nativeRuns, effective, ruby, actionGroupOwners, boxOwners, clippedOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },

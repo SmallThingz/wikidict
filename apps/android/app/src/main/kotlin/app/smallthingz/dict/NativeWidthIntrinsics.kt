@@ -60,7 +60,7 @@ internal fun nativeTextWidthRange(source: Spanned, paint: TextPaint, inset: Floa
         if (!clipped.hasFlow) return NativeWidthRange(0, 0)
         return nativeTextWidthRange(clipped.visual, paint, inset, breakWordMinimum, textDirection)
     }
-    if (nativeHasPositionedInlineImages(source)) {
+    if (nativeHasPositionedInlineImages(source) || nativeHasAtomicInlineBoxes(source)) {
         if (textDirection == null && source.getSpans(0, source.length, NativeAuthoredTextWrap::class.java)
                 .any { it.wrap == TextWrap.NoWrap })
             throw UnsupportedFloatLayout("No-wrap intrinsic direction is unavailable")

@@ -112,6 +112,8 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
     internal abstract fun nativeUsedLineMetrics(line: Int): NativeUsedLineMetrics
     internal abstract fun nativeContentLineMetrics(line: Int): NativeUsedLineMetrics
     internal abstract fun nativeReplacementOrigin(offset: Int): Pair<Float, Float>
+    internal open fun nativeReplacementPaintOrder(offset: Int): Long = offset.toLong()
+    internal open fun nativeOrdinaryCaretAbove(x: Float, y: Float, after: Long): NativeTextCaret? = null
     internal abstract fun nativeInlineActionFragments(start: Int, end: Int): List<NativeInlineActionFragment>
 
     internal open val nativeRubyExactAdvances: Boolean get() = false
@@ -197,16 +199,16 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
                 usedLineMetrics = usedLineMetrics, includeFontPadding = includeFontPadding,
                 rubyProbe = rubyProbe, inlineBoxProbe = inlineBoxProbe)
             shaped.withEmptyColumnLane(left, right, nodeFactory, decoration, decorationBounds)
-        } else if ((exactAvailableWidth != null || nativeHasClippedParagraphDirection(source)) &&
+        } else if ((exactAvailableWidth != null || nativeHasClippedParagraphDirection(source) || nativeHasAtomicInlineBoxes(source)) &&
             source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).isNotEmpty()) {
-            if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() || usedLineMetrics != null ||
+            if (occurrences.isNotEmpty() || carriedExclusions.isNotEmpty() && !nativeHasAtomicInlineBoxes(source) || usedLineMetrics != null ||
                 nativeHasPositionedInlineImages(source))
                 throw UnsupportedFloatLayout("Exact rich rows require source-owned metrics without floats or positioned images")
             nativeRubyFloatGeometry(source, paint, width, exactAvailableWidth ?: width.toFloat(), alignment, textDirection,
                 lineSpacingExtra, lineSpacingMultiplier, insets, includeFontPadding,
-                exactParagraphInsets || nativeHasClippedParagraphDirection(source) && insets != NativeTextInsets(),
-                nodeFactory, decoration, decorationBounds)
-        } else if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source) || nativeHasClippedParagraphDirection(source)) {
+                exactParagraphInsets || (nativeHasClippedParagraphDirection(source) || nativeHasAtomicInlineBoxes(source)) && insets != NativeTextInsets(),
+                nodeFactory, decoration, decorationBounds, carriedExclusions, requireDrainedAtBoundary)
+        } else if (exactAvailableWidth != null || nativeHasPositionedInlineImages(source) || nativeHasClippedParagraphDirection(source) || nativeHasAtomicInlineBoxes(source)) {
             NativeFloatRowGeometry.build(source, paint, width, occurrences, alignment, textDirection,
                 lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions,
                 nodeFactory, insets, usedLineMetrics, decoration, decorationBounds, includeFontPadding,

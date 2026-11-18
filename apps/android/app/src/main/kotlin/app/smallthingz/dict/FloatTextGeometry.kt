@@ -270,12 +270,15 @@ internal interface FloatTextGeometry {
         citationMarkerRanges.singleOrNull { it.marker.anchor == anchor }
     /** Completion follows the owner's actual scroll and fresh geometry publication. */
     fun revealOffset(offset: Int, onRevealed: () -> Unit) { onRevealed() }
+    fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) = revealOffset(caret.offset, onRevealed)
     fun revealNode(id: Int, onRevealed: () -> Unit) {
         nodes.firstOrNull { it.id == id }?.onReveal?.invoke(onRevealed) ?: onRevealed()
     }
     /** Null is unbounded; an empty rectangle is completely clipped. Caret positions stay logical. */
     fun clipForOffset(offset: Int): RectF? = null
     fun preciseClipForOffset(offset: Int): NativeTextClip? = null
+    fun clipForOffset(caret: NativeTextCaret): RectF? = clipForOffset(caret.ownerOffset)
+    fun preciseClipForOffset(caret: NativeTextCaret): NativeTextClip? = preciseClipForOffset(caret.ownerOffset)
     val hasPreciseClips: Boolean get() = false
     fun paintSelection(canvas: Canvas, start: Int, end: Int, paint: Paint) {
         rectsForRange(start, end).forEach { canvas.drawRect(it, paint) }
@@ -323,6 +326,10 @@ internal interface FloatTextGeometry {
     /** Exactly [length] entries, including null for a character without visible bounds. */
     fun characterRects(start: Int, length: Int): List<RectF?>
     fun caretRect(offset: Int): RectF
+    fun caretRect(caret: NativeTextCaret): RectF = caretRect(caret.offset)
+    fun caretAt(x: Float, y: Float): NativeTextCaret = NativeTextCaret(offsetForPosition(x, y))
+    fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret =
+        NativeTextCaret(visualOffset(caret.offset, direction))
     /** Logical bounds of the visual line containing offset; the end is exclusive. */
     fun lineRange(offset: Int): Pair<Int, Int>
     /** A source LF can be a retained Ruby gap rather than a native paragraph break. */
@@ -331,6 +338,12 @@ internal interface FloatTextGeometry {
      * never include characters from another row; generated layout tokens have no range.
      * Legacy owners retain their single contiguous line, including its terminal LF. */
     fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = listOf(lineRange(offset))
+    /** The preceding source unit owns an upstream boundary, including a detached end. */
+    fun visualLineRanges(caret: NativeTextCaret): List<Pair<Int, Int>> {
+        require(caret.offset in 0..text.length)
+        return visualLineRanges(if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            caret.offset - 1 else caret.offset)
+    }
     /** direction -1 means visual left; +1 means visual right. */
     fun visualOffset(offset: Int, direction: Int): Int
 }
@@ -347,6 +360,11 @@ internal fun FloatTextGeometry.visualLineFragment(offset: Int): Pair<Int, Int>? 
 internal fun FloatTextGeometry.visualLineEnd(offset: Int): Int {
     require(offset in 0..text.length)
     val end = visualLineRanges(offset).lastOrNull()?.second ?: offset
+    return if (end > 0 && isHardLineBreak(end - 1)) end - 1 else end
+}
+
+internal fun FloatTextGeometry.visualLineEnd(caret: NativeTextCaret): Int {
+    val end = visualLineRanges(caret).lastOrNull()?.second ?: caret.offset
     return if (end > 0 && isHardLineBreak(end - 1)) end - 1 else end
 }
 

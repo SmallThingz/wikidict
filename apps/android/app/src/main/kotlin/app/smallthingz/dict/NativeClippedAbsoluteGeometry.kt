@@ -101,6 +101,18 @@ internal class NativeClippedAbsoluteGeometry private constructor(
     }
     override fun caretRect(offset: Int): RectF = if (hasFlow) inner.caretRect(map.toVisual(offset))
         else { map.toVisual(offset); RectF(inner.caretRect(0).left, 0f, inner.caretRect(0).left, 0f) }
+    override fun caretRect(caret: NativeTextCaret): RectF = if (hasFlow)
+        inner.caretRect(caret.copy(offset = map.toVisual(caret.offset))) else caretRect(caret.offset)
+    override fun caretAt(x: Float, y: Float): NativeTextCaret = if (!hasFlow) NativeTextCaret(0) else
+        inner.caretAt(x, y).let { it.copy(offset = map.toSource(it.offset,
+            if (it.affinity == NativeTextAffinity.Upstream) NativeClippedSourceAffinity.Before else NativeClippedSourceAffinity.After)) }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret {
+        if (!hasFlow) return caret
+        return inner.visualCaret(caret.copy(offset = map.toVisual(caret.offset)), direction).let {
+            it.copy(offset = map.toSource(it.offset,
+                if (it.affinity == NativeTextAffinity.Upstream) NativeClippedSourceAffinity.Before else NativeClippedSourceAffinity.After))
+        }
+    }
     override fun clipForOffset(offset: Int): RectF? = if (map.clippedRangeIndexAt(offset) != null)
         caretRect(offset).let { RectF(it.left, it.top, it.left, it.top) } else inner.clipForOffset(map.toVisual(offset))
     override fun preciseClipForOffset(offset: Int): NativeTextClip? = inner.preciseClipForOffset(map.toVisual(offset))

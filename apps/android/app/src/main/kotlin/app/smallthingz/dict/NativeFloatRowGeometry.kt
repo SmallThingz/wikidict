@@ -134,7 +134,17 @@ internal class NativeFloatRowGeometry private constructor(
         } }
         row.glyphs.forEachIndexed { index, run ->
             val placed = map.placements[index]
-            if (run.column != null) {
+            if (run.atom != null) {
+                val atom = checkNotNull(run.atom)
+                if (canvas is NativeRubyAtomicCanvas) canvas.paintRubyAtom(placed.left, baselines[line], atom::paint)
+                else {
+                    val saved = canvas.save()
+                    try {
+                        canvas.translate(placed.left, baselines[line])
+                        atom.paint(canvas)
+                    } finally { canvas.restoreToCount(saved) }
+                }
+            } else if (run.column != null) {
                 val column = checkNotNull(run.column)
                 if (canvas is NativeRubyAtomicCanvas)
                     canvas.paintRubyAtom(column, placed.left, baselines[line], column::paintContents)
@@ -158,7 +168,9 @@ internal class NativeFloatRowGeometry private constructor(
     }
     override val ordinaryPaintBounds: List<NativeFloatBounds> by lazy {
         plan.rows.flatMapIndexed { line, row -> if (!present(line)) emptyList() else row.glyphs.mapIndexedNotNull { index, run ->
-            if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
+            if (run.atom != null) run.atom?.paintBounds?.translated(
+                mappedRows[line].placements[index].left, baselines[line])
+            else if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
                 mappedRows[line].placements[index].left, baselines[line])
             else if (run.image != null) {
                 if (run.image!!.nativeImageOccurrence == null) images.first { it.line == line && it.run === run }.let(::imageInk) else null
@@ -218,6 +230,30 @@ internal class NativeFloatRowGeometry private constructor(
         require(offset in 0..text.length)
         return checkNotNull(nativeRubyLineCaret(nativeLineAt(offset), offset))
     }
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        require(caret.offset in 0..text.length)
+        val preceding = caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0
+        return checkNotNull(lineCaret(nativeLineAt(if (preceding) caret.offset - 1 else caret.offset),
+            caret.offset, preceding))
+    }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        // A positioned image can overlap another row. Keep the actual hit owner
+        // when its source end is also the next row's source start.
+        val imageOrder = images.filter { it.image.nativeImageOccurrence == null } + positionedImages
+        imageOrder.asReversed().firstOrNull { imageRect(it).contains(x, y) }?.let { image ->
+            val rect = imageRect(image)
+            val end = (x >= (rect.left + rect.right) / 2f) != image.run.rtl
+            return NativeTextCaret(if (end) image.run.end else image.run.start,
+                if (end) NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+        }
+        val offset = offsetForPosition(x, y)
+        val line = plan.rows.indices.filter(::present).minByOrNull {
+            val vertical = maxOf(tops[it] - y, 0f, y - bottoms[it])
+            absSquared(vertical)
+        } ?: 0
+        return NativeTextCaret(offset, if (offset == plan.rows[line].end)
+            NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+    }
     private fun offsetOnLine(line: Int, x: Float, y: Float): Int {
         val row = plan.rows[line]
         val placements = mappedRows[line].placements
@@ -276,6 +312,30 @@ internal class NativeFloatRowGeometry private constructor(
         return if (direction > 0) other.firstOrNull()?.first ?: plan.rows[adjacent].start
             else other.lastOrNull()?.first ?: plan.rows[adjacent].start
     }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret {
+        require(caret.offset in 0..text.length && direction in listOf(-1, 1))
+        val preceding = caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0
+        val line = nativeLineAt(if (preceding) caret.offset - 1 else caret.offset)
+        val stops = visualStops(line)
+        val owned = if (preceding) plan.rows[line].glyphs.indexOfLast {
+            caret.offset > it.start && caret.offset <= it.end
+        } else plan.rows[line].glyphs.indexOfFirst { caret.offset >= it.start && caret.offset < it.end }
+        fun token(row: Int, stop: Pair<Int, Int>): NativeTextCaret {
+            val run = plan.rows[row].glyphs.getOrNull(stop.second)
+            return NativeTextCaret(stop.first, if (run != null && stop.first == run.end)
+                NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+        }
+        val candidates = stops.indices.filter { stops[it].first == caret.offset }
+        val current = candidates.firstOrNull { stops[it].second == owned } ?: candidates.firstOrNull() ?: return caret
+        var next = current + direction
+        while (next in stops.indices && token(line, stops[next]) == caret) next += direction
+        if (next in stops.indices) return token(line, stops[next])
+        val adjacent = line + if ((direction > 0) != plan.rows[line].paragraph.rtl) 1 else -1
+        if (adjacent !in plan.rows.indices) return caret
+        val other = visualStops(adjacent)
+        val stop = if (direction > 0) other.firstOrNull() else other.lastOrNull()
+        return stop?.let { token(adjacent, it) } ?: caret
+    }
     private fun visualStops(line: Int): List<Pair<Int, Int>> = buildList {
         plan.rows[line].glyphs.forEachIndexed { index, run ->
             val own = mutableListOf(run.start)
@@ -322,17 +382,21 @@ internal class NativeFloatRowGeometry private constructor(
     internal override fun nativeRubyLinePaintBounds(line: Int): List<NativeFloatBounds> {
         val row = plan.rows[line]
         return row.glyphs.mapIndexedNotNull { index, run ->
-            if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
+            if (run.atom != null) run.atom?.paintBounds?.translated(
+                mappedRows[line].placements[index].left, baselines[line])
+            else if (run.column != null) run.column?.nativePaintBounds(0f, 0f)?.translated(
                 mappedRows[line].placements[index].left, baselines[line])
             else if (run.image != null) images.first { it.line == line && it.run === run }.let(::imageInk)
             else if (run.start < row.visibleEnd) run.paintBounds(mappedRows[line].placements[index].left,
                 baselines[line], plan.nativeLineMetrics[line].top, plan.nativeLineMetrics[line].bottom) else null
         }
     }
-    internal override fun nativeRubyLineCaret(line: Int, publicOffset: Int): RectF? {
+    internal override fun nativeRubyLineCaret(line: Int, publicOffset: Int): RectF? = lineCaret(line, publicOffset, false)
+    private fun lineCaret(line: Int, publicOffset: Int, preceding: Boolean): RectF? {
         val row = plan.rows[line]
         if (publicOffset !in row.start..row.end) return null
-        val owned = row.glyphs.indexOfFirst { publicOffset >= it.start && publicOffset < it.end }.let {
+        val previous = if (preceding) row.glyphs.indexOfLast { it.end == publicOffset } else -1
+        val owned = if (previous >= 0) previous else row.glyphs.indexOfFirst { publicOffset >= it.start && publicOffset < it.end }.let {
             if (it >= 0) it else row.glyphs.indices.filter { index -> row.glyphs[index].end <= publicOffset }
                 .maxByOrNull { index -> row.glyphs[index].end } ?: -1
         }
@@ -408,10 +472,52 @@ internal class NativeFloatRowGeometry private constructor(
         plan.rows[line].glyphs.mapNotNull { it.column }.fold(plan.nativeLineMetrics[line]) { metrics, column ->
             metrics.including(column.container)
         }
+    internal override fun nativeReplacementPaintOrder(offset: Int): Long {
+        val line = nativeLineAt(offset)
+        val index = plan.rows[line].glyphs.indexOfFirst { it.start == offset && (it.atom != null || it.column != null) }
+        if (index < 0) throw UnsupportedFloatLayout("Native atomic paint order lost its actual run")
+        return (line.toLong() shl 32) + index
+    }
+    internal override fun nativeOrdinaryCaretAbove(x: Float, y: Float, after: Long): NativeTextCaret? {
+        for (line in plan.rows.indices.reversed()) {
+            if (!present(line) || (line.toLong() shl 32) + 0xffffffffL < after) continue
+            val row = plan.rows[line]
+            fun candidate(index: Int): NativeFloatGlyphRun? = row.glyphs[index].takeIf {
+                it.atom == null && it.column == null && it.image == null && it.start < row.visibleEnd
+            }
+            fun caret(index: Int, run: NativeFloatGlyphRun): NativeTextCaret {
+                val placed = mappedRows[line].placements[index]
+                val offset = run.offsetForAdvance((if (run.rtl) placed.right - x else x - placed.left).coerceIn(0f, run.advance))
+                return NativeTextCaret(offset, if (offset == run.end) NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+            }
+            // Every live decoration follows every glyph/atom on this row. Reserved
+            // hover ink remains an extent only and never participates in this query.
+            for (index in row.glyphs.indices.reversed()) {
+                val run = candidate(index) ?: continue
+                if (run.liveDecorationContains(mappedRows[line].placements[index].left, baselines[line], x, y))
+                    return caret(index, run)
+            }
+            for (index in row.glyphs.indices.reversed()) {
+                if ((line.toLong() shl 32) + index <= after) continue
+                val run = candidate(index) ?: continue
+                if (run.liveGlyphContains(mappedRows[line].placements[index].left, baselines[line], x, y))
+                    return caret(index, run)
+            }
+            // Same-row backgrounds preceded the candidate atom. A subsequent row's
+            // background, however, really paints over an earlier overflowing child.
+            if ((line.toLong() shl 32) > after) for (index in row.glyphs.indices.reversed()) {
+                val run = candidate(index) ?: continue
+                if (run.liveBackgroundContains(mappedRows[line].placements[index].left, baselines[line],
+                        plan.nativeLineMetrics[line].top, plan.nativeLineMetrics[line].bottom, x, y))
+                    return caret(index, run)
+            }
+        }
+        return null
+    }
     internal override fun nativeReplacementOrigin(offset: Int): Pair<Float, Float> {
         val line = nativeLineAt(offset)
         val placed = mappedRows[line].placements.singleOrNull { it.piece.start == offset && (it.piece is NativeFloatRowPiece.Image ||
-            plan.rows[line].glyphs.any { run -> run.start == offset && run.column != null }) }
+            plan.rows[line].glyphs.any { run -> run.start == offset && (run.column != null || run.atom != null) }) }
             ?: throw UnsupportedFloatLayout("Float image origin lost its original object range")
         return (placed.imageBounds?.left ?: placed.left) to baselines[line]
     }

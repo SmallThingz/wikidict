@@ -277,6 +277,12 @@ internal class NativeInlineBoxGeometry(
     } ?: fragments.lastOrNull { contains(it, x, y) }?.line
         ?: raw.nativeLineAt(raw.offsetForPosition(x, y))
     override fun offsetForPosition(x: Float, y: Float): Int = offsetOnLine(lineAt(x, y), x, y)
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        val line = lineAt(x, y)
+        val offset = offsetOnLine(line, x, y)
+        return NativeTextCaret(offset, if (offset == raw.nativeRangeOfLine(line).second)
+            NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
+    }
     val cursorBounds: List<RectF> get() = fragments.filter { it.owner.value.format.cursor != null }.map { RectF(it.border) }
     override fun cursorAt(x: Float, y: Float): InlineCursor? = mappedCursor(lineAt(x, y), x, y)
         ?: fragments.lastOrNull { it.owner.value.format.cursor != null && contains(it, x, y) }?.owner?.value?.format?.cursor
@@ -291,6 +297,14 @@ internal class NativeInlineBoxGeometry(
     }
     override fun caretRect(offset: Int): RectF = caretOnLine(raw.nativeLineAt(offset), offset)
         ?: throw UnsupportedFloatLayout("Inline box caret lost its native source affinity")
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        require(caret.offset in 0..text.length)
+        val preceding = caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0
+        val line = raw.nativeLineAt(if (preceding) caret.offset - 1 else caret.offset)
+        return lines[line].mapped.caretRect(caret.offset, if (preceding)
+            NativeInlineBoundaryAffinity.Preceding else NativeInlineBoundaryAffinity.Following)
+            ?: throw UnsupportedFloatLayout("Inline box caret lost its explicit source affinity")
+    }
     override fun lineRange(offset: Int): Pair<Int, Int> = raw.lineRange(offset)
     override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = raw.visualLineRanges(offset)
     override fun isHardLineBreak(offset: Int): Boolean = raw.isHardLineBreak(offset)

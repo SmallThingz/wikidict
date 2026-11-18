@@ -160,6 +160,15 @@ internal class NativeContextPaintInput(private val context: NativeFloatContextGe
             } ?: Double.POSITIVE_INFINITY
         }
 
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        val hit = winner(x, y) ?: return context.caretAt(x, y)
+        hit.group?.let { return NativeTextCaret(it.sourceOffset) }
+        hit.child?.let { return NativeTextCaret(it.offset) }
+        val leaf = hit.text ?: hit.box?.let { nearestLeaf(it.leaves, x, y) }
+            ?: return context.caretAt(x, y)
+        return leaf.geometry.caretAt(x - leaf.x, y - leaf.y).translated(leaf.offset)
+    }
+
     override fun offsetForPosition(x: Float, y: Float): Int {
         val hit = winner(x, y) ?: return context.offsetForPosition(x, y)
         hit.group?.let { return it.sourceOffset }

@@ -314,9 +314,71 @@ data class InlineBoxOverlay(val insets: InlineBoxInsets, val border: InlineBoxBo
         }
     }
 }
+// Shared declaration also used by the separately held overlay-content carrier.
+enum class InlineBoxOverlayTextAlign { Start, Left, Center, Right }
+
+/** Authored atom dimensions use the declaring Box font for em, exactly once. */
+data class InlineBoxAtomicLayout(val width: StyleLength, val height: StyleLength,
+    val margins: StyleEdges, val boxSizing: ContainerBoxSizing, val textAlign: InlineBoxOverlayTextAlign,
+    val wrap: TextWrap, val lineHeight: InlineLineHeight?) {
+    init {
+        require(width.value > 0f && height.value > 0f) { "Atomic inline box dimensions must be positive" }
+        require(wrap == TextWrap.Normal || wrap == TextWrap.BreakWord) { "Unsupported atomic inline box wrapping" }
+    }
+}
+
+private fun sameAtomicLineHeight(first: InlineLineHeight?, second: InlineLineHeight?): Boolean = when (first) {
+    null -> second == null
+    is InlineLineHeight.Computed -> second is InlineLineHeight.Computed &&
+        first.value.value == second.value.value && first.value.fontScaleBasis == second.value.fontScaleBasis
+    is InlineLineHeight.FontRelative -> second is InlineLineHeight.FontRelative && first.factor == second.factor &&
+        sameRubyFont(first.font, second.font)
+}
+
+private fun atomicInlineFont(span: Span): InlineFontSnapshot {
+    require(span.inlineStyle?.fontNormalized == true && span.fontScale != null && span.fontScale > 0f &&
+        span.fontScaleBasis != FontScaleBasis.Context && !span.small && !span.superscript && !span.subscript) {
+        "Atomic inline box requires its known normalized declaring font"
+    }
+    return InlineFontSnapshot(span.fontScale, span.fontScaleBasis, span.small, span.superscript, span.subscript,
+        true, span.bold, span.italic, span.code, span.language, span.classes, span.role, span.fontFeatures, span.fontFamily)
+}
+
+private fun validAtomicInlineStyle(span: Span, layout: InlineBoxAtomicLayout): Boolean {
+    val style = span.inlineStyle ?: return false
+    return style.fontNormalized && !span.underline && !span.strike && style.decoration == null &&
+        style.baselineShift == null && style.cursor == null && (style.wrap == null || style.wrap == layout.wrap) &&
+        (style.lineHeight == null || sameAtomicLineHeight(style.lineHeight, layout.lineHeight))
+}
+
+private fun validAtomicInlineChild(span: Span): Boolean = validRubyBodyChild(span) &&
+    span.kind == "text" && span.target.isEmpty() && span.targetFragment == null && span.text.isNotEmpty() &&
+    span.text.none { it.code < 0x20 || it == '\u007f' || it == '\u2028' || it == '\u2029' } &&
+    span.trail.isEmpty() && span.ruby == null && span.inlinePaddingGroup == null && span.inlineActionGroup == null &&
+    span.inlineBoxGroup == null && span.clippedAbsolute == null && span.citationMarker == null && !span.isQualifiedCitationBacklink
+
+private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
+    val layout = checkNotNull(group.atomicLayout)
+    require(owner.kind == "text" && owner.target.isEmpty() && owner.targetFragment == null &&
+        owner.audioControl == null && owner.citationMarker == null && !owner.isQualifiedCitationBacklink &&
+        owner.linkPaint == null && owner.direction in setOf("", "ltr", "rtl") && validAtomicInlineStyle(owner, layout)) {
+        "Invalid atomic inline box owner"
+    }
+    val font = atomicInlineFont(owner)
+    val height = layout.lineHeight
+    require(height !is InlineLineHeight.FontRelative || sameRubyFont(font, height.font)) {
+        "Atomic inline line-height font differs from its declaring owner"
+    }
+    for (child in group.spans) {
+        require(sameRubyFont(font, atomicInlineFont(child)) && child.direction == owner.direction &&
+            validAtomicInlineStyle(child, layout)) { "Atomic inline child metrics differ from its declaring owner" }
+    }
+}
+
 /** Only original children contribute text. Overlay order is authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
-    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleLength? = null) {
+    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleLength? = null,
+    val atomicLayout: InlineBoxAtomicLayout? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
@@ -1190,6 +1252,42 @@ internal fun Block.acceptsAnonymousContent(): Boolean = kind in setOf(
     "list_item", "definition", "example", "quotation", "term", "list_detail", "indent",
 ) || kind == "paragraph" && depth == 0 && listPath.isEmpty()
 
+/** Existence only: legacy ignored prefixes do not acquire a new validation budget.
+ * Work follows the supplied graph; absence is not claimed within the wire item cap.
+ * Identity tracking terminates shared/cyclic direct-model graphs without recursion. */
+private fun hasAtomicInlineBox(values: List<Span>): Boolean {
+    val seen = java.util.IdentityHashMap<Span, Boolean>()
+    val work = java.util.ArrayDeque<Iterator<Span>>()
+    work.addLast(values.iterator())
+    while (work.isNotEmpty()) {
+        val cursor = work.peekLast()
+        if (!cursor.hasNext()) { work.removeLast(); continue }
+        val span = cursor.next()
+        if (seen.put(span, true) != null) continue
+        val box = span.inlineBoxGroup
+        if (box != null) {
+            if (box.atomicLayout != null) return true
+            work.addLast(box.spans.iterator())
+        }
+        span.inlinePaddingGroup?.let { work.addLast(it.spans.iterator()) }
+        span.inlineActionGroup?.let { work.addLast(it.spans.iterator()) }
+        span.clippedAbsolute?.let { work.addLast(it.children.iterator()) }
+        span.ruby?.let { ruby ->
+            work.addLast(sequence<Span> {
+                for (segment in ruby.segments) {
+                    yieldAll(segment.gapBefore)
+                    for (base in segment.bases) { yieldAll(base.gapBefore); yieldAll(base.spans) }
+                    for (annotation in segment.annotations) {
+                        yieldAll(annotation.gapBefore); yieldAll(annotation.spans)
+                        yieldAll(annotation.fallbackBefore); yieldAll(annotation.fallbackAfter)
+                    }
+                }
+            }.iterator())
+        }
+    }
+    return false
+}
+
 /** Authoritative content only. Table depth and content depth never reset at a sink. */
 internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) -> Unit) {
     var visitFigures = true
@@ -1268,6 +1366,9 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             require(span.clippedAbsolute == null || !rubyChild && !boxChild && !clippedChild) {
                 "Clipped absolute inline cannot nest in a structural inline owner"
             }
+            require(span.inlineBoxGroup?.atomicLayout == null || !rubyChild && !boxChild && !clippedChild && actionOwner == null) {
+                "Atomic inline box cannot nest in another structural inline owner"
+            }
             if (clippedChild) require(validClippedAbsoluteChild(span)) { "Invalid clipped absolute inline child" }
             if (rubyChild) require(if (gap) validRubyChild(span) else validRubyBodyChild(span)) {
                 "Invalid ruby child for its body or gap context"
@@ -1290,7 +1391,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, actionOwner ?: span) }
             span.inlineBoxGroup?.let {
                 inlineBoxGroup(it, contentDepth, actionOwner ?: span.takeIf { it.kind in setOf("link", "external_link") },
-                    strictBody = rubyChild)
+                    strictBody = rubyChild, owner = span)
             }
             span.clippedAbsolute?.let {
                 clippedAbsolute(it, contentDepth, span.takeIf { it.kind in setOf("link", "external_link") })
@@ -1315,7 +1416,16 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         require(actualTextLeaves != before) { "Clipped absolute inline requires actual child text or trail" }
     }
     fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
-        strictBody: Boolean = false) {
+        strictBody: Boolean = false, owner: Span? = null) {
+        value.atomicLayout?.let {
+            charge(1)
+            require(value.spans.size <= remaining) { "Atomic inline children exceed the presentation budget" }
+            require(!strictBody && actionOwner == null && value.radius == null && value.overlays.isEmpty() &&
+                value.spans.all(::validAtomicInlineChild) && value.spans.any { child -> child.text.any { it != ' ' } }) {
+                "Atomic inline box requires plain noncollapsible source text without nested owners or decoration overlays"
+            }
+            if (owner != null) requireAtomicInlineOwner(owner, value)
+        }
         value.radius?.let { radius ->
             require(radius.unit == StyleLengthUnit.Px) { "Inline box radius requires CSS pixels" }
             val first = value.border.top
@@ -1371,7 +1481,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         onBlock(value)
         // Legacy rendering ignores these prefix runs. New typed custody still validates
         // their serialized owners and budgets without invoking display callbacks.
-        if ((value.table != null || value.kind == "rule") && value.spans.any { it.audioControl != null || it.clippedAbsolute != null })
+        if ((value.table != null || value.kind == "rule") &&
+            (value.spans.any { it.audioControl != null || it.clippedAbsolute != null } || hasAtomicInlineBox(value.spans)))
             spanList(value.spans, false, contentDepth, display = false, rubyChild = false)
         when {
             value.container != null -> {
@@ -1433,7 +1544,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
                 }
                 value.content.span.inlineActionGroup?.let { inlineActionGroup(it, contentDepth, value.content.span) }
                 value.content.span.inlineBoxGroup?.let {
-                    inlineBoxGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })
+                    inlineBoxGroup(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") },
+                        owner = value.content.span)
                 }
                 value.content.span.clippedAbsolute?.let {
                     clippedAbsolute(it, contentDepth, value.content.span.takeIf { it.kind in setOf("link", "external_link") })

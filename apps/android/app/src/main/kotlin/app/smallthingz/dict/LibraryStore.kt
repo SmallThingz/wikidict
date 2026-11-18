@@ -64,6 +64,23 @@ internal fun installedLinkOwner(target: EntryLink, entry: Entry, dictionaries: L
     return owners.filter { it.language.equals(fragment, ignoreCase = true) }.singleOrNull()
 }
 
+/** Exact ordinary lookup scope; aliases retain their existing current-owner route. */
+internal data class OrdinaryLinkQuery(val title: String, val edition: String, val kind: String, val language: String? = null)
+
+internal fun ordinaryLinkChoices(
+    key: String, entry: Entry, current: WordHit?, explicitOwner: DictionaryInfo?,
+    exact: (OrdinaryLinkQuery) -> List<WordHit>,
+): List<WordHit> {
+    if (current != null || explicitOwner != null || entry.edition.isEmpty() ||
+        entry.kind != "language" || entry.navigationKind != "language" ||
+        entry.navigationLanguage.isNullOrEmpty() || entry.redirect != null) return listOfNotNull(current)
+    val query = OrdinaryLinkQuery(key, entry.edition, entry.navigationKind)
+    val ownerless = exact(query.copy(language = "Unclassified"))
+    if (ownerless.isNotEmpty()) return ownerless
+    // Retain every exact owner for an explicit choice; never pick database order.
+    return exact(query)
+}
+
 data class WordHit(val dictionary: String, val title: String, val language: String, val kind: String, val offset: Long, val length: Int,
     val recordKey: String = title, val contextDictionary: String? = null, val edition: String = "") {
     val key get() = "$dictionary\u0000${contextDictionary.orEmpty()}\u0000$recordKey"
@@ -707,30 +724,32 @@ class LibraryStore private constructor(private val context: Context) {
         helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND record_key=substr(?,2) AND COALESCE(context_dictionary,'')=? LIMIT 1",
             arrayOf(word.dictionary,sqlText(word.recordKey.orEmpty()),word.contextDictionary.orEmpty())).use { c -> if(c.moveToFirst()) hit(c) else null }
     }
-    suspend fun link(target: EntryLink, entry: Entry): WordHit? = withContext(Dispatchers.IO) {
+    suspend fun link(target: EntryLink, entry: Entry): WordHit? = linkChoices(target, entry).singleOrNull()
+    suspend fun linkChoices(target: EntryLink, entry: Entry): List<WordHit> = withContext(Dispatchers.IO) {
         val key = if (target.targetFragment == null) target.title.replace('_',' ') else target.title
         if (entry.edition.isEmpty()) {
-            val dictionary = entry.origin?.dictionary ?: return@withContext null
+            val dictionary = entry.origin?.dictionary ?: return@withContext emptyList()
             return@withContext helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND dictionary=? AND kind=? ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
-                arrayOf(sqlText(foldSearchKey(key)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
+                arrayOf(sqlText(foldSearchKey(key)),dictionary,entry.navigationKind,sqlText(key))).use { c -> if(c.moveToFirst()) listOf(hit(c)) else emptyList() }
         }
-        if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext null
+        if (entry.navigationKind == "language" && entry.navigationLanguage.isNullOrEmpty()) return@withContext emptyList()
         // A language heading names an owner only when that owner is installed in this edition.
         // Other fragments remain ordinary within-owner section destinations.
         val explicitOwner = installedLinkOwner(target, entry, dictionaries)
         val linkLanguage = explicitOwner?.language ?: entry.navigationLanguage.orEmpty()
         val current = helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE normalized=substr(?,2) AND edition=? AND kind=? AND (substr(?,2)='' OR language=substr(?,2)) ORDER BY CASE WHEN title=substr(?,2) THEN 0 ELSE 1 END LIMIT 1",
             arrayOf(sqlText(foldSearchKey(key)),entry.edition,entry.navigationKind,sqlText(linkLanguage),sqlText(linkLanguage),sqlText(key))).use { c -> if(c.moveToFirst()) hit(c) else null }
-        if (current != null || explicitOwner != null || entry.kind != "language" || entry.navigationKind != "language" || entry.redirect != null)
-            return@withContext current
-        // Ownerless pages are installed separately. Only an exact ordinary target in
-        // this edition may follow a current-owner miss; aliases keep their own route.
-        val unclassified = dictionaries.singleOrNull {
-            it.edition == entry.edition && it.kind == "language" && it.language == "Unclassified"
-        } ?: return@withContext null
-        helper.readableDatabase.rawQuery("SELECT $hitColumns FROM word_choices WHERE dictionary=? AND kind='language' AND title=substr(?,2) LIMIT 2",
-            arrayOf(unclassified.id,sqlText(key))).use { c ->
-            if (!c.moveToFirst()) null else hit(c).takeUnless { c.moveToNext() }
+        ordinaryLinkChoices(key, entry, current, explicitOwner) { query ->
+            // word_choices also contains aliases expanded into language contexts. The
+            // backing dictionary must itself be an ordinary owner in this edition.
+            helper.readableDatabase.rawQuery("""SELECT $hitColumns FROM word_choices
+                WHERE normalized=substr(?,2) AND title=substr(?,2) AND edition=? AND kind=?
+                  AND dictionary IN (SELECT id FROM dictionaries WHERE edition=? AND kind=?
+                    AND (?='0' OR language=substr(?,2))) ORDER BY language,dictionary,record_key""",
+                arrayOf(sqlText(foldSearchKey(query.title)),sqlText(query.title),query.edition,query.kind,
+                    query.edition,query.kind,if(query.language==null) "0" else "1",sqlText(query.language.orEmpty()))).use { c -> buildList {
+                while (c.moveToNext()) add(hit(c))
+            } }
         }
     }
     fun rememberWord(hit:WordHit) { prefs.edit().putString("lastTitle",hit.title).putString("lastLanguage",hit.language)

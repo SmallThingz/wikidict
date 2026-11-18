@@ -55,11 +55,16 @@ internal class NativeSurfaceGeometry(val content: FloatTextGeometry,
     override fun characterRects(start: Int, length: Int): List<RectF?> = content.characterRects(start, length)
         .map { it?.let { bounds -> RectF(bounds).apply { offset(dx, dy) } } }
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = content.revealOffset(offset, onRevealed)
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) = content.revealOffset(caret, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = content.clipForOffset(offset)
         ?.let { RectF(it).apply { offset(dx, dy) } }
     override fun cursorAt(x: Float, y: Float): InlineCursor? = content.cursorAt(x - dx, y - dy)
     override fun horizontalScrollTargetAt(x: Float, y: Float): NativeHorizontalScrollTarget? =
         content.horizontalScrollTargetAt(x - dx, y - dy)
+    override fun caretRect(caret: NativeTextCaret): RectF = RectF(content.caretRect(caret)).apply { offset(dx, dy) }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret = content.caretAt(x - dx, y - dy)
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret = content.visualCaret(caret, direction)
+
     override fun caretRect(offset: Int): RectF = RectF(content.caretRect(offset)).apply { offset(dx, dy) }
     override fun lineRange(offset: Int): Pair<Int, Int> = content.lineRange(offset)
     override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = content.visualLineRanges(offset)

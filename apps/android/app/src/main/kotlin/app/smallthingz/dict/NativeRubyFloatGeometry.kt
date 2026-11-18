@@ -51,6 +51,10 @@ internal class NativeRubyFloatGeometry(
     override fun offsetForPosition(x: Float, y: Float) = projection.offset(x, y)
     override fun rectsForRange(start: Int, end: Int) = projection.rects(start, end)
     override fun caretRect(offset: Int) = projection.caret(offset)
+    override fun caretRect(caret: NativeTextCaret) = projection.caret(caret)
+    override fun caretAt(x: Float, y: Float) = projection.caretAt(x, y)
+    override fun visualCaret(caret: NativeTextCaret, direction: Int) = projection.visualCaret(caret, direction)
+    override fun visualLineRanges(caret: NativeTextCaret) = projection.visualLineRanges(caret)
     override fun cursorAt(x: Float, y: Float) = projection.cursor(x, y)
     override fun visualOffset(offset: Int, direction: Int) = projection.visualOffset(offset, direction)
     override fun visualLineRanges(offset: Int) = projection.visualLineRanges(offset)
@@ -158,14 +162,16 @@ internal fun nativeRubyFloatGeometry(source: Spanned, paint: TextPaint, width: I
     includeFontPadding: Boolean, exactParagraphInsets: Boolean,
     nodeFactory: (NativeFloatGeometry) -> List<FloatInteractionNode>,
     decoration: (Canvas, NativeFloatGeometry) -> Unit,
-    decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?): NativeFloatGeometry {
+    decorationBounds: (NativeFloatGeometry) -> NativeFloatBounds?,
+    carriedExclusions: List<NativeFloatExclusion> = emptyList(),
+    requireDrainedAtBoundary: Boolean = false): NativeFloatGeometry {
     val left = if (exactParagraphInsets) insets.left + insets.extraLeft else kotlin.math.ceil(insets.left + insets.extraLeft)
     val right = if (exactParagraphInsets) insets.right + insets.extraRight else kotlin.math.ceil(insets.right + insets.extraRight)
     val available = (exactWidth - left - right).coerceAtLeast(0f)
     var bands = NativeRubyBands(available)
     val seen = mutableSetOf<Map<NativeRubyFragmentKey, Float>>()
     fun shape(value: Spanned) = NativeFloatRowGeometry.build(value, paint, width, emptyList(), alignment,
-        direction, lineSpacingExtra, lineSpacingMultiplier, false, emptyList(), { emptyList() },
+        direction, lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, carriedExclusions, { emptyList() },
         insets, null, { _, _ -> }, { null }, includeFontPadding, exactWidth, exactParagraphInsets)
     repeat(64) {
         if (!seen.add(bands.observed)) throw UnsupportedFloatLayout("Exact ruby fragment bands cycle")

@@ -138,8 +138,18 @@ internal class NativeTableViewportGeometry(
     }
     // Carets retain logical position for arrow navigation; the View clips their paint separately.
     override fun caretRect(offset: Int): RectF = translated(content.caretRect(offset))
+    override fun caretRect(caret: NativeTextCaret): RectF = translated(content.caretRect(caret))
+    override fun caretAt(x: Float, y: Float): NativeTextCaret = content.caretAt(x - this.x, y - this.y)
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret = content.visualCaret(caret, direction)
     override fun clipForOffset(offset: Int): RectF = content.clipForOffset(offset)?.let { intersected(translated(it)) }
         ?: RectF(clip)
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) {
+        content.revealOffset(caret) {
+            afterContentPublication { current, currentPlacement ->
+                reveal(current?.takeIf { it.text.toString() == text.toString() }?.caretRect(caret), currentPlacement, onRevealed)
+            }
+        }
+    }
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
         content.revealOffset(offset) {
             afterContentPublication { current, currentPlacement ->

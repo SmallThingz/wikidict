@@ -625,13 +625,19 @@ internal fun nativeDelegatedSelectionInk(geometry: FloatTextGeometry, density: F
     })
     val radius = minOf(6 * density, minOf(owner.width, owner.height) / 2f)
     for (position in 0..geometry.text.length) {
-        val caret = geometry.caretRect(position).apply { offset(x, y) }
-        val clip = geometry.clipForOffset(position)?.let { RectF(it).apply { offset(x, y) } }
-        nativeDelegatedClip(NativeFloatBounds(caret.left, caret.top, caret.left + maxOf(1f, density), caret.bottom), clip)?.let(::add)
-        val cx = caret.left.coerceIn(owner.left + radius, maxOf(owner.left + radius, owner.right - radius))
-        val cy = (caret.bottom + 7 * density).coerceIn(owner.top + radius, maxOf(owner.top + radius, owner.bottom - radius))
-        nativeDelegatedClip(NativeFloatBounds(cx - radius, cy - radius, cx + radius, cy + radius), clip)?.let(::add)
-        nativeDelegatedClip(NativeFloatBounds(caret.left, minOf(caret.bottom, cy), caret.left + density, maxOf(caret.bottom, cy)), clip)?.let(::add)
+        val carets = NativeTextAffinity.entries.map { affinity ->
+            val token = NativeTextCaret(position, affinity)
+            geometry.caretRect(token).apply { offset(x, y) } to
+                geometry.clipForOffset(token)?.let { RectF(it).apply { offset(x, y) } }
+        }.distinctBy { (caret, clip) -> listOf(caret.left, caret.top, caret.right, caret.bottom,
+            clip?.left, clip?.top, clip?.right, clip?.bottom) }
+        for ((caret, clip) in carets) {
+            nativeDelegatedClip(NativeFloatBounds(caret.left, caret.top, caret.left + maxOf(1f, density), caret.bottom), clip)?.let(::add)
+            val cx = caret.left.coerceIn(owner.left + radius, maxOf(owner.left + radius, owner.right - radius))
+            val cy = (caret.bottom + 7 * density).coerceIn(owner.top + radius, maxOf(owner.top + radius, owner.bottom - radius))
+            nativeDelegatedClip(NativeFloatBounds(cx - radius, cy - radius, cx + radius, cy + radius), clip)?.let(::add)
+            nativeDelegatedClip(NativeFloatBounds(caret.left, minOf(caret.bottom, cy), caret.left + density, maxOf(caret.bottom, cy)), clip)?.let(::add)
+        }
     }
 }
 
@@ -643,19 +649,22 @@ internal fun nativeDelegatedSelectionInput(geometry: FloatTextGeometry, density:
 ): List<NativeFloatBounds> {
     if (geometry.text.isEmpty()) return emptyList()
     val radius = 24f * density
-    return (0..geometry.text.length).mapNotNull { offset ->
-        val (cx, cy) = nativeSelectionHandleCenter(geometry, offset, density, x, y, owner)
-        val clip = geometry.clipForOffset(offset)?.let { RectF(it).apply { offset(x, y) } }
-        nativeDelegatedClip(NativeFloatBounds(maxOf(owner.left, cx - radius), maxOf(owner.top, cy - radius),
-            minOf(owner.right, cx + radius), minOf(owner.bottom, cy + radius)), clip)
+    return (0..geometry.text.length).flatMap { offset ->
+        NativeTextAffinity.entries.mapNotNull { affinity ->
+            val (cx, cy) = nativeSelectionHandleCenter(geometry, offset, density, x, y, owner, affinity)
+            val clip = geometry.clipForOffset(NativeTextCaret(offset, affinity))?.let { RectF(it).apply { offset(x, y) } }
+            nativeDelegatedClip(NativeFloatBounds(maxOf(owner.left, cx - radius), maxOf(owner.top, cy - radius),
+                minOf(owner.right, cx + radius), minOf(owner.bottom, cy + radius)), clip)
+        }.distinct()
     }
 }
 
 internal fun nativeSelectionHandleCenter(geometry: FloatTextGeometry, offset: Int, density: Float,
     x: Float = 0f, y: Float = 0f,
-    owner: NativeFloatBounds = NativeFloatBounds(0f, 0f, geometry.width.toFloat(), geometry.height.toFloat())
+    owner: NativeFloatBounds = NativeFloatBounds(0f, 0f, geometry.width.toFloat(), geometry.height.toFloat()),
+    affinity: NativeTextAffinity = NativeTextAffinity.Downstream,
 ): Pair<Float, Float> {
-    val caret = geometry.caretRect(offset).apply { offset(x, y) }
+    val caret = geometry.caretRect(NativeTextCaret(offset, affinity)).apply { offset(x, y) }
     val radius = minOf(6f * density, minOf(owner.width, owner.height) / 2f)
     return caret.left.coerceIn(owner.left + radius, maxOf(owner.left + radius, owner.right - radius)) to
         (caret.bottom + 7f * density).coerceIn(owner.top + radius, maxOf(owner.top + radius, owner.bottom - radius))

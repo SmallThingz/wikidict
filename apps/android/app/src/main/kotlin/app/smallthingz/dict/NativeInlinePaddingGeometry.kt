@@ -93,12 +93,16 @@ internal class NativeInlinePaddingGeometry(
     override fun characterRects(start: Int, length: Int): List<RectF?> =
         inner.characterRects(start, length).map { it?.let(::translated) }
     override fun caretRect(offset: Int): RectF = translated(inner.caretRect(offset))
+    override fun caretRect(caret: NativeTextCaret): RectF = translated(inner.caretRect(caret))
+    override fun caretAt(x: Float, y: Float): NativeTextCaret = inner.caretAt(x - dx, y - dy)
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret = inner.visualCaret(caret, direction)
     override fun offsetForPosition(x: Float, y: Float): Int = inner.offsetForPosition(x - dx, y - dy)
     override fun lineRange(offset: Int): Pair<Int, Int> = inner.lineRange(offset)
     override fun visualLineRanges(offset: Int): List<Pair<Int, Int>> = inner.visualLineRanges(offset)
     override fun isHardLineBreak(offset: Int): Boolean = inner.isHardLineBreak(offset)
     override fun visualOffset(offset: Int, direction: Int): Int = inner.visualOffset(offset, direction)
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) = inner.revealOffset(offset, onRevealed)
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) = inner.revealOffset(caret, onRevealed)
     override fun revealNode(id: Int, onRevealed: () -> Unit) = inner.revealNode(id, onRevealed)
     override fun clipForOffset(offset: Int): RectF? = inner.clipForOffset(offset)?.let(::translated)
     override fun preciseClipForOffset(offset: Int): NativeTextClip? = inner.preciseClipForOffset(offset)?.translated(dx, dy)

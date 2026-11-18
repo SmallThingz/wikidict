@@ -6855,4 +6855,204 @@ class RendererDeviceTest {
             if (!alreadyFailed) primaryFailure?.let { throw it }
         }
     }
+    @OptIn(androidx.compose.ui.test.ExperimentalTestApi::class)
+    @Test fun ambiguousLinkDialogKeepsOriginalIntentAndCancelsOnlyItsCurrentChoice() {
+        val original = EntryLink("Literal#title", "Noun#part")
+        // Generic multi-edition display fixture; resolver admission is tested separately.
+        val hits = listOf(
+            WordHit("choice-fr-1", original.title, "French", "language", 0, 4, edition = "frwiktionary-20261001"),
+            WordHit("choice-en-1", original.title, "English", "language", 0, 4, edition = "enwiktionary-20261001"),
+            WordHit("choice-nl-1", original.title, "Dutch", "language", 0, 4, edition = "nlwiktionary-20261001"),
+            WordHit("choice-fr-2", original.title, "French", "language", 0, 4, edition = "frwiktionary-20261101"),
+            WordHit("choice-en-2", original.title, "English", "language", 0, 4, edition = "enwiktionary-20261101"),
+            WordHit("choice-nl-2", original.title, "Dutch", "language", 0, 4, edition = "nlwiktionary-20261101"))
+        val chooser = EntryLinkChoiceState()
+        val revision = mutableIntStateOf(1)
+        var controller: Any = Any()
+        val visible = mutableStateOf(true)
+        class Command(val target: EntryLink, val candidates: List<WordHit>, val revision: Int, val token: Any) {
+            val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val finished = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var cancelled = false
+            var result: WordHit? = null
+        }
+        val command = mutableStateOf<Command?>(null)
+        val returned = mutableListOf<Pair<EntryLink, WordHit?>>()
+        fun row(hit: WordHit) = hasClickAction() and hasText(hit.title) and hasText(hit.language) and hasText(sourceLabel(hit.edition))
+        val dialog = isDialog()
+        fun list() = compose.onNode(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsActions.ScrollToIndex)
+            and hasAnyAncestor(dialog))
+        fun start(): Command {
+            lateinit var next: Command
+            var previous: EntryLinkChoiceState.Request? = null
+            compose.runOnIdle {
+                previous = chooser.pending
+                next = Command(original, hits, revision.intValue, controller)
+                command.value = next
+            }
+            compose.waitUntil(5000) { next.started.isCompleted && chooser.pending != null && chooser.pending !== previous }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                val request = checkNotNull(chooser.pending)
+                assertSame(original, request.target)
+                assertEquals(hits.map { it.key }, request.hits.map { it.key })
+                request.hits.zip(hits).forEach { (actual, source) -> assertSame(source, actual) }
+            }
+            return next
+        }
+        fun completed(value: Command, hit: WordHit?) {
+            compose.waitUntil(5000) { value.finished.isCompleted }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertFalse(value.cancelled); assertSame(hit, value.result)
+                assertNull(chooser.pending)
+                assertSame(original, returned.last().first)
+            }
+            compose.onNode(dialog).assertDoesNotExist()
+        }
+        fun chooseWithKey(hit: WordHit, key: androidx.compose.ui.input.key.Key) {
+            list().performScrollToNode(row(hit))
+            // Dialog has its own Compose owner. Use that real View's keyboard-focus
+            // transition, the same public operation used by its InputModeManager.
+            val dialogView = (checkNotNull(compose.onNode(dialog).fetchSemanticsNode().root)
+                as androidx.compose.ui.platform.ViewRootForTest).view
+            compose.runOnIdle { assertTrue(dialogView.requestFocusFromTouch()) }
+            compose.waitForIdle()
+            compose.runOnIdle { assertFalse(dialogView.isInTouchMode) }
+            compose.onNode(row(hit)).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.RequestFocus) {
+                assertTrue(it())
+            }
+            compose.onNode(row(hit)).assertIsFocused().performKeyInput { pressKey(key) }
+        }
+        var primary: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                MaterialTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f)) {
+                        Text("Original reader remains mounted", Modifier.testTag("choice-underlying-reader"))
+                        if (visible.value) {
+                            androidx.compose.runtime.DisposableEffect(chooser) {
+                                onDispose { chooser.cancel() }
+                            }
+                            androidx.compose.runtime.LaunchedEffect(revision.intValue) { chooser.cancelIfStale() }
+                            val current = command.value
+                            androidx.compose.runtime.LaunchedEffect(current) {
+                                if (current != null) {
+                                    current.started.complete(Unit)
+                                    try {
+                                        current.result = chooser.choose(current.target, current.candidates) {
+                                            controller === current.token && revision.intValue == current.revision
+                                        }
+                                        returned += current.target to current.result
+                                    } catch (_: kotlinx.coroutines.CancellationException) {
+                                        current.cancelled = true
+                                    } finally { current.finished.complete(Unit) }
+                                }
+                            }
+                            EntryLinkChoiceDialog(chooser)
+                        }
+                    }
+                }
+            } }
+            val pointer = start()
+            compose.onNodeWithText("Choose an entry for ${original.title}").assertIsDisplayed()
+            compose.onNodeWithTag("choice-underlying-reader").assertExists()
+            // All original same-title owners remain reachable in the bounded list, including
+            // the later source editions below its viewport. No title-only deduplication.
+            hits.forEach { hit ->
+                list().performScrollToNode(row(hit))
+                compose.onNode(row(hit)).assertIsDisplayed().assertIsEnabled()
+            }
+            val range = list().fetchSemanticsNode().config[
+                androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]
+            assertTrue(range.maxValue() > 0f)
+            compose.onNode(row(hits.last())).performTouchInput { click() }
+            completed(pointer, hits.last())
+            val enter = start()
+            chooseWithKey(hits[1], androidx.compose.ui.input.key.Key.Enter)
+            completed(enter, hits[1])
+            val space = start()
+            chooseWithKey(hits[2], androidx.compose.ui.input.key.Key.Spacebar)
+            completed(space, hits[2])
+            val accessibility = start()
+            list().performScrollToNode(row(hits[0]))
+            compose.onNode(row(hits[0])).performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.OnClick) {
+                assertTrue(it())
+            }
+            completed(accessibility, hits[0])
+            val dismissed = start()
+            compose.onNodeWithText("Cancel").performClick()
+            completed(dismissed, null)
+            compose.runOnIdle { assertEquals(5, returned.size) }
+
+            val staleRevision = start()
+            compose.runOnIdle {
+                val old = checkNotNull(chooser.pending)
+                revision.intValue++
+                // Deliberately precede the revision LaunchedEffect: the click's own
+                // synchronous guard must reject the stale candidate.
+                chooser.complete(old, hits[0])
+                assertNull(chooser.pending)
+            }
+            compose.waitUntil(5000) { staleRevision.finished.isCompleted }
+            compose.runOnIdle { assertTrue(staleRevision.cancelled); assertEquals(5, returned.size) }
+            val newRevision = start()
+            compose.runOnIdle {
+                val current = checkNotNull(chooser.pending)
+                chooser.cancelIfStale()
+                assertSame(current, chooser.pending)
+            }
+            chooseWithKey(hits[3], androidx.compose.ui.input.key.Key.Enter)
+            completed(newRevision, hits[3])
+
+            val superseded = start()
+            lateinit var oldRequest: EntryLinkChoiceState.Request
+            compose.runOnIdle { oldRequest = checkNotNull(chooser.pending) }
+            val successor = start()
+            compose.waitUntil(5000) { superseded.finished.isCompleted }
+            compose.runOnIdle {
+                val current = checkNotNull(chooser.pending)
+                assertTrue(superseded.cancelled)
+                chooser.complete(oldRequest, hits[4])
+                assertSame(current, chooser.pending)
+                assertEquals(6, returned.size)
+            }
+            list().performScrollToNode(row(hits[4]))
+            compose.onNode(row(hits[4])).performClick()
+            completed(successor, hits[4])
+
+            val detachedController = start()
+            compose.runOnIdle {
+                val old = checkNotNull(chooser.pending)
+                controller = Any()
+                chooser.complete(old, hits[0])
+            }
+            compose.waitUntil(5000) { detachedController.finished.isCompleted }
+            compose.runOnIdle { assertTrue(detachedController.cancelled); assertEquals(7, returned.size) }
+            val disposal = start()
+            compose.runOnIdle { visible.value = false }
+            compose.waitUntil(5000) { disposal.finished.isCompleted }
+            compose.waitForIdle()
+            compose.runOnIdle {
+                assertTrue(disposal.cancelled); assertNull(chooser.pending)
+                assertEquals(7, returned.size)
+                returned.forEach { assertSame(original, it.first) }
+            }
+            compose.onNode(dialog).assertDoesNotExist()
+            compose.onNodeWithTag("choice-underlying-reader").assertExists()
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            val bodyFailure = primary
+            fun cleanup(block: () -> Unit) {
+                try { block() } catch (failure: Throwable) {
+                    val originalFailure = primary
+                    if (originalFailure == null) primary = failure else if (originalFailure !== failure) originalFailure.addSuppressed(failure)
+                }
+            }
+            cleanup { compose.runOnIdle { chooser.cancel(); compose.activity.setContent {} } }
+            cleanup { compose.waitForIdle() }
+            if (bodyFailure == null) primary?.let { throw it }
+        }
+    }
+
 }

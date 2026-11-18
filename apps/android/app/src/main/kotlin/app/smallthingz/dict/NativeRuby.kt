@@ -111,6 +111,11 @@ internal class NativeRubyPreparedSource(
     val visualSpaces = visualSpaces.toSet()
     val visualSpaceNeighbors = visualSpaceNeighbors.toMap()
     val protectedSpaces = protectedSpaces.toSet()
+    // Definite child layout is independent of outer fitting bands. Cache only within
+    // this original immutable source/font preparation; copying it starts a new epoch.
+    private val atomicChildren = mutableMapOf<Pair<String, Boolean>, NativeFloatGeometry>()
+    internal fun atomicChild(path: String, rtl: Boolean, create: () -> NativeFloatGeometry): NativeFloatGeometry =
+        atomicChildren.getOrPut(path to rtl, create)
     init {
         require(this.source.toString() == projection.text) { "Ruby source must keep its graphical UTF-16 text" }
         require(parentScript.applied.isFinite() && kotlin.math.abs(parentScript.applied) <= TablePixelLimit)
@@ -565,6 +570,9 @@ internal sealed interface NativeRubyPiece {
         val styled: Spanned? = null, val groupPaint: NativeRubyGapPaint? = null,
         val trimmed: Boolean = false, val leafPaint: NativeRubyGapPaint? = null,
         val protectedEdge: Boolean = false) : NativeRubyPiece
+    data class AtomicBox(override val nativeStart: Int, val atom: NativeInlineAtomicBox) : NativeRubyPiece {
+        override val nativeEnd: Int get() = nativeStart + 1
+    }
     data class Column(override val nativeStart: Int, val column: NativeRubyColumn) : NativeRubyPiece {
         override val nativeEnd: Int get() = nativeStart + 1
     }
@@ -604,10 +612,13 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
     val boxScopes: List<NativeRubyBoxScope> = emptyList()) {
     fun nativeOffset(offset: Int, endAffinity: Boolean = false): Int {
         require(offset in 0..source.length)
+        val atoms = pieces.filterIsInstance<NativeRubyPiece.AtomicBox>()
+        if (endAffinity) atoms.lastOrNull { it.atom.child.end == offset }?.let { return it.nativeEnd }
         val texts = pieces.filterIsInstance<NativeRubyPiece.Text>()
         texts.firstOrNull { offset >= it.start && offset < it.end }?.let {
             return if (it.collapsed) it.nativeStart else it.nativeStart + offset - it.start
         }
+        atoms.firstOrNull { offset >= it.atom.child.start && offset < it.atom.child.end }?.let { return it.nativeStart }
         pieces.filterIsInstance<NativeRubyPiece.Column>().firstOrNull { piece ->
             piece.column.children.any { child -> child.ranges.any { offset >= it.first && offset < it.second } }
         }?.let { return it.nativeStart }
@@ -625,6 +636,8 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
         }
         val baseRangesByLine = mutableMapOf<Int, MutableList<Pair<Int, Int>>>()
         pieces.forEach { piece -> when (piece) {
+            is NativeRubyPiece.AtomicBox -> baseRangesByLine.getOrPut(raw.nativeLineAt(piece.nativeStart)) { mutableListOf() }
+                .addAll(piece.atom.child.ranges)
             is NativeRubyPiece.Column -> baseRangesByLine.getOrPut(raw.nativeLineAt(piece.nativeStart)) { mutableListOf() }
                 .addAll(piece.column.baseRanges)
             is NativeRubyPiece.Text -> if (piece.nativeStart < piece.nativeEnd) {
@@ -655,6 +668,7 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
             if (column === piece.column) null else piece.nativeStart to column
         }.toMap()
         val intervals = pieces.flatMap { piece -> when (piece) {
+            is NativeRubyPiece.AtomicBox -> listOf(piece.nativeStart to piece.nativeEnd)
             is NativeRubyPiece.Column -> if (piece.column.baseText.any { it !in " \t\r\n" && !nativeRubyBidiControl(it) })
                 listOf(piece.nativeStart to piece.nativeEnd) else emptyList()
             is NativeRubyPiece.Text -> if (piece.collapsed) emptyList() else (piece.start until piece.end).mapNotNull { at ->
@@ -734,6 +748,7 @@ internal class NativeRubyLayout(val source: Spanned, val native: Spanned,
             }
         }
         val projected = pieces.flatMap { piece -> when (piece) {
+            is NativeRubyPiece.AtomicBox -> listOf(piece.copy(nativeStart = mapped(piece.nativeStart)))
             is NativeRubyPiece.Text -> listOf(piece.copy(nativeStart = mapped(piece.nativeStart), nativeEnd = mapped(piece.nativeEnd)))
             is NativeRubyPiece.Column -> (replacements[piece.nativeStart] ?: listOf(piece.column)).mapIndexed { index, column ->
                 NativeRubyPiece.Column(mapped(piece.nativeStart) + index, column)
@@ -759,16 +774,28 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     val raw: NativeFloatGeometry, private val isolatedColumn: Boolean = false) {
     private data class Child(val start: Int, val end: Int, val geometry: FloatTextGeometry,
         val x: Float, val y: Float, val line: Int, val cursor: InlineCursor?,
-        val ranges: List<Pair<Int, Int>>) {
+        val ranges: List<Pair<Int, Int>>, val atomic: Boolean = false, val paintOrder: Long = 0) {
         fun owns(offset: Int): Boolean = ranges.any { offset >= it.first && offset < it.second }
         fun endsAt(offset: Int): Boolean = ranges.any { it.first < it.second && offset == it.second }
     }
-    private val children = compiled.pieces.filterIsInstance<NativeRubyPiece.Column>().flatMap { piece ->
-        val (x, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
-        val line = raw.nativeLineAt(piece.nativeStart)
-        piece.column.children.map { child -> Child(child.start, child.end, child.geometry,
-            x + child.x, baseline + child.y, line, piece.column.cursor, child.ranges) }
-    }
+    private val atoms = compiled.pieces.filterIsInstance<NativeRubyPiece.AtomicBox>()
+    private val children = compiled.pieces.flatMap { piece -> when (piece) {
+        is NativeRubyPiece.Column -> {
+            val (x, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
+            val line = raw.nativeLineAt(piece.nativeStart)
+            piece.column.children.map { child -> Child(child.start, child.end, child.geometry,
+                x + child.x, baseline + child.y, line, piece.column.cursor, child.ranges,
+                paintOrder = if (atoms.isEmpty()) 0 else raw.nativeReplacementPaintOrder(piece.nativeStart)) }
+        }
+        is NativeRubyPiece.AtomicBox -> {
+            val (x, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
+            val child = piece.atom.child
+            listOf(Child(child.start, child.end, child.geometry, x + child.x, baseline + child.y,
+                raw.nativeLineAt(piece.nativeStart), null, child.ranges, atomic = true,
+                paintOrder = raw.nativeReplacementPaintOrder(piece.nativeStart)))
+        }
+        is NativeRubyPiece.Text -> emptyList()
+    } }.let { if (atoms.isEmpty()) it else it.sortedBy { child -> child.paintOrder } }
     private val texts = compiled.pieces.filterIsInstance<NativeRubyPiece.Text>()
     private val sourceCursors = nativeInlineRanges(compiled.source, NativeAuthoredCursor::class.java)
     private fun textOwner(offset: Int): NativeRubyPiece.Text? = texts.firstOrNull { offset >= it.start && offset < it.end }
@@ -837,7 +864,12 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             bounds.enclosing(NativeFloatBounds(x, baseline + piece.column.container.top,
                 x + piece.column.advance, baseline + piece.column.container.bottom))
         }
-        return gapPaintBounds().fold(gaps.fold(columns) { bounds, gap -> bounds.enclosing(gap.box) }) {
+        val atomicBounds = atoms.fold(columns) { bounds, piece ->
+            val (x, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
+            bounds.enclosing(NativeFloatBounds(x, baseline + piece.atom.metrics.top,
+                x + piece.atom.advance, baseline + piece.atom.metrics.bottom))
+        }
+        return gapPaintBounds().fold(gaps.fold(atomicBounds) { bounds, gap -> bounds.enclosing(gap.box) }) {
             bounds, own -> bounds.enclosing(own)
         }
     }
@@ -878,6 +910,13 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun boxRects(owner: NativeInlineBoxOwner, start: Int, end: Int, line: Int? = null): List<RectF>? {
         require(start in 0..length && end in start..length)
+        atoms.singleOrNull { it.atom.format.box?.owner === owner &&
+            it.atom.child.start == start && it.atom.child.end == end }?.let { piece ->
+            if (line != null && raw.nativeLineAt(piece.nativeStart) != line) return emptyList()
+            val (x, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
+            val box = piece.atom.borderBounds
+            return listOf(RectF(x + box.left, baseline + box.top, x + box.right, baseline + box.bottom))
+        }
         val scope = compiled.boxScopes.singleOrNull {
             it.format.box?.owner === owner && it.start == start && it.end == end
         } ?: return null
@@ -984,6 +1023,117 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         }
     }
 
+    private fun childAt(value: NativeTextCaret): Child? =
+        if (value.affinity == NativeTextAffinity.Upstream) children.lastOrNull {
+            value.offset > it.start && value.offset <= it.end
+        } else children.firstOrNull { it.owns(value.offset) }
+    private fun childHit(x: Float, y: Float): Child? = children.lastOrNull { child ->
+        child.geometry.containsInteraction(x - child.x, y - child.y) ||
+            listOf(child.geometry.caretRect(NativeTextCaret(0)), child.geometry.caretRect(
+                NativeTextCaret(child.end - child.start, NativeTextAffinity.Upstream))).any { box ->
+                x >= child.x + box.left && x <= child.x + box.right && y >= child.y + box.top && y <= child.y + box.bottom
+            }
+    } ?: atoms.lastOrNull { piece ->
+        val (left, baseline) = raw.nativeReplacementOrigin(piece.nativeStart)
+        x >= left && x < left + piece.atom.advance &&
+            y >= baseline + piece.atom.metrics.top && y < baseline + piece.atom.metrics.bottom
+    }?.let { piece -> children.single { it.atomic && it.start == piece.atom.child.start && it.end == piece.atom.child.end } }
+
+    fun caret(value: NativeTextCaret): RectF {
+        require(value.offset in 0..length)
+        childAt(value)?.let { child ->
+            return RectF(child.geometry.caretRect(NativeTextCaret(value.offset - child.start, value.affinity)))
+                .apply { offset(child.x, child.y) }
+        }
+        if (value.affinity == NativeTextAffinity.Upstream) texts.lastOrNull {
+            value.offset > it.start && value.offset <= it.end
+        }?.let { piece ->
+            val at = if (value.offset == piece.end) piece.nativeEnd else inText(piece, value.offset)
+            return raw.caretRect(NativeTextCaret(at, value.affinity))
+        }
+        return caret(value.offset)
+    }
+
+    private fun atomAtNative(value: NativeTextCaret): NativeRubyPiece.AtomicBox? =
+        if (value.affinity == NativeTextAffinity.Upstream) atoms.lastOrNull {
+            value.offset > it.nativeStart && value.offset <= it.nativeEnd
+        } else atoms.firstOrNull { value.offset >= it.nativeStart && value.offset < it.nativeEnd }
+
+    private fun sourceCaret(value: NativeTextCaret, movement: Int? = null): NativeTextCaret {
+        val piece = if (value.affinity == NativeTextAffinity.Upstream) texts.lastOrNull {
+            value.offset > it.nativeStart && value.offset <= it.nativeEnd
+        } else texts.firstOrNull { value.offset >= it.nativeStart && value.offset < it.nativeEnd }
+        if (piece != null) return NativeTextCaret(if (piece.collapsed) {
+            if (value.offset == piece.nativeEnd) piece.end else piece.start
+        } else piece.start + value.offset - piece.nativeStart, value.affinity)
+        atomAtNative(value)?.let { atom ->
+            val child = atom.atom.child
+            // Keyboard entry follows this child's resolved paragraph progression;
+            // coincident X values on different inner lines cannot select an owner.
+            if (movement != null) {
+                val rtl = (child.geometry as NativeFloatGeometry).nativeRubyParagraphDirection < 0
+                return if ((movement > 0) == rtl) NativeTextCaret(child.end, NativeTextAffinity.Upstream)
+                    else NativeTextCaret(child.start)
+            }
+            return if (value.affinity == NativeTextAffinity.Upstream) NativeTextCaret(child.end, value.affinity)
+                else NativeTextCaret(child.start)
+        }
+        return NativeTextCaret(sourceOffset(value.offset), value.affinity)
+    }
+
+    fun caretAt(x: Float, y: Float): NativeTextCaret {
+        val hit = childHit(x, y)
+        if (atoms.isNotEmpty()) raw.nativeOrdinaryCaretAbove(x, y, hit?.paintOrder ?: -1L)?.let {
+            return sourceCaret(it)
+        }
+        fun fromChild(child: Child): NativeTextCaret {
+            val local = child.geometry.caretAt(x - child.x, y - child.y)
+            return NativeTextCaret(child.start + local.offset,
+                if (local.offset == child.end - child.start) NativeTextAffinity.Upstream else local.affinity)
+        }
+        hit?.let { return fromChild(it) }
+        val rawCaret = raw.caretAt(x, y)
+        atomAtNative(rawCaret)?.let { atom ->
+            return fromChild(children.single { it.atomic && it.start == atom.atom.child.start && it.end == atom.atom.child.end })
+        }
+        return sourceCaret(rawCaret)
+    }
+
+    fun visualCaret(value: NativeTextCaret, direction: Int): NativeTextCaret {
+        require(value.offset in 0..length && direction in listOf(-1, 1))
+        val child = childAt(value)
+        if (child != null) {
+            if (!child.atomic) return NativeTextCaret(legacyVisualOffset(value.offset, direction))
+            val local = NativeTextCaret(value.offset - child.start, value.affinity)
+            val next = child.geometry.visualCaret(local, direction)
+            val translated = NativeTextCaret(child.start + next.offset,
+                if (next.offset == child.end - child.start) NativeTextAffinity.Upstream else next.affinity)
+            if (translated != value) return translated
+            val atom = atoms.single { it.atom.child.start == child.start && it.atom.child.end == child.end }
+            val edges = listOf(NativeTextCaret(atom.nativeStart), NativeTextCaret(atom.nativeEnd, NativeTextAffinity.Upstream))
+            val edge = if (direction < 0) edges.minBy { raw.caretRect(it).left } else edges.maxBy { raw.caretRect(it).left }
+            val moved = raw.visualCaret(edge, direction)
+            return if (moved == edge) value else sourceCaret(moved, direction)
+        }
+        val ordinary = if (value.affinity == NativeTextAffinity.Upstream) texts.lastOrNull {
+            value.offset > it.start && value.offset <= it.end
+        } else textOwner(value.offset)
+        val at = ordinary?.let { if (value.offset == it.end) it.nativeEnd else inText(it, value.offset) }
+            ?: compiled.nativeOffset(value.offset, value.affinity == NativeTextAffinity.Upstream)
+        val next = raw.visualCaret(NativeTextCaret(at, value.affinity), direction)
+        return sourceCaret(next, direction)
+    }
+
+    fun visualLineRanges(value: NativeTextCaret): List<Pair<Int, Int>> {
+        require(value.offset in 0..length)
+        childAt(value)?.takeIf { it.atomic }?.let { child ->
+            return child.geometry.visualLineRanges(NativeTextCaret(value.offset - child.start, value.affinity))
+                .map { (a, b) -> a + child.start to b + child.start }
+        }
+        return if (value.affinity == NativeTextAffinity.Upstream && value.offset > 0)
+            lineRanges(lineAt(value.offset - 1)) else visualLineRanges(value.offset)
+    }
+
     fun caret(offset: Int): RectF {
         require(offset in 0..length)
         val owned = children.firstOrNull { it.owns(offset) }
@@ -1041,6 +1191,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     } ?: Double.POSITIVE_INFINITY
 
     fun offset(x: Float, y: Float): Int {
+        if (atoms.isNotEmpty()) return caretAt(x, y).offset
         children.lastOrNull { it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
             return it.start + it.geometry.offsetForPosition(x - it.x, y - it.y)
         }
@@ -1110,6 +1261,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     }
 
     private fun sourceOffset(native: Int): Int {
+        atoms.firstOrNull { native >= it.nativeStart && native < it.nativeEnd }?.let { return it.atom.child.start }
         texts.firstOrNull { native >= it.nativeStart && native < it.nativeEnd }?.let {
             return if (it.collapsed) it.start else it.start + native - it.nativeStart
         }
@@ -1118,6 +1270,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             column.column.children.flatMap { it.ranges }.filter { it.first < it.second }.minOfOrNull { it.first }?.let { return it }
         }
         texts.lastOrNull { native == it.nativeEnd }?.let { return it.end }
+        atoms.lastOrNull { native == it.nativeEnd }?.let { return it.atom.child.end }
         columns.lastOrNull { native == it.nativeEnd }?.let { column ->
             column.column.children.flatMap { it.ranges }.filter { it.first < it.second }.maxOfOrNull { it.second }?.let { return it }
         }
@@ -1125,6 +1278,7 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         // following real source owner, without inventing a public control offset.
         compiled.pieces.firstOrNull { it.nativeStart > native }?.let { next ->
             when (next) {
+                is NativeRubyPiece.AtomicBox -> return next.atom.child.start
                 is NativeRubyPiece.Text -> return next.start
                 is NativeRubyPiece.Column -> next.column.children.flatMap { it.ranges }.filter { it.first < it.second }
                     .minOfOrNull { it.first }?.let { return it }
@@ -1133,7 +1287,10 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         return if (native >= compiled.native.length) length else 0
     }
 
-    fun visualOffset(offset: Int, direction: Int): Int {
+    fun visualOffset(offset: Int, direction: Int): Int =
+        if (atoms.isNotEmpty()) visualCaret(NativeTextCaret(offset), direction).offset else legacyVisualOffset(offset, direction)
+
+    private fun legacyVisualOffset(offset: Int, direction: Int): Int {
         require(offset in 0..length && direction in listOf(-1, 1))
         val owned = children.firstOrNull { it.owns(offset) }
         val ordinary = if (owned == null) textOwner(offset) else null
@@ -1185,6 +1342,9 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun visualLineRanges(offset: Int): List<Pair<Int, Int>> {
         require(offset in 0..length)
+        children.firstOrNull { it.atomic && it.owns(offset) }?.let { child ->
+            return child.geometry.visualLineRanges(offset - child.start).map { (a, b) -> a + child.start to b + child.start }
+        }
         val line = lineAt(offset)
         return lineRanges(line)
     }
@@ -1192,6 +1352,8 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
     fun baseTextOnLine(line: Int): String = buildString {
         val native = raw.nativeRangeOfLine(line)
         compiled.pieces.forEach { piece -> when (piece) {
+            is NativeRubyPiece.AtomicBox -> if (piece.nativeStart >= native.first && piece.nativeStart < native.second)
+                append(compiled.source, piece.atom.child.start, piece.atom.child.end)
             is NativeRubyPiece.Column -> if (piece.nativeStart >= native.first && piece.nativeStart < native.second)
                 append(piece.column.baseText)
             is NativeRubyPiece.Text -> {
@@ -1806,7 +1968,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             if (it.role in setOf(RubyTextRole.Owner, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) 0 else 1 }))
         val rootText = buildString {
             events.forEach { range ->
-                if (range.role == RubyTextRole.Owner || range.span?.usesInlineDirectionIsolate() == true ||
+                if (range.role == RubyTextRole.Owner || prepared.groups[range.path]?.box?.atomicLayout != null ||
+                    range.span?.usesInlineDirectionIsolate() == true ||
                     range.span?.citationMarker?.isolation != null) append('\ufffc')
                 else if (range.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) append(directText(prepared, range))
                 else append(prepared.projection.text, range.start, range.end)
@@ -1857,6 +2020,12 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         parent: ActionContext?, enclosingRtl: Boolean) {
         val format = checkNotNull(prepared.groups[range.path])
         val box = format.box
+        if (box?.atomicLayout != null) {
+            if (parent != null || range.role != RubyTextRole.BoxGroup)
+                throw UnsupportedFloatLayout("Atomic inline box requires its original independent group")
+            atomicBox(prepared, range, sourceStart, atomicParentRtl(prepared, sourceStart + range.start))
+            return
+        }
         val key = format.actionOwner
         if (range.role == RubyTextRole.ActionGroup) require(key != null && box == null)
         else {
@@ -1935,6 +2104,99 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 ownerWraps += NativeInlineRange(first, native.length, NativeAuthoredTextWrap(wrap,
                     inheritedOwner = true, sourceLineStarts = if (wrap == TextWrap.NoWrap) listOf(first) else null))
         }
+    }
+
+    private val atomicParentText by lazy {
+        val result = original.toString().toCharArray()
+        val intervals = nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
+            marker.value.projection.ranges.filter { range ->
+                range.role == RubyTextRole.Owner || marker.value.groups[range.path]?.box?.atomicLayout != null ||
+                    range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
+            }.map { marker.start + it.start to marker.start + it.end }
+        }.sortedBy { it.first }
+        var consumed = 0
+        intervals.forEach { (first, last) ->
+            for (at in maxOf(first, consumed) until last) if (result[at] != '\n') result[at] = '\ufffc'
+            consumed = maxOf(consumed, last)
+        }
+        String(result)
+    }
+    private val atomicParentParagraphs by lazy {
+        buildList {
+            var first = 0
+            atomicParentText.forEachIndexed { at, char -> if (char == '\n') { add(first to at); first = at + 1 } }
+            add(first to atomicParentText.length)
+        }
+    }
+    private val atomicParentDirections = mutableMapOf<Pair<Int, TextDirectionHeuristic>, Boolean>()
+    private fun atomicParentRtl(prepared: NativeRubyPreparedSource, offset: Int): Boolean {
+        val found = atomicParentParagraphs.binarySearchBy(offset) { it.first }
+        val paragraph = atomicParentParagraphs[if (found >= 0) found else -found - 2]
+        return atomicParentDirections.getOrPut(paragraph.first to prepared.direction) {
+            prepared.direction.isRtl(atomicParentText, paragraph.first, paragraph.second - paragraph.first)
+        }
+    }
+
+    private fun atomicBox(prepared: NativeRubyPreparedSource, range: RubyTextRange,
+        sourceStart: Int, enclosingRtl: Boolean) {
+        if (!exactAdvances) throw UnsupportedFloatLayout("Atomic inline box requires exact native rows")
+        val format = checkNotNull(prepared.groups[range.path])
+        val atomic = checkNotNull(format.box?.atomicLayout)
+        if (format.actionOwner != null || format.sourceDirection !in setOf("", "ltr", "rtl") ||
+            prepared.projection.ranges.any { it.path.startsWith(range.path + "/") &&
+                it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) })
+            throw UnsupportedFloatLayout("Atomic inline box requires the admitted plain source owner")
+        val rtl = when (format.sourceDirection) { "ltr" -> false; "rtl" -> true; else -> enclosingRtl }
+        val geometry = prepared.atomicChild(range.path, rtl) {
+            // A new inner formatting context has its own ASCII-space collapse,
+            // strut, line height and wrapping. Outer collapsed maps never enter it.
+            val styled = SpannableString(prepared.source.subSequence(range.start, range.end))
+            styled.getSpans(0, styled.length, Any::class.java).filter { it !is CharacterStyle }.forEach(styled::removeSpan)
+            if (styled.isEmpty() || styled.all { it == ' ' })
+                throw UnsupportedFloatLayout("Atomic inline box requires a real inner text line")
+            if (styled.any { it.code < 0x20 || it == '\u007f' || it == '\u2028' || it == '\u2029' })
+                throw UnsupportedFloatLayout("Atomic inline box contains an unsupported paragraph boundary")
+            val childPaint = TextPaint(format.paint).apply { bgColor = 0; baselineShift = 0 }
+            styled.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(childPaint), atomic.lineHeight,
+                strut = true, independentNormalStrut = true), 0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            styled.setSpan(NativeAuthoredTextWrap(atomic.wrap, inheritedOwner = true),
+                0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val childDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val compiler = NativeRubyCompiler(SpannedString(styled), childPaint, childDirection, null, true)
+            var at = 0
+            while (at < styled.length) {
+                val space = styled[at] == ' '
+                var end = at + 1
+                while (end < styled.length && (styled[end] == ' ') == space) end++
+                if (space) compiler.text(at, end, collapsed = true,
+                    collapsedText = if (at == 0 || end == styled.length) "" else " ")
+                else compiler.text(at, end)
+                at = end
+            }
+            val compiled = compiler.finish()
+            val alignment = when (atomic.textAlign) {
+                InlineBoxOverlayTextAlign.Start -> Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Left -> if (rtl) Layout.Alignment.ALIGN_OPPOSITE else Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Right -> if (rtl) Layout.Alignment.ALIGN_NORMAL else Layout.Alignment.ALIGN_OPPOSITE
+                InlineBoxOverlayTextAlign.Center -> Layout.Alignment.ALIGN_CENTER
+            }
+            val contentWidth = atomic.allocation.contentWidth
+            val raw = NativeFloatGeometry.build(compiled.native, childPaint, kotlin.math.floor(contentWidth).toInt(),
+                emptyList(), alignment = alignment, textDirection = childDirection,
+                includeFontPadding = false, exactAvailableWidth = contentWidth)
+            raw.withRubyProjection(compiled)
+        }
+        fun emit() {
+            val at = native.length
+            val atom = NativeInlineAtomicBox(format, sourceStart + range.start, sourceStart + range.end, geometry)
+            native.append('\ufffc')
+            pieces += NativeRubyPiece.AtomicBox(at, atom)
+            val first = breakText.length
+            breakText.append('\ufffc')
+            breakEdges[first] = at
+            breakEdges[breakText.length] = native.length
+        }
+        if (checkNotNull(range.span).usesInlineDirectionIsolate()) isolate(rtl, ::emit) else emit()
     }
 
     private fun resolveDirection(source: String, directText: String, enclosingRtl: Boolean): Boolean = when (source) {
@@ -2526,6 +2788,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         fun ranges(piece: NativeRubyPiece): List<Pair<Int, Int>> = when (piece) {
             is NativeRubyPiece.Text -> listOf(piece.start to piece.end)
             is NativeRubyPiece.Column -> piece.column.children.flatMap { it.ranges }
+            is NativeRubyPiece.AtomicBox -> piece.atom.child.ranges
         }
         val clippedPoints = nativeInlineRanges(original, NativeClippedVisibleMetricMarker::class.java)
         original.getSpans(0, original.length, Any::class.java).forEach { span ->
@@ -2620,6 +2883,9 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         }
         pieces.filterIsInstance<NativeRubyPiece.Column>().forEach {
             target.setSpan(it.column, it.nativeStart, it.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        pieces.filterIsInstance<NativeRubyPiece.AtomicBox>().forEach {
+            target.setSpan(it.atom, it.nativeStart, it.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         // Leaf wrap belongs to its actual child row. Only the declaring Ruby
         // owner contributes compound policy to this private parent buffer.

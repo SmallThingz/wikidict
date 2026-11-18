@@ -53,7 +53,9 @@ class EntryNavigationTest {
         }
     }
 
-    private inner class Harness(scope: CoroutineScope, state: EntryNavigationState = EntryNavigationState()) {
+    private inner class Harness(scope: CoroutineScope, state: EntryNavigationState = EntryNavigationState(),
+        choices: (suspend (EntryLink, Entry) -> List<WordHit>)? = null,
+        choose: suspend (EntryLink, List<WordHit>) -> WordHit? = { _, _ -> null }) {
         val dictionaries = mutableSetOf("fixture")
         var read: suspend (WordHit) -> Entry = { entry(it.title) }
         var link: suspend (EntryLink, Entry) -> WordHit? = { _, _ -> null }
@@ -92,6 +94,8 @@ class EntryNavigationTest {
             installed = { it in dictionaries },
             visitsChanged = { visits = it },
             state = state,
+            linkChoices = choices,
+            chooseLink = choose,
             restore = { hit, entry ->
                 restoredHit = hit
                 title = entry.title
@@ -728,6 +732,107 @@ class EntryNavigationTest {
             assertTrue(h.reads.isEmpty())
             assertTrue(h.errors.isEmpty())
             assertFalse(h.loading)
+        }
+    }
+
+    @Test fun ambiguousLinkChoiceKeepsAllOwnersOriginalFragmentAndExactBackVisit() = runBlocking {
+        withTimeout(5_000) {
+            val from = hit("Gvangjcouh").copy(dictionary = "za", language = "Vahcuengh")
+            val choices = mutableListOf(hit("Canton").copy(dictionary = "en", language = "English"),
+                hit("Canton").copy(dictionary = "fr", language = "French"),
+                hit("Canton").copy(dictionary = "nl", language = "Dutch"))
+            val offered = CompletableDeferred<Pair<EntryLink, List<WordHit>>>()
+            val answer = CompletableDeferred<WordHit?>()
+            val h = Harness(this, choices = { _, _ -> choices }, choose = { action, hits ->
+                offered.complete(action to hits); answer.await()
+            })
+            h.dictionaries += listOf("za", "en", "fr", "nl")
+            h.navigation.open(from).join()
+            val original = h.visits.currentId
+            val action = EntryLink("Canton", "Noun#part")
+            val pending = h.navigation.openLink(action, entry("Gvangjcouh"))
+            val (observed, rows) = offered.await()
+            assertSame(action, observed)
+            assertEquals(listOf("English", "French", "Dutch"), rows.map { it.language })
+            assertEquals(original, h.visits.currentId)
+            assertEquals(listOf("Gvangjcouh"), h.history)
+            assertTrue(h.visits.canGoBack)
+            assertFalse(h.loading) // Waiting for a decision is not a read in progress.
+            val selected = rows[1]
+            choices.clear() // Resolver mutation cannot alter the offered immutable snapshot.
+            answer.complete(selected)
+            pending.join()
+            assertEquals(selected, h.exactReads.last())
+            assertSame(action, h.targetComponents)
+            assertEquals(listOf("Gvangjcouh", "Canton"), h.history)
+            assertTrue(h.navigation.goBack())
+            while (h.loading) yield()
+            assertEquals(from, h.restoredHit)
+            assertEquals(original, h.visits.currentId)
+            assertEquals(EntryLink(""), h.targetComponents)
+            assertTrue(h.errors.isEmpty())
+            assertFalse(h.navigation.goBack())
+        }
+    }
+
+    @Test fun pendingLinkChoiceCancelsWithoutHistoryAndLateChoiceCannotReplaceNewIntent() = runBlocking {
+        withTimeout(5_000) {
+            for (mode in listOf("dismiss", "back", "supersede")) {
+                val offered = CompletableDeferred<Unit>()
+                val late = Completion<WordHit?>()
+                val first = hit("Canton")
+                val second = first.copy(dictionary = "other")
+                val h = Harness(this, choices = { _, _ -> listOf(first, second) }, choose = { _, _ ->
+                    offered.complete(Unit); late.await()
+                })
+                h.dictionaries += "other"
+                h.navigation.open(hit("source")).join()
+                val original = h.visits.currentId
+                val pending = h.navigation.openLink(EntryLink("Canton#Noun"), entry("source"))
+                try {
+                    offered.await(); late.started.await()
+                    when (mode) {
+                        "dismiss" -> late.succeed(null)
+                        "back" -> { assertTrue(h.navigation.goBack()); late.succeed(first) }
+                        else -> { h.navigation.open(hit("new root")).join(); late.succeed(first) }
+                    }
+                    pending.join()
+                    assertEquals(if (mode == "supersede") listOf("source", "new root") else listOf("source"), h.history)
+                    if (mode != "supersede") assertEquals(original, h.visits.currentId)
+                    assertTrue(h.errors.isEmpty())
+                    assertFalse(h.visits.canGoBack)
+                    assertFalse(h.loading)
+                } finally { h.navigation.cancel(); late.releaseIfPending(null) }
+            }
+        }
+    }
+
+    @Test fun linkChoiceRejectsForgedRemovedAndDetachedResultsWithoutLosingOriginalVisit() = runBlocking {
+        withTimeout(5_000) {
+            for (mode in listOf("forged", "removed", "detached")) {
+                val offered = CompletableDeferred<Unit>()
+                val answer = CompletableDeferred<WordHit?>()
+                val state = EntryNavigationState()
+                val first = hit("Canton").copy(dictionary = "first")
+                val second = first.copy(dictionary = "second")
+                val h = Harness(this, state, choices = { _, _ -> listOf(first, second) }, choose = { _, _ ->
+                    offered.complete(Unit); answer.await()
+                })
+                h.dictionaries += listOf("first", "second")
+                h.navigation.open(hit("source")).join()
+                val original = h.visits.currentId
+                val pending = h.navigation.openLink(EntryLink("Canton", "Noun"), entry("source"))
+                offered.await()
+                if (mode == "removed") { h.dictionaries -= "first"; h.navigation.libraryChanged() }
+                if (mode == "detached") Harness(this, state) // New controller owns committed state.
+                answer.complete(if (mode == "forged") hit("forged") else first)
+                pending.join()
+                assertEquals(listOf("source"), h.history)
+                assertEquals(original, state.snapshot().currentId)
+                if (mode == "forged") assertEquals(listOf("This dictionary choice is no longer available."), h.errors)
+                else assertTrue(h.errors.isEmpty())
+                h.navigation.cancel()
+            }
         }
     }
 }

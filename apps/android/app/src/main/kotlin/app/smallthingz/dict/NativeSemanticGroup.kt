@@ -81,6 +81,16 @@ internal class NativeSemanticGroup(
         return segments.firstOrNull { offset in it.start until it.end }
             ?: segments.lastOrNull { it.end == offset && it.end > it.start }
     }
+    private fun caretSegment(caret: NativeTextCaret): Segment? =
+        if (caret.affinity == NativeTextAffinity.Upstream && caret.offset > 0)
+            segments.lastOrNull { it.end > it.start && it.end == caret.offset } ?: at(caret.offset)
+        else at(caret.offset)
+    override fun revealOffset(caret: NativeTextCaret, onRevealed: () -> Unit) {
+        require(caret.offset in 0..text.length)
+        val segment = caretSegment(caret)
+        if (segment == null) revealOffset(caret.offset, onRevealed)
+        else segment.child.geometry.revealOffset(caret.translated(-segment.start), onRevealed)
+    }
     override fun revealOffset(offset: Int, onRevealed: () -> Unit) {
         require(offset in 0..text.length)
         val segment = at(offset) ?: segments.firstOrNull { it.start >= offset }
@@ -155,6 +165,46 @@ internal class NativeSemanticGroup(
         }
         return nodes.lastOrNull { it.contains(x, y) }
     }
+    override fun caretRect(caret: NativeTextCaret): RectF {
+        val segment = caretSegment(caret)
+        return segment?.let { it.child.geometry.caretRect(caret.translated(-it.start))
+            .apply { offset(it.child.x, it.child.y) } } ?: caretRect(caret.offset)
+    }
+    override fun caretAt(x: Float, y: Float): NativeTextCaret {
+        positionedGroups.lastOrNull { it.contains(x, y) }?.let { return NativeTextCaret(it.sourceOffset) }
+        val segment = segments.lastOrNull { it.child.geometry.containsInteraction(x - it.child.x, y - it.child.y) }
+            ?: segments.lastOrNull { x >= it.child.x && x < it.child.x + it.child.geometry.width &&
+                y >= it.child.y && y < it.child.y + it.child.geometry.height }
+            ?: segments.minByOrNull { kotlin.math.abs(y - it.child.y) } ?: return NativeTextCaret(0)
+        return segment.child.geometry.caretAt(x - segment.child.x, y - segment.child.y).translated(segment.start)
+    }
+    override fun visualCaret(caret: NativeTextCaret, direction: Int): NativeTextCaret {
+        val segment = caretSegment(caret)
+        require(direction == -1 || direction == 1)
+        segment?.let {
+            val moved = it.child.geometry.visualCaret(caret.translated(-it.start), direction).translated(it.start)
+            if (moved.offset != caret.offset) return moved.copy(affinity = when (moved.offset) {
+                it.start -> NativeTextAffinity.Downstream
+                it.end -> NativeTextAffinity.Upstream
+                else -> moved.affinity
+            })
+            if (moved != caret && caretSegment(moved) === it) return moved
+            val forward = (direction > 0) == (it.child.direction == BidiResolvedDirection.Ltr)
+            val index = segments.indexOf(it)
+            val neighbor = (if (forward) segments.drop(index + 1) else segments.take(index).asReversed())
+                .firstOrNull { next -> next.end > next.start }
+            if (neighbor != null) {
+                val enterStart = (direction > 0) == (neighbor.child.direction == BidiResolvedDirection.Ltr)
+                val edge = NativeTextCaret(if (enterStart) neighbor.start else neighbor.end,
+                    if (enterStart) NativeTextAffinity.Downstream else NativeTextAffinity.Upstream)
+                if (edge != caret) return edge
+                return neighbor.child.geometry.visualCaret(edge.translated(-neighbor.start), direction)
+                    .translated(neighbor.start)
+            }
+        }
+        return caret
+    }
+
     override fun caretRect(offset: Int): RectF {
         val segment = at(offset) ?: segments.firstOrNull { it.start >= offset }
             ?: return RectF(0f, height.toFloat(), 1f, height.toFloat())

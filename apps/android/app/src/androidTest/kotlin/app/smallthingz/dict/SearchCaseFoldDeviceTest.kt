@@ -161,7 +161,7 @@ class SearchCaseFoldDeviceTest {
         }
     }
 
-    @Test fun ordinaryLinksFallBackOnlyToExactSameEditionUnclassifiedTargets(): Unit = runBlocking {
+    @Test fun ordinaryLinksKeepExactSameEditionUnclassifiedPrecedence(): Unit = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertTrue(context.packageName.endsWith(".validation"))
         val library = LibraryStore.get(context)
@@ -192,7 +192,7 @@ class SearchCaseFoldDeviceTest {
             // Keep the old current-owner folded match ahead of an exact unowned match.
             assertEquals("LOCAL", library.link(EntryLink("local"), source)?.title)
             assertNull(library.link(EntryLink("exactonly"), source))
-            assertNull(library.link(EntryLink("elsewhere"), source))
+            assertEquals("Other owner", library.link(EntryLink("elsewhere"), source)?.language)
             assertNull(library.link(EntryLink("foreign-only"), source))
             assertNull(library.link(EntryLink("templlar/conj.BEN#Other_owner"), source))
             assertNull(library.link(EntryLink("templlar/conj.BEN#aragonés"), source))
@@ -248,6 +248,116 @@ class SearchCaseFoldDeviceTest {
         } finally {
             library.dictionaries.filter { it.edition in editions }.forEach { library.remove(it.id).join() }
             assertEquals(beforeIds, library.dictionaries.map { it.id }.toSet())
+        }
+    }
+
+
+    @Test fun ordinaryLinksFindOneExactOtherOwnerAndBackRetainsItsOriginalVisit(): Unit = runBlocking {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        assertTrue(context.packageName.endsWith(".validation"))
+        val library = LibraryStore.get(context)
+        val edition = "zafallback${UUID.randomUUID().toString().replace("-", "")}wiktionary-20261001"
+        val otherEdition = "other$edition"
+        val editions = setOf(edition, otherEdition)
+        val before = library.dictionaries.map { it.id }.toSet()
+        suspend fun install(owner: String, code: String, selectedEdition: String, titles: List<String>) {
+            val bytes = dictionary(owner, titles, code)
+            val hash = MessageDigest.getInstance("SHA-256").digest(owner.toByteArray()).joinToString("") { "%02x".format(it) }
+            library.importFile(name = { "$selectedEdition-$hash.wikblb" }) { ByteArrayInputStream(bytes) }.join()
+            assertNull(library.error)
+        }
+        try {
+            install("English", "en", edition, listOf("Canton"))
+            install("Vahcuengh", "za", edition, listOf("Gvangjcouh", "Ambiguous", "Ownerless", "Literal#title", "Under_score", "Under score"))
+            install("Other owner", "fr", edition, listOf("Ambiguous", "Ownerless", "Canton"))
+            install("Dutch", "nl", edition, listOf("Canton"))
+            install("Foreign owner", "za", otherEdition, listOf("ForeignOnly", "Gvangjcouh"))
+            // Reuse the valid maintained entry payload with an ordinary supplemental header.
+            val languageBytes = dictionary("Supplemental donor", listOf("KindOnly"))
+            var records = 9
+            repeat(2) { while (languageBytes[records++].toInt() != 0) Unit }
+            val supplemental = "WIKBLB08".toByteArray() + byteArrayOf(7) + languageBytes.copyOfRange(records, languageBytes.size)
+            library.importFile(name = { "$edition-supplemental.wikblb" }) { ByteArrayInputStream(supplemental) }.join()
+            assertNull(library.error)
+            val from = requireNotNull(library.exact("Canton", "English", edition))
+            val source = library.read(from)
+            val expected = requireNotNull(library.exact("Gvangjcouh", "Vahcuengh", edition))
+            assertFalse(library.dictionaries.any { it.edition == edition && it.language == "Unclassified" })
+            val found = requireNotNull(library.link(EntryLink("Gvangjcouh"), source))
+            assertEquals(expected, found)
+            assertEquals("Vahcuengh", library.read(found).language)
+            assertEquals("za", library.read(found).languageCode)
+            for (target in listOf("Ambiguous", "Missing", "ForeignOnly", "KindOnly", "gvangjcouh"))
+                assertNull(target, library.link(EntryLink(target), source))
+            assertNull(library.link(EntryLink("Gvangjcouh", "Other_owner"), source))
+            assertEquals("Literal#title", library.link(EntryLink("Literal#title", "Noun#part"), source)?.title)
+            assertNull(library.link(EntryLink("Literal#title"), source)) // Legacy fragment is not a literal hash title.
+            assertEquals("Under score", library.link(EntryLink("Under_score"), source)?.title)
+            assertEquals("Under_score", library.link(EntryLink("Under_score", ""), source)?.title)
+            install("Unclassified", "", edition, listOf("Ownerless"))
+            assertEquals("Unclassified", library.link(EntryLink("Ownerless"), source)?.language)
+            val reverseAction = EntryLink("Canton", "Noun#part")
+            val reverseBody = library.read(found)
+            val reverse = library.linkChoices(reverseAction, reverseBody)
+            assertEquals(setOf("English", "Other owner", "Dutch"), reverse.map { it.language }.toSet())
+            assertEquals(3, reverse.size)
+            assertTrue(reverse.all { it.title == "Canton" && it.edition == edition && it.kind == "language" })
+            assertNull(library.link(reverseAction, reverseBody)) // Legacy single-hit API still refuses ambiguity.
+            val choiceCommits = mutableListOf<Triple<WordHit, Entry, EntryLink>>()
+            val choiceErrors = mutableListOf<String>()
+            val chosen = requireNotNull(reverse.singleOrNull { it.language == "Other owner" })
+            val choiceNavigation = EntryNavigation(this, library::read, library::link, library::savedWord,
+                library::random, { null }, { hit, entry, action -> choiceCommits += Triple(hit, entry, action) },
+                {}, { choiceErrors += it }, { id -> library.dictionaries.any { it.id == id } },
+                linkChoices = library::linkChoices, chooseLink = { action, hits ->
+                    assertSame(reverseAction, action)
+                    assertEquals(reverse, hits)
+                    chosen
+                })
+            try {
+                choiceNavigation.open(found).join()
+                choiceNavigation.openLink(reverseAction, reverseBody).join()
+                assertEquals(chosen, choiceCommits.last().first)
+                assertSame(reverseAction, choiceCommits.last().third)
+                assertTrue(choiceNavigation.goBack())
+                kotlinx.coroutines.withTimeout(5_000) { while (choiceCommits.size != 3) kotlinx.coroutines.yield() }
+                assertEquals(found, choiceCommits.last().first)
+                assertEquals(EntryLink(""), choiceCommits.last().third)
+                assertTrue(choiceErrors.isEmpty())
+            } finally { choiceNavigation.cancel() }
+            val committed = mutableListOf<Triple<WordHit, Entry, EntryLink>>()
+            val errors = mutableListOf<String>()
+            var visits = EntryVisitState()
+            val navigation = EntryNavigation(this, library::read, library::link, library::savedWord,
+                library::random, { null }, { hit, entry, target -> committed += Triple(hit, entry, target) },
+                {}, { errors += it }, { id -> library.dictionaries.any { it.id == id } },
+                visitsChanged = { visits = it })
+            try {
+                navigation.open(from).join()
+                val originalVisit = visits.currentId
+                val action = EntryLink("Gvangjcouh", "Noun#part")
+                navigation.openLink(action, source).join()
+                assertEquals(expected, committed.last().first)
+                assertEquals(expected.key, committed.last().second.origin?.key)
+                assertSame(action, committed.last().third)
+                val targetVisit = visits.currentId
+                install("Later owner", "de", edition, listOf("Gvangjcouh", "Canton"))
+                navigation.openLink(action, source).join()
+                navigation.openLink(EntryLink("Missing"), source).join()
+                assertEquals(2, committed.size)
+                assertEquals(2, errors.size)
+                assertEquals(targetVisit, visits.currentId)
+                assertTrue(navigation.goBack())
+                kotlinx.coroutines.withTimeout(5_000) { while (committed.size != 3) kotlinx.coroutines.yield() }
+                assertEquals(from, committed.last().first)
+                assertEquals(from.key, committed.last().second.origin?.key)
+                assertEquals(EntryLink(""), committed.last().third)
+                assertEquals(originalVisit, visits.currentId)
+                assertFalse(navigation.goBack())
+            } finally { navigation.cancel() }
+        } finally {
+            library.dictionaries.filter { it.edition in editions }.forEach { library.remove(it.id).join() }
+            assertEquals(before, library.dictionaries.map { it.id }.toSet())
         }
     }
 

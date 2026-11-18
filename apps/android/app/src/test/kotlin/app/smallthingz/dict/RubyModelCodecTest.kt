@@ -72,7 +72,7 @@ class RubyModelCodecTest {
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
                 (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0) or
-                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0)
+                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0) or (if (value.inlineBoxGroup?.atomicLayout != null) 0x40 else 0)
             mark("$label.fontFields"); byte(fields)
             value.fontScale?.let { f32(it); byte(value.fontScaleBasis.ordinal) }
             value.fontFeatures?.let { byte(it.ordinal) }
@@ -226,6 +226,22 @@ class RubyModelCodecTest {
             spans(value.spans, "$label.body")
             mark("$label.childrenEnd")
             value.radius?.let { boxLength(it, "$label.radius") }
+            value.atomicLayout?.let { atomic ->
+                mark("$label.atomic")
+                boxLength(atomic.width, "$label.atomic.width"); boxLength(atomic.height, "$label.atomic.height")
+                listOf(atomic.margins.top, atomic.margins.right, atomic.margins.bottom, atomic.margins.left)
+                    .forEachIndexed { index, edge -> boxLength(edge, "$label.atomic.margin$index") }
+                mark("$label.atomic.sizing"); byte(atomic.boxSizing.ordinal)
+                mark("$label.atomic.align"); byte(atomic.textAlign.ordinal)
+                mark("$label.atomic.wrap"); byte(atomic.wrap.ordinal)
+                mark("$label.atomic.lineHeight")
+                when (val height = atomic.lineHeight) {
+                    null -> byte(0)
+                    is InlineLineHeight.Computed -> { byte(1); f32(height.value.value); byte(height.value.fontScaleBasis.ordinal) }
+                    is InlineLineHeight.FontRelative -> { byte(2); f32(height.factor); fontSnapshot(height.font, "$label.atomic.heightFont") }
+                }
+                mark("$label.atomic.end")
+            }
             mark("$label.end")
         }
         private fun referenceBlock(value: Block, label: String) {
@@ -4868,7 +4884,7 @@ class RubyModelCodecTest {
         val bytes = wire.document(listOf(source))
         val fields = wire.at.getValue("root.0.fontFields")
         val start = wire.at.getValue("root.0.box.radius")
-        for (unknown in listOf(0x40, 0x80)) reject("Other local font bits remain unknown",
+        for (unknown in listOf(0x40, 0x80)) reject("Missing atomic suffix or reserved local font bit",
             changed(bytes, fields, bytes[fields].toInt() or unknown))
         reject("Radius cannot borrow an absent box", changed(bytes, wire.at.getValue("root.0.box"), 0))
         reject("Payload requires its local flag", changed(bytes, fields, bytes[fields].toInt() and 0xdf))
@@ -5357,5 +5373,253 @@ class RubyModelCodecTest {
         val cyclic = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = cycleBlocks))), rowsHiddenMaxWidthPx = 720)
         cycleBlocks.add(Block("table", 0, emptyList(), table = cyclic))
         invalid("Cyclic hidden rows remain bounded") { PresentationSpanVisitor { _, _ -> }.table(cyclic) }
+    }
+
+    private fun atomicWireLayout(lineHeight: InlineLineHeight? = null, wrap: TextWrap = TextWrap.BreakWord): InlineBoxAtomicLayout {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        return InlineBoxAtomicLayout(StyleLength(StyleLengthUnit.Em, 1f), StyleLength(StyleLengthUnit.Em, 1f),
+            StyleEdges(zero, zero, zero, zero), ContainerBoxSizing.BorderBox, InlineBoxOverlayTextAlign.Start, wrap, lineHeight)
+    }
+    private fun atomicWireOwner(layout: InlineBoxAtomicLayout = atomicWireLayout(), value: String = "\u00a0",
+        direction: String = "", explicitPolicies: Boolean = false, family: ContainerFontFamily? = null): Span {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdge.None
+        val style = InlineTextStyle(fontNormalized = true, lineHeight = layout.lineHeight.takeIf { explicitPolicies },
+            wrap = layout.wrap.takeIf { explicitPolicies })
+        val child = Span("text", value, language = "hu", classes = "atomic-swatch", direction = direction,
+            fontScale = .81f, fontScaleBasis = FontScaleBasis.NormalBody, fontFeatures = FontFeaturePolicy.Normal,
+            fontFamily = family, inlineStyle = style, foreground = "#123456", background = "#ffffff",
+            tooltip = "original child", explanation = "original advice")
+        return child.copy(text = "", foreground = "#654321", background = "#20a0ff", tooltip = "original owner",
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), InlineBoxBorderEdges(none, none, none, none),
+                spans = listOf(child), atomicLayout = layout))
+    }
+    private fun atomicWireFont(value: Span) = InlineFontSnapshot(value.fontScale, value.fontScaleBasis,
+        value.small, value.superscript, value.subscript, true, value.bold, value.italic, value.code,
+        value.language, value.classes, value.role, value.fontFeatures, value.fontFamily)
+
+    @Test fun atomicInlineBoxLocalFlagRetainsRealNbspAndNullBytesAcrossEveryExistingSink() {
+        val source = atomicWireOwner()
+        val group = checkNotNull(source.inlineBoxGroup)
+        val plain = source.copy(inlineBoxGroup = group.copy(atomicLayout = null))
+        for (sink in Sink.entries) {
+            val wire = Wire('Y', 4)
+            val bytes = wire.document(listOf(source), sink, headingTitle = "\u00a0")
+            val actual = selected(read(bytes), sink)
+            assertEquals("$sink complete source", source, actual)
+            assertEquals("\u00a0", rubyGraphicalProjection(listOf(actual)).text)
+            assertEquals(.81f, checkNotNull(actual.fontScale), 0f)
+            assertEquals(.81f, checkNotNull(actual.inlineBoxGroup!!.spans.single().fontScale), 0f)
+            assertFalse(actual.hasInternalAction()); assertEquals("original child", actual.inlineBoxGroup!!.spans.single().tooltip)
+            val start = wire.at.getValue("root.0.box.atomic")
+            assertEquals(wire.at.getValue("root.0.box.childrenEnd"), start)
+            assertEquals(34, wire.at.getValue("root.0.box.atomic.end") - start)
+            val oneEm = byteArrayOf(1, 0, 0, -128, 63)
+            assertArrayEquals(oneEm + oneEm + ByteArray(20) + byteArrayOf(1, 0, 1, 0), bytes.copyOfRange(start, start + 34))
+            val fields = wire.at.getValue("root.0.fontFields")
+            assertEquals(0x40, bytes[fields].toInt() and 0x40)
+            val withoutSuffix = replace(bytes, start, start + 34, byteArrayOf())
+            val old = changed(withoutSuffix, fields, withoutSuffix[fields].toInt() and 0xbf)
+            assertArrayEquals("Only the local flag and34B suffix differ", Wire('Y', 4).document(listOf(plain), sink,
+                headingTitle = "\u00a0"), old)
+            assertEquals(plain, selected(read(old), sink))
+        }
+        for (sizing in ContainerBoxSizing.entries) for (align in InlineBoxOverlayTextAlign.entries)
+            for (wrap in listOf(TextWrap.Normal, TextWrap.BreakWord)) {
+                val owner = atomicWireOwner(atomicWireLayout(wrap = wrap).copy(boxSizing = sizing, textAlign = align),
+                    value = "Latin \u00a0", direction = "ltr")
+                assertEquals(owner, read(Wire('Y', 4).document(listOf(owner))).displayTitle.single())
+            }
+        val audio = Span("link", "Tone.ogg", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val catalog = listOf(Media("Tone.ogg", "audio", "original audio"))
+        val mixed = read(Wire('Z', 4 or 8192).document(listOf(source, audio), mediaValues = catalog))
+        assertEquals(listOf(source, audio), mixed.displayTitle); assertEquals(catalog, mixed.media)
+    }
+
+    @Test fun atomicInlineBoxKeepsExplicitLineHeightAndExistingFontFeatureCensusIndependent() {
+        val plain = atomicWireOwner()
+        val font = atomicWireFont(plain)
+        val heights = listOf<InlineLineHeight?>(null,
+            InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx)),
+            InlineLineHeight.Computed(InlineComputedLength(18f, FontScaleBasis.NormalBody)),
+            InlineLineHeight.FontRelative(1.5f, font))
+        for (height in heights) for (explicit in listOf(false, true)) {
+            val source = atomicWireOwner(atomicWireLayout(height), direction = "rtl", explicitPolicies = explicit)
+            val features = if (explicit) 16 else 0 // Atomic wrap itself is not the ordinary inline-style feature.
+            assertEquals(source, read(Wire('Y', 4).document(listOf(source), features = features)).displayTitle.single())
+            reject("Exact ordinary text-flow census", Wire('Y', 4).document(listOf(source), features = features xor 16))
+        }
+        val familyOwner = atomicWireOwner(family = ContainerFontFamily.SansSerif)
+        val familyHeight = InlineLineHeight.FontRelative(1.25f, atomicWireFont(familyOwner))
+        val family = atomicWireOwner(atomicWireLayout(familyHeight), family = ContainerFontFamily.SansSerif)
+        assertEquals(family, read(Wire('Y', 4).document(listOf(family), features = 4)).displayTitle.single())
+        reject("Atomic snapshot family retains existing census", Wire('Y', 4).document(listOf(family)))
+        reject("No invented family census for a null family", Wire('Y', 4).document(listOf(plain), features = 4))
+        val wrongHeight = InlineLineHeight.FontRelative(1f, font.copy(fontScale = 1f))
+        invalid("Font-relative line-height belongs to the original declaring font") { atomicWireOwner(atomicWireLayout(wrongHeight)) }
+        val computed = atomicWireLayout(InlineLineHeight.Computed(InlineComputedLength(20f, FontScaleBasis.CssPx)))
+        val inherited = atomicWireOwner(computed)
+        val same = inherited.copy(inlineStyle = inherited.inlineStyle!!.copy(lineHeight = computed.lineHeight))
+        assertEquals(computed.lineHeight, same.inlineStyle!!.lineHeight)
+        invalid("A different owner line-height is not an alias") {
+            inherited.copy(inlineStyle = inherited.inlineStyle!!.copy(lineHeight = heights[1]))
+        }
+    }
+
+    @Test fun atomicInlineBoxRequiresPositiveMatchingMetricsAndPlainNoncollapsibleOriginalChildren() {
+        val source = atomicWireOwner()
+        val group = checkNotNull(source.inlineBoxGroup)
+        val layout = checkNotNull(group.atomicLayout)
+        val child = group.spans.single()
+        fun childOwner(value: Span) = source.copy(inlineBoxGroup = group.copy(spans = listOf(value)))
+        for (value in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            invalid("Positive finite width") { layout.copy(width = StyleLength(StyleLengthUnit.Px, value)) }
+            invalid("Positive finite height") { layout.copy(height = StyleLength(StyleLengthUnit.Em, value)) }
+        }
+        invalid("No nowrap atomic policy") { layout.copy(wrap = TextWrap.NoWrap) }
+        for (value in listOf(null, 0f, -1f, Float.NaN, Float.POSITIVE_INFINITY))
+            invalid("Positive known owner font") { source.copy(fontScale = value) }
+        assertEquals(0f, checkNotNull(InlineFontSnapshot(0f, FontScaleBasis.NormalBody, fontNormalized = true).fontScale), 0f)
+        invalid("Positive known child font") { childOwner(child.copy(fontScale = 0f)) }
+        invalid("Matching zero owner and child fonts still require positive declaring size") {
+            source.copy(fontScale = 0f, inlineBoxGroup = group.copy(spans = listOf(child.copy(fontScale = 0f))))
+        }
+        for (change in listOf<(Span) -> Span>(
+            { it.copy(fontScale = 1f) }, { it.copy(fontScaleBasis = FontScaleBasis.CssPx) },
+            { it.copy(fontScaleBasis = FontScaleBasis.Context) }, { it.copy(fontFamily = ContainerFontFamily.SansSerif) },
+            { it.copy(fontFeatures = null) }, { it.copy(language = "en") }, { it.copy(classes = "other") },
+            { it.copy(role = "example") }, { it.copy(bold = true) }, { it.copy(italic = true) }, { it.copy(code = true) },
+            { it.copy(small = true) }, { it.copy(superscript = true) }, { it.copy(subscript = true) },
+            { it.copy(underline = true) }, { it.copy(strike = true) }, { it.copy(direction = "ltr") },
+            { it.copy(inlineStyle = null) }, { it.copy(inlineStyle = InlineTextStyle(fontNormalized = false)) },
+            { it.copy(inlineStyle = it.inlineStyle!!.copy(wrap = TextWrap.Normal)) },
+            { it.copy(inlineStyle = it.inlineStyle!!.copy(cursor = InlineCursor.Help)) },
+            { it.copy(inlineStyle = it.inlineStyle!!.copy(baselineShift = InlineComputedLength(1f, FontScaleBasis.CssPx))) }))
+            invalid("Every child metric remains the original owner metric") { childOwner(change(child)) }
+        for (direction in listOf("auto", "rtl")) invalid("No unresolved or mismatched direction") { childOwner(child.copy(direction = direction)) }
+        invalid("Unresolved owner direction") { atomicWireOwner(direction = "auto") }
+        for (value in listOf("", " ", "   ", "x\t", "x\n", "x\r", "x\u000c", "x\u0000", "x\u007f", "x\u2028", "x\u2029"))
+            invalid("No empty, collapsible-only or forced-control body") { childOwner(child.copy(text = value)) }
+        assertEquals(" \u00a0 ", childOwner(child.copy(text = " \u00a0 ")).inlineBoxGroup!!.spans.single().text)
+        for (change in listOf<(Span) -> Span>({ it.copy(trail = "!") }, { it.copy(kind = "link", target = "Target") },
+            { it.copy(kind = "external_link", target = "https://example.org") }, { it.copy(kind = "line_break") },
+            { it.copy(image = InlineImage("Probe.svg")) }, { it.copy(classes = "wikidict-media") }))
+            invalid("Atomic children cannot carry actions, media, or structural content") { childOwner(change(child)) }
+        invalid("Atomic owner cannot become an action") { source.copy(kind = "link", target = "Target") }
+        invalid("Atomic inside Ruby") { owner(listOf(base(source))) }
+        invalid("Atomic inside U") { Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 0f), listOf(source))) }
+        invalid("Atomic inside Box") { Span("text", "", inlineBoxGroup = group.copy(atomicLayout = null, spans = listOf(source))) }
+        invalid("Atomic inside V") { Span("link", "", "Target", inlineActionGroup = InlineActionGroup(listOf(source))) }
+        val overlays = mutableListOf<InlineBoxOverlay>()
+        val children = mutableListOf(child)
+        val retained = source.copy(inlineBoxGroup = group.copy(overlays = overlays, spans = children))
+        val entry = Entry("Atomic", listOf(retained), "language", "Hungarian", "hu", emptyList(), emptyList())
+        overlays.add(InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            left = InlineBoxInset(StyleWidthUnit.Px, 0f)), group.border))
+        invalid("Mutated overlay cannot bypass complete validation") { entry.copy() }
+        overlays.clear(); children[0] = child.copy(fontScale = 1f)
+        invalid("Mutated child font cannot bypass complete validation") { entry.copy() }
+        children[0] = child
+        assertSame(retained, entry.copy().displayTitle.single())
+        assertSame(child, retained.inlineBoxGroup!!.spans.single())
+        assertEquals("#20a0ff", retained.background); assertEquals("#ffffff", child.background)
+    }
+
+    @Test fun atomicInlineBoxRejectsOrphanFlagsMalformedSuffixesAndForgedDomains() {
+        val source = atomicWireOwner()
+        val wire = Wire('Y', 4)
+        val bytes = wire.document(listOf(source))
+        val fields = wire.at.getValue("root.0.fontFields")
+        val start = wire.at.getValue("root.0.box.atomic")
+        reject("Reserved bit0x80", changed(bytes, fields, bytes[fields].toInt() or 0x80))
+        reject("No same-owner Box", changed(bytes, wire.at.getValue("root.0.box"), 0))
+        reject("Suffix requires local0x40", changed(bytes, fields, bytes[fields].toInt() and 0xbf))
+        reject("No extra nullable tag", replace(bytes, start, start, byteArrayOf(1)))
+        reject("Strict EOF", bytes + byteArrayOf(0))
+        for (count in 0 until 34) reject("Incomplete atomic suffix $count", bytes.copyOf(start + count))
+        for (field in listOf("width", "height", "margin0", "margin1", "margin2", "margin3")) {
+            val at = wire.at.getValue("root.0.box.atomic.$field")
+            for (unit in listOf(2, 255)) reject("Only px/em $field", changed(bytes, at, unit))
+            for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) reject("Finite nonnegative $field",
+                changed32(bytes, at + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+            if (field == "width" || field == "height") reject("Positive $field", changed32(bytes, at + 1, 0))
+        }
+        for ((field, invalidTag) in listOf("sizing" to 2, "align" to 4, "wrap" to 2, "lineHeight" to 3))
+            reject("Unknown atomic $field", changed(bytes, wire.at.getValue("root.0.box.atomic.$field"), invalidTag))
+        val zeroRadius = changed(replace(bytes, start, start, ByteArray(5)), fields, bytes[fields].toInt() or 0x20)
+        reject("Radius and atomic are mutually exclusive even at0", zeroRadius)
+        val oldWire = Wire('O'); val old = oldWire.document(listOf(text("plain")))
+        reject("Old header rejects atomic local flag", changed(old, oldWire.at.getValue("root.0.fontFields"), 0x40))
+        val body = BodyTypography(InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true))
+        val noBoxWire = Wire('Y', 2); val noBox = noBoxWire.document(listOf(text("plain")), bodyTypography = body)
+        reject("Existing global4 required", changed(noBox, noBoxWire.at.getValue("root.0.fontFields"), 0x40))
+        val siblingWire = Wire('Y', 4); val siblings = siblingWire.document(listOf(source, text("plain")))
+        val sibling = siblingWire.at.getValue("root.1.fontFields")
+        reject("Sibling cannot borrow atomic owner", changed(siblings, sibling, siblings[sibling].toInt() or 0x40))
+        // Literal mutations bypass typed construction but retain the existing ordinary field framing.
+        reject("Serialized owner font cannot be zero", changed32(bytes, fields + 1, 0))
+        val childDirection = wire.at.getValue("root.0.box.body.0.direction")
+        reject("Serialized mismatched child direction", replace(bytes, childDirection, childDirection + 4,
+            byteArrayOf(3, 0, 0, 0) + "rtl".encodeToByteArray()))
+        val childText = wire.at.getValue("root.0.box.body.0.text")
+        reject("Serialized collapsible-only body", replace(bytes, childText, childText + 6, byteArrayOf(1, 0, 0, 0, 32)))
+        val childStyle = wire.at.getValue("root.0.box.body.0.style.flags")
+        reject("Serialized child font must be normalized", changed(bytes, childStyle, bytes[childStyle].toInt() and 0xf7))
+        assertEquals(source, read(bytes).displayTitle.single())
+    }
+
+    @Test fun atomicInlineBoxChargesOneItemAndRetainsCompleteIgnoredPrefixAndDepthWork() {
+        val limit = 1 shl 20
+        val source = atomicWireOwner()
+        val child = source.inlineBoxGroup!!.spans.single()
+        fun table(count: Int) = Table(listOf(source), java.util.Collections.nCopies(count, emptyList<Cell>()))
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(table(limit - 3))
+        assertEquals(listOf(source, child), seen); assertSame(source, seen[0]); assertSame(child, seen[1])
+        invalid("Owner, child and atomic object share exact model M+1") {
+            PresentationSpanVisitor { _, _ -> }.table(table(limit - 2))
+        }
+        fun literal(count: Int) = Wire('Y', 4).apply {
+            paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = table(count)), "atomicBudget") }
+        }.document(emptyList(), Sink.Body)
+        val decoded = read(literal(limit - 5)).sections.single().blocks.single().table!! // Section + Block + owner + child + atom.
+        assertEquals(limit - 5, decoded.rows.size); assertEquals(source, decoded.caption.single())
+        reject("Exact wire M+1", literal(limit - 4))
+        for (depth in listOf(15, 16)) {
+            val data = Wire('Y', 4).document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 15) assertEquals(1, read(data).sections.size)
+            else reject("Atomic child does not reset content depth", data)
+        }
+        for (depth in listOf(32, 33)) {
+            val data = Wire('Y', 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(source), Sink.Body)
+            if (depth == 32) assertEquals(1, read(data).sections.size)
+            else reject("Atomic child does not reset table depth", data)
+        }
+        for (kind in listOf("table", "rule")) {
+            fun raw(spans: List<Span>) = Block(kind, 0, spans,
+                table = Table(emptyList(), emptyList()).takeIf { kind == "table" })
+            val calls = mutableListOf<List<Span>>()
+            val originals = mutableListOf<Span>()
+            PresentationSpanVisitor { spans, _ -> calls.add(spans) }.apply { onSpan = { originals.add(it) } }
+                .block(raw(listOf(source)))
+            assertEquals(listOf(source, child), originals)
+            assertTrue("Ignored prefix never becomes a display callback", calls.all { it.isEmpty() })
+            val legacy = java.util.Collections.nCopies(limit + 1, text("ignored legacy"))
+            PresentationSpanVisitor { _, _ -> }.block(raw(legacy)) // Absence scan is non-charging, proportional to supplied input.
+            invalid("An actual atomic owner selects the complete ignored-prefix budget") {
+                PresentationSpanVisitor { _, _ -> }.block(raw(legacy + source))
+            }
+            val mutable = mutableListOf(text("ordinary"))
+            val wrapper = Span("text", "", inlinePaddingGroup = InlinePaddingGroup(
+                StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 0f), mutable))
+            val held = raw(listOf(wrapper))
+            mutable[0] = source
+            invalid("Nested atomic discovery revalidates the whole original prefix") { PresentationSpanVisitor { _, _ -> }.block(held) }
+            mutable[0] = wrapper
+            PresentationSpanVisitor { _, _ -> }.block(held) // Identity-aware absence scan terminates the old ignored cycle.
+        }
     }
 }

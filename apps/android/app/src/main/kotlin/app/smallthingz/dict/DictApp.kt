@@ -63,6 +63,68 @@ internal class ReaderSession : ViewModel() {
     }
 }
 
+/** A pending choice belongs only to its current composition/controller. */
+internal class EntryLinkChoiceState {
+    internal class Request(val target: EntryLink, val hits: List<WordHit>,
+        val isCurrent: () -> Boolean) {
+        val result = kotlinx.coroutines.CompletableDeferred<WordHit?>()
+    }
+    var pending by mutableStateOf<Request?>(null)
+        private set
+
+    suspend fun choose(target: EntryLink, hits: List<WordHit>, isCurrent: () -> Boolean): WordHit? {
+        currentCoroutineContext().ensureActive()
+        if (!isCurrent()) throw CancellationException("Link choice owner changed")
+        val request = Request(target, hits.toList(), isCurrent)
+        val previous = pending
+        pending = request
+        previous?.result?.cancel()
+        try {
+            val selected = request.result.await()
+            currentCoroutineContext().ensureActive()
+            if (!isCurrent()) throw CancellationException("Link choice owner changed")
+            return selected
+        } finally {
+            if (pending === request) pending = null
+        }
+    }
+
+    fun complete(request: Request, hit: WordHit?) {
+        if (pending !== request) return
+        if (!request.isCurrent()) { cancel(); return }
+        if (hit != null && request.hits.none { it === hit }) return
+        pending = null
+        request.result.complete(hit)
+    }
+
+    fun cancelIfStale() {
+        val request = pending ?: return
+        if (!request.isCurrent()) cancel()
+    }
+
+    fun cancel() {
+        val request = pending
+        pending = null
+        request?.result?.cancel()
+    }
+}
+
+@Composable
+internal fun EntryLinkChoiceDialog(state: EntryLinkChoiceState) {
+    val request = state.pending ?: return
+    AlertDialog(
+        onDismissRequest = { state.complete(request, null) },
+        title = { Text("Choose an entry for ${request.target.title}") },
+        text = {
+            Box(Modifier.fillMaxWidth().heightIn(max = 360.dp)) {
+                WordMatches(request.hits) { state.complete(request, it) }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = { state.complete(request, null) }) { Text("Cancel") } },
+    )
+}
+
 @Composable
 fun DictApp(library: LibraryStore, learning: LearningStore,
     importNavigationRequest: Long = 0L, onImportNavigationHandled: (Long) -> Unit = {},
@@ -107,6 +169,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             session.visits = navigationState.snapshot() // Pending work belonged to the old composition.
         }
     }
+    val linkChoiceState = remember(controllerToken) { EntryLinkChoiceState() }
     val navigation = remember(scope, session, navigationState) {
         EntryNavigation(
             scope = scope,
@@ -131,9 +194,27 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             error = { if (session.controllerToken === controllerToken) snackbar.showSnackbar(it) },
             installed = { id -> currentLibrary.dictionaries.any { it.id == id } },
             state = navigationState,
+            linkChoices = { target, entry ->
+                val lookupLibrary = currentLibrary
+                val lookupRevision = lookupLibrary.revision
+                val hits = lookupLibrary.linkChoices(target, entry)
+                currentCoroutineContext().ensureActive()
+                if (session.controllerToken !== controllerToken || currentLibrary !== lookupLibrary ||
+                    hits.size > 1 && currentLibrary.revision != lookupRevision)
+                    throw CancellationException("Link lookup owner changed")
+                hits
+            },
+            chooseLink = { target, hits ->
+                val choiceLibrary = currentLibrary
+                val choiceRevision = choiceLibrary.revision
+                linkChoiceState.choose(target, hits) {
+                    session.controllerToken === controllerToken && currentLibrary === choiceLibrary &&
+                        currentLibrary.revision == choiceRevision
+                }
+            },
         )
     }
-    DisposableEffect(navigation) { onDispose { navigation.cancel() } }
+    DisposableEffect(navigation) { onDispose { linkChoiceState.cancel(); navigation.cancel() } }
     val readerUri = remember(uri, navigation) {
         object : UriHandler {
             override fun openUri(uriString: String) {
@@ -144,6 +225,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
     }
     fun open(hit: WordHit) { navigation.open(hit) }
     LaunchedEffect(library, library.revision) {
+        linkChoiceState.cancelIfStale()
         // Revision zero is the initial database load, not a completed empty library.
         if (library.revision == 0) return@LaunchedEffect
         navigation.libraryChanged()
@@ -185,6 +267,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
         else navigation.goBack()
     }
     LaunchedEffect(screen, selected?.key, searching) { dockHidden = false }
+    EntryLinkChoiceDialog(linkChoiceState)
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
         androidx.compose.animation.AnimatedVisibility(
             visible = !dockHidden || screen != AppScreen.Dictionary || searching,
