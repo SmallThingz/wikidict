@@ -73,6 +73,10 @@ an installation.
 The notice generator requires a fresh output directory and verifies the selected
 source bytes. Reuse its existing unchanged output for later installs. QtShaderTools
 supplies build-time shader generation; it is not part of this runtime inventory.
+Bundled Qt libraries and plugins omit debugging information from their installed
+copies by default. The original build artifacts, dynamic symbols, resources and
+selected plugin inventory are retained. Set `WIKIDICT_QT_RUNTIME_STRIP_DEBUG=OFF`
+to keep debugging information in the installed copies too.
 For a development build that uses an externally managed patched Qt installation,
 leave `WIKIDICT_BUNDLE_QT_RUNTIME` off and arrange the loader paths for that exact
 installation. Do not mix it with stock Qt libraries or plugins.

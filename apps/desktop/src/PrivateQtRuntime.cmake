@@ -1,6 +1,7 @@
 # Optional coherent Qt runtime deployment for the paired private Qt build.
 # System-Qt packages keep their existing installation contract.
 option(WIKIDICT_BUNDLE_QT_RUNTIME "Install the selected matching Qt runtime beside the GUI" OFF)
+option(WIKIDICT_QT_RUNTIME_STRIP_DEBUG "Remove debug information from installed Qt copies; retain build artifacts" ON)
 set(WIKIDICT_QT_RUNTIME_ROOTS "" CACHE STRING "Exact coherent Qt build/install prefixes supplying runtime artifacts")
 set(_required_runtime_plugins
     "QWaylandIntegrationPlugin;QWaylandXdgShellIntegrationPlugin;QXcbIntegrationPlugin;QSvgPlugin;QSvgIconPlugin;QFFmpegMediaPlugin;QTlsBackendOpenSSLPlugin;QJpegPlugin;QGifPlugin;QComposePlatformInputContextPlugin;QIbusPlatformInputContextPlugin"
@@ -21,6 +22,15 @@ endif()
 file(REAL_PATH "${WIKIDICT_QT_RUNTIME_NOTICES_MANIFEST}" WIKIDICT_RUNTIME_NOTICE_MANIFEST)
 file(SHA256 "${WIKIDICT_RUNTIME_NOTICE_MANIFEST}" WIKIDICT_RUNTIME_NOTICE_MANIFEST_SHA256)
 find_program(WIKIDICT_RUNTIME_READELF NAMES readelf REQUIRED)
+set(WIKIDICT_RUNTIME_STRIP "")
+if(WIKIDICT_QT_RUNTIME_STRIP_DEBUG)
+    if(CMAKE_STRIP AND EXISTS "${CMAKE_STRIP}")
+        set(WIKIDICT_RUNTIME_STRIP "${CMAKE_STRIP}")
+    else()
+        find_program(WIKIDICT_RUNTIME_STRIP_TOOL NAMES llvm-strip strip REQUIRED)
+        set(WIKIDICT_RUNTIME_STRIP "${WIKIDICT_RUNTIME_STRIP_TOOL}")
+    endif()
+endif()
 set(_runtime_roots "")
 foreach(_root IN LISTS WIKIDICT_QT_RUNTIME_ROOTS)
     if(NOT IS_ABSOLUTE "${_root}" OR NOT IS_DIRECTORY "${_root}/lib")

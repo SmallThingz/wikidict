@@ -2,6 +2,8 @@
 set(_roots [==[@WIKIDICT_RUNTIME_ROOTS@]==])
 set(_version [==[@WIKIDICT_RUNTIME_VERSION@]==])
 set(_readelf [==[@WIKIDICT_RUNTIME_READELF@]==])
+set(_strip [==[@WIKIDICT_RUNTIME_STRIP@]==])
+set(_strip_debug [==[@WIKIDICT_QT_RUNTIME_STRIP_DEBUG@]==])
 set(_gui [==[@WIKIDICT_RUNTIME_GUI@]==])
 set(_linked_qt_files [==[@WIKIDICT_RUNTIME_LINKED_QT_FILES@]==])
 set(_plugin_files [==[@WIKIDICT_RUNTIME_PLUGIN_FILES@]==])
@@ -80,6 +82,18 @@ function(_resolve_qt name output)
         message(FATAL_ERROR "Qt dependency does not match selected version ${_version}: ${filename}")
     endif()
     set(${output} "${real}" PARENT_SCOPE)
+endfunction()
+
+function(_dynamic_symbols file output)
+    # Compare source and installed symbols with the same tool and locale. This
+    # presentation digest is deliberately not a portable manifest field.
+    execute_process(COMMAND "${CMAKE_COMMAND}" -E env LC_ALL=C "${_readelf}" --dyn-syms --wide "${file}"
+        RESULT_VARIABLE status OUTPUT_VARIABLE symbols ERROR_VARIABLE diagnostic)
+    if(NOT status EQUAL 0)
+        message(FATAL_ERROR "Cannot inspect runtime dynamic symbols ${file}: ${diagnostic}")
+    endif()
+    string(SHA256 digest "${symbols}")
+    set(${output} "${digest}" PARENT_SCOPE)
 endfunction()
 
 # A same-SONAME system target is not interchangeable with the selected private
@@ -173,6 +187,7 @@ function(_copy_runtime source relative new_rpath output)
         message(FATAL_ERROR "Runtime file destination is a symlink: ${relative}")
     endif()
     _elf("${source}" needed soname old_rpath)
+    _dynamic_symbols("${source}" source_symbols)
     file(SHA256 "${source}" source_sha)
     # Compare bytes rather than source timestamps: an earlier install already
     # rewrote its RPATH, and an incremental artifact can retain timestamps.
@@ -182,6 +197,27 @@ function(_copy_runtime source relative new_rpath output)
     endif()
     if(NOT old_rpath STREQUAL new_rpath)
         file(RPATH_CHANGE FILE "${destination}" OLD_RPATH "${old_rpath}" NEW_RPATH "${new_rpath}")
+    endif()
+    if(_strip_debug)
+        if(NOT EXISTS "${_strip}")
+            message(FATAL_ERROR "Selected debug stripping tool is unavailable")
+        endif()
+        # Only the installed copy is changed. Keep dynamic symbols, resources,
+        # plugin metadata and the original build's debugging information.
+        execute_process(COMMAND "${_strip}" --strip-debug "${destination}"
+            RESULT_VARIABLE strip_status ERROR_VARIABLE strip_diagnostic)
+        if(NOT strip_status EQUAL 0)
+            message(FATAL_ERROR "Cannot remove runtime debug information ${relative}: ${strip_diagnostic}")
+        endif()
+        execute_process(COMMAND "${_readelf}" --sections --wide "${destination}"
+            RESULT_VARIABLE sections_status OUTPUT_VARIABLE sections ERROR_VARIABLE sections_diagnostic)
+        if(NOT sections_status EQUAL 0 OR sections MATCHES "[ \t]\\.(debug|zdebug|stab)[_. \t]")
+            message(FATAL_ERROR "Runtime debug information remains in ${relative}: ${sections_diagnostic}")
+        endif()
+    endif()
+    _dynamic_symbols("${destination}" installed_symbols)
+    if(NOT installed_symbols STREQUAL source_symbols)
+        message(FATAL_ERROR "Installed runtime dynamic symbols differ: ${relative}")
     endif()
     _elf("${destination}" installed_needed installed_soname installed_rpath)
     if(NOT installed_rpath STREQUAL new_rpath OR NOT installed_needed STREQUAL needed
@@ -199,7 +235,12 @@ function(_copy_runtime source relative new_rpath output)
     set(${output} "${row}" PARENT_SCOPE)
 endfunction()
 
-set(_manifest "{\"schema\":\"wikidict.qt-runtime.v1\",\"qt_version\":\"${_version}\",\"libraries\":[],\"plugins\":[]}")
+set(_manifest "{\"schema\":\"wikidict.qt-runtime.v1\",\"qt_version\":\"${_version}\",\"libraries\":[],\"plugins\":[],\"dynamic_symbols_preserved\":true}")
+if(_strip_debug)
+    string(JSON _manifest SET "${_manifest}" debug_information "\"removed\"")
+else()
+    string(JSON _manifest SET "${_manifest}" debug_information "\"preserved\"")
+endif()
 set(_expected_libs "")
 set(_expected_plugins "")
 set(index 0)

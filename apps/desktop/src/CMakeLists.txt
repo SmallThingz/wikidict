@@ -90,7 +90,8 @@ install(PROGRAMS "${wikidict_install_executable}" DESTINATION bin RENAME wikidic
 if(NOT wikidict_install_header STREQUAL "")
     install(FILES "${wikidict_install_header}" DESTINATION include/dict)
 endif()
-install(FILES org.smallthingz.wikidict.desktop DESTINATION share/applications)
+file(REAL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/org.smallthingz.wikidict.desktop" wikidict_desktop_entry)
+install(FILES "${wikidict_desktop_entry}" DESTINATION share/applications)
 install(FILES "${WIKIDICT_CORE}/docs/assets/language-globe.svg"
     DESTINATION share/icons/hicolor/scalable/apps RENAME org.smallthingz.wikidict.svg)
 install(CODE [[
@@ -122,6 +123,15 @@ if(BUILD_TESTING)
                 COMPONENT wikidict-test-support EXCLUDE_FROM_ALL)
         endif()
         find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        if(WIKIDICT_BUNDLE_QT_RUNTIME AND WIKIDICT_QT_RUNTIME_STRIP_DEBUG)
+            add_test(NAME native-runtime-debug
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/runtime_debug_check.py"
+                    --cmake "${CMAKE_COMMAND}" --readelf "${WIKIDICT_RUNTIME_READELF}"
+                    --strip "${WIKIDICT_RUNTIME_STRIP}" --runtime "$<TARGET_FILE:Qt6::Concurrent>"
+                    --template "${CMAKE_CURRENT_SOURCE_DIR}/InstallPrivateQtRuntime.cmake.in"
+                    --tmp-root "${CMAKE_BINARY_DIR}/.tmp")
+            set_tests_properties(native-runtime-debug PROPERTIES TIMEOUT 180)
+        endif()
         add_test(NAME native-unified-entry
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/unified_entry_check.py"
                 --config "$<CONFIG>"

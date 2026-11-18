@@ -27,6 +27,11 @@ def runtime_inventory(prefix, env, root):
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema") != "wikidict.qt-runtime.v1":
         raise RuntimeError("missing private Qt runtime manifest")
+    debug_policy = manifest.get("debug_information", "preserved")
+    if debug_policy not in {"removed", "preserved"}:
+        raise RuntimeError("invalid private Qt debug information policy")
+    if "debug_information" in manifest and manifest.get("dynamic_symbols_preserved") is not True:
+        raise RuntimeError("private Qt deployment did not preserve dynamic symbols")
     if (prefix / "bin/qt.conf").read_text() != "[Paths]\nPrefix=..\nLibraries=lib\nPlugins=lib/qt6/plugins\n":
         raise RuntimeError("installed Qt plugin lookup is not prefix-relative")
     libraries, plugins = manifest["libraries"], manifest["plugins"]
@@ -49,6 +54,10 @@ def runtime_inventory(prefix, env, root):
         expected_rpath = "$ORIGIN/../../.." if plugin else "$ORIGIN"
         if needed != row["needed"] or soname != ([row["soname"]] if row["soname"] else []) or rpath != [expected_rpath]:
             raise RuntimeError(f"runtime ELF contract differs: {relative}")
+        if debug_policy == "removed":
+            sections, _ = run(["readelf", "--sections", "--wide", str(path)], env, root, f"runtime-sections-{index}")
+            if re.search(rb"\s\.(?:debug|zdebug|stab)[_.\s]", sections):
+                raise RuntimeError(f"runtime debug information remains: {relative}")
         dependencies, _ = run(["ldd", str(path)], env, root, f"runtime-dependencies-{index}")
         if b"not found" in dependencies:
             raise RuntimeError(f"missing installed runtime dependency: {relative}")
