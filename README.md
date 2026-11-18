@@ -485,6 +485,12 @@ each selected build. The reason counts can overlap on a single page. The
 manifest hash ties each row to the corresponding directory in the output index.
 An edition without a completed build has blank counts.
 
+[Local Reader checks](data/corpus-campaign-current01/local-edition-reader-checks.tsv)
+lists the selected edition digest, scanned records, flagged fields, and original
+source lines compared with the decoded text and links. Each completed scan links
+to its compressed report. Blank measurements indicate that this audit series
+has no result for the selected output. Visual and keyboard checks are separate.
+
 [Local edition build times](data/corpus-campaign-current01/local-edition-build-times.tsv)
 lists the elapsed build time, input XML pages, and pages per second for each
 selected output. Separate columns record known retry time and the number of
