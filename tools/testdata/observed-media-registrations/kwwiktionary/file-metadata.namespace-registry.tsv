@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	kwwiktionary
+# dump-date	20261001
+# content-language	kw
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Arbennek	Special	first-letter	0	0	0		compile_only	virtual_namespace	Arbednek
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Keskows	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows	Kescows
+2	Devnydhyer	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Keskows Devnydhyer	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Cows Devnydhyer	Kescows Devnydhyer
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Keskows Wiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows Wiktionary	Kescows Wiktionary	Wiktionary talk
+6	Restren	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Keskows Restren	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows Restren	Image talk	Kescows Restren
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Keskows MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	Cows MediaWiki	Kescows MediaWiki
+10	Skantlyn	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Scantlyn
+11	Keskows Skantlyn	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows Scantlyn	Kescows Skantlyn
+12	Gweres	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Keskows Gweres	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows Gweres	Kescows Gweres
+14	Klass	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Class
+15	Keskows Klass	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Cows Class	Kescows Class
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

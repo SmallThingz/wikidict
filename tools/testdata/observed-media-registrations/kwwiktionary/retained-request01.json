@@ -1,0 +1,27 @@
+{
+  "artifacts": {
+    "file-metadata.namespace-registry.tsv": {
+      "sha256": "82736da15bf8e83453bb903919248b5cdb482d5a1361670b9ee243fad2d08fa0",
+      "size": 2255
+    },
+    "file-metadata.request-000001.json": {
+      "sha256": "21e4fbed4da3f632c6d07bd86b1a2d963ac127a340ee1bab2d2b943938961ece",
+      "size": 6240
+    },
+    "file-metadata.response-000001-01.raw.json": {
+      "sha256": "73c72fb73ff458b1ac5ba393eaf4436ab1d55eaa84719604e4b0cec9ba93eeae",
+      "size": 115527
+    },
+    "file-metadata.response-000001-01.receipt.json": {
+      "sha256": "6f7b1f24bf0b714cabc48cb227418f9b4c3197575481a71fca223d0c1fa6f312",
+      "size": 521
+    }
+  },
+  "batch": {
+    "accepted_receipt": "file-metadata.response-000001-01.receipt.json",
+    "request": "file-metadata.request-000001.json"
+  },
+  "date": "20261001",
+  "figure_profile": "wikimedia-imagehandler-v4",
+  "wiki": "kwwiktionary"
+}

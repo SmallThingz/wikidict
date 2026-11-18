@@ -178,7 +178,20 @@ FIGURE_WMF4_PROFILE = dict(FIGURE_GIF_PROFILE, media_extensions={
     '3D': '43498dc2d52c37d98294e4bbf73a0e8a70bd1aea'})
 
 
-def figure_profile(core, kind):
+# Complete observed registration sets, independently reviewed against the image
+# model anchors. The original set remains valid at each core; never mix members.
+FIGURE_MEDIA_VARIANTS = {
+    '992ad5e3679f848254828e823860ba8b3ad3b39b': {
+        **FIGURE_WMF4_PROFILE['media_extensions'],
+        'PagedTiffHandler': 'b7208776bccdcbbfa4252f67f3e924b79b6587b9',
+        'TimedMediaHandler': '7755b61c361899ff83792940cf1eb20923a69bba'},
+    'bfe24921d500b20f2938fb8fe2a09cf5cac80161': {
+        **FIGURE_WMF4_PROFILE['media_extensions'],
+        'TimedMediaHandler': 'a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663'},
+}
+
+
+def figure_profile(core, kind, media_extensions=None):
     # GIF inherits bitmap geometry. This profile does not certify animated
     # thumbnail pixels, frame selection, or deployed animation limits.
     if kind == FIGURE_PROFILE_V3:
@@ -188,6 +201,10 @@ def figure_profile(core, kind):
             selected = FIGURE_WMF4_PROFILE
         else:
             selected = FIGURE_REGISTRATION_PROFILE if core in FIGURE_REGISTRATION_EPOCHS else FIGURE_GIF_PROFILE
+        if media_extensions is not None and media_extensions != selected['media_extensions']:
+            if media_extensions != FIGURE_MEDIA_VARIANTS.get(core):
+                raise ValueError('Unreviewed media registration set or version')
+            selected = dict(selected, media_extensions=dict(media_extensions))
         if kind == FIGURE_PROFILE_V4:
             return selected
         # The additional WebP proof applies only to f458 response records.
@@ -463,6 +480,11 @@ def _figure_site_registration(site, general, wiki, approved):
     if not isinstance(observed, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z', observed):
         raise ValueError('Missing actual site registration observation time')
     datetime.strptime(observed, '%Y-%m-%dT%H:%M:%SZ')
+    if _figure_media_extensions(site) != approved['media_extensions']:
+        raise ValueError('Unreviewed media registration set or version')
+
+
+def _figure_media_extensions(site):
     extensions = site['query'].get('extensions')
     if not isinstance(extensions, list) or len(extensions) > 1024:
         raise ValueError('Invalid site extension evidence inventory')
@@ -477,8 +499,7 @@ def _figure_site_registration(site, general, wiki, approved):
                 or not re.fullmatch('[0-9a-f]{40}', revision)):
             raise ValueError('Conflicting media registration evidence')
         registered[name] = revision
-    if registered != approved['media_extensions']:
-        raise ValueError('Unreviewed media registration set or version')
+    return registered
 
 
 def _figure_metadata_map(items):
@@ -1207,7 +1228,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
         raise ValueError('Compatible response epochs require replay contract v3')
     profile = None
     if has_batches:
-        approved = figure_profile(core, profile_kind)
+        approved = figure_profile(core, profile_kind, _figure_media_extensions(registration))
         if approved is None:
             raise ValueError('Unreviewed Figure handler source version; retain the response for source reconciliation')
         profile = dict(approved, site_raw_sha256=digest(site_raw))
@@ -1273,7 +1294,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
             raise ValueError('Figure batches mix site/source versions')
         if occurrences is not None and batch_core not in (FIGURE_CURRENT_CORE, FIGURE_REGISTRATION_CORE):
             raise ValueError('Compatible response epochs do not grant HTML occurrence authority')
-        batch_profile = figure_profile(batch_core, profile_kind)
+        batch_profile = figure_profile(batch_core, profile_kind, _figure_media_extensions(data))
         # Exact per-core registrations differ, but the proved image profile does
         # not. Both complete registration inventories are checked below.
         if ({key: value for key, value in batch_profile.items() if key != 'media_extensions'} !=
@@ -4748,9 +4769,13 @@ def select_reuse_batches(paths, wiki, date, namespace):
             plain = {'requests': batch['requests'], 'response': batch['response']}
             height_supplement = 'observed_svg_occurrences' in batch
             jpeg_supplement = 'jpeg_metadata_only' in batch
+            retained_profile = record.get('figure_profile', FIGURE_PROFILE_V3)
+            if retained_profile not in (FIGURE_PROFILE_V3, FIGURE_PROFILE_V4):
+                raise ValueError('Unsupported retained Figure request profile')
+            selected_profile = FIGURE_PROFILE_V4 if height_supplement or jpeg_supplement else retained_profile
             result = file_records((plain, batch) if height_supplement else (plain,), own_namespace, record_wiki, record_date,
                                   batch['response'].encode(), has_batches=True, record_limit=50,
-                                  profile_kind=FIGURE_PROFILE_V4 if height_supplement or jpeg_supplement else FIGURE_PROFILE_V3, allow_compatible_epochs=jpeg_supplement)
+                                  profile_kind=selected_profile, allow_compatible_epochs=selected_profile == FIGURE_PROFILE_V4)
             width_supplement = 'observed_svg_width_px' in batch
             supplement = width_supplement or height_supplement or jpeg_supplement
         group = (record_wiki, record_date)
@@ -6173,7 +6198,7 @@ def reproject_capture(source, output, *, target_contract=REPLAY_CONTRACT_V4,
     expected_header = dict(header)
     if target_profile is not None:
         general = decode(site)['query']['general']
-        expected_header['source_profile'] = dict(figure_profile(general['git-hash'], target_profile),
+        expected_header['source_profile'] = dict(figure_profile(general['git-hash'], target_profile, _figure_media_extensions(decode(site))),
             site_raw_sha256=digest(site))
     if ({key: value for key, value in new_header.items() if key not in ('generator_sha256', 'replay_contract')} !=
             {key: value for key, value in expected_header.items() if key not in ('generator_sha256', 'replay_contract')}):

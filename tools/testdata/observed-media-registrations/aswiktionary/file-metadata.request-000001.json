@@ -1,0 +1,26 @@
+{
+  "query": {
+    "action": "query",
+    "curtimestamp": "1",
+    "format": "json",
+    "formatversion": "2",
+    "iilimit": "1",
+    "iiprop": "size|sha1|timestamp|canonicaltitle|mediatype|mime|metadata",
+    "maxlag": "5",
+    "meta": "siteinfo",
+    "prop": "imageinfo",
+    "redirects": "1",
+    "siprop": "general|extensions",
+    "titles": "চিত্ৰ:Cafe Lipstick.jpg|চিত্ৰ:DerHexer.png|চিত্ৰ:Icono aviso borrar.png|চিত্ৰ:Redirect arrow without text.png|চিত্ৰ:Redirect arrow without text.svg|চিত্ৰ:Redirectltr.png|চিত্ৰ:Wikistress3D 2 v3.jpg"
+  },
+  "titles": [
+    "চিত্ৰ:Cafe Lipstick.jpg",
+    "চিত্ৰ:DerHexer.png",
+    "চিত্ৰ:Icono aviso borrar.png",
+    "চিত্ৰ:Redirect arrow without text.png",
+    "চিত্ৰ:Redirect arrow without text.svg",
+    "চিত্ৰ:Redirectltr.png",
+    "চিত্ৰ:Wikistress3D 2 v3.jpg"
+  ],
+  "url": "https://as.wiktionary.org/w/api.php?action=query&format=json&formatversion=2&meta=siteinfo&siprop=general%7Cextensions&prop=imageinfo&iiprop=size%7Csha1%7Ctimestamp%7Ccanonicaltitle%7Cmediatype%7Cmime%7Cmetadata&iilimit=1&redirects=1&maxlag=5&titles=%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3ACafe+Lipstick.jpg%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3ADerHexer.png%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3AIcono+aviso+borrar.png%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3ARedirect+arrow+without+text.png%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3ARedirect+arrow+without+text.svg%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3ARedirectltr.png%7C%E0%A6%9A%E0%A6%BF%E0%A6%A4%E0%A7%8D%E0%A7%B0%3AWikistress3D+2+v3.jpg&curtimestamp=1"
+}

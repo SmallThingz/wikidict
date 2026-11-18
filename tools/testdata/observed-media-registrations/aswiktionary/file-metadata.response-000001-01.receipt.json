@@ -1,0 +1,15 @@
+{
+  "accepted": true,
+  "ended_utc": "2026-11-18T08:01:14.006223+00:00",
+  "headers": {
+    "content-encoding": "gzip",
+    "content-type": "application/json; charset=utf-8",
+    "date": "Wed, 18 Nov 2026 08:01:13 GMT"
+  },
+  "request": "file-metadata.request-000001.json",
+  "response": "file-metadata.response-000001-01.raw.json",
+  "response_bytes": 81557,
+  "response_sha256": "23bfe559e1fd757ad3aea860f1203614c1179a0cd0d8704b1ae289e94dc58ceb",
+  "started_utc": "2026-11-18T08:01:12.378819+00:00",
+  "status": 200
+}

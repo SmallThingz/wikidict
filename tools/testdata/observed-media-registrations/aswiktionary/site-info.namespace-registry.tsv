@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	aswiktionary
+# dump-date	20261001
+# content-language	as
+-2	মাধ্যম	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	বিশেষ	Special	first-letter	0	0	0		compile_only	virtual_namespace	विशेष
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	বাৰ্তা	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	वार्ता	বার্তা
+2	সদস্য	User	first-letter	1	0	0		compile_only	standard_build_input	सदस्य
+3	সদস্য বাৰ্তা	User talk	first-letter	1	0	0		compile_only	discussion_namespace	सदस्य वार्ता	সদস্য বার্তা
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary বাৰ্তা	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	Wiktionary वार्ता	Wiktionary বার্তা
+6	চিত্ৰ	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	चित्र	চিত্র
+7	চিত্ৰ বাৰ্তা	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	चित्र वार्ता	চিত্র বার্তা
+8	মিডিয়াৱিকি	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	মেডিয়াৱিকি
+9	মিডিয়াৱিকি আলোচনা	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki বার্তা	মেডিয়াৱিকি বাৰ্তা
+10	সাঁচ	Template	case-sensitive	1	0	0		compile_only	standard_build_input	साँचा
+11	সাঁচ বাৰ্তা	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	साँचा वार्ता	সাঁচ বার্তা
+12	সহায়	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	সহায় বাৰ্তা	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	সহায় বার্তা
+14	শ্ৰেণী	Category	case-sensitive	0	0	0		compile_only	standard_build_input	श्रेणी	শ্রেণী
+15	শ্ৰেণী বাৰ্তা	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	श्रेणी वार्ता	শ্রেণী বার্তা
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

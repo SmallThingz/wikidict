@@ -12192,5 +12192,135 @@ class FigureHttpSingleTraversalTests(unittest.TestCase):
         finally:
             plan.write_bytes(saved)
 
+
+
+class ObservedMediaRegistrationTests(unittest.TestCase):
+    def fixture(self, wiki):
+        return Path(__file__).parent/'testdata/observed-media-registrations'/wiki
+
+    def actual(self, wiki):
+        root = self.fixture(wiki)
+        namespace = (root/'site-info.namespace-registry.tsv').read_bytes()
+        site = (root/'figure-sizing.site.json').read_bytes()
+        # These are closed failed prefixes: KW committed one of six planned
+        # batches. Decode only the exact retained complete line, not a full stream.
+        lines = (root/'figure-sizing.raw.json').read_bytes().splitlines(keepends=True)
+        self.assertEqual(len(lines), 2)
+        header = figure.stream_decode(lines[0])
+        self.assertGreaterEqual(header['base_batches'], 1)
+        batches = [figure.raw_record_decode(lines[1], figure.raw_record_encoding(header))]
+        self.assertEqual(len(batches), 1)
+        self.assertEqual(batches[0]['response'].encode(), site)
+        self.assertEqual(header['wiki'], wiki)
+        return namespace, site, batches
+
+    def derive(self, wiki, namespace, site, batches, profile=figure.FIGURE_PROFILE_V4):
+        return figure.file_records(batches, namespace, wiki, '20261001', site,
+            has_batches=True, record_limit=50, profile_kind=profile, allow_compatible_epochs=True)
+
+    def test_actual_as_kw_prefixes_preserve_every_fact_and_exact_registration(self):
+        for wiki in ('aswiktionary', 'kwwiktionary'):
+            with self.subTest(wiki=wiki):
+                ns, site, batches = self.actual(wiki)
+                result = self.derive(wiki, ns, site, batches)
+                actual = figure._figure_media_extensions(json.loads(site))
+                self.assertEqual(result['source_profile']['media_extensions'], actual)
+                self.assertEqual(result['source_profile']['site_raw_sha256'], figure.digest(site))
+                self.assertEqual(len(result['records']), len(batches[0]['requests']))
+                self.assertEqual({row['requested_file'] for row in result['records']}, set(batches[0]['requests']))
+                previous = copy.deepcopy(json.loads(site))
+                for row in previous['query']['extensions']:
+                    if row.get('type') == 'media': row['vcs-version'] = figure.FIGURE_WMF4_PROFILE['media_extensions'][row['name']]
+                old = figure.encoded(previous)
+                old_batches = [dict(batches[0], response=old.decode())]
+                self.assertEqual(self.derive(wiki, ns, old, old_batches)['records'], result['records'])
+                for row in result['records']:
+                    if row['mediatype'] == 'AUDIO': self.assertEqual(row['state'], 'unsupported')
+
+    def test_complete_set_selection_refuses_cross_mixes_unknown_missing_and_duplicates(self):
+        for wiki in ('aswiktionary','kwwiktionary'):
+            ns, site, batches = self.actual(wiki)
+            for mutation in ('mixed', 'foreign-core', 'unknown', 'missing', 'duplicate', 'extra'):
+                with self.subTest(wiki=wiki, mutation=mutation):
+                    bad = json.loads(site)
+                    rows = bad['query']['extensions']
+                    tmh = next(row for row in rows if row.get('name') == 'TimedMediaHandler')
+                    if mutation == 'mixed':
+                        tmh['vcs-version'] = ('a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663' if wiki == 'aswiktionary' else '7755b61c361899ff83792940cf1eb20923a69bba')
+                    elif mutation == 'foreign-core': bad['query']['general']['git-hash'] = '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c'
+                    elif mutation == 'unknown': tmh['vcs-version'] = '0'*40
+                    elif mutation == 'missing': rows.remove(tmh)
+                    elif mutation == 'duplicate': rows.append(copy.deepcopy(tmh))
+                    else: rows.append(dict(type='media',name='Unknown',**{'vcs-version':'0'*40}))
+                    raw = figure.encoded(bad)
+                    with self.assertRaises(ValueError): self.derive(wiki, ns, raw, [dict(batches[0], response=raw.decode())])
+
+    def test_profile_requires_exact_site_set_even_when_both_sets_are_reviewed(self):
+        for wiki in ('aswiktionary','kwwiktionary'):
+            ns, site, batches = self.actual(wiki)
+            result = self.derive(wiki, ns, site, batches)
+            general = json.loads(site)['query']['general']
+            wrong = dict(figure.figure_profile(general['git-hash'], figure.FIGURE_PROFILE_V4), site_raw_sha256=figure.digest(site))
+            with self.assertRaises(ValueError):
+                figure._figure_site_profile(site, general, wiki, result['source_profile'], wrong)
+            self.assertEqual(figure.figure_profile(general['git-hash'], figure.FIGURE_PROFILE_V4)['media_extensions'], figure.FIGURE_WMF4_PROFILE['media_extensions'])
+
+    def test_actual_retained_request_reuses_receipt_and_response_without_http(self):
+        for wiki in ('aswiktionary','kwwiktionary'):
+            ns, site, batches = self.actual(wiki)
+            root = self.fixture(wiki)
+            with patch.object(figure.evidence, 'get_response', side_effect=AssertionError('retained means no HTTP')):
+                reused = figure.retained_metadata_batch(root/'retained-request01.json', wiki, '20261001', ns)
+                self.assertEqual(reused, batches[0])
+                selected = figure.select_reuse_batches([root/'retained-request01.json'], wiki, '20261001', ns)
+            self.assertEqual(len(selected), 1)
+            self.assertEqual(selected[0]['kind'], 'retained-request')
+
+    def test_actual_registration_does_not_grant_v3_or_unsupported_families(self):
+        for wiki in ('aswiktionary','kwwiktionary'):
+            ns, site, batches = self.actual(wiki)
+            with self.assertRaises(ValueError): self.derive(wiki, ns, site, batches, figure.FIGURE_PROFILE_V3)
+            v4 = self.derive(wiki, ns, site, batches)
+            v5 = self.derive(wiki, ns, site, batches, figure.FIGURE_PROFILE_V5)
+            self.assertEqual(v4['records'], v5['records'])
+            for row in v4['records']:
+                if row['mediatype'] in ('AUDIO','VIDEO','OFFICE','3D'): self.assertEqual(row['state'], 'unsupported')
+
+    def test_retained_profile_is_explicit_and_does_not_waive_receipt_integrity(self):
+        import tempfile
+        wiki = 'aswiktionary'
+        ns, site, batches = self.actual(wiki)
+        source = self.fixture(wiki)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for path in source.iterdir(): (root/path.name).write_bytes(path.read_bytes())
+            original = json.loads((root/'retained-request01.json').read_text())
+            for profile in (None, 'wikimedia-imagehandler-v5', 'unknown'):
+                changed = copy.deepcopy(original)
+                if profile is None: changed.pop('figure_profile')
+                else: changed['figure_profile'] = profile
+                (root/'retained-request01.json').write_bytes(figure.encoded(changed))
+                with self.subTest(profile=profile), self.assertRaises(ValueError):
+                    figure.select_reuse_batches([root/'retained-request01.json'], wiki, '20261001', ns)
+            (root/'retained-request01.json').write_bytes(figure.encoded(original))
+            receipt = root/'file-metadata.response-000001-01.receipt.json'
+            receipt.write_bytes(receipt.read_bytes()+b' ')
+            with self.assertRaises(ValueError):
+                figure.select_reuse_batches([root/'retained-request01.json'], wiki, '20261001', ns)
+
+
+class ObservedAsNormalMediaTests(ReviewedDeployment992adTests):
+    def response(self, title, core):
+        response = super().response(title, core)
+        if core == self.core:
+            for row in response['query']['extensions']:
+                if row.get('type') == 'media': row['vcs-version'] = figure.FIGURE_MEDIA_VARIANTS[core][row['name']]
+        return response
+
+
+class ObservedKwNormalMediaTests(ObservedAsNormalMediaTests):
+    core = 'bfe24921d500b20f2938fb8fe2a09cf5cac80161'
+    prior = '992ad5e3679f848254828e823860ba8b3ad3b39b'
+
 if __name__ == '__main__':
     unittest.main()
