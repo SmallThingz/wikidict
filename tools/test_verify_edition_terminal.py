@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import copy_publication, main, reading_text
+from verify_edition_terminal import copy_publication, main, reading_body
 from verify_reader_ux import CheckFailure
 
 
@@ -65,6 +65,9 @@ class EditionTerminalTests(unittest.TestCase):
                 def wait(self, predicate, label):
                     events.append((self.timeout, label))
 
+                def snapshot(self, label):
+                    events.append(label)
+
                 def close(self):
                     events.append('reader closed')
 
@@ -79,7 +82,7 @@ class EditionTerminalTests(unittest.TestCase):
                                '--entry', 'Title', '--witness', 'body', '--report', str(parent / 'reports'),
                                '--screen-projection', 'libvterm'])
             self.assertEqual(result, 1)
-            self.assertEqual(events, [(45, 'opened edition'), 'reader closed', 'projection closed'])
+            self.assertEqual(events, [(45, 'opened edition'), 'failure-before-close', 'reader closed', 'projection closed'])
             report = json.loads(next((parent / 'reports').glob('*/result.json')).read_text())
             self.assertFalse(report['passed'])
             self.assertEqual(report['error'], 'body witness missing')
@@ -113,7 +116,8 @@ class EditionTerminalTests(unittest.TestCase):
         lines = [''] * 11
         lines[6:9] = ['other title │ chosen / owner', 'sidebar │', 'wrong │ actual definition']
         reader = SimpleNamespace(width=90, screen=SimpleNamespace(display=lines))
-        self.assertEqual(reading_text(reader, 8), 'actual definition')
+        self.assertEqual(reading_body(reader, 'chosen / owner'), 'actual definition')
         reader.width = 45
+        lines[6:8] = ['first scrolled definition line', 'second line']
         lines[8] = 'part one │ part two'
-        self.assertEqual(reading_text(reader, 8), 'part one │ part two')
+        self.assertEqual(reading_body(reader, 'chosen / owner'), 'first scrolled definition line second line part one │ part two')

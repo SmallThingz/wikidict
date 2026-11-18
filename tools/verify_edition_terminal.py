@@ -61,30 +61,38 @@ def copy_publication(source, destination, expected_digest=None):
     return digest
 
 
-def reading_text(reader, first_row=6):
+def reading_text(reader):
     # In split view the matches column is separate from the wrapped definition.
-    lines = reader.screen.display[first_row:-2]
+    lines = reader.screen.display[6:-2]
     if reader.width == 90:
         lines = [line.partition('│')[2] for line in lines]
     return normalized(' '.join(' '.join(lines).split()))
 
 
-def reveal_witness(reader, wanted):
-    body = reading_text(reader, 8)
+def reading_body(reader, heading):
+    text = reading_text(reader)
+    if text == heading:
+        return ''
+    # The title scrolls with the entry. After paging, even the first visible line can be definition text.
+    return text.removeprefix(heading + ' ')
+
+
+def reveal_witness(reader, wanted, heading):
+    body = reading_body(reader, heading)
     if wanted in body:
         return
     if '[+]' in body or '[+ notes]' in body:
         frame = reader.send('d')
         reader.wait(reader.entry_focused, 'expanded entry details', after=frame)
     for _ in range(64):
-        if wanted in reading_text(reader, 8):
+        if wanted in reading_body(reader, heading):
             return
         previous = reader.text()
         frame = reader.send(b'\x1b[6~')
         reader.wait(reader.entry_focused, 'paged through entry', after=frame)
         if reader.text() == previous:
             break
-    require(wanted in reading_text(reader, 8), f'Source witness missing from body at {reader.width} columns')
+    require(wanted in reading_body(reader, heading), f'Source witness missing from body at {reader.width} columns')
 
 
 def exercise(reader, language, entry, witness):
@@ -94,14 +102,15 @@ def exercise(reader, language, entry, witness):
     reader.action(b'\x15' + entry.encode(), lambda: reader.query() == normalized(entry) and
                   reader.page_is('search') and reader.header()[3] > 0, 'recovered search')
     reader.action(DOWN, lambda: reader.screen.cursor.hidden, 'selected first exact prefix match')
+    heading = normalized(' '.join(f'{entry} / {language}'.split()))
     reader.action(ENTER, lambda: reader.entry_focused() and
-                  normalized(f'{entry} / {language}') in reading_text(reader), 'opened requested entry')
+                  (reading_text(reader) + ' ').startswith(heading + ' '), 'opened requested entry')
     wanted = normalized(' '.join(witness.split()))
-    reveal_witness(reader, wanted)
+    reveal_witness(reader, wanted, heading)
     reader.snapshot('entry-wide')
     frame = reader.resize(45, 24)
     reader.wait(reader.entry_focused, 'entry resized to 45 columns', after=frame)
-    reveal_witness(reader, wanted)
+    reveal_witness(reader, wanted, heading)
     reader.snapshot('entry-narrow')
     reader.action(b'\x1b', lambda: reader.page_is('search') and not reader.entry_focused(), 'back to results')
     reader.finish(b'\x03')
@@ -132,6 +141,12 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                     result['opening_wait_seconds'] = time.monotonic() - started
                 reader.timeout = 5
                 exercise(reader, language, entry, witness)
+            except Exception:
+                try:
+                    reader.snapshot('failure-before-close')
+                except Exception as exc:
+                    result['failure_snapshot_error'] = str(exc)
+                raise
             finally:
                 try:
                     reader.close()
