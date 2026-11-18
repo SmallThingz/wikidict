@@ -21,6 +21,71 @@ import build_wiktionaries as builder
 
 
 class FigureFileTests(unittest.TestCase):
+    def test_batch_file_registry_bounds_and_preserves_normalization_errors(self):
+        raw = self.namespace.read_bytes()
+        ordinary = figure.evidence.Registry(raw, self.wiki, self.date)
+        cached = figure._BatchFileRegistry(raw, self.wiki, self.date)
+        prefix = ordinary.specs[6]['name'] + ':'
+        for i in range(600):
+            title = prefix + 'Bounded_' + str(i) + '.png'
+            self.assertEqual(cached.file_title(title), ordinary.file_title(title))
+        self.assertEqual(len(cached._batch_titles), 512)
+        cached._batch_titles.clear()
+        for invalid in (None, [], {}, '', prefix, prefix + 'a|b', prefix + 'a\x00b'):
+            with self.subTest(invalid=invalid):
+                for registry in (ordinary, cached):
+                    with self.assertRaises(ValueError):
+                        registry.file_title(invalid)
+        self.assertEqual(cached._batch_titles, {})
+
+    def test_batch_file_registry_caches_only_successful_exact_strings(self):
+        registry = figure._BatchFileRegistry(self.namespace.read_bytes(), self.wiki, self.date)
+        title = registry.specs[6]['name'] + ':Repeated.png'
+        original = figure.evidence.Registry.file_title
+        calls = []
+        def observed(instance, value):
+            calls.append(value)
+            return original(instance, value)
+        class UnhashableText(str):
+            __hash__ = None
+        with patch.object(figure.evidence.Registry, 'file_title', observed):
+            expected = registry.file_title(title)
+            self.assertEqual(registry.file_title(title), expected)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(registry.file_title(UnhashableText(title)), expected)
+            self.assertEqual(len(calls), 2)
+            for _ in range(2):
+                with self.assertRaises(ValueError):
+                    registry.file_title('')
+            self.assertEqual(len(calls), 4)
+        self.assertEqual(registry._batch_titles, {title: expected})
+
+    def test_file_records_batch_cache_resets_and_matches_uncached_complete_output(self):
+        _, _, _, batches, _ = self.jpeg_supplement_fixture()
+        before = copy.deepcopy(batches)
+        original = figure._BatchFileRegistry
+        resets = []
+        class CountedCache(dict):
+            def clear(self):
+                resets.append(len(self))
+                super().clear()
+        class ObservedRegistry(original):
+            def __init__(self, *args):
+                super().__init__(*args)
+                self._batch_titles = CountedCache()
+        class UncachedRegistry(original):
+            def file_title(self, value):
+                return figure.evidence.Registry.file_title(self, value)
+        with patch.object(figure, '_BatchFileRegistry', ObservedRegistry):
+            cached = self.epoch_document(batches)
+        self.assertEqual(len(resets), len(batches))
+        self.assertEqual(resets[0], 0)
+        self.assertGreater(resets[1], 0)
+        with patch.object(figure, '_BatchFileRegistry', UncachedRegistry):
+            uncached = self.epoch_document(batches)
+        self.assertEqual(cached, uncached)
+        self.assertEqual(batches, before)
+
     setUp = occurrence_tests.FigureInputTests.setUp
     write_projection = occurrence_tests.FigureInputTests.write_projection
     stage = occurrence_tests.FigureInputTests.stage

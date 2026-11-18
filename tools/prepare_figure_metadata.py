@@ -1213,9 +1213,27 @@ def jpeg_unrotated_metadata(info):
     return 'Orientation' not in fields or (type(fields['Orientation']) is int and fields['Orientation'] == 1)
 
 
+class _BatchFileRegistry(evidence.Registry):
+    """Reuse successful normalization only within one bounded response batch."""
+    def __init__(self, raw, wiki, date):
+        super().__init__(raw, wiki, date)
+        self._batch_titles = {}
+
+    def file_title(self, raw):
+        # Preserve the ordinary validator for non-string inputs and subclasses.
+        if type(raw) is not str:
+            return super().file_title(raw)
+        if raw in self._batch_titles:
+            return self._batch_titles[raw]
+        value = super().file_title(raw)
+        if len(self._batch_titles) < 512:
+            self._batch_titles[raw] = value
+        return value
+
+
 def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, record_limit,
                  profile_kind=FIGURE_PROFILE_V3, allow_tiff_companion=True, allow_compatible_epochs=False, allow_decimal_tiff_axes=True, allow_default_tiff_page=True):
-    registry = evidence.Registry(namespace_raw, wiki, date)
+    registry = _BatchFileRegistry(namespace_raw, wiki, date)
     registration = decode(site_raw)
     require_edition(registration, wiki)
     site_general = registration['query']['general']
@@ -1238,6 +1256,7 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
     observing = False
     base_count = observed_count = 0
     for batch_index, batch in enumerate(batches):
+        registry._batch_titles.clear()
         if (not isinstance(batch, dict) or set(batch) not in ({'requests', 'response'},
                 {'requests', 'response', 'tiff_metadata_response'}, {'requests', 'response', 'jpeg_metadata_only'},
                 {'requests', 'response', 'observed_svg_width_px'}, {'requests', 'response', 'observed_svg_occurrences'}) or
