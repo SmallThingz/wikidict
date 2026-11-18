@@ -3856,6 +3856,34 @@ class VerifiedPublicationInventoryTests(unittest.TestCase):
                 self.assertFalse((target/b.VERIFIED_INVENTORY_NAME).exists())
                 self.assertEqual(b.publication_inventory(target),json.loads((target/'complete.json').read_text())['publication_files'])
 
+    def test_completion_records_the_verified_compressed_digest_without_rereading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                with patch.object(b, 'sha256_file', wraps=b.sha256_file) as digest:
+                    b.build_locked([item], root, root/'output', 'zig', 1)
+                blob_reads = [call for call in digest.call_args_list
+                              if call.args[0].name == 'supplemental.wikblb.xz']
+                self.assertEqual(len(blob_reads), 1)
+                complete = json.loads((target/'complete.json').read_text())
+                self.assertEqual(complete['publication_files'], b.publication_inventory(target))
+
+    def test_publication_rejects_payload_hidden_among_derived_indexes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root, publish=False)
+                staging = target.with_name(item['date'] + '.building')
+                cache = staging/'languages'/'.dict-cache'
+                cache.mkdir(parents=True)
+                misplaced = cache/'orphan.wikblb.xz'
+                misplaced.write_bytes(lzma.compress(b'WIKBLB08orphan'))
+                with self.assertRaises(ValueError):
+                    b.build_locked([item], root, root/'output', 'zig', 1)
+                self.assertFalse(target.exists())
+                self.assertTrue(misplaced.exists())
+
     def test_interrupted_missing_compressed_payload_cannot_be_relabelled_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)

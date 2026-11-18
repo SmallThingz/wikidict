@@ -7333,7 +7333,12 @@ def verified_xz_record(path, expected_size):
 
 
 def validate_verified_publication_inventory(staging, verified_compressed=None):
-    """Admit only sealed members/content; never adopt surviving files on resume."""
+    expected, checked, _ = _verified_publication_inventories(staging, verified_compressed, allow_raw=True)
+    return expected, checked
+
+
+def _verified_publication_inventories(staging, verified_compressed, *, allow_raw):
+    """Return the logical seal, checked XZ members and the physical inventory checked against them."""
     path=artifact_path(staging/VERIFIED_INVENTORY_NAME)
     if not path.is_file() or path.is_symlink():
         raise ValueError('Verified staging lacks its sealed inventory; preserve and rebuild separately')
@@ -7341,7 +7346,7 @@ def validate_verified_publication_inventory(staging, verified_compressed=None):
     if index_identity(path.stat())!=before:raise ValueError('Verified inventory changed while reading')
     if not isinstance(saved,dict) or set(saved)!={'version','files'} or type(saved['version']) is not int or saved['version']!=1 or not isinstance(saved['files'],dict):
         raise ValueError('Invalid verified publication inventory')
-    expected=saved['files'];actual=publication_inventory(staging,allow_raw=True);allowed=set()
+    expected=saved['files'];actual=publication_inventory(staging,allow_raw=allow_raw);allowed=set()
     verified_compressed=verified_compressed or {};checked={}
     for name,record in expected.items():
         relative=Path(name)
@@ -7368,7 +7373,7 @@ def validate_verified_publication_inventory(staging, verified_compressed=None):
     if set(actual)-allowed:raise ValueError('Unexpected member in verified staging')
     required={'languages.tsv','page-coverage.json','namespace-coverage.json','fallback-pages.jsonl'}
     if not required.issubset(expected):raise ValueError('Verified inventory misses publication metadata')
-    return expected,checked
+    return expected, checked, actual
 
 
 def validate_namespace_coverage(root, expected_rows, namespace_snapshot=None, fallback_counts=None, site_info_snapshot=None):
@@ -7468,8 +7473,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         # Retire them before XZ, including a resume after earlier cleanup failed.
         cleanup_shard_workspace(target.with_name(date+'.shards'))
     raw = sorted(staging.rglob('*.wikblb'))
-    compressed = sorted(staging.rglob('*.wikblb.xz'))
-    logical = {name for name in sealed if name.endswith('.wikblb')}
+    logical = {name + '.xz' for name in sealed if name.endswith('.wikblb')}
     pending = []
     for blob in raw:
         compressed_path = Path(str(blob) + '.xz')
@@ -7481,12 +7485,16 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
     if pending:
         workers = compression_workers or default_build_threads()
         compress_many(pending, 1024*1024, workers)
-    compressed = sorted(staging.rglob('*.wikblb.xz'))
-    if ({path.relative_to(staging).as_posix()[:-3] for path in compressed} != logical or
-            list(staging.rglob('*.wikblb')) or list(staging.rglob('*.xz.part'))):
+    # Record the same physical bytes whose decoded contents passed the logical seal.
+    _, compressed, inventory = _verified_publication_inventories(staging, checked_compressed, allow_raw=False)
+    # Reader index directories are excluded from the manifest. A misplaced blob
+    # there must still prevent staging from becoming a finished dictionary.
+    for cache in (staging/'.dict-cache', staging/'languages'/'.dict-cache'):
+        if cache.is_dir() and any(member.name.endswith(('.wikblb', '.wikblb.xz', '.xz.part'))
+                                  for member in cache.rglob('*')):
+            raise ValueError(f'Unexpected publication payload in reader indexes: {cache}')
+    if compressed.keys() != logical:
         raise ValueError(f'Incomplete compressed publication: {staging}')
-    validate_verified_publication_inventory(staging,checked_compressed)
-    inventory=publication_inventory(staging)
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
         'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
