@@ -1,0 +1,16 @@
+{
+  "content_language": "kw",
+  "date": "20261001",
+  "namespace_registry_sha256": "82736da15bf8e83453bb903919248b5cdb482d5a1361670b9ee243fad2d08fa0",
+  "profile": "general-statistics-and-figure-default-options",
+  "query": {
+    "action": "query",
+    "format": "json",
+    "formatversion": "2",
+    "maxlag": "5",
+    "meta": "siteinfo",
+    "siprop": "general|statistics|defaultoptions"
+  },
+  "url": "https://kw.wiktionary.org/w/api.php?action=query&format=json&formatversion=2&maxlag=5&meta=siteinfo&siprop=general%7Cstatistics%7Cdefaultoptions",
+  "wiki": "kwwiktionary"
+}

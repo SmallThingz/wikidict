@@ -8421,6 +8421,12 @@ class ReviewedDeployment992adTests(EqualMediaBehaviorMemberTests):
         self.assertEqual(set(selected), {*figure.ROLES, 'file-metadata'})
 
 
+
+
+class ReviewedDeploymentBfe249Tests(ReviewedDeployment992adTests):
+    core = 'bfe24921d500b20f2938fb8fe2a09cf5cac80161'
+    prior = '992ad5e3679f848254828e823860ba8b3ad3b39b'
+
 class CaptureReplayContractTests(unittest.TestCase):
     def setUp(self):
         self.donor = DefaultPageReplayReprojectionTests()

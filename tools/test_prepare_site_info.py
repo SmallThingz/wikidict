@@ -429,5 +429,45 @@ class SiteInfoCaptureTests(unittest.TestCase):
 
 
 
+
+class RetainedKwBfe249Tests(unittest.TestCase):
+    def fixture(self):
+        return Path(__file__).parent/'testdata/kw-figure-defaults-bfe249'
+
+    def test_actual_kw_response_preserves_core_default_and_refuses_foreign_identity(self):
+        raw = (self.fixture()/'site-info.01.raw.json').read_bytes()
+        self.assertEqual(s.evidence.digest(raw), '503fe4f9fd0424e0cfe2edad648283876f65f939a6ac62df1a9cf8d88b8a3cfa')
+        data = s.evidence.decode(raw)
+        result = s.response(data, 'kwwiktionary', 'kw', s.FIGURE_PROFILE)
+        self.assertEqual(result['general']['git-hash'], 'bfe24921d500b20f2938fb8fe2a09cf5cac80161')
+        self.assertEqual(s.figure_thumbnail_width(result), 250)
+        for wiki, language in [('chrwiktionary', 'kw'), ('kwwiktionary', 'chr')]:
+            with self.assertRaises(ValueError): s.response(data, wiki, language, s.FIGURE_PROFILE)
+        changed = copy.deepcopy(data)
+        changed['query']['general']['git-hash'] = '0' * 40
+        with self.assertRaises(ValueError): s.response(changed, 'kwwiktionary', 'kw', s.FIGURE_PROFILE)
+        changed = copy.deepcopy(data)
+        del changed['query']['defaultoptions']
+        with self.assertRaises(ValueError): s.response(changed, 'kwwiktionary', 'kw', s.FIGURE_PROFILE)
+
+    def test_actual_kw_offline_revalidation_preserves_all_eight_originals(self):
+        work = Path(os.environ.get('WIKIDICT_SITE_INFO_TEST_ROOT', '.tmp/site-info-v2-tests'))
+        work.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='kw-', dir=work) as temporary:
+            root = Path(temporary)
+            original = {p.name:p.read_bytes() for p in self.fixture().iterdir()}
+            self.assertEqual(len(original), 8)
+            for name, raw in original.items(): (root/name).write_bytes(raw)
+            with patch.object(s.evidence, 'get_response', side_effect=AssertionError('offline means no HTTP')):
+                manifest = s.revalidate(root, s.evidence.digest(original['site-info.failure.json']))
+                self.assertEqual(s.verify(root), manifest)
+            self.assertEqual({name:(root/name).read_bytes() for name in original}, original)
+            self.assertIs(s.evidence.decode((root/'site-info.01.receipt.json').read_bytes())['accepted'], False)
+            self.assertEqual(manifest['wiki'], 'kwwiktionary')
+            self.assertEqual(manifest['core'], 'bfe24921d500b20f2938fb8fe2a09cf5cac80161')
+            projected = s.evidence.decode((root/s.SNAPSHOT).read_bytes())
+            self.assertEqual(projected['query'], s.evidence.decode(original['site-info.01.raw.json'])['query'])
+            self.assertEqual(set(p.name for p in root.iterdir())-set(original), {s.SNAPSHOT,s.MANIFEST,s.COMPLETE})
+
 if __name__ == '__main__':
     unittest.main()
