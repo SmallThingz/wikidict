@@ -83,6 +83,23 @@ class OwnedReaderTests(unittest.TestCase):
 
 
 class EntryFocusTests(unittest.TestCase):
+    def test_read_projects_only_frames_with_a_complete_end_marker(self):
+        reader = m.ReaderPty.__new__(m.ReaderPty)
+        reader.master, reader.raw, reader.frames, reader.projected = 31, bytearray(), 0, 0
+        reader.stream = unittest.mock.Mock()
+        reader.decoder = m.codecs.getincrementaldecoder('utf-8')('strict')
+        data = [b'first' + m.FRAME_END + 'dé'.encode()[:-1], 'é'.encode()[1:] + m.FRAME_END[:-1],
+                m.FRAME_END[-1:] + b'third' + m.FRAME_END]
+        with patch.object(m.select, 'select', return_value=([31], [], [])), patch.object(m.os, 'read', side_effect=data):
+            reader.read()
+            reader.stream.feed.assert_called_once_with('first' + m.FRAME_END.decode())
+            reader.read()
+            self.assertEqual((reader.frames, reader.stream.feed.call_count), (1, 1))
+            reader.read()
+            reader.stream.feed.assert_called_with('dé' + m.FRAME_END.decode() + 'third' + m.FRAME_END.decode())
+        self.assertEqual(reader.frames, 3)
+        self.assertEqual(reader.raw, b''.join(data))
+
     @staticmethod
     def reader(width, footer):
         # A completed terminal screen only: no PTY, subprocess, or signals.

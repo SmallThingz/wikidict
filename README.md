@@ -87,6 +87,8 @@ python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
 The check uses a disposable copy of the edition's verified files. It exercises
 empty search, keyboard recovery, entry reading, resize, Back, and terminal restoration.
 Use `--screen-projection libvterm` to check native terminal cells, including combining marks.
+Use `--screen-projection kitty` to check cell layout with an installed Kitty native parser.
+The report records which terminal produced the cells at each width.
 For serial reviews, pass `--cases entries.tsv` in place of `--root`, `--language`,
 `--entry`, and `--witness`. Each row needs `output_directory`, `owner_heading`,
 `exact_title`, `visible_definition_witness`, and `selected_complete_sha256` (the hash
@@ -551,7 +553,7 @@ Catalogue format and publishing details are documented in
 The reader can inspect a catalogue or install a dictionary directly:
 
 ```sh
-zig-out/bin/wikidict catalog
+zig-out/bin/wikidict catalog "$CATALOG_HTTPS_URL"
 zig-out/bin/wikidict install FILE_OR_HTTPS_URL --root DIRECTORY --sha256 HASH
 ```
 

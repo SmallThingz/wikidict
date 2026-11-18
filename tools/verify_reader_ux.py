@@ -97,7 +97,7 @@ class ReaderPty:
         self.decoder = codecs.getincrementaldecoder("utf-8")("strict")
         self.raw = bytearray()
         self.frames = 0
-        self.tail = b""
+        self.projected = 0
         self.snapshots = []
         self.cli_calls = []
         self.checks = []
@@ -162,12 +162,16 @@ class ReaderPty:
             raise
         if not data:
             return False
+        old_length = len(self.raw)
         self.raw.extend(data)
-        # Count complete synchronized frames even when a marker spans reads.
-        combined = self.tail + data
-        self.frames += combined.count(FRAME_END)
-        self.tail = combined[-(len(FRAME_END) - 1):]
-        self.stream.feed(self.decoder.decode(data))
+        # One read can end midway through the *next* redraw. A predicate must
+        # see only committed synchronized frames, even if a marker was split.
+        last = self.raw.rfind(FRAME_END, max(self.projected, old_length - len(FRAME_END) + 1))
+        if last >= 0:
+            end = last + len(FRAME_END)
+            self.frames += self.raw.count(FRAME_END, self.projected, end)
+            self.stream.feed(self.decoder.decode(self.raw[self.projected:end]))
+            self.projected = end
         return True
 
     def text(self) -> str:
@@ -285,7 +289,8 @@ class ReaderPty:
         require(self.process.poll() is not None, "Reader did not exit on its quit key")
         while self.read(0):
             pass
-        self.decoder.decode(b"", final=True)
+        self.stream.feed(self.decoder.decode(self.raw[self.projected:], final=True))
+        self.projected = len(self.raw)
         require(self.process.returncode == 0,
                 f"Reader exit code was {self.process.returncode}")
         require(termios.tcgetattr(self.slave) == self.original_termios,

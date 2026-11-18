@@ -17,17 +17,22 @@ from verify_reader_ux import DOWN, ENTER, ReaderPty, normalized, require
 
 
 class NativeCellReaderPty(ReaderPty):
+    projection_name = 'libvterm'
+
     def snapshot(self, label):
         super().snapshot(label)
         snapshot = self.snapshots[-1]
         path = self.output / Path(snapshot['file']).with_suffix('.cells.json.gz')
-        grid = dict(projection='libvterm', columns=self.width, rows=self.rows, cells=self.screen.cell_rows())
+        grid = dict(projection=self.projection_name, columns=self.width, rows=self.rows, cells=self.screen.cell_rows())
         payload = json.dumps(grid, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
         path.write_bytes(gzip.compress(payload, compresslevel=1, mtime=0))
         snapshot['cells_file'] = path.name
 
 
 def screen_projection(name):
+    if name == 'kitty':
+        import terminal_kitty
+        return terminal_kitty, NativeCellReaderPty
     if name == 'libvterm':
         import terminal_libvterm
         return terminal_libvterm, NativeCellReaderPty
@@ -140,6 +145,11 @@ def exercise(reader, heading_label, entry, witness):
     reader.snapshot('entry-wide')
     frame = reader.resize(45, 24)
     reader.wait(reader.entry_focused, 'entry resized to 45 columns', after=frame)
+    # Reflow preserves the current scroll offset. Start the narrow review at
+    # the title when the definition is outside the resized viewport.
+    if not source_witness_visible(reader, wanted, heading):
+        reader.action(b'\x1b[H', lambda: reader.entry_focused() and
+                      (reading_text(reader) + ' ').startswith(heading + ' '), 'Home returns to the entry title')
     reveal_witness(reader, wanted, heading)
     reader.snapshot('entry-narrow')
     reader.action(b'\x1b', lambda: reader.page_is('search') and not reader.entry_focused(), 'back to results')
@@ -163,6 +173,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
                                  projection, language=language, kind=kind)
+            reader.projection_name = engine
             try:
                 # A cold compressed edition may still be indexing after the ordinary key-response deadline.
                 try:
@@ -182,7 +193,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                     reader.close()
                     result.update(checks=reader.checks, screens=reader.snapshots)
                 finally:
-                    if engine == 'libvterm':
+                    if engine in ('kitty', 'libvterm'):
                         reader.screen.close()
         require(binary_identity(binary.stat()) == stamp, 'Reader executable changed during review')
         result['passed'] = True
@@ -205,8 +216,8 @@ def main(argv=None):
     parser.add_argument('--entry', help='Exact title in the selected collection')
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
-    parser.add_argument('--screen-projection', choices=('pyte', 'libvterm'), default='pyte',
-                        help='Screen cell engine (libvterm requires the native libvterm.so.0 library)')
+    parser.add_argument('--screen-projection', choices=('pyte', 'libvterm', 'kitty'), default='pyte',
+                        help='Screen cell engine (libvterm and kitty require their respective native libraries)')
     args = parser.parse_args(argv)
     if args.cases:
         if any((args.kind, args.language, args.entry, args.witness)):
