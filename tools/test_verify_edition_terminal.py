@@ -6,11 +6,34 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import copy_publication, main, reading_body, source_witness_visible
-from verify_reader_ux import CheckFailure
+from verify_edition_terminal import choose_startup_language, copy_publication, main, reading_body, source_witness_visible
+from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_implicit_startup_selects_the_requested_catalog_heading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = root / 'languages.tsv'
+            catalog.write_text('heading\nAymar aru\nUnclassified\nruso\n')
+            reader = Mock()
+            reader.screen.display = ['', 'Library']
+            reader.text.return_value = 'Installed dictionaries'
+            reader.wait.side_effect = lambda ready, label: self.assertTrue(ready(), label)
+
+            def choose(keys, ready, label):
+                self.assertEqual(keys, DOWN * 2 + ENTER)
+                reader.screen.display = ['  dict.     ruso / language', '']
+                reader.page_is.return_value = True
+                self.assertTrue(ready(), label)
+
+            reader.action.side_effect = choose
+            choose_startup_language(reader, root, 'ruso')
+            reader.action.assert_called_once()
+            reader.snapshot.assert_called_once_with('language-chooser')
+            with self.assertRaisesRegex(CheckFailure, 'missing from the catalog'):
+                choose_startup_language(reader, root, 'English')
+
     def test_batch_preserves_stale_generation_failure_and_runs_next_case(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)

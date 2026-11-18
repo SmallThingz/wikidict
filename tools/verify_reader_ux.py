@@ -84,7 +84,8 @@ class OwnedReaderProcess:
 class ReaderPty:
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
                  output: Path, timeout: float, budget_end: float, pyte_module, *,
-                 force_color: bool = False, language: str | None = "English", kind: str = "language"):
+                 force_color: bool = False, language: str | None = "English", kind: str = "language",
+                 tui_args: tuple[str, ...] = ()):
         require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
                 "pidfd signaling is required for Reader ownership")
         self.output = output
@@ -125,12 +126,13 @@ class ReaderPty:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
         argv = [str(binary)]
-        if force_color or kind != "language":
+        if force_color or kind != "language" or tui_args:
             argv.append("tui")
         if kind != "language":
             argv.extend(("--kind", kind))
         if force_color:
             argv.extend(("--color", "always"))
+        argv.extend(tui_args)
         self.launch = {"argv": argv, "color_mode": "always" if force_color else "auto",
                        "NO_COLOR_present": "NO_COLOR" in self.env, "TERM": self.env.get("TERM")}
         self.process = subprocess.Popen(

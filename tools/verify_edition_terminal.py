@@ -160,10 +160,33 @@ def binary_identity(stat):
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
 
 
-def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind):
+def choose_startup_language(reader, root, language):
+    header, *headings = (root / 'languages.tsv').read_text(encoding='utf-8').splitlines()
+    require(header == 'heading' and language in headings, 'Selected language is missing from the catalog')
+
+    def library_visible():
+        return reader.screen.display[1].strip() == 'Library' and 'Installed dictionaries' in reader.text()
+
+    def selected(heading):
+        label = normalized(reader.screen.display[0][12:].rstrip())
+        return reader.page_is('search') and label == normalized(heading + ' / language')
+
+    initial = 'English' if 'English' in headings else headings[0] if len(headings) == 1 else None
+    if initial is not None:
+        reader.wait(lambda: selected(initial), 'opened default collection')
+        if initial == language:
+            return
+        reader.action(b'\tL', library_visible, 'opened installed language chooser')
+    else:
+        reader.wait(library_visible, 'offered installed languages at startup')
+    reader.snapshot('language-chooser')
+    reader.action(DOWN * headings.index(language) + ENTER, lambda: selected(language), 'opened chosen language')
+
+
+def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
-                  passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest)
+                  passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
     try:
         projection, reader_type = screen_projection(engine)
         with tempfile.TemporaryDirectory(dir=out) as temp:
@@ -172,12 +195,15 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
-                                 projection, language=language, kind=kind)
+                                 projection, language=None if implicit else language, kind=kind)
             reader.projection_name = engine
             try:
                 # A cold compressed edition may still be indexing after the ordinary key-response deadline.
                 try:
-                    reader.wait(lambda: reader.frames and reader.page_is('search'), 'opened edition')
+                    if implicit:
+                        choose_startup_language(reader, root, language)
+                    else:
+                        reader.wait(lambda: reader.frames and reader.page_is('search'), 'opened edition')
                 finally:
                     result['opening_wait_seconds'] = time.monotonic() - started
                 reader.timeout = 5
@@ -215,6 +241,7 @@ def main(argv=None):
     parser.add_argument('--language', help='Exact compiled language heading')
     parser.add_argument('--entry', help='Exact title in the selected collection')
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
+    parser.add_argument('--implicit-language', action='store_true', help='Launch without a language override and use the keyboard chooser when needed')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
     parser.add_argument('--screen-projection', choices=('pyte', 'libvterm', 'kitty'), default='pyte',
                         help='Screen cell engine (libvterm and kitty require their respective native libraries)')
@@ -244,6 +271,8 @@ def main(argv=None):
             parser.error('A language entry requires its exact owner heading')
         if kind == 'supplemental' and language is not None:
             parser.error('Leave the owner heading empty for a supplemental entry')
+        if args.implicit_language and kind != 'language':
+            parser.error('--implicit-language exercises language collections only')
         if args.cases and (not digest or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest)):
             parser.error('Each TSV row needs the SHA-256 digest of the selected complete.json')
         source = Path(root).resolve()
@@ -259,7 +288,7 @@ def main(argv=None):
     failures = 0
     for root, language, entry, witness, digest, kind in cases:
         path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
-                                digest, parent, args.screen_projection, kind)
+                                digest, parent, args.screen_projection, kind, args.implicit_language)
         if args.cases:
             with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
                 ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),

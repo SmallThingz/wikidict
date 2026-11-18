@@ -86,6 +86,8 @@ python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
 
 The check uses a disposable copy of the edition's verified files. It exercises
 empty search, keyboard recovery, entry reading, resize, Back, and terminal restoration.
+Add `--implicit-language` to test normal startup and select the requested language
+with the keyboard when the reader opens its Library.
 Use `--screen-projection libvterm` to check native terminal cells, including combining marks.
 Use `--screen-projection kitty` to check cell layout with an installed Kitty native parser.
 The report records which terminal produced the cells at each width.
@@ -482,9 +484,11 @@ zig-out/bin/wikidict search ca --language English --root "$EDITION_DIR"
 zig-out/bin/wikidict stats --language English --root "$EDITION_DIR"
 ```
 
-Use a language heading returned by `languages`. To open the interactive reader,
-run `zig-out/bin/wikidict tui --root "$EDITION_DIR" --language English` with that
-heading. `DICT_ROOT` and `DICT_LANGUAGE` supply defaults for subsequent commands.
+Open the interactive reader with `zig-out/bin/wikidict tui --root "$EDITION_DIR"`.
+It opens English when installed. In an edition without English it opens the sole
+language or shows the Library, where the arrow keys and Enter select a language.
+Use `--language` with an exact heading from `languages` to open it directly.
+`DICT_ROOT` and `DICT_LANGUAGE` supply defaults for subsequent commands.
 
 Saved words and history use the same state as the TUI:
 
