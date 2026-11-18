@@ -1,3 +1,4 @@
+import gzip
 import json
 import hashlib
 import subprocess
@@ -481,10 +482,10 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 with self.assertRaises(audit.ScanError):
                     audit.scan(f.root, query)
 
-    def run_report(self, text=None, error=None):
+    def run_report(self, text=None, error=None, compressed=False):
         with Fixture() as f:
             if text is not None: f.language('English', [f.entry('fixture', text, language='English')])
-            report = f.root / 'audit.json'
+            report = f.root / ('audit.json.gz' if compressed else 'audit.json')
             report.write_text('{"status":"passed"}')
             def output(argv, timeout):
                 self.assertEqual(60, timeout)
@@ -496,7 +497,11 @@ class PresentationDiagnosticTests(unittest.TestCase):
             with mock.patch.object(audit.subprocess, 'check_output', side_effect=output), \
                  mock.patch('sys.argv', argv), mock.patch('builtins.print') as printed:
                 exit_value = audit.main()
-            result = json.loads(report.read_text())
+            raw = report.read_bytes()
+            if compressed:
+                raw = gzip.decompress(raw)
+            result = json.loads(raw)
+            self.assertEqual(raw, (json.dumps(result, ensure_ascii=False, indent=2) + '\n').encode())
             stdout = printed.call_args.args[0]
             if result['status'] == 'error':
                 self.assertTrue(stdout.startswith('PRESENTATION_AUDIT error '))
@@ -524,6 +529,21 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual([], result['issues'])
         self.assertFalse(result['semantic_acceptance'])
         self.assertEqual(list(audit.SUPPORTED_KINDS), result['scope']['record_kinds'])
+
+    def test_compressed_cli_report_preserves_all_three_outcomes(self):
+        for kwargs in ({'text': 'სიტყვა'}, {'text': '{{მცდარი}}'}, {'error': OSError('missing binary')}):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.run_report(**kwargs), self.run_report(**kwargs, compressed=True))
+
+    def test_report_larger_than_one_write_preserves_exact_bytes(self):
+        result = {'issues': [{'title': f'词{n}', 'text': 'მცდარი\n[[target]]'} for n in range(2050)]}
+        expected = (json.dumps(result, ensure_ascii=False, indent=2) + '\n').encode()
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ('result.json', 'result.json.gz'):
+                target = Path(folder, name)
+                audit.write_report(target, result)
+                actual = target.read_bytes()
+                self.assertEqual(gzip.decompress(actual) if name.endswith('.gz') else actual, expected)
 
     def test_command_timeout_exit_and_json_errors_replace_stale_success(self):
         for error in (subprocess.CalledProcessError(1, ['dict']),

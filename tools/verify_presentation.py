@@ -632,12 +632,49 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged, refer
         offset += len(titles)
 
 
+def report_chunks(result):
+    """Use the standard JSON encoder on bounded slices of the large top-level arrays."""
+    def nested(value):
+        return json.dumps(value, ensure_ascii=False, indent=2).replace('\n', '\n  ')
+
+    if not result:
+        yield '{}\n'
+        return
+    yield '{\n'
+    for index, (key, value) in enumerate(result.items()):
+        if index:
+            yield ',\n'
+        yield '  ' + json.dumps(key, ensure_ascii=False) + ': '
+        if isinstance(value, list) and len(value) > 128:
+            yield '['
+            for offset in range(0, len(value), 128):
+                if offset:
+                    yield ','
+                section = nested(value[offset:offset + 128])
+                yield section.removeprefix('[').removesuffix('\n  ]')
+            yield '\n  ]'
+        else:
+            yield nested(value)
+    yield '\n}\n'
+
+
+def write_report(path, result):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with ExitStack() as resources:
+        stream = resources.enter_context(path.open('wb'))
+        if path.suffix == '.gz':
+            stream = resources.enter_context(gzip.GzipFile(filename='', fileobj=stream, mode='wb',
+                                                         compresslevel=1, mtime=0))
+        for part in report_chunks(result):
+            stream.write(part.encode('utf-8'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     installed_reader = Path('zig-out/bin/wikidict')
     parser.add_argument('--binary', type=Path, default=installed_reader)
     parser.add_argument('--root', type=Path, required=True)
-    parser.add_argument('--report', type=Path, required=True)
+    parser.add_argument('--report', type=Path, required=True, help='JSON report path. A .gz suffix writes gzip-compressed JSON.')
     parser.add_argument('--definition-dump', type=Path, action='append',
                         help='Compare simple numbered definitions to the selected original XML. Supply every .xml.bz2 part.')
     parser.add_argument('--definition-registry', type=Path,
@@ -690,8 +727,7 @@ def main():
     except (OSError, subprocess.SubprocessError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
-    args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
+    write_report(args.report, result)
     if result['status'] == 'error':
         print(f"PRESENTATION_AUDIT error {result['error'][:500]}")
     else:
