@@ -1627,6 +1627,21 @@ class SmallestFirstSchedulerTests(unittest.TestCase):
         return dict(wiki=wiki, date=date, name=name, size=size, sha1='a'*40,
                     url='https://dumps.wikimedia.org/'+wiki+'/'+date+'/'+name)
 
+    def test_scheduler_waits_for_completion_unless_another_job_can_start(self):
+        groups = {(wiki, '20261001'): [self.item(wiki, '20261001', 10)]
+                  for wiki in ('aawiktionary', 'abwiktionary')}
+        # One slot stays full until the first edition finishes. With a second
+        # slot, a changing admission budget could let the next edition start.
+        for slots, expected in ((1, [None, None]), (2, [1, None])):
+            with self.subTest(slots=slots), \
+                 patch.object(b, 'safe_worker_budget', return_value=1), \
+                 patch.object(b, 'build'), \
+                 patch.object(b.concurrent.futures, 'wait', wraps=b.concurrent.futures.wait) as wait:
+                self.assertEqual(b.build_groups(groups, Path('.'), Path('.'), 'zig', 1, slots), [])
+                self.assertEqual([call.kwargs['timeout'] for call in wait.call_args_list], expected)
+                self.assertTrue(all(call.kwargs['return_when'] == b.concurrent.futures.FIRST_COMPLETED
+                                    for call in wait.call_args_list))
+
     def test_scheduler_orders_xml_member_totals_then_edition_and_date(self):
         specs = [('aawiktionary', '20261001', [90]),
                  ('zzwiktionary', '20261001', [6, 4]),

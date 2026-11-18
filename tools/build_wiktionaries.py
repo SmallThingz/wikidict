@@ -7895,7 +7895,10 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                     time.sleep(min(RESOURCE_ADMISSION_POLL_SECONDS,remaining))
                     continue
                 break
-            done,_=concurrent.futures.wait(active,timeout=1,return_when=concurrent.futures.FIRST_COMPLETED)
+            # Recheck admission only while another edition could start. With all
+            # slots occupied or the queue empty, completion is the next event.
+            timeout = 1 if pending and len(active) < jobs else None
+            done,_=concurrent.futures.wait(active,timeout=timeout,return_when=concurrent.futures.FIRST_COMPLETED)
             if not done:continue
             for future in done:
                 key=active.pop(future)
