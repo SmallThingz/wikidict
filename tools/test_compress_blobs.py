@@ -105,14 +105,35 @@ class SmallXzBatchCleanupTests(unittest.TestCase):
     setUp = LargeXzWaveTests.setUp
     assert_clean_parts = LargeXzWaveTests.assert_clean_parts
 
+    def test_interrupted_small_batch_is_retryable_without_losing_any_raw(self):
+        def interrupted(argv, *, check):
+            # A terminated xz process may leave even the current stream incomplete.
+            suffix = '.xz.part' if '--suffix=.xz.part' in argv else '.xz'
+            Path(str(self.paths[0]) + suffix).write_bytes(lzma.compress(self.sources[self.paths[0]]))
+            Path(str(self.paths[1]) + suffix).write_bytes(b'partial xz')
+            raise subprocess.CalledProcessError(-9, argv)
+
+        with mock.patch.object(compress_blobs.subprocess, 'run', side_effect=interrupted):
+            with self.assertRaises(subprocess.CalledProcessError):
+                compress_blobs.compress_many(self.paths, 64 * 1024, workers=1)
+        for path, original in self.sources.items():
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(Path(str(path) + '.xz').exists())
+        self.assert_clean_parts()
+        compress_blobs.compress_many(self.paths, 64 * 1024, workers=1)
+        for path, original in self.sources.items():
+            self.assertFalse(path.exists())
+            self.assertEqual(lzma.decompress(Path(str(path) + '.xz').read_bytes()), original)
+
     def fake_batch_xz(self, *, corrupt=None):
         def invoke(argv, *, check):
             self.assertTrue(check)
             self.assertEqual(argv[:3], ['xz', '-0', '--threads=1'])
             self.assertIn('--keep', argv)
-            self.assertEqual([Path(value) for value in argv[5:]], self.paths)
+            self.assertEqual(argv[5:7], ['--suffix=.xz.part', '--'])
+            self.assertEqual([Path(value) for value in argv[7:]], self.paths)
             for path in self.paths:
-                target = Path(str(path) + '.xz')
+                target = Path(str(path) + '.xz.part')
                 with target.open('xb') as out:
                     out.write(b'corrupt xz' if path == corrupt else
                               lzma.compress(path.read_bytes(), preset=0))

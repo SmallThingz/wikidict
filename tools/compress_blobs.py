@@ -35,15 +35,22 @@ def compress_small_batch_keep(paths, block_size):
     paths = [Path(path) for path in paths]
     if not 1 <= len(paths) <= 128 or len(set(paths)) != len(paths):
         raise ValueError('Small compression batch must have 1 through 128 unique files')
+    for path in paths:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64*1024:
+            raise ValueError('Expected small regular blob: ' + str(path))
+    started = time.perf_counter()
+    _encode_verified_batch(paths, block_size)
+    print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)
+
+
+def _encode_verified_batch(paths, block_size):
+    """Only give a stream its final name after all batch members round-trip."""
     parts = [Path(str(path) + '.xz.part') for path in paths]
     targets = [Path(str(path) + '.xz') for path in paths]
     for path, part, target in zip(paths, parts, targets):
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64*1024:
-            raise ValueError('Expected small regular blob: ' + str(path))
         _validate_raw_blob(path)
         if part.exists() or part.is_symlink(): raise FileExistsError(part)
         if target.exists() or target.is_symlink(): raise FileExistsError(target)
-    started = time.perf_counter()
     try:
         subprocess.run(['xz', '-0', '--threads=1', f'--block-size={block_size}',
                         '--keep', '--suffix=.xz.part', '--', *map(str, paths)], check=True)
@@ -52,9 +59,7 @@ def compress_small_batch_keep(paths, block_size):
             try: os.fsync(fd)
             finally: os.close(fd)
             verify_round_trip(path, part)
-        # No raw is retired here; the shard owner must first sync renamed entries.
         for part, target in zip(parts, targets): os.replace(part, target)
-        print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)
     finally:
         for part in parts: part.unlink(missing_ok=True)
 
@@ -62,22 +67,14 @@ def compress_small_batch_keep(paths, block_size):
 def _compress_batch(paths, block_size):
     paths=list(paths)
     if not paths:return
-    for path in paths:
-        _validate_raw_blob(path)
-        target=Path(str(path)+'.xz')
-        if target.exists():raise FileExistsError(target)
     started=time.perf_counter()
-    subprocess.run(['xz','-0','--threads=1',f'--block-size={block_size}','--keep',*[str(path) for path in paths]],check=True)
-    raw_bytes=0;compressed_bytes=0
-    try:
-        for path in paths:
-            target=Path(str(path)+'.xz')
-            verify_round_trip(path,target)
-            raw_bytes+=path.stat().st_size;compressed_bytes+=target.stat().st_size
-    except Exception:
-        for path in paths:
-            Path(str(path)+'.xz').unlink(missing_ok=True)
-        raise
+    _encode_verified_batch(paths, block_size)
+    raw_bytes = sum(path.stat().st_size for path in paths)
+    compressed_bytes = sum(Path(str(path) + '.xz').stat().st_size for path in paths)
+    for directory in {path.parent for path in paths}:
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try: os.fsync(fd)
+        finally: os.close(fd)
     # Verified outputs are now the recovery copies; raw cleanup must not roll them back.
     for path in paths:path.unlink()
     print(f'batch: {len(paths)} blobs; {raw_bytes} -> {compressed_bytes} bytes; {time.perf_counter()-started:.3f}s; verified',flush=True)
