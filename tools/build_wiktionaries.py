@@ -6202,7 +6202,8 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
             compiler=shutil.which(zig)
             if compiler is None:raise ValueError('Zig compiler executable is unavailable')
             compiler=Path(compiler).resolve(strict=True)
-            compiler_sha=sha256_file(compiler)
+            compiler_sha=(retained_roles.bind_input(compiler)['sha256']
+                          if isinstance(retained_roles, RetainedNativeToolRoles) else sha256_file(compiler))
             if build_identity is not None and (source!=build_identity['source'] or compiler_sha!=build_identity['zig_sha256']):
                 raise ValueError('Native blob tool preparation source or compiler differs from build identity')
             if retained_roles is not None:
@@ -6226,7 +6227,7 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                         retained_runtime_scope(retained_roles), selected_provenance)[0]
                 else:
                     current = source_fingerprint()
-                if current!=source or sha256_file(compiler)!=compiler_sha:
+                if current!=source or retained_roles.bind_input(compiler)['sha256']!=compiler_sha:
                     raise ValueError('Source or compiler changed during retained role selection')
                 outcome.update(preparation='retained-role-selection', orchestration_source=source,
                     zig_sha256=compiler_sha, native_role_provenance=(selected_provenance

@@ -15008,4 +15008,155 @@ class CanonicalFigureOverlapTests(unittest.TestCase):
         self.assertFalse(getattr(roles,'borrowed_capture_directories',{}))
         for path,raw in originals.items():self.assertEqual(path.read_bytes(),raw)
 
+class RetainedCompilerIdentityReuseTests(unittest.TestCase):
+    fixture = RetainedNativeRoleTests.fixture
+
+    def selection(self, root):
+        roles, compiler = self.fixture(root)
+        selection = b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+        identity = dict(source='qualified-source', zig_sha256=b.sha256_file(compiler),
+                        native_tool_roles=selection.provenance())
+        return selection, compiler, identity
+
+    def prepare(self, root, selection, compiler, identity):
+        return b.prepare_blob_tools(root/'workspace', str(compiler), 'testwiktionary', '20261001',
+            identity, expander_args=['dump', str(root/'output'), '--expander-only'], retained_roles=selection)
+
+    def test_bound_compiler_digest_reused_across_preparation_without_reading_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);selection,compiler,identity=self.selection(root);calls=[];reads=[];events=[]
+            original=b.sha256_file
+            def digest(path):
+                reads.append(Path(path))
+                return original(path)
+            with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                 patch.object(b,'sha256_file',side_effect=digest), \
+                 patch.object(b,'timed_run',side_effect=lambda argv,*a,**kw:calls.append(argv)), \
+                 patch.object(b,'phase_event',side_effect=lambda *a,**kw:events.append(kw)):
+                first=self.prepare(root,selection,compiler,identity)
+                second=self.prepare(root,selection,compiler,identity)
+            self.assertEqual(set(first),set(b.BLOB_TOOL_NAMES));self.assertEqual(first,second)
+            self.assertEqual(len(calls),2);self.assertEqual(calls[0],calls[1])
+            self.assertNotIn(compiler,reads)
+            for record in (event for event in events if 'status' in event):
+                self.assertEqual(record['status'],'success')
+                self.assertEqual(record['zig_sha256'],identity['zig_sha256'])
+                self.assertEqual(record['native_role_provenance'],identity['native_tool_roles'])
+            selection.require_unchanged()
+
+    def test_new_compiler_path_requires_actual_hash_before_digest_reuse(self):
+        for different in (False,True):
+            with self.subTest(different=different),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);selection,compiler,identity=self.selection(root);reads=[];calls=[]
+                alternate=root/'alternate-zig';alternate.write_bytes(b'foreign!' if different else compiler.read_bytes());alternate.chmod(0o755)
+                original=b.sha256_file
+                def digest(path):
+                    if Path(path)==alternate:reads.append(Path(path))
+                    return original(path)
+                with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                     patch.object(b,'sha256_file',side_effect=digest), \
+                     patch.object(b,'timed_run',side_effect=lambda argv,*a,**kw:calls.append(argv)),patch.object(b,'phase_event'):
+                    if different:
+                        with self.assertRaisesRegex(ValueError,'source or compiler differs'):
+                            self.prepare(root,selection,alternate,identity)
+                    else:self.prepare(root,selection,alternate,identity)
+                self.assertEqual(reads,[alternate]);self.assertEqual(len(calls),0 if different else 1)
+                self.assertEqual(selection.input_identities[alternate]['sha256'],original(alternate))
+
+    def test_bound_compiler_changes_refuse_before_native_dispatch(self):
+        for change in ('bytes-restored-mtime','same-bytes-replacement','mode'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);selection,compiler,identity=self.selection(root);before=compiler.stat()
+                if change=='bytes-restored-mtime':
+                    compiler.write_bytes(b'changed!');os.utime(compiler,ns=(before.st_atime_ns,before.st_mtime_ns))
+                elif change=='same-bytes-replacement':
+                    other=root/'replacement';other.write_bytes(compiler.read_bytes());other.chmod(0o755);os.replace(other,compiler)
+                else:compiler.chmod(0o555)
+                with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                     patch.object(b,'timed_run') as dispatch,patch.object(b,'phase_event'):
+                    with self.assertRaisesRegex(ValueError,'dependency identity changed'):
+                        self.prepare(root,selection,compiler,identity)
+                    dispatch.assert_not_called()
+
+    def test_post_preparation_compiler_guard_rejects_identity_change_even_when_bytes_match(self):
+        for change in ('same-bytes-replacement','bytes-restored-mtime','mode'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);selection,compiler,identity=self.selection(root);calls=[];events=[];checks=[]
+                def fingerprint():
+                    checks.append(True)
+                    if len(checks)==2:
+                        before=compiler.stat()
+                        if change=='same-bytes-replacement':
+                            other=root/'replacement';other.write_bytes(compiler.read_bytes());other.chmod(0o755);os.replace(other,compiler)
+                        elif change=='bytes-restored-mtime':
+                            compiler.write_bytes(b'changed!');os.utime(compiler,ns=(before.st_atime_ns,before.st_mtime_ns))
+                        else:compiler.chmod(0o555)
+                    return identity['source']
+                with patch.object(b,'source_fingerprint',side_effect=fingerprint), \
+                     patch.object(b,'timed_run',side_effect=lambda argv,*a,**kw:calls.append(argv)), \
+                     patch.object(b,'phase_event',side_effect=lambda *a,**kw:events.append(kw)):
+                    with self.assertRaisesRegex(ValueError,'dependency identity changed'):
+                        self.prepare(root,selection,compiler,identity)
+                self.assertEqual(len(calls),1);self.assertEqual(len(checks),2)
+                self.assertEqual(events[-1]['status'],'failure');self.assertNotIn('selected_native_artifacts',events[-1])
+
+    def test_new_compiler_path_mutated_during_hash_cannot_be_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);selection,compiler,identity=self.selection(root)
+            alternate=root/'alternate-zig';alternate.write_bytes(compiler.read_bytes());alternate.chmod(0o755)
+            original=b.sha256_file
+            def digest(path):
+                value=original(path)
+                if Path(path)==alternate:
+                    before=alternate.stat();alternate.write_bytes(b'changed!')
+                    os.utime(alternate,ns=(before.st_atime_ns,before.st_mtime_ns))
+                return value
+            with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                 patch.object(b,'sha256_file',side_effect=digest),patch.object(b,'timed_run') as dispatch,patch.object(b,'phase_event'):
+                with self.assertRaisesRegex(ValueError,'changed while hashing'):
+                    self.prepare(root,selection,alternate,identity)
+                dispatch.assert_not_called()
+            self.assertNotIn(alternate,selection.inputs);self.assertNotIn(alternate,selection.input_identities)
+
+    def test_bound_compiler_parent_alias_refuses_before_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=self.fixture(root)
+            directory=root/'toolchain';directory.mkdir();compiler=compiler.rename(directory/'zig')
+            for role in roles.values():
+                role['dependencies']['zig']['path']=str(compiler)
+            selection=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            identity=dict(source='qualified-source',zig_sha256=b.sha256_file(compiler),native_tool_roles=selection.provenance())
+            moved=root/'moved-toolchain';directory.rename(moved);directory.symlink_to(moved,target_is_directory=True)
+            with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                 patch.object(b,'timed_run') as dispatch,patch.object(b,'phase_event'):
+                with self.assertRaises(ValueError):self.prepare(root,selection,compiler,identity)
+                dispatch.assert_not_called()
+
+    def test_retained_source_change_and_native_failure_still_refuse_success(self):
+        for failure in ('source','native'):
+            with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);selection,compiler,identity=self.selection(root);events=[]
+                error=subprocess.CalledProcessError(7,['actual retained driver'],stderr=b'original failure')
+                with patch.object(b,'source_fingerprint',side_effect=[identity['source'],'changed-source']), \
+                     patch.object(b,'timed_run',side_effect=error if failure=='native' else None) as dispatch, \
+                     patch.object(b,'phase_event',side_effect=lambda *a,**kw:events.append(kw)):
+                    with self.assertRaises(ValueError if failure=='source' else subprocess.CalledProcessError) as caught:
+                        self.prepare(root,selection,compiler,identity)
+                    if failure=='native':self.assertIs(error,caught.exception)
+                self.assertEqual(dispatch.call_count,1);self.assertEqual(events[-1]['status'],'failure')
+                self.assertNotIn('selected_native_artifacts',events[-1])
+
+    def test_nonretained_preparation_keeps_both_actual_compiler_reads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);fixture=PreparedBlobToolsTests();workspace,compiler,identity=fixture.fixture(root);reads=[]
+            original=b.sha256_file
+            def digest(path):
+                if Path(path)==compiler:reads.append(Path(path))
+                return original(path)
+            with patch.object(b,'source_fingerprint',return_value=identity['source']), \
+                 patch.object(b,'sha256_file',side_effect=digest), \
+                 patch.object(b,'run_checked',side_effect=fixture.install),patch.object(b,'phase_event'):
+                tools=b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
+            self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES));self.assertEqual(reads,[compiler,compiler])
+
 if __name__=='__main__':unittest.main()
