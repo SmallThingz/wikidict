@@ -606,7 +606,7 @@ pub const Expander = struct {
         defer self.releasePageModuleTemplates();
         if (work_stats.current()) |work| work.comment_bytes +|= source.len;
         const comments_start = work_stats.cpuNow();
-        const stripped = try preprocess.stripDecodedCommentsForParsingPreservingPoem(self.runtime.allocator, source);
+        const stripped = try preprocess.directDecodedForParsingAlloc(self.runtime.allocator, source);
         if (work_stats.current()) |work| work.comments_ns +|= work_stats.elapsed(comments_start);
         defer self.runtime.allocator.free(stripped);
         const params = try self.runtime.newTable();
@@ -8594,6 +8594,171 @@ test "inclusion and comment node boundaries preserve literal default braces thro
     try LiteralCurlyBoundaryFixture.check("{{LiteralNested}}", "CAT");
     try LiteralCurlyBoundaryFixture.check("{{LiteralProtected}}", "<nowiki>{<noinclude/>{uc:cat}}</nowiki>");
     try LiteralCurlyBoundaryFixture.check("{{LiteralGeneratedLeft}}", "{{uc:cat}}");
+}
+
+test "direct inclusion retains protected text and cannot join authored or generated braces" {
+    try LiteralCurlyBoundaryFixture.check("{{<includeonly>subst:</includeonly>PAGENAME}}", "Literal boundary fixture");
+    try LiteralCurlyBoundaryFixture.check("{<includeonly>gone</includeonly>{uc:cat}}", "&#123;&#123;uc:cat&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{<includeonly/>{uc:cat}}", "&#123;&#123;uc:cat&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{<noinclude></noinclude>{uc:cat}}", "&#123;&#123;uc:cat&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{<onlyinclude></onlyinclude>{uc:cat}}", "&#123;&#123;uc:cat&#125;&#125;");
+    try LiteralCurlyBoundaryFixture.check("{{EmitOpen}}<includeonly>gone</includeonly>{uc:cat}}", "{{uc:cat}}");
+    try LiteralCurlyBoundaryFixture.check("<nowiki>{{<includeonly>subst:</includeonly>PAGENAME}}</nowiki>", "<nowiki>{{<includeonly>subst:</includeonly>PAGENAME}}</nowiki>");
+    try LiteralCurlyBoundaryFixture.check("<pre>{{<includeonly>subst:</includeonly>PAGENAME}}</pre>", "<pre>{{<includeonly>subst:</includeonly>PAGENAME}}</pre>");
+    try LiteralCurlyBoundaryFixture.check("<!--<includeonly>-->A<noinclude>{{uc:cat}}</noinclude><onlyinclude>B</onlyinclude>C", "ACATBC");
+}
+
+test "direct inclusion mode preserves MediaWiki first-close missing-end and raw-delimiter rules" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "A<includeonly>B</includeonly>C", .expected = "AC" },
+        .{ .source = "A<includeonly>B", .expected = "A" },
+        .{ .source = "A<INCLUDEONLY>B", .expected = "A<INCLUDEONLY>B" },
+        .{ .source = "A<INCLUDEONLY x=1>B</includeonly >C", .expected = "AC" },
+        .{ .source = "A<includeonly>B<includeonly>C</includeonly>D</includeonly>E", .expected = "AD</includeonly>E" },
+        .{ .source = "A</includeonly>B", .expected = "A</includeonly>B" },
+        .{ .source = "A<includeonly/>B", .expected = "AB" },
+        .{ .source = "A<includeonly / >B", .expected = "A" },
+        .{ .source = "A<includeonly/ >B", .expected = "A<includeonly/ >B" },
+        .{ .source = "A<includeonlyX>B</includeonlyX>C", .expected = "A<includeonlyX>B</includeonlyX>C" },
+        .{ .source = "A<noinclude x=\">\">B</noinclude>C", .expected = "A\">BC" },
+        .{ .source = "A<onlyinclude>B</onlyinclude>C", .expected = "ABC" },
+        .{ .source = "A<ONLYINCLUDE>B</ONLYINCLUDE>C", .expected = "ABC" },
+        .{ .source = "<nowiki><includeonly>X</includeonly><!--Y--></nowiki>", .expected = "<nowiki><includeonly>X</includeonly><!--Y--></nowiki>" },
+        .{ .source = "<source><includeonly>X</includeonly></source>", .expected = "<source><includeonly>X</includeonly></source>" },
+        .{ .source = "<ref><includeonly>X</includeonly></ref>", .expected = "<ref><includeonly>X</includeonly></ref>" },
+        .{ .source = "A<!--<includeonly>B-->C", .expected = "AC" },
+        .{ .source = "A<!--<onlyinclude>B</onlyinclude>-->C", .expected = "AC" },
+    };
+    for (cases) |case| {
+        const prepared = try preprocess.directDecodedForParsingAlloc(std.testing.allocator, case.source);
+        defer std.testing.allocator.free(prepared);
+        var visible: std.ArrayList(u8) = .empty;
+        defer visible.deinit(std.testing.allocator);
+        try preprocess.appendParsingText(std.testing.allocator, &visible, prepared);
+        try std.testing.expectEqualStrings(case.expected, visible.items);
+    }
+    const source = "A<noinclude>D</noinclude><includeonly>T</includeonly><onlyinclude>O</onlyinclude>Z";
+    const transcluded = try preprocess.transcludeDecodedAlloc(std.testing.allocator, source);
+    defer std.testing.allocator.free(transcluded);
+    try std.testing.expectEqualStrings("O", transcluded);
+    const direct = try preprocess.directDecodedForParsingAlloc(std.testing.allocator, source);
+    defer std.testing.allocator.free(direct);
+    var visible: std.ArrayList(u8) = .empty;
+    defer visible.deinit(std.testing.allocator);
+    try preprocess.appendParsingText(std.testing.allocator, &visible, direct);
+    try std.testing.expectEqualStrings("ADOZ", visible.items);
+}
+
+const FaroeseDirectInclusionFixture = struct {
+    const Row = struct { title: []const u8, page_id: u64, revision_id: u64, text: []const u8, redirect: ?[]const u8 };
+    const Corpus = struct { pages: []const Row, templates: []const Row };
+    const aliases = rt.namespace_registry.magic_words;
+    corpus: Corpus,
+    words: *const aliases.Registry,
+
+    fn row(self: *const @This(), title: []const u8) ?Row {
+        for (self.corpus.templates) |item| if (std.mem.eql(u8, title, item.title)) return item;
+        return null;
+    }
+    fn get(ctx: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        return if (self.row(title)) |item| item.text else null;
+    }
+    fn exists(ctx: ?*anyopaque, title: []const u8) !bool {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        return self.row(title) != null;
+    }
+    fn body(ctx: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?Provider.TransclusionBody {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        var item = self.row(title) orelse return null;
+        for (0..16) |_| {
+            if (item.redirect) |target| {
+                item = self.row(target) orelse return error.FixtureRedirectMissing;
+            } else {
+                return .{ .text = try preprocess.transcludeDecodedForParsingAlloc(a, item.text), .title = item.title, .borrowed = false };
+            }
+        }
+        return error.FixtureRedirectCycle;
+    }
+    fn resolve(ctx: ?*anyopaque, name: []const u8, form: aliases.Form) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(ctx.?));
+        return self.words.resolve(name, form);
+    }
+    fn parser(ctx: ?*anyopaque, name: []const u8) !?[]const u8 {
+        return resolve(ctx, name, .parser_function);
+    }
+};
+
+test "Faroese complete heimur and kambur direct pages expand inclusion-wrapped PAGENAME through ordinary providers" {
+    const F = FaroeseDirectInclusionFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const corpus = try std.json.parseFromSlice(F.Corpus, a, @embedFile("testdata/fo-direct-inclusion/pages-and-templates.json"), .{});
+    defer corpus.deinit();
+    try std.testing.expectEqual(@as(usize, 398), corpus.value.templates.len);
+    try std.testing.expectEqual(@as(usize, 2), corpus.value.pages.len);
+    var ns = try rt.namespace_registry.Registry.init(a, @embedFile("testdata/fo-direct-inclusion/namespace-registry.tsv"));
+    defer ns.deinit();
+    var words = try F.aliases.Registry.init(a, @embedFile("testdata/fo-direct-inclusion/magic-words.tsv"), "fowiktionary", "20261001", "fo");
+    defer words.deinit();
+    var provider: F = .{ .corpus = corpus.value, .words = &words };
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    runtime.namespace_catalog = &ns;
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{
+        .ctx = &provider, .get = F.get, .exists = F.exists, .get_transclusion_body = F.body,
+        .resolve_title_magic = F.resolve, .resolve_parser_function = F.parser,
+    }, .install_scribunto = installTestInvoke };
+    for (corpus.value.pages) |page| {
+        const current: host_api.CurrentPage = .{ .namespace = 0, .metadata = .{
+            .page_id = page.page_id, .revision_id = page.revision_id, .revision_timestamp = "", .revision_user = "", .content_model = "wikitext",
+        } };
+        const actual = try expander.expandStoredFragment(page.title, page.text, 1_670_803_200, current);
+        const actual_metadata = if (expander.missing_dependency_metadata) |metadata| try a.dupe(u8, metadata) else null;
+        try std.testing.expect(std.mem.indexOf(u8, actual, "{{<includeonly>subst:</includeonly>PAGENAME}}") == null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, try std.fmt.allocPrint(a, "'''{s}'''", .{page.title})) != null);
+        try std.testing.expect(std.mem.indexOf(u8, actual, try std.fmt.allocPrint(a, "leitord={s}&button_leita=&action=1&pageno=0 {s}", .{page.title, page.title})) != null);
+        // Independent ordinary magic-word path: no manual title or output text
+        // is substituted, and every other original page/provider byte remains.
+        const reference_source = try std.mem.replaceOwned(u8, a, page.text, "{{<includeonly>subst:</includeonly>PAGENAME}}", "{{PAGENAME}}");
+        const expected = try expander.expandStoredFragment(page.title, reference_source, 1_670_803_200, current);
+        try std.testing.expectEqualStrings(expected, actual);
+        try std.testing.expectEqual(actual_metadata != null, expander.missing_dependency_metadata != null);
+        if (actual_metadata) |metadata| {
+            var actual_phase = try dependency.decode(a, metadata, actual, "");
+            defer actual_phase.deinit();
+            var expected_phase = try dependency.decode(a, expander.missing_dependency_metadata.?, expected, "");
+            defer expected_phase.deinit();
+            try std.testing.expectEqualDeep(expected_phase.output(), actual_phase.output());
+            try std.testing.expectEqualDeep(expected_phase.occurrences(), actual_phase.occurrences());
+        }
+        if (std.mem.eql(u8, page.title, "heimur")) {
+            try std.testing.expect(std.mem.indexOf(u8, actual, "[[:Fyrimynd:..]]") != null);
+            try std.testing.expect(actual_metadata != null);
+        }
+    }
+}
+
+test "direct inclusion removal preserves a later missing dependency without evaluating excluded source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.init(a, 24);
+    defer runtime.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = .{ .get = LiteralCurlyBoundaryFixture.get, .exists = LiteralCurlyBoundaryFixture.exists } };
+    const actual = try expander.expandFragment("heimur", "{{<includeonly>{{HiddenMissing}}</includeonly>PAGENAME}}|{{Missing}}", 1_670_803_200);
+    try std.testing.expectEqualStrings("heimur|[[:Template:Missing]]", actual);
+    var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, actual, "");
+    defer phase.deinit();
+    try std.testing.expect(!phase.output().unknown);
+    try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+    try std.testing.expectEqualStrings("Template:Missing", phase.occurrences()[0].title);
+    try std.testing.expectEqualDeep(@as([]const dependency.Range, &.{.{ .start = 7, .end = @intCast(actual.len), .occurrence = 1 }}), phase.output().ranges);
 }
 
 test "literal default provenance preserves native intermediate values and chosen arguments" {

@@ -493,6 +493,10 @@ const InclusionTag = struct {
 };
 
 fn inclusionTagAt(text: []const u8, start: usize) ?InclusionTag {
+    return inclusionTagAtMode(text, start, true);
+}
+
+fn inclusionTagAtMode(text: []const u8, start: usize, comptime for_inclusion: bool) ?InclusionTag {
     const name_start = start + 1;
     var end = name_start;
     if (end < text.len and text[end] == '/') end += 1;
@@ -501,10 +505,18 @@ fn inclusionTagAt(text: []const u8, start: usize) ?InclusionTag {
     if (!std.ascii.isWhitespace(text[end]) and text[end] != '>' and
         !std.mem.startsWith(u8, text[end..], "/>")) return null;
     const name = text[name_start..end];
-    if (std.ascii.eqlIgnoreCase(name, "includeonly") or std.ascii.eqlIgnoreCase(name, "/includeonly"))
-        return .{ .name = name, .mode = .delimiter };
-    if (std.ascii.eqlIgnoreCase(name, "noinclude"))
-        return .{ .name = name, .mode = .excluded };
+    if (for_inclusion) {
+        if (std.ascii.eqlIgnoreCase(name, "includeonly") or std.ascii.eqlIgnoreCase(name, "/includeonly"))
+            return .{ .name = name, .mode = .delimiter };
+        if (std.ascii.eqlIgnoreCase(name, "noinclude"))
+            return .{ .name = name, .mode = .excluded };
+    } else {
+        if (std.ascii.eqlIgnoreCase(name, "noinclude") or std.ascii.eqlIgnoreCase(name, "/noinclude") or
+            std.ascii.eqlIgnoreCase(name, "onlyinclude") or std.ascii.eqlIgnoreCase(name, "/onlyinclude"))
+            return .{ .name = name, .mode = .delimiter };
+        if (std.ascii.eqlIgnoreCase(name, "includeonly"))
+            return .{ .name = name, .mode = .excluded };
+    }
     if (opaqueParserTagIndex(name)) |index|
         return .{ .name = name, .mode = .preserved, .close_cache_slot = index + 1 };
     return null;
@@ -536,12 +548,24 @@ pub fn transcludeDecodedForParsingAlloc(a: std.mem.Allocator, text: []const u8) 
     return transcludeDecodedWithBoundariesAlloc(a, text, true);
 }
 
+// Direct pages use the inverse inclusion mode. Keep ignored nodes until brace
+// parsing has separated constructs; removing them here could create new calls.
+pub fn directDecodedForParsingAlloc(a: std.mem.Allocator, text: []const u8) ![]u8 {
+    const included = try inclusionDecodedWithBoundariesAlloc(a, text, true, false);
+    defer a.free(included);
+    return stripDecodedCommentsForParsingPreservingPoem(a, included);
+}
+
 fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, preserve_empty_noinclude: bool) ![]u8 {
+    return inclusionDecodedWithBoundariesAlloc(a, text, preserve_empty_noinclude, true);
+}
+
+fn inclusionDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, preserve_empty_noinclude: bool, comptime for_inclusion: bool) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(a);
     // MediaWiki Preprocessor_Hash selects exact onlyinclude delimiters on the
     // raw source, before recognizing comments or extension bodies.
-    const onlyinclude = std.mem.indexOf(u8, text, "<onlyinclude>") != null and
+    const onlyinclude = for_inclusion and std.mem.indexOf(u8, text, "<onlyinclude>") != null and
         std.mem.indexOf(u8, text, "</onlyinclude>") != null;
     var seeking_onlyinclude = onlyinclude;
     var no_more_gt = false;
@@ -566,12 +590,21 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
             continue;
         }
         if (std.mem.startsWith(u8, text[lt..], "<!--")) {
-            const close = std.mem.indexOfPos(u8, text, lt + 4, "-->") orelse break;
-            if (preserve_empty_noinclude) try out.appendSlice(a, "<noinclude/>");
+            const close = std.mem.indexOfPos(u8, text, lt + 4, "-->") orelse {
+                if (!for_inclusion) try out.appendSlice(a, text[lt..]);
+                break;
+            };
+            // The direct-page comment pass retains its comment-only line and
+            // heading policies, while inclusion tags inside comments stay inert.
+            if (!for_inclusion) {
+                try out.appendSlice(a, text[lt .. close + 3]);
+            } else if (preserve_empty_noinclude) {
+                try out.appendSlice(a, "<noinclude/>");
+            }
             pos = close + 3;
             continue;
         }
-        const tag = inclusionTagAt(text, lt) orelse {
+        const tag = inclusionTagAtMode(text, lt, for_inclusion) orelse {
             try out.append(a, '<');
             pos = lt + 1;
             continue;
@@ -589,8 +622,11 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
             continue;
         }
         if (text[open_end - 2] == '/') {
-            if (tag.mode == .preserved or (preserve_empty_noinclude and tag.mode == .excluded))
+            if (tag.mode == .preserved or (for_inclusion and preserve_empty_noinclude and tag.mode == .excluded)) {
                 try out.appendSlice(a, text[lt..open_end]);
+            } else if (preserve_empty_noinclude and tag.mode == .excluded) {
+                try out.appendSlice(a, "<noinclude/>");
+            }
             pos = open_end;
             continue;
         }
@@ -607,8 +643,8 @@ fn transcludeDecodedWithBoundariesAlloc(a: std.mem.Allocator, text: []const u8, 
         } else {
             no_more_close[tag.close_cache_slot] = true;
             // The upstream missing-end whitelist uses the original spelling.
-            // A lowercase noinclude legitimately excludes through EOF.
-            if (std.mem.eql(u8, tag.name, "noinclude")) break;
+            // The lowercase excluded element legitimately runs through EOF.
+            if (std.mem.eql(u8, tag.name, if (for_inclusion) "noinclude" else "includeonly")) break;
             try out.appendSlice(a, text[lt..open_end]);
             pos = open_end;
         }
