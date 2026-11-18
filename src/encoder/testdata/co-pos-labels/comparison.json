@@ -1,0 +1,168 @@
+{
+  "counts": {
+    "missing_titles": 16,
+    "source_titles": 3535,
+    "source_senses": 3717,
+    "owned_titles": 3519,
+    "matched_senses": 3699,
+    "organized_titles": 0,
+    "present_titles": 3519
+  },
+  "examples": {
+    "-noun-": {
+      "title": "ape",
+      "language": "en",
+      "owner_matched": true,
+      "section": "Sustantivu",
+      "matched": 1,
+      "organized": false,
+      "page": "4320",
+      "revision": "65587",
+      "pos": "-noun-",
+      "witnesses": [
+        [
+          "scimiu, scimia",
+          [
+            [
+              0,
+              6,
+              "scimiu"
+            ],
+            [
+              8,
+              14,
+              "scimia"
+            ]
+          ]
+        ]
+      ],
+      "raw_prefix": [
+        "{{-en-}}",
+        "{{-noun-}}",
+        "'''ape'''",
+        "# [[scimiu]], [[scimia]]"
+      ]
+    },
+    "-adj-": {
+      "title": "contrary",
+      "language": "en",
+      "owner_matched": true,
+      "section": "Aghjettivu",
+      "matched": 1,
+      "organized": false,
+      "page": "9721",
+      "revision": "67170",
+      "pos": "-adj-",
+      "witnesses": [
+        [
+          "cuntrariu",
+          [
+            [
+              0,
+              9,
+              "cuntrariu"
+            ]
+          ]
+        ]
+      ],
+      "raw_prefix": [
+        "{{-en-}}",
+        "{{-adj-}}",
+        "'''contrary'''",
+        "# [[cuntrariu]]"
+      ]
+    },
+    "-verb-": {
+      "title": "domandare",
+      "language": "it",
+      "owner_matched": true,
+      "section": "Verbu",
+      "matched": 2,
+      "organized": false,
+      "page": "5743",
+      "revision": "67806",
+      "pos": "-verb-",
+      "witnesses": [
+        [
+          "dumandà",
+          [
+            [
+              0,
+              7,
+              "dumandà"
+            ]
+          ]
+        ],
+        [
+          "chera, chere",
+          [
+            [
+              0,
+              5,
+              "chera"
+            ],
+            [
+              7,
+              12,
+              "chere"
+            ]
+          ]
+        ]
+      ],
+      "raw_prefix": [
+        "{{-it-}}",
+        "{{-verb-}}",
+        "'''domandare'''",
+        "# [[dumandà]]",
+        "# [[chera]], [[chere]]"
+      ]
+    }
+  },
+  "templates": {
+    "-en-": {
+      "title": "Template:-en-",
+      "page": "4378",
+      "revision": "24896",
+      "sha256": "7de8cc410ca12d9c63d709a605454940b0423f2a6606eeb4052644c813cad315"
+    },
+    "-es-": {
+      "title": "Template:-es-",
+      "page": "4380",
+      "revision": "57502",
+      "sha256": "cd9fb502bc9470bdc42f256a1fd617ce2cfe93ac7a5a3aee97dd1828ef1903bf"
+    },
+    "-fr-": {
+      "title": "Template:-fr-",
+      "page": "4387",
+      "revision": "24831",
+      "sha256": "9401e926a7e30c3ccf8c613af839e5d72c38e6b774401c9abfbc2290a2de416e"
+    },
+    "-it-": {
+      "title": "Template:-it-",
+      "page": "4412",
+      "revision": "24685",
+      "sha256": "c176a2b01be0d0d55f3fedfaad0160ebe1b8c5f04343fefd5e87632334d2f64a"
+    },
+    "-verb-": {
+      "title": "Template:-verb-",
+      "page": "4523",
+      "revision": "18233",
+      "sha256": "820a3c399a77d79226a5851042a7114eeb13fb68f842c2cec9176b3d97978ee8"
+    },
+    "-noun-": {
+      "title": "Template:-noun-",
+      "page": "4525",
+      "revision": "13811",
+      "sha256": "b2c0c7eb90c49eaadf7fdc3e1c324eb758879b5396ae479df02ca9dad5a970e3"
+    },
+    "-adj-": {
+      "title": "Template:-adj-",
+      "page": "4527",
+      "revision": "18236",
+      "sha256": "045c2b39c931313f5c1ca73714e0709f00a028e238ea0758814c0b2d92dadac2"
+    }
+  },
+  "reader_sha256": "2f13dee28baff1a5e1f7b893899852c22ffc40558fa2c7449297efe06c692245",
+  "manifest_sha256": "bc26972d4e1c44587c67cfee51b2c151874e3f0a083283317dea2823b59d4834",
+  "dump_sha1": "a551929a3ef7d72034677f58107690a9dfdca3ad"
+}

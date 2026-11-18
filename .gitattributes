@@ -612,3 +612,6 @@ src/encoder/testdata/mg-karbord-etymology210/page.expanded.wikitext -whitespace
 src/encoder/testdata/sr-ji-affix210/page.expanded.wikitext -whitespace
 src/encoder/testdata/sr-ji-mul210/page.expanded.wikitext -whitespace
 src/encoder/testdata/sr-ji-mul210/common.css -whitespace
+# Corsican template captures retain their authenticated trailing spaces.
+src/encoder/testdata/co-pos-labels/template-verb.wikitext -text whitespace=-blank-at-eol
+src/encoder/testdata/co-pos-labels/template-adj.wikitext -text whitespace=-blank-at-eol
