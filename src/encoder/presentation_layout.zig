@@ -131,6 +131,7 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, title, "Nome proprio")) return "Proper noun";
     // The Chinese edition uses this heading for entries in several languages.
     if (std.mem.eql(u8, title, "專有名詞")) return "Proper noun";
+    if (std.mem.eql(u8, title, "名词")) return "Noun";
     // Retained ουσιαστικό p254472/r3274141 invokes PartOfSpeech; its
     // selected pos table p804996/r7358611 names this exact noun heading.
     if (std.mem.eql(u8, title, "Ουσιαστικό")) return "Noun";
@@ -11745,6 +11746,37 @@ test "actual Fuhe Reader meaning organization preserves every body action style 
     try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
 }
 
+
+test "Chinese noun heading groups the Japanese headword and linked definition" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    // ピアス, revision 6016976: {{ja-noun}} followed by # [[耳环]]，[[耳坠]].
+    const sections = [_]Section{
+        .{ .title = "日语", .level = 2 },
+        .{ .title = "词源", .level = 3 },
+        .{ .title = "读音", .level = 3 },
+        .{ .title = "名词", .level = 3, .blocks = &.{
+            .{ .kind = .paragraph, .text = "ピアス" },
+            .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{
+                .{ .kind = .link, .text = "耳环", .target = "耳环" },
+                .{ .kind = .text, .text = "，" },
+                .{ .kind = .link, .text = "耳坠", .target = "耳坠" },
+            } },
+        } },
+    };
+    const layout = try buildOwned(arena.allocator(), &sections, "日語");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const noun = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("日語", noun.language);
+    try std.testing.expectEqual(@as(usize, 3), noun.section);
+    try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, layout.other_sections);
+    try std.testing.expect(partOfSpeech("名词变格") == null);
+}
 
 test "Chinese proper noun heading groups the Hindi definition and its two quotations" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
