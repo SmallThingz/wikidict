@@ -18,7 +18,6 @@ import tempfile
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
-from functools import cache as memoize
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
 
@@ -467,39 +466,30 @@ def dictionary_snapshot(root):
                 value.st_gid, value.st_nlink, value.st_size,
                 value.st_mtime_ns, value.st_ctime_ns)
 
-    @memoize
-    def directory_route(path):
-        # Siblings share the same route. Recheck each distinct ancestor before
-        # returning the snapshot, including ancestors outside the dictionary.
-        route = []
-        for parent in (path, *path.parents):
-            if parent not in ancestor_identities:
-                ancestor_identities[parent] = state(parent, False)[:5]
-            route.append((str(parent), ancestor_identities[parent]))
-        return route
+    def remember_ancestors(parent):
+        # Each row carries its lexical and resolved paths. Their ancestors can
+        # be bound once per snapshot, including directories outside the root.
+        while parent not in ancestor_identities:
+            ancestor_identities[parent] = state(parent, False)[:5]
+            parent = parent.parent
 
     def visit(path, depth, resolved_parent=None):
         require(depth <= 16, 'dictionary directory depth exceeded')
         lexical = state(path, False)
-        target = state(path, True)
-        if resolved_parent is None or stat.S_ISLNK(lexical[2]):
+        is_link = stat.S_ISLNK(lexical[2])
+        target = state(path, True) if is_link else lexical
+        if resolved_parent is None or is_link:
             resolved = path.resolve(strict=True)
         else:
             resolved = resolved_parent / path.name
-        route = [(str(path), lexical[:5])]
-        if path != path.parent:
-            route.extend(directory_route(path.parent))
-        if resolved == path:
-            route = route * 2
-        else:
-            route.append((str(resolved), target[:5]))
-            if resolved != resolved.parent:
-                route.extend(directory_route(resolved.parent))
+        remember_ancestors(path.parent)
+        if resolved != path:
+            remember_ancestors(resolved.parent)
+        row = (str(path), str(resolved), lexical, target)
         if stat.S_ISDIR(target[2]):
             identity = target[:2]
             require(identity not in seen, 'dictionary directory alias or cycle')
             seen.add(identity)
-            before = state(path, True)
             names = sorted(name for name in os.listdir(path) if name != '.dict-cache')
             cache = path / '.dict-cache'
             try:
@@ -509,20 +499,19 @@ def dictionary_snapshot(root):
             else:
                 require(stat.S_ISDIR(cache_state[2]), 'derived cache directory changed type')
                 cache_identity = cache_state[:5]
-            rows.append((str(path), str(resolved), lexical, target, route, names, cache_identity))
+            rows.append((*row, names, cache_identity))
             for name in names:
                 visit(path / name, depth + 1, resolved)
-            require(before == state(path, True), 'dictionary directory changed during snapshot')
-            require(lexical == state(path, False), 'dictionary directory route changed during snapshot')
         else:
             require(stat.S_ISREG(target[2]), 'nonregular dictionary member')
-            rows.append((str(path), str(resolved), lexical, target, route))
-            require(target == state(path, True) and lexical == state(path, False),
-                    'dictionary member changed during snapshot')
+            rows.append(row)
+        if is_link:
+            require(target == state(path, True), 'dictionary link target changed during snapshot')
+        require(lexical == state(path, False), 'dictionary member changed during snapshot')
     visit(root, 0)
     for parent, identity in ancestor_identities.items():
         require(identity == state(parent, False)[:5], 'dictionary ancestor changed during snapshot')
-    return rows
+    return rows, ancestor_identities
 
 
 def process_birth(pid):
