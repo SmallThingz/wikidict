@@ -6,15 +6,18 @@ command/view counts expose scan cost. Raw DAL1 alias presentation is not exposed
 by the CLI; aliases are covered only through its selected, one-hop export view.
 """
 import argparse
+import gzip
 import hashlib
 import json
 import re
 import os
+import shutil
 import stat
 import sqlite3
 import tempfile
 import subprocess
-from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 from functools import cache as memoize
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
@@ -259,7 +262,7 @@ def emitted_views(root, catalog, query):
     return views
 
 
-def scan(root, query, export_page=None, *, observe_record=None):
+def scan(root, query, export_page=None, *, observe_record=None, audit_references=False):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=[], annotations=[], views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0,
@@ -279,6 +282,7 @@ def scan(root, query, export_page=None, *, observe_record=None):
         return value
 
     destinations = {}
+    destination_references = {}
     for view in emitted_views(root, ask('languages'), ask):
         summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0)
         result['views'].append(summary)
@@ -324,8 +328,11 @@ def scan(root, query, export_page=None, *, observe_record=None):
                 require(exported.get('kind') == view['kind'].replace('-', '_') and
                         exported.get('language') == view['language'], 'export selection owner mismatch')
                 entries = exported['entries']
-                require(isinstance(entries, list) and len(entries) == 1, 'missing or ambiguous export')
-                entry = entries[0]
+                reference, reused = exported.get('audit_reference'), exported.get('audit_reused')
+                require(audit_references or reference is reused is None, 'unexpected audit reference')
+                require(isinstance(entries, list) and len(entries) == (0 if reused is not None else 1),
+                        'missing or ambiguous export')
+                entry = reused if reused is not None else entries[0]
                 actual_kind, owner, actual_title = entry['kind'], entry.get('language'), entry['title']
                 require(actual_kind in (*[x.replace('-', '_') for x in SUPPORTED_KINDS], 'alias') and
                         (owner is None or isinstance(owner, str)) and isinstance(actual_title, str) and actual_title,
@@ -342,12 +349,27 @@ def scan(root, query, export_page=None, *, observe_record=None):
                 else:
                     require(actual_title == title and actual_kind == view['kind'].replace('-', '_'),
                             'unjoined export destination')
+                identity = (actual_kind, owner, actual_title)
+                if reference is not None:
+                    require(isinstance(reference, str) and re.fullmatch('[0-9a-f]{64}', reference) is not None and
+                            view['kind'] == 'language' and actual_kind != 'language' and actual_kind != 'alias' and
+                            owner is None and redirect is not None and redirect.get('followed') is True,
+                            'invalid cross-feature audit reference')
+                if reused is not None:
+                    require(reference in destination_references and destination_references[reference] == identity and
+                            identity in destinations, 'unknown or conflicting destination reference')
+                    summary['duplicate_destinations'] += 1
+                    result['duplicate_destinations'] += 1
+                    exported = entries = entry = redirect = None
+                    continue
                 # A followed alias changes routing metadata, not destination
                 # content. Scan that content once while retaining query joins
                 # on its first issue occurrence and explicit duplicate counts.
                 content = {key: value for key, value in entry.items() if key != 'redirect'}
-                identity = (actual_kind, owner, actual_title)
                 digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).digest()
+                if reference is not None:
+                    require(destination_references.setdefault(reference, identity) == identity,
+                            'conflicting destination reference')
                 if identity in destinations:
                     require(destinations[identity] == digest, 'conflicting duplicate destination')
                     summary['duplicate_destinations'] += 1
@@ -509,7 +531,44 @@ def process_birth(pid):
     return int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19])
 
 
-def batch_exports(binary, root, selection, matches, batch_size, unchanged):
+def compress_exports(stream, storage):
+    with stream, gzip.GzipFile(fileobj=storage, mode='wb', compresslevel=1, mtime=0) as compressed:
+        shutil.copyfileobj(stream, compressed, length=128 * 1024)
+
+
+@contextmanager
+def checked_export_stream(argv):
+    # The CLI can emit megabytes of repeated JSON per title. Retain the whole
+    # batch until the child succeeds, spilling only compressed bytes to disk.
+    with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as storage:
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(read_fd, 'rb') as stream, os.fdopen(write_fd, 'wb', buffering=0) as writer:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                copied = pool.submit(compress_exports, stream, storage)
+                try:
+                    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=writer)
+                finally:
+                    writer.close()
+                birth = None
+                try:
+                    birth = process_birth(process.pid)
+                    code = process.wait(timeout=60)
+                except BaseException:
+                    try:
+                        if process.poll() is None and birth is not None:
+                            require(process_birth(process.pid) == birth, 'export child identity changed')
+                            process.kill()
+                    finally:
+                        process.wait()
+                    raise
+                copied.result()
+                require(code == 0, f'export batch failed with status {code}')
+        storage.seek(0)
+        with gzip.GzipFile(fileobj=storage, mode='rb') as decoded:
+            yield decoded
+
+
+def batch_exports(binary, root, selection, matches, batch_size, unchanged, reference_hints=None):
     require(1 <= batch_size <= 64, 'invalid export batch size')
     offset = 0
     while offset < len(matches):
@@ -537,38 +596,37 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged):
             continue
         unchanged()
         argv = [str(binary.resolve()), 'export', '--root', str(root),
-                '--format', 'json', *selection, '--batch', '--case-sensitive', '--', *titles]
-        # Disk-backed framing bounds Python memory to one decoded response.
-        # Nothing from a failed/incomplete child is accepted as an export.
-        with tempfile.TemporaryFile() as spool:
-            process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=spool)
-            birth = None
-            try:
-                birth = process_birth(process.pid)
-                code = process.wait(timeout=60)
-            except BaseException:
-                try:
-                    if process.poll() is None and birth is not None:
-                        require(process_birth(process.pid) == birth, 'export child identity changed')
-                        process.kill()
-                finally:
-                    # Joining is mandatory even if /proc is unreadable or its
-                    # identity proof fails. An unproved PID is never signalled;
-                    # that exceptional case waits for natural child handback.
-                    process.wait()
-                raise
-            require(code == 0, f'export batch failed with status {code}')
+                '--format', 'json', *selection, '--batch', '--case-sensitive']
+        hints = None
+        if reference_hints is not None:
+            hints = [reference_hints.get(title, '0' * 64) for title in titles]
+            argv.extend(['--audit-reference-hints', ''.join(hints)])
+        argv.extend(['--', *titles])
+        with checked_export_stream(argv) as spool:
             unchanged()
-            spool.seek(0)
-            for title in titles:
+            for index, title in enumerate(titles):
                 line = spool.readline()
                 require(bool(line) and line.endswith(b'\n'), 'incomplete export batch')
                 value = json.loads(line)
                 line = None
+                reference = None
+                if hints is not None:
+                    require(isinstance(value, dict) and set(value) == {'response', 'reference', 'reused'},
+                            'invalid audit reference envelope')
+                    value, reference, reused = value['response'], value['reference'], value['reused']
+                    require(isinstance(value, dict) and (reference is None or isinstance(reference, str) and
+                            re.fullmatch('[0-9a-f]{64}', reference) is not None), 'invalid audit reference')
+                    if reused is not None:
+                        require(isinstance(reused, dict) and set(reused) == {'kind', 'title', 'redirect'} and
+                                reference == hints[index] and reference == reference_hints.get(title),
+                                'unsolicited audit reference')
+                    value.update(audit_reference=reference, audit_reused=reused)
                 require(isinstance(value, dict) and value.get('schema') == 'dict.results.v1' and
                         value.get('operation') == 'lookup' and value.get('query') == title and
                         value.get('match_mode') == 'exact-utf8', 'batch response/query mismatch')
                 yield value
+                if reference is not None:
+                    reference_hints[title] = reference
                 value = None
             require(spool.read(1) == b'', 'unexpected extra batch response')
         offset += len(titles)
@@ -586,11 +644,15 @@ def main():
                         help='Match literal localized headings by code using the selected build’s language-registry.tsv.')
     parser.add_argument('--batch-size', type=int, choices=range(1, 65),
                         help='Exact exports per Reader process (default: 32 with the installed wikidict, 1 with another binary)')
+    parser.add_argument('--audit-reference-hints', action='store_true',
+                        help='Reuse confirmed fixed-feature redirect bodies with a compatible Reader')
     args = parser.parse_args()
     if args.definition_registry and not args.definition_dump:
         parser.error('--definition-registry requires --definition-dump')
     if args.batch_size is None:
         args.batch_size = 32 if args.binary.resolve() == installed_reader.resolve() else 1
+    if args.audit_reference_hints and args.batch_size == 1:
+        parser.error('--audit-reference-hints requires batch export')
 
     def query(*parts):
         return cli_query(args.binary, args.root, *parts)
@@ -605,15 +667,17 @@ def main():
                 require(dictionary_snapshot(args.root) == before, 'dictionary source changed during audit')
                 require(dictionary_snapshot(args.binary) == binary_before, 'CLI binary changed during audit')
             if args.batch_size > 1:
+                hints = {} if args.audit_reference_hints else None
                 def exports(selection, matches):
-                    return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged)
+                    return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged, hints)
         with ExitStack() as resources:
             review = None
             if args.definition_dump:
                 from source_definition_audit import SourceDefinitions
                 review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
                 resources.callback(review.close)
-            result = scan(args.root, query, exports, observe_record=review.observe if review else None)
+            result = scan(args.root, query, exports, observe_record=review.observe if review else None,
+                          audit_references=args.audit_reference_hints)
             if review is not None:
                 result['source_definitions'] = review.report()
                 if result['source_definitions']['unmatched']:

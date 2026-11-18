@@ -1,6 +1,7 @@
 import json
 import hashlib
 import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -704,6 +705,19 @@ class BatchExportBoundaryTests(unittest.TestCase):
             with self.assertRaises(audit.ScanError):
                 list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='猫')], 1, lambda: None))
 
+    def test_compressed_batch_roundtrips_in_memory_and_after_spill(self):
+        line = 'paalunan (BH) 猫\n'.encode()
+        payload = line * 50000
+        command = [sys.executable, '-c', f'import sys; sys.stdout.buffer.write({line!r} * 50000)']
+        spool = tempfile.SpooledTemporaryFile
+        for limit in (64, len(payload)):
+            with self.subTest(limit=limit), spool(max_size=limit) as storage:
+                with mock.patch.object(audit.tempfile, 'SpooledTemporaryFile', return_value=storage):
+                    with audit.checked_export_stream(command) as result:
+                        self.assertEqual(payload, result.read())
+                        self.assertEqual(limit == 64, storage._rolled)
+                        self.assertLess(storage.tell(), len(payload) // 10)
+
     def test_failed_and_truncated_batch_never_yields_a_success(self):
         class Child:
             pid = 123
@@ -829,6 +843,41 @@ class BatchExportBoundaryTests(unittest.TestCase):
                 yield {}
             with self.assertRaisesRegex(audit.ScanError, 'extra batch export'):
                 audit.scan(f.root, f.query, extra)
+
+    def test_confirmed_feature_reference_preserves_report_and_refuses_conflicts(self):
+        with Fixture() as f:
+            token = 'a' * 64
+            target = f.entry('Appendix:X', '__NOEDITSECTION__', kind='supplemental')
+            edge = dict(source_title='alias', target_title='Appendix:X', fragment='section', followed=True)
+            alias = dict(target, redirect=edge)
+            for owner in ('English', 'French'):
+                f.language(owner, [f.entry('word', 'plain', language=owner)], aliases={'alias': alias})
+            f.feature('supplemental', [target])
+            expected = audit.scan(f.root, f.query)
+
+            def exports(mode):
+                def run(selection, matches):
+                    for match in matches:
+                        title = match['title']
+                        response = f.query('export', *selection, '--case-sensitive', '--', title)
+                        if title == 'alias':
+                            response = dict(response, audit_reference=token)
+                            if selection[-1] == 'French':
+                                if mode == 'conflict':
+                                    response['audit_reference'] = 'b' * 64
+                                    response['entries'] = [dict(alias, title=target['title'], preamble_spans=[])]
+                                else:
+                                    response['audit_reference'] = 'b' * 64 if mode == 'unknown' else token
+                                    response['entries'] = []
+                                    response['audit_reused'] = dict(kind='supplemental', title=target['title'], redirect=edge)
+                        yield response
+                return run
+
+            self.assertEqual(expected, audit.scan(f.root, f.query, exports('good'), audit_references=True))
+            with self.assertRaisesRegex(audit.ScanError, 'unknown or conflicting destination reference'):
+                audit.scan(f.root, f.query, exports('unknown'), audit_references=True)
+            with self.assertRaisesRegex(audit.ScanError, 'conflicting duplicate destination'):
+                audit.scan(f.root, f.query, exports('conflict'), audit_references=True)
 
 
 if __name__ == '__main__':

@@ -96,6 +96,20 @@ python3 tools/verify_presentation.py --root "$edition" --report "$report" \
     --definition-dump "$dump"
 ```
 
+With a Reader built from the matching audit-reference source, select it
+explicitly to reuse fixed-feature bodies across repeated language-view redirects.
+
+```sh
+python3 tools/verify_presentation.py --binary "$reader" --root "$edition" \
+    --report "$report" --definition-dump "$dump" --batch-size 32 \
+    --audit-reference-hints
+```
+
+The audit still resolves each redirect in its selected view. It reads the full
+body on first use and again for a different destination record, so conflicts
+remain detectable. The default works with older Readers using ordinary exports.
+If an opted-in export fails, the audit reports an incomplete scan.
+
 The audit verifies each compressed member against its recorded size and SHA-1.
 It checks plain text and internal links under literal language headings
 on template-free pages. A match requires the expected language, definition
