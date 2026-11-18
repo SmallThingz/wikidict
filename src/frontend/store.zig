@@ -102,25 +102,33 @@ pub const Store = struct {
 
     fn indexAliases(self: *Store, aliases: *native_storage.File, kind: Kind) !void {
         const a = self.allocator;
-        var positions: std.ArrayList(AliasPosition) = .empty;
-        errdefer positions.deinit(a);
         const prefix_key = [_]u8{ '0' + @as(u8, @intCast(@backingInt(kind))), '\t' };
         const selected = aliases.prefix(&prefix_key);
-        for (selected.start..selected.end) |i| {
-            const raw_key = try aliases.titleAt(i);
+        const alias_count = selected.end - selected.start;
+        if (self.neutral_main and alias_count == 0) return error.FileNotFound;
+        const definitions = self.definitionCount();
+        _ = try std.math.add(usize, definitions, alias_count);
+        const positions = try a.alloc(AliasPosition, alias_count);
+        errdefer a.free(positions);
+        var insertion: usize = 0;
+        for (positions, selected.start..) |*position, record_index| {
+            const raw_key = try aliases.titleAt(record_index);
             const key = raw_key[prefix_key.len..];
             if (key.len == 0 or !std.unicode.utf8ValidateSlice(key)) return error.InvalidAlias;
+            const i = record_index - selected.start;
+            if (i != 0 and std.mem.eql(u8, positions[i - 1].key, key)) return error.DuplicateAliasKey;
+            // Both directories are sorted. Merge a dense redirect catalog in one pass;
+            // for sparse redirects, seek directly to each insertion point.
+            if (alias_count >= definitions) {
+                while (insertion < definitions and std.mem.order(u8, try self.file.titleAt(insertion), key) == .lt) insertion += 1;
+            } else {
+                insertion = self.file.prefix(key).start;
+            }
+            if (insertion < definitions and std.mem.eql(u8, try self.file.titleAt(insertion), key)) return error.AliasDefinitionCollision;
             // The alias directory owns this suffix for the Store lifetime.
-            try positions.append(a, .{ .record_index = i, .key = key });
+            position.* = .{ .record_index = record_index, .key = key, .position = insertion + i };
         }
-        if (self.neutral_main and positions.items.len == 0) return error.FileNotFound;
-        _ = try std.math.add(usize, self.definitionCount(), positions.items.len);
-        for (positions.items, 0..) |*position, i| {
-            if (i != 0 and std.mem.eql(u8, positions.items[i - 1].key, position.key)) return error.DuplicateAliasKey;
-            if (!self.neutral_main and self.file.find(position.key) != null) return error.AliasDefinitionCollision;
-            position.position = if (self.neutral_main) i else try std.math.add(usize, self.file.prefix(position.key).start, i);
-        }
-        self.alias_positions = try positions.toOwnedSlice(a);
+        self.alias_positions = positions;
     }
 
     fn decodeAlias(raw: native_storage.Record) !Alias {
@@ -610,6 +618,36 @@ test "alias overlay rejects source identity mismatch and ordinary record collisi
     defer db.deinit();
     try std.testing.expectEqual(@as(u64, 0), db.aliases.?.payload_reads);
     try std.testing.expectError(error.InvalidAlias, db.recordAlloc(a, (try db.find("dog")).?));
+}
+
+test "sparse alias overlay inserts before longer titles and rejects exact collisions" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const fixture = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(fixture, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try writeAliasTestBlob(fixture, root, .language, "English", &.{
+        .{ .title = "ab", .payload = "" }, .{ .title = "below", .payload = "" },
+        .{ .title = "猫", .payload = "" },
+    });
+    try writeAliasTestBlob(fixture, root, .alias, "", &.{
+        .{ .title = "1\tb", .payload = "" },
+        .{ .title = "1\t龍", .payload = "" },
+    });
+    {
+        var db = try Store.open(std.testing.io, a, root, .language, "English");
+        defer db.deinit();
+        for ([_][]const u8{ "ab", "b", "below", "猫", "龍" }, 0..) |title, i| {
+            try std.testing.expectEqualStrings(title, try db.titleAt(i));
+            try std.testing.expectEqual(i, (try db.find(title)).?);
+        }
+        try std.testing.expectEqual(Range{ .start = 1, .end = 3 }, try db.prefix("b"));
+        try std.testing.expectEqual(@as(u64, 0), db.aliases.?.payload_reads);
+    }
+    try writeAliasTestBlob(fixture, root, .alias, "", &.{.{ .title = "1\tbelow", .payload = "" }});
+    try std.testing.expectError(error.AliasDefinitionCollision, Store.open(std.testing.io, a, root, .language, "English"));
 }
 
 test "same-count alias replacement invalidates a warmed folded task and disk cache" {
