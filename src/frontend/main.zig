@@ -128,7 +128,7 @@ fn run(init: std.process.Init) !u8 {
         return 2;
     };
     defer db.deinit();
-    if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, w);
+    if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, opts.batch_audit_hints, w);
     const color = switch (opts.color) {
         .always => true,
         .never => false,
@@ -384,8 +384,8 @@ test {
 // One ordinary Store selection and the same exact lookup/decoder/Response as
 // single export. Each line is independently associated by its unchanged query;
 // duplicates remain duplicates. Stop after the first empty result or error.
-fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []const u8, w: *std.Io.Writer) !u8 {
-    for (queries) |query| {
+fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []const u8, hints: ?[]const u8, w: *std.Io.Writer) !u8 {
+    for (queries, 0..) |query, position| {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const a = arena.allocator();
@@ -398,22 +398,36 @@ fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []cons
             .total_matches = 0,
             .match_mode = "exact-utf8",
         };
+        var audit: store.Store.AuditReference = .{
+            .arena = a,
+            .hint = if (hints) |values| values[position * 64 ..][0..64] else "",
+        };
         if (try db.find(query)) |index| {
-            var raw = try db.recordAlloc(gpa, index);
-            defer raw.deinit();
-            var doc = try model.fromRecord(gpa, raw.record);
-            defer doc.deinit();
-            response.entries = &.{doc.entry};
             response.total_matches = 1;
-            try std.json.Stringify.value(response, .{}, w);
-            try w.writeByte('\n');
-            try w.flush();
+            if (try db.recordAuditAlloc(gpa, index, if (hints != null) &audit else null)) |found| {
+                var raw = found;
+                defer raw.deinit();
+                var doc = try model.fromRecord(gpa, raw.record);
+                defer doc.deinit();
+                response.entries = &.{doc.entry};
+                try writeBatchResponse(w, response, if (hints != null) &audit else null);
+            } else try writeBatchResponse(w, response, &audit);
         } else {
-            try std.json.Stringify.value(response, .{}, w);
-            try w.writeByte('\n');
-            try w.flush();
+            try writeBatchResponse(w, response, if (hints != null) &audit else null);
             return 1;
         }
     }
     return 0;
+}
+
+fn writeBatchResponse(w: *std.Io.Writer, response: output.Response, audit: ?*const store.Store.AuditReference) !void {
+    if (audit) |value| {
+        try std.json.Stringify.value(.{
+            .response = response,
+            .reference = if (value.id) |*id| @as(?[]const u8, id) else null,
+            .reused = value.reused,
+        }, .{}, w);
+    } else try std.json.Stringify.value(response, .{}, w);
+    try w.writeByte('\n');
+    try w.flush();
 }

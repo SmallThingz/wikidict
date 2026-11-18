@@ -14,6 +14,7 @@ pub const Options = struct {
     query: []const u8 = "",
     // Borrowed literal argv tail; only explicit bounded exact export uses it.
     batch_queries: []const []const u8 = &.{},
+    batch_audit_hints: ?[]const u8 = null,
     format: Format = .text,
     color: Color = .auto,
     theme: Theme = .terminal,
@@ -98,7 +99,10 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
             if (pos + 1 >= argv.len) return error.Usage;
             pos += 1;
             const value = argv[pos];
-            if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) {
+            if (std.mem.eql(u8, arg, "--audit-reference-hints")) {
+                if (out.batch_audit_hints != null) return error.Usage;
+                out.batch_audit_hints = value;
+            } else if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) {
                 out.language = value;
                 out.language_explicit = true;
             } else if (std.mem.eql(u8, arg, "--kind")) out.kind = store.parseKind(value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--format")) out.format = std.meta.stringToEnum(Format, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--theme")) out.theme = std.meta.stringToEnum(Theme, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--color")) out.color = std.meta.stringToEnum(Color, value) orelse return error.Usage else if (std.mem.eql(u8, arg, "--limit")) out.limit = std.fmt.parseInt(usize, value, 10) catch return error.Usage else if (std.mem.eql(u8, arg, "--offset")) out.offset = std.fmt.parseInt(usize, value, 10) catch return error.Usage else return error.Usage;
@@ -110,6 +114,10 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
     }
     if (out.help) return out;
     if (batch_export and (out.batch_queries.len == 0 or !out.case_sensitive or out.format != .json)) return error.Usage;
+    if (out.batch_audit_hints) |hints| {
+        if (!batch_export or hints.len != out.batch_queries.len * 64) return error.Usage;
+        for (hints) |c| if (!(c >= '0' and c <= '9') and !(c >= 'a' and c <= 'f')) return error.Usage;
+    }
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
     if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
@@ -145,6 +153,15 @@ test "CLI options are strict and lookup shorthand is unambiguous" {
 
     // Old positional ROOT/KIND syntax is gone; a non-command first token is always WORD.
     try std.testing.expectError(error.Usage, parse(&.{ ".tmp/blobs", "citations", "example" }));
+}
+
+test "audit references require one lowercase digest per exact batch query" {
+    const hint = "0000000000000000000000000000000000000000000000000000000000000000";
+    const parsed = try parse(&.{ "export", "--case-sensitive", "--batch", "--audit-reference-hints", hint, "--", "old" });
+    try std.testing.expectEqualStrings(hint, parsed.batch_audit_hints.?);
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--case-sensitive", "--batch", "--audit-reference-hints", hint, "--", "old", "another" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--case-sensitive", "--batch", "--audit-reference-hints", hint[1..] ++ "G", "--", "old" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--audit-reference-hints", hint, "--", "old" }));
 }
 
 test "frontend formats and terminal options reject invalid combinations" {

@@ -223,9 +223,20 @@ pub const Store = struct {
         }
     };
     pub fn recordAlloc(self: *Store, a: std.mem.Allocator, index: usize) !Raw {
+        return (try self.recordAuditAlloc(a, index, null)).?;
+    }
+
+    pub const AuditReference = struct {
+        arena: std.mem.Allocator,
+        hint: []const u8,
+        id: ?[64]u8 = null,
+        reused: ?struct { kind: Kind, title: []const u8, redirect: Redirect } = null,
+    };
+
+    pub fn recordAuditAlloc(self: *Store, a: std.mem.Allocator, index: usize, audit: ?*AuditReference) !?Raw {
         return switch (try self.positionAt(index)) {
-            .definition => |i| readFile(a, &self.file, i),
-            .alias => |i| self.readAlias(a, self.alias_positions[i].record_index),
+            .definition => |i| try readFile(a, &self.file, i),
+            .alias => |i| try self.readAlias(a, self.alias_positions[i].record_index, audit),
         };
     }
 
@@ -250,7 +261,7 @@ pub const Store = struct {
         return .{ .source_title = alias.source_title, .target_title = alias.target_title, .fragment = alias.fragment, .followed = followed };
     }
 
-    fn readAlias(self: *Store, a: std.mem.Allocator, index: usize) !Raw {
+    fn readAlias(self: *Store, a: std.mem.Allocator, index: usize, audit: ?*AuditReference) !?Raw {
         const aliases = if (self.neutral_main) &self.file else if (self.aliases) |*file| file else return error.InvalidAlias;
         var source = try aliases.readAlloc(a, index);
         errdefer source.deinit();
@@ -295,6 +306,36 @@ pub const Store = struct {
         const target_index = target_file.find(alias.target_key) orelse {
             target_file.deinit();
             return aliasView(source, alias);
+        };
+        if (audit) |value| if (self.selectionKind() == .language) {
+            // Derived indexes can be regenerated independently of the source.
+            // Bind the actual stored extent and decoder inputs, not its ordinal.
+            const row = target_file.directory.rows[target_index];
+            const title = try target_file.titleAt(target_index);
+            var extent: [12]u8 = undefined;
+            std.mem.writeInt(u64, extent[0..8], row.offset, .little);
+            std.mem.writeInt(u32, extent[8..12], row.length, .little);
+            var id_hash = std.crypto.hash.sha2.Sha256.init(.{});
+            id_hash.update("wikidict-audit-reference-v1\x00");
+            id_hash.update(&target_file.fingerprint);
+            id_hash.update(&extent);
+            id_hash.update(target_file.path);
+            id_hash.update("\x00");
+            id_hash.update(title);
+            id_hash.update("\x00");
+            id_hash.update(target_file.directory.header);
+            value.id = std.fmt.bytesToHex(id_hash.finalResult(), .lower);
+            if (std.mem.eql(u8, &value.id.?, value.hint)) {
+                value.reused = .{ .kind = kind, .title = try value.arena.dupe(u8, title), .redirect = .{
+                    .source_title = try value.arena.dupe(u8, alias.source_title),
+                    .target_title = try value.arena.dupe(u8, alias.target_title),
+                    .fragment = try value.arena.dupe(u8, alias.fragment),
+                    .followed = true,
+                } };
+                source.deinit();
+                target_file.deinit();
+                return null;
+            }
         };
         var target = try readFile(a, &target_file, target_index);
         target.target_file = target_file;
@@ -577,6 +618,28 @@ test "alias overlay preserves order and follows exactly one compiled target" {
         try std.testing.expectEqualStrings("Alpha", doc.entry.title);
         try std.testing.expect(!doc.entry.redirect.?.followed);
         try std.testing.expect(doc.entry.language == null);
+
+        const english_index = (try db.find("Feature")).?;
+        const unknown: [64]u8 = @splat('0');
+        var observed: Store.AuditReference = .{ .arena = fixture, .hint = &unknown };
+        var first = (try db.recordAuditAlloc(a, english_index, &observed)).?;
+        defer first.deinit();
+        var first_doc = try model.fromRecord(a, first.record);
+        defer first_doc.deinit();
+        try std.testing.expectEqualStrings("animal", first_doc.entry.title);
+        try std.testing.expectEqual(@as(u64, 1), first.target_file.?.payload_reads);
+        const id = observed.id.?;
+        var repeat: Store.AuditReference = .{ .arena = fixture, .hint = &id };
+        const german_index = (try german.find("Feature")).?;
+        try std.testing.expect((try german.recordAuditAlloc(a, german_index, &repeat)) == null);
+        try std.testing.expectEqualSlices(u8, &id, &repeat.id.?);
+        try std.testing.expectEqual(Kind.thesaurus, repeat.reused.?.kind);
+        try std.testing.expectEqualStrings(first_doc.entry.title, repeat.reused.?.title);
+        try std.testing.expectEqualDeep(first_doc.entry.redirect.?, repeat.reused.?.redirect);
+        var fallback: Store.AuditReference = .{ .arena = fixture, .hint = &id };
+        var still_alias = (try german.recordAuditAlloc(a, (try german.find("Alpha")).?, &fallback)).?;
+        defer still_alias.deinit();
+        try std.testing.expect(fallback.id == null and fallback.reused == null);
     }
     {
         var thesaurus = try Store.open(std.testing.io, a, root, .thesaurus, "");
