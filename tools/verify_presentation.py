@@ -13,6 +13,7 @@ import os
 import stat
 import tempfile
 import subprocess
+from functools import cache as memoize
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
 
@@ -431,6 +432,7 @@ def prepare_index_directories(root):
 def dictionary_snapshot(root):
     root = Path(root).absolute()
     rows, seen = [], set()
+    ancestor_identities = {}
 
     def state(path, follow):
         value = path.stat() if follow else path.lstat()
@@ -438,13 +440,34 @@ def dictionary_snapshot(root):
                 value.st_gid, value.st_nlink, value.st_size,
                 value.st_mtime_ns, value.st_ctime_ns)
 
-    def visit(path, depth):
+    @memoize
+    def directory_route(path):
+        # Siblings share the same route. Recheck each distinct ancestor before
+        # returning the snapshot, including ancestors outside the dictionary.
+        route = []
+        for parent in (path, *path.parents):
+            if parent not in ancestor_identities:
+                ancestor_identities[parent] = state(parent, False)[:5]
+            route.append((str(parent), ancestor_identities[parent]))
+        return route
+
+    def visit(path, depth, resolved_parent=None):
         require(depth <= 16, 'dictionary directory depth exceeded')
         lexical = state(path, False)
         target = state(path, True)
-        resolved = path.resolve(strict=True)
-        route = [(str(parent), state(parent, False)[:5])
-                 for parent in (path, *path.parents, resolved, *resolved.parents)]
+        if resolved_parent is None or stat.S_ISLNK(lexical[2]):
+            resolved = path.resolve(strict=True)
+        else:
+            resolved = resolved_parent / path.name
+        route = [(str(path), lexical[:5])]
+        if path != path.parent:
+            route.extend(directory_route(path.parent))
+        if resolved == path:
+            route = route * 2
+        else:
+            route.append((str(resolved), target[:5]))
+            if resolved != resolved.parent:
+                route.extend(directory_route(resolved.parent))
         if stat.S_ISDIR(target[2]):
             identity = target[:2]
             require(identity not in seen, 'dictionary directory alias or cycle')
@@ -461,14 +484,17 @@ def dictionary_snapshot(root):
                 cache_identity = cache_state[:5]
             rows.append((str(path), str(resolved), lexical, target, route, names, cache_identity))
             for name in names:
-                visit(path / name, depth + 1)
+                visit(path / name, depth + 1, resolved)
             require(before == state(path, True), 'dictionary directory changed during snapshot')
+            require(lexical == state(path, False), 'dictionary directory route changed during snapshot')
         else:
             require(stat.S_ISREG(target[2]), 'nonregular dictionary member')
             rows.append((str(path), str(resolved), lexical, target, route))
             require(target == state(path, True) and lexical == state(path, False),
                     'dictionary member changed during snapshot')
     visit(root, 0)
+    for parent, identity in ancestor_identities.items():
+        require(identity == state(parent, False)[:5], 'dictionary ancestor changed during snapshot')
     return rows
 
 

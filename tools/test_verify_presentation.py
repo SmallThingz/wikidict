@@ -653,6 +653,29 @@ class BatchExportBoundaryTests(unittest.TestCase):
             (root / '.incomplete').write_bytes(b'')
             self.assertNotEqual(current, audit.dictionary_snapshot(root))
 
+    def test_shared_ancestor_replaced_during_walk_rejects_same_target(self):
+        with tempfile.TemporaryDirectory() as d:
+            parent = Path(d)
+            real = parent / 'real'
+            (real / 'edition').mkdir(parents=True)
+            (real / 'edition' / 'entry').write_bytes(b'unchanged')
+            link = parent / 'current'
+            link.symlink_to(real, target_is_directory=True)
+            replacement = parent / 'replacement'
+            replacement.symlink_to(real, target_is_directory=True)
+            root = link / 'edition'
+            listdir = audit.os.listdir
+
+            def list_and_replace(path):
+                names = listdir(path)
+                if path == root:
+                    replacement.replace(link)
+                return names
+
+            with mock.patch.object(audit.os, 'listdir', list_and_replace):
+                with self.assertRaisesRegex(audit.ScanError, 'ancestor changed'):
+                    audit.dictionary_snapshot(root)
+
     def test_prepared_derived_index_writes_do_not_change_published_source_snapshot(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d); (root/'a.wikblb').write_bytes(b'source')
