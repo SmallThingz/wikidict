@@ -34,6 +34,8 @@ def configuration(site_raw, stats_raw):
     site = e.decode(site_raw)
     cfg = prior.profile.configuration(site, digest(site_raw))
     domain = {0}
+    # Each accepted count belongs to the bounded formatting domain below.
+    parsed_counts = {}
     seen = set()
     if not stats_raw or not stats_raw.endswith(b'\n'): raise ValueError('Incomplete category statistics')
     for raw_line in io.BytesIO(stats_raw):
@@ -45,9 +47,15 @@ def configuration(site_raw, stats_raw):
         seen.add(title)
         numbers = []
         for raw in fields[1:]:
-            if re.fullmatch('0|[1-9][0-9]*', raw) is None or int(raw) > MAX_VALUE:
-                raise ValueError('Invalid category count')
-            numbers.append(int(raw))
+            value = parsed_counts.get(raw)
+            if value is None:
+                if re.fullmatch('0|[1-9][0-9]*', raw) is None:
+                    raise ValueError('Invalid category count')
+                value = int(raw)
+                if value > MAX_VALUE:
+                    raise ValueError('Invalid category count')
+                parsed_counts[raw] = value
+            numbers.append(value)
         total, subcats, files = numbers
         if subcats + files > total: raise ValueError('Inconsistent category counts')
         domain.update((total, total-subcats-files, subcats, files))
