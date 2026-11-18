@@ -52,6 +52,46 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual('entry.blocks[0].spans', path)
         self.assertEqual(['behavior-switch'], audit.diagnostic_categories(text))
 
+    def test_ruby_base_reading_and_fallback_are_separate_visible_runs(self):
+        def span(text, **fields):
+            return dict(kind='text', text=text, **fields)
+
+        ruby = dict(segments=[dict(bases=[dict(spans=[span('日')])], annotations=[dict(
+            spans=[span('__NO'), span('TOC__', explanation='{{tooltip}}')],
+            fallback_before=[span('(')], fallback_after=[span(')')])])])
+        body = [span('{'), span('', ruby=ruby, trail='{'), span('after')]
+        fields = list(audit.text_fields(body))
+        self.assertEqual(['{', '日', '__NOTOC__', '(', ')', '{after'], [text for _, text in fields])
+        self.assertEqual([('entry[1].ruby.segments[0].annotations[0].spans', ['behavior-switch'])],
+                         [(path, audit.diagnostic_categories(text)) for path, text in fields
+                          if audit.diagnostic_categories(text)])
+
+    def test_nested_inline_groups_scan_visible_text_once_and_keep_target_separate(self):
+        visible = dict(kind='link', text='Lua ', target='{{target}}', explanation='{{tooltip}}')
+        child = dict(kind='text', text='', inline_action_group=dict(spans=[visible, dict(kind='text', text='error')]))
+        for group in ('inline_padding_group', 'inline_box_group'):
+            with self.subTest(group=group):
+                body = [dict(kind='text', text='', **{group: dict(spans=[child])})]
+                self.assertEqual([('entry', 'Lua error')],
+                                 list(audit.text_fields(body)))
+                self.assertEqual(['{{target}}'], [target for _, target in audit.action_fields(body)])
+                self.assertEqual(['{{tooltip}}'], [note for _, note in audit.annotation_fields(body)])
+
+
+    def test_inline_group_text_joins_outer_prose_and_respects_overlay_order(self):
+        def span(text, **fields):
+            return dict(kind='text', text=text, **fields)
+
+        for key in ('inline_action_group', 'inline_padding_group', 'inline_box_group'):
+            with self.subTest(key=key):
+                spans = [span('__NO'), span('', **{key: dict(spans=[span('TO')])}), span('C__')]
+                self.assertEqual([('entry', '__NOTOC__')], list(audit.text_fields(spans)))
+        group = dict(spans=[span('Lua '), span('error')], overlays=[dict(content=None),
+            dict(content=dict(before_child=1, spans=[span('example')])),
+            dict(content=dict(before_child=1, spans=[span(' without ')]))])
+        fields = list(audit.text_fields([span('', inline_box_group=group, trail='.')]))
+        self.assertEqual([('entry', 'Lua example without error.')], fields)
+        self.assertEqual([], audit.diagnostic_categories(fields[0][1]))
 
     def test_explanations_traverse_span_lists_tables_and_references_once(self):
         span = dict(kind='text', text='body', trail='', explanation='literal {{x}}')

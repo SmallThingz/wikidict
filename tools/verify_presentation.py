@@ -35,6 +35,39 @@ def diagnostic_categories(text):
     ) if pattern.search(text)]
 
 
+def inline_text_parts(spans, path, start=0):
+    """Yield inline prose in authored order, or a separate Ruby reading context."""
+    for index, span in enumerate(spans, start):
+        text = span['text']
+        trail = span.get('trail', '')
+        if span['kind'] == 'line_break':
+            yield '\n' + text + trail + '\n'
+            continue
+        yield text
+        if isinstance(span.get('ruby'), dict):
+            yield f'{path}[{index}].ruby', span['ruby']
+        for key in ('inline_action_group', 'inline_padding_group', 'inline_box_group'):
+            group = span.get(key)
+            if not isinstance(group, dict):
+                continue
+            group_path = f'{path}[{index}].{key}'
+            children = group['spans']
+            cursor = 0
+            for overlay_index, overlay in enumerate(group.get('overlays', [])):
+                content = overlay.get('content')
+                if content is None:
+                    continue
+                boundary = content['before_child']
+                require(natural(boundary) and cursor <= boundary <= len(children),
+                        f'invalid overlay child position in {group_path}')
+                yield from inline_text_parts(children[cursor:boundary], group_path + '.spans', cursor)
+                yield from inline_text_parts(content['spans'], f'{group_path}.overlays[{overlay_index}].content.spans')
+                cursor = boundary
+            tail = children[cursor:] if cursor else children
+            yield from inline_text_parts(tail, group_path + '.spans', cursor)
+        yield trail
+
+
 def text_fields(value, path='entry'):
     if isinstance(value, dict):
         for key, child in value.items():
@@ -44,11 +77,21 @@ def text_fields(value, path='entry'):
                 yield from text_fields(child, path + '.' + key)
     elif isinstance(value, list):
         if value and all(isinstance(span, dict) and 'text' in span and 'kind' in span for span in value):
-            # Separate semantic breaks without hiding their stored diagnostic text/trail.
-            yield path, ''.join(
-                ('\n' + span['text'] + span.get('trail', '') + '\n'
-                 if span['kind'] == 'line_break' else span['text'] + span.get('trail', ''))
-                for span in value)
+            # Annotations and fallbacks are read separately from neighboring prose.
+            parts = []
+            saw_ruby = False
+            for part in inline_text_parts(value, path):
+                if isinstance(part, str):
+                    parts.append(part)
+                else:
+                    if any(parts):
+                        yield path, ''.join(parts)
+                    parts.clear()
+                    ruby_path, ruby = part
+                    yield from text_fields(ruby, ruby_path)
+                    saw_ruby = True
+            if not saw_ruby or any(parts):
+                yield path, ''.join(parts)
             return
         for index, child in enumerate(value):
             yield from text_fields(child, f'{path}[{index}]')
