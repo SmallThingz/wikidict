@@ -377,7 +377,7 @@ private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
 
 /** Only original children contribute text. Overlay order is authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
-    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleLength? = null,
+    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleWidth? = null,
     val atomicLayout: InlineBoxAtomicLayout? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
@@ -1041,9 +1041,13 @@ data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? =
     val textAlign: CellTextAlign? = null, val borderEdges: CellBorderEdges? = null,
     val letterSpacing: StyleLength? = null, val width: StyleWidth? = null,
     val minWidth: StyleLength? = null, val verticalAlign: CellVerticalAlign? = null,
-    val lineHeight: CellLineHeight? = null) {
-    init { require(border != null || padding != null || textAlign != null || borderEdges != null ||
-        letterSpacing != null || width != null || minWidth != null || verticalAlign != null || lineHeight != null) { "Empty cell style" } }
+    val lineHeight: CellLineHeight? = null, val opacity: Float? = null) {
+    init {
+        require(border != null || padding != null || textAlign != null || borderEdges != null ||
+            letterSpacing != null || width != null || minWidth != null || verticalAlign != null ||
+            lineHeight != null || opacity != null) { "Empty cell style" }
+        require(opacity == null || opacity.isFinite() && opacity in 0f..1f) { "Invalid cell opacity" }
+    }
 }
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
                 val background: String? = null, val nestedTable: Table? = null, val blocks: List<Block>? = null,
@@ -1427,15 +1431,21 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             if (owner != null) requireAtomicInlineOwner(owner, value)
         }
         value.radius?.let { radius ->
-            require(radius.unit == StyleLengthUnit.Px) { "Inline box radius requires CSS pixels" }
-            val first = value.border.top
-            require(value.overlays.isEmpty() && first is InlineBoxBorderEdge.Solid && first.color is InlineBoxColor.Rgb) {
-                "Rounded inline box requires solid RGB borders without overlays"
+            require(radius.unit == StyleWidthUnit.Px || radius.unit == StyleWidthUnit.Percent) {
+                "Inline box radius requires CSS pixels or percent"
             }
-            require(listOf(value.border.right, value.border.bottom, value.border.left).all { edge ->
-                edge is InlineBoxBorderEdge.Solid && edge.width.unit == first.width.unit &&
-                    edge.width.value == first.width.value && edge.color == first.color
-            }) { "Rounded inline box borders must have equal widths and colors" }
+            val other = listOf(value.border.right, value.border.bottom, value.border.left)
+            require(value.overlays.isEmpty() && when (val first = value.border.top) {
+                is InlineBoxBorderEdge.Solid -> first.color is InlineBoxColor.Rgb && other.all { edge ->
+                    edge is InlineBoxBorderEdge.Solid && edge.width.unit == first.width.unit &&
+                        edge.width.value == first.width.value && edge.color == first.color
+                }
+                is InlineBoxBorderEdge.Dotted -> first.color is InlineBoxColor.Rgb && other.all { edge ->
+                    edge is InlineBoxBorderEdge.Dotted && edge.width.unit == first.width.unit &&
+                        edge.width.value == first.width.value && edge.color == first.color
+                }
+                else -> false
+            }) { "Rounded inline box requires four equal solid or dotted RGB borders without overlays" }
         }
         val depth = descend(contentDepth)
         charge(value.overlays.size)
@@ -1988,6 +1998,9 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
     val advisories = linkedSetOf<TextDetail>()
     visitEntryAnnotationRuns(entry) { spans, location ->
         val graphical = rubyGraphicalSpans(spans)
+        val boxProjection = if (spans.hasNativeInlineGroups()) rubyGraphicalProjection(spans).takeIf { projection ->
+            projection.ranges.any { it.role == RubyTextRole.BoxGroup }
+        } else null
         var cachedContext: String? = null
         fun context(): String = cachedContext ?: run {
             val plain = textOf(spans)
@@ -2009,8 +2022,7 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
                 }
                 label.setLength(0)
             }
-            for (span in graphical) {
-                val value = if (advisory) span.imageTooltip else span.explanation
+            fun append(span: Span, value: String?) {
                 val owned = if (!advisory && !value.isNullOrEmpty()) owners.media(span) else null
                 val nextKind = if (advisory) TextDetailKind.Advisory else if (owned != null) TextDetailKind.MediaDescription else TextDetailKind.Abbreviation
                 val image = span.image
@@ -2027,12 +2039,43 @@ private fun entryTextDetails(entry: Entry): List<TextDetail> {
                 if (span.kind == "line_break") {
                     finish(); annotation = value; kind = nextKind; file = nextFile
                     label.append(text); finish(); annotation = null; file = null
-                    continue
+                    return
                 }
                 if (value != annotation || nextKind != kind || nextFile != file) {
                     finish(); annotation = value; kind = nextKind; file = nextFile
                 }
                 if (!value.isNullOrEmpty()) label.append(text)
+            }
+            if (!advisory || boxProjection == null) {
+                graphical.forEach { append(it, if (advisory) it.imageTooltip else it.explanation) }
+            } else {
+                var leaf = 0
+                val titleOwners = ArrayList<RubyTextRange>()
+                for (range in boxProjection.ranges) {
+                    while (titleOwners.isNotEmpty() && !range.path.startsWith(titleOwners.last().path + "/"))
+                        titleOwners.removeAt(titleOwners.lastIndex)
+                    val source = range.span ?: continue
+                    if (source.tooltip != null) titleOwners.add(range)
+                    if (range.role == RubyTextRole.BoxGroup) {
+                        source.tooltip?.takeIf { it.isNotEmpty() }?.let { title ->
+                            // The original border/padding still owns its title when a child
+                            // explicitly suppresses its own hover advice. Emit that owner once.
+                            finish(); annotation = null; file = null
+                            result.add(TextDetail(TextDetailKind.Advisory,
+                                boxProjection.text.substring(range.start, range.end), title, context()))
+                        }
+                    } else if (range.role != RubyTextRole.Owner && range.role != RubyTextRole.PaddingGroup &&
+                        range.role != RubyTextRole.ActionGroup && range.role != RubyTextRole.ClippedAbsolute) {
+                        val projected = graphical[leaf++]
+                        val nearestTitle = titleOwners.lastOrNull()
+                        // A null child inherits its Box's title; the original owner record
+                        // already carries it. Empty child/image titles remain explicit stops.
+                        val value = if (source.tooltip == null && source.image?.tooltip == null &&
+                            nearestTitle?.role == RubyTextRole.BoxGroup) null else projected.imageTooltip
+                        append(projected, value)
+                    }
+                }
+                check(leaf == graphical.size)
             }
             finish()
         }

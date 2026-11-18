@@ -126,4 +126,108 @@ class TableStyleTest {
         assertEquals(0.0, zeroWindow.style!!.decorationScale, 0.0)
         assertEquals(listOf(body), grid.cells.single().cell.spans)
     }
+
+    @Test fun opacityOnlyCellStylePreservesNullGeometryAndDecorationProjectionAtEveryEndpoint() {
+        val text = listOf(Span("text", "Original cell body"))
+        val original = Table(emptyList(), listOf(listOf(Cell(text, false, 1, 1))))
+        fun metrics(table: Table, viewport: Int) = tableRenderMetrics(table, 136, 10, 40, 1f,
+            containerFontPixels = 20f, decorationViewportWidth = viewport, decorationViewportHeight = viewport)
+        fun geometry(value: TableRenderMetrics?): List<Any?>? = value?.let { listOf(it.width, it.columnWidth,
+            it.cellPadding, it.minRowHeight, it.cellSpacing, it.borderWidth, it.extraColumns,
+            it.columnWidths?.toList(), it.outerBorder, it.style) }
+        for (viewport in listOf(0, 1, 80, 400)) {
+            val ordinary = metrics(original, viewport)
+            for (opacity in listOf(0f, .2f, .201f, 1f)) {
+                val cell = original.rows.single().single().copy(style = CellStyle(opacity = opacity))
+                val table = original.copy(rows = listOf(listOf(cell)))
+                assertFalse(tableHasOwnStyle(table))
+                assertFalse(tableHasComputedCellStyle(table))
+                assertEquals(tableUsesContentWidths(original), tableUsesContentWidths(table))
+                assertEquals(geometry(ordinary), geometry(metrics(table, viewport)))
+                assertSame(text, cell.spans)
+                assertEquals(opacity, cell.style!!.opacity!!, 0f)
+                assertEquals(opacity < 1f, table.hasNativeCellOpacity())
+            }
+        }
+        // The existing geometric style and viewport-driven decoration projection
+        // still own their exact arithmetic when opacity is added alongside them.
+        val oldStyle = CellStyle(padding = all(px(1000f)), border = StyleBorder.Solid(px(30f), "#123456"))
+        val styled = original.copy(rows = listOf(listOf(original.rows[0][0].copy(style = oldStyle))))
+        assertTrue(tableHasOwnStyle(styled))
+        for (viewport in listOf(1, 80, 400)) for (opacity in listOf(0f, .2f, 1f)) {
+            val table = styled.copy(rows = listOf(listOf(styled.rows[0][0].copy(style = oldStyle.copy(opacity = opacity)))))
+            assertEquals(geometry(metrics(styled, viewport)), geometry(metrics(table, viewport)))
+            assertEquals(tableHasComputedCellStyle(styled), tableHasComputedCellStyle(table))
+        }
+    }
+
+    @Test fun opacityGroupAdmissionKeepsRealBoxTextAndRefusesUnsupportedOwnersWithoutChangingSource() {
+        val zero = all(px(0f))
+        val border = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val children = listOf(Span("text", "\u00a0\u00a0\u00a0\u00a0"))
+        val box = Span("text", "", background = "#153b64", tooltip = "Original advice",
+            inlineBoxGroup = InlineBoxGroup(zero, border, spans = children))
+        val body = listOf(box, Span("text", " "), box.copy(background = "#962e22"),
+            Span("text", " "), box.copy(background = "#2f683a"))
+        val cell = Cell(body, false, 1, 1, style = CellStyle(opacity = .2f))
+        val table = Table(emptyList(), listOf(listOf(cell)), style = TableStyle(width = StyleWidth(StyleWidthUnit.Percent, 100f)))
+        assertTrue(nativeCellOpacityTableShape(table))
+        assertSame(body, table.rows[0][0].spans)
+        assertSame(children, table.rows[0][0].spans[0].inlineBoxGroup!!.spans)
+        assertEquals("\u00a0\u00a0\u00a0\u00a0 \u00a0\u00a0\u00a0\u00a0 \u00a0\u00a0\u00a0\u00a0", rubyGraphicalText(body))
+        val linked = cell.copy(spans = listOf(Span("link", "Retained action", "Target")))
+        assertFalse(nativeCellOpacityTableShape(table.copy(rows = listOf(listOf(linked)))))
+        assertEquals("Target", linked.spans.single().target)
+        val caption = listOf(Span("link", "Original caption", "Caption target"))
+        val captioned = table.copy(caption = caption)
+        assertFalse(nativeCellOpacityTableShape(captioned))
+        assertSame(caption, captioned.caption)
+        assertFalse(nativeCellOpacityTableShape(table.copy(style = table.style!!.copy(collapse = TableCollapse.Collapse))))
+        val nested = cell.copy(spans = emptyList(), nestedTable = Table(emptyList(), listOf(listOf(Cell(children, false, 1, 1)))))
+        assertFalse(nativeCellOpacityTableShape(table.copy(rows = listOf(listOf(nested)))))
+        assertSame(children, nested.nestedTable!!.rows[0][0].spans)
+        for (opacity in listOf(0f, 1f)) {
+            val source = cell.copy(style = cell.style!!.copy(opacity = opacity))
+            assertSame(body, source.spans)
+            assertEquals(opacity < 1f, source.hasNativeCellOpacity())
+        }
+    }
+
+    @Test fun opacityBodyEnrollmentPreservesOriginalRowsAndRequiresTheCompleteReferentialEntryEpoch() {
+        val before = Block("paragraph", 0, listOf(Span("link", "Before", "Before target")))
+        val cell = Cell(listOf(Span("text", "body")), false, 1, 1, style = CellStyle(opacity = .2f))
+        val table = Table(emptyList(), listOf(listOf(cell)), style = TableStyle(width = StyleWidth(StyleWidthUnit.Percent, 100f)))
+        val middle = Block("table", 0, emptyList(), table = table)
+        val after = Block("paragraph", 0, listOf(Span("text", "After")))
+        val entry = Entry("word", emptyList(), "language", "Malagasy", "mg",
+            listOf(Section(2, "Malagasy", listOf(before, middle, after))), emptyList())
+        val rows = entry.readingRows
+        val originalKeys = rows.map { it.key }
+        assertEquals(listOf(rows.indices), floatBodyRuns(rows, language = entry.language))
+        assertEquals(originalKeys, entry.readingRows.map { it.key })
+        assertSame(before, rows.single { it.block === before }.block)
+        val tableProjection = rows.single { it.key == "block-0-1" }.block!!
+        assertEquals(middle, tableProjection)
+        assertSame(cell.spans, tableProjection.table!!.rows.single().single().spans)
+        assertSame(table, entry.sections.single().blocks[1].table)
+        assertSame(after, rows.single { it.block === after }.block)
+        val source = nativeCellOpacityEntrySource(entry, rows, rows.indices)!!
+        assertSame(entry, source.entry)
+        assertNull(nativeCellOpacityEntrySource(entry, rows, 1..rows.lastIndex))
+        val equalReplacement = entry.copy()
+        assertEquals(entry, equalReplacement)
+        assertNotEquals(NativeCellOpacitySourceIdentity(entry), NativeCellOpacitySourceIdentity(equalReplacement))
+        assertEquals(NativeCellOpacitySourceIdentity(entry), NativeCellOpacitySourceIdentity(entry))
+        assertNull(nativeCellOpacityEntrySource(entry.copy(preamble = listOf(Span("text", "Separate source"))), rows, rows.indices))
+        assertNull(nativeCellOpacityEntrySource(entry.copy(references = listOf(Reference(1, 1, "", listOf(Span("text", "Reference"))))), rows, rows.indices))
+        assertNull(nativeCellOpacityEntrySource(entry.copy(displayTitle = listOf(Span("text", "Separate rich title"))), rows, rows.indices))
+        assertNull(nativeCellOpacityEntrySource(entry.copy(media = listOf(Media("Outside.png", "image", "Separate media"))), rows, rows.indices))
+        for (opacity in listOf<Float?>(null, 1f)) {
+            val original = table.copy(rows = listOf(listOf(cell.copy(style = opacity?.let { CellStyle(opacity = it) }))))
+            val legacy = entry.copy(sections = listOf(entry.sections.single().copy(blocks = listOf(before, middle.copy(table = original), after))))
+            assertTrue(floatBodyRuns(legacy.readingRows, language = legacy.language).isEmpty())
+            assertEquals("Before target", legacy.sections.single().blocks.first().spans.single().target)
+        }
+    }
 }

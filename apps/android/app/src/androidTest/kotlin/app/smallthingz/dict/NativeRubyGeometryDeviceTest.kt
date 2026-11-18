@@ -2726,7 +2726,7 @@ class NativeRubyGeometryDeviceTest {
             decorate: Boolean = false, scale: Float = 1f,
             borders: InlineBoxBorderEdges = InlineBoxBorderEdges(
                 InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000")), none, none, none),
-            radius: StyleLength? = null) =
+            radius: StyleWidth? = null) =
             Span(if (action) "link" else "text", "", if (action) "box-source" else "",
                 fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
                 foreground = "#0000ff", background = "#00ff00", linkPaint = if (action) linkPolicy else null,
@@ -3050,9 +3050,9 @@ class NativeRubyGeometryDeviceTest {
             val noPadding = StyleEdges(zero, zero, zero, zero)
             fun roundedOwner(children: List<Span>, radius: Float?, action: Boolean = true, scale: Float = 1f) =
                 sourceBox(children, edges = noPadding, overlays = emptyList(), action = action, scale = scale,
-                    borders = equal, radius = radius?.let { StyleLength(StyleLengthUnit.Px, it) })
+                    borders = equal, radius = radius?.let { StyleWidth(StyleWidthUnit.Px, it) })
             fun withRadius(owner: Span, radius: Float?) = owner.copy(inlineBoxGroup =
-                checkNotNull(owner.inlineBoxGroup).copy(radius = radius?.let { StyleLength(StyleLengthUnit.Px, it) }))
+                checkNotNull(owner.inlineBoxGroup).copy(radius = radius?.let { StyleWidth(StyleWidthUnit.Px, it) }))
             fun unchangedText(first: NativeFloatGeometry, second: NativeFloatGeometry) {
                 assertEquals(first.text.toString(), second.text.toString())
                 assertEquals(first.width, second.width); assertEquals(first.height, second.height)

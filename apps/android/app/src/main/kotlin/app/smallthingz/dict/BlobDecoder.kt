@@ -509,7 +509,15 @@ object BlobDecoder {
                     if (flags and 8 != 0) inlineBoxInset() else null), inlineBoxBorders())
             }
             val children = spans()
-            val radius = if (radiusDeclared) styleLength() else null
+            val radius = if (radiusDeclared) {
+                val unit = when (byte()) {
+                    0 -> StyleWidthUnit.Px
+                    2 -> StyleWidthUnit.Percent
+                    else -> error("Unknown inline box radius unit")
+                }
+                require(buffer.remaining() >= 4) { "Truncated inline box radius" }
+                StyleWidth(unit, buffer.float)
+            } else null
             val atomic = if (atomicDeclared) inlineBoxAtomicLayout() else null
             InlineBoxGroup(padding, border, overlays, children, radius, atomic).also { hasInlineBoxGroup = true }
         }
@@ -1081,7 +1089,7 @@ object BlobDecoder {
         private fun cellStyle(): CellStyle? {
             if (!tableStyles || !presence()) return null
             val flags = byte()
-            val allowed = if (containerFonts) 0xef else 0x07
+            val allowed = if (containerFonts) 0xff else 0x07
             require(flags != 0 && flags and allowed.inv() == 0) { "Invalid cell style flags" }
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
@@ -1097,7 +1105,8 @@ object BlobDecoder {
                 else -> error("Unknown cell vertical alignment")
             } else null
             return CellStyle(border = border, padding = padding, textAlign = align, width = width, minWidth = minimum,
-                verticalAlign = vertical, lineHeight = if (flags and 8 != 0) cellLineHeight() else null)
+                verticalAlign = vertical, lineHeight = if (flags and 8 != 0) cellLineHeight() else null,
+                opacity = if (flags and 16 != 0) buffer.float else null)
         }
         private fun cellMetricBasis(): FontScaleBasis = when (byte()) {
             1 -> FontScaleBasis.NormalBody

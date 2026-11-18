@@ -744,4 +744,63 @@ class RubyTextTest {
         assertTrue(rubyNativeTerminalProjection(emptyList()).projection.text.isEmpty())
     }
 
+    @Test fun nativeAdvisoryDeclarationsKeepOriginalOwnersNullInheritanceAndLocalEmptySuppression() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        fun box(children: List<Span>, title: String?) = Span("text", "", tooltip = title,
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), none, spans = children))
+        val inherited = Span("text", "e")
+        val suppressed = Span("text", "x", tooltip = "")
+        val own = Span("text", "y", tooltip = "Child title")
+        val linked = Span("link", "real", "Original", targetFragment = "Part")
+        val nested = box(listOf(linked), null)
+        val owner = box(listOf(inherited, suppressed, own, nested), "Owner title")
+        val outside = Span("text", "\u2009label")
+        val source = listOf(owner, outside, owner)
+        val projection = rubyGraphicalProjection(source)
+        val index = NativeTextAdvisoryIndex(projection)
+        val declarations = index.declarations
+        assertEquals("exyreal\u2009labelexyreal", projection.text)
+        assertEquals(listOf("Owner title", "", "Child title", "Owner title", "", "Child title"),
+            declarations.map { it.span!!.tooltip })
+        fun ranges(span: Span) = projection.ranges.filter { it.span === span }
+        ranges(inherited).forEach { assertEquals("Owner title", index.title(it)) }
+        ranges(suppressed).forEach { assertEquals("", index.title(it)) }
+        ranges(own).forEach { assertEquals("Child title", index.title(it)) }
+        ranges(linked).forEach { assertEquals("Owner title", index.title(it)) }
+        assertNull(index.title(ranges(outside).single()))
+        assertNull(inherited.tooltip); assertNull(linked.tooltip); assertEquals("", suppressed.tooltip)
+        assertSame(owner, source[0]); assertSame(owner, source[2])
+        assertEquals(2, projection.ranges.count { it.span?.kind == "link" })
+        val first = ranges(owner).first(); val repeated = ranges(owner).last()
+        assertEquals(NativeTextAdvisoryIdentity(owner, first.path), NativeTextAdvisoryIdentity(owner, first.path))
+        assertNotEquals(NativeTextAdvisoryIdentity(owner, first.path), NativeTextAdvisoryIdentity(owner, repeated.path))
+        assertNotEquals(NativeTextAdvisoryIdentity(owner, first.path), NativeTextAdvisoryIdentity(owner.copy(), first.path))
+        assertSame(inherited, owner.inlineBoxGroup!!.spans[0]); assertSame(linked, nested.inlineBoxGroup!!.spans.single())
+    }
+
+    @Test fun nativeAdvisoryIndexKeepsCoincidentActionOwnersAndImageTitlePrecedence() {
+        val empty = Span("text", "")
+        val first = Span("link", "", "First", tooltip = "First title", inlineActionGroup = InlineActionGroup(listOf(empty)))
+        val second = Span("link", "", "Second", tooltip = "Second title", inlineActionGroup = InlineActionGroup(listOf(empty)))
+        val own = Span("text", "", tooltip = "Raw span title", image = InlineImage("One.png", tooltip = "Own image title"))
+        val suppressed = own.copy(image = own.image!!.copy(file = "Two.png", tooltip = ""))
+        val inherited = own.copy(image = own.image!!.copy(file = "Three.png", tooltip = null))
+        val projection = rubyGraphicalProjection(listOf(first, second, own, suppressed, inherited))
+        val index = NativeTextAdvisoryIndex(projection)
+        val a = projection.ranges.single { it.span === first }
+        val b = projection.ranges.single { it.span === second }
+        assertEquals(a.start, b.start); assertEquals(a.end, b.end)
+        assertEquals("First title", index.title(a)); assertEquals("Second title", index.title(b))
+        assertNotEquals(NativeTextAdvisoryIdentity(first, a.path), NativeTextAdvisoryIdentity(second, b.path))
+        assertEquals("Own image title", index.imageTitle(projection.ranges.single { it.span === own }, "fallback"))
+        assertEquals("", index.imageTitle(projection.ranges.single { it.span === suppressed }, "fallback"))
+        assertEquals("Raw span title", index.imageTitle(projection.ranges.single { it.span === inherited }, "fallback"))
+        assertEquals(EntryLink("First"), first.entryLink()); assertEquals(EntryLink("Second"), second.entryLink())
+        assertEquals("\ufffc\ufffc\ufffc", projection.text)
+        assertEquals(2, projection.ranges.count { it.span?.hasInternalAction() == true })
+        assertSame(empty, first.inlineActionGroup!!.spans.single()); assertSame(empty, second.inlineActionGroup!!.spans.single())
+    }
+
 }

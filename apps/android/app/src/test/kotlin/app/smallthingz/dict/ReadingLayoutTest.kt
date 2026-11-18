@@ -1808,4 +1808,91 @@ class ReadingLayoutTest {
         assertNull(headingDestination(legacyWrappedEntry, "#high-heading"))
         assertNull(headingDestination(legacyWrappedEntry, "#caption-heading"))
     }
+
+    @Test fun plainBoxOwnerAdviceKeepsBothOriginalCellOccurrencesAndRealTextOrder() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edge = InlineBoxBorderEdge.Dotted(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.Rgb("#445566"))
+        val child = Span("text", "e")
+        val owner = Span("text", "", tooltip = "Endrika mifarana", inlineBoxGroup = InlineBoxGroup(
+            StyleEdges(zero, zero, zero, zero), InlineBoxBorderEdges(edge, edge, edge, edge), spans = listOf(child)))
+        val first = listOf(Span("text", "one\u2009"), owner, Span("text", ","))
+        val second = listOf(Span("text", "two\u2009"), owner, Span("link", "!", "real-target"))
+        val table = Table(emptyList(), listOf(listOf(Cell(first, false, 1, 1), Cell(second, false, 1, 1))))
+        val entry = Entry("advisory cells", emptyList(), "language", "Malagasy", "mg",
+            listOf(Section(3, "Body", listOf(Block("table", 0, emptyList(), table = table)))), emptyList())
+        val advice = entry.textDetails.filter { it.kind == TextDetailKind.Advisory }
+        assertEquals(listOf("e", "e"), advice.map { it.label })
+        assertEquals(listOf("Endrika mifarana", "Endrika mifarana"), advice.map { it.description })
+        assertNotEquals(advice[0].context, advice[1].context)
+        assertEquals("one\u2009e,", rubyGraphicalText(first))
+        assertEquals("two\u2009e!", rubyGraphicalText(second))
+        assertSame(owner, table.rows.single()[0].spans[1]); assertSame(owner, table.rows.single()[1].spans[1])
+        assertSame(child, owner.inlineBoxGroup!!.spans.single())
+        assertFalse(owner.hasInternalAction()); assertFalse(child.hasInternalAction())
+        assertEquals("real-target", table.rows.single()[1].spans.last().target)
+        assertTrue(entry.abbreviations.isEmpty())
+    }
+
+    @Test fun boxOwnerAdviceRetainsBorderTitleAcrossEmptyChildrenWithoutDuplicatingLinkedOwner() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val borders = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        fun box(children: List<Span>) = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), borders, spans = children)
+        val inherited = Span("text", "a")
+        val suppressed = Span("text", "b", tooltip = "")
+        val nestedChild = Span("text", "c")
+        val nestedSuppression = Span("text", "", tooltip = "", inlineBoxGroup = box(listOf(nestedChild)))
+        val own = Span("text", "d", tooltip = "Child advice")
+        val children = listOf(inherited, suppressed, nestedSuppression, own)
+        val owner = Span("link", "", "actual-owner-target", tooltip = "Owner advice", inlineBoxGroup = box(children))
+        val source = listOf(Span("text", "("), owner, Span("text", ")"))
+        val entry = Entry("border advice", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(Block("paragraph", 0, source)))), emptyList())
+        val advice = entry.textDetails.filter { it.kind == TextDetailKind.Advisory }
+        // Empty titles suppress their child fragments, not the original parent's border/padding.
+        // The linked fallback's inherited copies must not add separate a/c owner records.
+        assertEquals(listOf("Owner advice", "Child advice"), advice.map { it.description })
+        assertEquals(listOf("abcd", "d"), advice.map { it.label })
+        assertEquals("(abcd)", rubyGraphicalText(source))
+        assertNull(inherited.tooltip); assertEquals("", suppressed.tooltip)
+        assertEquals("", nestedSuppression.tooltip); assertNull(nestedChild.tooltip)
+        assertSame(children, owner.inlineBoxGroup!!.spans)
+        assertSame(owner, entry.sections.single().blocks.single().spans[1])
+        assertEquals("actual-owner-target", owner.target)
+        assertTrue(owner.hasInternalAction()); assertTrue(children.none { it.hasInternalAction() })
+        val untitled = owner.copy(tooltip = null)
+        val empty = owner.copy(tooltip = "")
+        for (withoutOwnerAdvice in listOf(untitled, empty)) {
+            val other = entry.copy(sections = listOf(Section(3, "Body",
+                listOf(Block("paragraph", 0, listOf(withoutOwnerAdvice))))))
+            assertEquals(listOf("Child advice"), other.textDetails.map { it.description })
+        }
+    }
+
+    @Test fun boxAdvicePreservesExistingSetAggregationAndIndependentImageAndLinkAdvice() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val borders = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val owner = Span("text", "", tooltip = "Same advice", inlineBoxGroup = InlineBoxGroup(
+            StyleEdges(zero, zero, zero, zero), borders, spans = listOf(Span("text", "e"))))
+        val image = Span("text", "", tooltip = "Raw image advice", image = InlineImage("Advice.svg", 15,
+            alt = "Image name", tooltip = "Actual image advice"))
+        val link = Span("link", "outside", "actual-link", tooltip = "Link advice")
+        val source = listOf(owner, Span("text", " "), owner.copy(), image, link)
+        val entry = Entry("advisory aggregation", emptyList(), "language", "English", "en",
+            listOf(Section(3, "Body", listOf(Block("paragraph", 0, source)))), emptyList(),
+            media = listOf(Media("Advice.svg", "image", "")))
+        val advice = entry.textDetails.filter { it.kind == TextDetailKind.Advisory }
+        // Existing details aggregate equal label/description/context, even across equal owners.
+        assertEquals(listOf("Same advice", "Actual image advice", "Link advice"), advice.map { it.description })
+        assertEquals(listOf("e", "Image name", "outside"), advice.map { it.label })
+        assertSame(image, entry.sections.single().blocks.single().spans[3])
+        assertSame(link, entry.sections.single().blocks.single().spans[4])
+        assertEquals("actual-link", link.target)
+        assertEquals("Raw image advice", image.tooltip)
+        assertEquals("Actual image advice", image.image!!.tooltip)
+        val noBox = entry.copy(sections = listOf(Section(3, "Body",
+            listOf(Block("paragraph", 0, listOf(image, link))))))
+        assertEquals(listOf("Actual image advice", "Link advice"), noBox.textDetails.map { it.description })
+    }
 }

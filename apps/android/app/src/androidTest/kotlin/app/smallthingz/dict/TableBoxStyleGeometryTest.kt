@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -18,6 +19,7 @@ import androidx.compose.ui.unit.sp
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import kotlin.math.roundToInt
 
 class TableBoxStyleGeometryTest {
     @get:Rule val compose = createPhysicalComposeRule()
@@ -585,4 +587,272 @@ class TableBoxStyleGeometryTest {
             compose.runOnIdle { assertEquals(List(5) { "caption-action" }, clicked) }
         } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
     }
+
+    @Test fun entryCellOpacityCompositesOnceAndKeepsInvisibleSwatchSourceThroughRefusalAndRecovery() {
+        val zero = px(0f)
+        fun edges(value: Float) = StyleEdges(px(value), px(value), px(value), px(value))
+        val edge = InlineBoxBorderEdge.Solid(px(1f), InlineBoxColor.Rgb("#000000"))
+        val border = InlineBoxBorderEdges(edge, edge, edge, edge)
+        val nbsp = "\u00a0\u00a0\u00a0\u00a0"
+        // The retained line25 swatches: three adjacent original four-NBSP boxes,
+        // exact title spellings and two trailing spaces. Table/cell chrome and
+        // font below are controlled; caption/full-page/TD-title parity is unclaimed.
+        val colors = listOf("#80ffc0", "#00ff80", "#008040")
+        val titles = listOf("rgb(128,255,192)", "rgb(000,255,128)", "rgb(000,128,064)")
+        val owners = colors.mapIndexed { index, color -> Span("text", "", background = color, tooltip = titles[index],
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), border,
+                spans = listOf(Span("text", nbsp)))) }
+        val spaces = Span("text", "  ")
+        val source = owners + spaces
+        val text = nbsp.repeat(3) + "  "
+        val action = Span("link", "Retained opacity action", target = "opacity-target", targetFragment = "Original")
+        val backdrop = android.graphics.Color.rgb(4, 3, 5)
+        val cellBackground = android.graphics.Color.rgb(127, 127, 127)
+        val cellBorder = android.graphics.Color.rgb(0, 255, 0)
+        val style = CellStyle(border = StyleBorder.Solid(px(4f), "#00ff00"), padding = edges(24f),
+            textAlign = CellTextAlign.Left)
+        val tableStyle = TableStyle(background = "#040305", border = StyleBorder.None,
+            padding = edges(0f), collapse = TableCollapse.Separate,
+            width = StyleWidth(StyleWidthUnit.Percent, 100f))
+        data class Fixture(val entry: Entry, val table: Table, val alpha: Float?, val width: Int)
+        fun fixture(alpha: Float?, width: Int = 320, withAction: Boolean = false): Fixture {
+            val cell = Cell(if (withAction) source + action else source, false, 1, 1,
+                background = "#7f7f7f", style = style.copy(opacity = alpha))
+            val table = Table(emptyList(), listOf(listOf(cell)),
+                geometry = TableGeometry(border = 0, cellSpacing = 0, cellPadding = 0), style = tableStyle)
+            return Fixture(Entry("", emptyList(), "language", "", "",
+                listOf(Section(3, "", listOf(Block("table", 0, emptyList(), table = table)))), emptyList()),
+                table, alpha, width)
+        }
+        val original = fixture(.2f)
+        val selected = mutableStateOf(original, androidx.compose.runtime.referentialEqualityPolicy())
+        val callbacks = mutableListOf<EntryLink>()
+        val failures = mutableListOf<String>()
+        val observer: (String) -> Unit = { failures += it }
+        var primary: Throwable? = null
+        fun views(root: android.view.View): List<NativeFloatTextView> = buildList {
+            if (root is NativeFloatTextView) add(root)
+            if (root is android.view.ViewGroup) for (i in 0 until root.childCount) addAll(views(root.getChildAt(i)))
+        }
+        fun cellView() = views(compose.activityRule.activity().window.decorView)
+            .single { it.currentMeasuredGeometry?.text?.toString() == text }
+        fun grid() = compose.onNode(SemanticsMatcher("the actual table grid") {
+            it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)?.let { tag ->
+                tag == "compiled-table-grid" || tag.startsWith("compiled-table-grid-") } == true
+        }, useUnmergedTree = true)
+        fun warnings(rootFailure: Boolean = false) = compose.onAllNodesWithText(
+            if (rootFailure) "Unable to display this layout." else NativeCellOpacityUnavailable, useUnmergedTree = true)
+        fun change(value: Fixture, available: Boolean, rootFailure: Boolean = false) {
+            compose.runOnIdle { failures.clear(); selected.value = value }
+            compose.waitUntil(5000) {
+                var hasText = false
+                compose.runOnIdle { hasText = views(compose.activityRule.activity().window.decorView)
+                    .any { it.currentMeasuredGeometry?.text?.toString() == text } }
+                val hasWarning = warnings().fetchSemanticsNodes().isNotEmpty()
+                val hasRootWarning = warnings(true).fetchSemanticsNodes().isNotEmpty()
+                var exactRootReason = false
+                compose.runOnIdle { exactRootReason = NativeCellOpacityUnavailable in failures }
+                if (available) hasText && !hasWarning && !hasRootWarning
+                else if (rootFailure) hasRootWarning && exactRootReason else hasWarning
+            }
+            compose.waitForIdle()
+        }
+        data class Raster(val bitmap: android.graphics.Bitmap, val x: Int, val y: Int)
+        fun capture(): Raster {
+            val node = grid().fetchSemanticsNode()
+            val bounds = node.boundsInRoot
+            val root = (checkNotNull(node.root) as androidx.compose.ui.platform.ViewRootForTest).view
+            val bitmap = grid().captureToImage().asAndroidBitmap()
+            try {
+                val location = IntArray(2)
+                compose.runOnIdle { root.getLocationOnScreen(location) }
+                val left = bounds.left.roundToInt()
+                val top = bounds.top.roundToInt()
+                assertEquals(bounds.right.roundToInt() - left, bitmap.width)
+                assertEquals(bounds.bottom.roundToInt() - top, bitmap.height)
+                assertEquals(android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB), bitmap.colorSpace)
+                return Raster(bitmap, location[0] + left, location[1] + top)
+            } catch (failure: Throwable) { bitmap.recycle(); throw failure }
+        }
+        fun sample(raster: Raster, offset: Int): Int {
+            val point = FloatArray(2)
+            compose.runOnIdle {
+                val view = cellView()
+                val rect = checkNotNull(checkNotNull(view.currentMeasuredGeometry).characterRects(offset, 1).single())
+                point[0] = rect.centerX() + view.paddingLeft
+                point[1] = rect.centerY() + view.paddingTop
+                val matrix = android.graphics.Matrix(); view.transformMatrixToGlobal(matrix); matrix.mapPoints(point)
+            }
+            return raster.bitmap.getPixel(kotlin.math.floor(point[0] - raster.x).toInt(),
+                kotlin.math.floor(point[1] - raster.y).toInt())
+        }
+        fun expected(color: Int, alpha: Float): Int {
+            fun channel(source: Int, destination: Int) = kotlin.math.floor(
+                source.toDouble() * alpha.toDouble() + destination.toDouble() * (1.0 - alpha.toDouble()) + .5).toInt()
+            return android.graphics.Color.rgb(channel(android.graphics.Color.red(color), android.graphics.Color.red(backdrop)),
+                channel(android.graphics.Color.green(color), android.graphics.Color.green(backdrop)),
+                channel(android.graphics.Color.blue(color), android.graphics.Color.blue(backdrop)))
+        }
+        fun assertColor(expected: Int, actual: Int) {
+            assertEquals(255, android.graphics.Color.alpha(actual))
+            for (shift in listOf(0, 8, 16)) assertTrue("expected ${Integer.toHexString(expected)}, got ${Integer.toHexString(actual)}",
+                kotlin.math.abs(((expected ushr shift) and 255) - ((actual ushr shift) and 255)) <= 1)
+        }
+        data class TextShape(val characters: List<android.graphics.RectF?>, val carets: List<android.graphics.RectF>,
+            val width: Int, val height: Int)
+        fun shape(): TextShape {
+            lateinit var result: TextShape
+            compose.runOnIdle {
+                val view = cellView(); val geometry = checkNotNull(view.currentMeasuredGeometry)
+                assertEquals(text, geometry.text.toString())
+                assertEquals(12, geometry.text.count { it == '\u00a0' })
+                assertEquals(2, geometry.text.count { it == ' ' })
+                assertTrue(geometry.nodes.none { it.onClick != null || it.onLongClick != null })
+                result = TextShape(geometry.characterRects(0, text.length).map { it?.let { rect -> android.graphics.RectF(rect) } },
+                    (0..text.length).map { geometry.caretRect(NativeTextCaret(it,
+                        if (it == text.length) NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)) },
+                    geometry.width, geometry.height)
+                assertTrue(result.characters.take(12).all { it != null && it.width() > 0f })
+                val advice = geometry.nodes.filter { it.kind == FloatInteractionKind.ADVISORY }
+                assertEquals(3, advice.size)
+                advice.forEachIndexed { index, node ->
+                    assertSame(owners[index], checkNotNull(node.advisoryIdentity).span)
+                    assertEquals(titles[index], node.tooltip.toString())
+                    assertEquals(index * 4 to index * 4 + 4, node.start to node.end)
+                }
+                val host = checkNotNull(view.accessibilityNodeProvider.createAccessibilityNodeInfo(
+                    android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+                try {
+                    assertEquals(text, host.text.toString())
+                    assertTrue(host.isVisibleToUser)
+                    assertFalse(host.isClickable)
+                } finally { host.recycle() }
+            }
+            return result
+        }
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f),
+                    LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides observer) {
+                    androidx.compose.material3.MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(
+                        background = androidx.compose.ui.graphics.Color.White, surface = androidx.compose.ui.graphics.Color.White),
+                        typography = androidx.compose.material3.Typography(bodyLarge = androidx.compose.ui.text.TextStyle(
+                            fontSize = 20.sp, letterSpacing = 0.sp,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace))) {
+                        Box(Modifier.width(selected.value.width.dp).testTag("opacity-containing")) {
+                            EntryView(selected.value.entry, false, {}, { callbacks += it },
+                                settings = AppSettings(allowImages = false, allowAudio = false))
+                        }
+                    }
+                }
+            } }
+            change(original, true)
+            val initial = shape()
+            var atPointTwo = 0
+            for (alpha in listOf<Float?>(.2f, .201f, 0f, 1f, null, .2f)) {
+                val next = fixture(alpha)
+                change(next, true)
+                assertEquals(initial, shape())
+                assertSame(source, next.table.rows.single().single().spans)
+                owners.forEachIndexed { index, owner -> assertSame(owner, next.table.rows[0][0].spans[index]) }
+                val raster = capture()
+                try {
+                    // NativeDocumentScroll's actual reader insets are 12px per side;
+                    // the authored 100% table fills that remaining body allocation.
+                    assertEquals(320f, compose.onNodeWithTag("opacity-containing").fetchSemanticsNode().size.width.toFloat(), .01f)
+                    assertEquals(296, raster.bitmap.width)
+                    val effective = alpha ?: 1f
+                    assertColor(expected(cellBackground, effective), raster.bitmap.getPixel(12, 12))
+                    assertColor(expected(cellBorder, effective), raster.bitmap.getPixel(2, raster.bitmap.height / 2))
+                    val swatches = listOf(1, 5, 9).map { sample(raster, it) }
+                    for (i in colors.indices) assertColor(expected(android.graphics.Color.parseColor(colors[i]), effective), swatches[i])
+                    // Opaque swatches cover the cell background BEFORE the one group
+                    // alpha. Per-draw fading would leak the gray background here.
+                    if (alpha == .2f) atPointTwo = android.graphics.Color.green(swatches[0])
+                    if (alpha == .201f) {
+                        assertEquals(53, atPointTwo)
+                        assertEquals(54, android.graphics.Color.green(swatches[0]))
+                        assertEquals(54, android.graphics.Color.green(swatches[1]))
+                    }
+                    if (alpha == 0f) {
+                        assertEquals(listOf(backdrop, backdrop, backdrop), swatches)
+                        assertEquals(backdrop, raster.bitmap.getPixel(12, 12))
+                        assertEquals(backdrop, raster.bitmap.getPixel(2, raster.bitmap.height / 2))
+                    }
+                } finally { raster.bitmap.recycle() }
+                if (alpha == 0f) compose.runOnIdle {
+                    val view = cellView()
+                    val args = android.os.Bundle().apply {
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                        putInt(android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+                    }
+                    assertTrue(view.accessibilityNodeProvider.performAction(
+                        android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID,
+                        android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, args))
+                    assertEquals(text, view.selectedTextForCopy())
+                    view.setSelection(0, 0)
+                }
+            }
+            val reference = android.text.TextPaint().apply { textSize = 20f; typeface = android.graphics.Typeface.MONOSPACE }
+            assertTrue("One complete NBSP box plus real cell edges cannot fit this narrow reader body",
+                reference.measureText(nbsp) + 2f + 2f * (24f + 4f) > 100f - 24f)
+            // Same original Entry and source, only allocation changes: failure must
+            // revoke a prior measured permission, and wide reflow must recover it.
+            change(original.copy(width = 100), false, rootFailure = true)
+            warnings(true)[0].assertIsDisplayed()
+            compose.runOnIdle {
+                assertTrue(NativeCellOpacityUnavailable in failures)
+                val view = cellView()
+                assertEquals(text, view.logicalText.toString())
+                view.setSelection(0, text.length)
+                assertEquals(text, view.selectedTextForCopy())
+                view.setSelection(0, 0)
+            }
+            shape() // The real fallback cell retains original character and AX owners.
+            assertSame(source, selected.value.table.rows[0][0].spans)
+            change(original, true)
+            assertEquals(initial, shape())
+            val recovered = capture()
+            try { assertColor(expected(android.graphics.Color.parseColor(colors[0]), .2f), sample(recovered, 1)) }
+            finally { recovered.bitmap.recycle() }
+            val unsupported = fixture(.2f, withAction = true)
+            change(unsupported, false)
+            warnings()[0].assertIsDisplayed()
+            compose.waitUntil(5000) {
+                var ready = false
+                compose.runOnIdle { ready = views(compose.activityRule.activity().window.decorView).any { view ->
+                    view.currentMeasuredGeometry?.nodes?.any { it.label.toString() == action.text && it.onClick != null } == true } }
+                ready
+            }
+            compose.runOnIdle {
+                val view = views(compose.activityRule.activity().window.decorView).single { candidate ->
+                    candidate.currentMeasuredGeometry?.nodes?.any { it.label.toString() == action.text && it.onClick != null } == true }
+                val node = checkNotNull(view.currentMeasuredGeometry).nodes.single { it.label.toString() == action.text }
+                assertEquals(text + action.text, view.logicalText.toString())
+                assertSame(action, unsupported.table.rows[0][0].spans.last())
+                assertTrue(view.accessibilityNodeProvider.performAction(node.id,
+                    android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                assertEquals(listOf(EntryLink("opacity-target", "Original")), callbacks)
+            }
+            change(original, true)
+            assertEquals(initial, shape())
+            change(unsupported, false)
+            warnings()[0].assertIsDisplayed()
+            change(original, true)
+            val last = capture()
+            try { assertColor(expected(android.graphics.Color.parseColor(colors[1]), .2f), sample(last, 5)) }
+            finally { last.bitmap.recycle() }
+            compose.runOnIdle { assertEquals(1, callbacks.size) }
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} }; compose.waitForIdle() }
+            catch (cleanup: Throwable) {
+                val failure = primary
+                if (failure == null) throw cleanup
+                if (failure !== cleanup) failure.addSuppressed(cleanup)
+            }
+        }
+    }
+
 }

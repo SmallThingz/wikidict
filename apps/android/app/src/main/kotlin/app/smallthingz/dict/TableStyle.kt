@@ -64,7 +64,9 @@ internal fun tableStyleLengthPixels(value: StyleLength, density: Float, containe
     val unit = if (value.unit == StyleLengthUnit.Px) density else containerFontPixels
     return (value.value.toDouble() * unit.toDouble()).coerceAtMost(MaxComputedFontPixels.toDouble()).toFloat()
 }
-internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style != null } }
+internal fun CellStyle.hasTableLayoutStyle(): Boolean = border != null || padding != null || textAlign != null ||
+    borderEdges != null || letterSpacing != null || width != null || minWidth != null || verticalAlign != null || lineHeight != null
+internal fun tableHasOwnStyle(table: Table): Boolean = table.style != null || table.rows.any { row -> row.any { it.style?.hasTableLayoutStyle() == true } }
 internal fun tableHasComputedCellStyle(table: Table): Boolean = table.style?.border is StyleBorder.Edges || table.rows.any { row -> row.any { cell ->
     cell.style?.let { it.border is StyleBorder.Edges || it.borderEdges != null || it.letterSpacing != null || it.width != null || it.minWidth != null || it.lineHeight != null } == true ||
         cell.nestedTable?.let(::tableHasComputedCellStyle) == true ||

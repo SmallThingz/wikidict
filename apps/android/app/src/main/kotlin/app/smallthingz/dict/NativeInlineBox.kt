@@ -37,19 +37,21 @@ internal data class NativeInlineBoxOverlay(val insets: NativeInlineBoxInsets, va
 internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val padding: NativeInlineBoxEdges,
     val border: NativeInlineBoxBorders, overlays: List<NativeInlineBoxOverlay>,
     val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null,
-    val atomicLayout: NativeInlineAtomicBoxFormat? = null) {
+    val atomicLayout: NativeInlineAtomicBoxFormat? = null, val radiusPercentage: Boolean = false) {
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
     val rightAdvance = nativeInlineBoxCoordinate(padding.right.toDouble() + border.right.width)
     init {
         nativeInlineBoxCoordinate(leftAdvance.toDouble() + rightAdvance)
+        require(!radiusPercentage || radius != null)
         radius?.let { value ->
-            nativeInlineBoxCoordinates(value)
+            if (!value.isFinite()) throw UnsupportedFloatLayout("Rounded inline radius is unavailable")
+            if (!radiusPercentage) nativeInlineBoxCoordinates(value)
             val first = border.top
-            if (value < 0f || overlays.isNotEmpty() || first.color == null || first.color ushr 24 != 255 ||
+            if (value < 0f || overlays.isNotEmpty() || atomicLayout != null || first.color == null || first.color ushr 24 != 255 ||
                 listOf(border.top, border.right, border.bottom, border.left).any {
-                    it.dotted || it.width != first.width || it.color != first.color
-                }) throw UnsupportedFloatLayout("Rounded inline box requires equal solid RGB borders without overlays")
+                    it.dotted != first.dotted || it.width != first.width || it.color != first.color
+                }) throw UnsupportedFloatLayout("Rounded inline box requires equal solid or dotted RGB borders without overlays")
         }
     }
     fun color(value: NativeInlineBoxBorder, declaring: NativeRubyGroupFormat): Int = value.color
@@ -137,4 +139,40 @@ internal fun nativeInlineBoxOverlayRect(overlay: NativeInlineBoxOverlay, contain
     val y = axis(containing.top, containing.height(), overlay.insets.top, overlay.insets.bottom,
         overlay.border.top.width, overlay.border.bottom.width, false)
     return RectF(x.first, y.first, x.second, y.second)
+}
+
+/** Only the source-proved top stroke and its one interior circle share native allocation.
+ * This is not general nested inline-box support. The original owners remain distinct. */
+internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: NativeInlineBoxSpan): Boolean {
+    val a = parent.box
+    val b = child.box
+    val x = parent.format
+    val y = child.format
+    fun plain(f: NativeRubyGroupFormat) = f.actionOwner == null && f.actionPaint == null &&
+        f.sourceDirection.isEmpty() && f.wrap == null && f.underline == null && f.cursor == null &&
+        f.baselineShift == 0f && (f.localBaselineShift == null || f.localBaselineShift == 0f) &&
+        f.paint.bgColor == 0 && !f.paint.isUnderlineText && !f.paint.isStrikeThruText &&
+        f.box?.owner?.span?.kind == "text"
+    fun zero(e: NativeInlineBoxEdges) = e.top == 0f && e.right == 0f && e.bottom == 0f && e.left == 0f
+    return plain(x) && plain(y) && parent.shift == 0f && child.shift == 0f &&
+        x.paint.equalsForTextMeasurement(y.paint) && x.lineHeight == y.lineHeight &&
+        child.box.owner.path.startsWith(parent.box.owner.path + "/") &&
+        a.atomicLayout == null && b.atomicLayout == null && a.overlays.isEmpty() && b.overlays.isEmpty() &&
+        zero(a.padding) && zero(b.padding) && a.radius == null &&
+        a.border.top.width > 0f && !a.border.top.dotted &&
+        a.border.left.width == 0f && a.border.right.width == 0f && a.border.bottom.width == 0f &&
+        b.radiusPercentage && b.radius == 50f && b.border.top.width > 0f && b.border.top.dotted &&
+        listOf(b.border.right, b.border.bottom, b.border.left).all { it == b.border.top }
+}
+
+internal fun nativeInlineBoxNesting(spans: List<NativeInlineRange<NativeInlineBoxSpan>>,
+    rtl: (NativeInlineRange<NativeInlineBoxSpan>) -> Boolean): List<Int> {
+    val parents = nativeInlineBoxNestedParents(spans.map { it.start to it.end })
+        ?: throw UnsupportedFloatLayout("Inline box ranges are outside the strict interior pair domain")
+    parents.forEachIndexed { index, parent ->
+        if (parent >= 0 && (!nativeInlineBoxNestedPair(spans[parent].value, spans[index].value) ||
+                rtl(spans[parent]) || rtl(spans[index])))
+            throw UnsupportedFloatLayout("Nested inline decoration requires its static equal-metric LTR owners")
+    }
+    return parents
 }

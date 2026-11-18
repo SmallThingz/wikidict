@@ -178,6 +178,9 @@ internal fun NativeFloatContextLayout(
     absoluteScope: Boolean = false,
     onInputGeometry: ((NativeFloatContextGeometry, FloatTextGeometry) -> Unit)? = null,
     revealUnavailable: (suspend () -> Unit)? = null,
+    // Runs after all native surface/extent checks. A validator may use the existing
+    // UnsupportedFloatLayout path; null clears any previous measured permission.
+    onMeasuredGeometry: ((NativeFloatContextGeometry?, FloatTextGeometry?) -> Unit)? = null,
     child: @Composable (id: Int, originalContainingWidth: NativeLayoutInput<Int>) -> Unit,
 ) {
     val ordinaryBody = bodyAdjoining == BodyAdjoiningPolicy.Ordinary
@@ -287,7 +290,10 @@ internal fun NativeFloatContextLayout(
             delegatedTables.values.forEach { it.paintOriginalState(drawContext.canvas.nativeCanvas, focus = false) }
             delegatedTables.values.forEach { it.paintOriginalState(drawContext.canvas.nativeCanvas, focus = true) }
         }) {
-        if (loading != null) Text(loading.prepared.stateDescription ?: "Loading text layout")
+        if (loading != null) {
+            androidx.compose.runtime.SideEffect { onMeasuredGeometry?.invoke(null, null) }
+            Text(loading.prepared.stateDescription ?: "Loading text layout")
+        }
         else {
             val slots = leaves.withIndex().filter { it.value !is NativeFloatContextSpec.Text && it.value !is NativeFloatContextSpec.Rule }
             val textSlots = leaves.indices.filter { leaves[it] is NativeFloatContextSpec.Text || leaves[it] is NativeFloatContextSpec.Rule }
@@ -517,6 +523,7 @@ internal fun NativeFloatContextLayout(
                 }
 
                 private fun MeasureScope.measureContext(measurables: List<Measurable>, constraints: Constraints): MeasureResult {
+                    onMeasuredGeometry?.invoke(null, null)
                     val ticket = ownInput?.begin(binding, constraints)
                     val width = constraints.maxWidth.takeIf { constraints.hasBoundedWidth }
                     delegatedTables.values.forEach { it.begin(delegatedRevision, width ?: 0) }
@@ -952,8 +959,10 @@ internal fun NativeFloatContextLayout(
                             catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Document overflow exceeds Compose measurement range") }
                         }
                         if (documentSurface) documentPublisher?.publish(documentOwner, width, documentScrollBounds)
+                        onMeasuredGeometry?.invoke(geometry, inputGeometry)
                         Result.success(geometry)
                     } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
+                    if (result.isFailure) onMeasuredGeometry?.invoke(null, null)
                     if (documentSurface && (width == null || result.isFailure)) documentPublisher?.remove(documentOwner)
                     if (result.isFailure && width != null) slots.forEach { (index, part) ->
                         if (index !in attempted) {

@@ -2031,9 +2031,19 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         else {
             require(range.role == RubyTextRole.BoxGroup && box != null &&
                 box.owner.span === range.span && box.owner.path == range.path)
-            if (prepared.projection.ranges.any { it.path.startsWith(range.path + "/") &&
-                    it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) })
-                throw UnsupportedFloatLayout("Inline box needs ordinary rich native children")
+            val descendants = prepared.projection.ranges.filter { it.path.startsWith(range.path + "/") }
+            val nested = descendants.filter { it.role == RubyTextRole.BoxGroup }
+            val paired = nested.isNotEmpty() || parent?.format?.box != null
+            if (paired && (nested.isNotEmpty() && parent != null && parent.format.box == null ||
+                    prepared.projection.ranges.any { ancestor -> range.path.startsWith(ancestor.path + "/") &&
+                        ancestor.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) }))
+                throw UnsupportedFloatLayout("Nested inline decoration cannot inherit a structural action or ruby owner")
+            if (descendants.any { it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) } ||
+                nested.size > 1 || nested.any { it.start <= range.start || it.end >= range.end } ||
+                nested.isNotEmpty() && descendants.any { child -> child.span?.let {
+                    it.kind != "text" || it.usesInlineDirectionIsolate() || it.image != null || it.citationMarker != null
+                } == true })
+                throw UnsupportedFloatLayout("Inline box needs ordinary children or one strict interior static decoration")
         }
         require(key == null || key.span === range.span && key.path == range.path)
         val placement = nativeRubyBaselinePlacement(nativeRubyScriptMode(range), format.baselineShift,
@@ -2042,6 +2052,12 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         if (!shift.isFinite() || kotlin.math.abs(shift) > TablePixelLimit)
             throw UnsupportedFloatLayout("Inline action baseline exceeds native coordinates")
         val rtl = resolveDirection(format.sourceDirection, directText(prepared, range), enclosingRtl)
+        if (box != null && parent?.format?.box != null &&
+            (parent.rtl || rtl || !nativeInlineBoxNestedPair(
+                NativeInlineBoxSpan(parent.format, parent.shift, null), NativeInlineBoxSpan(format, shift, null))))
+            throw UnsupportedFloatLayout("Nested inline decoration lost its static equal-metric LTR context")
+        val nestedDecoration = box != null && (parent?.format?.box != null ||
+            prepared.projection.ranges.any { it.role == RubyTextRole.BoxGroup && it.path.startsWith(range.path + "/") })
         val absolute = SpannedString(prepared.source.subSequence(range.start, range.end))
         val styled = nativeRubyLocalSource(absolute, format.paint, placement.state, format.lineHeight, shift) { offset ->
             prepared.projection.ranges.lastOrNull { it.span != null &&
@@ -2063,6 +2079,27 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 styled.getSpans(first, last, MetricAffectingSpan::class.java).forEach { it.updateMeasureState(measured) }
                 styled.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(measured), format.lineHeight),
                     first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        if (nestedDecoration) {
+            val primary = NativePrimaryFontMetrics.from(format.paint)
+            if (rtl || shift != 0f || styled.getSpans(0, styled.length, NativeAuthoredBaselineShift::class.java).any { it.shift != 0f } ||
+                styled.getSpans(0, styled.length, NativeAuthoredUnderline::class.java).isNotEmpty() ||
+                styled.getSpans(0, styled.length, NativeAuthoredTextWrap::class.java).isNotEmpty() ||
+                styled.getSpans(0, styled.length, NativeAuthoredInlineMetrics::class.java).any {
+                    it.primary != primary || it.policy != format.lineHeight ||
+                        it.declaringPrimary != null && it.declaringPrimary != primary
+                } || styled.getSpans(0, styled.length, NativeRunLineMetrics::class.java).any {
+                    it.primary != primary || it.policy != format.lineHeight
+                }) throw UnsupportedFloatLayout("Nested inline decoration has unequal realized line metrics")
+            cuts.zipWithNext().forEach { (start, end) ->
+                if (start < end) {
+                    val measured = TextPaint(format.paint)
+                    styled.getSpans(start, end, MetricAffectingSpan::class.java).forEach { it.updateMeasureState(measured) }
+                    if (!measured.equalsForTextMeasurement(format.paint) || measured.bgColor != 0 ||
+                        measured.isUnderlineText || measured.isStrikeThruText)
+                        throw UnsupportedFloatLayout("Nested inline decoration has unequal realized text metrics")
+                }
             }
         }
         val first = native.length

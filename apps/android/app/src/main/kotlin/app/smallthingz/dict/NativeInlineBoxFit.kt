@@ -43,13 +43,14 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
             throw UnsupportedFloatLayout("Inline box paragraph needs native replacement allocation")
         if (boxes.any { it.start >= it.end || it.start < 0 || it.end > source.length })
             throw UnsupportedFloatLayout("Inline box lost its nonempty source interval")
-        if (boxes.sortedBy { it.start }.zipWithNext().any { (a, b) -> a.end > b.start })
-            throw UnsupportedFloatLayout("Nested inline box allocation is unavailable")
+        nativeInlineBoxNesting(boxes) { range -> parentRtl(range.value, range.start) }
         boxes.forEach { box ->
             val body = source.subSequence(box.start, box.end)
             if (body.any { it in "\t\r\n\u000c" })
                 throw UnsupportedFloatLayout("Inline box forced text breaks are unavailable")
-            if (body.first().isWhitespace() || body.last().isWhitespace())
+            // NBSP has real noncollapsible advance even when every glyph has empty ink.
+            if (body.first().let { it != '\u00a0' && it.isWhitespace() } ||
+                body.last().let { it != '\u00a0' && it.isWhitespace() })
                 throw UnsupportedFloatLayout("Inline box edge whitespace needs native collapse ownership")
         }
         val retained = source.getSpans(0, source.length, NativeRubyBreaks::class.java).singleOrNull()?.boundaries
@@ -90,7 +91,8 @@ internal class NativeInlineBoxWidths(source: Spanned, private val paint: TextPai
     fun advance(start: Int, end: Int, intrinsicMinimum: Boolean = false): Float {
         var last = visibleEnd(start, end)
         if (intrinsicMinimum) {
-            if (markers.isEmpty()) while (last > start && source[last - 1].isWhitespace()) last--
+            if (markers.isEmpty()) while (last > start && source[last - 1] != '\u00a0' &&
+                source[last - 1].isWhitespace()) last--
             else while (last > start && nativeFloatRowLineEndSpace(source[last - 1]) &&
                 markers.none { last - 1 >= it.start && last - 1 < it.end }) last--
         }

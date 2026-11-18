@@ -794,9 +794,12 @@ internal fun prepareNativeFloatText(
                         inset(overlay.insets.top), inset(overlay.insets.right),
                         inset(overlay.insets.bottom), inset(overlay.insets.left)), borders(overlay.border)) },
                     currentColorPaint = action?.let(::groupPaintAt), radius = model.radius?.let {
-                        if (it.unit != StyleLengthUnit.Px) throw UnsupportedFloatLayout("Rounded inline radius must be CSS pixels")
-                        length(it)
-                    }, atomicLayout = atomic)
+                        when (it.unit) {
+                            StyleWidthUnit.Px -> nativeInlineBoxCoordinate(it.value.toDouble() * density.density)
+                            StyleWidthUnit.Percent -> it.value
+                            StyleWidthUnit.Em -> throw UnsupportedFloatLayout("Rounded inline radius cannot use em")
+                        }
+                    }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent)
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
@@ -1215,7 +1218,70 @@ internal fun prepareNativeFloatText(
                 }
                 native
         }
+    // Only the existing original grouped-source projection grants these owner paths.
+    // Ordinary nongrouped nodes keep their already-proven native offsets and metadata.
+    val advisoryProjection = ruby?.projection
+    val advisoryIndex = advisoryProjection?.let(::NativeTextAdvisoryIndex)
+    fun withAdvisories(geometry: FloatTextGeometry, nodes: List<FloatInteractionNode>,
+        sources: Map<Int, RubyTextRange>): List<FloatInteractionNode> {
+        val index = advisoryIndex ?: return nodes
+        val projection = checkNotNull(advisoryProjection)
+        val advisoryDeclarations = index.declarations
+        if (advisoryDeclarations.isEmpty()) return nodes
+        data class AdvisoryShape(val bounds: List<RectF>, val contains: (Float, Float) -> Boolean)
+        val shapes = mutableMapOf<String, AdvisoryShape>()
+        fun shape(range: RubyTextRange): AdvisoryShape = shapes.getOrPut(range.path) {
+            val span = checkNotNull(range.span)
+            val bounds = when (range.role) {
+                RubyTextRole.BoxGroup -> geometry.inlineBoxGroupRects(boxOwners.getValue(range.path), range.start, range.end)
+                    ?: throw UnsupportedFloatLayout("Inline advisory lost its original box geometry")
+                RubyTextRole.PaddingGroup -> geometry.inlinePaddingGroupRects(span, range.start, range.end)
+                    ?: throw UnsupportedFloatLayout("Inline advisory lost its original padding geometry")
+                RubyTextRole.ClippedAbsolute, RubyTextRole.ClippedText -> emptyList()
+                else -> geometry.rectsForRange(range.start, range.end)
+            }
+            val curves = (index.ancestors(range) + range).filter { box ->
+                box.role == RubyTextRole.BoxGroup && box.span?.inlineBoxGroup?.radius != null }.map { box ->
+                geometry.inlineBoxGroupHitTest(boxOwners.getValue(box.path), box.start, box.end)
+                    ?: throw UnsupportedFloatLayout("Rounded advisory lost its original box geometry")
+            }
+            AdvisoryShape(bounds) { x, y -> bounds.any { it.contains(x, y) } && curves.all { it(x, y) } }
+        }
+        fun titleAt(range: RubyTextRange, fallback: CharSequence?): (Float, Float) -> CharSequence? {
+            val descendants = index.descendants(range)
+            val inherited = index.title(range) ?: fallback
+            return { x, y -> descendants.lastOrNull { shape(it).contains(x, y) }?.span?.tooltip ?: inherited }
+        }
+        val actions = nodes.map { node ->
+            val range = sources[node.id]
+            if (range == null) node else {
+                val image = node.kind == FloatInteractionKind.IMAGE
+                val title = if (image) index.imageTitle(range, node.tooltip) else index.title(range) ?: node.tooltip
+                node.copy(tooltip = title,
+                    advisoryIdentity = NativeTextAdvisoryIdentity(checkNotNull(range.span), range.path),
+                    tooltipForPosition = if (image) { _, _ -> title } else titleAt(range, node.tooltip))
+            }
+        }
+        val firstId = (nodes.maxOfOrNull { it.id } ?: -1) + 1
+        val advisories = advisoryDeclarations.mapIndexedNotNull { ordinal, range ->
+            val span = checkNotNull(range.span)
+            // Existing source actions/images retain their one node and original activation.
+            if (span.tooltip.isNullOrEmpty() || span.kind == "link" || span.kind == "external_link" || span.image != null ||
+                range.role == RubyTextRole.ClippedAbsolute || range.role == RubyTextRole.ClippedText) null else {
+                val own = shape(range)
+                val overrides = index.descendants(range)
+                FloatInteractionNode(firstId + ordinal, FloatInteractionKind.ADVISORY, range.start, range.end,
+                    own.bounds, projection.text.subSequence(range.start, range.end), span.tooltip, null,
+                    hitTest = { x, y -> own.contains(x, y) && overrides.none { shape(it).contains(x, y) } },
+                    advisoryIdentity = NativeTextAdvisoryIdentity(span, range.path),
+                    tooltipForPosition = titleAt(range, span.tooltip))
+            }
+        }
+        // Passive advice must never take the pointer action from a real link/image/control.
+        return advisories + actions
+    }
     val nativeNodes: (FloatTextGeometry) -> List<FloatInteractionNode> = { geometry ->
+        val advisorySources = mutableMapOf<Int, RubyTextRange>()
         if (sourceLineStarts?.isEmpty() == true) emptyList() else buildList {
                          nativeLinks.forEachIndexed { index, range ->
                             val actionGroup = range.group
@@ -1291,6 +1357,7 @@ internal fun prepareNativeFloatText(
                                 figureLinkFocusPaint(scope.policy, nativeLinkFocusFragments(geometry,
                                     range.start, range.end, fragments), scope.density, scope.bodyPixels)
                             }
+                            (actionGroup ?: paddingAction ?: childRange)?.let { advisorySources[index] = it }
                             add(FloatInteractionNode(index, FloatInteractionKind.LINK, range.start, range.end,
                                 fragments, annotated.subSequence(range.start, range.end), (clippedActionSpan ?: actionGroup?.span ?: paddingOwner ?: citationSource)?.tooltip,
                                  citationCallbacks[range.start to range.end] ?: actionGroup?.let { actionGroupCallbacks.getValue(it.path) } ?: { when (val link = range.item) { is LinkAnnotation.Clickable -> link.linkInteractionListener?.onClick(link) ?: onLink(EntryLink(link.tag)); is LinkAnnotation.Url -> uri.openUri(link.url) }
@@ -1326,6 +1393,9 @@ internal fun prepareNativeFloatText(
                             val focus = image.span.linkPaint?.let {
                                 ordinaryLinkFocusPaint(it, fragments, density.density, bodyPixels)
                             }
+                            ruby?.leaves?.getOrNull(image.id)?.range?.takeIf { it.span === image.span }?.let {
+                                advisorySources[firstImage + image.id] = it
+                            }
                             add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
                                 fragments, accessibilityLabel, advice, click,
                                 imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
@@ -1352,7 +1422,7 @@ internal fun prepareNativeFloatText(
                                 listOf(actionBounds(geometry as NativeFloatGeometry, index)), action.label, null, action.onClick,
                                 if (action.collapsed) "Collapsed" else "Expanded"))
                         }
-    }.let { nodes ->
+    }.let { withAdvisories(geometry, it, advisorySources) }.let { nodes ->
         // The nonpainting semantic heading must not cover its source-link hit targets.
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }

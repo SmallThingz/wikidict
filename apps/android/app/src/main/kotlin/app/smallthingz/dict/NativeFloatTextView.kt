@@ -248,6 +248,66 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     private var ordinaryLinkFocusVisible = false
     private var virtualKeyboardFocus = View.NO_ID
         set(value) { field = value; updateMissingLinkPaint() }
+    private var pointerAdvisoryNode: FloatInteractionNode? = null
+    private var pointerAdvisoryText: String? = null
+    private var pointerAdvisoryX = 0f
+    private var pointerAdvisoryY = 0f
+    private var pointerAdvisoryFrame: List<Float>? = null
+    private var pointerAdvisoryObserver: android.view.ViewTreeObserver? = null
+    private fun advisoryFrame(): List<Float> {
+        val matrix = android.graphics.Matrix()
+        transformMatrixToGlobal(matrix)
+        return FloatArray(9).also(matrix::getValues).toList()
+    }
+    private fun advisoryText(node: FloatInteractionNode, x: Float, y: Float): String? =
+        (if (node.tooltipForPosition != null) node.tooltipForPosition.invoke(x, y) else node.tooltip)
+            ?.toString()?.takeIf { it.isNotEmpty() }
+    private val pointerAdvisoryPreDraw = android.view.ViewTreeObserver.OnPreDrawListener {
+        val old = pointerAdvisoryNode
+        val current = if (!needsGeometry && originalOwnerAvailable()) hitNode(pointerAdvisoryX, pointerAdvisoryY) else null
+        if (old != null && (!isEnabled || !isShown || !hasWindowFocus() ||
+                pointerAdvisoryFrame != advisoryFrame() || !sameInputNode(old, current) ||
+                current == null || advisoryText(current, pointerAdvisoryX, pointerAdvisoryY) != pointerAdvisoryText))
+            clearPointerAdvisory()
+        true
+    }
+    private fun clearPointerAdvisory() {
+        pointerAdvisoryObserver?.takeIf { it.isAlive }?.removeOnPreDrawListener(pointerAdvisoryPreDraw)
+        pointerAdvisoryObserver = null
+        pointerAdvisoryFrame = null
+        pointerAdvisoryNode = null
+        if (pointerAdvisoryText != null) tooltipText = null
+        pointerAdvisoryText = null
+    }
+    private fun updatePointerAdvisory(node: FloatInteractionNode?, x: Float, y: Float) {
+        val title = node?.let { advisoryText(it, x, y) }
+        if (title == null) { clearPointerAdvisory(); return }
+        pointerAdvisoryX = x
+        pointerAdvisoryY = y
+        if (title == pointerAdvisoryText && sameInputNode(pointerAdvisoryNode, node)) return
+        // A nonempty-to-nonempty toolkit update leaves its old popup/anchor alive.
+        // Reset only on a real owner/title change; ordinary movement keeps native dwell.
+        clearPointerAdvisory()
+        pointerAdvisoryNode = node
+        pointerAdvisoryText = title
+        pointerAdvisoryFrame = advisoryFrame()
+        tooltipText = title
+        if (isAttachedToWindow) viewTreeObserver.takeIf { it.isAlive }?.let {
+            pointerAdvisoryObserver = it
+            it.addOnPreDrawListener(pointerAdvisoryPreDraw)
+        }
+    }
+
+    override fun setEnabled(enabled: Boolean) {
+        if (!enabled) clearPointerAdvisory()
+        super.setEnabled(enabled)
+    }
+
+    override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+        if (!hasWindowFocus) clearPointerAdvisory()
+        super.onWindowFocusChanged(hasWindowFocus)
+    }
+
     private var hoveredNode = View.NO_ID
         set(value) { field = value; updateMissingLinkPaint() }
     private var pressedLinkNode = View.NO_ID
@@ -310,6 +370,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (scrollClip === next) return
         // AndroidView retains this source owner when its ancestor scrollport changes.
         scrollClip = next
+        clearPointerAdvisory()
         cancelCapturedOwnerSequence()
         clearPendingLinkKey("scroll-clip-changed")
         hoveredNode = View.NO_ID
@@ -438,6 +499,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         unsupportedCallback = onUnsupported
         if (changed) {
             bindGeneration++
+            clearPointerAdvisory()
             // Factories also change on reflow. Reconcile held input against the measured
             // source/action owners; a timer or event while geometry is dirty must refuse it.
             needsGeometry = true
@@ -453,6 +515,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         val width = max(0, desiredWidth - paddingLeft - paddingRight)
         if (needsGeometry || lastMeasuredWidth != width) {
             val previousGeometry = geometry
+            clearPointerAdvisory()
             val previous = previousGeometry?.text?.toString()
             val attemptedFactory = geometryFactory
             lastMeasuredWidth = width
@@ -762,6 +825,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
         if (before.id != after.id || before.kind != after.kind || before.start != after.start || before.end != after.end ||
             before.label?.toString() != after.label?.toString() || before.onLongClick !== after.onLongClick ||
             before.customActions != after.customActions || before.citationMarker != after.citationMarker ||
+            before.advisoryIdentity != after.advisoryIdentity || before.tooltip?.toString() != after.tooltip?.toString() ||
             before.clippedAbsoluteLocation?.coordinateScope !== after.clippedAbsoluteLocation?.coordinateScope) return false
         val identity = before.missingLinkPaint?.actionIdentity
         val nextIdentity = after.missingLinkPaint?.actionIdentity
@@ -805,6 +869,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        clearPointerAdvisory()
         if (!isEnabled || !originalOwnerAvailable()) {
             cancelCapturedOwnerSequence()
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
@@ -1100,6 +1165,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        clearPointerAdvisory()
         if (!isEnabled) { clearPendingLinkKey("disabled"); return false }
         if (!originalOwnerAvailable()) { clearPendingLinkKey("delegated-owner-unavailable"); return false }
         if (needsGeometry) {
@@ -1178,6 +1244,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        clearPointerAdvisory()
         if (!isEnabled) { clearPendingLinkKey("disabled"); return false }
         if (!originalOwnerAvailable()) { clearPendingLinkKey("delegated-owner-unavailable"); return false }
         val pending = pendingLinkKey
@@ -1201,6 +1268,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun onDetachedFromWindow() {
+        clearPointerAdvisory()
         pendingViewportReveal = null
         finishCitationReveal(false)
         citationNavigation?.remove(this)
@@ -1232,6 +1300,13 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
+        // The toolkit popup belongs to the original virtual source node. Do not
+        // duplicate its title or tooltip actions on this whole-paragraph host.
+        if (pointerAdvisoryText != null) {
+            info.tooltipText = null
+            info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SHOW_TOOLTIP)
+            info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_HIDE_TOOLTIP)
+        }
         if (tableCoordinateOwner != null) {
             val visible = tableVisibleScreenBounds() ?: RectF()
             val screen = Rect().also { visible.roundOut(it) }
@@ -1320,11 +1395,15 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
     }
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean {
-        if (!originalOwnerAvailable()) return false
+        if (!originalOwnerAvailable() || needsGeometry) { clearPointerAdvisory(); return false }
         val manager = context.getSystemService(AccessibilityManager::class.java)
         val explore = manager.isEnabled && manager.isTouchExplorationEnabled
-        val next = if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) View.NO_ID
-            else hitNode(event.x - paddingLeft, event.y - paddingTop)?.id ?: View.NO_ID
+        val x = event.x - paddingLeft; val y = event.y - paddingTop
+        val node = if (event.actionMasked == MotionEvent.ACTION_HOVER_EXIT) null else hitNode(x, y)
+        val pointer = event.pointerCount == 1 && (event.isFromSource(InputDevice.SOURCE_MOUSE) ||
+            event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS || event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER)
+        if (pointer && isEnabled && !explore) updatePointerAdvisory(node, x, y) else clearPointerAdvisory()
+        val next = node?.id ?: View.NO_ID
         if (next != hoveredNode) {
             if (explore && next != View.NO_ID) sendNodeEvent(next, AccessibilityEvent.TYPE_VIEW_HOVER_ENTER)
             if (explore && hoveredNode != View.NO_ID) sendNodeEvent(hoveredNode, AccessibilityEvent.TYPE_VIEW_HOVER_EXIT)
@@ -1332,7 +1411,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
             invalidate()
         }
         if (event.actionMasked != MotionEvent.ACTION_HOVER_EXIT &&
-            geometry?.containsInput(event.x - paddingLeft, event.y - paddingTop) == false) return false
+            geometry?.containsInput(x, y) == false) { clearPointerAdvisory(); return false }
         return explore && next != View.NO_ID || super.dispatchHoverEvent(event)
     }
 
@@ -1377,7 +1456,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                 tooltipText = node.tooltip
                 AccessibilityNodeInfoCompat.wrap(this).stateDescription = node.stateDescription
                 isEnabled = this@NativeFloatTextView.isEnabled
-                isFocusable = true
+                isFocusable = node.kind != FloatInteractionKind.ADVISORY
                 isFocused = virtualKeyboardFocus == node.id
                 isAccessibilityFocused = virtualAccessibilityFocus == node.id
                 isClickable = node.onClick != null
@@ -1388,7 +1467,8 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                     addAction(AccessibilityNodeInfo.AccessibilityAction(nativeHeadingCustomActionId(index), custom.label))
                 }
                 addAction(if (isAccessibilityFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_ACCESSIBILITY_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_ACCESSIBILITY_FOCUS)
-                addAction(if (isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
+                if (node.kind != FloatInteractionKind.ADVISORY)
+                    addAction(if (isFocused) AccessibilityNodeInfo.AccessibilityAction.ACTION_CLEAR_FOCUS else AccessibilityNodeInfo.AccessibilityAction.ACTION_FOCUS)
                 node.clippedAbsoluteLocation?.let { location ->
                     setClippedAbsoluteAccessibilityBounds(this, location)
                     return@apply
@@ -1473,6 +1553,7 @@ internal class NativeFloatTextView(context: Context, private var scrollClip: Nat
                     sendNodeEvent(node.id, AccessibilityEvent.TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED)
                 }
                 AccessibilityNodeInfo.ACTION_FOCUS -> {
+                    if (node.kind == FloatInteractionKind.ADVISORY) return false
                     val previous = focusRegion
                     focusRegion = nodeFocusRegion(node)
                     if (!requestFocus()) { focusRegion = previous; return false }

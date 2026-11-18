@@ -1,5 +1,9 @@
 package app.smallthingz.dict
 
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.performScrollToNode
+import kotlin.math.roundToInt
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.focusRequester
@@ -1857,7 +1861,7 @@ class RubyComposeTextDeviceTest {
         val child = Span("text", "Oorganklik", italic = true, foreground = normal.foreground)
         val group = InlineBoxGroup(StyleEdges(zero, StyleLength(StyleLengthUnit.Em, .2f), zero,
             StyleLength(StyleLengthUnit.Em, .1f)), InlineBoxBorderEdges(border, border, border, border),
-            spans = listOf(child), radius = StyleLength(StyleLengthUnit.Px, 2f))
+            spans = listOf(child), radius = StyleWidth(StyleWidthUnit.Px, 2f))
         val link = Span("link", "", "Wiktionary:Oorganklik en onoorganklik", italic = true,
             foreground = normal.foreground, background = "#f8f9fa", linkPaint = policy, inlineBoxGroup = group)
         val period = Span("text", ".")
@@ -2394,6 +2398,335 @@ class RubyComposeTextDeviceTest {
             }
         }
         assertEquals(phases.size, calls.size)
+    }
+
+    @Test fun plainCircleAdvisoriesKeepRealTableSmallTextAndToolkitHoverWithoutActions() = control {
+        val title = "Vowel sign appearing in front of the initial consonant."
+        val replacementTitle = "Controlled replacement advisory"
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val dotted = InlineBoxBorderEdge.Dotted(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.Rgb("#808080"))
+        val border = InlineBoxBorderEdges(dotted, dotted, dotted, dotted)
+        fun small(text: String, tooltip: String? = null) = Span("text", text, tooltip = tooltip,
+            fontScale = .8f, fontScaleBasis = FontScaleBasis.NormalBody)
+        fun badge(tooltip: String? = title, childTitle: String? = null, rounded: Boolean = true) =
+            small("", tooltip).copy(inlineStyle = InlineTextStyle(cursor = InlineCursor.Help),
+                inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero), border,
+                    spans = listOf(small("e", childTitle)),
+                    radius = if (rounded) StyleWidth(StyleWidthUnit.Percent, 50f) else null))
+        val firstThai = "เงินปันผล"
+        val secondThai = "เงิ็น-ปัน-ผน"
+        val firstTail = "\u2009ŋ\u2009i\u2009n\u2009p\u2009ạ\u2009n\u2009pʰ\u2009l"
+        val secondTail = "\u2009ŋ\u2009i\u2009˘\u2009n\u2009–\u2009p\u2009ạ\u2009n\u2009–\u2009pʰ\u2009n"
+        val reference = Span("link", "Reference", "advisory-reference", targetFragment = "Original")
+        val callbacks = mutableListOf<EntryLink>()
+        data class Fixture(val entry: Entry, val first: Span, val second: Span, val width: Int = 300,
+            val density: Float = 1f, val zoom: Float = 1f)
+        fun fixture(first: Span = badge(), second: Span = badge(), width: Int = 300,
+            density: Float = 1f, zoom: Float = 1f): Fixture {
+            fun line(thai: String, owner: Span, tail: String) = listOf(Span("text", thai, language = "th"),
+                Span("line_break", ""), owner, small(tail))
+            val cellStyle = CellStyle(textAlign = CellTextAlign.Center)
+            // Source-derived controlled subset: both complete advisory TD bodies, with
+            // the second real DIV retained. The 20sp/.8 font is fixture data, not MG proof.
+            val table = Table(emptyList(), listOf(
+                listOf(Cell(line(firstThai, first, firstTail), false, 1, 1, style = cellStyle)),
+                listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(Block("container", 0, emptyList(),
+                    container = Container(listOf(Block("paragraph", 0, line(secondThai, second, secondTail)))))), style = cellStyle))),
+                geometry = TableGeometry(cellPadding = 10, cellSpacing = 2),
+                style = TableStyle(border = StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), "#a9a9a9")))
+            val entry = Entry("Advisory control", emptyList(), "language", "Thai", "th",
+                listOf(Section(3, "Pronunciation", listOf(Block("table", 0, emptyList(), table = table),
+                    Block("paragraph", 0, listOf(reference))))), emptyList())
+            return Fixture(entry, first, second, width, density, zoom)
+        }
+        val original = fixture()
+        val selected = mutableStateOf(original, referentialEqualityPolicy())
+        var failure: String? = null
+        val observer: (String) -> Unit = { failure = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            val state = selected.value
+            CompositionLocalProvider(LocalDensity provides Density(state.density, state.zoom),
+                LocalLayoutDirection provides LayoutDirection.Ltr, LocalNativeFloatContextFailureObserver provides observer) {
+                MaterialTheme(colorScheme = androidx.compose.material3.lightColorScheme(background = Color.White,
+                    surface = Color.White, onSurface = Color.Black), typography = Typography(bodyLarge = TextStyle(fontSize = 20.sp,
+                    fontFamily = FontFamily.Monospace, color = Color.Black, letterSpacing = 0.sp))) {
+                    Box(Modifier.fillMaxSize().background(Color.White).safeDrawingPadding().padding(12.dp)) {
+                        Box(Modifier.width(state.width.dp)) {
+                            EntryView(state.entry, false, {}, { callbacks += it },
+                                settings = AppSettings(allowImages = false, allowAudio = false))
+                        }
+                    }
+                }
+            }
+        } }
+        fun nativeViews(root: android.view.View): List<NativeFloatTextView> = buildList {
+            if (root is NativeFloatTextView) add(root)
+            if (root is android.view.ViewGroup) for (i in 0 until root.childCount) addAll(nativeViews(root.getChildAt(i)))
+        }
+        fun expectedCellText(thai: String) = thai + "\ne" + if (thai == firstThai) firstTail else secondTail
+        fun view(thai: String): NativeFloatTextView = nativeViews(compose.activityRule.activity().window.decorView)
+            .single { it.currentMeasuredGeometry?.text?.toString() == expectedCellText(thai) }
+        fun popup(value: String): android.widget.TextView? {
+            fun find(root: android.view.View): android.widget.TextView? {
+                val visible = android.graphics.Rect()
+                if (root is android.widget.TextView && root.text.toString() == value && root.isShown &&
+                    root.getGlobalVisibleRect(visible) && !visible.isEmpty) return root
+                if (root is android.view.ViewGroup) for (i in 0 until root.childCount) find(root.getChildAt(i))?.let { return it }
+                return null
+            }
+            val decor = compose.activityRule.activity().window.decorView
+            return android.view.inspector.WindowInspector.getGlobalWindowViews().asSequence()
+                .filter { it !== decor }.mapNotNull(::find).firstOrNull()
+        }
+        fun awaitPopup(value: String, shown: Boolean) = compose.waitUntil(5000) {
+            var present = false
+            compose.runOnIdle { present = popup(value) != null }
+            present == shown
+        }
+        fun awaitFixture() {
+            compose.waitUntil(5000) {
+                var ready = false
+                compose.runOnIdle { ready = nativeViews(compose.activityRule.activity().window.decorView)
+                    .count { it.currentMeasuredGeometry?.text?.toString() in listOf(expectedCellText(firstThai), expectedCellText(secondThai)) } == 2 }
+                ready
+            }
+            compose.waitForIdle()
+            compose.runOnIdle { assertNull(failure) }
+        }
+        fun change(value: Fixture) {
+            compose.runOnIdle { failure = null; selected.value = value }
+            awaitFixture()
+        }
+        var lastScreen: Pair<Float, Float>? = null
+        var lastTool = android.view.MotionEvent.TOOL_TYPE_MOUSE
+        fun inject(action: Int, point: Pair<Float, Float>, tool: Int = android.view.MotionEvent.TOOL_TYPE_MOUSE,
+            checkFixture: Boolean = true) {
+            if (checkFixture) compose.runOnIdle {
+                val activity = compose.activityRule.activity()
+                assertPhysicalActivity(activity)
+                assertTrue(activity.hasWindowFocus())
+                val manager = activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+                assertFalse("Hover popup fixture requires touch exploration to be inactive", manager.isTouchExplorationEnabled)
+            }
+            val properties = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+            val coordinates = android.view.MotionEvent.PointerCoords().apply { x = point.first; y = point.second }
+            val source = if (tool == android.view.MotionEvent.TOOL_TYPE_STYLUS) android.view.InputDevice.SOURCE_STYLUS
+                else android.view.InputDevice.SOURCE_MOUSE
+            val now = android.os.SystemClock.uptimeMillis()
+            val event = android.view.MotionEvent.obtain(now, now, action, 1, arrayOf(properties), arrayOf(coordinates),
+                0, 0, 1f, 1f, 0, 0, source, 0)
+            try { androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().sendPointerSync(event) }
+            finally { event.recycle() }
+            lastScreen = point; lastTool = tool
+            compose.waitForIdle()
+        }
+        fun screen(view: NativeFloatTextView, x: Float, y: Float): Pair<Float, Float> {
+            val matrix = android.graphics.Matrix(); view.transformMatrixToGlobal(matrix)
+            val point = floatArrayOf(x + view.paddingLeft, y + view.paddingTop); matrix.mapPoints(point)
+            return point[0] to point[1]
+        }
+        fun hover(thai: String, owner: Span, tool: Int = android.view.MotionEvent.TOOL_TYPE_MOUSE,
+            corner: Boolean = false): Pair<Float, Float> {
+            lateinit var point: Pair<Float, Float>
+            compose.runOnIdle {
+                val actual = view(thai); val geometry = checkNotNull(actual.currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.advisoryIdentity?.span === owner }
+                val box = node.bounds.single()
+                val x = if (corner) box.left + .05f else box.centerX()
+                val y = if (corner) box.top + .05f else box.centerY()
+                assertEquals(!corner, node.contains(x, y))
+                point = screen(actual, x, y)
+            }
+            inject(android.view.MotionEvent.ACTION_HOVER_ENTER, point, tool)
+            inject(android.view.MotionEvent.ACTION_HOVER_MOVE, point, tool)
+            return point
+        }
+        data class CellRaster(val bitmap: android.graphics.Bitmap, val left: Int, val top: Int)
+        fun captureCell(): CellRaster {
+            val interaction = compose.onNodeWithTag("compiled-table-cell-root-0", useUnmergedTree = true)
+            val node = interaction.fetchSemanticsNode()
+            val bounds = node.boundsInRoot
+            val root = (checkNotNull(node.root) as androidx.compose.ui.platform.ViewRootForTest).view
+            val bitmap = interaction.captureToImage().asAndroidBitmap()
+            try {
+                val location = IntArray(2)
+                compose.runOnIdle { root.getLocationOnScreen(location) }
+                assertEquals(bounds.right.roundToInt() - bounds.left.roundToInt(), bitmap.width)
+                assertEquals(bounds.bottom.roundToInt() - bounds.top.roundToInt(), bitmap.height)
+                return CellRaster(bitmap, location[0] + bounds.left.roundToInt(), location[1] + bounds.top.roundToInt())
+            } catch (failure: Throwable) { bitmap.recycle(); throw failure }
+        }
+        fun glyphMask(bitmap: android.graphics.Bitmap): Set<Int> = buildSet {
+            for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
+                val pixel = bitmap.getPixel(x, y)
+                if (android.graphics.Color.alpha(pixel) > 0 && android.graphics.Color.red(pixel) < 40 &&
+                    android.graphics.Color.green(pixel) < 40 && android.graphics.Color.blue(pixel) < 40)
+                    add(y * bitmap.width + x)
+            }
+        }
+        var primary: Throwable? = null
+        try {
+            awaitFixture()
+            lateinit var originalGlyphs: Set<Int>
+            lateinit var originalCharacters: List<android.graphics.RectF?>
+            compose.runOnIdle {
+                for ((thai, tail, owner) in listOf(Triple(firstThai, firstTail, original.first), Triple(secondThai, secondTail, original.second))) {
+                    val actual = view(thai); val geometry = checkNotNull(actual.currentMeasuredGeometry)
+                    assertEquals(thai + "\ne" + tail, geometry.text.toString())
+                    val node = geometry.nodes.single { it.kind == FloatInteractionKind.ADVISORY }
+                    assertSame(owner, checkNotNull(node.advisoryIdentity).span)
+                    assertEquals("e", geometry.text.subSequence(node.start, node.end).toString())
+                    assertEquals(title, node.tooltip); assertNull(node.onClick); assertNull(node.onLongClick); assertNull(node.preciseClip)
+                    assertTrue(geometry.characterRects(node.start, 1).single()?.isEmpty == false)
+                    val info = checkNotNull(actual.accessibilityNodeProvider.createAccessibilityNodeInfo(node.id))
+                    try {
+                        assertEquals("e", info.text.toString()); assertEquals(title, info.tooltipText.toString())
+                        assertFalse(info.isClickable); assertFalse(info.isLongClickable); assertFalse(info.isFocusable)
+                        assertFalse(actual.accessibilityNodeProvider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                        assertFalse(actual.accessibilityNodeProvider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                    } finally { info.recycle() }
+                    val expected = TextPaint().apply { textSize = 16f; typeface = android.graphics.Typeface.MONOSPACE }.measureText("e") + 2f
+                    assertEquals(expected, node.bounds.single().width(), .05f)
+                    assertNull(owner.background); assertNull(owner.inlineBoxGroup!!.spans.single().background)
+                }
+                val actual = view(firstThai)
+                originalCharacters = checkNotNull(actual.currentMeasuredGeometry).characterRects(0, actual.logicalText.length)
+                    .map { rectangle -> rectangle?.let { android.graphics.RectF(it) } }
+                assertTrue(original.entry.textDetails.any { it.kind == TextDetailKind.Advisory && it.label == "e" && it.description == title })
+            }
+            val firstCapture = captureCell()
+            val originalRasterSize = firstCapture.bitmap.width to firstCapture.bitmap.height
+            try { originalGlyphs = glyphMask(firstCapture.bitmap); assertTrue(originalGlyphs.isNotEmpty()) }
+            finally { firstCapture.bitmap.recycle() }
+            // The actual Compose cell paints the label; its AndroidView owns interaction only.
+            // A white gap between dots still lies inside the real outer curved hit.
+            lateinit var gapPoint: Pair<Float, Float>
+            val gapCapture = captureCell()
+            try { compose.runOnIdle {
+                val actual = view(firstThai); val geometry = checkNotNull(actual.currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.advisoryIdentity?.span === original.first }
+                val box = node.bounds.single()
+                val bitmap = gapCapture.bitmap
+                val matrix = android.graphics.Matrix(); actual.transformMatrixToGlobal(matrix)
+                val inverse = android.graphics.Matrix(); assertTrue(matrix.invert(inverse))
+                val rx = box.width() / 2f; val ry = box.height() / 2f
+                assertTrue(rx > 1f && ry > 1f)
+                var found: Pair<Float, Float>? = null
+                for (py in 0 until bitmap.height) for (px in 0 until bitmap.width) {
+                    val screenX = gapCapture.left + px + .5f; val screenY = gapCapture.top + py + .5f
+                    val point = floatArrayOf(screenX, screenY); inverse.mapPoints(point)
+                    val x = point[0] - actual.paddingLeft; val y = point[1] - actual.paddingTop
+                    val dx = x - box.centerX(); val dy = y - box.centerY()
+                    val inner = dx * dx / ((rx - 1f) * (rx - 1f)) + dy * dy / ((ry - 1f) * (ry - 1f))
+                    if (found == null && inner > 1f && node.contains(x, y) && bitmap.getPixel(px, py) == android.graphics.Color.WHITE)
+                        found = screenX to screenY
+                }
+                gapPoint = checkNotNull(found) { "The dotted border must retain a background-colored gap inside its curved hit" }
+            } } finally { gapCapture.bitmap.recycle() }
+            inject(android.view.MotionEvent.ACTION_HOVER_ENTER, gapPoint)
+            inject(android.view.MotionEvent.ACTION_HOVER_MOVE, gapPoint)
+            awaitPopup(title, true)
+            inject(android.view.MotionEvent.ACTION_HOVER_EXIT, gapPoint)
+            awaitPopup(title, false)
+            val mousePoint = hover(firstThai, original.first)
+            compose.runOnIdle { assertEquals(title, view(firstThai).tooltipText.toString()) }
+            awaitPopup(title, true) // A real separate toolkit window, not merely a View property.
+            var samePopup: android.widget.TextView? = null
+            compose.runOnIdle { samePopup = popup(title) }
+            inject(android.view.MotionEvent.ACTION_HOVER_MOVE, mousePoint)
+            compose.runOnIdle { assertSame(samePopup, popup(title)) }
+            hover(firstThai, original.first, corner = true)
+            compose.runOnIdle { assertNull(view(firstThai).tooltipText) }
+            awaitPopup(title, false)
+            hover(secondThai, original.second, android.view.MotionEvent.TOOL_TYPE_STYLUS)
+            awaitPopup(title, true)
+            inject(android.view.MotionEvent.ACTION_HOVER_EXIT, checkNotNull(lastScreen), lastTool)
+            awaitPopup(title, false)
+
+            val square = fixture(badge(rounded = false), badge(rounded = false))
+            change(square)
+            compose.runOnIdle {
+                val actual = view(firstThai)
+                assertEquals(originalCharacters, checkNotNull(actual.currentMeasuredGeometry).characterRects(0, actual.logicalText.length))
+            }
+            val squareCapture = captureCell()
+            try {
+                assertEquals(originalRasterSize, squareCapture.bitmap.width to squareCapture.bitmap.height)
+                assertEquals(originalGlyphs, glyphMask(squareCapture.bitmap)) // The actual glyph paint is not radius-clipped.
+            } finally { squareCapture.bitmap.recycle() }
+            change(original)
+            hover(firstThai, original.first)
+            awaitPopup(title, true)
+            val replaced = fixture(badge(replacementTitle), original.second)
+            change(replaced)
+            awaitPopup(title, false)
+            hover(firstThai, replaced.first)
+            awaitPopup(replacementTitle, true)
+            compose.runOnIdle { view(firstThai).isEnabled = false }
+            awaitPopup(replacementTitle, false)
+            compose.runOnIdle { assertNull(view(firstThai).tooltipText); view(firstThai).isEnabled = true }
+            val empty = fixture(badge(""), original.second)
+            change(empty)
+            compose.runOnIdle {
+                val actual = view(firstThai)
+                assertTrue(checkNotNull(actual.currentMeasuredGeometry).nodes.none { it.kind == FloatInteractionKind.ADVISORY })
+                assertNull(actual.tooltipText)
+            }
+            val absent = fixture(badge(null), original.second)
+            change(absent)
+            compose.runOnIdle { assertTrue(checkNotNull(view(firstThai).currentMeasuredGeometry).nodes.none { it.kind == FloatInteractionKind.ADVISORY }) }
+            val childEmpty = fixture(badge(childTitle = ""), original.second)
+            change(childEmpty)
+            compose.runOnIdle {
+                val actual = view(firstThai); val geometry = checkNotNull(actual.currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.advisoryIdentity?.span === childEmpty.first }
+                val glyph = checkNotNull(geometry.characterRects(node.start, 1).single())
+                assertFalse(node.contains(glyph.centerX(), glyph.centerY()))
+                assertEquals(title, node.tooltip) // Parent border retains its own title.
+            }
+            val narrow = fixture(original.first, original.second, width = 190, density = 1.25f, zoom = 1.25f)
+            change(narrow)
+            compose.runOnIdle {
+                val geometry = checkNotNull(view(firstThai).currentMeasuredGeometry)
+                val node = geometry.nodes.single { it.advisoryIdentity?.span === original.first }
+                val expected = TextPaint().apply { textSize = 16f * 1.25f * 1.25f; typeface = android.graphics.Typeface.MONOSPACE }.measureText("e") + 2f * 1.25f
+                assertEquals(expected, node.bounds.single().width(), .05f)
+                assertEquals(firstThai + "\ne" + firstTail, geometry.text.toString())
+            }
+            change(original)
+            compose.onNodeWithTag("entry-abbreviations").performTouchInput { click() }
+            val details = original.entry.textDetails.filter { it.kind == TextDetailKind.Advisory && it.description == title }
+            assertEquals(2, details.size); assertEquals(2, details.map { it.context }.distinct().size)
+            val entryScroll = compose.onNodeWithTag("entry-scroll")
+            details.forEach { detail ->
+                entryScroll.performScrollToNode(androidx.compose.ui.test.hasText(detail.context))
+                compose.onNodeWithText(detail.context).assertIsDisplayed()
+                compose.onNode(androidx.compose.ui.test.hasText(title) and
+                    androidx.compose.ui.test.hasAnySibling(androidx.compose.ui.test.hasText(detail.context))).assertIsDisplayed()
+            }
+            entryScroll.performScrollToNode(androidx.compose.ui.test.hasTestTag("entry-abbreviations"))
+            compose.onNodeWithTag("entry-abbreviations").performTouchInput { click() }
+            awaitFixture()
+            compose.runOnIdle {
+                assertTrue(callbacks.isEmpty())
+                val actual = view(firstThai); val text = actual.logicalText.toString()
+                actual.setSelection(0, text.length)
+                assertTrue(actual.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_COPY, null))
+                val clipboard = actual.context.getSystemService(android.content.ClipboardManager::class.java)
+                assertEquals(text, clipboard.primaryClip!!.getItemAt(0).text.toString())
+                assertSame(reference, original.entry.sections.single().blocks.last().spans.single())
+            }
+        } catch (failure: Throwable) { primary = failure; throw failure }
+        finally {
+            try {
+                var owned = false
+                compose.runOnIdle { owned = compose.activityRule.activity().hasWindowFocus() }
+                if (owned) lastScreen?.let { inject(android.view.MotionEvent.ACTION_HOVER_EXIT, it, lastTool, checkFixture = false) }
+            } catch (cleanup: Throwable) {
+                val earlier = primary
+                if (earlier == null) throw cleanup else if (earlier !== cleanup) earlier.addSuppressed(cleanup)
+            }
+        }
     }
 
 }

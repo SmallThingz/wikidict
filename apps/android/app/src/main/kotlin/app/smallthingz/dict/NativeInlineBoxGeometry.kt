@@ -37,7 +37,10 @@ internal class NativeInlineBoxGeometry(
     private val lines: List<Line>
     private val owners: List<Owner>
     private val fragments: List<Fragment>
-    private val rounded: Map<Fragment, NativeInlineBoxRoundPaint>
+    private val nestingParents: List<Int>
+    private val spanIndices = this.spans.withIndex().associate { it.value to it.index }
+    private val nestedChildren: Map<Int, Int>
+    private val rounded: Map<Fragment, NativeInlineBoxCurvePaint>
     private val cursors = nativeInlineRanges(raw.nativeRubyShapingSource, NativeAuthoredCursor::class.java)
 
     private fun coordinate(value: Double) = nativeInlineBoxCoordinate(value)
@@ -88,9 +91,8 @@ internal class NativeInlineBoxGeometry(
                         android.icu.lang.UCharacter.hasBinaryProperty(c.code, android.icu.lang.UProperty.BIDI_CONTROL)
                 }) throw UnsupportedFloatLayout("Inline box body contains unsupported native controls")
         }
-        val ordered = this.spans.sortedBy { it.start }
-        if (ordered.zipWithNext().any { (a, b) -> a.end > b.start })
-            throw UnsupportedFloatLayout("Nested or overlapping native inline boxes are unavailable")
+        nestingParents = nativeInlineBoxNesting(this.spans) { range -> ownerRtl(range, firstLine(range)) }
+        nestedChildren = nestingParents.withIndex().filter { it.value >= 0 }.associate { it.value to it.index }
         if (this.spans.map { it.value.box.owner }.distinct().size != this.spans.size)
             throw UnsupportedFloatLayout("Inline box owner lost its original occurrence")
         val source = raw.nativeRubyShapingSource
@@ -105,7 +107,11 @@ internal class NativeInlineBoxGeometry(
             val capture = nativeInlineLineCapture(raw, line, cuts, required)
             val edges = mutableListOf<Edge>()
             for (owner in active) {
-                val parts = visual(capture.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end)))
+                val captured = capture.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
+                val ownerIndex = spanIndices.getValue(owner)
+                if ((nestingParents[ownerIndex] >= 0 || nestedChildren.containsKey(ownerIndex)) && captured.any { it.rtl })
+                    throw UnsupportedFloatLayout("Nested inline decoration requires actual LTR native runs")
+                val parts = visual(captured)
                 if (parts.isEmpty()) throw UnsupportedFloatLayout("Inline box zero-advance fragment allocation is unavailable")
                 val rtl = ownerRtl(owner, line)
                 fun addEdge(leftSide: Boolean, amount: Float, fragment: VisualFragment, sourceBoundary: Int) {
@@ -153,7 +159,19 @@ internal class NativeInlineBoxGeometry(
                 val baseline = coordinate(mapped.baseline.toDouble() + value.shift)
                 val top = coordinate(baseline.toDouble() + primary.ascent)
                 val bottom = coordinate(baseline.toDouble() + primary.descent)
-                val parts = visual(mapped.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end)))
+                val ownPieces = mapped.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
+                val ownerIndex = spanIndices.getValue(owner)
+                val childIndex = nestedChildren[ownerIndex]
+                // Child edges are real in-flow allocation, including at a wrapped row endpoint.
+                // They extend only the ancestor decoration; source glyph/caret pieces stay exact.
+                val childEdges = if (childIndex == null) emptyList() else orderedEdges.filter {
+                    it.owner === this.spans[childIndex]
+                }.map { edge ->
+                    val placed = mapped.placedEdges.single { it.increment === edge.increment }
+                    val at = edge.increment.boundary.offset
+                    NativeInlineRunPiece(at, at, false, placed.left, placed.right, -1)
+                }
+                val parts = visual(ownPieces + childEdges)
                 val rtl = ownerRtl(owner, line)
                 parts.forEachIndexed { index, part ->
                     val hasLeft = (line == firstLine(owner) && !rtl && index == 0) ||
@@ -183,18 +201,30 @@ internal class NativeInlineBoxGeometry(
             Line(mapped, coordinate(advanceBounds.right.toDouble() - advanceBounds.left), advanceBounds)
         }
         fragments = builtFragments.toList()
-        val roundedFragments = mutableMapOf<Fragment, NativeInlineBoxRoundPaint>()
+        val roundedFragments = mutableMapOf<Fragment, NativeInlineBoxCurvePaint>()
         owners = this.spans.map { range ->
             val own = fragments.filter { it.owner === range }
-            range.value.box.radius?.takeIf { it > 0f }?.let { radius ->
+            range.value.box.radius?.takeIf { it > 0f || range.value.box.border.top.dotted }?.let { radius ->
                 val rtl = ownerRtl(range, firstLine(range))
                 val visualOrder = own.groupBy { it.line }.toSortedMap().values.flatMap {
                     if (rtl) it.asReversed() else it
                 }
-                val slices = nativeInlineBoxCornerSlices(visualOrder.map(::boxBounds), rtl, radius,
-                    range.value.box.border.top.width)
-                visualOrder.zip(slices).forEach { (fragment, slice) ->
-                    roundedFragments[fragment] = NativeInlineBoxRoundPaint(slice)
+                val box = range.value.box
+                if (!box.radiusPercentage && !box.border.top.dotted) {
+                    val slices = nativeInlineBoxCornerSlices(visualOrder.map(::boxBounds), rtl, radius,
+                        box.border.top.width)
+                    visualOrder.zip(slices).forEach { (fragment, slice) ->
+                        roundedFragments[fragment] = NativeInlineBoxRoundPaint(slice)
+                    }
+                } else {
+                    val slices = nativeInlineBoxEllipseSlices(visualOrder.map(::boxBounds), rtl, radius,
+                        box.radiusPercentage, box.border.top.width)
+                    val decorations = mutableMapOf<NativeInlineBoxEllipseShape, NativeInlineBoxEllipseDecoration>()
+                    visualOrder.zip(slices).forEach { (fragment, slice) ->
+                        roundedFragments[fragment] = decorations.getOrPut(slice.shape) {
+                            NativeInlineBoxEllipseDecoration(slice.shape, box.border.top.dotted)
+                        }.slice(slice)
+                    }
                 }
             }
             val first = own.filter { it.line == firstLine(range) }.let { if (ownerRtl(range, firstLine(range))) it.last() else it.first() }
@@ -222,7 +252,7 @@ internal class NativeInlineBoxGeometry(
         return { x, y -> known.fragments.any { contains(it, x, y) } }
     }
     private fun contains(fragment: Fragment, x: Float, y: Float): Boolean =
-        rounded[fragment]?.slice?.contains(x, y) ?: fragment.border.contains(x, y)
+        rounded[fragment]?.contains(x, y) ?: fragment.border.contains(x, y)
 
     /** Only caller-owned action boxes are clipped; native selection and caret paths are untouched. */
     fun childActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int, childStart: Int, childEnd: Int,
@@ -332,7 +362,8 @@ internal class NativeInlineBoxGeometry(
     override val extents: NativeGeometryExtents get() = NativeGeometryExtents(width, height.toFloat(),
         ordinaryPaintBounds.reduceOrNull { a, b -> a.enclosing(b) }, nativeBoundsOf(rectsForRange(0, text.length) + cursorBounds))
     private fun paintBackgrounds(canvas: Canvas, line: Int?) {
-        fragments.filter { line == null || it.line == line }.forEach { fragment ->
+        fragments.filter { line == null || it.line == line }
+            .sortedWith(compareBy({ it.line }, { if (nestingParents[spanIndices.getValue(it.owner)] < 0) 0 else 1 })).forEach { fragment ->
             val color = fragment.owner.value.format.paint.bgColor
             val curved = rounded[fragment]
             if (curved != null) curved.paint(canvas, color,
@@ -457,7 +488,8 @@ internal class NativeInlineBoxBorderPaint(box: RectF, borders: NativeInlineBoxBo
 }
 
 /** Paint a bounded window of the one composite decoration. Text replay never enters this clip. */
-private class NativeInlineBoxRoundPaint(val slice: NativeInlineBoxCornerSlice) {
+private class NativeInlineBoxRoundPaint(val slice: NativeInlineBoxCornerSlice) : NativeInlineBoxCurvePaint {
+    override fun contains(x: Float, y: Float) = slice.contains(x, y)
     private fun path(box: NativeFloatBounds, radii: NativeCornerRadii) = Path().apply {
         val corners = radii.clockwise.flatMap { listOf(it.toFloat(), it.toFloat()) }.toFloatArray()
         addRoundRect(RectF(box.left, box.top, box.right, box.bottom), corners, Path.Direction.CW)
@@ -468,7 +500,7 @@ private class NativeInlineBoxRoundPaint(val slice: NativeInlineBoxCornerSlice) {
         slice.localShape.paddingBox?.let { addPath(path(it, slice.localShape.innerRadii)) }
     }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    fun paint(canvas: Canvas, background: Int, borderColor: Int) {
+    override fun paint(canvas: Canvas, background: Int, borderColor: Int) {
         val box = slice.fragment
         val checkpoint = canvas.save()
         try {

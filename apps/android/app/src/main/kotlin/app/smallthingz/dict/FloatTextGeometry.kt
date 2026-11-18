@@ -383,7 +383,7 @@ internal fun nativeBoundsOf(rectangles: List<RectF>): NativeFloatBounds? = recta
     .filter { !it.isEmpty }.map { NativeFloatBounds(it.left, it.top, it.right, it.bottom) }
     .reduceOrNull { a, b -> a.enclosing(b) }
 
-internal enum class FloatInteractionKind { LINK, IMAGE, HEADING, CONTROL, MARKER, SEPARATOR }
+internal enum class FloatInteractionKind { LINK, IMAGE, HEADING, CONTROL, MARKER, SEPARATOR, ADVISORY }
 
 /** IDs must remain stable across width reflow. Empty and single-space labels are authored data. */
 internal data class FloatInteractionNode(
@@ -408,6 +408,8 @@ internal data class FloatInteractionNode(
     val sourceFocusVisible: Boolean = false,
     val citationMarker: CitationMarker? = null,
     val clippedAbsoluteLocation: NativeClippedAbsoluteSemanticLocation? = null,
+    val advisoryIdentity: NativeTextAdvisoryIdentity? = null,
+    val tooltipForPosition: ((Float, Float) -> CharSequence?)? = null,
 ) {
     fun contains(x: Float, y: Float): Boolean = (clipBounds?.contains(x, y) ?: true) &&
         (preciseClip?.contains(x, y) ?: true) &&
@@ -415,6 +417,7 @@ internal data class FloatInteractionNode(
     fun translated(x: Float, y: Float): FloatInteractionNode = copy(
         bounds = bounds.map { RectF(it).apply { offset(x, y) } },
         hitTest = hitTest?.let { test -> { px, py -> test(px - x, py - y) } },
+        tooltipForPosition = tooltipForPosition?.let { query -> { px, py -> query(px - x, py - y) } },
         focusPaint = focusPaint?.translated(x, y),
         clipBounds = clipBounds?.let { RectF(it).apply { offset(x, y) } },
         preciseClip = preciseClip?.translated(x, y),

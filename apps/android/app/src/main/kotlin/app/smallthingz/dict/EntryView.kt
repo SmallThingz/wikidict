@@ -681,6 +681,9 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     val actions = sectionRows.mapValues { (_, item) -> actionsForSection(item) }
                     bodyText?.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
                     NativeDocumentOverflowItem(documentOverflow, visibleRows.slice(run).map { it.key }) {
+                    val opacitySource = remember(NativeCellOpacitySourceIdentity(entry), visibleRows.map { it.key }, run) {
+                        nativeCellOpacityEntrySource(entry, visibleRows, run)
+                    }.takeIf { blocks.any { it.table?.let(::nativeHasCellOpacity) == true } }
                     NativeFloatBlockContext(blocks, readerLink, row.sectionKey, Modifier,
                         inCell = false, gridPath = "root", gapDp = 6f, trailingGap = true,
                         containAtEnd = true, blockPaths = rows.map { it.key }, gapsDp = rows.map { if (it.compact) 2f else 6f },
@@ -688,7 +691,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                         documentSurface = entry.bodyAdjoining == BodyAdjoiningPolicy.Ordinary ||
                             blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() || it.hasContainerDisclosure() } || nativeAudioDocumentScrollNeeded(blocks),
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
-                        bodyTextContext = bodyText?.getOrNull(), referenceLayoutParagraphs = referenceParagraphs)
+                        bodyTextContext = bodyText?.getOrNull(), referenceLayoutParagraphs = referenceParagraphs,
+                         cellOpacitySource = opacitySource)
                     }
                 } else if (rowIndex !in floatCovered) {
                     row.referenceBatch?.let { CompiledReferenceBatchView(it, entry.references, row.key, readerLink, referenceLayoutTarget) }
@@ -988,7 +992,7 @@ private fun tableHasMinimumWidth(table: Table): Boolean {
 }
 
 private fun tableLayoutFeature(table: Table, feature: Feature?): Feature? =
-    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) }
+    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) }
 
 @Composable
 private fun TableCaptionContext(table: Table, content: @Composable () -> Unit) {
@@ -1225,7 +1229,7 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
   val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
   val inline = table.style?.isInline == true
   val lineHeightPixels = tableLineHeightPixels(table)
-  if (table.style?.minWidth == null && lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
+  if (table.style?.minWidth == null && !table.hasNativeCellOpacity() && lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
       Text("Table line height is too large to display.")
       return
   }
@@ -1424,7 +1428,7 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table)
-    if (table.style?.minWidth == null && lineHeight != null && (!lineHeight.isFinite() || lineHeight <= 0f || lineHeight > TablePixelLimit)) {
+    if (table.style?.minWidth == null && !table.hasNativeCellOpacity() && lineHeight != null && (!lineHeight.isFinite() || lineHeight <= 0f || lineHeight > TablePixelLimit)) {
         Text("Table line height is too large to display.")
         return
     }
@@ -1599,6 +1603,14 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             })
         return
     }
+    val opacityRequested = table.hasNativeCellOpacity()
+    val opacityOwner = LocalNativeCellOpacityTable.current?.takeIf { it.table === table &&
+        selectionCells == null && anonymousGridStyle == null && !pairedHeightIntrinsics }
+    if (opacityRequested && (opacityOwner == null || !nativeCellOpacityTableShape(table))) {
+        UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
+            NativeCellOpacityUnavailable, showWarning = true)
+        return
+    }
     val delegated = LocalNativeDelegatedTable.current?.takeIf { it.table === table && selectionCells == null }
     val delegatedFallback = delegated?.fallbackReason != null
     SideEffect { delegated?.composedFallback(delegatedFallback) }
@@ -1614,12 +1626,12 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val cellColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outline
-    if (table.rowsHiddenMaxWidthPx == null && table.style?.minWidth == null && !hasCorners && !pairedHeightIntrinsics && anonymousGridStyle == null && natural == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) {
+    if (table.rowsHiddenMaxWidthPx == null && table.style?.minWidth == null && !hasCorners && !pairedHeightIntrinsics && anonymousGridStyle == null && natural == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table) && !opacityRequested) {
         LaunchedEffect(table, decorationProjection) { removeDecorations() }
         return
     }
     if (natural == null) {
-        if (table.style?.minWidth != null) {
+        if (table.style?.minWidth != null || opacityRequested) {
             UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
                 "Table minimum-width layout is unavailable. Table content is retained.",
                 refuseIntrinsicQueries = true, showWarning = true)
@@ -1655,7 +1667,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val lineHeightPixels = tableLineHeightPixels(table, containerStyle ?: inheritedContainerBodyStyle(),
         anonymousGridStyle ?: table.style)
     if (lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
-        if (table.style?.minWidth != null) {
+        if (table.style?.minWidth != null || opacityRequested) {
             UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
                 "Table line height exceeds native geometry. Table content is retained.",
                 refuseIntrinsicQueries = true, showWarning = true)
@@ -1711,9 +1723,10 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 val background = authoredColors[index] ?: if (rounded != null && tableBackground != null) null
                     else tableBackground ?: if (anonymousGridStyle != null) null
                     else inheritedColor ?: if (placed.cell.header) headerColor else cellColor
-                background?.let { drawRect(it,
+                val opacityGrouped = opacityOwner?.permitted == true && placed.cell.hasNativeCellOpacity()
+                background?.takeUnless { opacityGrouped && authoredColors[index] != null }?.let { drawRect(it,
                     topLeft = Offset(left.toFloat(), top.toFloat()), size = Size(cellWidth.toFloat(), (bottom - top).toFloat())) }
-                if (styled?.collapse != true) {
+                if (styled?.collapse != true && !opacityGrouped) {
                     val fallback = TableStyleBorder(pixels.borderWidth.toFloat(), null)
                     val edges = styled?.cellEdges?.get(index) ?: TableCellBorders(fallback, fallback, fallback, fallback)
                     separateCellBorderSegments(left.toFloat(), top.toFloat(), (left + cellWidth).toFloat(), bottom.toFloat(), edges).forEach { edge ->
@@ -1762,7 +1775,18 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             val cellWeight = if (placed.cell.header) {
                 if (placed.cell.style?.lineHeight != null) FontWeight.Bold else FontWeight.SemiBold
             } else LocalCellWeight.current
-            Box(Modifier.testTag("compiled-table-cell-$path-$index").onGloballyPositioned { coordinates ->
+            Box(Modifier.nativeCellOpacity(opacityOwner, index) { canvas, bounds ->
+                // A null cell background is transparent over the independent table
+                // backdrop; never reclassify inherited/table paint as cell-owned.
+                authoredColors[index]?.let { color -> canvas.drawRect(bounds,
+                    android.graphics.Paint().apply { this.color = color.toArgb() }) }
+                val fallback = TableStyleBorder(natural.borderWidth.toFloat(), null)
+                val edges = styled?.cellEdges?.get(index) ?: TableCellBorders(fallback, fallback, fallback, fallback)
+                separateCellBorderSegments(bounds.left, bounds.top, bounds.right, bounds.bottom, edges).forEach { edge ->
+                    val color = edge.color?.let { canonicalColorArgb(it)?.let(::Color) } ?: borderColor
+                    paintNativeTableBorder(canvas, edge, color.toArgb())
+                }
+            }.testTag("compiled-table-cell-$path-$index").onGloballyPositioned { coordinates ->
                 delegatedCell?.let { it.cellCoordinates = coordinates; it.table.validateAfterPlacement() }
             }.semantics {
                 collectionItemInfo = androidx.compose.ui.semantics.CollectionItemInfo(
@@ -1781,7 +1805,10 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     val selection = selectionCells?.get(index)
                     val blocks = placed.cell.blocks
                     val paragraph = if (intrinsicTable) intrinsicTableSingleParagraph(placed.cell) else null
-                    if (selection != null) selection.content { selection.geometry = it }
+                    if (opacityOwner != null && blocks == null && placed.cell.nestedTable == null)
+                        StyledText(placed.cell.spans, onLink = onLink,
+                            measuredCellGeometry = opacityOwner.text[index])
+                    else if (selection != null) selection.content { selection.geometry = it }
                     else if (paragraph != null) BlockView(paragraph, onLink, "$cellPath/block-0", inCell = true,
                         gridPath = "$path/$index/block-0")
                     else if (blocks != null) FloatBlockSequence(blocks, onLink, cellPath, inCell = true,
@@ -1883,6 +1910,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
 
         override fun MeasureScope.measure(measurables: List<Measurable>, incoming: Constraints): MeasureResult {
         blockLayoutFailure?.update(null)
+        opacityOwner?.measureStarted()
         val cells = measurables.take(grid.cells.size)
         val reference = widthInput?.value?.takeUnless { table.style?.minWidth != null && it < 0 }
             ?: widthReference ?: incoming.maxWidth.takeIf { incoming.hasBoundedWidth }
@@ -1944,7 +1972,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             if (anonymousGridStyle != null || pairedHeightIntrinsics) blockLayoutFailure?.update(
                 if (hasCorners) "Authored table corner geometry is unavailable at this size" else "Anonymous table grid is unavailable at this size")
             drawingPixels = null
-            if (table.style?.minWidth == null && !hasCorners && anonymousGridStyle == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table)) removeDecorations()
+            if (table.style?.minWidth == null && !hasCorners && anonymousGridStyle == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table) && !opacityRequested) removeDecorations()
             // Keep the existing cells visible in an explicitly unavailable grid.
             // A later width change measures these same owners again, without
             // replacing active media or latching a composition-only error state.
@@ -1994,6 +2022,23 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             val cellContentOffsets = children.indices.map { index ->
                 tableCellContentOffset(pixels, grid.cells[index], children[index].height,
                     grid.cells[index].cell.style?.verticalAlign)
+            }
+            if (opacityOwner != null) {
+                val boxes = grid.cells.map { placed ->
+                    val left = pixels.physicalCellLeft(placed.column, placed.colspan, layoutDirection == LayoutDirection.Rtl)
+                    NativeFloatBounds(left.toFloat(), pixels.cellTop(placed.row).toFloat(),
+                        (left + pixels.cellWidth(placed.colspan, placed.column)).toFloat(),
+                        pixels.cellBottom(placed.row, placed.cell.rowspan).toFloat())
+                }
+                val insets = grid.cells.indices.map { index -> styled?.cellInsets?.get(index) ?:
+                    TablePixelInsets(natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth,
+                        natural.cellPadding + natural.borderWidth, natural.cellPadding + natural.borderWidth) }
+                val boxTops = grid.cells.indices.map { index -> boxes[index].top + cellContentOffsets[index] }
+                opacityOwner.measured(pixels.width, pixels.height, boxes, boxTops,
+                    grid.cells.indices.map { index -> (boxes[index].left + insets[index].left) to
+                        (boxTops[index] + insets[index].top) },
+                    children.indices.map { index -> (children[index].width - insets[index].horizontal) to
+                        (children[index].height - insets[index].vertical) }, density.density)
             }
             val tableBaselines = if (cellBaselinePolicy) {
                 val cellLines = children.indices.map { index ->
@@ -2118,7 +2163,8 @@ internal fun inlineMetricOwnerAnnotation(span: Span, style: TextStyle): Annotate
     styledTextAnnotation(listOf(inlineMetricOwnerSpan(span)), null, style) { }
 
 @Composable
-internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = inheritedContainerBodyStyle(), onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false) {
+internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weight: FontWeight? = null, style: TextStyle = inheritedContainerBodyStyle(), onLink: (EntryLink) -> Unit = {}, preserveWhitespace: Boolean = false,
+    measuredCellGeometry: NativeCellOpacityText? = null) {
     val nativeRuby = LocalRubyNative.current
     val terminalClipped = LocalClippedAbsoluteTerminalFallback.current
     if (!nativeRuby && !terminalClipped && source.any { it.clippedAbsolute != null }) {
@@ -2193,7 +2239,7 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
         }
         return
     }
-    if (terminalClipped || !terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerWrap != null && nativeInlineStyle || containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
+    if (measuredCellGeometry != null || terminalClipped || !terminalImageFallback && (sourceImageOccurrence || nativeRuby && (sourceRuby || (containerWrap != null && nativeInlineStyle || containerFormat != null || sourceLinkPaint || sourceInlineStyle || sourceFontStack || sourceInlineFamily) &&
         (!sourceLinkPaint || nativeLinkPaint) && (!(sourceInlineStyle || sourceFontStack || sourceInlineFamily) || nativeInlineStyle)))) {
         val native = prepareNativeFloatText(spans, annotated, egyptianRuns,
             renderedStyle.copy(textDirection = compiledDirection, textAlign = cellTextAlign ?: style.textAlign),
@@ -2201,8 +2247,13 @@ internal fun StyledText(source: List<Span>, modifier: Modifier = Modifier, weigh
             nativeLineHeight = lineHeightPixels?.let { NativeLineHeightPolicy.Pixels(it) } ?: containerFormat?.lineHeight,
             sourceFamily = sourceFamily, ownerFont = containerFormat?.ownerFont, rubyWeight = weight,
             ownerWrap = containerWrap.takeIf { nativeInlineStyle }, terminalFallback = terminalClipped)
+        val measuredBinding = remember(measuredCellGeometry, RubySourceIdentity(source), native.revision) {
+            measuredCellGeometry?.bind()
+        }
+        DisposableEffect(measuredBinding) { onDispose { measuredBinding?.clear() } }
         val nativeModifier = if (LocalNativePreformattedText.current) modifier.width(IntrinsicSize.Max) else modifier
-        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(native, 0f)), nativeModifier, linkColor) { _, _ ->
+        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(native, 0f)), nativeModifier, linkColor,
+            onMeasuredGeometry = measuredBinding?.let { binding -> { _, geometry -> binding.observed(geometry) } }) { _, _ ->
             error("Native inline text has no delegated child")
         }
         return
@@ -2412,7 +2463,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     sectionKeys: List<String>? = null, documentSurface: Boolean = false,
     fixedHeightReachable: Boolean = false, positionedPaintRoot: Boolean = false,
     bodyAdjoining: BodyAdjoiningPolicy? = null, bodyTextContext: ContainerTextContext? = null,
-    referenceLayoutParagraphs: Map<String, ReferenceLayoutParagraph> = emptyMap()) {
+    referenceLayoutParagraphs: Map<String, ReferenceLayoutParagraph> = emptyMap(),
+    cellOpacitySource: NativeCellOpacityEntrySource? = null) {
     val density = LocalDensity.current
     val contentWidths = LocalTableContentWidths.current
     val inheritedAlign = LocalCellTextAlign.current
@@ -2456,6 +2508,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     val audioLayoutInputs = remember { linkedMapOf<Triple<Int, Int, String>, NativeLayoutInput<Float>>() }
     val retainedAudioInputs = hashSetOf<Triple<Int, Int, String>>()
     val mediaAudioInputs = mutableMapOf<Int, Map<Int, NativeLayoutInput<Float>>>()
+    val opacityRoot = remember(cellOpacitySource) { cellOpacitySource?.let(::NativeCellOpacityRoot) }
+    val opacityTables = mutableMapOf<Int, NativeCellOpacityTable>()
     val originalChildren = mutableMapOf<Int, NativeContainerLeaf>()
     val leafBoxes = mutableMapOf<Int, ParagraphBox?>()
     val gaps = blocks.indices.map { index ->
@@ -2624,6 +2678,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             originalChildren[index] = leaf
             val table = block.table
             val tableFeature = if (table == null) block.feature else tableLayoutFeature(table, block.feature)
+            if (opacityRoot != null && table != null && leaf.rootIndex != null && !leaf.inContainer &&
+                block.style == null && blockIndentDp(block) == 0 && blockPrefix(block).isEmpty() && tableFeature == null)
+                opacityTables[index] = opacityRoot.table(index, table)
             val ownerLanguage = table?.blockViewport?.language ?: table?.floatViewport?.language
             val nativeTableAdmitted = ownerLanguage?.let { nativeTableOwnerLanguageTag(it) != null } ?: true
             val blockViewport = table?.takeIf { nativeTableAdmitted && it.blockViewport != null }?.blockViewportAt(documentViewport)
@@ -2758,7 +2815,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     } }.takeIf { request != null && it >= 0 }
     @Composable fun originalChild(id: Int, originalWidth: NativeLayoutInput<Int>) {
         val leaf = originalChildren.getValue(id)
-        CompositionLocalProvider(LocalFloatTableWidthReference provides originalWidth,
+        CompositionLocalProvider(LocalNativeCellOpacityTable provides opacityTables[id],
+            LocalFloatTableWidthReference provides originalWidth,
             LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope,
             LocalNativeContainerTextWrap provides leaf.ownerWrap,
             LocalFloatMarginsConsumed provides nativeTableConsumesMargins(leaf.block.table,
@@ -2770,6 +2828,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         }
     }
     audioLayoutInputs.keys.retainAll(retainedAudioInputs)
+    opacityRoot?.retain(opacityTables.keys)
+    DisposableEffect(opacityRoot) { onDispose { opacityRoot?.revoke() } }
     NativeFloatContextLayout(parts, modifier, linkColor, containAtEnd, revealIndex, request,
         { if (request != null) reached(request) }, adjoining = parts.any {
             it is NativeFloatContextSpec.Container || it is NativeFloatContextSpec.Rule
@@ -2781,6 +2841,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             (blockPaths ?: blocks.indices.map { "$path/block-$it" }).any {
                 request.path == it || request.path.startsWith(it + "/")
             })) ({ sourceReveal(request, null) }) else null,
+        onMeasuredGeometry = opacityRoot?.let { root -> { geometry, _ -> root.validate(geometry, parts, density.density) } },
         delegatedSourceRevision = listOf(blocks, rootContext, baseStyle, settings, edition, media,
             LocalMissingLinkOwner.current, containAtEnd, documentSurface, fixedHeightReachable, positionedPaintRoot) +
             listOfNotNull(bodyAdjoining)) { id, originalWidth ->

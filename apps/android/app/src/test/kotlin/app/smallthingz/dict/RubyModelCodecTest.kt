@@ -225,7 +225,7 @@ class RubyModelCodecTest {
             value.overlays.forEachIndexed { index, overlay -> boxOverlay(overlay, "$label.overlay$index") }
             spans(value.spans, "$label.body")
             mark("$label.childrenEnd")
-            value.radius?.let { boxLength(it, "$label.radius") }
+            value.radius?.let { mark("$label.radius"); byte(it.unit.ordinal); f32(it.value) }
             value.atomicLayout?.let { atomic ->
                 mark("$label.atomic")
                 boxLength(atomic.width, "$label.atomic.width"); boxLength(atomic.height, "$label.atomic.height")
@@ -551,6 +551,43 @@ class RubyModelCodecTest {
             minimumTableStyle(grid, "responsive.grid"); byte(TableContainingDirection.Ltr.ordinal); string("ja")
             tail(); columnLayoutTail()
         }
+        /** Existing CellStyle field order, with the scalar opacity suffix after line height. */
+        private fun opacityCellStyle(value: CellStyle?, label: String) {
+            mark("$label.presence"); byte(if (value == null) 0 else 1)
+            if (value == null) return
+            require(value.borderEdges == null && value.letterSpacing == null)
+            val flags = (if (value.border != null) 1 else 0) or (if (value.padding != null) 2 else 0) or
+                (if (value.textAlign != null) 4 else 0) or (if (value.lineHeight != null) 8 else 0) or
+                (if (value.opacity != null) 16 else 0) or (if (value.width != null) 32 else 0) or
+                (if (value.minWidth != null) 64 else 0) or (if (value.verticalAlign != null) 128 else 0)
+            mark("$label.flags"); byte(flags)
+            value.border?.let { border -> when (border) {
+                StyleBorder.None -> byte(0)
+                is StyleBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); string(border.color) }
+                else -> error("Unsupported fixture border")
+            } }
+            value.padding?.let { edges -> listOf(edges.top, edges.right, edges.bottom, edges.left)
+                .forEachIndexed { index, length -> positionedLength(length, "$label.padding.$index") } }
+            value.textAlign?.let { byte(it.ordinal) }
+            value.width?.let { byte(it.unit.ordinal); f32(it.value) }
+            value.minWidth?.let { positionedLength(it, "$label.minimum") }
+            value.verticalAlign?.let { byte(it.ordinal) }
+            mark("$label.lineHeight")
+            value.lineHeight?.let { lineHeight ->
+                val strut = lineHeight.strut
+                require(strut?.ownerFont == null)
+                byte(if (strut == null) 0 else 1)
+                strut?.let { f32(it.fontScale); byte(it.fontScaleBasis.ordinal) }
+                when (val height = lineHeight.height) {
+                    CellLineHeightValue.Normal -> byte(0)
+                    is CellLineHeightValue.Multiplier -> { byte(1); f32(height.value) }
+                    is CellLineHeightValue.Length -> { byte(2); f32(height.value.value); byte(height.value.fontScaleBasis.ordinal) }
+                }
+            }
+            mark("$label.oldEnd")
+            value.opacity?.let { mark("$label.opacity"); f32(it) }
+            mark("$label.end")
+        }
         private fun positionedTable(value: Table, label: String) {
             require(value.geometry == null && value.blockViewport == null && value.floatViewport == null)
             mark("$label.flags"); byte(if (value.rowsHiddenMaxWidthPx == null) 1 else 0x21)
@@ -559,14 +596,14 @@ class RubyModelCodecTest {
                 u32(row.size.toLong())
                 row.forEachIndexed { cellIndex, cell ->
                     val name = "$label.row$rowIndex.cell$cellIndex"
-                    require(cell.background == null && cell.style == null)
-                    byte(if (cell.header) 1 else 0); u16(cell.colspan); u16(cell.rowspan); byte(0)
+                    byte(if (cell.header) 1 else 0); u16(cell.colspan); u16(cell.rowspan)
+                    byte(if (cell.background == null) 0 else 1); cell.background?.let { string(it) }
                     spans(cell.spans, "$name.spans")
                     if (cell.nestedTable == null) byte(0) else positionedTable(cell.nestedTable, "$name.nested")
                     byte(if (cell.blocks == null) 0 else 1)
                     cell.blocks?.let { blocks -> u32(blocks.size.toLong())
                         blocks.forEachIndexed { index, child -> positionedBlock(child, "$name.block$index") } }
-                    byte(0)
+                    opacityCellStyle(cell.style, "$name.style")
                 }
             }
             minimumTableStyle(value.style, "$label.style"); byte(if (value.captionBlocks == null) 0 else 1)
@@ -4758,51 +4795,52 @@ class RubyModelCodecTest {
         val px = StyleLengthUnit.Px
         val em = StyleLengthUnit.Em
         val zero = StyleLength(px, 0f)
+        val zeroRadius = StyleWidth(StyleWidthUnit.Px, 0f)
         val padding = StyleEdges(StyleLength(em, .2f), StyleLength(em, .5f), StyleLength(em, .2f), StyleLength(em, .5f))
         val color = InlineBoxColor.Rgb("#aabbcc")
         val edge = InlineBoxBorderEdge.Solid(StyleLength(px, 1f), color)
         val border = InlineBoxBorderEdges(edge, edge, edge, edge)
         val child = Span("text", "Afrikaans\ud83d\ude00", trail = "!", fontScale = 1.25f, fontScaleBasis = FontScaleBasis.NormalBody)
         val square = InlineBoxGroup(padding, border, spans = listOf(child))
-        val explicitZero = square.copy(radius = zero)
-        val rounded = square.copy(radius = StyleLength(px, 2f))
+        val explicitZero = square.copy(radius = zeroRadius)
+        val rounded = square.copy(radius = StyleWidth(StyleWidthUnit.Px, 2f))
         val owner = Span("link", "", "Afrikaans", background = "#eeeeee", fontScale = 1.25f,
             fontScaleBasis = FontScaleBasis.NormalBody, inlineBoxGroup = rounded)
-        assertNull(square.radius); assertEquals(zero, explicitZero.radius); assertNotEquals(square, explicitZero)
-        assertEquals(StyleLength(px, 2f), rounded.radius)
+        assertNull(square.radius); assertEquals(zeroRadius, explicitZero.radius); assertNotEquals(square, explicitZero)
+        assertEquals(StyleWidth(StyleWidthUnit.Px, 2f), rounded.radius)
         assertSame(child, rounded.spans.single()); assertSame(rounded, owner.inlineBoxGroup)
         assertEquals("Afrikaans\ud83d\ude00!", rubyGraphicalProjection(listOf(owner)).text)
         assertEquals("Afrikaans", owner.target); assertEquals("#eeeeee", owner.background)
         assertEquals(1.25f, owner.fontScale!!, 0f); assertEquals(padding, rounded.padding)
         assertNull(owner.copy(inlineBoxGroup = rounded.copy(radius = null)).inlineBoxGroup!!.radius)
-        assertEquals(StyleLength(px, 2f), owner.inlineBoxGroup!!.radius)
+        assertEquals(StyleWidth(StyleWidthUnit.Px, 2f), owner.inlineBoxGroup!!.radius)
         val zeroEdge = edge.copy(width = zero)
-        assertEquals(zero, square.copy(border = InlineBoxBorderEdges(zeroEdge, zeroEdge, zeroEdge, zeroEdge), radius = zero).radius)
+        assertEquals(zeroRadius, square.copy(border = InlineBoxBorderEdges(zeroEdge, zeroEdge, zeroEdge, zeroEdge), radius = zeroRadius).radius)
         val emEdge = edge.copy(width = StyleLength(em, .1f))
-        assertEquals(StyleLength(px, 2f), square.copy(border = InlineBoxBorderEdges(emEdge, emEdge, emEdge, emEdge),
-            radius = StyleLength(px, 2f)).radius)
+        assertEquals(StyleWidth(StyleWidthUnit.Px, 2f), square.copy(border = InlineBoxBorderEdges(emEdge, emEdge, emEdge, emEdge),
+            radius = StyleWidth(StyleWidthUnit.Px, 2f)).radius)
         for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY))
-            invalid("Radius must remain finite and nonnegative") { square.copy(radius = StyleLength(px, value)) }
-        for (value in listOf(0f, 2f)) invalid("Radius is physical CSS px only") { square.copy(radius = StyleLength(em, value)) }
+            invalid("Radius must remain finite and nonnegative") { square.copy(radius = StyleWidth(StyleWidthUnit.Px, value)) }
+        for (value in listOf(0f, 2f)) invalid("Radius cannot use em") { square.copy(radius = StyleWidth(StyleWidthUnit.Em, value)) }
         val badEdges = listOf<InlineBoxBorderEdge>(InlineBoxBorderEdge.None, InlineBoxBorderEdge.Hidden,
             InlineBoxBorderEdge.Dotted(edge.width, color), edge.copy(width = StyleLength(px, 2f)),
             edge.copy(width = StyleLength(em, 1f)), edge.copy(color = InlineBoxColor.Rgb("#aabbcd")),
             edge.copy(color = InlineBoxColor.CurrentColor), edge.copy(color = InlineBoxColor.Transparent),
             edge.copy(color = InlineBoxColor.LightDark("#aabbcc", "#aabbcc")))
-        for (radius in listOf(zero, StyleLength(px, 2f))) for (bad in badEdges) {
-            invalid("Every nonnull radius requires four equal solid RGB edges") {
+        for (radius in listOf(zeroRadius, StyleWidth(StyleWidthUnit.Px, 2f))) for (bad in badEdges) {
+            invalid("Every nonnull radius requires one uniform RGB border style") {
                 square.copy(border = border.copy(left = bad), radius = radius)
             }
             assertNull(square.copy(border = border.copy(left = bad)).radius)
-            if (bad !is InlineBoxBorderEdge.Solid || bad.color !is InlineBoxColor.Rgb) {
-                invalid("Uniform edges still require solid canonical RGB") {
+            if (bad !is InlineBoxBorderEdge.Dotted && (bad !is InlineBoxBorderEdge.Solid || bad.color !is InlineBoxColor.Rgb)) {
+                invalid("Uniform edges still require solid or dotted canonical RGB") {
                     square.copy(border = InlineBoxBorderEdges(bad, bad, bad, bad), radius = radius)
                 }
             }
         }
         val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
             left = InlineBoxInset(StyleWidthUnit.Px, 0f)), border)
-        for (radius in listOf(zero, StyleLength(px, 2f))) invalid("Rounded owner cannot carry an overlay") {
+        for (radius in listOf(zeroRadius, StyleWidth(StyleWidthUnit.Px, 2f))) invalid("Rounded owner cannot carry an overlay") {
             square.copy(overlays = listOf(overlay), radius = radius)
         }
         assertEquals(listOf(overlay), square.copy(overlays = listOf(overlay)).overlays)
@@ -4818,7 +4856,7 @@ class RubyModelCodecTest {
         assertSame(child, rounded.spans.single())
     }
 
-    private fun roundedWireOwner(radius: StyleLength?): Span {
+    private fun roundedWireOwner(radius: StyleWidth?): Span {
         val px = StyleLengthUnit.Px
         val pad = StyleLength(StyleLengthUnit.Em, .25f)
         val edge = InlineBoxBorderEdge.Solid(StyleLength(px, 1f), InlineBoxColor.Rgb("#c8ccd1"))
@@ -4833,7 +4871,7 @@ class RubyModelCodecTest {
 
     @Test fun inlineBoxRadiusLocalFlagRoundtripsWholeActionAtEveryExistingSinkAndKeepsNullBytes() {
         val square = roundedWireOwner(null)
-        for (radius in listOf(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 2f))) {
+        for (radius in listOf(StyleWidth(StyleWidthUnit.Px, 0f), StyleWidth(StyleWidthUnit.Px, 2f))) {
             val source = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = radius))
             for (sink in Sink.entries) {
                 val wire = Wire('Y', 4)
@@ -4862,7 +4900,7 @@ class RubyModelCodecTest {
             }
         }
         assertNull(square.inlineBoxGroup!!.radius)
-        val inner = Span("text", "", inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleLength(StyleLengthUnit.Px, 2f)))
+        val inner = Span("text", "", inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleWidth(StyleWidthUnit.Px, 2f)))
         val outer = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(spans = listOf(inner)))
         val wire = Wire('Y', 4)
         val bytes = wire.document(listOf(outer))
@@ -4872,13 +4910,13 @@ class RubyModelCodecTest {
         val audio = Span("link", "Tone.ogg", "File:Tone.ogg",
             classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
         val catalog = listOf(Media("Tone.ogg", "audio", "original audio"))
-        val rounded = roundedWireOwner(StyleLength(StyleLengthUnit.Px, 2f))
+        val rounded = roundedWireOwner(StyleWidth(StyleWidthUnit.Px, 2f))
         val mixed = read(Wire('Z', 4 or 8192).document(listOf(rounded, audio), mediaValues = catalog))
         assertEquals(listOf(rounded, audio), mixed.displayTitle); assertEquals(catalog, mixed.media)
     }
 
     @Test fun inlineBoxRadiusRejectsOrphanFlagsMalformedLengthsAndForgedRoundedDomains() {
-        val radius = StyleLength(StyleLengthUnit.Px, 2f)
+        val radius = StyleWidth(StyleWidthUnit.Px, 2f)
         val source = roundedWireOwner(radius)
         val wire = Wire('Y', 4)
         val bytes = wire.document(listOf(source))
@@ -4888,7 +4926,7 @@ class RubyModelCodecTest {
             changed(bytes, fields, bytes[fields].toInt() or unknown))
         reject("Radius cannot borrow an absent box", changed(bytes, wire.at.getValue("root.0.box"), 0))
         reject("Payload requires its local flag", changed(bytes, fields, bytes[fields].toInt() and 0xdf))
-        for (unit in listOf(1, 2, 255)) reject("Only physical CSS-pixel radius", changed(bytes, start, unit))
+        for (unit in listOf(1, 3, 255)) reject("Only CSS-pixel or percentage radius", changed(bytes, start, unit))
         for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) reject("Finite nonnegative radius",
             changed32(bytes, start + 1, value.toRawBits().toLong() and 0xffff_ffffL))
         for (count in 0 until 5) reject("No partial radius suffix", bytes.copyOf(start + count))
@@ -4934,7 +4972,7 @@ class RubyModelCodecTest {
     @Test fun inlineBoxRadiusDoesNotAddItemsOrResetContentAndTableBudgets() {
         val limit = 1 shl 20
         val square = roundedWireOwner(null)
-        val rounded = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleLength(StyleLengthUnit.Px, 2f)))
+        val rounded = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleWidth(StyleWidthUnit.Px, 2f)))
         fun root(count: Int, source: Span) = Block("table", 0, emptyList(), table = Table(listOf(source),
             java.util.Collections.nCopies(count, emptyList<Cell>())))
         fun model(count: Int, source: Span) = Entry("Budget", emptyList(), "language", "Afrikaans", "af",
@@ -5621,5 +5659,371 @@ class RubyModelCodecTest {
             mutable[0] = wrapper
             PresentationSpanVisitor { _, _ -> }.block(held) // Identity-aware absence scan terminates the old ignored cycle.
         }
+    }
+    private fun percentCircleOwner(radius: StyleWidth? = StyleWidth(StyleWidthUnit.Percent, 50f),
+        dotted: Boolean = true): Span {
+        val pad = StyleLength(StyleLengthUnit.Em, .2f)
+        val width = StyleLength(StyleLengthUnit.Px, 1f)
+        val color = InlineBoxColor.Rgb("#777777")
+        val edge = if (dotted) InlineBoxBorderEdge.Dotted(width, color) else InlineBoxBorderEdge.Solid(width, color)
+        val child = Span("text", "e", language = "mg", small = true, foreground = "#123456")
+        return Span("text", "", language = "mg", small = true, tooltip = "Original MG advisory — é",
+            explanation = "original advice", inlineStyle = InlineTextStyle(cursor = InlineCursor.Help),
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(pad, pad, pad, pad),
+                InlineBoxBorderEdges(edge, edge, edge, edge), spans = listOf(child), radius = radius))
+    }
+
+    @Test fun inlineBoxPercentRadiusRetainsRawValuesDottedEdgesAndOriginalAdvisoryOwners() {
+        for (dotted in listOf(false, true)) for (value in listOf(0f, 50f, 75f, 150f)) {
+            val source = percentCircleOwner(StyleWidth(StyleWidthUnit.Percent, value), dotted)
+            val group = checkNotNull(source.inlineBoxGroup)
+            val child = group.spans.single()
+            assertEquals(StyleWidth(StyleWidthUnit.Percent, value), group.radius)
+            assertEquals("e", rubyGraphicalProjection(listOf(source)).text)
+            assertTrue(source.small); assertTrue(child.small)
+            assertEquals("Original MG advisory — é", source.tooltip)
+            assertEquals(InlineCursor.Help, source.inlineStyle!!.cursor)
+            assertNull(child.tooltip); assertFalse(source.hasInternalAction()); assertFalse(child.hasInternalAction())
+            val copied = source.copy(inlineBoxGroup = group.copy())
+            assertSame(child, copied.inlineBoxGroup!!.spans.single())
+            val noRadius = group.copy(radius = null)
+            assertNull(noRadius.radius); assertSame(child, noRadius.spans.single())
+        }
+        val square = percentCircleOwner(null)
+        val group = square.inlineBoxGroup!!
+        val edge = group.border.top as InlineBoxBorderEdge.Dotted
+        val zero = edge.copy(width = StyleLength(StyleLengthUnit.Em, 0f))
+        val zeroEdges = InlineBoxBorderEdges(zero, zero, zero, zero)
+        assertEquals(StyleWidth(StyleWidthUnit.Px, 0f), group.copy(border = zeroEdges,
+            radius = StyleWidth(StyleWidthUnit.Px, 0f)).radius)
+        for (value in listOf(0f, 50f)) invalid("Em remains outside the radius domain") {
+            group.copy(radius = StyleWidth(StyleWidthUnit.Em, value))
+        }
+        for (unit in listOf(StyleWidthUnit.Px, StyleWidthUnit.Percent))
+            for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                invalid("Both admitted units require finite nonnegative values") { group.copy(radius = StyleWidth(unit, value)) }
+        val mismatches = listOf<InlineBoxBorderEdge>(InlineBoxBorderEdge.Solid(edge.width, edge.color),
+            edge.copy(width = StyleLength(StyleLengthUnit.Px, 2f)),
+            edge.copy(width = StyleLength(StyleLengthUnit.Em, 1f)),
+            edge.copy(color = InlineBoxColor.Rgb("#777778")), InlineBoxBorderEdge.None, InlineBoxBorderEdge.Hidden)
+        for (bad in mismatches) {
+            val mixed = group.copy(border = group.border.copy(left = bad))
+            assertNull(mixed.radius)
+            invalid("A radius requires a uniform style, width and color") {
+                mixed.copy(radius = StyleWidth(StyleWidthUnit.Percent, 50f))
+            }
+        }
+        for (color in listOf(InlineBoxColor.CurrentColor, InlineBoxColor.Transparent,
+            InlineBoxColor.LightDark("#777777", "#777777"))) {
+            val bad = edge.copy(color = color)
+            val uniform = group.copy(border = InlineBoxBorderEdges(bad, bad, bad, bad))
+            assertNull(uniform.radius)
+            invalid("Dotted rounded borders require opaque canonical RGB") {
+                uniform.copy(radius = StyleWidth(StyleWidthUnit.Percent, 50f))
+            }
+        }
+        val atomic = atomicWireOwner().inlineBoxGroup!!
+        invalid("Percentage radius cannot enter an atomic layout") {
+            atomic.copy(radius = StyleWidth(StyleWidthUnit.Percent, 0f))
+        }
+        val overlays = mutableListOf<InlineBoxOverlay>()
+        val retained = percentCircleOwner().copy(inlineBoxGroup = percentCircleOwner().inlineBoxGroup!!.copy(overlays = overlays))
+        val entry = Entry("Circle", listOf(retained), "language", "Malagasy", "mg", emptyList(), emptyList())
+        overlays += InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Px, 0f)), group.border)
+        invalid("Mutation cannot bypass the deep radius guard") { retained.copy() }
+        invalid("Complete Entry validation retains the overlay restriction") { entry.copy() }
+        overlays.clear()
+        assertSame(retained, entry.copy().displayTitle.single())
+    }
+
+    @Test fun inlineBoxPercentRadiusUsesSameFiveByteSlotAtEverySinkAndKeepsLegacyPixels() {
+        val literals = listOf(0f to byteArrayOf(2, 0, 0, 0, 0),
+            50f to byteArrayOf(2, 0, 0, 72, 66), 75f to byteArrayOf(2, 0, 0, -106, 66))
+        for (dotted in listOf(false, true)) for ((value, literal) in literals) for (sink in Sink.entries) {
+            val source = percentCircleOwner(StyleWidth(StyleWidthUnit.Percent, value), dotted)
+            val wire = Wire('Y', 4)
+            val bytes = wire.document(listOf(source), sink, headingTitle = "e")
+            val decoded = selected(read(bytes), sink)
+            assertEquals("$sink complete source", source, decoded)
+            assertFalse(decoded.hasInternalAction())
+            assertEquals("e", rubyGraphicalProjection(listOf(decoded)).text)
+            val offset = wire.at.getValue("root.0.box.radius")
+            assertEquals(wire.at.getValue("root.0.box.childrenEnd"), offset)
+            assertEquals(offset + 5, wire.at.getValue("root.0.box.end"))
+            assertArrayEquals(literal, bytes.copyOfRange(offset, offset + 5))
+            val field = wire.at.getValue("root.0.fontFields")
+            assertEquals(0x20, bytes[field].toInt() and 0x20)
+            val px = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(radius = StyleWidth(StyleWidthUnit.Px, value)))
+            val pxBytes = Wire('Y', 4).document(listOf(px), sink, headingTitle = "e")
+            assertArrayEquals("Only the scalar unit differs", changed(bytes, offset, 0), pxBytes)
+            assertEquals(px, selected(read(pxBytes), sink))
+            val square = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(radius = null))
+            var stripped = replace(bytes, offset, offset + 5, byteArrayOf())
+            stripped = changed(stripped, field, stripped[field].toInt() and 0xdf)
+            assertArrayEquals("Null retains the old square shape bytes", Wire('Y', 4).document(listOf(square), sink,
+                headingTitle = "e"), stripped)
+            assertEquals(square, selected(read(stripped), sink))
+        }
+        // The pre-existing pixel literals remain literal and need no new capability.
+        for ((value, suffix) in listOf(0f to ByteArray(5), 2f to byteArrayOf(0, 0, 0, 0, 64))) {
+            val wire = Wire('Y', 4)
+            val bytes = wire.document(listOf(roundedWireOwner(StyleWidth(StyleWidthUnit.Px, value))))
+            val offset = wire.at.getValue("root.0.box.radius")
+            assertArrayEquals(suffix, bytes.copyOfRange(offset, offset + 5))
+        }
+        val owner = percentCircleOwner()
+        val action = Span("link", "original action", "Target", targetFragment = "sense")
+        val external = Span("external_link", "outside", "https://example.test/original")
+        val sources = listOf(owner, text("\u2009"), action, text("\u2009"), external)
+        val decoded = read(Wire('Y', 4).document(sources)).displayTitle
+        assertEquals(sources, decoded)
+        assertEquals("e\u2009original action\u2009outside", rubyGraphicalProjection(decoded).text)
+        assertFalse(decoded[0].hasInternalAction()); assertEquals(EntryLink("Target", "sense"), decoded[2].entryLink())
+        assertEquals(external.target, decoded[4].target)
+        val family = owner.copy(fontFamily = ContainerFontFamily.SansSerif)
+        assertEquals(family, read(Wire('Y', 4).document(listOf(family), features = 4)).displayTitle.single())
+        reject("Existing font-family census still applies", Wire('Y', 4).document(listOf(family)))
+        reject("Radius does not earn unrelated text-flow debt", Wire('Y', 4).document(listOf(owner), features = 16))
+        val childGroup = owner.copy(tooltip = "nested original title")
+        val nested = percentCircleOwner(null).copy(inlineBoxGroup = percentCircleOwner(null).inlineBoxGroup!!.copy(spans = listOf(childGroup)))
+        val nestedWire = Wire('Y', 4); val bytes = nestedWire.document(listOf(nested))
+        assertEquals(nested, read(bytes).displayTitle.single())
+        assertEquals(0, bytes[nestedWire.at.getValue("root.0.fontFields")].toInt() and 0x20)
+        assertEquals(0x20, bytes[nestedWire.at.getValue("root.0.box.body.0.fontFields")].toInt() and 0x20)
+    }
+
+    @Test fun inlineBoxPercentRadiusRejectsMalformedUnitsAndCannotBorrowOtherPayloadOwners() {
+        val source = percentCircleOwner()
+        val wire = Wire('Y', 4); val bytes = wire.document(listOf(source))
+        val at = wire.at.getValue("root.0.box.radius"); val fields = wire.at.getValue("root.0.fontFields")
+        for (unit in listOf(1, 3, 255)) reject("Only radius px0 and percent2", changed(bytes, at, unit))
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+            reject("Percentage scalar must remain finite nonnegative", changed32(bytes, at + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+        for (count in 0 until 5) reject("Fixed five-byte suffix cannot truncate", bytes.copyOf(at + count))
+        reject("No nullable prefix in the scalar slot", replace(bytes, at, at, byteArrayOf(1)))
+        reject("Strict final EOF", bytes + byteArrayOf(0))
+        reject("Local flag is mandatory", changed(bytes, fields, bytes[fields].toInt() and 0xdf))
+        reject("Actual same-owner Box is mandatory", changed(bytes, wire.at.getValue("root.0.box"), 0))
+        reject("Reserved local0x80 remains refused", changed(bytes, fields, bytes[fields].toInt() or 0x80))
+        val child = wire.at.getValue("root.0.box.body.0.fontFields")
+        reject("A child cannot borrow its owner's radius", changed(bytes, child, bytes[child].toInt() or 0x20))
+        val body = BodyTypography(InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true))
+        val absentWire = Wire('Y', 2); val absent = absentWire.document(listOf(text("ordinary")), bodyTypography = body)
+        reject("Box capability remains mandatory", changed(absent, absentWire.at.getValue("root.0.fontFields"), 0x20))
+        val atomicWire = Wire('Y', 4); val atomic = atomicWire.document(listOf(atomicWireOwner()))
+        val start = atomicWire.at.getValue("root.0.box.atomic")
+        val field = atomicWire.at.getValue("root.0.fontFields")
+        val both = replace(atomic, start, start, byteArrayOf(2, 0, 0, 72, 66))
+        reject("Percent and atomic tails do not authorize the combined domain", changed(both, field, both[field].toInt() or 0x20))
+        assertEquals(source, read(bytes).displayTitle.single())
+    }
+
+    @Test fun inlineBoxPercentDottedRadiusKeepsOneSharedBudgetAndBothDepthLimits() {
+        val source = percentCircleOwner()
+        val limit = 1 shl 20
+        fun block(count: Int) = Block("table", 0, emptyList(), table = Table(listOf(source),
+            java.util.Collections.nCopies(count, emptyList<Cell>())))
+        fun model(count: Int) = Entry("Budget", emptyList(), "language", "Malagasy", "mg",
+            listOf(Section(2, "Body", listOf(block(count)))), emptyList())
+        // Original Block, original Box owner and real child; radius adds no policy item.
+        assertEquals(limit - 3, model(limit - 3).sections.single().blocks.single().table!!.rows.size)
+        invalid("Percentage radius cannot reset complete model work") { model(limit - 2) }
+        fun literal(count: Int) = Wire('Y', 4).apply {
+            paragraphOverride = { positionedBlock(block(count), "percentBudget") }
+        }.document(emptyList(), Sink.Body)
+        assertEquals(limit - 4, read(literal(limit - 4)).sections.single().blocks.single().table!!.rows.size)
+        reject("Percentage radius cannot reset complete decode work", literal(limit - 3))
+        for (depth in listOf(15, 16)) {
+            val bytes = Wire('Y', 4).document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 15) assertEquals(1, read(bytes).sections.size) else reject("Content depth stays16", bytes)
+        }
+        for (depth in listOf(32, 33)) {
+            val bytes = Wire('Y', 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(source), Sink.Body)
+            if (depth == 32) assertEquals(1, read(bytes).sections.size) else reject("Table depth stays32", bytes)
+        }
+    }
+
+    private fun opacityTable(style: CellStyle?, spans: List<Span> = listOf(
+        Span("link", "kept action", "Original target", targetFragment = "part", tooltip = "Original title"))) =
+        Table(emptyList(), listOf(listOf(Cell(spans, false, 1, 1, background = "#123456", style = style))))
+
+    @Test fun cellOpacityModelKeepsExplicitZeroOneAndOriginalChildrenWithoutNewCellRestrictions() {
+        for (alpha in listOf(0f, .2f, 1f, -0f)) {
+            val style = CellStyle(opacity = alpha)
+            assertEquals(alpha.toRawBits(), checkNotNull(style.opacity).toRawBits())
+            assertEquals(style, style.copy())
+            val empty = Cell(emptyList(), false, 1, 1, style = style)
+            PresentationSpanVisitor { _, _ -> }.table(Table(emptyList(), listOf(listOf(empty))))
+        }
+        invalid("The all-null old style remains empty") { CellStyle() }
+        val source = CellStyle(border = StyleBorder.None)
+        assertNull(source.opacity)
+        assertEquals(source, source.copy(opacity = null))
+        for (alpha in listOf(-Float.MIN_VALUE, -1f, Math.nextUp(1f), Float.NaN,
+            Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY)) {
+            invalid("Invalid direct opacity $alpha") { CellStyle(opacity = alpha) }
+            invalid("Copies revalidate opacity $alpha") { source.copy(opacity = alpha) }
+        }
+        val span = Span("link", "original", "Original target", tooltip = "title", background = "#abcdef")
+        val rows = listOf(listOf(Cell(listOf(span), true, 2, 1, background = "#102030", style = CellStyle(opacity = 0f))))
+        val table = Table(listOf(text("caption")), rows)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(table)
+        assertSame(rows, table.rows)
+        assertSame(span, seen.last())
+        assertEquals("Original target", seen.last().target)
+        assertEquals("#102030", table.rows.single().single().background)
+        assertEquals("#abcdef", seen.last().background)
+    }
+
+    @Test fun cellOpacityMUsesLiteralScalarAfterAllOldFieldsAndKeepsNullBytes() {
+        val name = "opacity.table.row0.cell0.style"
+        fun encode(style: CellStyle?): Pair<Wire, ByteArray> {
+            val wire = Wire('M').apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = opacityTable(style)), "opacity") } }
+            return wire to wire.document(emptyList(), Sink.Body)
+        }
+        for ((alpha, literal) in listOf(0f to byteArrayOf(0, 0, 0, 0),
+            .2f to byteArrayOf(-51, -52, 76, 62), 1f to byteArrayOf(0, 0, -128, 63))) {
+            val style = CellStyle(opacity = alpha)
+            val (wire, bytes) = encode(style)
+            assertArrayEquals("DPRM".encodeToByteArray(), bytes.copyOfRange(0, 4))
+            val start = wire.at.getValue("$name.presence")
+            val tail = wire.at.getValue("$name.opacity")
+            assertEquals(2, tail - start)
+            assertArrayEquals(byteArrayOf(1, 16) + literal, bytes.copyOfRange(start, tail + 4))
+            assertEquals(opacityTable(style), read(bytes).sections.single().blocks.single().table)
+            val (_, absent) = encode(null)
+            assertArrayEquals(absent, replace(bytes, start, tail + 4, byteArrayOf(0)))
+            assertNull(read(absent).sections.single().blocks.single().table!!.rows.single().single().style)
+        }
+        val px = StyleLength(StyleLengthUnit.Px, 2f)
+        val style = CellStyle(border = StyleBorder.Solid(px, "#456789"), padding = StyleEdges(px, px, px, px),
+            textAlign = CellTextAlign.Right, width = StyleWidth(StyleWidthUnit.Percent, 75f), minWidth = px,
+            verticalAlign = CellVerticalAlign.Middle,
+            lineHeight = CellLineHeight(CellLineHeightValue.Length(CellFixedLineHeight(17f, FontScaleBasis.CssPx)),
+                CellTextStrut(.8f, FontScaleBasis.NormalBody)), opacity = .2f)
+        val (wire, bytes) = encode(style)
+        assertEquals(255, bytes[wire.at.getValue("$name.flags")].toInt() and 255)
+        assertEquals(wire.at.getValue("$name.oldEnd"), wire.at.getValue("$name.opacity"))
+        assertEquals(12, wire.at.getValue("$name.opacity") - wire.at.getValue("$name.lineHeight"))
+        assertEquals(style, read(bytes).sections.single().blocks.single().table!!.rows.single().single().style)
+        val without = style.copy(opacity = null)
+        val (_, legacy) = encode(without)
+        val stripped = changed(replace(bytes, wire.at.getValue("$name.opacity"), wire.at.getValue("$name.end"),
+            byteArrayOf()), wire.at.getValue("$name.flags"), 0xef)
+        assertArrayEquals(legacy, stripped)
+        assertEquals(without, read(legacy).sections.single().blocks.single().table!!.rows.single().single().style)
+    }
+
+    @Test fun cellOpacityRejectsPreMInvalidScalarsAndMalformedPresenceOrTail() {
+        val source = opacityTable(CellStyle(opacity = .2f))
+        val wire = Wire('M').apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = source), "invalidOpacity") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val name = "invalidOpacity.table.row0.cell0.style"
+        val value = wire.at.getValue("$name.opacity")
+        reject("Cell local0x10 remains refused before M", changed(bytes, 3, 'L'.code))
+        for (alpha in listOf(-Float.MIN_VALUE, -1f, Math.nextUp(1f), Float.NaN,
+            Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY)) {
+            reject("Invalid scalar $alpha", changed32(bytes, value, alpha.toRawBits().toLong() and 0xffff_ffffL))
+        }
+        for (presence in listOf(2, 255)) reject("Noncanonical CellStyle presence $presence",
+            changed(bytes, wire.at.getValue("$name.presence"), presence))
+        reject("Present style cannot have no fields", changed(bytes, wire.at.getValue("$name.flags"), 0))
+        for (available in 0..3) reject("Truncated scalar $available", bytes.copyOf(value + available))
+        reject("Missing flagged scalar", replace(bytes, value, value + 4, byteArrayOf()))
+        reject("Unconsumed suffix", bytes + byteArrayOf(0))
+        val legacy = opacityTable(CellStyle(border = StyleBorder.None))
+        val oldWire = Wire('M').apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = legacy), "oldOpacity") } }
+        val oldBytes = oldWire.document(emptyList(), Sink.Body)
+        assertEquals(legacy, read(changed(oldBytes, 3, 'L'.code)).sections.single().blocks.single().table)
+        val orphan = replace(oldBytes, oldWire.at.getValue("oldOpacity.table.row0.cell0.style.end"),
+            oldWire.at.getValue("oldOpacity.table.row0.cell0.style.end"), byteArrayOf(-51, -52, 76, 62))
+        reject("Unflagged scalar is not trailing metadata", orphan)
+    }
+
+    @Test fun cellOpacityZeroRetainsEveryRecursiveHolderActionAndOriginalBudget() {
+        val link = Span("link", "deep action", "Original target", targetFragment = "part", tooltip = "Original title")
+        val leaf = opacityTable(CellStyle(opacity = 0f), listOf(link))
+        val outer = Table(listOf(text("caption")), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("paragraph", 0, listOf(text("\u00a0"))),
+                Block("table", 0, emptyList(), table = leaf)), style = CellStyle(opacity = 0f)),
+            Cell(emptyList(), true, 1, 1, nestedTable = leaf, style = CellStyle(opacity = 1f)))))
+        val block = Block("container", 0, emptyList(), container = Container(listOf(
+            Block("table", 0, emptyList(), table = outer), Block("paragraph", 0, listOf(text("after"))))))
+        for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption,
+            Sink.ReferenceBlocks, Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val wire = Wire('O').apply { paragraphOverride = { positionedBlock(block, "holder") } }
+            val decoded = read(wire.document(emptyList(), sink))
+            val retained = mutableListOf<Span>()
+            val visitor = PresentationSpanVisitor { spans, _ -> retained.addAll(spans) }
+            decoded.sections.forEach { visitor.blocks(it.blocks) }
+            decoded.references.forEach { reference -> reference.visitSpanRuns { spans, _ -> retained.addAll(spans) } }
+            assertEquals("$sink retains both original actions", 2, retained.count { it.target == link.target })
+            assertTrue("$sink retains source NBSP", retained.any { it.text == "\u00a0" })
+            assertTrue("$sink consumes the following sibling", retained.any { it.text == "after" })
+            assertEquals(2, retained.count { it.targetFragment == "part" && it.tooltip == "Original title" })
+        }
+        val rounded = percentCircleOwner(StyleWidth(StyleWidthUnit.Percent, 50f))
+        val mixed = opacityTable(CellStyle(opacity = .2f), listOf(rounded))
+        val mixedWire = Wire('Y', 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = mixed), "mixedOpacity") } }
+        assertEquals(mixed, read(mixedWire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+
+        val limit = 1 shl 20
+        fun budget(rows: Int, opacity: Float?) = Table(emptyList(),
+            java.util.Collections.nCopies(rows, emptyList<Cell>()) + listOf(listOf(
+                Cell(listOf(link), false, 1, 1, style = opacity?.let { CellStyle(opacity = it) }))))
+        for (opacity in listOf(null, 0f, 1f)) {
+            // Empty rows plus one real row/cell/action: scalar opacity adds no work item.
+            val exact = budget(limit - 3, opacity)
+            val seen = mutableListOf<Span>()
+            PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(exact)
+            assertEquals(listOf(link), seen)
+            assertSame(link, seen.single())
+            invalid("Opacity cannot restart the model budget") {
+                PresentationSpanVisitor { _, _ -> }.table(budget(limit - 2, opacity))
+            }
+            fun literal(rows: Int) = Wire('M').apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = budget(rows, opacity)), "opacityBudget") }
+            }.document(emptyList(), Sink.Body)
+            // Decoder additionally counts the Section and Table Block slots.
+            val decoded = read(literal(limit - 5)).sections.single().blocks.single().table!!
+            assertEquals(limit - 4, decoded.rows.size)
+            assertEquals(listOf(link), decoded.rows.last().single().spans)
+            assertEquals(opacity, decoded.rows.last().single().style?.opacity)
+            reject("Opacity cannot restart the wire budget", literal(limit - 4))
+        }
+        for (depth in listOf(LegacyMaxTableDepth, LegacyMaxTableDepth + 1)) {
+            var nested = leaf
+            repeat(depth - 1) { nested = Table(emptyList(), listOf(listOf(
+                Cell(emptyList(), false, 1, 1, nestedTable = nested, style = CellStyle(opacity = 0f))))) }
+            val wire = Wire('M').apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = nested), "opacityDepth") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            if (depth == LegacyMaxTableDepth) assertNotNull(read(bytes)) else reject("M retains its original table depth limit", bytes)
+        }
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('O').apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = leaf), "opacityContent") } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 16) assertNotNull(read(bytes)) else reject("Opacity cannot reset content depth", bytes)
+        }
+        val child = mutableListOf(text("valid"))
+        val action = Span("link", "", "Owner", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 1f), child))
+        val hidden = opacityTable(CellStyle(opacity = 0f), listOf(action))
+        child.add(Span("link", "illegal nested action", "Other"))
+        invalid("Zero alpha does not suppress mutated child action validation") {
+            PresentationSpanVisitor { _, _ -> }.table(hidden)
+        }
+        val invalidWire = Wire('U').apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = hidden), "hiddenAction") } }
+        reject("Zero alpha does not suppress serialized child action validation",
+            invalidWire.document(emptyList(), Sink.Body))
     }
 }
