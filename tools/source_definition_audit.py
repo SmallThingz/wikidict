@@ -11,7 +11,7 @@ import xml.etree.ElementTree as ET
 
 HEADING = re.compile(r'==\s*([^=\[\]{}<>|]+?)\s*==')
 LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
-PLAIN = re.compile(r"[^\[\]{}<>|&'#=]+")
+PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
 BARE_URL = re.compile(r'https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[A-Za-z0-9_./~-]*)?')
 
 
@@ -23,7 +23,7 @@ def simple_line(source, title):
     end = offset = 0
     for match in LINK.finditer(source):
         literal = source[end:match.start()]
-        if literal and not PLAIN.fullmatch(literal):
+        if literal and ("''" in literal or not PLAIN.fullmatch(literal)):
             return None
         target, label = match[1], match[2] or match[1]
         if (target.strip() != target or target.casefold() == title.casefold() or "''" in label
@@ -36,7 +36,7 @@ def simple_line(source, title):
         offset += len(label)
         end = match.end()
     tail = source[end:]
-    if tail and not PLAIN.fullmatch(tail):
+    if tail and ("''" in tail or not PLAIN.fullmatch(tail)):
         return None
     parts.append(tail)
     text = ''.join(parts)

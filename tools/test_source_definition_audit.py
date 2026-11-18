@@ -35,6 +35,16 @@ class SourceDefinitionTests(unittest.TestCase):
         for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part|cat]]'):
             self.assertIsNone(simple_line(source, 'other'))
 
+    def test_literal_apostrophes_preserve_text_and_link_positions(self):
+        text = "Liquidu trasparente chì si trova in a natura e ch'hè necissariu par a vita."
+        self.assertEqual(simple_line(text, 'acqua'), (text, ()))
+        self.assertEqual(simple_line("l'[[eau]]", 'mot'), ("l'eau", ((2, 5, 'eau'),)))
+        # The target is an opaque page title, while the visible label is prose.
+        self.assertEqual(simple_line("[[O''Neill|O'Neill]]", 'surname'),
+                         ("O'Neill", ((0, 7, "O''Neill"),)))
+        for marked in ("a ''word''", "'''bold'''", "[[word|''label'']]", "unclosed ''word"):
+            self.assertIsNone(simple_line(marked, 'other'))
+
     def test_numbered_bare_url_must_be_an_external_link_to_its_own_text(self):
         url = 'https://tuludictionary.in/dictionary/cgi-bin/web/frame.html'
         expected = simple_line(url, 'word')
