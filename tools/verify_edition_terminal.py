@@ -12,6 +12,25 @@ import time
 from verify_reader_ux import DOWN, ENTER, ReaderPty, normalized, require
 
 
+class NativeCellReaderPty(ReaderPty):
+    def snapshot(self, label):
+        super().snapshot(label)
+        snapshot = self.snapshots[-1]
+        path = self.output / Path(snapshot['file']).with_suffix('.cells.json')
+        path.write_text(json.dumps(dict(projection='libvterm', columns=self.width,
+                                        rows=self.rows, cells=self.screen.cell_rows()),
+                                   ensure_ascii=False, indent=2) + '\n')
+        snapshot['cells_file'] = path.name
+
+
+def screen_projection(name):
+    if name == 'libvterm':
+        import terminal_libvterm
+        return terminal_libvterm, NativeCellReaderPty
+    import pyte
+    return pyte, ReaderPty
+
+
 def copy_publication(source, destination):
     raw = (source / 'complete.json').read_bytes()
     manifest = json.loads(raw)
@@ -84,7 +103,7 @@ def exercise(reader, language, entry, witness):
     reader.finish(b'\x03')
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--root', type=Path, required=True)
@@ -92,30 +111,36 @@ def main():
     parser.add_argument('--entry', required=True, help='Exact title in that language')
     parser.add_argument('--witness', required=True, help='Visible text expected from the original entry body')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
-    args = parser.parse_args()
+    parser.add_argument('--screen-projection', choices=('pyte', 'libvterm'), default='pyte',
+                        help='Screen cell engine (libvterm requires the native libvterm.so.0 library)')
+    args = parser.parse_args(argv)
     source = args.root.resolve(strict=True)
     binary = args.binary.resolve(strict=True)
     parent = args.report.resolve()
     require(parent != source and source not in parent.parents, 'Reports must be outside the publication')
     require(all(s.strip() for s in (args.language, args.entry, args.witness)), 'Empty selection or witness')
-    import pyte
     parent.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=args.language, entry=args.entry, witness=args.witness,
-                  passed=False, screens=[])
+                  passed=False, screens=[], screen_projection=args.screen_projection)
     try:
+        projection, reader_type = screen_projection(args.screen_projection)
         with binary.open('rb') as f:
             result['binary_sha256'] = hashlib.file_digest(f, 'sha256').hexdigest()
         with tempfile.TemporaryDirectory(dir=out) as temp:
             root = Path(temp) / 'dictionary'
             result['complete_sha256'] = copy_publication(source, root)
-            reader = ReaderPty(binary, root, 90, 30, out / 'screens', 5, time.monotonic() + 45,
-                               pyte, language=args.language)
+            reader = reader_type(binary, root, 90, 30, out / 'screens', 5, time.monotonic() + 45,
+                                 projection, language=args.language)
             try:
                 exercise(reader, args.language, args.entry, args.witness)
             finally:
-                reader.close()
-                result.update(checks=reader.checks, screens=reader.snapshots)
+                try:
+                    reader.close()
+                    result.update(checks=reader.checks, screens=reader.snapshots)
+                finally:
+                    if args.screen_projection == 'libvterm':
+                        reader.screen.close()
         result['passed'] = True
     except Exception as exc:
         result['error'] = str(exc)
