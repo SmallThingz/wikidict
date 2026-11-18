@@ -639,30 +639,46 @@ fn parseBool(raw: []const u8) !bool {
     return error.InvalidPageIndex;
 }
 
+// Common index fields are unsigned decimal digits. These lengths fit without
+// overflow; all other syntax retains the standard parser and its exact errors.
+fn parsePageIndexUnsigned(comptime T: type, raw: []const u8) !T {
+    const safe_digits = switch (@bitSizeOf(T)) { 32 => 9, 64 => 19, else => 0 };
+    if (raw.len != 0 and raw.len <= safe_digits) {
+        var value: T = 0;
+        for (raw) |byte| {
+            const digit = byte -% '0';
+            if (digit > 9) return std.fmt.parseInt(T, raw, 10);
+            value = value * 10 + digit;
+        }
+        return value;
+    }
+    return std.fmt.parseInt(T, raw, 10);
+}
+
 pub fn parsePageIndexLine(kind: PageIndexKind, line: []const u8) !IndexedPage {
     var fields = std.mem.splitScalar(u8, line, '\t');
     const source: PageSource = switch (kind) {
         .raw_xml => .{ .raw_xml = .{
-            .offset = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10),
-            .len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
+            .offset = try parsePageIndexUnsigned(u64, fields.next() orelse return error.InvalidPageIndex),
+            .len = try parsePageIndexUnsigned(usize, fields.next() orelse return error.InvalidPageIndex),
         } },
         .multistream_bz2, .multistream_zstd => blk: {
             const loc: CompressedLocation = .{
-                .stream_id = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10),
-                .offset = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
-                .len = try std.fmt.parseInt(usize, fields.next() orelse return error.InvalidPageIndex, 10),
+                .stream_id = try parsePageIndexUnsigned(u32, fields.next() orelse return error.InvalidPageIndex),
+                .offset = try parsePageIndexUnsigned(usize, fields.next() orelse return error.InvalidPageIndex),
+                .len = try parsePageIndexUnsigned(usize, fields.next() orelse return error.InvalidPageIndex),
             };
             break :blk if (kind == .multistream_bz2) .{ .multistream_bz2 = loc } else .{ .multistream_zstd = loc };
         },
     };
     const title = fields.next() orelse return error.InvalidPageIndex;
     const redirect_raw = fields.next() orelse return error.InvalidPageIndex;
-    const page_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
-    const revision_id = try std.fmt.parseInt(u64, fields.next() orelse return error.InvalidPageIndex, 10);
+    const page_id = try parsePageIndexUnsigned(u64, fields.next() orelse return error.InvalidPageIndex);
+    const revision_id = try parsePageIndexUnsigned(u64, fields.next() orelse return error.InvalidPageIndex);
     const revision_timestamp = fields.next() orelse return error.InvalidPageIndex;
     const revision_user = fields.next() orelse return error.InvalidPageIndex;
     const content_model = fields.next() orelse return error.InvalidPageIndex;
-    const ns = try std.fmt.parseInt(u32, fields.next() orelse return error.InvalidPageIndex, 10);
+    const ns = try parsePageIndexUnsigned(u32, fields.next() orelse return error.InvalidPageIndex);
     const has_source = try parseBool(fields.next() orelse return error.InvalidPageIndex);
     const source_needs_decode = try parseBool(fields.next() orelse return error.InvalidPageIndex);
     var revision_size: ?u64 = null;
@@ -1633,4 +1649,47 @@ test "page index numeric authority is optional explicit and rejects invalid proo
     inline for (.{ "\t3", "\tunknown\t3", "\t" ++ revision_size_proof, "\t" ++ revision_size_proof ++ "\t01", "\t" ++ revision_size_proof ++ "\t3\textra" }) |suffix| {
         try std.testing.expectError(error.InvalidPageIndex, parsePageIndexLine(.raw_xml, old ++ suffix));
     }
+}
+
+test "page index unsigned decimal preserves standard syntax and errors" {
+    const values = [_][]const u8{
+        "", "0", "00", "00000000000000000000", "1", "9", "999999999",
+        "1000000000", "4294967295", "4294967296", "9999999999999999999",
+        "10000000000000000000", "18446744073709551615", "18446744073709551616",
+        "+0", "+1", "-0", "-1", "1_000", "_1", "1_", "1__2", " 1", "1 ",
+        "0x10", "1a", "a1", "\x00", "\xff", "١",
+    };
+    inline for (.{ u32, u64, usize }) |T| for (values) |value| {
+        const expected = std.fmt.parseInt(T, value, 10) catch |err| {
+            try std.testing.expectError(err, parsePageIndexUnsigned(T, value));
+            continue;
+        };
+        try std.testing.expectEqual(expected, try parsePageIndexUnsigned(T, value));
+    };
+}
+
+test "page index numeric shortcut retains complete row fields and strict size proof" {
+    const suffix = "\tcat\tredirect\t+7\t7_0\t2026-10-01T00:00:00Z\tA\twikitext\t4294967295\t1\t0";
+    const raw = try parsePageIndexLine(.raw_xml, "18446744073709551615\t+3" ++ suffix);
+    try std.testing.expectEqualDeep(IndexedPage{
+        .source = .{ .raw_xml = .{ .offset = std.math.maxInt(u64), .len = 3 } },
+        .title = "cat", .redirect = "redirect", .page_id = 7, .revision_id = 70,
+        .revision_timestamp = "2026-10-01T00:00:00Z", .revision_user = "A",
+        .content_model = "wikitext", .ns = std.math.maxInt(u32),
+        .has_source = true, .source_needs_decode = false, .revision_size = null,
+    }, raw);
+    inline for (.{ PageIndexKind.multistream_bz2, PageIndexKind.multistream_zstd }) |kind| {
+        const row = try parsePageIndexLine(kind, "4294967295\t12\t+3" ++ suffix);
+        var expected = raw;
+        const loc: CompressedLocation = .{ .stream_id = std.math.maxInt(u32), .offset = 12, .len = 3 };
+        expected.source = if (kind == .multistream_bz2) .{ .multistream_bz2 = loc } else .{ .multistream_zstd = loc };
+        try std.testing.expectEqualDeep(expected, row);
+        try std.testing.expectError(error.Overflow, parsePageIndexLine(kind, "4294967296\t12\t3" ++ suffix));
+    }
+    const base = "12\t3" ++ suffix;
+    try std.testing.expectEqual(@as(?u64, 3), (try parsePageIndexLine(.raw_xml, base ++ "\t" ++ revision_size_proof ++ "\t3")).revision_size);
+    // Numeric field syntax remains permissive; revision-size evidence is canonical.
+    try std.testing.expectError(error.InvalidPageIndex, parsePageIndexLine(.raw_xml, base ++ "\t" ++ revision_size_proof ++ "\t+3"));
+    try std.testing.expectError(error.InvalidPageIndex, parsePageIndexLine(.raw_xml, base ++ "\t" ++ revision_size_proof ++ "\t03"));
+    try std.testing.expectError(error.Overflow, parsePageIndexLine(.raw_xml, "18446744073709551616\t3" ++ suffix));
 }
