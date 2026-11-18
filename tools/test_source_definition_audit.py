@@ -115,9 +115,12 @@ class SourceDefinitionTests(unittest.TestCase):
                 record['language_code'] = 'en'
                 audit.observe(record)
                 self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (7, 0))
+                self.assertIsNone(audit.report()['matched_example'])
                 record.update(language='Français', language_code='fr')
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 2)
+                self.assertEqual(audit.report()['matched_example'], dict(exact_title='word', owner_heading='Français',
+                                 visible_definition_witness='first', page='1', revision='2', line=2))
                 blocks[-3]['spans'][0].update(bold=False, italic=True)
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 3)

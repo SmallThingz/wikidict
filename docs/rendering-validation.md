@@ -135,6 +135,11 @@ IDs. Review unmatched lines against the source, including numbered examples
 and lists of related terms. Expanded templates, more complex formatting and
 the appearance of the rendered page need separate checks.
 
+When a line matches, `matched_example` gives its source page, revision, line,
+lookup title, compiled language heading and visible definition. The last three
+fields can be passed to the terminal check with the selected publication path
+and manifest digest. The field is null when no line matched.
+
 When an edition uses localized headings such as Tulu `ತುಳು`, pass
 `--definition-registry` with the `language-registry.tsv` used for that build.
 The audit checks its SHA-256 against `complete.json` and compares each

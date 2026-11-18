@@ -169,6 +169,7 @@ def localized_language_codes(raw):
 class SourceDefinitions:
     def __init__(self, database, root, dumps, registry=None):
         self.db = sqlite3.connect(database)
+        self.matched_example = None
         try:
             self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
@@ -263,6 +264,10 @@ class SourceDefinitions:
             index = bisect_left(candidates, cursor)
             if index < len(candidates):
                 self.db.execute('UPDATE sense SET matched=1 WHERE rowid=?', (rowid,))
+                if self.matched_example is None:
+                    page, revision, line = self.db.execute('SELECT page,revision,line FROM sense WHERE rowid=?', (rowid,)).fetchone()
+                    self.matched_example = dict(exact_title=entry['title'], owner_heading=entry['language'],
+                                                visible_definition_witness=text, page=page, revision=revision, line=line)
                 cursor = candidates[index] + 1
 
     def report(self):
@@ -276,7 +281,7 @@ class SourceDefinitions:
         return dict(eligible=count, matched=matched, unmatched=count-matched, dump_sha1=self.inputs,
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
-                    examples=examples,
+                    examples=examples, matched_example=self.matched_example,
                     scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def close(self):

@@ -802,7 +802,7 @@ def run_audit(args, report_files):
         if 'issues' in result:
             summary['review_fields'] = len(result['issues'])
         if 'source_definitions' in result:
-            summary.update({k: result['source_definitions'][k] for k in ('eligible', 'matched', 'unmatched')})
+            summary.update({k: result['source_definitions'][k] for k in ('eligible', 'matched', 'unmatched', 'matched_example')})
         print(json.dumps(summary, ensure_ascii=False))
     elif result['status'] == 'error':
         print(f"PRESENTATION_AUDIT error {result['error'][:500]}")
