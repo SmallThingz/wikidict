@@ -1843,4 +1843,272 @@ class RubyComposeTextDeviceTest {
         compose.onNodeWithTag("inline-box-focus-destination").assertIsFocused()
         assertEquals(List(3) { listOf("typed-box-ancestor", "typed-box-child") }.flatten(), callbacks.map { it.target })
     }
+    @Test fun roundedWholeLinkUsesOriginalSourceAndIndependentFocusAcrossZoomAndReflow() = control {
+        // Direct typed consumer fixture with synthetic font/focus values. The retained
+        // AF label/target/box shape is not an article or physical-device acceptance claim.
+        val normal = LinkState("#3366cc", false)
+        val active = LinkState("#cc2200", false)
+        val policy = LinkPaint(normal, normal, active, active, normal, normal, active, active,
+            underlineOnFocus = true, focusOutline = FigureFocusOutline(
+                StyleLength(StyleLengthUnit.Px, 3f), FigureColor.Rgb("#ff0000"),
+                StyleLength(StyleLengthUnit.Px, 7f), SignedContainerMargin(StyleLengthUnit.Px, -1f)))
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val border = InlineBoxBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.Rgb("#c8ccd1"))
+        val child = Span("text", "Oorganklik", italic = true, foreground = normal.foreground)
+        val group = InlineBoxGroup(StyleEdges(zero, StyleLength(StyleLengthUnit.Em, .2f), zero,
+            StyleLength(StyleLengthUnit.Em, .1f)), InlineBoxBorderEdges(border, border, border, border),
+            spans = listOf(child), radius = StyleLength(StyleLengthUnit.Px, 2f))
+        val link = Span("link", "", "Wiktionary:Oorganklik en onoorganklik", italic = true,
+            foreground = normal.foreground, background = "#f8f9fa", linkPaint = policy, inlineBoxGroup = group)
+        val period = Span("text", ".")
+        val source = listOf(link, period)
+        // AF's source-shaped baseline has no authored cursor. This separate typed
+        // phase makes owner-cursor rounding observable without claiming AF provenance.
+        val helpLink = link.copy(inlineStyle = InlineTextStyle(cursor = InlineCursor.Help))
+        val helpSource = listOf(helpLink, period)
+        val expected = "Oorganklik."
+        data class Phase(val density: Float, val zoom: Float, val widthDp: Int, val help: Boolean = false)
+        val phases = listOf(Phase(1f, 1f, 220), Phase(1.5f, 1f, 220),
+            Phase(1.5f, 1.4f, 220), Phase(1.5f, 1.4f, 82), Phase(1f, 1f, 220, help = true),
+            Phase(1f, 1f, 220))
+        val phase = mutableStateOf(0)
+        val calls = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { calls += it }
+        val visits = MissingLinkVisits()
+        val focusDestination = androidx.compose.ui.focus.FocusRequester()
+        var prepared: PreparedNativeFloatText? = null
+        var committed = -1
+        var failure: String? = null
+        val observe: (String) -> Unit = { failure = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            val selected = phases[phase.value]
+            val selectedSource = if (selected.help) helpSource else source
+            val density = Density(selected.density, selected.zoom)
+            MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = TextStyle(
+                fontSize = 20.sp, fontFamily = FontFamily.Monospace, letterSpacing = 0.sp))) {
+                CompositionLocalProvider(LocalDensity provides density, LocalLayoutDirection provides LayoutDirection.Ltr,
+                    LocalMissingLinkVisits provides visits, LocalNativeFloatContextFailureObserver provides observe) {
+                    val style = TextStyle(fontSize = 20.sp, lineHeight = 36.sp,
+                        fontFamily = FontFamily.Monospace, letterSpacing = 0.sp, textDirection = TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(selectedSource, null, style, onLink)
+                    val value = prepareNativeFloatText(selectedSource, annotated, egyptianTextRuns(selectedSource), style,
+                        MaterialTheme.colorScheme.primary, emptyList(), AppSettings(allowImages = false, allowAudio = false),
+                        "", onLink, nativeLineHeight = NativeLineHeightPolicy.Pixels(with(density) { 36.sp.toPx() }))
+                    SideEffect { prepared = value; committed = phase.value }
+                    Box(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp)
+                        .background(Color.White).testTag("rounded-link-focus-destination")
+                        .focusRequester(focusDestination).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(selected.widthDp.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("Rounded link control has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun views(root: android.view.View): List<NativeFloatTextView> = buildList {
+            if (root is NativeFloatTextView) add(root)
+            if (root is android.view.ViewGroup) for (index in 0 until root.childCount) addAll(views(root.getChildAt(index)))
+        }
+        fun sameRect(a: android.graphics.RectF, b: android.graphics.RectF) {
+            assertEquals(a.left, b.left, .01f); assertEquals(a.top, b.top, .01f)
+            assertEquals(a.right, b.right, .01f); assertEquals(a.bottom, b.bottom, .01f)
+        }
+        var firstWidth = 0f
+        var firstHeight = 0
+        var firstId = 0
+        var firstView: NativeFloatTextView? = null
+        var firstActionIdentity: MissingLinkActionIdentity? = null
+        for (index in phases.indices) {
+            compose.runOnIdle { failure = null; phase.value = index }
+            compose.waitForIdle()
+            var movedFocus = false
+            compose.runOnIdle {
+                val view = views(compose.activity.window.decorView).single()
+                if (view.hasFocus()) {
+                    assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter))
+                    movedFocus = true
+                }
+            }
+            if (movedFocus) compose.onNodeWithTag("rounded-link-focus-destination").assertIsFocused()
+            compose.runOnIdle {
+                assertEquals(index, committed); assertNull(failure)
+                val selected = phases[index]
+                val selectedLink = if (selected.help) helpLink else link
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                val view = views(compose.activity.window.decorView).single()
+                if (firstView == null) firstView = view else assertSame(firstView, view)
+                if (view.selectionActive) {
+                    assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ESCAPE,
+                        android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ESCAPE)))
+                    view.onKeyUp(android.view.KeyEvent.KEYCODE_ESCAPE,
+                        android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ESCAPE))
+                }
+                assertFalse(view.selectionActive)
+                val sourceWidth = with(Density(selected.density, selected.zoom)) { selected.widthDp.dp.roundToPx() }
+                val actual = checkNotNull(view.currentMeasuredGeometry)
+                val surface = actual as NativeSurfaceGeometry
+                assertEquals(sourceWidth, surface.content.width)
+                assertEquals(surface.width, view.width)
+                val raw = checkNotNull(value.geometry).invoke(sourceWidth, emptyList(), false)
+                assertEquals(expected, value.text.toString()); assertEquals(expected, view.logicalText.toString())
+                assertEquals(expected, actual.text.toString()); assertEquals(expected, raw.text.toString())
+                val native = checkNotNull(value.native)
+                val nativeSource = native.source(sourceWidth)
+                val marker = nativeSource.getSpans(0, nativeSource.length, NativeRubyPreparedSource::class.java).single()
+                val range = marker.projection.ranges.single { it.role == RubyTextRole.BoxGroup }
+                assertSame(selectedLink, range.span); assertEquals(0 to child.text.length, range.start to range.end)
+                assertSame(child, marker.projection.ranges.single { it.span === child }.span)
+                assertSame(period, marker.projection.ranges.single { it.span === period }.span)
+                assertEquals(1, marker.projection.ranges.count { it.span?.hasInternalAction() == true })
+                val format = marker.groups.getValue(range.path)
+                val box = checkNotNull(format.box)
+                assertSame(selectedLink, box.owner.span)
+                assertEquals(range.path, box.owner.path)
+                val node = actual.nodes.single()
+                assertEquals(FloatInteractionKind.LINK, node.kind)
+                assertEquals(0 to child.text.length, node.start to node.end)
+                assertEquals(child.text, node.label.toString())
+                assertNull(node.preciseClip) // Rounded decoration/hits must not become a glyph clip.
+                val state = checkNotNull(node.missingLinkPaint)
+                assertSame(policy, state.ordinaryPolicy)
+                assertSame(format.actionPaint, state)
+                assertSame(state, box.currentColorPaint)
+                val identity = checkNotNull(state.actionIdentity)
+                assertSame(checkNotNull(format.actionOwner), identity.occurrence)
+                if (index == 0) { firstId = node.id; firstActionIdentity = identity }
+                else {
+                    assertEquals(firstId, node.id)
+                    if (index < 4) assertEquals(firstActionIdentity, identity)
+                }
+                val bodyPixels = 20f * selected.density * selected.zoom
+                assertEquals(bodyPixels, format.paint.textSize, .01f)
+                assertTrue(format.paint.typeface.isItalic)
+                assertEquals(0xfff8f9fa.toInt(), format.paint.bgColor)
+                assertEquals(2f * selected.density, checkNotNull(box.radius), .001f)
+                assertEquals(bodyPixels * .1f, box.padding.left, .01f)
+                assertEquals(bodyPixels * .2f, box.padding.right, .01f)
+                assertEquals(0f, box.padding.top, 0f); assertEquals(0f, box.padding.bottom, 0f)
+                for (edge in listOf(box.border.top, box.border.right, box.border.bottom, box.border.left)) {
+                    assertEquals(selected.density, edge.width, .001f)
+                    assertEquals(0xffc8ccd1.toInt(), edge.color)
+                }
+                val leafPaint = TextPaint(native.paint).also { p ->
+                    nativeSource.getSpans(0, 1, MetricAffectingSpan::class.java)
+                        .filter { nativeSource.getSpanStart(it) <= 0 && nativeSource.getSpanEnd(it) > 0 }
+                        .forEach { it.updateMeasureState(p) }
+                }
+                assertEquals(bodyPixels, leafPaint.textSize, .01f); assertTrue(leafPaint.typeface.isItalic)
+                val borders = checkNotNull(raw.inlineBoxGroupRects(box.owner, range.start, range.end))
+                assertTrue(borders.isNotEmpty())
+                val nativeHit = checkNotNull(raw.inlineBoxGroupHitTest(box.owner, range.start, range.end))
+                val rawChars = raw.characterRects(0, expected.length)
+                val actualChars = actual.characterRects(0, expected.length)
+                assertEquals(expected.length, actualChars.size)
+                val rawFirst = checkNotNull(rawChars.first()); val actualFirst = checkNotNull(actualChars.first())
+                val dx = actualFirst.left - rawFirst.left; val dy = actualFirst.top - rawFirst.top
+                rawChars.zip(actualChars).forEach { (a, b) ->
+                    sameRect(android.graphics.RectF(checkNotNull(a)).apply { offset(dx, dy) }, checkNotNull(b))
+                }
+                assertEquals(borders.size, node.bounds.size)
+                borders.zip(node.bounds).forEach { (a, b) -> sameRect(android.graphics.RectF(a).apply { offset(dx, dy) }, b) }
+                if (index != 3) {
+                    assertEquals(1, borders.size)
+                    val independent = android.text.TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        textSize = bodyPixels
+                        typeface = android.graphics.Typeface.create(android.graphics.Typeface.MONOSPACE, android.graphics.Typeface.ITALIC)
+                    }
+                    assertEquals(independent.measureText(child.text) + bodyPixels * .3f + 2f * selected.density,
+                        borders.single().width(), .08f)
+                } else assertTrue("the narrow allocation must cause real source reflow", borders.size > 1)
+                if (index == 0) { firstWidth = borders.single().width(); firstHeight = actual.height }
+                if (index == phases.lastIndex) {
+                    assertEquals(firstWidth, borders.single().width(), .01f)
+                    assertEquals(firstHeight, actual.height)
+                }
+                val first = borders.first()
+                val radius = 2f * selected.density
+                val corner = (first.left + radius * .1f) to (first.top + radius * .1f)
+                assertTrue(first.contains(corner.first, corner.second))
+                assertFalse(nativeHit(corner.first, corner.second))
+                val cornerActual = (corner.first + dx) to (corner.second + dy)
+                assertFalse(node.contains(cornerActual.first, cornerActual.second))
+                assertNull(actual.interactionNodeAt(cornerActual.first, cornerActual.second))
+                val inside = (first.left + selected.density + bodyPixels * .05f) to first.centerY()
+                assertTrue(nativeHit(inside.first, inside.second))
+                val insideActual = (inside.first + dx) to (inside.second + dy)
+                assertTrue(node.contains(insideActual.first, insideActual.second))
+                assertEquals(node.id, checkNotNull(actual.interactionNodeAt(insideActual.first, insideActual.second)).id)
+                val punctuation = checkNotNull(actualChars.last())
+                assertFalse(node.contains(punctuation.centerX(), punctuation.centerY()))
+                if (selected.help) {
+                    assertNull(actual.cursorAt(cornerActual.first, cornerActual.second))
+                    assertEquals(InlineCursor.Help, actual.cursorAt(insideActual.first, insideActual.second))
+                    assertNull(actual.cursorAt(punctuation.centerX(), punctuation.centerY()))
+                    fun icon(point: Pair<Float, Float>): android.view.PointerIcon? {
+                        val now = android.os.SystemClock.uptimeMillis()
+                        val event = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_HOVER_MOVE,
+                            point.first + view.paddingLeft, point.second + view.paddingTop, 0)
+                        event.source = android.view.InputDevice.SOURCE_MOUSE
+                        return try { view.onResolvePointerIcon(event, 0) } finally { event.recycle() }
+                    }
+                    val help = android.view.PointerIcon.getSystemIcon(view.context, android.view.PointerIcon.TYPE_HELP)
+                    assertEquals(help, icon(insideActual))
+                    assertNotEquals(help, icon(cornerActual))
+                }
+                fun tap(point: Pair<Float, Float>) {
+                    val down = android.os.SystemClock.uptimeMillis()
+                    // Finish each owned synthetic gesture before the next sample; no
+                    // timing/sleep assumption or accidental double-tap recognition.
+                    for (action in listOf(android.view.MotionEvent.ACTION_DOWN, android.view.MotionEvent.ACTION_UP,
+                        android.view.MotionEvent.ACTION_CANCEL)) {
+                        val event = android.view.MotionEvent.obtain(down, android.os.SystemClock.uptimeMillis(), action,
+                            point.first + view.paddingLeft - view.scrollX, point.second + view.paddingTop - view.scrollY, 0)
+                        try { view.dispatchTouchEvent(event) } finally { event.recycle() }
+                    }
+                }
+                val beforePointer = calls.size
+                tap(cornerActual); assertEquals(beforePointer, calls.size)
+                tap(insideActual); assertEquals(beforePointer + 1, calls.size)
+                assertEquals(link.target, calls.last().target)
+                val outlines = checkNotNull(node.focusPaint).outlines()
+                assertTrue(outlines.isNotEmpty())
+                for (outline in outlines) {
+                    assertEquals(3f * selected.density, outline.width, .001f)
+                    assertEquals(7f * selected.density, outline.radius, .001f)
+                    assertEquals(-selected.density, outline.offset, .001f)
+                    assertEquals(0xffff0000.toInt(), outline.color)
+                }
+                val provider = checkNotNull(view.accessibilityNodeProvider)
+                val hostId = android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(hostId))
+                try { assertEquals(expected, host.text.toString()); assertEquals(1, host.childCount) } finally { host.recycle() }
+                val info = checkNotNull(provider.createAccessibilityNodeInfo(node.id))
+                try { assertEquals(child.text, info.text.toString()); assertTrue(info.isClickable); assertTrue(info.isVisibleToUser) }
+                finally { info.recycle() }
+                assertTrue(provider.performAction(node.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                assertTrue(state.focused)
+                val beforeEnter = calls.size
+                assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertTrue(state.active); assertEquals(0xffcc2200.toInt(), state.appearance().color)
+                assertEquals(beforeEnter, calls.size)
+                assertTrue(view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertFalse(state.active); assertEquals(beforeEnter + 1, calls.size)
+                assertEquals(link.target, calls.last().target)
+                view.setSelection(0, expected.length)
+                assertEquals(expected, view.selectedTextForCopy())
+                assertSame(child, link.inlineBoxGroup!!.spans.single()); assertSame(group, link.inlineBoxGroup)
+                assertSame(period, source.last()); assertEquals("", link.text); assertEquals("text", child.kind)
+                assertEquals("#f8f9fa", link.background); assertTrue(link.italic)
+            }
+        }
+        compose.runOnIdle { assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter)) }
+        compose.onNodeWithTag("rounded-link-focus-destination").assertIsFocused()
+        assertEquals(phases.size * 2, calls.size)
+        assertTrue(calls.all { it.target == link.target })
+    }
+
 }

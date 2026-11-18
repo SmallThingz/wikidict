@@ -186,6 +186,8 @@ internal class NativeAnonymousFlowGeometry private constructor(
         native.inlineActionGroupRects(owner, start, end)
     internal fun nativeInlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? =
         native.inlineBoxGroupRects(owner, start, end)
+    internal fun nativeInlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? =
+        native.inlineBoxGroupHitTest(owner, start, end)
     internal fun nativeInlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? =
         native.inlineBoxChildActionRects(owner, start, end, childStart, childEnd, fragments)
@@ -429,6 +431,29 @@ internal class NativeAnonymousFlowGeometry private constructor(
         val begin = inline.first()
         val last = inline.last()
         return native.inlineBoxGroupRects(owner,
+            begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
+            last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
+    }
+
+    override fun inlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? {
+        require(start in 0..text.length && end in start..text.length)
+        if (start == end) return null
+        val covered = selection.segments.filter { start < it.end && end > it.start }
+        val first = covered.firstOrNull() ?: return null
+        if (first is AnonymousSelectionSegment.Figure) {
+            if (covered.size != 1) return null
+            val placed = figureById.getValue(first.anchor.event.id)
+            return placed.measured.geometry.inlineBoxGroupHitTest(owner, start - first.start, end - first.start)
+                ?.let { test -> { x, y -> test(x - placed.bounds.left, y - placed.bounds.top) } }
+        }
+        if (covered.any { it !is AnonymousSelectionSegment.Inline }) return null
+        val inline = covered.filterIsInstance<AnonymousSelectionSegment.Inline>()
+        if (inline.any { it.authored.replacement } || inline.zipWithNext().any { (a, b) ->
+                a.end != b.start || a.nativeEnd != b.nativeStart
+            }) return null
+        val begin = inline.first()
+        val last = inline.last()
+        return native.inlineBoxGroupHitTest(owner,
             begin.authored.nativeOffset(begin.authored.logicalStart + start - begin.start),
             last.authored.nativeOffset(last.authored.logicalStart + end - last.start))
     }

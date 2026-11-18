@@ -884,6 +884,14 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         return raw.nativeInlineBoxRects(owner, scope.nativeStart, scope.nativeEnd, line)
     }
 
+    fun boxHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? {
+        require(start in 0..length && end in start..length)
+        val scope = compiled.boxScopes.singleOrNull {
+            it.format.box?.owner === owner && it.start == start && it.end == end
+        } ?: return null
+        return raw.nativeInlineBoxHitTest(owner, scope.nativeStart, scope.nativeEnd)
+    }
+
     fun boxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? {
         require(start in 0..length && end in start..length && childStart in start..end && childEnd in childStart..end)
@@ -1074,6 +1082,10 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         return sourceOffset(raw.nativeRubyLineOffsetForPosition(line, x, y))
     }
 
+    private fun boxAllowsCursor(start: Int, end: Int, x: Float, y: Float): Boolean =
+        compiled.boxScopes.filter { it.format.box?.radius != null && start >= it.start && end <= it.end }
+            .all { scope -> boxHitTest(checkNotNull(scope.format.box).owner, scope.start, scope.end)?.invoke(x, y) == true }
+
     fun cursorOnLine(line: Int, x: Float, y: Float): InlineCursor? {
         children.lastOrNull { it.line == line && it.geometry.containsInteraction(x - it.x, y - it.y) }?.let {
             it.geometry.cursorAt(x - it.x, y - it.y)?.let { cursor -> return cursor }
@@ -1089,7 +1101,8 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
             }?.let { return it.cursor }
         }
         sourceCursors.lastOrNull { owner ->
-            rectsOnLine(line, owner.start, owner.end).any { it.contains(x, y) }
+            rectsOnLine(line, owner.start, owner.end).any { it.contains(x, y) } &&
+                boxAllowsCursor(owner.start, owner.end, x, y)
         }?.let { return it.value.cursor }
         gaps.lastOrNull { it.line == line && x >= it.box.left && x < it.box.right &&
             y >= it.box.top && y < it.box.bottom }?.cursor?.let { return it }
@@ -1223,7 +1236,8 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
         cursors.lastOrNull { x >= it.bounds.left && x < it.bounds.right &&
             y >= it.bounds.top && y < it.bounds.bottom }?.let { return it.cursor }
         if (isolatedColumn) return actionCursor(x, y)
-        sourceCursors.lastOrNull { owner -> rects(owner.start, owner.end).any { it.contains(x, y) } }
+        sourceCursors.lastOrNull { owner -> rects(owner.start, owner.end).any { it.contains(x, y) } &&
+            boxAllowsCursor(owner.start, owner.end, x, y) }
             ?.let { return it.value.cursor }
         gaps.lastOrNull { x >= it.box.left && x < it.box.right &&
             y >= it.box.top && y < it.box.bottom }?.cursor?.let { return it }
@@ -1232,7 +1246,8 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     private fun actionCursor(x: Float, y: Float, line: Int? = null): InlineCursor? =
         compiled.actionScopes.asReversed().firstOrNull { scope -> scope.format.cursor != null &&
-            actionRects(scope.owner, scope.start, scope.end, line)?.any { it.contains(x, y) } == true
+            actionRects(scope.owner, scope.start, scope.end, line)?.any { it.contains(x, y) } == true &&
+                (scope.ownBox?.let { boxHitTest(it, scope.start, scope.end)?.invoke(x, y) } ?: true)
         }?.format?.cursor
 }
 

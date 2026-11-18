@@ -71,8 +71,9 @@ class RubyModelCodecTest {
             byte(if (value.foreground == null) 0 else 1); value.foreground?.let { string(it) }
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
-                (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0)
-            byte(fields)
+                (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0) or
+                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0)
+            mark("$label.fontFields"); byte(fields)
             value.fontScale?.let { f32(it); byte(value.fontScaleBasis.ordinal) }
             value.fontFeatures?.let { byte(it.ordinal) }
             value.linkPaint?.let { byte(1); linkPaint(it) }
@@ -223,6 +224,9 @@ class RubyModelCodecTest {
             mark("$label.overlays"); u32(value.overlays.size.toLong())
             value.overlays.forEachIndexed { index, overlay -> boxOverlay(overlay, "$label.overlay$index") }
             spans(value.spans, "$label.body")
+            mark("$label.childrenEnd")
+            value.radius?.let { boxLength(it, "$label.radius") }
+            mark("$label.end")
         }
         private fun referenceBlock(value: Block, label: String) {
             if (version == 'Z') { positionedBlock(value, label); return }
@@ -4686,4 +4690,213 @@ class RubyModelCodecTest {
         reject("Wrapper-only family requires global family census", missing)
     }
 
+
+    @Test fun inlineBoxRadiusPreservesNullZeroAndOriginalOwnerWhileRejectingNonuniformShapes() {
+        val px = StyleLengthUnit.Px
+        val em = StyleLengthUnit.Em
+        val zero = StyleLength(px, 0f)
+        val padding = StyleEdges(StyleLength(em, .2f), StyleLength(em, .5f), StyleLength(em, .2f), StyleLength(em, .5f))
+        val color = InlineBoxColor.Rgb("#aabbcc")
+        val edge = InlineBoxBorderEdge.Solid(StyleLength(px, 1f), color)
+        val border = InlineBoxBorderEdges(edge, edge, edge, edge)
+        val child = Span("text", "Afrikaans\ud83d\ude00", trail = "!", fontScale = 1.25f, fontScaleBasis = FontScaleBasis.NormalBody)
+        val square = InlineBoxGroup(padding, border, spans = listOf(child))
+        val explicitZero = square.copy(radius = zero)
+        val rounded = square.copy(radius = StyleLength(px, 2f))
+        val owner = Span("link", "", "Afrikaans", background = "#eeeeee", fontScale = 1.25f,
+            fontScaleBasis = FontScaleBasis.NormalBody, inlineBoxGroup = rounded)
+        assertNull(square.radius); assertEquals(zero, explicitZero.radius); assertNotEquals(square, explicitZero)
+        assertEquals(StyleLength(px, 2f), rounded.radius)
+        assertSame(child, rounded.spans.single()); assertSame(rounded, owner.inlineBoxGroup)
+        assertEquals("Afrikaans\ud83d\ude00!", rubyGraphicalProjection(listOf(owner)).text)
+        assertEquals("Afrikaans", owner.target); assertEquals("#eeeeee", owner.background)
+        assertEquals(1.25f, owner.fontScale!!, 0f); assertEquals(padding, rounded.padding)
+        assertNull(owner.copy(inlineBoxGroup = rounded.copy(radius = null)).inlineBoxGroup!!.radius)
+        assertEquals(StyleLength(px, 2f), owner.inlineBoxGroup!!.radius)
+        val zeroEdge = edge.copy(width = zero)
+        assertEquals(zero, square.copy(border = InlineBoxBorderEdges(zeroEdge, zeroEdge, zeroEdge, zeroEdge), radius = zero).radius)
+        val emEdge = edge.copy(width = StyleLength(em, .1f))
+        assertEquals(StyleLength(px, 2f), square.copy(border = InlineBoxBorderEdges(emEdge, emEdge, emEdge, emEdge),
+            radius = StyleLength(px, 2f)).radius)
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY))
+            invalid("Radius must remain finite and nonnegative") { square.copy(radius = StyleLength(px, value)) }
+        for (value in listOf(0f, 2f)) invalid("Radius is physical CSS px only") { square.copy(radius = StyleLength(em, value)) }
+        val badEdges = listOf<InlineBoxBorderEdge>(InlineBoxBorderEdge.None, InlineBoxBorderEdge.Hidden,
+            InlineBoxBorderEdge.Dotted(edge.width, color), edge.copy(width = StyleLength(px, 2f)),
+            edge.copy(width = StyleLength(em, 1f)), edge.copy(color = InlineBoxColor.Rgb("#aabbcd")),
+            edge.copy(color = InlineBoxColor.CurrentColor), edge.copy(color = InlineBoxColor.Transparent),
+            edge.copy(color = InlineBoxColor.LightDark("#aabbcc", "#aabbcc")))
+        for (radius in listOf(zero, StyleLength(px, 2f))) for (bad in badEdges) {
+            invalid("Every nonnull radius requires four equal solid RGB edges") {
+                square.copy(border = border.copy(left = bad), radius = radius)
+            }
+            assertNull(square.copy(border = border.copy(left = bad)).radius)
+            if (bad !is InlineBoxBorderEdge.Solid || bad.color !is InlineBoxColor.Rgb) {
+                invalid("Uniform edges still require solid canonical RGB") {
+                    square.copy(border = InlineBoxBorderEdges(bad, bad, bad, bad), radius = radius)
+                }
+            }
+        }
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            left = InlineBoxInset(StyleWidthUnit.Px, 0f)), border)
+        for (radius in listOf(zero, StyleLength(px, 2f))) invalid("Rounded owner cannot carry an overlay") {
+            square.copy(overlays = listOf(overlay), radius = radius)
+        }
+        assertEquals(listOf(overlay), square.copy(overlays = listOf(overlay)).overlays)
+        val mutableOverlays = mutableListOf<InlineBoxOverlay>()
+        val mutableGroup = rounded.copy(overlays = mutableOverlays)
+        val retainedOwner = owner.copy(inlineBoxGroup = mutableGroup)
+        val retainedEntry = Entry("Rounded", listOf(retainedOwner), "language", "Afrikaans", "af", emptyList(), emptyList())
+        mutableOverlays.add(overlay)
+        invalid("Existing Span revalidation must catch a later overlay") { retainedOwner.copy() }
+        invalid("Complete Entry revalidation must catch a later overlay") { retainedEntry.copy() }
+        mutableOverlays.clear()
+        assertSame(retainedOwner, retainedEntry.copy().displayTitle.single())
+        assertSame(child, rounded.spans.single())
+    }
+
+    private fun roundedWireOwner(radius: StyleLength?): Span {
+        val px = StyleLengthUnit.Px
+        val pad = StyleLength(StyleLengthUnit.Em, .25f)
+        val edge = InlineBoxBorderEdge.Solid(StyleLength(px, 1f), InlineBoxColor.Rgb("#c8ccd1"))
+        val states = List(8) { LinkState("#123456", it % 2 != 0) }
+        val paint = LinkPaint(states[0], states[1], states[2], states[3], states[4], states[5], states[6], states[7], true)
+        return Span("link", "", "Afrikaans", targetFragment = "sense", tooltip = "whole action",
+            background = "#eeeeee", fontScale = 1.25f, fontScaleBasis = FontScaleBasis.NormalBody, linkPaint = paint,
+            inlineBoxGroup = InlineBoxGroup(StyleEdges(pad, pad, pad, pad), InlineBoxBorderEdges(edge, edge, edge, edge),
+                spans = listOf(Span("text", "Afrikaans\ud83d\ude00", trail = "!", fontScale = 1.25f,
+                    fontScaleBasis = FontScaleBasis.NormalBody)), radius = radius))
+    }
+
+    @Test fun inlineBoxRadiusLocalFlagRoundtripsWholeActionAtEveryExistingSinkAndKeepsNullBytes() {
+        val square = roundedWireOwner(null)
+        for (radius in listOf(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 2f))) {
+            val source = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = radius))
+            for (sink in Sink.entries) {
+                val wire = Wire('Y', 4)
+                val bytes = wire.document(listOf(source), sink,
+                    headingTitle = "Afrikaans\ud83d\ude00!")
+                val actual = selected(read(bytes), sink)
+                assertEquals("$sink complete source owner", source, actual)
+                assertEquals(EntryLink("Afrikaans", "sense"), actual.entryLink())
+                assertEquals("whole action", actual.tooltip); assertEquals("#eeeeee", actual.background)
+                assertEquals("text", actual.inlineBoxGroup!!.spans.single().kind)
+                assertEquals("", actual.inlineBoxGroup!!.spans.single().target)
+                assertEquals("Afrikaans\ud83d\ude00!", rubyGraphicalProjection(listOf(actual)).text)
+                val start = wire.at.getValue("root.0.box.radius")
+                assertEquals(wire.at.getValue("root.0.box.childrenEnd"), start)
+                assertEquals(start + 5, wire.at.getValue("root.0.box.end"))
+                val expected = if (radius.value == 0f) byteArrayOf(0, 0, 0, 0, 0) else byteArrayOf(0, 0, 0, 0, 64)
+                assertArrayEquals(expected, bytes.copyOfRange(start, start + 5))
+                assertEquals(0x20, bytes[wire.at.getValue("root.0.fontFields")].toInt() and 0x20)
+                var old = replace(bytes, start, start + 5, byteArrayOf())
+                val field = wire.at.getValue("root.0.fontFields")
+                old = changed(old, field, old[field].toInt() and 0xdf)
+                val legacy = Wire('Y', 4).document(listOf(square), sink,
+                    headingTitle = "Afrikaans\ud83d\ude00!")
+                assertArrayEquals("Only same-owner local bit and5B suffix differ", legacy, old)
+                assertEquals(square, selected(read(old), sink))
+            }
+        }
+        assertNull(square.inlineBoxGroup!!.radius)
+        val inner = Span("text", "", inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleLength(StyleLengthUnit.Px, 2f)))
+        val outer = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(spans = listOf(inner)))
+        val wire = Wire('Y', 4)
+        val bytes = wire.document(listOf(outer))
+        assertEquals(outer, read(bytes).displayTitle.single())
+        assertEquals(0, bytes[wire.at.getValue("root.0.fontFields")].toInt() and 0x20)
+        assertEquals(0x20, bytes[wire.at.getValue("root.0.box.body.0.fontFields")].toInt() and 0x20)
+        val audio = Span("link", "Tone.ogg", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val catalog = listOf(Media("Tone.ogg", "audio", "original audio"))
+        val rounded = roundedWireOwner(StyleLength(StyleLengthUnit.Px, 2f))
+        val mixed = read(Wire('Z', 4 or 8192).document(listOf(rounded, audio), mediaValues = catalog))
+        assertEquals(listOf(rounded, audio), mixed.displayTitle); assertEquals(catalog, mixed.media)
+    }
+
+    @Test fun inlineBoxRadiusRejectsOrphanFlagsMalformedLengthsAndForgedRoundedDomains() {
+        val radius = StyleLength(StyleLengthUnit.Px, 2f)
+        val source = roundedWireOwner(radius)
+        val wire = Wire('Y', 4)
+        val bytes = wire.document(listOf(source))
+        val fields = wire.at.getValue("root.0.fontFields")
+        val start = wire.at.getValue("root.0.box.radius")
+        for (unknown in listOf(0x40, 0x80)) reject("Other local font bits remain unknown",
+            changed(bytes, fields, bytes[fields].toInt() or unknown))
+        reject("Radius cannot borrow an absent box", changed(bytes, wire.at.getValue("root.0.box"), 0))
+        reject("Payload requires its local flag", changed(bytes, fields, bytes[fields].toInt() and 0xdf))
+        for (unit in listOf(1, 2, 255)) reject("Only physical CSS-pixel radius", changed(bytes, start, unit))
+        for (value in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY)) reject("Finite nonnegative radius",
+            changed32(bytes, start + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+        for (count in 0 until 5) reject("No partial radius suffix", bytes.copyOf(start + count))
+        reject("No extra nullable tag", replace(bytes, start, start, byteArrayOf(1)))
+        reject("Strict final EOF", bytes + byteArrayOf(0))
+        val childFields = wire.at.getValue("root.0.box.body.0.fontFields")
+        reject("Child cannot borrow ancestor radius box", changed(bytes, childFields, bytes[childFields].toInt() or 0x20))
+        val siblingWire = Wire('Y', 4)
+        val siblings = siblingWire.document(listOf(source, text("ordinary")))
+        val siblingField = siblingWire.at.getValue("root.1.fontFields")
+        reject("Sibling cannot borrow another owner's box", changed(siblings, siblingField, siblings[siblingField].toInt() or 0x20))
+        val oldWire = Wire('O')
+        val old = oldWire.document(listOf(text("ordinary")))
+        assertEquals(listOf(text("ordinary")), read(old).displayTitle)
+        reject("Old header still rejects radius flag", changed(old, oldWire.at.getValue("root.0.fontFields"), 0x20))
+        val body = BodyTypography(InlineFontSnapshot(1f, FontScaleBasis.NormalBody, fontNormalized = true))
+        val noBoxWire = Wire('Y', 2)
+        val noBox = noBoxWire.document(listOf(text("ordinary")), bodyTypography = body)
+        assertEquals(body, read(noBox).bodyTypography)
+        reject("Existing global box capability is required", changed(noBox, noBoxWire.at.getValue("root.0.fontFields"), 0x20))
+        val square = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(radius = null))
+        val border = square.inlineBoxGroup!!.border
+        val first = border.top as InlineBoxBorderEdge.Solid
+        val overlay = InlineBoxOverlay(InlineBoxInsets(top = InlineBoxInset(StyleWidthUnit.Px, 0f),
+            right = InlineBoxInset(StyleWidthUnit.Px, 0f)), border)
+        val uniformCurrent = first.copy(color = InlineBoxColor.CurrentColor)
+        val badGroups = listOf(square.inlineBoxGroup!!.copy(overlays = listOf(overlay)),
+            square.inlineBoxGroup!!.copy(border = border.copy(left = InlineBoxBorderEdge.Dotted(first.width, first.color))),
+            square.inlineBoxGroup!!.copy(border = border.copy(left = first.copy(width = StyleLength(StyleLengthUnit.Em, 1f)))),
+            square.inlineBoxGroup!!.copy(border = InlineBoxBorderEdges(uniformCurrent, uniformCurrent, uniformCurrent, uniformCurrent)))
+        for (group in badGroups) {
+            val raw = Wire('Y', 4)
+            val legacy = raw.document(listOf(square.copy(inlineBoxGroup = group)))
+            assertEquals(group, read(legacy).displayTitle.single().inlineBoxGroup)
+            val at = raw.at.getValue("root.0.box.childrenEnd")
+            val forged = replace(legacy, at, at, byteArrayOf(0, 0, 0, 0, 64))
+            val field = raw.at.getValue("root.0.fontFields")
+            reject("Forged radius cannot widen square shape domain", changed(forged, field, forged[field].toInt() or 0x20))
+        }
+        assertEquals(source, read(bytes).displayTitle.single())
+    }
+
+    @Test fun inlineBoxRadiusDoesNotAddItemsOrResetContentAndTableBudgets() {
+        val limit = 1 shl 20
+        val square = roundedWireOwner(null)
+        val rounded = square.copy(inlineBoxGroup = square.inlineBoxGroup!!.copy(radius = StyleLength(StyleLengthUnit.Px, 2f)))
+        fun root(count: Int, source: Span) = Block("table", 0, emptyList(), table = Table(listOf(source),
+            java.util.Collections.nCopies(count, emptyList<Cell>())))
+        fun model(count: Int, source: Span) = Entry("Budget", emptyList(), "language", "Afrikaans", "af",
+            listOf(Section(2, "Body", listOf(root(count, source)))), emptyList())
+        // Existing root Block + original Box Span + real child Span; radius is only a scalar.
+        for (source in listOf(square, rounded)) {
+            assertEquals(limit - 3, model(limit - 3, source).sections.single().blocks.single().table!!.rows.size)
+            invalid("Radius never bypasses shared model work") { model(limit - 2, source) }
+            fun literal(count: Int) = Wire('Y', 4).apply {
+                paragraphOverride = { positionedBlock(root(count, source), "radiusBudget") }
+            }.document(emptyList(), Sink.Body)
+            // Reader also charges the existing Section slot.
+            assertEquals(limit - 4, read(literal(limit - 4)).sections.single().blocks.single().table!!.rows.size)
+            reject("Radius never bypasses shared decode work", literal(limit - 3))
+        }
+        for (depth in listOf(15, 16)) {
+            val bytes = Wire('Y', 4).document(listOf(rounded), Sink.Container, containers = depth)
+            if (depth == 15) assertEquals(1, read(bytes).sections.size)
+            else reject("Box child still consumes content depth after15 containers", bytes)
+        }
+        for (depth in listOf(32, 33)) {
+            val bytes = Wire('Y', 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(rounded), Sink.Body)
+            if (depth == 32) assertEquals(1, read(bytes).sections.size)
+            else reject("Rounded box cannot reset table depth", bytes)
+        }
+    }
 }

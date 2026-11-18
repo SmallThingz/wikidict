@@ -2725,14 +2725,15 @@ class NativeRubyGeometryDeviceTest {
             overlays: List<InlineBoxOverlay> = listOf(overlay), action: Boolean = false,
             decorate: Boolean = false, scale: Float = 1f,
             borders: InlineBoxBorderEdges = InlineBoxBorderEdges(
-                InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000")), none, none, none)) =
+                InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000")), none, none, none),
+            radius: StyleLength? = null) =
             Span(if (action) "link" else "text", "", if (action) "box-source" else "",
                 fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja",
                 foreground = "#0000ff", background = "#00ff00", linkPaint = if (action) linkPolicy else null,
                 inlineStyle = InlineTextStyle(fontNormalized = true, cursor = InlineCursor.Help,
                     decoration = if (decorate) InlineUnderline(InlineUnderlineStyle.Solid,
                         thickness = StyleLength(StyleLengthUnit.Px, 2f)) else null),
-                inlineBoxGroup = InlineBoxGroup(edges, borders, overlays, children))
+                inlineBoxGroup = InlineBoxGroup(edges, borders, overlays, children, radius = radius))
         fun sourceAction(child: Span) = Span("link", "", "ancestor-source", foreground = "#0000ff",
             fontScale = 1f, fontScaleBasis = FontScaleBasis.NormalBody, language = "ja", linkPaint = linkPolicy,
             inlineStyle = InlineTextStyle(fontNormalized = true), inlineActionGroup = InlineActionGroup(listOf(child)))
@@ -2744,6 +2745,7 @@ class NativeRubyGeometryDeviceTest {
         fun resolve(span: Span): TextPaint = paint(span.fontScale ?: 1f, Color.BLUE).apply {
             typeface = Typeface.create(Typeface.MONOSPACE, if (span.italic) Typeface.ITALIC else Typeface.NORMAL)
             textLocale = Locale.forLanguageTag(span.language.ifEmpty { "ja" })
+            bgColor = span.background?.let(Color::parseColor) ?: 0
             if (span.superscript) baselineShift = scriptShift(this).toInt()
         }
         fun make(owner: Span, ancestor: Span? = null, rtl: Boolean = false,
@@ -2796,7 +2798,7 @@ class NativeRubyGeometryDeviceTest {
                             }
                             NativeInlineBoxOverlay(NativeInlineBoxInsets(inset(decoration.insets.top), inset(decoration.insets.right),
                                 inset(decoration.insets.bottom), inset(decoration.insets.left)), borders(decoration.border))
-                        }, currentColorPaint = state) }
+                        }, currentColorPaint = state, radius = value.radius?.value) }
                     part.path to NativeRubyGroupFormat(declaring, direction, rootPolicy, sourceDirection = span.direction,
                         cursor = span.inlineStyle?.cursor,
                         underline = span.inlineStyle?.decoration?.let {
@@ -2817,6 +2819,8 @@ class NativeRubyGeometryDeviceTest {
                     }, part.start, part.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     logical.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(child), rootPolicy),
                         part.start, part.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    span.inlineStyle?.cursor?.let { logical.setSpan(NativeAuthoredCursor(it),
+                        part.start, part.end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
                 }
             val prepared = NativeRubyPreparedSource(projection, SpannedString(logical), rootPaint, direction, groups)
             val source = SpannableString(logical).apply { setSpan(prepared, 0, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
@@ -2833,7 +2837,10 @@ class NativeRubyGeometryDeviceTest {
                         range.start, range.end, geometry.rectsForRange(range.start, range.end)))
                 }
                 listOf(FloatInteractionNode(31, FloatInteractionKind.LINK, range.start, range.end, bounds,
-                    value.projection.text.substring(range.start, range.end), null, value.callback, missingLinkPaint = value.state))
+                    value.projection.text.substring(range.start, range.end), null, value.callback, missingLinkPaint = value.state,
+                    hitTest = value.owner.inlineBoxGroup?.radius?.let {
+                        checkNotNull(geometry.inlineBoxGroupHitTest(value.key, value.range.start, value.range.end))
+                    }))
             })
         fun verify(value: Value, geometry: NativeFloatGeometry): List<RectF> {
             assertEquals(value.projection.text, geometry.text.toString())
@@ -3035,6 +3042,164 @@ class NativeRubyGeometryDeviceTest {
         assertSame(ancestor, styled.action)
         assertTrue(styledGeometry.nodes.single().contains(styledBox.left + .5f, styledBox.centerY()))
         assertEquals(content.size, wide.rectsForRange(0, body.text.length).size)
+
+        // Rounded decoration changes neither fitting nor the original action/source owners.
+        run {
+            val solid = InlineBoxBorderEdge.Solid(one, InlineBoxColor.Rgb("#000000"))
+            val equal = InlineBoxBorderEdges(solid, solid, solid, solid)
+            val noPadding = StyleEdges(zero, zero, zero, zero)
+            fun roundedOwner(children: List<Span>, radius: Float?, action: Boolean = true, scale: Float = 1f) =
+                sourceBox(children, edges = noPadding, overlays = emptyList(), action = action, scale = scale,
+                    borders = equal, radius = radius?.let { StyleLength(StyleLengthUnit.Px, it) })
+            fun withRadius(owner: Span, radius: Float?) = owner.copy(inlineBoxGroup =
+                checkNotNull(owner.inlineBoxGroup).copy(radius = radius?.let { StyleLength(StyleLengthUnit.Px, it) }))
+            fun unchangedText(first: NativeFloatGeometry, second: NativeFloatGeometry) {
+                assertEquals(first.text.toString(), second.text.toString())
+                assertEquals(first.width, second.width); assertEquals(first.height, second.height)
+                assertEquals(first.shapedLineCount, second.shapedLineCount)
+                for (at in 0..first.text.length) sameRect(first.caretRect(at), second.caretRect(at), 0f)
+                for (at in first.text.indices) {
+                    assertEquals(first.visualLineRanges(at), second.visualLineRanges(at))
+                    first.characterRects(at, 1).zip(second.characterRects(at, 1)).forEach { (a, b) ->
+                        if (a == null) assertNull(b) else sameRect(a, checkNotNull(b), 0f)
+                    }
+                }
+            }
+            fun expectedCorner(width: Double, height: Double, radius: Double, x: Double, y: Double): Boolean {
+                if (x < 0 || x >= width || y < 0 || y >= height) return false
+                val r = minOf(radius, width / 2, height / 2)
+                val dx = when { x < r -> r - x; x > width - r -> x - width + r; else -> 0.0 }
+                val dy = when { y < r -> r - y; y > height - r -> y - height + r; else -> 0.0 }
+                return dx == 0.0 || dy == 0.0 || dx * dx + dy * dy <= r * r
+            }
+            val afOwner = roundedOwner(listOf(sourceLeaf("Oorganklik", italic = true)), null)
+            val after = listOf(sourceLeaf("."))
+            val oldValue = make(afOwner, after = after)
+            val zeroValue = make(withRadius(afOwner, 0f), after = after)
+            val roundValue = make(withRadius(afOwner, 7.5f), after = after)
+            val old = build(oldValue, 240); val squared = build(zeroValue, 240); val round = build(roundValue, 240)
+            val oldBoxes = verify(oldValue, old); verify(zeroValue, squared); val roundBoxes = verify(roundValue, round)
+            assertEquals(oldBoxes, roundBoxes)
+            unchangedText(old, squared); unchangedText(old, round)
+            assertArrayEquals(snapshotPixels(old), snapshotPixels(squared))
+            changesInside(snapshotPixels(old), snapshotPixels(round), roundBoxes)
+            assertEquals("Oorganklik.", round.text.toString())
+            assertEquals("Oorganklik", round.nodes.single().label)
+            assertEquals(10, round.nodes.single().end)
+            assertNull(round.nodes.single().preciseClip)
+            val box = roundBoxes.single()
+            assertFalse(round.nodes.single().contains(box.left + .05f, box.top + .05f))
+            assertNull(round.cursorAt(box.left + .05f, box.top + .05f))
+            assertTrue(round.nodes.single().contains(box.left + .5f, box.centerY()))
+            assertEquals(InlineCursor.Help, round.cursorAt(box.left + .5f, box.centerY()))
+            assertNull(round.inlineBoxGroupHitTest(NativeInlineBoxOwner(roundValue.owner, roundValue.key.path),
+                roundValue.range.start, roundValue.range.end))
+            assertNull(round.inlineBoxGroupHitTest(roundValue.key, roundValue.range.start, roundValue.range.end - 1))
+            assertEquals(oldValue.state!!.ordinaryPolicy, roundValue.state!!.ordinaryPolicy)
+
+            // The child selectable band reaches an excluded corner. A child cursor may not bypass its ancestor.
+            val cursorChild = sourceLeaf("MMMM", action = true, scale = 3f).copy(
+                inlineStyle = InlineTextStyle(fontNormalized = true, cursor = InlineCursor.Help))
+            val childOwner = roundedOwner(listOf(cursorChild), 12f, action = false)
+            val childValue = make(childOwner)
+            val childGeometry = build(childValue, 400)
+            val childBox = verify(childValue, childGeometry).single()
+            val candidate = (1..24).asSequence().flatMap { xi -> (1..24).asSequence().map { yi ->
+                (childBox.left + xi / 4f) to (childBox.top + yi / 4f)
+            } }.first { (x, y) ->
+                !expectedCorner(childBox.width().toDouble(), childBox.height().toDouble(), 12.0,
+                    (x - childBox.left).toDouble(), (y - childBox.top).toDouble()) &&
+                    childGeometry.rectsForRange(0, cursorChild.text.length).any { it.contains(x, y) }
+            }
+            assertFalse(childGeometry.nodes.single().contains(candidate.first, candidate.second))
+            assertNull(childGeometry.cursorAt(candidate.first, candidate.second))
+            val center = childGeometry.nodes.single().bounds.first().let { it.centerX() to it.centerY() }
+            assertTrue(childGeometry.nodes.single().contains(center.first, childBox.centerY()))
+            assertEquals(InlineCursor.Help, childGeometry.cursorAt(center.first, childBox.centerY()))
+
+            // Tiny child text, independently tall declaring font: the original corner extends past the first cut.
+            for (parentRtl in listOf(false, true)) {
+                val text = if (parentRtl) "א אבג אבג" else "i iii iii"
+                val small = sourceLeaf(text, scale = .25f)
+                val splitOwner = roundedOwner(listOf(small), 12f).copy(direction = if (parentRtl) "rtl" else "ltr")
+                val splitValue = make(splitOwner, rtl = parentRtl)
+                val splitWidth = kotlin.math.ceil(resolve(small).measureText(text.substring(0, 2)) + 3f).toInt()
+                val split = build(splitValue, splitWidth)
+                val pieces = verify(splitValue, split)
+                assertTrue(pieces.size >= 3)
+                val ordered = pieces.groupBy { it.top }.toSortedMap().values.flatMap {
+                    if (parentRtl) it.sortedByDescending { part -> part.left } else it.sortedBy { part -> part.left }
+                }
+                val total = ordered.sumOf { it.width().toDouble() }
+                assertTrue(ordered.first().width() < minOf(12f, ordered.first().height() / 2f))
+                var consumed = 0.0
+                data class Slice(val bounds: RectF, val start: Double)
+                val slices = ordered.map { part ->
+                    consumed += part.width()
+                    Slice(part, if (parentRtl) total - consumed else consumed - part.width())
+                }
+                val hit = checkNotNull(split.inlineBoxGroupHitTest(splitValue.key, splitValue.range.start, splitValue.range.end))
+                for (part in pieces) for (xi in 0..8) for (yi in 0..8) {
+                    val x = part.left + (xi + .5f) * part.width() / 9f
+                    val y = part.top + (yi + .5f) * part.height() / 9f
+                    val expected = slices.any { slice ->
+                        slice.bounds.contains(x, y) && expectedCorner(total, slice.bounds.height().toDouble(), 12.0,
+                            slice.start + x - slice.bounds.left, (y - slice.bounds.top).toDouble())
+                    }
+                    assertEquals(expected, hit(x, y))
+                    assertEquals(expected, split.nodes.single().contains(x, y))
+                    assertEquals(if (expected) InlineCursor.Help else null, split.cursorAt(x, y))
+                }
+                val flatValue = make(withRadius(splitOwner, 0f), rtl = parentRtl)
+                val flat = build(flatValue, splitWidth)
+                unchangedText(flat, split)
+                assertEquals(pieces, verify(flatValue, flat))
+                changesInside(snapshotPixels(flat), snapshotPixels(split), pieces)
+                val startChars = split.characterRects(0, 1).filterNotNull()
+                val terminalChars = split.characterRects(split.text.length - 1, 1).filterNotNull()
+                assertTrue(startChars.isNotEmpty() && terminalChars.isNotEmpty())
+                assertEquals(splitValue.projection.text, split.text.toString())
+
+                // Opposite owner progression is supported unbroken; its old fragmented-affinity refusal remains explicit.
+                val oppositeText = if (parentRtl) "i iii iii" else "א אבג אבג"
+                val oppositeOwner = roundedOwner(listOf(sourceLeaf(oppositeText, scale = .25f)), 12f)
+                    .copy(direction = if (parentRtl) "ltr" else "rtl")
+                val oppositeValue = make(oppositeOwner, rtl = parentRtl)
+                val oppositeWide = build(oppositeValue, 240)
+                verify(oppositeValue, oppositeWide)
+                assertEquals(if (parentRtl) -1 else 1, oppositeWide.nativeRubyLineDirection(0))
+                val first = checkNotNull(oppositeWide.characterRects(0, 1).single())
+                val last = checkNotNull(oppositeWide.characterRects(oppositeText.length - 1, 1).single())
+                assertEquals(!parentRtl, first.left > last.left)
+                try { build(oppositeValue, splitWidth); fail("Opposite fragmented edges still need native affinity ownership") }
+                catch (failure: UnsupportedFloatLayout) {
+                    assertEquals("Inline box edge shaping affinity is unavailable", failure.message)
+                }
+                unchangedText(split, build(splitValue, splitWidth))
+            }
+
+            // Radius does not become an overflow clip for a child's own paint or glyphs.
+            val overflowChildren = listOf(sourceLeaf("i", scale = .25f),
+                sourceLeaf("f", scale = 3f, italic = true).copy(background = "#ff00ff"), sourceLeaf("i", scale = .25f))
+            val overflowOwner = roundedOwner(overflowChildren, 10f)
+            val overflowValue = make(overflowOwner); val overflow = build(overflowValue, 400)
+            val overflowBox = verify(overflowValue, overflow).single()
+            val squareOverflowValue = make(withRadius(overflowOwner, 0f)); val squareOverflow = build(squareOverflowValue, 400)
+            unchangedText(squareOverflow, overflow)
+            val squarePixels = snapshotPixels(squareOverflow); val roundPixels = snapshotPixels(overflow)
+            changesInside(squarePixels, roundPixels, listOf(overflowBox))
+            var outside = 0
+            squarePixels.indices.forEach { index ->
+                val x = index % 768 - 64; val y = index / 768 - 64
+                if (x + 1 <= overflowBox.left || x >= overflowBox.right || y + 1 <= overflowBox.top || y >= overflowBox.bottom) {
+                    assertEquals(squarePixels[index], roundPixels[index])
+                    if (Color.alpha(roundPixels[index]) > 0) outside++
+                }
+            }
+            assertTrue("Real child glyph/background overflow must remain painted", outside > 0)
+            unchangedText(old, build(oldValue, 240))
+            assertArrayEquals(snapshotPixels(old), snapshotPixels(build(oldValue, 240)))
+        }
 
         val solverBorders = NativeInlineBoxBorders(NativeInlineBoxBorder(1f, null), NativeInlineBoxBorder(3f, null),
             NativeInlineBoxBorder(4f, null), NativeInlineBoxBorder(2f, null))

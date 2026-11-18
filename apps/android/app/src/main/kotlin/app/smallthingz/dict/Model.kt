@@ -316,7 +316,7 @@ data class InlineBoxOverlay(val insets: InlineBoxInsets, val border: InlineBoxBo
 }
 /** Only original children contribute text. Overlay order is authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
-    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>) {
+    val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleLength? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
@@ -1305,6 +1305,17 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
         strictBody: Boolean = false) {
+        value.radius?.let { radius ->
+            require(radius.unit == StyleLengthUnit.Px) { "Inline box radius requires CSS pixels" }
+            val first = value.border.top
+            require(value.overlays.isEmpty() && first is InlineBoxBorderEdge.Solid && first.color is InlineBoxColor.Rgb) {
+                "Rounded inline box requires solid RGB borders without overlays"
+            }
+            require(listOf(value.border.right, value.border.bottom, value.border.left).all { edge ->
+                edge is InlineBoxBorderEdge.Solid && edge.width.unit == first.width.unit &&
+                    edge.width.value == first.width.value && edge.color == first.color
+            }) { "Rounded inline box borders must have equal widths and colors" }
+        }
         val depth = descend(contentDepth)
         charge(value.overlays.size)
         val before = actualTextLeaves

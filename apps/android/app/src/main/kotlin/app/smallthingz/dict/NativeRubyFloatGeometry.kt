@@ -71,6 +71,7 @@ internal class NativeRubyFloatGeometry(
     override fun inlinePaddingGroupRects(owner: Span, start: Int, end: Int) = projection.paddingRects(owner, start, end)
     override fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int) = projection.actionRects(owner, start, end)
     override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int) = projection.boxRects(owner, start, end)
+    override fun inlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int) = projection.boxHitTest(owner, start, end)
     override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>) = projection.boxChildActionRects(owner, start, end, childStart, childEnd, fragments)
     internal override fun nativeInlineActionRectsOnLine(owner: NativeInlineActionOwner, line: Int, start: Int, end: Int) =

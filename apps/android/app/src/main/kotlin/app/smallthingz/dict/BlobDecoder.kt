@@ -327,7 +327,7 @@ object BlobDecoder {
                 require(canonicalColorArgb(it) != null) { "Invalid span background" }
             } else null
             val fontFields = if (!fontScales) 0 else if (containerFonts) byte().also {
-                require(it and (if (extendedFontFamilies) 0xe0 else if (inlineStyles) 0xf0 else 0xf8) == 0) { "Unknown span font fields" }
+                require(it and (if (inlineBoxGroups) 0xc0 else if (extendedFontFamilies) 0xe0 else if (inlineStyles) 0xf0 else 0xf8) == 0) { "Unknown span font fields" }
             } else if (presence()) 1 else 0
             val rawScale = if (fontFields and 1 != 0) {
                 require(buffer.remaining() >= 4) { "Truncated span font scale" }
@@ -377,7 +377,9 @@ object BlobDecoder {
             val ruby = if (rubySpans && presence()) ruby() else null
             val inlinePaddingGroup = if (inlinePaddingGroups && presence()) inlinePaddingGroup() else null
             val inlineActionGroup = if (inlineActionGroups && presence()) inlineActionGroup() else null
-            val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup() else null
+            val radiusDeclared = fontFields and 0x20 != 0
+            val inlineBoxGroup = if (inlineBoxGroups && presence()) inlineBoxGroup(radiusDeclared) else null
+            require(!radiusDeclared || inlineBoxGroup != null) { "Inline box radius requires its same-owner box" }
             val citationMarker = if (citationNavigation && presence()) citationMarker() else null
             val audioControl = if (audioControls && presence()) audioControl() else null
             val clippedAbsolute = if (clippedAbsolutes && presence()) clippedAbsolute() else null
@@ -466,8 +468,8 @@ object BlobDecoder {
             inlineBoxBorderEdge(), inlineBoxBorderEdge())
         private fun inlineBoxInset(): InlineBoxInset = InlineBoxInset(
             StyleWidthUnit.entries.getOrNull(byte()) ?: error("Unknown inline box inset unit"), buffer.float)
-        private fun inlineBoxGroup(): InlineBoxGroup = content {
-            require(buffer.remaining() >= 32) { "Truncated inline box group" }
+        private fun inlineBoxGroup(radiusDeclared: Boolean): InlineBoxGroup = content {
+            require(buffer.remaining() >= 32 + if (radiusDeclared) 5 else 0) { "Truncated inline box group" }
             val padding = styleEdges()
             val border = inlineBoxBorders()
             val overlays = List(count(15)) {
@@ -481,7 +483,9 @@ object BlobDecoder {
                     if (flags and 4 != 0) inlineBoxInset() else null,
                     if (flags and 8 != 0) inlineBoxInset() else null), inlineBoxBorders())
             }
-            InlineBoxGroup(padding, border, overlays, spans()).also { hasInlineBoxGroup = true }
+            val children = spans()
+            val radius = if (radiusDeclared) styleLength() else null
+            InlineBoxGroup(padding, border, overlays, children, radius).also { hasInlineBoxGroup = true }
         }
         fun bodyTypography(directions: Boolean): BodyTypography {
             require(remainingItems > 0) { "Body typography exceeds the presentation budget" }

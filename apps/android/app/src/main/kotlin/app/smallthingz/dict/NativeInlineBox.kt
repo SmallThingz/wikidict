@@ -36,11 +36,21 @@ internal data class NativeInlineBoxOverlay(val insets: NativeInlineBoxInsets, va
 
 internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val padding: NativeInlineBoxEdges,
     val border: NativeInlineBoxBorders, overlays: List<NativeInlineBoxOverlay>,
-    val currentColorPaint: NativeMissingLinkPaint? = null) {
+    val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null) {
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
     val rightAdvance = nativeInlineBoxCoordinate(padding.right.toDouble() + border.right.width)
-    init { nativeInlineBoxCoordinate(leftAdvance.toDouble() + rightAdvance) }
+    init {
+        nativeInlineBoxCoordinate(leftAdvance.toDouble() + rightAdvance)
+        radius?.let { value ->
+            nativeInlineBoxCoordinates(value)
+            val first = border.top
+            if (value < 0f || overlays.isNotEmpty() || first.color == null || first.color ushr 24 != 255 ||
+                listOf(border.top, border.right, border.bottom, border.left).any {
+                    it.dotted || it.width != first.width || it.color != first.color
+                }) throw UnsupportedFloatLayout("Rounded inline box requires equal solid RGB borders without overlays")
+        }
+    }
     fun color(value: NativeInlineBoxBorder, declaring: NativeRubyGroupFormat): Int = value.color
         ?: currentColorPaint?.appearance()?.color ?: declaring.paint.color
 }

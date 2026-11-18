@@ -769,13 +769,18 @@ internal fun prepareNativeFloatText(
                 // CurrentColor belongs to this owner or its actual stored action ancestor,
                 // never to a child link which merely occupies the same logical interval.
                 val action = actionGroupRanges.lastOrNull { it.path == path || path.startsWith(it.path + "/") }
+                if (model.radius != null && action != null && action.path != path)
+                    throw UnsupportedFloatLayout("Rounded inline box inside a separate action group is unavailable")
                 NativeInlineBoxFormat(boxOwners.getValue(path), NativeInlineBoxEdges(
                     length(model.padding.top), length(model.padding.right),
                     length(model.padding.bottom), length(model.padding.left)), borders(model.border),
                     model.overlays.map { overlay -> NativeInlineBoxOverlay(NativeInlineBoxInsets(
                         inset(overlay.insets.top), inset(overlay.insets.right),
                         inset(overlay.insets.bottom), inset(overlay.insets.left)), borders(overlay.border)) },
-                    currentColorPaint = action?.let(::groupPaintAt))
+                    currentColorPaint = action?.let(::groupPaintAt), radius = model.radius?.let {
+                        if (it.unit != StyleLengthUnit.Px) throw UnsupportedFloatLayout("Rounded inline radius must be CSS pixels")
+                        length(it)
+                    })
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
@@ -1255,6 +1260,14 @@ internal fun prepareNativeFloatText(
                                     range.start, range.end, childFragments)
                                     ?: throw UnsupportedFloatLayout("Inline box child action geometry is unavailable")
                             }
+                            val roundedOwners = boxRanges.filter { box ->
+                                box.span?.inlineBoxGroup?.radius != null &&
+                                    (box.path == actionGroup?.path || childRange?.path?.startsWith(box.path + "/") == true)
+                            }
+                            val roundedHitTests = roundedOwners.map { box ->
+                                geometry.inlineBoxGroupHitTest(boxOwners.getValue(box.path), box.start, box.end)
+                                    ?: throw UnsupportedFloatLayout("Rounded inline action lost its original box geometry")
+                            }
                             val ordinary = if (actionGroup == null) ordinaryPolicies[range.start to range.end] else actionGroup.span?.linkPaint
                             val focus = if (clippedLocation != null) null else if (ordinary != null) ordinaryLinkFocusPaint(ordinary,
                                 nativeLinkFocusFragments(geometry, range.start, range.end, fragments), density.density, bodyPixels)
@@ -1270,7 +1283,9 @@ internal fun prepareNativeFloatText(
                                         (if (ordinary != null) visits else captionScope?.visits)?.record(it)
                                     }
                                     Unit
-                                }, stateDescription = clippedActionSpan?.explanation?.takeIf { it.isNotEmpty() }, missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker, clippedAbsoluteLocation = clippedLocation))
+                                }, stateDescription = clippedActionSpan?.explanation?.takeIf { it.isNotEmpty() },
+                                hitTest = if (roundedHitTests.isEmpty()) null else { x, y -> roundedHitTests.all { it(x, y) } },
+                                missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker, clippedAbsoluteLocation = clippedLocation))
                         }
                         val firstImage = nativeLinks.size
                         images.forEach { image ->

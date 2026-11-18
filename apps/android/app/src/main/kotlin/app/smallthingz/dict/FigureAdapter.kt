@@ -352,6 +352,8 @@ private class AnonymousInlineNodeGeometry(private val owner: NativeAnonymousFlow
         this.owner.nativeInlineActionGroupRects(owner, source.start + start, source.start + end)
     override fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? =
         this.owner.nativeInlineBoxGroupRects(owner, source.start + start, source.start + end)
+    override fun inlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? =
+        this.owner.nativeInlineBoxGroupHitTest(owner, source.start + start, source.start + end)
     override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? =
         this.owner.nativeInlineBoxChildActionRects(owner, source.start + start, source.start + end,

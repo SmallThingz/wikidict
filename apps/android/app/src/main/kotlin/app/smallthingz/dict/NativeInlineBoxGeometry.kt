@@ -37,6 +37,8 @@ internal class NativeInlineBoxGeometry(
     private val lines: List<Line>
     private val owners: List<Owner>
     private val fragments: List<Fragment>
+    private val rounded: Map<Fragment, NativeInlineBoxRoundPaint>
+    private val cursors = nativeInlineRanges(raw.nativeRubyShapingSource, NativeAuthoredCursor::class.java)
 
     private fun coordinate(value: Double) = nativeInlineBoxCoordinate(value)
     private fun rectangle(l: Float, t: Float, r: Float, b: Float): RectF {
@@ -181,8 +183,20 @@ internal class NativeInlineBoxGeometry(
             Line(mapped, coordinate(advanceBounds.right.toDouble() - advanceBounds.left), advanceBounds)
         }
         fragments = builtFragments.toList()
+        val roundedFragments = mutableMapOf<Fragment, NativeInlineBoxRoundPaint>()
         owners = this.spans.map { range ->
             val own = fragments.filter { it.owner === range }
+            range.value.box.radius?.takeIf { it > 0f }?.let { radius ->
+                val rtl = ownerRtl(range, firstLine(range))
+                val visualOrder = own.groupBy { it.line }.toSortedMap().values.flatMap {
+                    if (rtl) it.asReversed() else it
+                }
+                val slices = nativeInlineBoxCornerSlices(visualOrder.map(::boxBounds), rtl, radius,
+                    range.value.box.border.top.width)
+                visualOrder.zip(slices).forEach { (fragment, slice) ->
+                    roundedFragments[fragment] = NativeInlineBoxRoundPaint(slice)
+                }
+            }
             val first = own.filter { it.line == firstLine(range) }.let { if (ownerRtl(range, firstLine(range))) it.last() else it.first() }
             val last = own.filter { it.line == lastLine(range) }.let { if (ownerRtl(range, lastLine(range))) it.first() else it.last() }
             val containing = rectangle(minOf(first.padding.left, last.padding.left), minOf(first.padding.top, last.padding.top),
@@ -194,6 +208,7 @@ internal class NativeInlineBoxGeometry(
                 lines.flatMap { it.mapped.fragmentsForRange(range.start, range.end) },
                 currentColorPaint = range.value.box.currentColorPaint), overlays, last.line)
         }
+        rounded = roundedFragments.toMap()
     }
 
     fun lineAdvance(line: Int): Float = lines[line].advance
@@ -202,6 +217,13 @@ internal class NativeInlineBoxGeometry(
         val known = selectedOwner(owner, start, end) ?: return null
         return known.fragments.filter { line == null || it.line == line }.map { RectF(it.border) }
     }
+    fun boxHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? {
+        val known = selectedOwner(owner, start, end) ?: return null
+        return { x, y -> known.fragments.any { contains(it, x, y) } }
+    }
+    private fun contains(fragment: Fragment, x: Float, y: Float): Boolean =
+        rounded[fragment]?.slice?.contains(x, y) ?: fragment.border.contains(x, y)
+
     /** Only caller-owned action boxes are clipped; native selection and caret paths are untouched. */
     fun childActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int, childStart: Int, childEnd: Int,
         fragments: List<RectF>): List<RectF>? {
@@ -237,17 +259,27 @@ internal class NativeInlineBoxGeometry(
     fun caretOnLine(line: Int, offset: Int): RectF? = lines[line].mapped.caretRect(offset,
         if (offset == raw.nativeRangeOfLine(line).second) NativeInlineBoundaryAffinity.Preceding else NativeInlineBoundaryAffinity.Following)
     fun offsetOnLine(line: Int, x: Float, y: Float): Int = lines[line].mapped.offsetForPosition(x, y)
-    fun cursorOnLine(line: Int, x: Float, y: Float): InlineCursor? = lines[line].mapped.cursorAt(x, y)
-        ?: fragments.lastOrNull { it.line == line && it.border.contains(x, y) }?.owner?.value?.format?.cursor
+    private fun mappedCursor(line: Int, x: Float, y: Float): InlineCursor? {
+        if (rounded.isEmpty()) return lines[line].mapped.cursorAt(x, y)
+        val range = raw.nativeRangeOfLine(line)
+        return cursors.lastOrNull { cursor ->
+            val start = maxOf(range.first, cursor.start); val end = minOf(range.second, cursor.end)
+            start < end && lines[line].mapped.rectsForRange(start, end).any { it.contains(x, y) } &&
+                owners.filter { it.range.value.box.radius != null && cursor.start >= it.range.start &&
+                    cursor.end <= it.range.end }.all { owner -> owner.fragments.any { contains(it, x, y) } }
+        }?.value?.cursor
+    }
+    fun cursorOnLine(line: Int, x: Float, y: Float): InlineCursor? = mappedCursor(line, x, y)
+        ?: fragments.lastOrNull { it.line == line && contains(it, x, y) }?.owner?.value?.format?.cursor
     private fun lineAt(x: Float, y: Float): Int = lines.indices.reversed().firstOrNull { line ->
         val range = raw.nativeRangeOfLine(line)
         rectsOnLine(line, range.first, range.second).any { it.contains(x, y) }
-    } ?: fragments.lastOrNull { it.border.contains(x, y) }?.line
+    } ?: fragments.lastOrNull { contains(it, x, y) }?.line
         ?: raw.nativeLineAt(raw.offsetForPosition(x, y))
     override fun offsetForPosition(x: Float, y: Float): Int = offsetOnLine(lineAt(x, y), x, y)
     val cursorBounds: List<RectF> get() = fragments.filter { it.owner.value.format.cursor != null }.map { RectF(it.border) }
-    override fun cursorAt(x: Float, y: Float): InlineCursor? = lines[lineAt(x, y)].mapped.cursorAt(x, y)
-        ?: fragments.lastOrNull { it.owner.value.format.cursor != null && it.border.contains(x, y) }?.owner?.value?.format?.cursor
+    override fun cursorAt(x: Float, y: Float): InlineCursor? = mappedCursor(lineAt(x, y), x, y)
+        ?: fragments.lastOrNull { it.owner.value.format.cursor != null && contains(it, x, y) }?.owner?.value?.format?.cursor
     override fun rectsForRange(start: Int, end: Int): List<RectF> = lines.flatMap { it.mapped.rectsForRange(start, end) }
     override fun characterRects(start: Int, length: Int): List<RectF?> {
         require(start in 0..text.length && length >= 0 && length <= text.length - start)
@@ -288,8 +320,13 @@ internal class NativeInlineBoxGeometry(
     private fun paintBackgrounds(canvas: Canvas, line: Int?) {
         fragments.filter { line == null || it.line == line }.forEach { fragment ->
             val color = fragment.owner.value.format.paint.bgColor
-            if (color ushr 24 != 0) canvas.drawRect(fragment.border, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
-            fragment.painter.paint(canvas) { fragment.owner.value.box.color(it, fragment.owner.value.format) }
+            val curved = rounded[fragment]
+            if (curved != null) curved.paint(canvas, color,
+                fragment.owner.value.box.color(fragment.owner.value.box.border.top, fragment.owner.value.format))
+            else {
+                if (color ushr 24 != 0) canvas.drawRect(fragment.border, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+                fragment.painter.paint(canvas) { fragment.owner.value.box.color(it, fragment.owner.value.format) }
+            }
         }
     }
     fun paintOverlays(canvas: Canvas, line: Int? = null) {
@@ -402,5 +439,31 @@ internal class NativeInlineBoxBorderPaint(box: RectF, borders: NativeInlineBoxBo
                 } finally { canvas.restoreToCount(checkpoint) }
             }
         }
+    }
+}
+
+/** Paint a bounded window of the one composite decoration. Text replay never enters this clip. */
+private class NativeInlineBoxRoundPaint(val slice: NativeInlineBoxCornerSlice) {
+    private fun path(box: NativeFloatBounds, radii: NativeCornerRadii) = Path().apply {
+        val corners = radii.clockwise.flatMap { listOf(it.toFloat(), it.toFloat()) }.toFloatArray()
+        addRoundRect(RectF(box.left, box.top, box.right, box.bottom), corners, Path.Direction.CW)
+    }
+    private val outer = path(slice.localShape.borderBox, slice.localShape.outerRadii)
+    private val border = Path(outer).apply {
+        fillType = Path.FillType.EVEN_ODD
+        slice.localShape.paddingBox?.let { addPath(path(it, slice.localShape.innerRadii)) }
+    }
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    fun paint(canvas: Canvas, background: Int, borderColor: Int) {
+        val box = slice.fragment
+        val checkpoint = canvas.save()
+        try {
+            canvas.translate(box.left, box.top)
+            canvas.clipRect(0f, 0f, box.right - box.left, box.bottom - box.top)
+            if (background ushr 24 != 0) { fill.color = background; canvas.drawPath(outer, fill) }
+            if (slice.localShape.borderWidth > 0f && borderColor ushr 24 != 0) {
+                fill.color = borderColor; canvas.drawPath(border, fill)
+            }
+        } finally { canvas.restoreToCount(checkpoint) }
     }
 }

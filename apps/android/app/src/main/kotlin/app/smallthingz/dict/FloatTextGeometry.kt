@@ -317,6 +317,7 @@ internal interface FloatTextGeometry {
     fun inlineActionGroupRects(owner: NativeInlineActionOwner, start: Int, end: Int): List<RectF>? = null
     /** In-flow fragments only; positioned border overlays never become action/selection geometry. */
     fun inlineBoxGroupRects(owner: NativeInlineBoxOwner, start: Int, end: Int): List<RectF>? = null
+    fun inlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? = null
     fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? = null
     /** Exactly [length] entries, including null for a character without visible bounds. */

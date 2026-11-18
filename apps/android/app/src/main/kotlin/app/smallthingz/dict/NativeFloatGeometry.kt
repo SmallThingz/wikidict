@@ -123,6 +123,7 @@ internal abstract class NativeFloatGeometry : FloatTextGeometry {
     internal open fun nativeInlineBoxCursorAt(x: Float, y: Float, line: Int? = null): InlineCursor? = null
     internal open fun nativeInlineBoxRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         line: Int? = null): List<RectF>? = null
+    internal open fun nativeInlineBoxHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? = null
     internal open fun nativeInlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? = null
     internal open fun nativeInlineActionRectsOnLine(owner: NativeInlineActionOwner, line: Int,
@@ -436,6 +437,12 @@ private class NativeStaticFloatGeometry private constructor(
         require(start in 0..text.length && end in start..text.length)
         return ruby?.boxRects(owner, start, end) ?: inlineBox?.boxRects(owner, start, end)
     }
+    override fun inlineBoxGroupHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? {
+        require(start in 0..text.length && end in start..text.length)
+        return ruby?.boxHitTest(owner, start, end) ?: inlineBox?.boxHitTest(owner, start, end)
+    }
+    internal override fun nativeInlineBoxHitTest(owner: NativeInlineBoxOwner, start: Int, end: Int): ((Float, Float) -> Boolean)? =
+        inlineBox?.boxHitTest(owner, start, end)
     override fun inlineBoxChildActionRects(owner: NativeInlineBoxOwner, start: Int, end: Int,
         childStart: Int, childEnd: Int, fragments: List<RectF>): List<RectF>? {
         require(start in 0..text.length && end in start..text.length && childStart in start..end && childEnd in childStart..end)
