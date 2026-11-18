@@ -183,7 +183,8 @@ pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u
             if (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0)) end = overflowPrefixEnd(rest);
             if (end < rest.len) {
                 if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
-                    if (space > end / 2 and nextClusterEnd(rest, space) == space + 1) end = space;
+                    if (nextClusterEnd(rest, space) == space + 1 and
+                        (space > end / 2 or moveWholeWord(rest, space, end, @max(columns, 2)))) end = space;
                 }
             }
             try rows.append(a, rest[0..end]);
@@ -425,6 +426,24 @@ test "cell wrapping preserves CJK and combining marks without splitting UTF8" {
     }
 }
 
+test "prose wraps a Malayalam definition at the word boundary when the word fits" {
+    initLocale();
+    const a = std.testing.allocator;
+    const lead = "  1. ക്രിയയെ അകർമ്മകമാക്കി";
+    const word = "സൂചിപ്പിക്കാനുപയോഗിക്കുന്ന";
+    const tail = word ++ " പ്രത്യയം";
+    const plain = try wrap(a, lead ++ " " ++ tail, 41);
+    defer a.free(plain);
+    try std.testing.expectEqual(@as(usize, 2), plain.len);
+    try std.testing.expectEqualStrings(lead, plain[0]);
+    try std.testing.expectEqualStrings(tail, plain[1]);
+    const styled = try wrapStyled(a, lead ++ " \x1b[1m" ++ word ++ "\x1b[0m പ്രത്യയം", 41);
+    defer a.free(styled);
+    try std.testing.expectEqual(@as(usize, 2), styled.len);
+    try std.testing.expectEqualStrings(lead, styled[0].bytes);
+    try std.testing.expectEqualStrings("\x1b[1m" ++ word ++ "\x1b[0m പ്രത്യയം", styled[1].bytes);
+}
+
 // Only use styled rows for output produced by the renderer, after terminalText
 // neutralizes source controls. SGR is zero-width; no cursor/OSC/DCS sequence is accepted.
 pub fn sgrLength(text: []const u8) ?usize {
@@ -532,8 +551,7 @@ pub const RenderRow = struct { bytes: []const u8, carry: TextStyle, left: usize 
 pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
     return wrapStyledProjected(a, text, columns, &.{});
 }
-// Keep the existing UTF-8 byte midpoint policy, excluding renderer SGR atoms.
-// Styling must not move a soft word boundary; raw slices still own their offsets.
+// Ignore styling when deciding where an overlong word can break.
 fn textByteCount(text: []const u8) usize {
     var count: usize = 0;
     var pos: usize = 0;
@@ -546,6 +564,24 @@ fn textByteCount(text: []const u8) usize {
         }
     }
     return count;
+}
+
+// If prose has already started and the next word fits on a fresh line, keep it
+// intact. Only inspect at most a line's worth of the following word.
+fn moveWholeWord(line: []const u8, space: usize, end: usize, columns: usize) bool {
+    if (line[end] == ' ') return false;
+    var pos: usize = 0;
+    while (pos < space) {
+        if (sgrLength(line[pos..space])) |n| {
+            pos += n;
+        } else if (line[pos] == ' ') {
+            pos += 1;
+        } else break;
+    }
+    if (pos == space) return false;
+    const following = line[space + 1 ..];
+    const fit = prefixBytes(following, columns);
+    return fit == following.len or std.mem.indexOfScalar(u8, following[0 .. fit + 1], ' ') != null;
 }
 
 /// Rows continue borrowing the original text; section offsets remain valid.
@@ -575,7 +611,9 @@ pub fn wrapStyledProjectedFromStyle(a: std.mem.Allocator, text: []const u8, colu
             if (rest.len != 0 and (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0))) end = overflowPrefixEnd(rest);
             if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                 const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
-                if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 and (poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1) end = space;
+                if ((poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1 and
+                    (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 or
+                        (poem == null and moveWholeWord(rest, space, end, available)))) end = space;
             };
             const slice = rest[0..end];
             try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
