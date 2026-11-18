@@ -581,9 +581,13 @@ def main():
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--definition-dump', type=Path, action='append',
                         help='Compare simple numbered definitions to the selected original XML. Supply every .xml.bz2 part.')
+    parser.add_argument('--definition-registry', type=Path,
+                        help='Match literal localized headings by code using the selected build’s language-registry.tsv.')
     parser.add_argument('--batch-size', type=int, choices=range(1, 65),
                         help='Exact exports per Reader process (default: 32 with the installed wikidict, 1 with another binary)')
     args = parser.parse_args()
+    if args.definition_registry and not args.definition_dump:
+        parser.error('--definition-registry requires --definition-dump')
     if args.batch_size is None:
         args.batch_size = 32 if args.binary.resolve() == installed_reader.resolve() else 1
 
@@ -606,7 +610,7 @@ def main():
             review = None
             if args.definition_dump:
                 from source_definition_audit import SourceDefinitions
-                review = SourceDefinitions('', args.root, args.definition_dump)
+                review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
                 resources.callback(review.close)
             result = scan(args.root, query, exports, observe_record=review.observe if review else None)
             if review is not None:

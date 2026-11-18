@@ -7,7 +7,7 @@ from contextlib import closing
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from source_definition_audit import SourceDefinitions, compiled_line, definitions, simple_line
+from source_definition_audit import SourceDefinitions, compiled_line, definitions, localized_language_codes, simple_line
 
 
 class SourceDefinitionTests(unittest.TestCase):
@@ -16,6 +16,13 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', ((0, 4, 'cat'),))])
         for prefix in ('{{header}}', '<nowiki>', '{|', '__TOC__'):
             self.assertEqual(list(definitions(prefix + '\n' + text, 'self', {'English'})), [])
+        self.assertEqual(list(definitions(text + '\n# ________________', 'self', {'English'})),
+                         list(definitions(text, 'self', {'English'})))
+
+    def test_localized_name_requires_one_owner_across_registry_sections(self):
+        header = '# wikidict-language-registry-v2\n# mediawiki\n'
+        raw = header + 'aa\tOne\taa\nfr\tfrançais\tFrench\n# iso-639-3\nzz\tTwo\tOne\n'
+        self.assertEqual(localized_language_codes(raw.encode()), {'français': 'fr'})
 
     def test_links_bind_each_visible_range_with_its_own_destination(self):
         expected = simple_line('A [[猫|cat]] or [[mačka|cat]].', 'other')
@@ -27,6 +34,14 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertNotEqual(compiled_line(spans), expected)
         for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part|cat]]'):
             self.assertIsNone(simple_line(source, 'other'))
+
+    def test_numbered_bare_url_must_be_an_external_link_to_its_own_text(self):
+        url = 'https://tuludictionary.in/dictionary/cgi-bin/web/frame.html'
+        expected = simple_line(url, 'word')
+        self.assertEqual(compiled_line([dict(kind='external_link', text=url, target=url)]), expected)
+        self.assertNotEqual(compiled_line([dict(kind='text', text=url)]), expected)
+        self.assertNotEqual(compiled_line([dict(kind='link', text=url, target=url)]), expected)
+        self.assertIsNone(compiled_line([dict(kind='external_link', text=url, target=url + '/elsewhere')]))
 
     def test_real_dump_hash_owner_definition_actions_and_order(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -59,6 +74,22 @@ class SourceDefinitionTests(unittest.TestCase):
                 report = audit.report()
                 self.assertEqual((report['eligible'], report['matched']), (4, 2))
                 self.assertEqual([row['line'] for row in report['examples']], [4, 5])
+            registry = root / 'language-registry.tsv'
+            registry.write_text('# wikidict-language-registry-v2\n# mediawiki\nfr\tFrench\tFrançais\n')
+            manifest['build_inputs']['auxiliary_snapshot_sha256'] = {
+                'language-registry': hashlib.sha256(registry.read_bytes()).hexdigest()}
+            (root / 'complete.json').write_text(json.dumps(manifest))
+            (root / 'languages.tsv').write_text('heading\nUnclassified\n')
+            with closing(SourceDefinitions('', root, [dump], registry)) as audit:
+                record['language_code'] = 'en'
+                audit.observe(record)
+                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (4, 0))
+                record.update(language='Français', language_code='fr')
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 2)
+            registry.write_text(registry.read_text() + '\n')
+            with self.assertRaisesRegex(ValueError, 'registry differs'):
+                SourceDefinitions('', root, [dump], registry)
             member[-1] = '0' * 40
             (root / 'complete.json').write_text(json.dumps(manifest))
             with self.assertRaisesRegex(ValueError, 'SHA-1 differs'):

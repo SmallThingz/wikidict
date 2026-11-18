@@ -106,6 +106,12 @@ IDs. Review unmatched lines against the source, including numbered examples
 and lists of related terms. Other headings, expanded templates and visual styling
 need separate checks.
 
+When an edition uses localized headings such as Tulu `ತುಳು`, pass
+`--definition-registry` with the `language-registry.tsv` used for that build.
+The audit checks its SHA-256 against `complete.json` and compares each
+unambiguous primary MediaWiki name with the language code in the decoded entry.
+This also finds eligible definitions when the compiled catalog omitted their language.
+
 ## Whole-dump evidence
 
 The earlier recovery checkpoint was exercised against complete indexed
