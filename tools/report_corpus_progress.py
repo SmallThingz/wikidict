@@ -177,8 +177,11 @@ def table_bytes(ledger):
     header = ['edition','date','input_xml_pages','latest_successful_attempt','latest_successful_build_seconds',
         'retry_inclusive_production_seconds','production_attempts','failed_or_interrupted_production_attempts','unknown_duration_attempts','latest_mechanical_status']
     out = io.StringIO(); writer = csv.writer(out,lineterminator='\n'); writer.writerow(header)
-    for edition in sorted({r['edition'] for r in ledger['attempts']}):
-        rows = [r for r in ledger['attempts'] if r['edition']==edition]; latest = latest_success(rows).get(edition)
+    by_edition = {}
+    for attempt in ledger['attempts']:
+        by_edition.setdefault(attempt['edition'], []).append(attempt)
+    for edition, rows in sorted(by_edition.items()):
+        latest = latest_success(rows).get(edition)
         unknown = sum(r['elapsed_seconds'] is None for r in rows)
         writer.writerow([edition,rows[-1]['date'],latest['input_pages'] if latest else '',latest['attempt_number'] if latest else '',
             format(latest['elapsed_seconds'],'.17g') if latest and latest['elapsed_seconds'] is not None else '',
