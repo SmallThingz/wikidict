@@ -12,7 +12,7 @@ Wikimedia dumps + pinned site data
    MediaWiki/Scribunto build pipeline
               |
               v
-    WIKBLB08 + DPR2-DPRG data
+    WIKBLB08 dictionaries with DPR presentation records
        /          |          \
   CLI / TUI     C ABI     Android decoder
                   |          |
@@ -26,7 +26,7 @@ shipped in a dictionary.
 ## What is here
 
 - **Compiler/bundler** for Wiktionary XML, templates and Scribunto modules.
-- **WIKBLB08/DPR2-DPRG** encoder and decoder.
+- **WIKBLB08** dictionary encoder and decoder with versioned DPR presentation records.
 - **CLI/TUI reader** with search, history, saved words and study modes.
 - **C ABI** used by the native desktop application.
 - **Raw and seekable XZ storage** with derived random-access indexes.
@@ -165,7 +165,7 @@ The build pipeline:
 1. extracts templates, modules and page metadata;
 2. parses Lua and emits transient LLVM bitcode/native code;
 3. expands every bundled page with its concrete MediaWiki context;
-4. compiles the result into DPRG presentation records;
+4. encodes each entry using the DPR features required by its content;
 5. writes data-only WIKBLB08 files;
 6. removes the transient executable build artifacts.
 
@@ -583,7 +583,7 @@ in their own unscoped root.
 
 ```text
 src/
-├── decoder/    WIKBLB08/DPR2-DPRG decoding and query APIs
+├── decoder/    WIKBLB08 decoding and query APIs
 ├── encoder/    dictionary and presentation compilation
 ├── ffi/        public C header
 ├── frontend/   CLI, TUI and C ABI implementation

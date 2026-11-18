@@ -4,12 +4,11 @@ Native Android reader for Wiktionary dictionaries produced by
 [wikidict](../../README.md). This Gradle project lives at `apps/android` in the
 same repository as the compiler and desktop readers.
 
-The app reads compiled WIKBLB08 dictionaries with DPR2 through DPRM presentation data directly. It does not ship a WebView, Lua
-runtime, wikitext parser or JSON dictionary format.
-
-Newer presentation versions preserve explanations, colors, anchors, nested tables
-and reference fragments. Older readers may refuse newer dictionaries; update the
-reader before importing them.
+The app reads compiled WIKBLB08 dictionaries directly. Its native Kotlin decoder
+recognizes DPR2 through DPR9, DPRA through DPRV, and the supported DPRY and DPRZ
+feature flags. These versions carry formatting such as ruby annotations, nested
+tables and reference fragments. A reader that reports an unsupported record
+version or feature combination needs a compatible build.
 
 ## Data path
 
@@ -23,7 +22,7 @@ streaming validation + install
 SQLite title / offset index
         |
         v
-on-demand DPR2-DPRM decode
+on-demand DPR entry decoding
 ```
 
 Only the selected record is decoded. Compressed dictionaries stay compressed on
