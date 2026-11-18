@@ -118,11 +118,14 @@ The audit verifies each compressed member against its recorded size and SHA-1.
 It checks plain text and internal links under literal language headings
 on template-free pages. A match requires the expected language, definition
 order, visible text and destination of each linked range. For example, swapping
-two links with the same display text fails the check. `source_definitions` reports eligible,
+two links with the same display text fails the check. A single balanced italic
+or bold passage must cover the same Unicode character range in the decoded spans.
+In the Albanian entry for English `foot`, this checks both linked translations
+and their italic qualifiers, `skaj` and `njësi matëse`. `source_definitions` reports eligible,
 matched and unmatched counts with up to 32 examples and their page and revision
 IDs. Review unmatched lines against the source, including numbered examples
-and lists of related terms. Other headings, expanded templates and visual styling
-need separate checks.
+and lists of related terms. Expanded templates, more complex formatting and
+the appearance of the rendered page need separate checks.
 
 When an edition uses localized headings such as Tulu `ತುಳು`, pass
 `--definition-registry` with the `language-registry.tsv` used for that build.

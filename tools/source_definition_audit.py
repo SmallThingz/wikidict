@@ -66,6 +66,60 @@ def compiled_line(spans):
     return text.strip(), tuple((start - leading, end - leading, *action) for start, end, *action in links)
 
 
+def source_line(source, title):
+    plain = simple_line(source, title)
+    if plain is not None:
+        return (*plain, None)
+    # One balanced emphasis pair outside link syntax. Links may be entirely
+    # inside or outside the emphasis. Never interpret apostrophes in a target.
+    parts = re.split(r"('{2,})", source)
+    if len(parts) != 5:
+        return None
+    before, opening, marked, closing, after = parts
+    if opening != closing or opening not in ("''", "'''") or not marked.strip():
+        return None
+    unmarked = before + marked + after
+    plain = simple_line(unmarked, title)
+    if plain is None:
+        return None
+    boundaries = [len(before), len(before) + len(marked)]
+    display_offsets = boundaries.copy()
+    for link in LINK.finditer(unmarked):
+        for i, at in enumerate(boundaries):
+            if link.start() < at < link.end():
+                return None
+            if link.end() <= at:
+                display_offsets[i] -= len(link[0]) - len(link[2] or link[1])
+    return (*plain, (*display_offsets, 'italic' if opening == "''" else 'bold'))
+
+
+def compiled_emphasis(spans):
+    """Return the single visible emphasis range, if this block has exactly one."""
+    text = ''.join(span['text'] for span in spans)
+    first = len(text) - len(text.lstrip())
+    last = len(text.rstrip())
+    offset = 0
+    interval = None
+    for span in spans:
+        if span.get('trail'):
+            return None
+        start = max(offset, first)
+        offset += len(span['text'])
+        end = min(offset, last)
+        if start >= end or not (span.get('bold') or span.get('italic')):
+            continue
+        if span.get('bold') and span.get('italic'):
+            return None
+        style = 'bold' if span.get('bold') else 'italic'
+        if interval is None:
+            interval = (start - first, end - first, style)
+        elif interval[1:] == (start - first, style):
+            interval = (interval[0], end - first, style)
+        else:
+            return None
+    return interval
+
+
 def definitions(text, title, headings):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
@@ -81,7 +135,7 @@ def definitions(text, title, headings):
             owner = heading[1] if heading and heading[1] in headings else None
         if not owner or not line.startswith('#') or line.startswith(('##', '#:', '#*', '#;')):
             continue
-        witness = simple_line(line[1:].strip(), title)
+        witness = source_line(line[1:].strip(), title)
         if witness is not None:
             yield owner, number, *witness
 
@@ -112,7 +166,7 @@ class SourceDefinitions:
     def __init__(self, database, root, dumps, registry=None):
         self.db = sqlite3.connect(database)
         try:
-            self.db.execute('CREATE TABLE sense (title, owner, code, line, text, links, page, revision, matched INTEGER DEFAULT 0)')
+            self.db.execute('CREATE TABLE sense (title, owner, code, line, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
@@ -168,15 +222,16 @@ class SourceDefinitions:
                 revision = page.find('{*}revision')
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
-                self.db.executemany('INSERT INTO sense (title,owner,code,line,text,links,page,revision) VALUES (?,?,?,?,?,?,?,?)',
-                    ((title, owner, self.codes.get(owner), n, text, json.dumps(links, ensure_ascii=False), page.findtext('{*}id'), revision.findtext('{*}id'))
-                     for owner, n, text, links in definitions(revision.findtext('{*}text', ''), title, headings)))
+                self.db.executemany('INSERT INTO sense (title,owner,code,line,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?)',
+                    ((title, owner, self.codes.get(owner), n, text, json.dumps(links, ensure_ascii=False), json.dumps(emphasis) if emphasis else None,
+                      page.findtext('{*}id'), revision.findtext('{*}id'))
+                     for owner, n, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings)))
             root.remove(page)
 
     def observe(self, entry):
         if entry['kind'] != 'language':
             return
-        expected = self.db.execute('SELECT rowid,text,links FROM sense WHERE title=? AND '
+        expected = self.db.execute('SELECT rowid,text,links,emphasis FROM sense WHERE title=? AND '
                                    '(code=? OR (code IS NULL AND owner=?)) ORDER BY line',
                                    (entry['title'], entry.get('language_code'), entry['language'])).fetchall()
         if not expected:
@@ -184,18 +239,21 @@ class SourceDefinitions:
         # Plain and directly linked senses must occupy a definition block in
         # order. A coincidental match in a translation or example cannot pass.
         positions = defaultdict(list)
+        styled = any(emphasis is not None for _, _, _, emphasis in expected)
         position = 0
         for section in entry['sections']:
             for block in section['blocks']:
                 if block['kind'] == 'definition' and block.get('list_path') == '#':
                     witness = compiled_line(block['spans'])
                     if witness is not None:
-                        positions[witness].append(position)
+                        positions[(*witness, None)].append(position)
+                        if styled and (emphasis := compiled_emphasis(block['spans'])) is not None:
+                            positions[(*witness, emphasis)].append(position)
                     position += 1
         cursor = 0
-        for rowid, text, links in expected:
+        for rowid, text, links, emphasis in expected:
             actions = tuple(tuple(action) for action in json.loads(links))
-            candidates = positions.get((text, actions), ())
+            candidates = positions.get((text, actions, tuple(json.loads(emphasis)) if emphasis else None), ())
             index = bisect_left(candidates, cursor)
             if index < len(candidates):
                 self.db.execute('UPDATE sense SET matched=1 WHERE rowid=?', (rowid,))
@@ -203,17 +261,17 @@ class SourceDefinitions:
 
     def report(self):
         count, matched = self.db.execute('SELECT count(*),coalesce(sum(matched),0) FROM sense').fetchone()
-        missing = self.db.execute('SELECT title,owner,line,text,links,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
+        missing = self.db.execute('SELECT title,owner,line,text,links,emphasis,page,revision FROM sense WHERE matched=0 ORDER BY rowid LIMIT 32')
         examples = []
-        for title, owner, line, text, links, page, revision in missing:
+        for title, owner, line, text, links, emphasis, page, revision in missing:
             actions = json.loads(links)
             target = actions[0][2] if len(actions) == 1 and actions[0][:2] == [0, len(text)] else None
-            examples.append(dict(title=title, owner=owner, line=line, text=text, links=actions, target=target, page=page, revision=revision))
+            examples.append(dict(title=title, owner=owner, line=line, text=text, links=actions, emphasis=json.loads(emphasis) if emphasis else None, target=target, page=page, revision=revision))
         return dict(eligible=count, matched=matched, unmatched=count-matched, dump_sha1=self.inputs,
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples,
-                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def close(self):
         self.db.close()

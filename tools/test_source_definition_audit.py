@@ -7,13 +7,13 @@ from contextlib import closing
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from source_definition_audit import SourceDefinitions, compiled_line, definitions, localized_language_codes, simple_line
+from source_definition_audit import SourceDefinitions, compiled_emphasis, compiled_line, definitions, localized_language_codes, simple_line, source_line
 
 
 class SourceDefinitionTests(unittest.TestCase):
     def test_source_boundaries(self):
         text = '==English==\n===Noun===\n# [[cat|cats]]\n#: Example\n## subsense\n# [[self]]\n==Unknown==\n# stray meaning'
-        self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', ((0, 4, 'cat'),))])
+        self.assertEqual(list(definitions(text, 'self', {'English'})), [('English', 3, 'cats', ((0, 4, 'cat'),), None)])
         for prefix in ('{{header}}', '<nowiki>', '{|', '__TOC__'):
             self.assertEqual(list(definitions(prefix + '\n' + text, 'self', {'English'})), [])
         self.assertEqual(list(definitions(text + '\n# ________________', 'self', {'English'})),
@@ -53,13 +53,26 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertNotEqual(compiled_line([dict(kind='link', text=url, target=url)]), expected)
         self.assertIsNone(compiled_line([dict(kind='external_link', text=url, target=url + '/elsewhere')]))
 
+    def test_emphasis_uses_visible_unicode_offsets_and_preserves_link_targets(self):
+        self.assertEqual(source_line("[[këmbë|këmbë]] (''skaj'')", 'foot'),
+                         ('këmbë (skaj)', ((0, 5, 'këmbë'),), (7, 11, 'italic')))
+        self.assertEqual(source_line("'''[[حاسد]]''' کی جمع", 'حساد'),
+                         ('حاسد کی جمع', ((0, 4, 'حاسد'),), (0, 4, 'bold')))
+        for invalid in ("[[cat|''cat'']]", "''a'''", "''a'' and ''b''", "'''''x'''''", "''' '''"):
+            self.assertIsNone(source_line(invalid, 'other'))
+        spans = [dict(text='  a '), dict(text='猫', italic=True), dict(text='s', italic=True), dict(text='! ')]
+        self.assertEqual(compiled_emphasis(spans), (2, 4, 'italic'))
+        self.assertIsNone(compiled_emphasis([*spans, dict(text='another run', italic=True)]))
+        spans[2]['bold'] = True
+        self.assertIsNone(compiled_emphasis(spans))
+
     def test_real_dump_hash_owner_definition_actions_and_order(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             dump = root / 'wiki-date-pages-meta-current1.xml-p1p3.bz2'
             xml = ET.fromstring('<mediawiki><page><title>word</title><id>1</id><ns>0</ns>'
                                 '<revision><id>2</id><text/></revision></page></mediawiki>')
-            xml.find('page/revision/text').text = '==French==\n# first\n# [[second]]\n# first\n# prose'
+            xml.find('page/revision/text').text = "==French==\n# first\n# [[second]]\n# first\n# prose\n# ''[[chat]]''"
             dump.write_bytes(bz2.compress(ET.tostring(xml)))
             checksum = hashlib.sha1(dump.read_bytes()).hexdigest()
             member = ['wiki', 'date', dump.name, dump.stat().st_size, checksum]
@@ -74,7 +87,8 @@ class SourceDefinitionTests(unittest.TestCase):
 
             blocks = [block('definition', 'first'), block('definition', 'second', 'link', target='second'),
                       block('example', 'first'), block('definition', 'prose', 'external_link', target='elsewhere'),
-                      block('definition', 'prose', inline_action_group={'spans': [dict(kind='link', text='hidden', target='wrong')]})]
+                      block('definition', 'prose', inline_action_group={'spans': [dict(kind='link', text='hidden', target='wrong')]}),
+                      block('definition', 'chat', 'link', target='chat', bold=True)]
             with closing(SourceDefinitions('', root, [dump])) as audit:
                 record = dict(kind='language', title='word', language='English', sections=[dict(blocks=blocks)])
                 audit.observe(record)
@@ -82,8 +96,9 @@ class SourceDefinitionTests(unittest.TestCase):
                 record['language'] = 'French'
                 audit.observe(record)
                 report = audit.report()
-                self.assertEqual((report['eligible'], report['matched']), (4, 2))
-                self.assertEqual([row['line'] for row in report['examples']], [4, 5])
+                self.assertEqual((report['eligible'], report['matched']), (5, 2))
+                self.assertEqual([row['line'] for row in report['examples']], [4, 5, 6])
+                self.assertEqual(report['examples'][-1]['emphasis'], [0, 4, 'italic'])
             registry = root / 'language-registry.tsv'
             registry.write_text('# wikidict-language-registry-v2\n# mediawiki\nfr\tFrench\tFrançais\n')
             manifest['build_inputs']['auxiliary_snapshot_sha256'] = {
@@ -93,10 +108,13 @@ class SourceDefinitionTests(unittest.TestCase):
             with closing(SourceDefinitions('', root, [dump], registry)) as audit:
                 record['language_code'] = 'en'
                 audit.observe(record)
-                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (4, 0))
+                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (5, 0))
                 record.update(language='Français', language_code='fr')
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 2)
+                blocks[-1]['spans'][0].update(bold=False, italic=True)
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 3)
             registry.write_text(registry.read_text() + '\n')
             with self.assertRaisesRegex(ValueError, 'registry differs'):
                 SourceDefinitions('', root, [dump], registry)
