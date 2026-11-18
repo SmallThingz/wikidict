@@ -13,6 +13,19 @@ import subprocess
 from pathlib import Path
 
 
+def encoded_page_count(log_path):
+    pattern = re.compile(rb"^pages=(\d+) main_pages=\d+(?:\s|$)")
+    count = None
+    with log_path.open("rb") as stream:
+        for line in stream:
+            match = pattern.match(line)
+            if match:
+                if count is not None:
+                    raise ValueError("Encoder reported multiple corpus summaries")
+                count = int(match[1])
+    return count
+
+
 def validate(args):
     staging = args.output.with_name("." + args.output.name + ".building")
     if args.output.exists() or staging.exists():
@@ -42,10 +55,10 @@ def validate(args):
                             "--expander-root", str(args.expander_root), "--workers", str(args.workers)],
                            stdout=log, stderr=subprocess.STDOUT, check=True)
             log.flush()
-            summary = re.search(r"^pages=(\d+) main_pages=", log_path.read_text(), re.MULTILINE)
-            if summary is None or int(summary[1]) != status["expected_pages"]:
+            selected = encoded_page_count(log_path)
+            if selected != status["expected_pages"]:
                 raise ValueError("Encoder did not report the complete indexed corpus")
-            status["selected_pages"] = int(summary[1])
+            status["selected_pages"] = selected
             status["stage"] = "verify"
             report()
             # The verifier rejects marked bundles; this directory remains hidden

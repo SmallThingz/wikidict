@@ -14,7 +14,7 @@ from validate_corpus import validate
 class CorpusPublicationTest(unittest.TestCase):
     def test_publication_requires_complete_encoding_and_verification(self):
         Path(".tmp").mkdir(exist_ok=True)
-        for scenario in ("pass", "encode_failure", "short_corpus", "verify_failure"):
+        for scenario in ("pass", "encode_failure", "short_corpus", "missing_count", "repeated_count", "verify_failure"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory(dir=".tmp") as directory:
                 root = Path(directory)
                 (root / "page-index.tsv").write_text("# index\npage one\npage two\n")
@@ -26,7 +26,14 @@ class CorpusPublicationTest(unittest.TestCase):
                         self.assertTrue((root / ".published.building" / ".incomplete").exists())
                         if scenario == "encode_failure":
                             raise subprocess.CalledProcessError(1, argv)
-                        kwargs["stdout"].write(f"pages={1 if scenario == 'short_corpus' else 2} main_pages=2\n")
+                        log = kwargs["stdout"]
+                        log.buffer.write(b"diagnostic from source: \xff\n")
+                        if scenario == "missing_count":
+                            log.write("pages=2 main_pages=unavailable\n")
+                        else:
+                            log.write(f"pages={1 if scenario == 'short_corpus' else 2} main_pages=2\n")
+                        if scenario == "repeated_count":
+                            log.write("pages=1 main_pages=1\n")
                     else:
                         self.assertEqual(argv[0], "verifier")
                         self.assertFalse(args.output.exists())
