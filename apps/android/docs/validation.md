@@ -2,7 +2,23 @@
 
 ## Current canonical source and host qualification — 2026-11-18
 
-The canonical Android implementation includes commit
+The canonical Android implementation now includes commit
+`a22f5f12b1928421762907e5b6e5f50cb7c3c67d`, **Support detached inline overlay
+text in Android**. The 16 changed files comprise 12 main, two JVM-test and two
+instrumentation-test files, including three new files. The [FR commit bridge][fr-bridge]
+records exact equality with the qualified private inputs and the 13 earlier
+candidate edits already satisfied by current code. The canonical source inventory
+now contains 956 files. These FR changes are not in Package142.
+
+Host143 passed **17 freshly executed JVM correctness checks**, with no carried
+cases: ten new FR controls and seven maintained regressions covering atomic boxes,
+radius/opacity custody, rich-source projection and NBSP actions. It compiled all
+three Kotlin routes: 158 main, 145 unit-test and 94 instrumentation inputs. The
+14 relevant device controls (nine new and five maintained) were **compiled only**.
+The [Host143 audit][host143] retains the raw results and physical/source closure.
+The declared suite now contains 1,149 cases; no full 1,149-case run is claimed.
+
+The preceding canonical implementation includes commit
 `86f83199d63ecc5b24f54d5f71534113bd71bbdb`, **Support scoped MG inline decorations
 and cell opacity**. Its 31 files comprise 18 main, seven JVM-test and six
 instrumentation-test files, including 11 new files. The integration includes the
@@ -10,10 +26,10 @@ RectF API correction and both later fixture corrections. The exact file list and
 qualified private-to-canonical byte comparison are in the [commit bridge][mg-bridge].
 The retained `mg-tooltip-circle01/private-host01/application03.json` is the
 qualification input for this completed integration, not an unmerged product.
-All 953 files in Package142's canonical source manifest matched the worktree
-before this documentation-only update; no build input changed for this update.
+Package142's 953-file source manifest belongs to this MG baseline. Its product
+inputs remain distinct from the subsequent FR source integration above.
 
-The current JVM qualification covers **1,139 cases**: 1,137 correctness cases
+The preceding MG JVM qualification covers **1,139 cases**: 1,137 correctness cases
 and two benchmark-named cases, with no performance claim. Host140 ran all 1,139:
 1,137 passed and two test fixtures failed. Host141 then ran and passed the two
 corrected methods, carrying the exact 1,137 unchanged passing cases and their
@@ -28,7 +44,7 @@ to date and instrumentation evidence was carried on identical inputs. The eight
 new MG device controls were **compiled only**, not executed on a phone.
 
 **Package142 is the current verified unsigned host artifact.** Ordinary
-`assembleRelease`, R8 and release vital checks passed on the canonical source.
+`assembleRelease`, R8 and release vital checks passed on the `86f83199` MG source.
 The existing native libraries were verified and reused; no JNI build, JVM test
 or instrumentation run was repeated. Release vital checks do not constitute a
 new full-lint result. The [saved package audit][package142] records:
@@ -62,17 +78,23 @@ There are no retained current Android rendered frames for the new MG circles,
 nested decorations, NBSP or cell-opacity controls. Genuine producer/Writer/reader
 interoperability and whole-page fidelity remain separate from host qualification.
 
-The separate French positioned-overlay packet
-`android-pending-y01/inline-overlay40-01/coherent01/preparation01.json`
-(`cf93be81`) remains **private, source-reviewed and unrun**. It is not part of
-Package142 or its test counts; it requires a current sparse source reconciliation
-and its selected host qualification before integration. No additional integration
-dependency remains for the qualified MG31 changes above.
+The original French positioned-overlay packet (`cf93be81`) remains an immutable
+source-only record. Its current-base successor (`fd70b1ce`) supplied the 16 edits
+qualified by Host143 and integrated above; no source-integration dependency
+remains for that selected scope. Detached text retains logical source, copy and
+accessibility ordering while staying outside normal line breaking and advance.
+Wrapped placement uses the measured LTR first/last padding-fragment rule; wrapped
+RTL and bidi-split owners remain outside the supported scope. Genuine complete
+FR producer/Writer/reader interoperability and rendered phone behavior remain
+unqualified. No new APK was built for these changes, and no signing, installation
+or physical-access hold was changed.
 
 The evidence links below refer to retained local `.tmp` records, not published
 assets.
 
 [mg-bridge]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/android-mg-canonical-commit-bridge01.json
+[fr-bridge]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/android-fr-overlay-canonical-commit-bridge01.json
+[host143]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host143/saved-result-peer-reader01.json
 [host141]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host141/saved-result-peer-reader01.json
 [package142]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package142/saved-result-peer-reader01.json
 [apk142]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package142/artifacts/release-unsigned.apk
