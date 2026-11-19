@@ -31,6 +31,7 @@ class QGridLayout;
 class QResizeEvent;
 class QTabWidget;
 class QTextBrowser;
+class QTextDocument;
 class QPlainTextEdit;
 class QTimer;
 class QWidget;
@@ -81,6 +82,7 @@ private:
     void updateReaderLayout();
     void updateCompactNavigation();
     void showCompactPane(bool search);
+    void restoreCompactReadingScroll();
     void focusSearch(bool selectAll = false);
     void resizeEvent(QResizeEvent *event) override;
     void openRoot(const QString &root, const QString &word = {});
@@ -165,6 +167,13 @@ private:
     int wideSidebarWidth_ = -1;
     bool compactNavigation_ = false;
     bool compactSearchPane_ = false;
+    struct CompactReadingScroll {
+        QPointer<QTextDocument> document;
+        quint64 composition;
+        int horizontal;
+        int vertical;
+    };
+    std::optional<CompactReadingScroll> compactReadingScroll_;
     QTextBrowser *title_ = nullptr;
     QLabel *meta_ = nullptr;
     QTabWidget *entryTabs_ = nullptr;

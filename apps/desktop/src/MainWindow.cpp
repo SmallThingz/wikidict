@@ -4174,6 +4174,10 @@ void MainWindow::focusSearch(bool selectAll) {
 }
 
 void MainWindow::showCompactPane(bool search) {
+    if (compactNavigation_ && search && !compactSearchPane_ && readerContent_->isVisible()) {
+        compactReadingScroll_ = CompactReadingScroll{reading_->document(), readingComposition_,
+            reading_->horizontalScrollBar()->value(), reading_->verticalScrollBar()->value()};
+    }
     compactSearchPane_ = search;
     if (!compactNavigation_) return;
     searchPane_->setVisible(search);
@@ -4186,6 +4190,24 @@ void MainWindow::showCompactPane(bool search) {
         paneLayout->activate();
     searchPaneAction_->setChecked(search);
     readingPaneAction_->setChecked(!search);
+    if (!search) restoreCompactReadingScroll();
+}
+
+void MainWindow::restoreCompactReadingScroll() {
+    const auto saved = std::exchange(compactReadingScroll_, std::nullopt);
+    if (!saved) return;
+    const QPointer<MainWindow> guard(this);
+    const auto current = [&] {
+        return guard && saved->document && reading_->document() == saved->document
+            && readingComposition_ == saved->composition;
+    };
+    if (!current()) return;
+    // Showing a hidden splitter child delivers its deferred zero-width resize
+    // before the final geometry. Finish that layout before restoring its pan.
+    saved->document->documentLayout()->documentSize();
+    if (!current()) return;
+    reading_->horizontalScrollBar()->setValue(saved->horizontal);
+    if (current()) reading_->verticalScrollBar()->setValue(saved->vertical);
 }
 
 void MainWindow::updateCompactNavigation() {
@@ -4223,6 +4245,7 @@ void MainWindow::updateCompactNavigation() {
         }
     }
     updateReaderLayout();
+    if (!compact) restoreCompactReadingScroll();
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event) {
@@ -5727,6 +5750,10 @@ bool MainWindow::restoreVisitReading(const Visit &visit) {
     else focusSearch();
     // Cursor/focus restoration can scroll; the saved reading position wins.
     reading_->verticalScrollBar()->setValue(visit.scroll);
+    if (compactNavigation_ && compactSearchPane_) {
+        compactReadingScroll_ = CompactReadingScroll{reading_->document(), readingComposition_,
+            reading_->horizontalScrollBar()->value(), visit.scroll};
+    }
     return true;
 }
 

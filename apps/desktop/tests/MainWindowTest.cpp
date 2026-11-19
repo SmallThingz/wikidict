@@ -23308,6 +23308,92 @@ private slots:
         reader->verticalScrollBar()->setValue(0);
         QTest::keyClick(reader, Qt::Key_PageDown);
         QTRY_VERIFY(reader->verticalScrollBar()->value() > 0);
+        // The hidden splitter pane is temporarily zero-width. A long entry
+        // must keep its pan when returning, without reviving a link focus cue.
+        QJsonArray longBlocks;
+        for (int row = 0; row < 80; ++row) {
+            const QJsonObject span = row == 30
+                ? QJsonObject{{"kind", "link"}, {"text", "Compact pane link"}, {"target", "dog"}}
+                : QJsonObject{{"kind", "text"}, {"text", QStringLiteral("Long compact reading paragraph %1 with enough text to wrap normally.").arg(row)}};
+            longBlocks.append(QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{span}}});
+        }
+        QJsonObject longEntry = entry;
+        longEntry.insert("sections", QJsonArray{QJsonObject{{"title", "English"}, {"level", 2}, {"blocks", longBlocks}}});
+        const auto response = [](const QJsonObject &value) {
+            return QJsonDocument(QJsonObject{{"entries", QJsonArray{value}}}).toJson();
+        };
+        QVERIFY(window.renderResponse(response(longEntry), false));
+        reader->setFocus(); QTRY_VERIFY(reader->hasFocus());
+        QTest::keyClick(reader, Qt::Key_Home, Qt::ControlModifier);
+        for (int step = 0; step < 8 && reader->textCursor().selectedText() != QStringLiteral("Compact pane link"); ++step)
+            QTest::keyClick(reader, Qt::Key_Tab);
+        QCOMPARE(reader->textCursor().selectedText(), QStringLiteral("Compact pane link"));
+        QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+        QTextDocument *const longDocument = reader->document();
+        const QString longText = longDocument->toRawText();
+        const int linkPosition = reader->textCursor().position();
+        const int savedPan = reader->verticalScrollBar()->value();
+        const auto settlePane = [&] {
+            QTest::qWait(20); // include queued resize, reflow and scrollbar work
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+            QCoreApplication::processEvents();
+        };
+        const quint64 composition = window.readingComposition_;
+        const qsizetype longVisits = window.visits_.size();
+        QVERIFY(savedPan > 0);
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(search->hasFocus());
+        QVERIFY(!window.readerContent_->isVisible());
+        readingSwitch->setFocus(); QTRY_VERIFY(readingSwitch->hasFocus());
+        QTest::keyClick(readingSwitch, Qt::Key_Space);
+        QTRY_VERIFY(reader->hasFocus());
+        QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+        settlePane();
+        QVERIFY(!window.readingFloatLayoutScheduled_);
+        QCOMPARE(reader->verticalScrollBar()->value(), savedPan);
+        QCOMPARE(reader->document(), longDocument);
+        QCOMPARE(reader->document()->toRawText(), longText);
+        QCOMPARE(window.currentEntry_, longEntry);
+        QCOMPARE(window.readingComposition_, composition);
+        QCOMPARE(window.visits_.size(), longVisits);
+        QCOMPARE(reader->textCursor().position(), linkPosition);
+        QVERIFY(!reader->textCursor().hasSelection()); // ordinary native link focus-out
+        // Explicit history restoration wins over the pan captured by hiding.
+        MainWindow::Visit hiddenVisit; hiddenVisit.readerFocused = false; hiddenVisit.scroll = savedPan;
+        QVERIFY(window.restoreVisitReading(hiddenVisit));
+        QTRY_VERIFY(search->hasFocus());
+        readingSwitch->setFocus(); QTRY_VERIFY(readingSwitch->hasFocus());
+        QTest::keyClick(readingSwitch, Qt::Key_Space);
+        QTRY_VERIFY(reader->hasFocus()); settlePane();
+        QCOMPARE(reader->verticalScrollBar()->value(), savedPan);
+        QCOMPARE(reader->document()->toRawText(), longText);
+        // A new entry still resets to the top, even if the old pane was hidden.
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(search->hasFocus());
+        QJsonObject nextEntry = longEntry; nextEntry.insert("title", "Next compact entry");
+        QVERIFY(window.renderResponse(response(nextEntry), false));
+        readingSwitch->setFocus(); QTRY_VERIFY(readingSwitch->hasFocus());
+        QTest::keyClick(readingSwitch, Qt::Key_Space);
+        QTRY_VERIFY(window.readerContent_->isVisible() && reader->hasFocus());
+        settlePane(); QVERIFY(!window.readingFloatLayoutScheduled_);
+        QCOMPARE(window.currentEntry_, nextEntry);
+        QVERIFY(reader->verticalScrollBar()->maximum() > savedPan);
+        QCOMPARE(reader->verticalScrollBar()->value(), 0);
+        // Leaving compact mode reveals the same hidden reader through the wide
+        // layout path; consume the saved pan there too, then return normally.
+        reader->setFocus(); reader->verticalScrollBar()->setValue(savedPan);
+        QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+        QTRY_VERIFY(search->hasFocus());
+        window.resize(1000, 780);
+        QTRY_VERIFY(!window.compactNavigation_);
+        QTRY_VERIFY(!window.readingFloatLayoutScheduled_);
+        settlePane(); QVERIFY(!window.readingFloatLayoutScheduled_);
+        QCOMPARE(reader->verticalScrollBar()->value(), qMin(savedPan, reader->verticalScrollBar()->maximum()));
+        QVERIFY(!window.compactReadingScroll_);
+        reader->setFocus(); window.resize(480, 600);
+        QTRY_VERIFY(window.compactNavigation_);
+        QVERIFY(window.renderResponse(response(entry), false));
+        reader->setFocus(); QTRY_VERIFY(reader->hasFocus());
         QVERIFY(window.refreshReading());
         // Clicking the already-open suggestion must return to Reading without
         // re-rendering the entry or adding another visit.
