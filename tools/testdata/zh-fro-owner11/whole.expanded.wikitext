@@ -1,0 +1,31 @@
+==古法语==
+
+===词源1===
+* <strong class="error"><span class="scribunto-error">Lua error in Module:Etymology/templates: Wikibase sitelink snapshot missing entity=Q397 site=zhwiki</span></strong>
+
+====其他写法====
+* <span class="Latn" lang="fro">-{[[:historie#古法語|-{historie}-]]}-</span>
+
+====名词====
+<span class="headword-line"><strong class="Latn headword" lang="fro">-{estoire}-</strong>&nbsp;<span class="gender"><abbr title="陰性">陰</abbr></span> (間接格複數-{ <b class="Latn" lang="fro">[[:estoires#古法語|-{estoires}-]]</b>}-，主格單數-{ <b class="Latn" lang="fro"><strong class="selflink">estoire</strong></b>}-，主格複數-{ <b class="Latn" lang="fro">[[:estoires#古法語|-{estoires}-]]</b>}-)</span>[[Category:古法語詞元|ESTOIRE]][[Category:古法語名詞|ESTOIRE]][[Category:古法語陰性名詞|ESTOIRE]][[Category:古法語陰性名詞|ESTOIRE]][[Category:有詞條的頁面|ESTOIRE]][[Category:有1個詞條的頁面|ESTOIRE]]
+
+# [[历史]]
+# [[故事]]
+
+=====派生语汇=====
+* 盎格魯-諾曼語：<span class="Latn" lang="fro">-{[[:estorie#古法語|-{estorie}-]]}-</span><ul><li><span class="desc-arr" title="借詞">→</span> 中古英語：<span class="Latn" lang="enm">-{[[:storie#中古英語|-{storie}-]]}-</span></li></ul>
+* 法語：<span class="Latn" lang="fr">-{[[:histoire#法語|-{histoire}-]]}-</span>
+* 加羅語：<span class="Latn" lang="roa-gal">-{[[:istoèrr#加羅語|-{istoèrr}-]]}-</span><templatestyles src="Module:etymology/style.css"/>
+* 諾曼語：<span class="Latn" lang="nrf">-{[[:histouaire#諾曼語|-{histouaire}-]]}-</span><templatestyles src="Module:etymology/style.css"/>, <span class="Latn" lang="nrf">-{[[:histouère#諾曼語|-{histouère}-]]}-</span>, <span class="Latn" lang="nrf">-{[[:istwer#諾曼語|-{istwer}-]]}-</span>
+* <span class="desc-arr" title="借詞">→</span> 中古英語：<span class="Latn" lang="enm">-{[[:historie#中古英語|-{historie}-]]}-</span><ul><li>英語：<span class="Latn" lang="en">-{[[:history#英語|-{history}-]]}-</span></li><li>低地蘇格蘭語：<span class="Latn" lang="sco">-{[[:history#低地蘇格蘭語|-{history}-]]}-</span><templatestyles src="Module:etymology/style.css"/></li></ul>
+
+===词源2===
+源自<strong class="error"><span class="scribunto-error">Lua error in Module:Etymology/templates: Wikibase sitelink snapshot missing entity=Q35497 site=zhwiki</span></strong>，<ref><span class="citation-whole"><span class="cited-source">Euren, S. F. (<span class="None" lang="und">-{1896}-</span>), chapter 2, in <cite>Étude sur l'r français</cite>&lrm;<sup>[https://www.google.ca/books/edition/%C3%89tude_sur_l_r_fran%C3%A7ais/0wkTAAAAYAAJ?hl=en]</sup>, Upsala&#58; Imprimerie Almquist & Wiksell, [https://www.google.ca/books/edition/%C3%89tude_sur_l_r_fran%C3%A7ais/0wkTAAAAYAAJ?hl=en&gbpv=1&pg=PA22 page <span class="None" lang="und">-{22}-</span>]</span></span></ref><span class="Polyt" lang="grc">-{[[:στολή#古希臘語|-{στολή}-]]}-</span> <span class="mention-gloss-paren annotation-paren">(</span><span lang="grc-Latn" class="tr Latn">-{stolḗ}-</span><span class="mention-gloss-paren annotation-paren">)</span>[[Category:古希臘語紅鏈]][[Category:古希臘語紅鏈/l]]的指小词。
+
+====名词====
+<span class="headword-line"><strong class="Latn headword" lang="fro">-{estoire}-</strong></span>[[Category:古法語詞元|ESTOIRE]][[Category:古法語名词|ESTOIRE]][[Category:有詞條的頁面|ESTOIRE]][[Category:有1個詞條的頁面|ESTOIRE]]
+
+# <span class='form-of-definition use-with-mention'><span class='form-of-definition-link'><i class="Latn mention" lang="fro">-{[[:estoile#古法語|-{estoile}-]]}-</i></span>的另一種寫法</span>
+
+===参考资料===
+<div class="reflist"><references group="" responsive="0"/></div>

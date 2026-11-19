@@ -5693,7 +5693,7 @@ fn processMain(
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
-            .{},
+            reference_context,
             fallbacks,
             poem_phase,
             &.{},
@@ -6150,7 +6150,7 @@ fn processMain(
             codes.namespace_catalog,
             codes.behavior_switches,
             codes.image_options,
-            .{},
+            reference_context,
             fallbacks,
             poem_phase,
             &.{},
@@ -22994,4 +22994,80 @@ test "literal H1 banner partition retains exact category BR prefix and refuses e
             if (std.mem.startsWith(u8, case.prefix, "[[")) try std.testing.expect(!sourceBannerPartition(absent, raw, tracked, &authored, &rendered));
         }
     }
+}
+
+test "ordinary whole-page Writer preserves estoire's planned citation and later Greek link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/zh-gugli176/namespace-registry.tsv"));
+    defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/zh-gugli176/namespace-siteinfo.raw.json"));
+    ns.manual_conversion_context = try std.json.parseFromSliceLeaky(NS.ManualConversionContext, a,
+        @embedFile("testdata/zh-nested-attributes229/manual-context.json"), .{ .allocate = .alloc_always, .duplicate_field_behavior = .@"error" });
+    var behavior = try NS.behavior_switches.Registry.init(a, @embedFile("testdata/zh-piasu381-pitch/behavior-switches.tsv"),
+        ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256);
+    defer behavior.deinit();
+
+    // Exercise the whole-page ownership fallback with an unresolved heading.
+    // Language resolution is independent of the page's existing citation plan.
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .behavior_switches = &behavior };
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/estoire", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const raw = @embedFile("testdata/zh-estoire383/whole.raw.wikitext");
+    const expanded = @embedFile("testdata/zh-estoire383/whole.expanded.wikitext");
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "estoire", expanded, raw, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "Unclassified"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("estoire")) orelse return error.TestUnexpectedResult;
+    const stored = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+    try std.testing.expectEqualSlices(u8, record.payload, try blobs.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqualStrings("", stored.entry.language_code);
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.references.len);
+    const note = stored.entry.references[0];
+    try std.testing.expect(note.kind == .note and note.number == 1);
+    const page_url = "https://www.google.ca/books/edition/%C3%89tude_sur_l_r_fran%C3%A7ais/0wkTAAAAYAAJ?hl=en&gbpv=1&pg=PA22";
+    var cited_page = false;
+    var note_text: std.ArrayList(u8) = .empty;
+    for (note.spans) |span| {
+        try note_text.appendSlice(a, span.text);
+        if (std.mem.eql(u8, span.target, page_url)) cited_page = true;
+    }
+    try std.testing.expect(cited_page and std.mem.indexOf(u8, note_text.items, "Euren, S. F.") != null);
+
+    var markers: usize = 0;
+    var greek_actions: usize = 0;
+    var history = false;
+    var story = false;
+    for (stored.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        const target = if (span.target_fragment) |fragment|
+            try std.mem.concat(a, u8, &.{ span.target, "#", fragment }) else span.target;
+        if (std.mem.eql(u8, target, "#reference-1")) {
+            try std.testing.expect(span.kind == .link and span.role == .reference and span.superscript);
+            try std.testing.expectEqualStrings("[1]", span.text);
+            markers += 1;
+        }
+        if (std.mem.eql(u8, target, "στολή#古希臘語")) {
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqualStrings("στολή", span.text);
+            try std.testing.expectEqualStrings("grc", span.language);
+            greek_actions += 1;
+        }
+        if (std.mem.eql(u8, target, "历史")) history = true;
+        if (std.mem.eql(u8, target, "故事")) story = true;
+    };
+    try std.testing.expect(history and story);
+    try std.testing.expectEqual(@as(usize, 1), markers);
+    try std.testing.expectEqual(@as(usize, 1), greek_actions);
 }

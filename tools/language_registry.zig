@@ -1579,6 +1579,58 @@ pub const Registry = struct {
         return std.mem.eql(u8, attested, owner) and self.localHeadingMatches(attested, label);
     }
 
+    // This one reviewed Chinese spelling joins the captured local display to
+    // the independently parsed canonical field in Languages/data/3/f. Other
+    // translated UI names remain unrelated to heading ownership.
+    fn capturedZhOldFrench(self: *const Registry, a: std.mem.Allocator, source: []const u8, wiki: []const u8, language: []const u8) !bool {
+        if (!std.mem.eql(u8, wiki, "zhwiktionary") or !std.mem.eql(u8, language, "zh")) return false;
+        const original = (self.source_full_names.get("fro") orelse return false) orelse return false;
+        if (!std.mem.eql(u8, original, "古法語")) return false;
+        const local = self.resolveTrusted(original) orelse canonical_source: {
+            // The complete dump-local canonical module establishes Strong
+            // ownership without granting Trusted aliases. Its presence must not
+            // invalidate the independently captured positional/display proof.
+            const canonical = self.resolveCanonicalName(original) orelse return false;
+            const strong = self.resolveStrong(original) orelse return false;
+            if (!std.mem.eql(u8, canonical.code, strong.code) or
+                !self.sourceBannerNameAllowed("fro", original, false)) return false;
+            break :canonical_source strong;
+        };
+        if (!std.mem.eql(u8, local.code, "fro") or !self.sourceBannerNameAllowed("fro", "古法语", false)) return false;
+        var expected: [2]?usize = .{ null, null };
+        var counts: [2]usize = .{ 0, 0 };
+        var matched: [2]bool = .{ false, false };
+        var seen: [2]std.StringHashMapUnmanaged(void) = .{ .empty, .empty };
+        defer for (&seen) |*map| map.deinit(a);
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        while (lines.next()) |line| {
+            var fields = std.mem.splitScalar(u8, line, '\t');
+            const tag = fields.next() orelse continue;
+            const display = fields.next() orelse continue;
+            const scope = fields.next() orelse continue;
+            if (!std.mem.eql(u8, display, "zh")) continue;
+            const index: usize = if (std.mem.eql(u8, scope, "all")) 0 else if (std.mem.eql(u8, scope, "single")) 1 else continue;
+            if (std.mem.eql(u8, tag, "C")) {
+                if (expected[index] != null) return false;
+                expected[index] = std.fmt.parseInt(usize, fields.next() orelse return false, 10) catch return false;
+                if (expected[index].? > 20031 or fields.next() != null) return false;
+            } else if (std.mem.eql(u8, tag, "N")) {
+                const limit = expected[index] orelse return false;
+                const code_value = fields.next() orelse return false;
+                const name = try decodeAutonymName(a, fields.next() orelse return false);
+                if (fields.next() != null or counts[index] >= limit) return false;
+                counts[index] += 1;
+                const row = try seen[index].getOrPut(a, code_value);
+                if (row.found_existing) return false;
+                const old_french = std.mem.eql(u8, code_value, "fro");
+                const label = std.mem.eql(u8, name, "古法语");
+                if (old_french != label) return false;
+                if (old_french) matched[index] = true;
+            }
+        }
+        return matched[0] and matched[1] and counts[0] == expected[0].? and counts[1] == expected[1].?;
+    }
+
     /// Promote installed captured autonyms and their existing same-code ASCII
     /// first-letter capitals. Translated UI profiles are not heading proof.
     pub fn trustAutonymSnapshot(self: *Registry, source: []const u8, wiki: []const u8, date: []const u8, language: []const u8) !void {
@@ -1685,6 +1737,7 @@ pub const Registry = struct {
             if (count != n) return error.IncompleteLanguageNameProfile;
         }
         if (english_expected) |n| if (english_count != n) return error.IncompleteLanguageNameProfile;
+        const zh_old_french = try self.capturedZhOldFrench(a, source, wiki, language);
         // Validate the complete selected profile before changing any trust.
         // A code alias, missing label, ambiguous name or later local conflict
         // cannot acquire authority from this independent spelling evidence.
@@ -1747,6 +1800,7 @@ pub const Registry = struct {
                 }
             }
         }
+        if (zh_old_french) try self.addLocalAlias("古法语", "fro");
     }
 
     fn autonymCodeValid(code_value: []const u8) bool {
@@ -5971,4 +6025,89 @@ pub fn sourceNumberedPosTemplate(source: []const u8, role: usize) bool {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
     return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
+}
+
+test "captured Chinese Old French spelling requires complete source and profile agreement" {
+    const a = std.testing.allocator;
+    const header = "# wikidict-language-names-v1\n# wiki\tzhwiktionary\n# dump-date\t20261001\n# content-language\tzh\n";
+    const rows = "C\tzh\tall\t1\nN\tzh\tall\tfro\t古法语\nC\tzh\tsingle\t1\nN\tzh\tsingle\tfro\t古法语\n";
+    const tsv = "# content-language\tzh\n# mediawiki\nzh\t中文\tzh\tChinese\tzho\tchi\nfro\tOld French (842-ca. 1400)\tfro\nfr\tFrench\n";
+    const data = @embedFile("testdata/zh-fro-owner11/module-1363222.lua");
+    for (0..10) |arm| {
+        var registry = Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(tsv);
+        if (arm != 1) try positionalLanguageDataImport(&registry, data, "languages/data/3/f");
+        if (arm == 2) try registry.addLocalAlias("古法語", "fr");
+        if (arm == 3) try registry.addLocalAlias("古法语", "fr");
+        if (arm == 4) try registry.addTsv("fr\tFrench\t古法语\n");
+        if (arm == 5) try registry.addSourceFullName("fro", null);
+        const profile = switch (arm) {
+            6 => header ++ "C\tzh\tall\t1\nN\tzh\tall\tfro\t古法语\n",
+            7 => header ++ rows ++ "N\tzh\tsingle\tfr\t古法语\n",
+            8 => header ++ "C\tzh\tall\t2\nN\tzh\tall\tfro\t古法语\nN\tzh\tall\tfr\t古法语\nC\tzh\tsingle\t1\nN\tzh\tsingle\tfro\t古法语\n",
+            9 => header ++ "C\tzh\tall\t1\nN\tzh\tall\tfro\t古法语\nC\tzh\tsingle\t1\nN\tzh\tsingle\tfro\tOther\n",
+            else => header ++ rows,
+        };
+        try registry.trustAutonymSnapshot(profile, "zhwiktionary", "20261001", "zh");
+        if (arm == 0) {
+            const owner = registry.resolveTrusted("古法语") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("fro", owner.code);
+            try std.testing.expectEqualStrings("Old French (842-ca. 1400)", owner.heading);
+            try std.testing.expect(registry.resolveStrong("古法语") == null);
+            try registry.addLocalAlias("古法语", "fr");
+            try std.testing.expect(registry.resolveTrusted("古法语") == null);
+        } else if (arm == 3) {
+            // A conflicting explicit local alias stays French; this profile
+            // must neither erase that authority nor promote it to Old French.
+            const conflict = registry.resolveTrusted("古法语") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("fr", conflict.code);
+            try std.testing.expectEqualStrings("French", conflict.heading);
+        } else try std.testing.expect(registry.resolveTrusted("古法语") == null);
+    }
+    var foreign = Registry.empty(a); defer foreign.deinit();
+    try foreign.addTsv(tsv);
+    try positionalLanguageDataImport(&foreign, data, "languages/data/3/f");
+    const foreign_profile = "# wikidict-language-names-v1\n# wiki\tenwiktionary\n# dump-date\t20261001\n# content-language\tzh\n" ++ rows;
+    try foreign.trustAutonymSnapshot(foreign_profile, "enwiktionary", "20261001", "zh");
+    try std.testing.expect(foreign.resolveTrusted("古法语") == null);
+    const other = header ++ "C\tzh\tall\t1\nN\tzh\tall\tfr\t法语\nC\tzh\tsingle\t1\nN\tzh\tsingle\tfr\t法语\n";
+    try foreign.trustAutonymSnapshot(other, "zhwiktionary", "20261001", "zh");
+    try std.testing.expect(foreign.resolveTrusted("法语") == null);
+}
+
+test "captured Chinese spelling joins canonical source without generic trust or conflict loss" {
+    const a = std.testing.allocator;
+    const header = "# wikidict-language-names-v1\n# wiki\tzhwiktionary\n# dump-date\t20261001\n# content-language\tzh\n";
+    const rows = "C\tzh\tall\t1\nN\tzh\tall\tfro\t古法语\nC\tzh\tsingle\t1\nN\tzh\tsingle\tfro\t古法语\n";
+    for (0..10) |arm| {
+        var registry = Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(@embedFile("testdata/zh-fro-owner11/language-registry.tsv"));
+        try registry.addLua(@embedFile("testdata/zh-fro-canonical01/module-1368467.lua"));
+        if (arm != 1) try positionalLanguageDataImport(&registry, @embedFile("testdata/zh-fro-owner11/module-1363222.lua"), "languages/data/3/f");
+        if (arm == 2) try registry.addLua("return {[\"古法語\"]=\"fr\"}");
+        if (arm == 3) try registry.addLocalAlias("古法語", "fr");
+        if (arm == 4) try registry.addLocalAlias("古法语", "fr");
+        if (arm == 5) try registry.addSourceFullName("fro", null);
+        if (arm == 7) _ = registry.source_canonical_names.remove("古法語");
+        if (arm == 8) _ = registry.strong_names.remove("古法語");
+        if (arm == 9) try registry.english_added_aliases.put(registry.arena.allocator(), "古法語", {});
+        if (arm == 0) {
+            try std.testing.expect(registry.resolveTrusted("古法語") == null);
+            try std.testing.expectEqualStrings("fro", registry.resolveStrong("古法語").?.code);
+            try std.testing.expect(registry.resolveTrusted("古法语") == null);
+        }
+        const profile = if (arm == 6) header ++ "C\tzh\tall\t1\nN\tzh\tall\tfro\t古法语\n" else header ++ rows;
+        try registry.trustAutonymSnapshot(profile, "zhwiktionary", "20261001", "zh");
+        if (arm == 0) {
+            const owner = registry.resolveTrusted("古法语") orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("fro", owner.code);
+            try std.testing.expectEqualStrings("古法語", owner.heading);
+            try std.testing.expect(registry.resolveStrong("古法语") == null);
+            try std.testing.expect(registry.resolveTrusted("古法語") == null);
+            try registry.addLocalAlias("古法语", "fr");
+            try std.testing.expect(registry.resolveTrusted("古法语") == null);
+        } else if (arm == 4) {
+            try std.testing.expectEqualStrings("fr", registry.resolveTrusted("古法语").?.code);
+        } else try std.testing.expect(registry.resolveTrusted("古法语") == null);
+    }
 }

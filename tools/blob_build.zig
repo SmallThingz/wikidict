@@ -67239,3 +67239,167 @@ test "Finnish Writer separates exact authored Bwaidoka and Molima category owner
         }
     }
 }
+
+const ZhOldFrenchCaptured = struct {
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, snapshot: bool) !void {
+        try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));
+        const files = [_]struct { path: []const u8, data: []const u8 }{
+            .{ .path = "manifest.jsonl", .data = @embedFile("testdata/zh-fro-owner11/manifest.jsonl") },
+            .{ .path = "language-registry.tsv", .data = @embedFile("testdata/zh-fro-owner11/language-registry.tsv") },
+            .{ .path = "modules/1363192.lua", .data = @embedFile("testdata/zh-magal/module-1363192.lua") },
+            .{ .path = "modules/1363222.lua", .data = @embedFile("testdata/zh-fro-owner11/module-1363222.lua") },
+        };
+        for (files) |file| try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, file.path}), .data = file.data });
+        if (snapshot) try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "language-names.tsv"}), .data = @embedFile("testdata/zh-fro-owner11/language-names.tsv") });
+    }
+};
+
+test "normal Chinese metadata resolves estoire Old French and preserves complete Writer body and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/zh-gugli176/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/zh-gugli176/namespace-siteinfo.raw.json"));
+    ns.manual_conversion_context = try std.json.parseFromSliceLeaky(namespace_registry.ManualConversionContext, a,
+        @embedFile("testdata/zh-nested-attributes229/manual-context.json"), .{ .allocate = .alloc_always, .duplicate_field_behavior = .@"error" });
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, @embedFile("testdata/zh-piasu381-pitch/behavior-switches.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    const selected = try std.fs.path.join(a, &.{root, "selected"});
+    const omitted = try std.fs.path.join(a, &.{root, "without-names"});
+    try ZhOldFrenchCaptured.install(io, a, selected, true);
+    try ZhOldFrenchCaptured.install(io, a, omitted, false);
+    var registry = try loadLanguageRegistry(io, a, selected, &ns); defer registry.deinit();
+    var reference = try loadLanguageRegistry(io, a, omitted, &ns); defer reference.deinit();
+    try std.testing.expectEqualStrings("fro", reference.resolveTrusted("古法語").?.code);
+    try std.testing.expect(reference.resolveTrusted("古法语") == null);
+    const owner = registry.resolveTrusted("古法语") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fro", owner.code);
+    try std.testing.expectEqualStrings("Old French (842-ca. 1400)", owner.heading);
+    try std.testing.expect(registry.resolveStrong("古法语") == null);
+    // Independent source-attested owner for the complete-body comparison.
+    // The omitted snapshot itself above still supplies no simplified alias.
+    try reference.addLocalAlias("古法语", "fro");
+    const raw = @embedFile("testdata/zh-fro-owner11/whole.raw.wikitext");
+    const expanded = @embedFile("testdata/zh-fro-owner11/whole.expanded.wikitext");
+    try std.testing.expect(std.mem.indexOf(u8, raw, "==古法语==") != null);
+    const T = encoder.presentation_types;
+    var entries: [2]T.Entry = undefined;
+    for ([_]*language_registry.Registry{ &registry, &reference }, 0..) |current, arm| {
+        var codes = languageCodes(current, &ns); codes.behavior_switches = &behavior;
+        const output = try std.fmt.allocPrint(a, "{s}/writer-{d}", .{root, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "estoire", expanded, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        entries[arm] = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, "estoire");
+        try std.testing.expectEqualStrings("fro", entries[arm].language_code);
+        const stored: T.Stored = .{ .entry = entries[arm] };
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "estoire", .language, .{ .heading = owner.heading, .code = "fro" });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+    try std.testing.expectEqualDeep(entries[1], entries[0]);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entries[1] }), try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entries[0] }));
+    try std.testing.expectEqual(@as(usize, 1), entries[0].references.len);
+    var markers: usize = 0; var greek: usize = 0; var history = false; var story = false;
+    for (entries[0].sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        const target = if (span.target_fragment) |fragment| try std.mem.concat(a, u8, &.{span.target, "#", fragment}) else span.target;
+        if (std.mem.eql(u8, target, "#reference-1")) {
+            try std.testing.expect(span.kind == .link and span.role == .reference and span.superscript);
+            try std.testing.expectEqualStrings("[1]", span.text);
+            markers += 1;
+        }
+        if (std.mem.eql(u8, target, "στολή#古希臘語")) {
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqualStrings("στολή", span.text);
+            try std.testing.expectEqualStrings("grc", span.language);
+            greek += 1;
+        }
+        history = history or std.mem.eql(u8, target, "历史");
+        story = story or std.mem.eql(u8, target, "故事");
+    };
+    try std.testing.expectEqual(@as(usize, 1), markers);
+    try std.testing.expectEqual(@as(usize, 1), greek);
+    try std.testing.expect(history and story);
+}
+
+const ZhOldFrenchCanonicalCaptured = struct {
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, snapshot: bool) !void {
+        try ZhOldFrenchCaptured.install(io, a, root, snapshot);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "manifest.jsonl"}), .data = @embedFile("testdata/zh-fro-canonical01/manifest.jsonl") });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{root, "modules/1368467.lua"}), .data = @embedFile("testdata/zh-fro-canonical01/module-1368467.lua") });
+    }
+};
+test "normal Chinese canonical module preserves estoire complete owner body references and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/zh-gugli176/namespace-registry.tsv")); defer ns.deinit();
+    try ns.attachLanguageConversion(@embedFile("testdata/zh-gugli176/namespace-siteinfo.raw.json"));
+    ns.manual_conversion_context = try std.json.parseFromSliceLeaky(namespace_registry.ManualConversionContext, a,
+        @embedFile("testdata/zh-nested-attributes229/manual-context.json"), .{ .allocate = .alloc_always, .duplicate_field_behavior = .@"error" });
+    var behavior = try namespace_registry.behavior_switches.Registry.init(a, @embedFile("testdata/zh-piasu381-pitch/behavior-switches.tsv"), ns.wiki, ns.dump_date, ns.content_language, ns.source_sha256); defer behavior.deinit();
+    const selected = try std.fs.path.join(a, &.{root, "selected"});
+    const omitted = try std.fs.path.join(a, &.{root, "without-names"});
+    try ZhOldFrenchCanonicalCaptured.install(io, a, selected, true);
+    try ZhOldFrenchCanonicalCaptured.install(io, a, omitted, false);
+    var registry = try loadLanguageRegistry(io, a, selected, &ns); defer registry.deinit();
+    var reference = try loadLanguageRegistry(io, a, omitted, &ns); defer reference.deinit();
+    try std.testing.expect(reference.resolveTrusted("古法語") == null);
+    try std.testing.expectEqualStrings("fro", reference.resolveStrong("古法語").?.code);
+    try std.testing.expect(reference.resolveTrusted("古法语") == null);
+    const owner = registry.resolveTrusted("古法语") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fro", owner.code);
+    try std.testing.expectEqualStrings("古法語", owner.heading);
+    try std.testing.expect(registry.resolveStrong("古法语") == null);
+    // Independent source-attested owner for the complete-body comparison.
+    // The omitted snapshot itself above still supplies no simplified alias.
+    try reference.addLocalAlias("古法语", "fro");
+    const raw = @embedFile("testdata/zh-fro-owner11/whole.raw.wikitext");
+    const expanded = @embedFile("testdata/zh-fro-owner11/whole.expanded.wikitext");
+    try std.testing.expect(std.mem.indexOf(u8, raw, "==古法语==") != null);
+    const T = encoder.presentation_types;
+    var entries: [2]T.Entry = undefined;
+    for ([_]*language_registry.Registry{ &registry, &reference }, 0..) |current, arm| {
+        var codes = languageCodes(current, &ns); codes.behavior_switches = &behavior;
+        const output = try std.fmt.allocPrint(a, "{s}/writer-{d}", .{root, arm});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "estoire", expanded, raw, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        entries[arm] = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, "estoire");
+        try std.testing.expectEqualStrings("fro", entries[arm].language_code);
+        const stored: T.Stored = .{ .entry = entries[arm] };
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "estoire", .language, .{ .heading = owner.heading, .code = "fro" });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+    try std.testing.expectEqualDeep(entries[1], entries[0]);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entries[1] }), try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entries[0] }));
+    try std.testing.expectEqual(@as(usize, 1), entries[0].references.len);
+    var markers: usize = 0; var greek: usize = 0; var history = false; var story = false;
+    for (entries[0].sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        const target = if (span.target_fragment) |fragment| try std.mem.concat(a, u8, &.{span.target, "#", fragment}) else span.target;
+        if (std.mem.eql(u8, target, "#reference-1")) {
+            try std.testing.expect(span.kind == .link and span.role == .reference and span.superscript);
+            try std.testing.expectEqualStrings("[1]", span.text);
+            markers += 1;
+        }
+        if (std.mem.eql(u8, target, "στολή#古希臘語")) {
+            try std.testing.expectEqual(@as(usize, 1), markers);
+            try std.testing.expectEqualStrings("στολή", span.text);
+            try std.testing.expectEqualStrings("grc", span.language);
+            greek += 1;
+        }
+        history = history or std.mem.eql(u8, target, "历史");
+        story = story or std.mem.eql(u8, target, "故事");
+    };
+    try std.testing.expectEqual(@as(usize, 1), markers);
+    try std.testing.expectEqual(@as(usize, 1), greek);
+    try std.testing.expect(history and story);
+}
