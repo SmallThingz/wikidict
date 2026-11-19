@@ -2086,8 +2086,11 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
                 if (source_language_banner.decoratedCategoryLabel(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |label|
                     try registry.addSourceTemplateLabel(label, code);
             }
-            if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
+            if (source_language_banner.parse(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof| {
                 try registry.addSourceLanguageBanner(code, proof);
+            } else if (source_language_banner.categoryLinkedBoundary(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof| {
+                try registry.addSourceLanguageBoundary(code, proof);
+            }
             if (source_language_banner.parseParagraph(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |proof|
                 try registry.addSourceLanguageParagraph(code, proof);
         }
@@ -2341,6 +2344,18 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
             fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
                 return value.matchesSourceLanguageBanner(code_value, heading, level);
+            }
+        }.matches,
+        .source_banner_boundary_fn = struct {
+            fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.matchesSourceLanguageBoundary(code_value, heading, level);
+            }
+        }.matches,
+        .source_banner_prefix_fn = struct {
+            fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8, prefix: []const u8) bool {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.matchesSourceLanguageBannerPrefix(code_value, heading, level, prefix);
             }
         }.matches,
         .get_fn = struct {
@@ -66789,4 +66804,247 @@ test "normal template loader conditions local noun adjective roles on exact prov
         try std.testing.expect(registry.resolveStrong("নাম") == null);
         try std.testing.expect(registry.resolveStrong("বিশেষণ") == null);
     }
+}
+
+const ZaProvedPrefixTest = struct {
+    const providers = [_]struct { code: []const u8, page: u64, revision: u64, source: []const u8 }{
+        .{ .code = "en", .page = 8687, .revision = 11152, .source = @embedFile("testdata/za-prefix-owner/template-en-.wikitext") },
+        .{ .code = "fr", .page = 8695, .revision = 11166, .source = @embedFile("testdata/za-prefix-owner/template-fr-.wikitext") },
+        .{ .code = "de", .page = 8786, .revision = 11280, .source = @embedFile("testdata/za-prefix-owner/template-de-.wikitext") },
+        .{ .code = "es", .page = 8865, .revision = 11531, .source = @embedFile("testdata/za-prefix-owner/template-es-.wikitext") },
+    };
+    const pages = [_]struct { title: []const u8, first: []const u8, raw: []const u8 }{
+        .{ .title = "Australia", .first = "es", .raw = @embedFile("testdata/za-prefix-owner/page-Australia.wikitext") },
+        .{ .title = "Beijing", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-Beijing.wikitext") },
+        .{ .title = "Chongzuo", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-Chongzuo.wikitext") },
+        .{ .title = "France", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-France.wikitext") },
+        .{ .title = "Guangzhou", .first = "de", .raw = @embedFile("testdata/za-prefix-owner/page-Guangzhou.wikitext") },
+        .{ .title = "football", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-football.wikitext") },
+        .{ .title = "potassium", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-potassium.wikitext") },
+        .{ .title = "train", .first = "fr", .raw = @embedFile("testdata/za-prefix-owner/page-train.wikitext") },
+    };
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", @embedFile("testdata/za-prefix-owner/language-registry.tsv"));
+        var index: std.ArrayList(u8) = .empty;
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        for (providers, 0..) |provider, ordinal| {
+            try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\t模板:-{s}-\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{provider.code, provider.page, provider.revision}));
+            try templates.append(ordinal, provider.page, provider.revision, provider.source);
+        }
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", index.items);
+        try templates.finish(try std.fs.path.join(a, &.{root, "page-index.tsv"}));
+    }
+    fn expanded(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+        var result = raw;
+        for (providers) |provider| {
+            // These four complete selected bodies are static. This is explicit
+            // fixture instantiation, not a claimed saved Worker response.
+            const body = try std.mem.replaceOwned(u8, a, try std.mem.replaceOwned(u8, a, provider.source, "<includeonly>", ""), "</includeonly>", "");
+            result = try std.mem.replaceOwned(u8, a, result, try std.fmt.allocPrint(a, "{{{{-{s}-}}}}", .{provider.code}), body);
+        }
+        return result;
+    }
+    fn namespace(a: std.mem.Allocator) !namespace_registry.Registry {
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/za-prefix-owner/namespace-registry.tsv"));
+        try ns.attachInterwikiMap(@embedFile("testdata/za-prefix-owner/interwiki-map.tsv"));
+        return ns;
+    }
+
+};
+
+test "ZA exact selected static provider prefix requires body and heading agreement" {
+    const F = ZaProvedPrefixTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try F.install(io, a, root); var ns = try F.namespace(a); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    for (F.providers) |provider| {
+        const proof = source_language_banner.parse(provider.source, &ns, null, &registry, provider.code).?;
+        const prefix = proof.emitted_prefix.?;
+        const emitted = try std.mem.concat(a, u8, &.{prefix.category, prefix.suffix});
+        try std.testing.expect(registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level, emitted));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level + 1, emitted));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level, try std.mem.concat(a, u8, &.{"<br>", emitted})));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level, try std.mem.concat(a, u8, &.{prefix.category, "__NOEDITSECTION__\n"})));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, "different", proof.level, emitted));
+        var conflict = proof; conflict.emitted_prefix = .{ .category = prefix.category, .suffix = "__NOEDITSECTION__\n<br/>\n" };
+        try registry.addSourceLanguageBanner(provider.code, conflict);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(provider.code, proof.heading, proof.level));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level, emitted));
+        try registry.addSourceLanguageBanner(provider.code, proof);
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(provider.code, proof.heading, proof.level, emitted));
+    }
+}
+
+test "ZA eight complete selected multiowner pages retain their first provider break and full bodies" {
+    const F = ZaProvedPrefixTest; const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    for (F.pages) |page| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(io, a, root); var ns = try F.namespace(a); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+        const expanded = try F.expanded(a, page.raw);
+        const first_heading = std.mem.indexOf(u8, expanded, "=<div").?;
+        const second_heading = std.mem.indexOfPos(u8, expanded, first_heading + 1, "=<div").?;
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, page.title, expanded, page.raw, null);
+        const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.fallback_pages);
+        for ([_][]const u8{page.first, "en"}, 0..) |code, owner_index| {
+            const owner = registry.resolve(code).?;
+            const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, page.title);
+            const region = if (owner_index == 0) expanded[0..second_heading] else expanded[second_heading..];
+            var fallback: encoder.presentation_document.Fallbacks = .{};
+            const expected_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, page.title, .language, owner.heading, code, region, null, .{}, &ns, &fallback);
+            const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, page.title, .language, .{.heading=owner.heading,.code=code});
+            try std.testing.expectEqualDeep(expected.entry, actual);
+            const stored: T.Stored = .{.entry=actual}; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+            const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, page.title, .language, .{.heading=owner.heading,.code=code});
+            try std.testing.expectEqualDeep(stored, decoded);
+            try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+            if (owner_index == 0) {
+                try std.testing.expect(actual.sections.len >= 2);
+                var breaks: usize = 0;
+                for (actual.sections[0].blocks) |block| for (block.spans) |span| { if (span.kind == .line_break) breaks += 1; };
+                try std.testing.expectEqual(@as(usize, 1), breaks);
+            }
+        }
+    }
+}
+
+test "ZA unproved or independent prefixes retain the existing unowned source fallback" {
+    const F = ZaProvedPrefixTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const page = F.pages[2]; // Complete actual Chongzuo, the shortest two-owner page.
+    for ([_]enum { no_callback, wrong_prefix, independent }{ .no_callback, .wrong_prefix, .independent }) |mode| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(io, a, root); var ns = try F.namespace(a); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); var codes = languageCodes(&registry, &ns);
+        var expanded = try F.expanded(a, page.raw); var raw = page.raw;
+        if (mode == .no_callback) codes.source_banner_prefix_fn = null;
+        if (mode == .wrong_prefix) expanded = try std.mem.replaceOwned(u8, a, expanded, "[[Category:Fazyij]]", "[[Category:Different]]");
+        if (mode == .independent) { raw = try std.mem.concat(a, u8, &.{"Before [[independent]]\n", raw}); expanded = try std.mem.concat(a, u8, &.{"Before [[independent]]\n", expanded}); }
+        const prefix_end = std.mem.indexOf(u8, expanded, "=<div").?;
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{.id=0,.kind=.language}, page.title, expanded, raw, null);
+        const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 3), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 1), stats.fallback_pages);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", page.title);
+        var fallback: encoder.presentation_document.Fallbacks = .{};
+        const bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, page.title, .language, "Unclassified", "", expanded[0..prefix_end], null, .{}, &ns, &fallback);
+        const expected = try encoder.presentation_codec.decodeAlloc(a, bytes, page.title, .language, .{.heading="Unclassified",.code=""});
+        try std.testing.expectEqualDeep(expected.entry, actual);
+    }
+}
+
+
+const IuCategoryBannerTest = struct {
+    const ns_source = @embedFile("testdata/iu-category-banner/namespace.tsv");
+    const registry_source = @embedFile("testdata/iu-category-banner/registry.tsv");
+    const en = @embedFile("testdata/iu-category-banner/en-template.wikitext");
+    const es = @embedFile("testdata/iu-category-banner/es-template.wikitext");
+    const eo = @embedFile("testdata/iu-category-banner/eo-template.wikitext");
+    const iu = @embedFile("testdata/iu-category-banner/iu-template.wikitext");
+    const mul = @embedFile("testdata/iu-category-banner/mul-template.wikitext");
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, code: []const u8, body: []const u8, selected: bool) !void {
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", registry_source);
+        const title = if (selected) try std.fmt.allocPrint(a, "Template:-{s}-", .{code}) else "Template:unrelated";
+        const row = try std.fmt.allocPrint(a, "0\t0\t{s}\t\t2005\t9670\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{title});
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", row);
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        try templates.append(0, 2005, 9670, body);
+        try templates.finish(try std.fs.path.join(a, &.{root, "page-index.tsv"}));
+    }
+    // Source-instantiated fixture only: select the exact main-namespace branch
+    // in the retained complete provider. This is not a captured expanded page.
+    fn expanded(a: std.mem.Allocator, raw: []const u8, code: []const u8, provider: []const u8) ![]const u8 {
+        const prefix = "__NOEDITSECTION__\n";
+        const at = std.mem.indexOf(u8, provider, "<includeonly>") orelse return error.TestUnexpectedResult;
+        const line = provider[prefix.len..at];
+        const label = line[7 .. line.len - 7];
+        const rendered = try std.fmt.allocPrint(a, "{s}{s}\n[[Category:{s}]]", .{prefix, line, label});
+        const marker = try std.fmt.allocPrint(a, "{{{{-{s}-}}}}", .{code});
+        return std.mem.replaceOwned(u8, a, raw, marker, rendered);
+    }
+};
+
+
+test "IU linked category declaration proves source banner only and rejects conflicting or dynamic owners" {
+    const F = IuCategoryBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, F.ns_source); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    try TpiStaticCategoryOwnerTest.hash(F.en, "8fab33a4f9f00e3f1a0c1b82921767e7873bae03a70e77f9aaefd5d95d6b9aa3");
+    try TpiStaticCategoryOwnerTest.hash(F.es, "31029d601b6914cba75a6197350fbacc612ff5b34439187c5dba0d3019e4f47a");
+    for ([_]struct { code: []const u8, source: []const u8, label: []const u8 }{
+        .{ .code = "en", .source = F.en, .label = "ᖃᓪᓗᓈᑎᑐᑦ" }, .{ .code = "es", .source = F.es, .label = "ᓯᐸᐃᓂᑎᑐᑦ" },
+        .{ .code = "eo", .source = F.eo, .label = "ᐃᓯᐱᕋᓐᑐ" },
+    }) |case| {
+        const proof = source_language_banner.parse(case.source, &ns, null, &registry, case.code) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings(case.label, proof.label);
+        try std.testing.expectEqualStrings(case.label, proof.target);
+        try std.testing.expectEqual(@as(u8, 2), proof.level);
+        try std.testing.expectEqual(.category_declaration, proof.authority);
+        try registry.addSourceLanguageBanner(case.code, proof);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(case.code, proof.heading, 2));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(case.code, proof.heading, 1));
+        try std.testing.expect(registry.resolve(case.label) == null);
+        try std.testing.expect(registry.resolveTrusted(case.label) == null);
+    }
+    try std.testing.expect(source_language_banner.parse(F.iu, &ns, null, &registry, "iu") == null);
+    try std.testing.expectEqualStrings("ike-cans", registry.resolve("ᐃᓄᒃᑎᑐᑦ").?.code);
+    try std.testing.expect(source_language_banner.parse(F.mul, &ns, null, &registry, "mul") == null);
+    try std.testing.expect(source_language_banner.parse(F.en, &ns, null, &registry, "not-a-code") == null);
+    for ([_][2][]const u8{
+        .{ "__NOEDITSECTION__", "__TOC__" }, .{ "== ''[[", "=== ''[[" },
+        .{ "[[ᖃᓪᓗᓈᑎᑐᑦ]]", "[[ᖃᓪᓗᓈᑎᑐᑦ|other]]" }, .{ "[[ᖃᓪᓗᓈᑎᑐᑦ]]", "[[ᖃᓪᓗᓈᑎᑐᑦ#part]]" },
+        .{ "[[ᖃᓪᓗᓈᑎᑐᑦ]]", "[[{{dynamic}}]]" }, .{ "[[ᖃᓪᓗᓈᑎᑐᑦ]]", "[[English]]" },
+        .{ "Category:ᖃᓪᓗᓈᑎᑐᑦ", "Category:other" }, .{ "Category:ᖃᓪᓗᓈᑎᑐᑦ", ":Category:ᖃᓪᓗᓈᑎᑐᑦ" },
+        .{ "{{NAMESPACE}}", "{{PAGENAME}}" }, .{ "#ifeq:", "#if:" },
+        .{ "||[[", "|Main|[[" }, .{ "|}}</includeonly>", "|visible}}</includeonly>" },
+        .{ "</includeonly>", "</includeonly>\nextra" }, .{ "<includeonly>", "<onlyinclude>" },
+    }) |mutation| {
+        try std.testing.expect(std.mem.indexOf(u8, F.en, mutation[0]) != null);
+        const changed = try std.mem.replaceOwned(u8, a, F.en, mutation[0], mutation[1]);
+        try std.testing.expect(source_language_banner.parse(changed, &ns, null, &registry, "en") == null);
+    }
+    try registry.addLocalAlias("ᖃᓪᓗᓈᑎᑐᑦ", "es");
+    try std.testing.expect(source_language_banner.parse(F.en, &ns, null, &registry, "en") == null);
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("en", "''[[ᖃᓪᓗᓈᑎᑐᑦ]]''", 2));
+}
+
+
+test "IU conflicting category declaration retains only exact boundary and never becomes an owner alias" {
+    const F = IuCategoryBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try namespace_registry.Registry.init(a, F.ns_source); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    try std.testing.expect(source_language_banner.parse(F.iu, &ns, null, &registry, "iu") == null);
+    const proof = source_language_banner.categoryLinkedBoundary(F.iu, &ns, null, &registry, "iu") orelse return error.TestUnexpectedResult;
+    try registry.addSourceLanguageBoundary("iu", proof);
+    try std.testing.expect(registry.matchesSourceLanguageBoundary("iu", proof.heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("iu", proof.heading, 2));
+    try std.testing.expectEqualStrings("ike-cans", registry.resolve(proof.label).?.code);
+    try std.testing.expect(!registry.matchesSourceLanguageBoundary("fr", proof.heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBoundary("iu", proof.heading, 3));
+    try std.testing.expect(!registry.matchesSourceLanguageBoundary("iu", "other", 2));
+    try std.testing.expect(source_language_banner.categoryLinkedBoundary(F.mul, &ns, null, &registry, "mul") == null);
+    try std.testing.expect(source_language_banner.categoryLinkedBoundary(F.iu, &ns, null, &registry, "unknown-code") == null);
+    for ([_][2][]const u8{
+        .{ "__NOEDITSECTION__", "__TOC__" }, .{ "{{NAMESPACE}}", "{{PAGENAME}}" },
+        .{ "Category:", ":Category:" }, .{ "|}}</includeonly>", "|visible}}</includeonly>" },
+        .{ "</includeonly>", "</includeonly>\nextra" },
+    }) |mutation| {
+        const changed = try std.mem.replaceOwned(u8, a, F.iu, mutation[0], mutation[1]);
+        try std.testing.expect(source_language_banner.categoryLinkedBoundary(changed, &ns, null, &registry, "iu") == null);
+    }
+    var conflicting = proof; conflicting.heading = "other";
+    try registry.addSourceLanguageBoundary("iu", conflicting);
+    try std.testing.expect(!registry.matchesSourceLanguageBoundary("iu", proof.heading, 2));
+    try registry.addSourceLanguageBoundary("iu", proof);
+    try std.testing.expect(!registry.matchesSourceLanguageBoundary("iu", proof.heading, 2));
 }

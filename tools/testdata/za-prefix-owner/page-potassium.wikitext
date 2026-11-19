@@ -1,0 +1,44 @@
+{{-fr-}}
+'''potassium''' ''m''
+
+# [[gyaz]]
+
+{{-en-}}
+'''potassium''' 
+
+# [[gyaz]]
+
+[[ast:potassium]]
+[[cs:potassium]]
+[[cy:potassium]]
+[[de:potassium]]
+[[el:potassium]]
+[[en:potassium]]
+[[et:potassium]]
+[[eu:potassium]]
+[[fa:potassium]]
+[[fi:potassium]]
+[[fr:potassium]]
+[[hu:potassium]]
+[[id:potassium]]
+[[io:potassium]]
+[[ja:potassium]]
+[[kk:potassium]]
+[[kn:potassium]]
+[[ko:potassium]]
+[[la:potassium]]
+[[lt:potassium]]
+[[mg:potassium]]
+[[nl:potassium]]
+[[nn:potassium]]
+[[no:potassium]]
+[[pl:potassium]]
+[[pt:potassium]]
+[[ro:potassium]]
+[[ru:potassium]]
+[[simple:potassium]]
+[[sv:potassium]]
+[[ta:potassium]]
+[[tr:potassium]]
+[[vi:potassium]]
+[[zh:potassium]]

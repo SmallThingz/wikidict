@@ -38,7 +38,8 @@ fn hiddenCategory(source: []const u8, ns: *const namespaces.Registry, behavior: 
 pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
     return parseKnownNames(source, ns, behavior, registry, code) orelse
         parseFlaggedName(source, ns, behavior, registry, code) orelse
-        parseLiteralCode(source, ns, behavior, registry, code);
+        parseLiteralCode(source, ns, behavior, registry, code) orelse
+        parseCategoryLinkedHeading(source, ns, behavior, registry, code);
 }
 
 // A source-authenticated literal banner may prefix its known language name
@@ -256,6 +257,16 @@ fn parseLiteralCode(source: []const u8, ns: *const namespaces.Registry, behavior
         const parsed = syntax.controlHeading(line, null) orelse return null;
         if (parsed.level < 1 or parsed.level > 2) return null;
         result = literalCodeHeading(parsed.title, parsed.level, behavior, registry, code) orelse return null;
+        // The parser above proves the complete static body. Retain only this
+        // exact inclusion projection; neither arbitrary prefix text nor a later
+        // matching heading can manufacture a template-to-prefix association.
+        if (leading_break and std.mem.startsWith(u8, source, "<includeonly>")) {
+            const begin = "<includeonly>".len;
+            const close = std.mem.indexOf(u8, source, "</includeonly>") orelse return null;
+            const after = close + "</includeonly>".len;
+            if (after <= cursor and hiddenCategory(source[begin..close], ns, behavior))
+                result.?.emitted_prefix = .{ .category = source[begin..close], .suffix = source[after..cursor] };
+        }
         cursor = end;
     }
     return result;
@@ -493,4 +504,43 @@ pub fn decoratedCategoryLabel(source: []const u8, ns: *const namespaces.Registry
     // onlyinclude, parameters, nested tags, or additional emitted content.
     if (!hiddenCategory(tail["<noinclude>".len .. tail.len - "</noinclude>".len], ns, behavior)) return null;
     return label;
+}
+
+
+fn parseCategoryLinkedHeading(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    return categoryLinkedDeclaration(source, ns, behavior, registry, code, false);
+}
+
+
+pub fn categoryLinkedBoundary(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    return categoryLinkedDeclaration(source, ns, behavior, registry, code, true);
+}
+
+
+fn categoryLinkedDeclaration(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8, boundary_only: bool) ?languages.SourceLanguageBanner {
+    if (source.len > 4096 or !registry.codes.contains(code)) return null;
+    const control = "__NOEDITSECTION__";
+    if (!std.mem.startsWith(u8, source, control ++ "\n")) return null;
+    const control_end = (controlAt(behavior, source, 0) catch return null) orelse return null;
+    if (control_end != control.len) return null;
+    const input = source[control.len + 1 ..];
+    const suffix = "<includeonly>\n{{#ifeq:{{NAMESPACE}}||";
+    const cut = std.mem.indexOf(u8, input, suffix) orelse return null;
+    const line = input[0..cut];
+    if (!std.mem.startsWith(u8, line, "== ''[[") or !std.mem.endsWith(u8, line, "]]'' ==")) return null;
+    const label = line[7 .. line.len - 7];
+    if (!plain(label) or label.len > 256 or !std.unicode.utf8ValidateSlice(label) or
+        !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or std.mem.indexOfAny(u8, label, ":#") != null or
+        std.mem.indexOf(u8, label, "__") != null or containsControl(behavior, label) or
+        (!boundary_only and !registry.sourceBannerCategoryNameCompatible(code, label))) return null;
+    const tail = input[cut + suffix.len ..];
+    const close = "|}}</includeonly>";
+    if (!std.mem.endsWith(u8, tail, close)) return null;
+    const category = tail[0 .. tail.len - close.len];
+    if (!hiddenCategory(category, ns, behavior) or std.mem.indexOfScalar(u8, category, '|') != null or
+        !std.mem.eql(u8, category, std.mem.trim(u8, category, " \t\r\n"))) return null;
+    if (!std.mem.eql(u8, ns.ofTitle(category[2 .. category.len - 2]).text, label)) return null;
+    const heading = syntax.controlHeading(line, null) orelse return null;
+    if (heading.level != 2) return null;
+    return .{ .heading = heading.title, .level = 2, .target = label, .label = label, .authority = .category_declaration };
 }

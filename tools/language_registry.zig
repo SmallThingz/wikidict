@@ -54,9 +54,28 @@ const DerivedPreferredName = struct {
     code: []const u8,
 };
 
+pub const SourceLanguageBannerPrefix = struct {
+    category: []const u8,
+    suffix: []const u8,
+
+    pub fn matches(self: SourceLanguageBannerPrefix, emitted: []const u8) bool {
+        return emitted.len == self.category.len + self.suffix.len and
+            std.mem.startsWith(u8, emitted, self.category) and
+            std.mem.eql(u8, emitted[self.category.len..], self.suffix);
+    }
+
+    fn same(left: ?SourceLanguageBannerPrefix, right: ?SourceLanguageBannerPrefix) bool {
+        const a = left orelse return right == null;
+        const b = right orelse return false;
+        return std.mem.eql(u8, a.category, b.category) and std.mem.eql(u8, a.suffix, b.suffix);
+    }
+};
+
 pub const SourceLanguageBanner = struct {
     heading: []const u8, level: u8, target: []const u8, label: []const u8,
-    authority: enum { known_names, literal_code } = .known_names,
+    authority: enum { known_names, literal_code, category_declaration } = .known_names,
+    // Exact static transclusion bytes before this provider's own heading.
+    emitted_prefix: ?SourceLanguageBannerPrefix = null,
 };
 
 pub const SourceLanguageParagraph = struct { label: []const u8, category: []const u8 };
@@ -328,6 +347,9 @@ pub const Registry = struct {
     pub fn sourceBannerLiteralCodeNameCompatible(self: *const Registry, code_value: []const u8, value: []const u8) bool {
         return self.sourceBannerNameAllowed(code_value, value, false);
     }
+    pub fn sourceBannerCategoryNameCompatible(self: *const Registry, code_value: []const u8, value: []const u8) bool {
+        return self.sourceBannerNameAllowed(code_value, value, false);
+    }
     fn sourceBannerNameAllowed(self: *const Registry, code_value: []const u8, value: []const u8, require_known: bool) bool {
         if (!self.codes.contains(code_value) or value.len == 0) return false;
         var found = false;
@@ -360,10 +382,30 @@ pub const Registry = struct {
     }
     pub fn addSourceLanguageBanner(self: *Registry, code_value: []const u8, proof: SourceLanguageBanner) !void {
         if (!self.sourceBannerNamesAllowed(code_value, proof)) return;
+        try self.retainSourceLanguageBanner(code_value, proof);
+    }
+    /// A complete category declaration still proves its physical boundary
+    /// when its registered code and local name disagree. Retain the same
+    /// immutable proof, but the ordinary owner matcher must continue to refuse.
+    pub fn addSourceLanguageBoundary(self: *Registry, code_value: []const u8, proof: SourceLanguageBanner) !void {
+        if (proof.authority != .category_declaration or !self.codes.contains(code_value)) return;
+        try self.retainSourceLanguageBanner(code_value, proof);
+    }
+    pub fn matchesSourceLanguageBoundary(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8) bool {
+        const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
+        return proof.authority == .category_declaration and proof.level == level and std.mem.eql(u8, proof.heading, heading);
+    }
+    fn retainSourceLanguageBanner(self: *Registry, code_value: []const u8, proof: SourceLanguageBanner) !void {
         if (self.source_banners.getPtr(code_value)) |stored| {
             if (stored.*) |previous| {
                 if (previous.authority != proof.authority or previous.level != proof.level or !std.mem.eql(u8, previous.heading, proof.heading) or
-                    !std.mem.eql(u8, previous.target, proof.target) or !std.mem.eql(u8, previous.label, proof.label)) stored.* = null;
+                    !std.mem.eql(u8, previous.target, proof.target) or !std.mem.eql(u8, previous.label, proof.label)) {
+                    stored.* = null;
+                } else if (!SourceLanguageBannerPrefix.same(previous.emitted_prefix, proof.emitted_prefix)) {
+                    // Conflicting prelude bodies do not erase an otherwise exact
+                    // heading, but can never grant that heading another prefix.
+                    stored.*.?.emitted_prefix = null;
+                }
             }
             return;
         }
@@ -372,7 +414,18 @@ pub const Registry = struct {
             .heading = try a.dupe(u8, proof.heading), .level = proof.level,
             .target = try a.dupe(u8, proof.target), .label = try a.dupe(u8, proof.label),
             .authority = proof.authority,
+            .emitted_prefix = if (proof.emitted_prefix) |prefix| .{
+                .category = try a.dupe(u8, prefix.category),
+                .suffix = try a.dupe(u8, prefix.suffix),
+            } else null,
         });
+    }
+
+    pub fn matchesSourceLanguageBannerPrefix(self: *const Registry, code_value: []const u8, heading: []const u8, level: u8, emitted: []const u8) bool {
+        if (!self.matchesSourceLanguageBanner(code_value, heading, level)) return false;
+        const proof = (self.source_banners.get(code_value) orelse return false) orelse return false;
+        const prefix = proof.emitted_prefix orelse return false;
+        return prefix.matches(emitted);
     }
     pub fn addSourceLinkedHeading(self: *Registry, proof: SourceLinkedHeading) !void {
         if (self.source_linked_heading_conflict) return;

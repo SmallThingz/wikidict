@@ -615,3 +615,10 @@ src/encoder/testdata/sr-ji-mul210/common.css -whitespace
 # Corsican template captures retain their authenticated trailing spaces.
 src/encoder/testdata/co-pos-labels/template-verb.wikitext -text whitespace=-blank-at-eol
 src/encoder/testdata/co-pos-labels/template-adj.wikitext -text whitespace=-blank-at-eol
+# Retained ZA source and registry fixtures preserve their authenticated trailing bytes.
+tools/testdata/za-prefix-owner/language-registry.tsv whitespace=-blank-at-eol
+tools/testdata/za-prefix-owner/page-Australia.wikitext whitespace=-blank-at-eol
+tools/testdata/za-prefix-owner/page-France.wikitext whitespace=-blank-at-eol
+tools/testdata/za-prefix-owner/page-football.wikitext whitespace=-blank-at-eol
+tools/testdata/za-prefix-owner/page-potassium.wikitext whitespace=-blank-at-eol
+tools/testdata/za-prefix-owner/page-train.wikitext whitespace=-blank-at-eol

@@ -1,0 +1,3 @@
+__NOEDITSECTION__
+== ''[[ᓯᐸᐃᓂᑎᑐᑦ]]'' ==<includeonly>
+{{#ifeq:{{NAMESPACE}}||[[Category:ᓯᐸᐃᓂᑎᑐᑦ]]|}}</includeonly>
