@@ -68,6 +68,7 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'tools/native_qualification.py':b'standalone native qualification',
             'tools/test_native_qualification.py':b'qualification controls',
             'tools/verify_presentation.py':b'standalone finished-dictionary verifier',
+            'tools/audit_checkpoint.py':b'resumable finished-dictionary audit',
             'tools/test_verify_presentation.py':b'presentation verifier controls',
             'tools/source_definition_audit.py':b'compare source and decoded entries',
             'tools/test_source_definition_audit.py':b'source comparison controls',
@@ -116,6 +117,7 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
     def test_qualification_edits_reuse_workspace_but_keep_audit_and_publication_guards(self):
         for name in ('tools/native_qualification.py', 'tools/test_native_qualification.py',
                      'tools/verify_presentation.py', 'tools/test_verify_presentation.py',
+                     'tools/audit_checkpoint.py',
                      'tools/source_definition_audit.py', 'tools/test_source_definition_audit.py'):
             with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);sources,registry,items=self.fixture(root)

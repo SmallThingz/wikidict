@@ -266,15 +266,15 @@ def localized_language_codes(raw):
 
 
 class SourceDefinitions:
-    def __init__(self, database, root, dumps, registry=None):
-        self.db = sqlite3.connect(database)
+    def __init__(self, database, root, dumps, registry=None, checkpoint=None):
+        self.owns_db = checkpoint is None
+        self.db = sqlite3.connect(database) if self.owns_db else checkpoint.db
         self.matched_example = None
         # Most Reader titles can have no source witness (e.g. template-only
         # pages). A fixed occupancy table avoids SQLite calls for definite
         # misses. Collisions still go through the exact title/owner query.
         self._source_title_buckets = bytearray(65536)
         try:
-            self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
             self.codes = {}
@@ -293,6 +293,16 @@ class SourceDefinitions:
                        and '-pages-meta-current' in name and re.search(r'\.xml(?:-p[0-9]+p[0-9]+)?\.bz2$', name)}
             if not members or len(dumps) != len(members) or {path.name for path in dumps} != members.keys():
                 raise ValueError('Expected every selected XML dump member exactly once')
+            if checkpoint is not None and checkpoint.get('source_index'):
+                self.inputs = {p.name: members[p.name][1] for p in dumps}
+                self.matched_example = checkpoint.get('matched_example')
+                for title, in self.db.execute('SELECT DISTINCT title FROM sense'):
+                    self._source_title_buckets[hash(title) % len(self._source_title_buckets)] = 1
+                self.has_definitions = self.db.execute('SELECT 1 FROM sense LIMIT 1').fetchone() is not None
+                return
+            if checkpoint is not None:
+                self.db.execute('BEGIN IMMEDIATE')
+            self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             self.inputs = {}
             for path in dumps:
                 with path.open('rb') as raw:
@@ -313,6 +323,9 @@ class SourceDefinitions:
                         raise ValueError(f'Dump SHA-1 differs: {path.name}')
                     self.inputs[path.name] = expected
             self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
+            if checkpoint is not None:
+                checkpoint.guard()
+                checkpoint.put('source_index', True)
             self.db.commit()
             self.has_definitions = self.db.execute('SELECT 1 FROM sense LIMIT 1').fetchone() is not None
         except (ET.ParseError, EOFError, sqlite3.Error) as error:
@@ -424,4 +437,5 @@ class SourceDefinitions:
             yield dict(title=title, owner=owner, page=page, revision=revision, line=line)
 
     def close(self):
-        self.db.close()
+        if self.owns_db:
+            self.db.close()

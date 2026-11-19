@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import reviewed_nonlexical as nonlexical
+from audit_checkpoint import AuditCheckpoint, CheckpointRows, file_binding
 
 try:
     from compression import zstd
@@ -318,7 +319,7 @@ def emitted_views(root, catalog, query):
 
 
 def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list,
-         catalog_page_size=None, audit_alias_references=False):
+         catalog_page_size=None, audit_alias_references=False, checkpoint=None, checkpoint_guard=None):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0, image_alternatives=0,
@@ -337,19 +338,39 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
         require(isinstance(value, dict), 'non-object CLI response')
         return value
 
-    destinations = {}
-    destination_references = {}
-    for view in emitted_views(root, language_catalog(ask, catalog_page_size), ask):
-        summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0)
-        result['views'].append(summary)
+    destinations = {} if checkpoint is None else checkpoint.mapping('destinations')
+    destination_references = {} if checkpoint is None else checkpoint.mapping('references')
+    cursor = [0, 0, None, None]
+    views = None if checkpoint is None else checkpoint.get('inventory')
+    if views is None:
+        views = list(emitted_views(root, language_catalog(ask, catalog_page_size), ask))
+        if checkpoint is not None:
+            checkpoint_guard()
+            checkpoint.put('inventory', views)
+            checkpoint.put('counts', {'commands': result['commands']})
+            checkpoint.db.commit()
+    elif checkpoint is not None:
+        result.update(checkpoint.get('counts'))
+        result['views'] = checkpoint.view_summaries()
+        cursor = checkpoint.get('cursor', cursor)
+    for index, view in enumerate(views):
+        if index < cursor[0]:
+            continue
+        if index < len(result['views']):
+            summary = result['views'][index]
+        else:
+            summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0)
+            result['views'].append(summary)
         # Args requires a nonempty language; this reserved selector is only a
         # neutral-store transport argument, never an inferred record owner.
         language_arg = 'neutral-alias-view' if view['neutral'] else view['language']
         selection = ['--kind', view['kind']]
         if language_arg is not None:
             selection += ['--language', language_arg]
-        offset, expected_total, previous = 0, None, None
+        offset, expected_total, previous = cursor[1:] if index == cursor[0] else (0, None, None)
         while True:
+            if checkpoint is not None:
+                checkpoint_guard()
             page = ask('search', *selection, '--case-sensitive', '--limit', '1000',
                        '--offset', str(offset), '--', '')
             require(page.get('kind') == view['kind'].replace('-', '_') and
@@ -417,7 +438,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                         require(actual_kind != 'language' and redirect.get('followed') is True,
                                 'invalid cross-feature audit reference')
                 if reused is not None:
-                    require(reference in destination_references and destination_references[reference] == identity and
+                    require(destination_references.get(reference) == identity and
                             identity in destinations, 'unknown or conflicting destination reference')
                     summary['duplicate_destinations'] += 1
                     result['duplicate_destinations'] += 1
@@ -431,8 +452,9 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                 if reference is not None:
                     require(destination_references.setdefault(reference, identity) == identity,
                             'conflicting destination reference')
-                if identity in destinations:
-                    require(destinations[identity] == digest, 'conflicting duplicate destination')
+                prior_digest = destinations.get(identity)
+                if prior_digest is not None:
+                    require(prior_digest == digest, 'conflicting duplicate destination')
                     summary['duplicate_destinations'] += 1
                     result['duplicate_destinations'] += 1
                     exported = entries = entry = content = redirect = None
@@ -480,6 +502,10 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
             if page_exports is not None:
                 require(next(page_exports, None) is None, 'unexpected extra batch export')
             offset += len(matches)
+            if checkpoint is not None:
+                checkpoint_guard()
+                next_cursor = [index, offset, expected_total, previous] if page['has_more'] else [index + 1, 0, None, None]
+                checkpoint.save_page(result, index, summary, next_cursor)
             if not page['has_more']:
                 break
         require(offset == expected_total, 'incomplete view')
@@ -869,6 +895,8 @@ def report_chunks(result):
         yield '  ' + json.dumps(key, ensure_ascii=False) + ': '
         if isinstance(value, ReportRows):
             yield from value.chunks()
+        elif isinstance(value, CheckpointRows):
+            yield from value.chunks(nested_json, row_body)
         elif isinstance(value, list) and len(value) > 128:
             yield '['
             for offset in range(0, len(value), 128):
@@ -892,6 +920,21 @@ def write_report(path, result):
             stream.write(part.encode('utf-8'))
 
 
+def write_checkpoint_report(path, result):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.audit-report-', dir=path.parent) as directory:
+        pending = Path(directory) / path.name
+        write_report(pending, result)
+        with pending.open('rb') as stream:
+            os.fsync(stream.fileno())
+        os.replace(pending, path)
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     installed_reader = Path('zig-out/bin/wikidict')
@@ -913,6 +956,8 @@ def main():
                         help='Reuse validated redirect bodies when the target is absent in the selected language')
     parser.add_argument('--catalog-page-size', type=int, metavar='N',
                         help='Read N language indexes per native catalog request (1–1000)')
+    parser.add_argument('--checkpoint', type=Path,
+                        help='Resume or create an audit checkpoint for this exact publication and Reader')
     args = parser.parse_args()
     if args.audit_alias_references and not (args.audit_reference_hints and args.audit_export_session):
         parser.error('--audit-alias-references requires --audit-reference-hints and --audit-export-session')
@@ -926,6 +971,15 @@ def main():
         parser.error('--audit-reference-hints requires batch export')
     if args.audit_export_session and args.batch_size == 1:
         parser.error('--audit-export-session requires batch export')
+    if args.checkpoint:
+        stage = args.root.resolve()
+        checkpoint_path = args.checkpoint.resolve()
+        report_path = args.report.resolve()
+        inputs = [args.binary, *(args.definition_dump or []), *([args.definition_registry] if args.definition_registry else [])]
+        reserved = {checkpoint_path, *(Path(str(checkpoint_path) + suffix) for suffix in ('-journal', '-wal', '-shm'))}
+        if (checkpoint_path.is_relative_to(stage) or report_path.is_relative_to(stage)
+                or report_path in reserved or {path.resolve() for path in inputs} & (reserved | {report_path})):
+            parser.error('checkpoint or report overlaps an audit input or each other')
 
     with ExitStack() as report_files:
         return run_audit(args, report_files)
@@ -937,15 +991,59 @@ def run_audit(args, report_files):
 
     try:
         exports = None
-        if args.batch_size > 1 or args.definition_dump:
+        checkpoint = None
+        if args.batch_size > 1 or args.definition_dump or args.checkpoint:
             prepare_index_directories(args.root)
             before = dictionary_snapshot(args.root)
             binary_before = dictionary_snapshot(args.binary)
             def unchanged():
                 require(dictionary_snapshot(args.root) == before, 'dictionary source changed during audit')
                 require(dictionary_snapshot(args.binary) == binary_before, 'CLI binary changed during audit')
+            if args.checkpoint:
+                import audit_checkpoint
+                import source_definition_audit
+                inputs = [*(args.definition_dump or []), *([args.definition_registry] if args.definition_registry else []),
+                          Path(__file__), Path(audit_checkpoint.__file__), Path(source_definition_audit.__file__), Path(nonlexical.__file__)]
+                file_inputs = [file_binding(path) for path in inputs]
+                def checkpoint_guard():
+                    unchanged()
+                    require([file_binding(path) for path in inputs] == file_inputs, 'checkpoint input changed during audit')
+                def digest(path):
+                    with Path(path).open('rb') as stream:
+                        return hashlib.file_digest(stream, 'sha256').hexdigest()
+                root = args.root.resolve(strict=True)
+                path = args.checkpoint.absolute()
+                require(not path.resolve().is_relative_to(root) and path.resolve() != args.report.resolve() and
+                        all(str(path.resolve()) != row[1] for row in file_inputs) and path.resolve() != args.binary.resolve(),
+                        'checkpoint overlaps an audit input or report')
+                def serial_snapshot(value):
+                    return [value[0], {str(key): stamp for key, stamp in value[1].items()}]
+                published = args.root / 'complete.json'
+                binding = dict(version=1, dictionary=serial_snapshot(before), binary=serial_snapshot(binary_before),
+                               inputs=file_inputs, manifest_sha256=digest(published), binary_sha256=digest(args.binary),
+                               tooling_sha256=[digest(path) for path in inputs[-4:]],
+                               options=dict(batch_size=args.batch_size, reference_hints=args.audit_reference_hints,
+                                            export_session=args.audit_export_session, alias_references=args.audit_alias_references,
+                                            catalog_page_size=args.catalog_page_size))
+                checkpoint = AuditCheckpoint(report_files, path, json.loads(json.dumps(binding)))
+                checkpoint.guard = checkpoint_guard
+                if not checkpoint.get('stage_verified'):
+                    members = json.loads(published.read_text())['publication_files']
+                    lexical_root = args.root.absolute()
+                    expected_paths = set(members) | {'complete.json'}
+                    actual_paths = {Path(row[0]).relative_to(lexical_root).as_posix()
+                                    for row in before[0] if stat.S_ISREG(row[3][2])}
+                    require(actual_paths == expected_paths, 'checkpoint publication membership differs')
+                    for name, expected in members.items():
+                        member = root / name
+                        require(not Path(name).is_absolute() and '..' not in Path(name).parts and member.is_file() and
+                                member.stat().st_size == expected['size'] and digest(member) == expected['sha256'],
+                                'checkpoint publication member differs: ' + name)
+                    checkpoint_guard()
+                    checkpoint.put('stage_verified', True)
+                    checkpoint.db.commit()
             if args.batch_size > 1:
-                hints = {} if args.audit_reference_hints else None
+                hints = ({} if checkpoint is None else checkpoint.mapping('hints')) if args.audit_reference_hints else None
                 selected, exchange = None, None
                 def exports(selection, matches):
                     def send(titles, batch_hints):
@@ -965,11 +1063,20 @@ def run_audit(args, report_files):
             review = None
             if args.definition_dump:
                 from source_definition_audit import SourceDefinitions
-                review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
+                review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry, checkpoint=checkpoint)
                 resources.callback(review.close)
+                if checkpoint is not None:
+                    checkpoint.review = review
+            if checkpoint is None:
+                row_factory = lambda: ReportRows(report_files)
+            else:
+                kinds = iter(('issues', 'annotations'))
+                row_factory = lambda: checkpoint.rows(next(kinds))
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
-                          audit_references=args.audit_reference_hints, row_factory=lambda: ReportRows(report_files),
-                          catalog_page_size=args.catalog_page_size, audit_alias_references=args.audit_alias_references)
+                          audit_references=args.audit_reference_hints, row_factory=row_factory,
+                          catalog_page_size=args.catalog_page_size, checkpoint=checkpoint,
+                          checkpoint_guard=checkpoint.guard if checkpoint is not None else None,
+                          audit_alias_references=args.audit_alias_references)
             if review is not None:
                 definitions = review.report()
                 result['source_definitions'] = definitions
@@ -983,13 +1090,15 @@ def run_audit(args, report_files):
                     result['additional_unmatched_definitions'] = locations
         if args.batch_size > 1 or args.definition_dump:
             unchanged()
+        if checkpoint is not None:
+            checkpoint.guard()
         if args.batch_size > 1:
             result['export_transport'] = dict(mode='guarded-native-json-lines', batch_size=args.batch_size,
                 timeout_seconds=60, immutable_source_guard=True, logical_commands=result['commands'])
     except (OSError, subprocess.SubprocessError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
-    write_report(args.report, result)
+    (write_checkpoint_report if args.checkpoint else write_report)(args.report, result)
     if args.summary_json:
         summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records') if k in result}
         if 'issues' in result:

@@ -124,6 +124,13 @@ python3 tools/verify_presentation.py --binary "$reader" --root "$edition" \
     --audit-alias-references
 ```
 
+For a scan that may span several runs, add `--checkpoint "$work/reader.sqlite"`.
+Keep the database and its SQLite sidecar files outside the dictionary directory.
+Rerun the command with the same dictionary, Reader, source dump, registry and
+options. It verifies those inputs and resumes at the last committed search page.
+The final report includes findings from every page. Use a fresh checkpoint when
+changing the inputs or the verifier.
+
 For a large edition, give `--report` a filename ending in `.json.gz`. The audit
 writes compressed JSON directly, including findings from failed scans. `gzip -dc`
 returns the same UTF-8 JSON as the plain report. Use `--summary-json` in batch

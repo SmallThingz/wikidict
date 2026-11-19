@@ -2,6 +2,8 @@ import bz2
 import gzip
 import json
 import hashlib
+import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -702,6 +704,154 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 self.assertFalse(result['semantic_acceptance'])
 
 
+class ResumeAuditTests(unittest.TestCase):
+    def test_mode_two_reuses_only_previously_committed_alias_across_view_restart(self):
+        with Fixture() as f, tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / 'audit.sqlite'
+            token = 'a' * 64
+            edge = dict(source_title='old', target_title='missing', fragment='x', followed=False)
+            body = dict(f.entry('old', '__NOTOC__', kind='alias'), redirect=edge)
+            for owner in ('Dutch', 'French'):
+                f.language(owner, [], aliases={'old': body})
+            baseline = root / 'legacy.json.gz'
+            audit.write_report(baseline, audit.scan(f.root, f.query))
+
+            def run(*, fail=False, mode=2):
+                with ExitStack() as resources:
+                    checkpoint = audit.AuditCheckpoint(resources, path, {'mode': mode})
+                    hints = checkpoint.mapping('hints')
+                    kinds = iter(('issues', 'annotations'))
+
+                    def exports(selection, matches):
+                        for match in matches:
+                            title = match['title']
+                            value = f.query('export', *selection, '--case-sensitive', '--', title)
+                            value['audit_reference'] = token
+                            if selection[-1] == 'French':
+                                self.assertEqual(hints.get(title), token)
+                                if fail:
+                                    raise SystemExit(77)
+                                value.update(entries=[], audit_reused=dict(kind='alias', title=title, redirect=edge))
+                            yield value
+                            hints[title] = token
+
+                    result = audit.scan(f.root, f.query, exports, audit_references=True, audit_alias_references=True,
+                        checkpoint=checkpoint, checkpoint_guard=lambda: None,
+                        row_factory=lambda: checkpoint.rows(next(kinds)))
+                    audit.write_report(root/'resumed.json.gz', result)
+
+            with self.assertRaises(SystemExit):
+                run(fail=True)
+            with self.assertRaisesRegex(ValueError, 'inputs or settings differ'):
+                run(mode=1)
+            run()
+            self.assertEqual(baseline.read_bytes(), (root/'resumed.json.gz').read_bytes())
+
+    def test_abrupt_exit_keeps_previous_commit_and_discards_pending_rows(self):
+        with tempfile.TemporaryDirectory() as output:
+            path = Path(output) / 'checkpoint.sqlite'
+            with ExitStack() as resources:
+                checkpoint = audit.AuditCheckpoint(resources, path, {'version': 1})
+                checkpoint.put('cursor', [0, 12, 16, 'last'])
+                checkpoint.mapping('destinations')[('language', 'English', 'last')] = b'current'
+                checkpoint.db.commit()
+            child = """import os, sys
+from contextlib import ExitStack
+from pathlib import Path
+from audit_checkpoint import AuditCheckpoint
+with ExitStack() as resources:
+    checkpoint = AuditCheckpoint(resources, Path(sys.argv[1]), {'version': 1})
+    checkpoint.put('cursor', [1, 0, None, None])
+    checkpoint.rows('issues').append({'text': 'uncommitted'})
+    checkpoint.mapping('destinations')[('language', 'English', 'new')] = b'unknown'
+    os._exit(77)
+"""
+            script_path = str(Path(audit.__file__).parent)
+            env = dict(os.environ, PYTHONPATH=script_path)
+            self.assertEqual(subprocess.run([sys.executable, '-B', '-c', child, str(path)], env=env, timeout=5).returncode, 77)
+            with ExitStack() as resources:
+                checkpoint = audit.AuditCheckpoint(resources, path, {'version': 1})
+                self.assertEqual(checkpoint.get('cursor'), [0, 12, 16, 'last'])
+                self.assertEqual(len(checkpoint.rows('issues')), 0)
+                self.assertIsNone(checkpoint.mapping('destinations').get(('language', 'English', 'new')))
+
+    def test_interrupted_page_rolls_back_evidence_and_matches_and_resumes_exactly(self):
+        with Fixture() as f, tempfile.TemporaryDirectory() as output:
+            out = Path(output)
+            f.page_size = 2
+            (f.root / 'languages.tsv').write_text('heading\nEnglish\n')
+            first = f.entry('a', '[[direct]]', language='English')
+            final = f.entry('b', '[[second]]', language='English')
+            for entry in (first, final):
+                entry['sections'] = [dict(blocks=[dict(kind='definition', list_path='#',
+                    spans=[dict(kind='text', text='authored')])])]
+            third = dict(final, title='c')
+            alias = dict(first, redirect=dict(source_title='d', target_title='a', fragment='', followed=True))
+            f.language('English', [first, final, third], aliases={'d': alias})
+            dump = out / 'wiki-date-pages-meta-current.xml.bz2'
+            xml = '<mediawiki>' + ''.join(f'<page><title>{t}</title><ns>0</ns><id>{n}</id><revision><id>{n}</id><text>==English==\n# authored</text></revision></page>'
+                for n, t in enumerate(('a', 'b', 'c'), 1)) + '</mediawiki>'
+            raw = bz2.compress(xml.encode())
+            dump.write_bytes(raw)
+            binary = out / 'dict'; binary.touch()
+            members = {p.relative_to(f.root).as_posix(): dict(size=p.stat().st_size, sha256=hashlib.sha256(p.read_bytes()).hexdigest())
+                       for p in f.root.rglob('*') if p.is_file()}
+            (f.root / 'complete.json').write_text(json.dumps(dict(edition='wiki', date='date', publication_files=members,
+                build_inputs=dict(files=[['wiki', 'date', dump.name, len(raw), hashlib.sha1(raw).hexdigest()]]))))
+            checkpoint = out / 'checkpoint.sqlite'
+
+            def invoke(name, checkpoint_args, query):
+                argv = ['verify_presentation.py', '--root', str(f.root), '--binary', str(binary),
+                        '--definition-dump', str(dump), '--report', str(out / name), *checkpoint_args]
+                with (mock.patch('sys.argv', argv), mock.patch.object(audit, 'cli_query', side_effect=query),
+                      mock.patch('builtins.print')):
+                    return audit.main()
+
+            def ordinary(_binary, _root, *parts):
+                return f.query(*parts)
+
+            extra = ['--checkpoint', str(checkpoint)]
+            self.assertEqual(invoke('ordinary.json.gz', [], ordinary), 1)
+
+            def interrupted(_binary, _root, *parts):
+                if parts[0] == 'export' and parts[-1] == 'd':
+                    raise SystemExit(99)
+                return f.query(*parts)
+
+            with self.assertRaises(SystemExit):
+                invoke('unpublished.json.gz', extra, interrupted)
+            self.assertFalse((out / 'unpublished.json.gz').exists())
+            with ExitStack() as resources:
+                db = sqlite3.connect(checkpoint)
+                resources.callback(db.close)
+                self.assertEqual(db.execute("SELECT count(*) FROM report").fetchone()[0], 2)
+                self.assertEqual(db.execute("SELECT sum(matched) FROM sense").fetchone()[0], 2)
+                self.assertEqual(json.loads(db.execute("SELECT value FROM meta WHERE key='cursor'").fetchone()[0])[:2], [0, 2])
+
+            def resumed(_binary, _root, *parts):
+                self.assertNotEqual(parts[0], 'languages')
+                if parts[0] == 'search':
+                    self.assertEqual(parts[parts.index('--offset') + 1], '2')
+                return f.query(*parts)
+
+            def conflict(_binary, _root, *parts):
+                value = resumed(_binary, _root, *parts)
+                if parts[0] == 'export' and parts[-1] == 'd':
+                    value['entries'] = [dict(alias, preamble_spans=[dict(kind='text', text='changed')])]
+                return value
+
+            self.assertEqual(invoke('conflict.json.gz', extra, conflict), 2)
+            self.assertIn('conflicting duplicate destination', gzip.decompress((out / 'conflict.json.gz').read_bytes()).decode())
+            self.assertEqual(invoke('resumed.json.gz', extra, resumed), 1)
+            self.assertEqual((out / 'ordinary.json.gz').read_bytes(), (out / 'resumed.json.gz').read_bytes())
+            self.assertEqual(invoke('again.json.gz', extra, lambda *unused: self.fail('completed state replayed')), 1)
+            self.assertEqual((out / 'ordinary.json.gz').read_bytes(), (out / 'again.json.gz').read_bytes())
+            dump.write_bytes(raw)
+            self.assertEqual(invoke('wrong.json.gz', extra, lambda *unused: self.fail('changed input replayed')), 2)
+            self.assertIn('checkpoint inputs or settings differ', gzip.decompress((out / 'wrong.json.gz').read_bytes()).decode())
+
+
 class Fixture:
     """Small mocked CLI boundary, with native-shaped responses and inventory."""
     def __enter__(self):
@@ -894,6 +1044,7 @@ number = 0
 while count := r.read(1):
     number += 1
     hints = r.read(1)[0]
+    assert hints == (0 if number == 1 else int(sys.argv[1]))
     if hints:
         assert r.read(count[0] * 64) == b'0' * (count[0] * 64)
     for _ in range(count[0]):
@@ -903,11 +1054,12 @@ while count := r.read(1):
     w.write(b'\\n')
     w.flush()
 '''
-        with audit.checked_export_session([sys.executable, '-c', child]) as request:
-            for number, title, hints in ((1, '猫', None), (2, '-dash', ['0' * 64])):
-                with request([title], hints) as result:
-                    self.assertEqual(str(number).encode() + title.encode() + b'x' * (128 * 1024) + b'\n',
-                                     result.read())
+        for mode in (1, 2):
+            with audit.checked_export_session([sys.executable, '-c', child, str(mode)], alias_references=mode == 2) as request:
+                for number, title, hints in ((1, '猫', None), (2, '-dash', ['0' * 64])):
+                    with request([title], hints) as result:
+                        self.assertEqual(str(number).encode() + title.encode() + b'x' * (128 * 1024) + b'\n',
+                                         result.read())
 
     def test_export_session_never_yields_uncommitted_or_failed_output(self):
         for code, message in ((0, 'without completing the batch'), (3, 'status 3')):

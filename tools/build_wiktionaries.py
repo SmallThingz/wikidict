@@ -2758,6 +2758,7 @@ SHARD_SOURCE_EXCLUSIONS = frozenset((
     'tools/corpus_controller.py', 'tools/test_corpus_controller.py',
     'tools/native_qualification.py', 'tools/test_native_qualification.py',
     'tools/verify_presentation.py', 'tools/test_verify_presentation.py',
+    'tools/audit_checkpoint.py',
     'tools/source_definition_audit.py', 'tools/test_source_definition_audit.py',
 ))
 
