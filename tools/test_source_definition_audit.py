@@ -153,6 +153,20 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertNotEqual(compiled_line([dict(kind='link', text=url, target=url)]), expected)
         self.assertIsNone(compiled_line([dict(kind='external_link', text=url, target=url + '/elsewhere')]))
 
+    def test_prose_before_an_external_url_preserves_its_action_range(self):
+        url = 'https://en.wikipedia.org/wiki/Jasminum_angustifolium'
+        prefix = 'Wild Jasmine.'  # Tulu ಎದ್ರೋಳಿ, page 910, revision 3963.
+        source = prefix + url
+        spans = [dict(kind='text', text=prefix), dict(kind='external_link', text=url, target=url)]
+        self.assertEqual(simple_line(source, 'ಎದ್ರೋಳಿ'), compiled_line(spans))
+        self.assertNotEqual(simple_line(source, 'ಎದ್ರೋಳಿ'), compiled_line([dict(kind='text', text=source)]))
+        self.assertIsNone(compiled_line([spans[0], dict(spans[1], target='https://example.org')]))
+        self.assertEqual(source_line("''wild'' " + url, 'word')[2], (0, 4, 'italic'))
+        self.assertEqual(source_line("''" + url + "''", 'word')[2], (0, len(url), 'italic'))
+        for unsupported in ('word' + url, url + '?query=yes', url + '.', url + ' ' + url,
+                            "Wild ht''tp''s://example.org"):
+            self.assertIsNone(source_line(unsupported, 'word'))
+
     def test_emphasis_uses_visible_unicode_offsets_and_preserves_link_targets(self):
         self.assertEqual(source_line("[[këmbë|këmbë]] (''skaj'')", 'foot'),
                          ('këmbë (skaj)', ((0, 5, 'këmbë'),), (7, 11, 'italic')))

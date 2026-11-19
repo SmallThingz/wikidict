@@ -67,8 +67,17 @@ def registry_link_trail(raw):
 
 def simple_line(source, title, trail_rule=None):
     """Return visible prose and the code-point range of each authored link."""
-    if BARE_URL.fullmatch(source) and not source.endswith('.'):
-        return source, ((0, len(source), source, 'external'),)
+    if '://' in source:
+        # This observer recognizes a terminal bare URL after simple prose. A
+        # scheme elsewhere may have different delimiters or a bracketed label.
+        url = BARE_URL.search(source)
+        if url is None or url.end() != len(source) or source.endswith('.'):
+            return None
+        prefix = source[:url.start()]
+        if prefix and (prefix[-1] not in ' .\t' or not PLAIN.fullmatch(prefix)
+                       or "''" in prefix or '://' in prefix):
+            return None
+        return source, ((url.start(), url.end(), url[0], 'external'),)
     parts, links = [], []
     end = offset = 0
     for match in LINK.finditer(source):
@@ -159,6 +168,10 @@ def source_line(source, title, trail_rule=None):
     if plain is None:
         return None
     boundaries = [len(before), len(before) + len(marked)]
+    for action in plain[1]:
+        if len(action) == 4 and action[3] == 'external':
+            if any(action[0] < at < action[1] for at in boundaries):
+                return None  # Emphasis split the URL token in the original source.
     display_offsets = boundaries.copy()
     for link in LINK.finditer(unmarked):
         trail = trail_rule.match(unmarked, link.end()) if trail_rule is not None else None
