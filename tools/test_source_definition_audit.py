@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 
 from source_definition_audit import (SourceDefinitions, compiled_emphasis, compiled_line, definitions,
@@ -181,6 +182,19 @@ class SourceDefinitionTests(unittest.TestCase):
                       block('definition', 'prose', inline_action_group={'spans': [dict(kind='link', text='hidden', target='wrong')]}),
                       block('definition', 'chat', 'link', target='chat', bold=True),
                       block('definition', 'kitten'), block('definition', 'young kitten')]
+            with patch('source_definition_audit.hash', side_effect=lambda t: 0 if t == 'absent' else 1, create=True), \
+                    closing(SourceDefinitions('', root, [dump])) as audit:
+                statements = []
+                audit.db.set_trace_callback(statements.append)
+                record = dict(kind='language', title='absent', language='French', sections=[dict(blocks=blocks)])
+                audit.observe(record)
+                self.assertEqual(statements, [])
+                audit.observe(dict(record, title='collision'))
+                self.assertEqual(len(statements), 1)
+                self.assertIn('SELECT rowid', statements[0])
+                self.assertEqual(audit.report()['matched'], 0)
+                audit.observe(dict(record, title='word'))
+                self.assertEqual(audit.report()['matched'], 2)
             with closing(SourceDefinitions('', root, [dump])) as audit:
                 self.assertTrue(audit.has_definitions)
                 record = dict(kind='language', title='word', language='English', sections=[dict(blocks=blocks)])

@@ -269,6 +269,10 @@ class SourceDefinitions:
     def __init__(self, database, root, dumps, registry=None):
         self.db = sqlite3.connect(database)
         self.matched_example = None
+        # Most Reader titles can have no source witness (e.g. template-only
+        # pages). A fixed occupancy table avoids SQLite calls for definite
+        # misses. Collisions still go through the exact title/owner query.
+        self._source_title_buckets = bytearray(65536)
         try:
             self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
             manifest = json.loads((root / 'complete.json').read_bytes())
@@ -336,6 +340,7 @@ class SourceDefinitions:
                 for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings, self.trail_rule):
                     if origin is None:
                         origin = page.findtext('{*}id'), revision.findtext('{*}id')
+                        self._source_title_buckets[hash(title) % len(self._source_title_buckets)] = 1
                     actions = json.dumps(links, ensure_ascii=False)
                     rows.append((title, owner, self.codes.get(owner), n, list_path, text, actions,
                                  json.dumps(emphasis) if emphasis else None, *origin))
@@ -350,6 +355,8 @@ class SourceDefinitions:
 
     def observe(self, entry):
         if entry['kind'] != 'language':
+            return
+        if not self._source_title_buckets[hash(entry['title']) % len(self._source_title_buckets)]:
             return
         expected = self.db.execute('SELECT rowid,list_path,text,links,emphasis FROM sense WHERE title=? AND '
                                    '(code=? OR (code IS NULL AND owner=?)) ORDER BY line',
