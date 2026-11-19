@@ -38,15 +38,10 @@ The **Dictionaries** screen can:
 - import local `.wikblb` or `.wikblb.xz` files;
 - replace or remove installed dictionaries.
 
-Configured default catalogue URL:
-
-```text
-https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list
-```
-
-Official releases and their assets are currently withdrawn. During testing, import
-locally built dictionaries or use your own catalogue. The configured URL remains
-unchanged; publication is on hold until explicitly approved again.
+On a fresh release or performance-build installation, the catalogue list starts
+empty. Open **Dictionaries** and import a local `.wikblb` or `.wikblb.xz` file, or
+use **Add catalogue** to enter an HTTPS list. Existing installations keep their
+saved sources. The official releases and assets have been withdrawn.
 
 The catalogue format is documented in the
 [catalogue documentation](../../docs/catalogues.md).

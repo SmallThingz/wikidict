@@ -1,10 +1,6 @@
 # Dictionary download catalogues
 
-Android's default catalogue is:
-
-`https://github.com/SmallThingz/wikidict/releases/latest/download/dictionaries.list`
-
-Official releases and their assets are withdrawn. Publication remains on hold until the project owner explicitly approves it again. During testing, import local dictionaries or configure your own HTTPS catalogue in the Dictionaries screen.
+Fresh Android release and performance builds start with an empty list of catalogue sources. In **Dictionaries**, import a local `.wikblb` or `.wikblb.xz` file or choose **Add catalogue** and enter an HTTPS list. Upgrades retain saved sources. The official releases and assets are withdrawn pending the project owner’s approval.
 
 After publication is approved, the UTF-8 catalogue can be uploaded as a release asset alongside the dictionaries. Creating a repository or generating a catalogue does not publish anything.
 
@@ -30,4 +26,4 @@ For an approved publication, upload all referenced files under their generated n
 
 Android imports raw WIKBLB08 files and independently seekable `.wikblb.xz` files. Installation streams to a temporary file, verifies the advertised size and checksum when supplied, checks framing and sorted titles, creates a local SQLite title/offset index, and atomically commits the file and index. The app decodes each entry's DPR presentation when it is opened. Supported record versions and feature flags are checked by the [Android decoder](../apps/android/app/src/main/kotlin/app/smallthingz/dict/BlobDecoder.kt).
 
-Debug builds substitute the default catalogue with a local multiword corpus slice. Custom catalogue URLs still use the network. Release/performance builds contain no development dictionary and use the default remote URL.
+Fresh debug installations use a bundled sample catalogue. Debug builds also serve that sample for the previously configured official catalogue URL. Custom HTTPS catalogues use the network. The bundled sample is available only in debug builds.
