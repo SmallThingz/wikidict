@@ -102,6 +102,7 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     installedActions->addWidget(removeButton_);
     layout->addLayout(installedActions);
     installed_ = dictionaryList(this, {QStringLiteral("On this device"), QStringLiteral("Words"), QStringLiteral("Size")});
+    installed_->setColumnHidden(1, true);
     installed_->setObjectName(QStringLiteral("installedDictionaries"));
     installed_->setAccessibleName(QStringLiteral("Installed dictionaries"));
     layout->addWidget(installed_, 1);
@@ -307,14 +308,16 @@ void LibraryDialog::refreshInstalled(std::function<void(const QString &)> finish
     }, [this, listed, recovered, root, finished = std::move(finished)](const QString &error) {
         installed_->clear();
         dictionaries_ = error.isEmpty() ? *listed : QList<LibraryStorage::Dictionary>{};
+        bool hasWordCounts = false;
         if (*recovered) { noteRootChange(root); changed_ = true; }
         if (error.isEmpty()) {
             qint64 total = 0;
             for (int i = 0; i < dictionaries_.size(); ++i) {
                 const auto &dictionary = dictionaries_[i];
                 auto *item = new QTreeWidgetItem(installed_, {dictionary.heading,
-                        dictionary.words < 0 ? QStringLiteral("-") : QLocale().toString(dictionary.words),
+                        dictionary.words < 0 ? QStringLiteral("Unknown") : QLocale().toString(dictionary.words),
                         LibraryStorage::formatBytes(dictionary.bytes)});
+                if (dictionary.words >= 0) hasWordCounts = true;
                 item->setData(0, Qt::UserRole, i);
                 item->setToolTip(0, dictionary.path);
                 total += dictionary.bytes;
@@ -326,6 +329,7 @@ void LibraryDialog::refreshInstalled(std::function<void(const QString &)> finish
         } else {
             installedSummary_->setText(QStringLiteral("Cannot read this dictionary folder."));
         }
+        installed_->setColumnHidden(1, !hasWordCounts);
         refreshCatalogView();
         if (finished) finished(error);
         else finishOperation(error, !error.isEmpty());

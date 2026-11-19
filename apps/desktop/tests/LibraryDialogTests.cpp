@@ -489,6 +489,7 @@ int main(int argc, char **argv) {
         auto *import = control<QPushButton>(dialog, "importDictionary");
         auto *remove = control<QPushButton>(dialog, "removeDictionary");
         require(installed->topLevelItemCount() == 0 && import->isEnabled() && !remove->isEnabled(), "actionable empty library");
+        require(installed->isColumnHidden(1), "empty library omits the word-count column");
         require(control<QLabel>(dialog, "availableDictionariesSummary")->text() == QStringLiteral("Add a source to browse available dictionaries."), "empty source list offers an available action");
         require(control<QPushButton>(dialog, "addCatalogueSource")->isEnabled() && !control<QPushButton>(dialog, "refreshCatalogues")->isEnabled(), "source-free guidance matches enabled controls");
         diagnosticStage = "import English";
@@ -499,10 +500,15 @@ int main(int argc, char **argv) {
         const auto imported = LibraryStorage::installed(dialog.selectedRoot());
         require(imported.size() == 1 && imported.first().words >= 0, "one installed dictionary with its actual word count");
         const auto words = imported.first().words;
+        require(!installed->isColumnHidden(1) && installed->topLevelItem(0)->text(1) == QLocale().toString(words),
+                "import reveals the measured word count");
         const QString expectedStatus = QStringLiteral("Installed English: %1 %2.")
             .arg(QLocale().toString(words), words == 1 ? QStringLiteral("word") : QStringLiteral("words"));
         require(status->text() == expectedStatus, "successful import status uses the actual count and singular/plural word");
         if (argc > 2) require(dialog.grab().save(QString::fromLocal8Bit(argv[2])), "save library screenshot");
+        // A folder opened directly from a corpus build has no desktop import counts.
+        require(QFile::remove(QDir(dialog.selectedRoot()).filePath(QStringLiteral(".desktop-library.json"))),
+                "remove the disposable fixture's import metadata before the next refresh");
         // Accessibility row selection need not move the keyboard current index.
         const QString secondSource = temp.filePath(QStringLiteral("French.wikblb"));
         QByteArray secondBytes("WIKBLB08", 8);
@@ -525,6 +531,8 @@ int main(int argc, char **argv) {
             if (item->text(0) == QStringLiteral("French")) french = item;
         }
         require(english && french, "distinct real dictionaries are available for selection regression");
+        require(!installed->isColumnHidden(1) && english->text(1) == QStringLiteral("Unknown") &&
+                french->text(1) == QLocale().toString(1), "mixed library distinguishes unknown and measured counts");
         diagnosticStage = "selected row controls";
         const auto declineSelectedEnglish = [&] {
             bool observedEnglish = false;
@@ -562,6 +570,12 @@ int main(int argc, char **argv) {
         QTest::mouseClick(remove, Qt::LeftButton);
         require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 5000), "remove only selected French fixture");
         require(installed->topLevelItem(0)->text(0) == QStringLiteral("English"), "unselected English survives selected French removal");
+        require(installed->isColumnHidden(1), "library omits word counts when every remaining row is unknown");
+        const QString countsScreenshot = qEnvironmentVariable("DICT_TEST_UNCOUNTED_LIBRARY_SCREENSHOT");
+        if (!countsScreenshot.isEmpty()) {
+            dialog.resize(640, 600);
+            require(dialog.grab().save(countsScreenshot), "save the compact uncounted library view");
+        }
         diagnosticStage = "remove English";
         installed->setCurrentItem(installed->topLevelItem(0));
         require(remove->isEnabled(), "selected installed dictionary enables removal");
