@@ -2121,9 +2121,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         }
         break :lexical .{ .section = selected orelse break :lexical null, .kind = proof.kind, .definition_text = proof.definition_text };
     };
-    const layout = try semantic.buildForDictionaryWithSourceNumberedLexemes(a, work.sections, synthetic_unclassified,
+    const layout = try semantic.buildForEntry(a, work.sections, synthetic_unclassified,
         if (classified_owner) |owner| owner.heading else null, source_lexeme,
-        if (namespace_catalog) |catalog| catalog.wiki else "", numbered_lexemes.items);
+        if (namespace_catalog) |catalog| catalog.wiki else "", numbered_lexemes.items, title);
     const codec_phase = consume_diagnostics.beginConsumePhase(.codec);
     defer consume_diagnostics.endConsumePhase(codec_phase);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);

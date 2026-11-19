@@ -2200,19 +2200,24 @@ fn portugueseNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const 
     return hasTopLevelNumberedGloss(section.blocks);
 }
 
-// The Aromanian edition's Format templates use these exact H3 labels and
-// targets for entries in several languages. Only -symbol- emits plain text.
-fn aromanianSectionPart(section: anytype, owner: ?[]const u8, wiki_id: []const u8) ?[]const u8 {
-    if (!std.mem.eql(u8, wiki_id, "roa_rupwiktionary") or section.level != 3) return null;
+fn aromanianHeadingSpan(section: anytype, owner: ?[]const u8, wiki_id: []const u8, level: u8) ?*const wiki.Span {
+    if (!std.mem.eql(u8, wiki_id, "roa_rupwiktionary") or section.level != level) return null;
     const language = owner orelse return null;
     if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return null;
     const S = @TypeOf(section);
     if (!@hasField(S, "title_spans") or !@hasField(S, "is_heading") or
         !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return null;
     if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0 or section.title_spans.len != 1) return null;
-    const span = section.title_spans[0];
+    const span = &section.title_spans[0];
     if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or span.self_link or
         span.role != .normal or !std.mem.eql(u8, span.text, section.title)) return null;
+    return span;
+}
+
+// The Aromanian edition's Format templates use these exact H3 labels and
+// targets for entries in several languages. Only -symbol- emits plain text.
+fn aromanianSectionPart(section: anytype, owner: ?[]const u8, wiki_id: []const u8) ?[]const u8 {
+    const span = aromanianHeadingSpan(section, owner, wiki_id, 3) orelse return null;
     if (span.kind == .text and span.target.len == 0 and std.mem.eql(u8, span.text, "Simbol")) return "Symbol";
     if (span.kind != .link) return null;
     const Label = struct { title: []const u8, target: []const u8, part: []const u8 };
@@ -2228,6 +2233,63 @@ fn aromanianSectionPart(section: anytype, owner: ?[]const u8, wiki_id: []const u
         if (std.mem.eql(u8, section.title, label.title) and std.mem.eql(u8, span.target, label.target)) return label.part;
     }
     return null;
+}
+
+fn linkedAromanianEtymologyHeading(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
+    if (!std.mem.eql(u8, section.title, "Etimulughii")) return false;
+    const heading = aromanianHeadingSpan(section, owner, wiki_id, 3) orelse return false;
+    return heading.kind == .link and std.mem.eql(u8, heading.target, "etimulughii") and heading.target_fragment == null;
+}
+
+// agustu (p5584/r14483) declares a noun and supplies its headword, origin and
+// translations without a numbered definition. Preserve that distinction.
+fn aromanianNounWithoutGloss(sections: anytype, i: usize, page_title: ?[]const u8, owner: ?[]const u8, wiki_id: []const u8) bool {
+    const title = page_title orelse return false;
+    if (i != 1 or (sections.len != 3 and sections.len != 4) or title.len == 0) return false;
+    const language = owner orelse return false;
+    if (!std.mem.eql(u8, language, "Aromanian") and !std.mem.eql(u8, language, "Armâneaşci")) return false;
+    const banner = aromanianHeadingSpan(sections[0], owner, wiki_id, 1) orelse return false;
+    if (banner.kind != .link or banner.target_fragment != null or !std.mem.eql(u8, banner.text, "Armâneaşci") or
+        !std.mem.eql(u8, banner.target, "armâneaşci")) return false;
+    if (!linkedAromanianEtymologyHeading(sections[2], owner, wiki_id)) return false;
+    if (sections.len == 4 and (sections[3].level != 3 or !std.mem.eql(u8, sections[3].title, "Pri alti limbi"))) return false;
+    const blocks = sections[i].blocks;
+    if (blocks.len != 2 or blocks[0].kind != .heading) return false;
+    const headword = blocks[1];
+    if (headword.kind != .paragraph or headword.depth != 0 or headword.list_path.len != 0 or
+        !greekSynonymFlatBlock(headword) or headword.spans.len != 1) return false;
+    const span = headword.spans[0];
+    if (comptime @hasField(@TypeOf(span), "trail")) if (span.trail.len != 0) return false;
+    return greekSynonymPlain(span) and span.flags.bold and !span.flags.italic and
+        std.mem.eql(u8, span.text, title);
+}
+
+fn postposedAromanianEtymology(sections: anytype, lexeme: Lexeme, owner: ?[]const u8, wiki_id: []const u8) ?usize {
+    const i = lexeme.section + 1;
+    if (i >= sections.len or lexeme.etymology != null or sections[lexeme.section].level != 3) return null;
+    const section = sections[i];
+    if (!linkedAromanianEtymologyHeading(section, owner, wiki_id)) return null;
+
+    // Format:-ety- (3602/15630) supplies the prompt. Require content beyond it.
+    if (section.blocks.len < 2 or section.blocks[0].kind != .heading or section.blocks[1].kind != .paragraph) return null;
+    const spans = section.blocks[1].spans;
+    const prompt = "Dit ţi limbâ v'ini zborlu";
+    if (section.blocks[1].depth != 0 or section.blocks[1].list_path.len != 0 or spans.len == 0) return null;
+    const first = spans[0];
+    if (first.kind != .text or first.provenance != .parsed or first.flags.code or
+        !std.mem.startsWith(u8, first.text, prompt)) return null;
+    const tail = first.text[prompt.len..];
+    if (tail.len != 0 and !std.ascii.isWhitespace(tail[0])) return null;
+    for (sections, 0..) |other_section, n| {
+        if (n != i and std.mem.eql(u8, other_section.title, section.title)) return null;
+    }
+    var has_content = false;
+    for (spans, 0..) |span, n| {
+        if (span.generated_diagnostic) return null;
+        const text = if (n == 0) span.text[prompt.len..] else span.text;
+        if (std.mem.trim(u8, text, " \t\r\n.,:").len != 0) has_content = true;
+    }
+    return if (has_content) i else null;
 }
 
 // The entry limbã uses :[1], :[2] in place of ordinary # definitions. Keep
@@ -2317,6 +2379,159 @@ test "Aromanian dictionary linked noun headings preserve ordinary and bracketed 
     }
 }
 
+test "Aromanian limbã attaches the following sourced etymology to its noun without moving its body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8,
+        level: u8 = 3,
+        is_heading: bool = true,
+        title_list_path: []const u8 = "",
+        title_depth: u8 = 0,
+        title_spans: []const wiki.Span,
+        blocks: []const wiki.Block,
+    };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "limbã" } };
+    const noun = (try renderer.renderBody("[[sumstantivu|Sumstantivu]]"))[0].spans;
+    const ety = (try renderer.renderBody("[[etimulughii|Etimulughii]]"))[0].spans;
+    // Ordinary expanded p3530/r14967, including Format:-ety- p3602/r15630.
+    const body = try renderer.renderBody("'''limbã''' ''f'' (pl. '''[[limbe]]''')\n:[1] [[organ|Organ]]\n:[2] [[system|System]] ti comunicatsia anamisa di prãvdzãle cama analtsã shi ominjlji.");
+    const lexical = try a.alloc(wiki.Block, 1 + body.len);
+    lexical[0] = .{ .kind = .heading, .level = 3, .spans = noun };
+    @memcpy(lexical[1..], body);
+    const prompt = "Dit ţi limbâ v'ini zborlu";
+    const origin = [_]wiki.Block{
+        .{ .kind = .heading, .level = 3, .spans = ety },
+        (try renderer.renderBody(prompt ++ " latinã ''[[lingua]]''"))[0],
+    };
+    const sections = [_]Section{
+        .{ .title = "Sumstantivu", .title_spans = noun, .blocks = lexical },
+        .{ .title = "Etimulughii", .title_spans = ety, .blocks = &origin },
+    };
+    const layout = try buildForDictionary(a, &sections, false, "Armâneaşci", null, "roa_rupwiktionary");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    try std.testing.expectEqual(@as(?usize, 1), layout.lexemes[0].etymology);
+    const encoded = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections, layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+    const stored = try encoder.presentation_codec.decodeAlloc(a, encoded, "limbã", .language, .{ .heading = "Armâneaşci", .code = "roa-rup" });
+    const noun_record = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun_record.kind);
+    try std.testing.expectEqual(@as(?usize, 1), noun_record.etymology);
+    try std.testing.expectEqualSlices(usize, &.{1}, stored.entry.organization.other_sections);
+    try std.testing.expectEqual(@as(usize, 2), noun_record.definitions.len);
+    for (noun_record.definitions, [_][]const u8{ "organ", "system" }, 2..) |sense, target, i| {
+        try std.testing.expectEqual(i, sense.block);
+        try std.testing.expectEqualStrings(target, stored.entry.sections[0].blocks[sense.block].spans[1].target);
+    }
+    const etymons = stored.entry.sections[noun_record.etymology.?].blocks[1].spans;
+    try std.testing.expectEqual(@as(usize, 2), etymons.len);
+    try std.testing.expectEqualStrings(prompt ++ " latinã ", etymons[0].text);
+    try std.testing.expect(etymons[1].kind == .link and etymons[1].italic);
+    try std.testing.expectEqualStrings("lingua", etymons[1].target);
+    try std.testing.expectEqualStrings("lingua", etymons[1].text);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, stored));
+
+    var unassigned = layout.lexemes[0];
+    unassigned.etymology = null;
+    for ([_][]const u8{ prompt, prompt ++ ".", prompt ++ "x latinã" }) |text| {
+        var bad_body = origin;
+        bad_body[1] = (try renderer.renderBody(text))[0];
+        var example = sections;
+        example[1].blocks = &bad_body;
+        try std.testing.expect(postposedAromanianEtymology(&example, unassigned, "Armâneaşci", "roa_rupwiktionary") == null);
+    }
+    for ([_][]const u8{ "Etimulughii", "[[different|Etimulughii]]", "[[etimulughii#foreign|Etimulughii]]" }) |markup| {
+        var example = sections;
+        example[1].title_spans = (try renderer.renderBody(markup))[0].spans;
+        try std.testing.expect(postposedAromanianEtymology(&example, unassigned, "Armâneaşci", "roa_rupwiktionary") == null);
+    }
+    try std.testing.expect(postposedAromanianEtymology(&sections, unassigned, null, "roa_rupwiktionary") == null);
+    try std.testing.expect(postposedAromanianEtymology(&sections, unassigned, "Armâneaşci", "otherwiki") == null);
+    try std.testing.expect(postposedAromanianEtymology(&sections, layout.lexemes[0], "Armâneaşci", "roa_rupwiktionary") == null);
+    const duplicated = [_]Section{ sections[0], sections[1], sections[1] };
+    const dup = try buildForDictionary(a, &duplicated, false, "Armâneaşci", null, "roa_rupwiktionary");
+    try std.testing.expect(dup.lexemes[0].etymology == null);
+    const ambiguous = [_]Section{ sections[0], sections[1], sections[0] };
+    const many = try buildForDictionary(a, &ambiguous, false, "Armâneaşci", null, "roa_rupwiktionary");
+    try std.testing.expectEqual(@as(usize, 2), many.lexemes.len);
+    for (many.lexemes) |lexeme| try std.testing.expect(lexeme.etymology == null);
+}
+
+test "Aromanian agustu retains its source-declared noun and etymology without inventing a definition" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8,
+        level: u8,
+        is_heading: bool = true,
+        title_list_path: []const u8 = "",
+        title_depth: u8 = 0,
+        title_spans: []const wiki.Span,
+        blocks: []const wiki.Block,
+
+        fn make(r: *wiki.Renderer, level: u8, label: []const u8, heading: []const u8, source: []const u8) !@This() {
+            const title_spans = (try r.renderBody(heading))[0].spans;
+            const body = try r.renderBody(source);
+            const blocks = try r.a.alloc(wiki.Block, body.len + 1);
+            blocks[0] = .{ .kind = .heading, .level = level, .spans = title_spans };
+            @memcpy(blocks[1..], body);
+            return .{ .title = label, .level = level, .title_spans = title_spans, .blocks = blocks };
+        }
+    };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "agustu" } };
+    const sections = [_]Section{
+        try Section.make(&renderer, 1, "Armâneaşci", "[[armâneaşci|Armâneaşci]]", ""),
+        try Section.make(&renderer, 3, "Sumstantivu", "[[sumstantivu|Sumstantivu]]", "'''agustu'''"),
+        try Section.make(&renderer, 3, "Etimulughii", "[[etimulughii|Etimulughii]]", "Dit ţi limbâ v'ini zborlu latinâ '''[[augustus (mensis)|augustus]]'''."),
+        try Section.make(&renderer, 3, "Pri alti limbi", "Pri alti limbi", ":*[[italianeaşci|Italianeaşci]]: [[agosto]]\n:*[[ispanjolã|Ispanjolã]]: [[augusto]]\n:*[[frânţeaşci|Frânţeaşci]]: [[août]]\n:*[[inglezaşci|Inglezaşci]]: [[august]]\n:*[[rumãneaşci|Rumãneaşci]]: [[august]]"),
+    };
+    const layout = try buildForEntry(a, &sections, false, "Aromanian", null, "roa_rupwiktionary", &.{}, "agustu");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections, layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "agustu", .language, .{ .heading = "Aromanian", .code = "roa-rup" });
+    const noun = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Aromanian", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(?usize, 2), noun.etymology);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions.len);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, noun.introduction);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 3 }, stored.entry.organization.other_sections);
+    const word = stored.entry.sections[noun.section].blocks[1].spans[0];
+    try std.testing.expect(word.bold and std.mem.eql(u8, word.text, "agustu"));
+    const etymon = stored.entry.sections[noun.etymology.?].blocks[1].spans[1];
+    try std.testing.expect(etymon.kind == .link and etymon.bold);
+    try std.testing.expectEqualStrings("augustus", etymon.text);
+    try std.testing.expectEqualStrings("augustus (mensis)", etymon.target);
+    const translations = stored.entry.sections[3].blocks[1..];
+    try std.testing.expectEqual(@as(usize, 5), translations.len);
+    for (translations, [_][]const u8{ "agosto", "augusto", "août", "august", "august" }) |block, target| {
+        try std.testing.expectEqualStrings(target, block.spans[2].target);
+    }
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    for ([_]?[]const u8{ null, "different title" }) |title| {
+        const wrong = try buildForEntry(a, &sections, false, "Aromanian", null, "roa_rupwiktionary", &.{}, title);
+        try std.testing.expectEqual(@as(usize, 0), wrong.lexemes.len);
+    }
+    const unknown = try buildForEntry(a, &sections, true, null, null, "roa_rupwiktionary", &.{}, "agustu");
+    try std.testing.expectEqual(@as(usize, 0), unknown.lexemes.len);
+    const foreign = try buildForEntry(a, &sections, false, "Aromanian", null, "otherwiki", &.{}, "agustu");
+    try std.testing.expectEqual(@as(usize, 0), foreign.lexemes.len);
+    var different = sections;
+    different[3] = sections[1];
+    const competing = try buildForEntry(a, &different, false, "Aromanian", null, "roa_rupwiktionary", &.{}, "agustu");
+    try std.testing.expectEqual(@as(usize, 0), competing.lexemes.len);
+    different = sections;
+    different[1] = try Section.make(&renderer, 3, "Sumstantivu", "[[sumstantivu|Sumstantivu]]", "agustu");
+    const prose = try buildForEntry(a, &different, false, "Aromanian", null, "roa_rupwiktionary", &.{}, "agustu");
+    try std.testing.expectEqual(@as(usize, 0), prose.lexemes.len);
+}
+
 test "Aromanian dictionary indexes seven source-declared lexical sections under their supplied language" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2401,6 +2616,10 @@ pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[
 }
 
 pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme) !Layout {
+    return buildForEntry(a, sections, unclassified, owner, source_lexeme, wiki_id, numbered_proofs, null);
+}
+
+pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme, page_title: ?[]const u8) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
     const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
@@ -2414,14 +2633,16 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
     for (sections, 0..) |section, i| {
         const numbered_part = if (unclassified) null else sourceNumberedPart(section, i, owner, numbered_proofs);
         const aromanian_part = if (unclassified) null else aromanianSectionPart(section, owner, wiki_id);
+        const aromanian_noun = if (aromanian_part) |kind| std.mem.eql(u8, kind, "Noun") else false;
+        const declared_aromanian = if (aromanian_part != null and (hasTopLevelNumberedGloss(section.blocks) or
+            (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else if (aromanian_part != null and hasTopLevelNumberedGloss(section.blocks)) aromanian_part else null;
+            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
-        const aromanian_noun = if (aromanian_part) |kind| std.mem.eql(u8, kind, "Noun") else false;
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse (if (aromanian_noun) aromanianIndentedSenses(section.blocks) else null) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
         const meaning_paragraph = if (named_kind == null and paragraph_part == null and !unclassified)
             serbianMeaningParagraph(section.blocks, owner, section.level) else null;
@@ -2515,6 +2736,12 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
         } else try other.append(a, i);
     }
     if (active) |previous| lexemes.items[previous].related_sections = try related.toOwnedSlice(a);
+    // A postposed origin cannot start a group for later lexemes. Attach only
+    // the single adjacent origin of an already classified, unambiguous record.
+    if (!unclassified and lexemes.items.len == 1 and std.mem.eql(u8, wiki_id, "roa_rupwiktionary")) {
+        const lexeme = &lexemes.items[0];
+        if (postposedAromanianEtymology(sections, lexeme.*, owner, wiki_id)) |origin_section| lexeme.etymology = origin_section;
+    }
     return .{ .lexemes = try lexemes.toOwnedSlice(a), .other_sections = try other.toOwnedSlice(a) };
 }
 const ControlledFigureFixture = struct {
