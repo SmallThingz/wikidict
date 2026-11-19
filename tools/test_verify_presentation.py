@@ -349,6 +349,24 @@ class PresentationDiagnosticTests(unittest.TestCase):
                              {issue['path'].split('.spans')[1] for issue in result['issues']})
             self.assertTrue(all(issue['nonwaivable'] for issue in result['issues']))
 
+    def test_image_map_button_labels_are_visible_text_independent_of_destinations(self):
+        with Fixture() as f:
+            entry = f.entry('kōukāng', '', language='English')
+            region = dict(kind='internal', target='kōukāng', label='[missing template]')
+            fallback = dict(kind='external', target='https://example.test', label='Lua error')
+            image = dict(map=dict(regions=[dict(shape='rectangle', coordinates=[0, 0, 1, 1], action=region)],
+                                  default_action=fallback))
+            entry['sections'] = [dict(blocks=[dict(spans=[dict(kind='text', text='', image=image)])])]
+            entry['metadata'] = dict(label='{{old bookkeeping label}}')
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            map_path = 'entry.sections[0].blocks[0].spans[0].image.map.'
+            self.assertEqual([(map_path + 'regions[0].action.label', ['unavailable-template'], 'image-map-label'),
+                              (map_path + 'default_action.label', ['error-prose'], 'image-map-label')],
+                             [(issue['path'], issue['categories'], issue['interpretation']) for issue in result['issues']])
+            self.assertEqual(result['image_alternatives'], 0)
+            self.assertEqual(result['annotations'], [])
+
     def test_all_seven_views_and_owner_inventory(self):
         with Fixture() as f:
             f.language('Unverified exact heading', [f.entry('main', '__NOEDITSECTION__', language='Unverified exact heading')])

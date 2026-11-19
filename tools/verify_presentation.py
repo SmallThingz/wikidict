@@ -138,6 +138,12 @@ def destination_fields(action, path, internal_kind, external_kind):
         yield 'target', path + '.target_fragment', action['target_fragment']
 
 
+def image_map_fields(action, path):
+    yield from destination_fields(action, path, 'internal', 'external')
+    if isinstance(action, dict) and action.get('kind') in ('internal', 'external') and isinstance(action.get('label'), str):
+        yield 'image_map_label', path + '.label', action['label']
+
+
 def attribute_fields(value, path='entry'):
     """Walk decoded annotations and link destinations independently of visible prose."""
     if isinstance(value, dict):
@@ -165,10 +171,8 @@ def attribute_fields(value, path='entry'):
             if isinstance(image_map, dict):
                 map_path = path + '.image.map'
                 for i, region in enumerate(image_map.get('regions', [])):
-                    yield from destination_fields(region.get('action'), f'{map_path}.regions[{i}].action',
-                                                  'internal', 'external')
-                yield from destination_fields(image_map.get('default_action'), map_path + '.default_action',
-                                              'internal', 'external')
+                    yield from image_map_fields(region.get('action'), f'{map_path}.regions[{i}].action')
+                yield from image_map_fields(image_map.get('default_action'), map_path + '.default_action')
         if value.get('kind') in ('link', 'external_link'):
             yield from destination_fields(value, path, 'link', 'external_link')
         for key, child in value.items():
@@ -490,7 +494,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
                 for field, path, text in attribute_fields(content):
-                    if field in ('image_alt', 'clipped_text'):
+                    if field in ('image_alt', 'clipped_text', 'image_map_label'):
                         if field == 'image_alt':
                             result['image_alternatives'] += 1
                         categories = diagnostic_categories(text)
@@ -499,7 +503,8 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                                 view_kind=view['kind'], view_language=view['language'], query_title=title,
                                 source_title=redirect['source_title'] if redirect else title,
                                 redirect=redirect, path=path, text=text[:500], categories=categories,
-                                interpretation='image-alternative' if field == 'image_alt' else 'clipped-semantic-text'))
+                                interpretation={'image_alt': 'image-alternative', 'clipped_text': 'clipped-semantic-text',
+                                                'image_map_label': 'image-map-label'}[field]))
                     elif field in ('explanation', 'tooltip'):
                         result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
