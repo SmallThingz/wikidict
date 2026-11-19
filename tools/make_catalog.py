@@ -73,6 +73,7 @@ def catalogue(files, base_url):
         raise ValueError(f'catalogue has more than {MAX_CATALOG_ENTRIES} dictionaries')
 
     rows = ['# wikidict-list-v1: URL<TAB>label<TAB>bytes<TAB>sha256']
+    encoded_size = len(rows[0].encode('utf-8')) + 1
     names = set()
     for path in paths:
         if path.name in names:
@@ -81,9 +82,11 @@ def catalogue(files, base_url):
         label = blob_label(path)
         with path.open('rb') as source:
             digest = hashlib.file_digest(source, 'sha256').hexdigest()
-        rows.append(f'{base_url.rstrip("/")}/{quote(path.name)}\t{label}\t{path.stat().st_size}\t{digest}')
-        if len(('\n'.join(rows) + '\n').encode('utf-8')) > MAX_CATALOG_BYTES:
+        row = f'{base_url.rstrip("/")}/{quote(path.name)}\t{label}\t{path.stat().st_size}\t{digest}'
+        encoded_size += len(row.encode('utf-8')) + 1
+        if encoded_size > MAX_CATALOG_BYTES:
             raise ValueError(f'catalogue exceeds {MAX_CATALOG_BYTES} bytes')
+        rows.append(row)
 
     return '\n'.join(rows) + '\n'
 

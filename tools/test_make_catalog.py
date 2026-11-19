@@ -116,6 +116,21 @@ class CatalogTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'exceeds 1'):
                     c.catalogue([path], 'https://example.test/release')
 
+    def test_utf8_byte_limit_includes_multilingual_rows_and_final_newline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = [Path(tmp) / name for name in ('one.wikblb', 'two.wikblb')]
+            for path, code, label in zip(paths, ('as', 'ja'), ('অসমীয়া', '日本語')):
+                path.write_bytes(language_blob(code, label))
+            url = 'https://example.test/dictionaries'
+            expected = c.catalogue(paths, url)
+            size = len(expected.encode('utf-8'))
+            self.assertGreater(size, len(expected))
+            with patch.object(c, 'MAX_CATALOG_BYTES', size):
+                self.assertEqual(c.catalogue(paths, url), expected)
+            with patch.object(c, 'MAX_CATALOG_BYTES', size - 1):
+                with self.assertRaisesRegex(ValueError, 'exceeds'):
+                    c.catalogue(paths, url)
+
     def test_rejects_unverified_language_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'bad.wikblb'
