@@ -107,15 +107,15 @@ class EditionTerminalTests(unittest.TestCase):
             binary = parent / 'reader'
             binary.write_bytes(b'test double')
             selections = parent / 'entries.tsv'
-            selections.write_text('output_directory\towner_heading\texact_title\tvisible_definition_witness\tselected_complete_sha256\n'
-                                  f'{source}\tOwner\tA\tFirst\t{"0" * 64}\n'
-                                  f'{source}\tOwner\tB\tSecond\t{digest}\n')
+            selections.write_text('output_directory\towner_heading\texact_title\tvisible_definition_witness\tselected_complete_sha256\tredirect_target\n'
+                                  f'{source}\tOwner\tA\tFirst\t{"0" * 64}\t\n'
+                                  f'{source}\tOwner\tB\tSecond\t{digest}\tDestination\n')
             factory = Mock(return_value=Mock(checks=['checked'], snapshots=[]))
             with patch('verify_edition_terminal.screen_projection', return_value=(None, factory)), \
                     patch('verify_edition_terminal.exercise') as exercise:
                 self.assertEqual(main(['--binary', str(binary), '--cases', str(selections),
                                        '--report', str(parent / 'reports')]), 1)
-            exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second')
+            exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second', 'Destination')
             self.assertEqual(factory.call_args.kwargs['kind'], 'language')
             ledger = next((parent / 'reports').glob('*/results.jsonl'))
             first, second = [json.loads(line) for line in ledger.read_text().splitlines()]
@@ -154,7 +154,8 @@ class EditionTerminalTests(unittest.TestCase):
                 def close(self):
                     events.append('reader closed')
 
-            def fail(reader, language, entry, witness):
+            def fail(reader, language, entry, witness, redirect_target):
+                self.assertIsNone(redirect_target)
                 self.assertEqual((reader.width, reader.rows, reader.timeout), (90, 30, 5))
                 self.assertNotEqual(reader.private_root, source)
                 raise CheckFailure('body witness missing')
@@ -188,7 +189,7 @@ class EditionTerminalTests(unittest.TestCase):
                     patch('verify_edition_terminal.exercise') as exercise:
                 self.assertEqual(main(['--binary', str(binary), '--cases', str(cases), '--report', str(parent / 'out')]), 0)
             self.assertEqual(factory.call_args.kwargs, {'language': None, 'kind': 'supplemental'})
-            exercise.assert_called_once_with(factory.return_value, 'supplemental', 'Appendix', 'Body')
+            exercise.assert_called_once_with(factory.return_value, 'supplemental', 'Appendix', 'Body', None)
             result = json.loads(next((parent / 'out').glob('*/*/result.json')).read_text())
             self.assertIsNone(result['language'])
             self.assertEqual(result['kind'], 'supplemental')

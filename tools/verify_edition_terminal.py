@@ -193,7 +193,7 @@ def reveal_witness(reader, wanted, heading):
     require(source_witness_visible(reader, wanted, heading), f'Source witness missing from body at {reader.width} columns')
 
 
-def exercise(reader, heading_label, entry, witness):
+def exercise(reader, heading_label, entry, witness, redirect_target=None):
     reader.action(b'\x15wikidict-no-match-5400b4b7', lambda: reader.query() == 'wikidict-no-match-5400b4b7'
                   and reader.page_is('search', count=0) and 'No matching words.' in reader.text(), 'empty search')
     require(reader.text().count('No matching words.') == 1, 'Empty search repeats the same message')
@@ -205,7 +205,7 @@ def exercise(reader, heading_label, entry, witness):
     reader.action(b'\x15' + entry.encode(), lambda: reader.query() == normalized(entry) and
                   reader.page_is('search') and reader.header()[3] > 0, 'recovered search')
     reader.action(DOWN, lambda: reader.screen.cursor.hidden, 'selected first exact prefix match')
-    heading = normalized(' '.join(f'{entry} / {heading_label}'.split()))
+    heading = normalized(' '.join(f'{redirect_target or entry} / {heading_label}'.split()))
     reader.action(ENTER, lambda: reader.entry_focused() and
                   (reading_text(reader) + ' ').startswith(heading + ' '), 'opened requested entry')
     wanted = normalized(' '.join(witness.split()))
@@ -272,11 +272,13 @@ def choose_startup_language(reader, root, language):
 
 
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
-             indexed_page=False):
+             indexed_page=False, redirect_target=None):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
     try:
+        if redirect_target is not None:
+            result['redirect_target'] = redirect_target
         projection, reader_type = screen_projection(engine)
         with tempfile.TemporaryDirectory(dir=out) as temp:
             root = Path(temp) / 'dictionary'
@@ -299,7 +301,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                 finally:
                     result['opening_wait_seconds'] = time.monotonic() - started
                 reader.timeout = 5
-                exercise(reader, language or kind, entry, witness)
+                exercise(reader, language or kind, entry, witness, redirect_target)
             except Exception:
                 try:
                     reader.snapshot('failure-before-close')
@@ -333,6 +335,7 @@ def main(argv=None):
     parser.add_argument('--kind', choices=('language', 'supplemental'), help='Record collection (default: language)')
     parser.add_argument('--language', help='Exact compiled language heading')
     parser.add_argument('--entry', help='Exact title in the selected collection')
+    parser.add_argument('--redirect-target', help='Expected title after opening the selected redirect')
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
     parser.add_argument('--implicit-language', action='store_true', help='Launch without a language override and use the keyboard chooser when needed')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
@@ -340,7 +343,7 @@ def main(argv=None):
                         help='Screen cell engine (libvterm and kitty require their respective native libraries)')
     args = parser.parse_args(argv)
     if args.cases:
-        if any((args.kind, args.language, args.entry, args.witness)):
+        if any((args.kind, args.language, args.entry, args.witness, args.redirect_target)):
             parser.error('--cases supplies the language, entry and witness for each row')
         with args.cases.open(encoding='utf-8', newline='') as data:
             rows = csv.DictReader(data, delimiter='\t')
@@ -348,16 +351,19 @@ def main(argv=None):
             if not set(columns).issubset(rows.fieldnames or []):
                 parser.error('TSV requires columns ' + ', '.join(columns))
             cases = [(row['output_directory'], row['owner_heading'] or None, row['exact_title'],
-                      row['visible_definition_witness'], row['selected_complete_sha256'], row.get('kind') or 'language')
+                      row['visible_definition_witness'], row['selected_complete_sha256'], row.get('kind') or 'language',
+                      row.get('redirect_target') or None)
                      for row in rows]
     else:
-        cases = [(str(args.indexed_page or args.root), args.language, args.entry, args.witness, None, args.kind or 'language')]
+        cases = [(str(args.indexed_page or args.root), args.language, args.entry, args.witness, None, args.kind or 'language', args.redirect_target)]
     parent = args.report.resolve()
     if not cases:
         parser.error('No entries selected')
-    for root, language, entry, witness, digest, kind in cases:
+    for root, language, entry, witness, digest, kind, redirect_target in cases:
         if not all(s and s.strip() for s in (root, entry, witness)):
             parser.error('Each entry needs a dictionary directory, title and witness')
+        if redirect_target is not None and not redirect_target.strip():
+            parser.error('A redirect needs its exact destination title')
         if kind not in ('language', 'supplemental'):
             parser.error(f'Unsupported collection: {kind!r}')
         if kind == 'language' and not (language and language.strip()):
@@ -379,9 +385,10 @@ def main(argv=None):
     if args.cases:
         parent = Path(tempfile.mkdtemp(prefix='edition-batch-', dir=parent))
     failures = 0
-    for root, language, entry, witness, digest, kind in cases:
+    for root, language, entry, witness, digest, kind, redirect_target in cases:
         path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
-                                digest, parent, args.screen_projection, kind, args.implicit_language, indexed_page=args.indexed_page is not None)
+                                digest, parent, args.screen_projection, kind, args.implicit_language,
+                                indexed_page=args.indexed_page is not None, redirect_target=redirect_target)
         if args.cases:
             with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
                 ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),
