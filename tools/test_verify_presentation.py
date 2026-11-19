@@ -728,7 +728,7 @@ class BatchExportBoundaryTests(unittest.TestCase):
 
             def list_and_replace(path):
                 names = listdir(path)
-                if path == root:
+                if Path(path) == root:
                     replacement.replace(link)
                 return names
 

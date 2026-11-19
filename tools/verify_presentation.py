@@ -472,42 +472,44 @@ def prepare_index_directories(root):
 
 
 def dictionary_snapshot(root):
-    root = Path(root).absolute()
+    root = str(Path(root).absolute())
     rows, seen = [], set()
     ancestor_identities = {}
 
     def state(path, follow):
-        value = path.stat() if follow else path.lstat()
+        value = os.stat(path) if follow else os.lstat(path)
         return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
                 value.st_gid, value.st_nlink, value.st_size,
                 value.st_mtime_ns, value.st_ctime_ns)
 
     def remember_ancestors(parent):
-        # Each row carries its lexical and resolved paths. Their ancestors can
-        # be bound once per snapshot, including directories outside the root.
+        # Fresh identities are still bound once per snapshot. Strings avoid
+        # reconstructing/hashing the same Path parents for every source member.
         while parent not in ancestor_identities:
             ancestor_identities[parent] = state(parent, False)[:5]
-            parent = parent.parent
+            parent = os.path.dirname(parent)
 
-    def visit(path, depth, resolved_parent=None):
+    def visit(path, depth, resolved_parent=None, lexical_parent=None):
         require(depth <= 16, 'dictionary directory depth exceeded')
         lexical = state(path, False)
         is_link = stat.S_ISLNK(lexical[2])
         target = state(path, True) if is_link else lexical
         if resolved_parent is None or is_link:
-            resolved = path.resolve(strict=True)
+            resolved = str(Path(path).resolve(strict=True))
+        elif resolved_parent == lexical_parent:
+            resolved = path
         else:
-            resolved = resolved_parent / path.name
-        remember_ancestors(path.parent)
+            resolved = os.path.join(resolved_parent, os.path.basename(path))
+        remember_ancestors(lexical_parent if lexical_parent is not None else os.path.dirname(path))
         if resolved != path:
-            remember_ancestors(resolved.parent)
-        row = (str(path), str(resolved), lexical, target)
+            remember_ancestors(os.path.dirname(resolved))
+        row = (path, resolved, lexical, target)
         if stat.S_ISDIR(target[2]):
             identity = target[:2]
             require(identity not in seen, 'dictionary directory alias or cycle')
             seen.add(identity)
             names = sorted(name for name in os.listdir(path) if name != '.dict-cache')
-            cache = path / '.dict-cache'
+            cache = os.path.join(path, '.dict-cache')
             try:
                 cache_state = state(cache, False)
             except FileNotFoundError:
@@ -517,7 +519,7 @@ def dictionary_snapshot(root):
                 cache_identity = cache_state[:5]
             rows.append((*row, names, cache_identity))
             for name in names:
-                visit(path / name, depth + 1, resolved)
+                visit(os.path.join(path, name), depth + 1, resolved, path)
         else:
             require(stat.S_ISREG(target[2]), 'nonregular dictionary member')
             rows.append(row)
@@ -527,7 +529,7 @@ def dictionary_snapshot(root):
     visit(root, 0)
     for parent, identity in ancestor_identities.items():
         require(identity == state(parent, False)[:5], 'dictionary ancestor changed during snapshot')
-    return rows, ancestor_identities
+    return rows, {Path(parent): identity for parent, identity in ancestor_identities.items()}
 
 
 def process_birth(pid):
