@@ -65,6 +65,14 @@ class SourceDefinitionTests(unittest.TestCase):
         raw = header + 'aa\tOne\taa\nfr\tfrançais\tFrench\n# iso-639-3\nzz\tTwo\tOne\n'
         self.assertEqual(localized_language_codes(raw.encode()), {'français': 'fr'})
 
+    def test_initial_capital_must_be_listed_and_unambiguous_with_its_primary_name(self):
+        raw = ('# wikidict-language-registry-v2\n# mediawiki\n'
+               'sv\tsvenska\tSvenska\tSwedish\nfi\tfinska\n'
+               'en\tengelska\tEngelska\nde\ttyska\tTyska\n'
+               '# iso-639-3\nxx\tEngelska\nyy\ttyska\n').encode()
+        self.assertEqual(localized_language_codes(raw),
+                         {'svenska': 'sv', 'Svenska': 'sv', 'finska': 'fi', 'engelska': 'en'})
+
     def test_source_index_keeps_order_and_origin_across_insert_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

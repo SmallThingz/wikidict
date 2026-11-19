@@ -244,12 +244,12 @@ def definitions(text, title, headings, trail_rule=None):
 
 
 def localized_language_codes(raw):
-    """Use exact primary MediaWiki labels only if no other code claims that spelling."""
+    """Use unambiguous MediaWiki names and their explicitly registered initial capitals."""
     lines = raw.decode('utf-8').splitlines()
     if not lines or lines[0] != '# wikidict-language-registry-v2' or '# mediawiki' not in lines:
         raise ValueError('Expected a v2 language registry with MediaWiki names')
     claims = defaultdict(set)
-    primary = {}
+    candidates = {}
     mediawiki = False
     for line in lines[1:]:
         fields = line.split('\t')
@@ -261,8 +261,14 @@ def localized_language_codes(raw):
             for name in fields:
                 claims[name].add(fields[0])
             if mediawiki:
-                primary[fields[1]] = fields[0]
-    return {name: code for name, code in primary.items() if name and claims[name] == {code}}
+                name = fields[1]
+                candidates[name] = (fields[0], name)
+                initial = name[:1].upper()
+                capitalized = initial + name[1:]
+                if len(initial) == 1 and capitalized != name and capitalized in fields[2:]:
+                    candidates[capitalized] = (fields[0], name)
+    return {spelling: code for spelling, (code, primary) in candidates.items()
+            if spelling and claims[spelling] == claims[primary] == {code}}
 
 
 class SourceDefinitions:
@@ -428,7 +434,7 @@ class SourceDefinitions:
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples, matched_example=self.matched_example,
-                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def unmatched_locations(self, *, after_examples):
         rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '
