@@ -4080,38 +4080,62 @@ class RendererDeviceTest {
         val initializationState = initializationField.get(failures) as androidx.compose.runtime.MutableState<String?>
         val previousInitializationError = initializationState.value
         val startupError = "Unable to open your library. Restart the app to try again."
+        val scopeField = LibraryStore::class.java.getDeclaredField("scope").apply { isAccessible = true }
+        val scopeJob = (scopeField.get(library) as kotlinx.coroutines.CoroutineScope).coroutineContext[kotlinx.coroutines.Job]!!
+        val mutexField = LibraryStore::class.java.getDeclaredField("mutex").apply { isAccessible = true }
+        val operationMutex = mutexField.get(library) as kotlinx.coroutines.sync.Mutex
+        suspend fun drainLibrary() = kotlinx.coroutines.withTimeout(15000) {
+            scopeJob.children.toList().forEach { it.join() }
+        }
         var imports = 0
         assertTrue("Isolated debug catalogue must use bundled rows",
             previousSources == listOf(Catalog.DEBUG_FIXTURE) || previousSources == listOf(Catalog.DEFAULT))
         try {
-            compose.runOnIdle {
-                runBlocking {
-                    assertFalse(failures.initialize(open = { throw java.io.IOException("Owned startup failure fixture") }))
+            drainLibrary()
+            // A queued empty refresh cannot finish under this mutex. This detects
+            // the transient operation even if its busy label would be missed by a frame.
+            operationMutex.lock()
+            try {
+                compose.runOnIdle {
+                    runBlocking {
+                        assertFalse(failures.initialize(open = { throw java.io.IOException("Owned startup failure fixture") }))
+                    }
+                    assertEquals(startupError, library.initializationError)
+                    library.sources.toList().forEach(library::removeSource)
+                    assertTrue(library.catalog.isEmpty())
+                    assertNull(library.error)
+                    assertTrue(library.refreshCatalogs().isCompleted)
                 }
-                assertEquals(startupError, library.initializationError)
-                library.sources.toList().forEach(library::removeSource)
-            }
-            library.refreshCatalogs().join()
-            assertTrue(library.catalog.isEmpty())
-            assertNull(library.error)
-            compose.activityRule.scenario.onActivity { activity ->
-                activity.setContent {
-                    androidx.compose.material3.MaterialTheme {
-                        LibraryScreen(library) {
-                            imports++
-                            library.importFile(input = { throw java.io.IOException(importError) })
+                compose.activityRule.scenario.onActivity { activity ->
+                    activity.setContent {
+                        androidx.compose.material3.MaterialTheme {
+                            LibraryScreen(library) {
+                                imports++
+                                library.importFile(input = { throw java.io.IOException(importError) })
+                            }
                         }
                     }
                 }
-            }
-            compose.waitUntil(15000) { library.busy == null }
+                compose.waitForIdle()
+                compose.runOnIdle {
+                    assertNull(library.busy)
+                    assertFalse("No empty-source refresh may queue behind an import", scopeJob.children.any())
+                }
+                compose.onNodeWithText("Reading catalogues").assertDoesNotExist()
+                compose.onNodeWithContentDescription("Import wikblb").assertIsEnabled()
+                compose.onNodeWithContentDescription("Refresh catalogues").assertIsNotEnabled()
+            } finally { operationMutex.unlock() }
             compose.onNodeWithText(explanation).assertIsDisplayed()
             compose.onNodeWithText(startupError).assertIsDisplayed()
             compose.onNodeWithContentDescription("Import wikblb").assertIsEnabled().performClick()
             compose.runOnIdle { assertEquals(1, imports) }
             compose.waitUntil(15000) { library.busy == null && library.error == importError }
             compose.onNodeWithText(importError).assertIsDisplayed()
-            compose.onNodeWithContentDescription("Refresh catalogues").assertIsEnabled()
+            compose.onNodeWithContentDescription("Refresh catalogues").assertIsNotEnabled()
+            compose.runOnIdle {
+                assertTrue(library.refreshCatalogs().isCompleted)
+                assertEquals(importError, library.error)
+            }
             compose.onNodeWithContentDescription("Add catalogue").performClick()
             compose.onNode(hasSetTextAction()).performTextInput("http://example.invalid/catalogue.list")
             compose.onNodeWithText("Add source").performClick()
@@ -4132,6 +4156,33 @@ class RendererDeviceTest {
             compose.onNodeWithText(startupError).assertIsDisplayed()
             compose.runOnIdle { assertEquals(startupError, library.initializationError) }
             assertEquals(previousDictionaries, library.dictionaries.map { it.id })
+            drainLibrary()
+            compose.runOnIdle { failures.publishCatalogueError("Owned removed catalogue failure") }
+            operationMutex.lock()
+            lateinit var supersededRefresh: kotlinx.coroutines.Job
+            try {
+                compose.runOnIdle { supersededRefresh = library.refreshCatalogs() }
+                compose.onNodeWithContentDescription("Remove source ${Catalog.DEFAULT}").performScrollTo().performClick()
+                compose.runOnIdle {
+                    assertTrue(library.sources.isEmpty())
+                    assertTrue(library.catalog.isEmpty())
+                    assertNull(library.error)
+                    assertNull(library.busy)
+                    assertEquals(listOf(supersededRefresh), scopeJob.children.toList())
+                    assertEquals(startupError, library.initializationError)
+                    failures.operationError = importError
+                }
+                compose.onNodeWithContentDescription("Import wikblb").performScrollTo().assertIsEnabled()
+                compose.onNodeWithContentDescription("Refresh catalogues").assertIsNotEnabled()
+                compose.onNodeWithText("Reading catalogues").assertDoesNotExist()
+            } finally { operationMutex.unlock() }
+            supersededRefresh.join()
+            compose.runOnIdle {
+                assertTrue(supersededRefresh.isCancelled)
+                assertTrue(library.catalog.isEmpty())
+                assertEquals(importError, library.error)
+                assertNull(library.busy)
+            }
         } finally {
             compose.runOnIdle {
                 initializationState.value = previousInitializationError
@@ -4141,6 +4192,7 @@ class RendererDeviceTest {
             library.refreshCatalogs().join()
             compose.waitUntil(15000) { library.busy == null }
             assertEquals(previousSources, library.sources)
+            assertTrue(library.catalog.isNotEmpty())
         }
     }
 

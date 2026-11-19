@@ -9,7 +9,23 @@ import kotlinx.coroutines.CancellationException
 internal class LibraryFailureState {
     var initializationError by mutableStateOf<String?>(null)
         private set
-    var operationError by mutableStateOf<String?>(null)
+    private var operationMessage by mutableStateOf<String?>(null)
+    private var catalogueOwnsError = false
+    var operationError: String?
+        get() = operationMessage
+        set(value) {
+            operationMessage = value
+            catalogueOwnsError = false
+        }
+
+    fun publishCatalogueError(message: String?) {
+        operationError = message
+        catalogueOwnsError = message != null
+    }
+
+    fun clearCatalogueError() {
+        if (catalogueOwnsError) operationError = null
+    }
 
     suspend fun initialize(
         open: suspend () -> Unit,

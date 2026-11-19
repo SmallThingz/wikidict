@@ -21,14 +21,14 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
     var message by remember { mutableStateOf<String?>(null) }
     var remove by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
-        if(autoRefresh && library.catalog.isEmpty() && library.busy==null && library.error==null)
+        if(autoRefresh && library.sources.isNotEmpty() && library.catalog.isEmpty() && library.busy==null && library.error==null)
             library.refreshCatalogs()
     }
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         item { Row(verticalAlignment=Alignment.CenterVertically) {
             Text("Dictionaries",Modifier.weight(1f),style=MaterialTheme.typography.headlineMedium)
             IconButton(onClick=onImport,enabled=library.busy==null) { Icon(Icons.Outlined.FolderOpen,"Import wikblb") }
-            IconButton(onClick={library.refreshCatalogs()},enabled=library.busy==null) { Icon(Icons.Outlined.Refresh,"Refresh catalogues") }
+            IconButton(onClick={library.refreshCatalogs()},enabled=library.sources.isNotEmpty()&&library.busy==null) { Icon(Icons.Outlined.Refresh,"Refresh catalogues") }
         } }
         (library.busy ?: if (library.hasRetainedDownload) "Download needs attention" else null)?.let { label ->
             item { Column {

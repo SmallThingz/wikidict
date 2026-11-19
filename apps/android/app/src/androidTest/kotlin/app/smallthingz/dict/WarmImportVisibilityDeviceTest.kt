@@ -160,7 +160,7 @@ class WarmImportVisibilityDeviceTest {
                 val failure = requireNotNull(library.error)
                 awaitText(failure)
                 compose.onNodeWithContentDescription("Import wikblb").assertIsEnabled()
-                compose.onNodeWithContentDescription("Refresh catalogues").assertIsEnabled()
+                compose.onNodeWithContentDescription("Refresh catalogues").assertIsNotEnabled()
                 assertEquals(beforeIds + id, library.dictionaries.map { it.id }.toSet())
                 assertEquals(entry, library.read(hit))
                 withContext(Dispatchers.IO) {

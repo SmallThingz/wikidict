@@ -445,31 +445,48 @@ class LibraryStore private constructor(private val context: Context) {
         } } catch (e: CancellationException) { throw e }
         catch (e: Exception) { failOwnedDownload(e) { removeDownload(id) } }
     }
-    private fun operation(label: String, ownsDownload: Boolean = false, action: suspend () -> Unit): Job = scope.launch {
+    private fun operation(label: String, ownsDownload: Boolean = false,
+        stillCurrent: () -> Boolean = { true }, action: suspend () -> Unit): Job = scope.launch {
         operations.run(
-            start = { withContext(Dispatchers.Main) { busy = label; error = null; progress = 0f; transferDetail = null } },
+            start = { withContext(Dispatchers.Main) {
+                // A removed catalogue must not publish a queued busy state or erase an import error.
+                if (!stillCurrent()) throw CancellationException("Catalogue sources changed")
+                busy = label; error = null; progress = 0f; transferDetail = null
+            } },
             finish = { withContext(NonCancellable + Dispatchers.Main) { busy = null; transferDetail = null } },
             ownedDownloadId = { if (ownsDownload) downloadId().takeIf { it >= 0 } else null },
         ) {
             try { action() } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                withContext(Dispatchers.Main) { error = e.message ?: "Could not complete this operation" }
+                withContext(Dispatchers.Main) {
+                    if (stillCurrent()) error = e.message ?: "Could not complete this operation"
+                }
             }
         }
     }
-    fun refreshCatalogs() = operation("Reading catalogues") {
-        val entries = ArrayList<CatalogItem>()
-        val failures = ArrayList<String>()
-        for(source in sources.toList()) {
-            try {
-                entries += if(BuildConfig.DEBUG && (source == Catalog.DEBUG_FIXTURE || source == Catalog.DEFAULT))
-                    context.assets.open("debug-dictionaries.list").use { Catalog.parse(it.bufferedReader().readText(),true) }
-                else Catalog.parse(Network.read(source,2*1024*1024).decodeToString(throwOnInvalidSequence=true))
-            } catch(e:CancellationException) { throw e }
-            catch(e:Exception) { failures += "${URI(source).host}: ${e.message ?: "Unavailable"}" }
+    fun refreshCatalogs(): Job {
+        val requestedSources = sources
+        if (requestedSources.isEmpty()) {
+            catalog = emptyList()
+            failures.clearCatalogueError()
+            return Job().apply { complete() }
         }
-        withContext(Dispatchers.Main) {
-            catalog=entries.distinctBy{it.url}
-            error=failures.takeIf{it.isNotEmpty()}?.joinToString("\n")
+        return operation("Reading catalogues", stillCurrent = { sources === requestedSources }) {
+            val entries = ArrayList<CatalogItem>()
+            val failures = ArrayList<String>()
+            for(source in requestedSources) {
+                try {
+                    entries += if(BuildConfig.DEBUG && (source == Catalog.DEBUG_FIXTURE || source == Catalog.DEFAULT))
+                        context.assets.open("debug-dictionaries.list").use { Catalog.parse(it.bufferedReader().readText(),true) }
+                    else Catalog.parse(Network.read(source,2*1024*1024).decodeToString(throwOnInvalidSequence=true))
+                } catch(e:CancellationException) { throw e }
+                catch(e:Exception) { failures += "${URI(source).host}: ${e.message ?: "Unavailable"}" }
+            }
+            withContext(Dispatchers.Main) {
+                if (sources === requestedSources) {
+                    catalog=entries.distinctBy{it.url}
+                    this@LibraryStore.failures.publishCatalogueError(failures.takeIf{it.isNotEmpty()}?.joinToString("\n"))
+                }
+            }
         }
     }
     fun download(item: CatalogItem) = operation("Downloading ${item.label}", ownsDownload = !item.url.startsWith("asset://")) {

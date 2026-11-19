@@ -52,4 +52,34 @@ class LibraryFailureStateTest {
         assertEquals(0, publications)
         assertNull(state.initializationError)
     }
+
+    @Test fun removingLastCatalogueClearsItsFailureWithoutErasingInitialization() = runBlocking {
+        val state = LibraryFailureState()
+        assertFalse(state.initialize(open = { throw IOException("Storage unavailable") }))
+        val startupError = state.initializationError
+        state.publishCatalogueError("Removed catalogue unavailable")
+        assertEquals("Removed catalogue unavailable", state.operationError)
+        state.clearCatalogueError()
+        assertNull(state.operationError)
+        assertEquals(startupError, state.initializationError)
+        // Adding a working catalogue uses the normal publication path again.
+        state.publishCatalogueError("Later catalogue unavailable")
+        state.publishCatalogueError(null)
+        assertNull(state.operationError)
+        assertEquals(startupError, state.initializationError)
+    }
+
+    @Test fun catalogueRemovalPreservesLaterImportOrDownloadFailureEvenWithSameMessage() {
+        val state = LibraryFailureState()
+        for (message in listOf("Selected file unavailable", "Download failed")) {
+            state.publishCatalogueError(message)
+            // Ownership changes even when the later operation reports identical text.
+            state.operationError = message
+            state.clearCatalogueError()
+            assertEquals(message, state.operationError)
+            state.operationError = null
+            state.clearCatalogueError()
+            assertNull(state.operationError)
+        }
+    }
 }
