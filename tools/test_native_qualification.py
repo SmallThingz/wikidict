@@ -2980,7 +2980,8 @@ class PrivateManifestAuthenticationTests(unittest.TestCase):
         selected = [n for n in body if isinstance(n, ast.FunctionDef) and n.name in names or
                     isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in variables for t in n.targets)]
         self.assertEqual({n.name for n in selected if isinstance(n, ast.FunctionDef)}, names)
-        ns = dict(os=os, stat=stat, time=time, Path=Path, hashlib=hashlib)
+        ns = dict(os=os, stat=stat, time=time, Path=Path, hashlib=hashlib,
+                  qualification_file_reference=qualification.qualification_file_reference)
         exec(compile(ast.fix_missing_locations(ast.Module(body=selected, type_ignores=[])),
                      '<actual-worker-authentication>', 'exec'), ns)
         helper = runpy.run_path(str(Path(qualification.__file__).with_name('native_qualification_helpers.py')))
@@ -3558,6 +3559,28 @@ class TestCacheRetentionTests(unittest.TestCase):
                     request['release']=self.document(root/'release.json',dict(schema='native-resource-release.v1',released=True,physical_closure=request['closure'],cache_custody_released=True))
                     self.assertEqual(qualification.cleanup_closed_test_cache(request,reconcile_protected=pins)['status'],'cleanup-deferred')
                     self.assertEqual(calls,[])
+
+
+class QualificationFileReferenceTests(unittest.TestCase):
+    def test_descriptor_and_accounting_use_bounded_reads(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'artifact'
+            payload = b'0123456789abcdef' * 100_003
+            path.write_bytes(payload)
+            counters = {'files': 0, 'bytes': 0}
+            with path.open('rb') as stream:
+                readinto = stream.readinto
+
+                def bounded(buffer):
+                    self.assertGreater(len(buffer), 0)
+                    self.assertLessEqual(len(buffer), 1024 * 1024)
+                    return readinto(buffer)
+
+                with patch.object(stream, 'readinto', bounded), patch.object(Path, 'open', return_value=stream):
+                    result = qualification.qualification_file_reference(path, counters=counters)
+            self.assertEqual(result, {'path': str(path), 'bytes': len(payload),
+                                      'sha256': hashlib.sha256(payload).hexdigest()})
+            self.assertEqual(counters, {'files': 1, 'bytes': len(payload)})
 
 
 class PassedClosureRetentionTests(unittest.TestCase):

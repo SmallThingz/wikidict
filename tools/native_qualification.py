@@ -1506,6 +1506,35 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
             fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
 
+def qualification_file_reference(path, *, counters=None):
+    """Hash one stable file and count the bytes read without retaining its contents."""
+    import hashlib
+    import os
+    from pathlib import Path
+
+    def identity(stamp):
+        return (stamp.st_dev, stamp.st_ino, stamp.st_mode, stamp.st_size,
+                stamp.st_mtime_ns, stamp.st_ctime_ns)
+
+    path = Path(path)
+    expected = identity(path.stat())
+    digest = hashlib.sha256()
+    size = 0
+    buffer = memoryview(bytearray(min(256 * 1024, max(4096, expected[3]))))
+    with path.open('rb', buffering=0) as stream:
+        assert identity(os.fstat(stream.fileno())) == expected, str(path)
+        if counters is not None:
+            counters['files'] += 1
+        while count := stream.readinto(buffer):
+            size += count
+            digest.update(buffer[:count])
+            if counters is not None:
+                counters['bytes'] += count
+        assert identity(os.fstat(stream.fileno())) == expected, str(path)
+    assert identity(path.stat()) == expected, str(path)
+    return {'path': str(path), 'bytes': size, 'sha256': digest.hexdigest()}
+
+
 def close_passed_native_qualification(request, *, reconcile_protected=None):
     """Verify and close the existing full-pass route, then run optional housekeeping.
 
@@ -1530,7 +1559,7 @@ def close_passed_native_qualification(request, *, reconcile_protected=None):
     assert (source_identity.st_dev, source_identity.st_ino, source_identity.st_uid,
             stat.S_IMODE(source_identity.st_mode)) == tuple(
                 cfg['retained_source'][key] for key in ('device', 'inode', 'uid', 'mode'))
-    def ref(p):p=pathlib.Path(p);b=p.read_bytes();return dict(path=str(p),bytes=len(b),sha256=hashlib.sha256(b).hexdigest())
+    ref = qualification_file_reference
     def load(n):return json.loads((O/n).read_bytes())
     def identity(pid,base):
      try:s=(pathlib.Path(base)/str(pid)/'stat').read_text().rsplit(')',1)[1].split();return dict(pid=pid,birth=int(s[19]),group=int(s[2]),session=int(s[3]))
@@ -1679,14 +1708,7 @@ if __name__ == '__main__':
         from pathlib import Path
         import os,json,hashlib,subprocess,time,stat,ast,runpy,sys,fcntl
         D=Path(sys.argv[1]);N=D.parent.parent;Q=N
-        def state(s):return(s.st_dev,s.st_ino,s.st_mode,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
-        def ref(p):
-         p=Path(p);s=p.stat();h=hashlib.sha256()
-         with p.open('rb')as f:
-          assert state(os.fstat(f.fileno()))==state(s)
-          for z in iter(lambda:f.read(1048576),b''):h.update(z)
-          assert state(os.fstat(f.fileno()))==state(s)
-         assert state(p.stat())==state(s);return dict(path=str(p),bytes=s.st_size,sha256=h.hexdigest())
+        ref = qualification_file_reference
         def auth(v):assert ref(v['path'])=={k:v[k]for k in ('path','bytes','sha256')},v['path'];return Path(v['path'])
         def read(v):return json.loads(auth(v).read_text())
         def write(p,v):
@@ -1777,14 +1799,7 @@ if __name__ == '__main__':
         _hash_reads = dict(bytes=0, files=0)
         source_guard_metrics = []
         def ref(p):
-         p=Path(p);s=p.stat();h=hashlib.sha256()
-         with p.open('rb')as f:
-          assert state(os.fstat(f.fileno()))==state(s)
-          _hash_reads['files'] += 1
-          for z in iter(lambda:f.read(1048576),b''):
-           _hash_reads['bytes'] += len(z);h.update(z)
-          assert state(os.fstat(f.fileno()))==state(s)
-         assert state(p.stat())==state(s);return dict(path=str(p),bytes=s.st_size,sha256=h.hexdigest())
+            return qualification_file_reference(p, counters=_hash_reads)
         # Private replacement for auth() in the existing embedded owner/worker source.
         # Each process authenticates its own expected inputs; ref() remains uncached.
         _expected_inputs = {}
