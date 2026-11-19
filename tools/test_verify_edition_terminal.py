@@ -254,6 +254,20 @@ class EditionTerminalTests(unittest.TestCase):
         for witness in ('next words unrelated column', 'private match', 'chosen / owner first words'):
             self.assertFalse(source_witness_visible(reader, witness, 'chosen / owner'))
 
+    def test_wrapped_source_words_inside_one_bordered_cell(self):
+        def row(left, right=''):
+            return 'sidebar'.ljust(29) + f'│   │ {left:21} │ {right:12} │'
+
+        lines = [''] * 6 + [row('Parto supra di la', 'first'), row('kapitelo di kolono,', 'second'),
+                            row('qua havas', 'third'), row('next section'), row(''),
+                            row('another entry')] + [''] * 2
+        cells = [[{'text': c} for c in line] for line in lines]
+        reader = SimpleNamespace(width=90, screen=SimpleNamespace(display=lines, cell_rows=lambda: cells))
+        self.assertTrue(source_witness_visible(reader, 'Parto supra di la kapitelo di kolono, qua havas', 'abako / Ido'))
+        for wrong in ('di la second', 'first kapitelo', 'third next section', 'havas next section',
+                      'section another entry', 'sidebar Parto', 'kapitelo supra di'):
+            self.assertFalse(source_witness_visible(reader, wrong, 'abako / Ido'))
+
     def test_full_width_glyph_wrap_only_rejoins_at_the_pane_edge(self):
         def cells(text):
             row = []

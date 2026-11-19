@@ -130,6 +130,34 @@ def reading_body(reader, heading):
     return text.removeprefix(heading + ' ')
 
 
+def wrapped_table_cell_contains(rows, left, right, wanted):
+    """Match adjacent lines inside one bordered column when the next word had to wrap."""
+    previous = ''
+    spare = 0
+    for row in rows:
+        cells = row[left + 1:right]
+        if len(cells) < 3 or cells[0]['text'] != ' ' or cells[-1]['text'] != ' ':
+            previous = ''
+            continue
+        content = cells[1:-1]
+        line = normalized(' '.join(''.join(c['text'] for c in content).split()))
+        if not line:
+            previous = ''
+            continue
+        # The one-cell padding is outside the available text width. A new
+        # indented line, or a word that fit on the previous row, is no wrap proof.
+        word = itertools.takewhile(lambda c: not c['text'].isspace(), content)
+        word_width = sum(c.get('width', 1) for c in word)
+        if previous and word_width and 1 + word_width > spare:
+            previous += ' ' + line
+            if wanted in previous:
+                return True
+        else:
+            previous = line
+        spare = sum(1 for _ in itertools.takewhile(lambda c: c['text'] == ' ', reversed(content)))
+    return False
+
+
 def source_witness_visible(reader, wanted, heading):
     if wanted in reading_body(reader, heading):
         return True
@@ -168,9 +196,13 @@ def source_witness_visible(reader, wanted, heading):
     for edges, lines in itertools.groupby(rows, key=table_edges):
         if len(edges) < 2:
             continue
+        lines = list(lines)
         prose = [''.join(cell['text'] for cell in row[start:edges[0]]) for row in lines]
         text = normalized(' '.join(' '.join(prose).split()))
         if text != heading and wanted in text.removeprefix(heading + ' '):
+            return True
+        if any(wrapped_table_cell_contains(lines, left_edge, right_edge, wanted)
+               for left_edge, right_edge in itertools.pairwise(edges)):
             return True
     return False
 
