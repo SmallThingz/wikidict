@@ -350,9 +350,14 @@ class SourceDefinitions:
         for event, page in events:
             if event != 'end' or page.tag.rsplit('}', 1)[-1] != 'page':
                 continue
-            if page.findtext('{*}ns') == '0' and page.find('{*}redirect') is None:
-                title = page.findtext('{*}title')
-                revision = page.find('{*}revision')
+            # Read each group of direct children once, preserving the first local
+            # name just as ElementTree's wildcard find/findtext do.
+            fields = {}
+            for child in page:
+                fields.setdefault(child.tag.rpartition('}')[2], child)
+            if 'ns' in fields and fields['ns'].text == '0' and 'redirect' not in fields:
+                title = fields['title'].text if 'title' in fields else None
+                revision = fields.get('revision')
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
                 origin = None
