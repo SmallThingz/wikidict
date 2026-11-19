@@ -9,6 +9,7 @@ import itertools
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import time
@@ -48,8 +49,17 @@ def copy_publication(source, destination, expected_digest=None, *, expected_stat
     require(expected_status in ('built', 'empty') and manifest['status'] == expected_status,
             f'Expected dictionary manifest status {expected_status!r}')
     members = manifest['publication_files']
+    require(isinstance(members, dict) and all(isinstance(value, dict) for value in members.values()),
+            'Expected size and digest for every publication member')
+    copy_members(source, destination, members)
+    (destination / 'complete.json').write_bytes(raw)
+    return digest
+
+
+def copy_members(source, destination, members):
     require('languages.tsv' in members, 'Missing language catalog')
     destination.mkdir()
+    copied = {}
     for name, expected in members.items():
         rel = Path(name)
         require(not rel.is_absolute() and rel.parts and '..' not in rel.parts and
@@ -61,11 +71,47 @@ def copy_publication(source, destination, expected_digest=None, *, expected_stat
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(original, target)
         with target.open('rb') as f:
-            require(target.stat().st_size == expected['size'] and
-                    hashlib.file_digest(f, 'sha256').hexdigest() == expected['sha256'],
-                    f'Publication member differs: {name}')
-    (destination / 'complete.json').write_bytes(raw)
-    return digest
+            size = os.fstat(f.fileno()).st_size
+            digest = hashlib.file_digest(f, 'sha256').hexdigest()
+        if expected is not None:
+            require(size == expected['size'] and digest == expected['sha256'], f'Publication member differs: {name}')
+        else:
+            copied[name] = dict(size=size, sha256=digest)
+    return copied
+
+
+def copy_indexed_page(case, destination):
+    """Open one ordinary indexed Writer result in an isolated writable Reader directory."""
+    source = case / 'data'
+    receipt = case / 'ordinary-output-result.json'
+    coverage = source / 'page-coverage.json'
+    for path in (receipt, coverage):
+        require(path.resolve(strict=True) == path and path.is_file(), f'Invalid indexed page input: {path}')
+    raw = receipt.read_bytes()
+    coverage_raw = coverage.read_bytes()
+    page, seen = json.loads(raw), json.loads(coverage_raw)
+    require(page.get('schema') == 'wikidict.ordinary-indexed-output.v1' and page.get('name') == case.name and
+            page.get('complete') is True and page.get('error_name') is None and
+            isinstance(page.get('index_row_sha256'), str) and re.fullmatch('[0-9a-f]{64}', page['index_row_sha256']),
+            'Expected a completed ordinary indexed page')
+    for key, field in (('ordinal', 'start_page'), ('index_byte_offset', 'index_byte_offset')):
+        require(type(page.get(key)) is int and page[key] >= 0 and type(seen.get(field)) is int and
+                seen[field] == page[key], 'Page coverage differs from the indexed selection')
+    require(all(type(seen.get(key)) is int and seen[key] == 1 for key in ('version', 'requested_limit', 'pages_seen')),
+            'Expected coverage for exactly one page')
+    # The ordinary Writer emits raw blobs. Leave caches, settings, media downloads
+    # and build diagnostics in place. Report exactly which Reader inputs we used.
+    def snapshot():
+        paths = [source / 'languages.tsv', *sorted(source.glob('*.wikblb')), *sorted((source / 'languages').glob('*.wikblb'))]
+        return {str(p.relative_to(source)): binary_identity(p.lstat()) for p in paths}
+    before = snapshot()
+    require(len(before) > 1, 'Indexed page has no Reader blobs')
+    members = copy_members(source, destination, dict.fromkeys(before))
+    require(snapshot() == before and receipt.read_bytes() == raw and coverage.read_bytes() == coverage_raw,
+            'Indexed page changed while staging')
+    return dict(ordinal=page['ordinal'], index_byte_offset=page['index_byte_offset'], index_row_sha256=page['index_row_sha256'],
+                receipt_sha256=hashlib.sha256(raw).hexdigest(), coverage_sha256=hashlib.sha256(coverage_raw).hexdigest(),
+                reader_files=members)
 
 
 def reading_text(reader):
@@ -225,7 +271,8 @@ def choose_startup_language(reader, root, language):
     reader.action(keys, lambda: selected(language), 'opened chosen language')
 
 
-def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False):
+def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
+             indexed_page=False):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
@@ -233,7 +280,10 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
         projection, reader_type = screen_projection(engine)
         with tempfile.TemporaryDirectory(dir=out) as temp:
             root = Path(temp) / 'dictionary'
-            result['complete_sha256'] = copy_publication(source, root, expected_digest)
+            if indexed_page:
+                result['indexed_page'] = copy_indexed_page(source, root)
+            else:
+                result['complete_sha256'] = copy_publication(source, root, expected_digest)
             require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
@@ -278,6 +328,7 @@ def main(argv=None):
     parser.add_argument('--binary', type=Path, required=True)
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument('--root', type=Path)
+    selection.add_argument('--indexed-page', type=Path, help='Test one ordinary Writer case directory containing ordinary-output-result.json and data/.')
     selection.add_argument('--cases', type=Path, help='TSV of source-selected entries for serial review')
     parser.add_argument('--kind', choices=('language', 'supplemental'), help='Record collection (default: language)')
     parser.add_argument('--language', help='Exact compiled language heading')
@@ -300,7 +351,7 @@ def main(argv=None):
                       row['visible_definition_witness'], row['selected_complete_sha256'], row.get('kind') or 'language')
                      for row in rows]
     else:
-        cases = [(str(args.root), args.language, args.entry, args.witness, None, args.kind or 'language')]
+        cases = [(str(args.indexed_page or args.root), args.language, args.entry, args.witness, None, args.kind or 'language')]
     parent = args.report.resolve()
     if not cases:
         parser.error('No entries selected')
@@ -330,7 +381,7 @@ def main(argv=None):
     failures = 0
     for root, language, entry, witness, digest, kind in cases:
         path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
-                                digest, parent, args.screen_projection, kind, args.implicit_language)
+                                digest, parent, args.screen_projection, kind, args.implicit_language, indexed_page=args.indexed_page is not None)
         if args.cases:
             with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
                 ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),

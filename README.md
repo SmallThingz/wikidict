@@ -99,6 +99,20 @@ of `complete.json`). For appendices and other supplemental records, set the opti
 `--kind supplemental` and omit `--language`. Each result links to its own screens. A failed entry is recorded
 and the remaining entries still run.
 
+To inspect a page built with the Writer’s `--indexed-page-outputs` mode, pass
+the case directory containing `ordinary-output-result.json` and `data/`. For
+example, this opens the Norwegian Bokmål definition of `green` from the Serbian
+edition at both terminal widths.
+
+```sh
+python3 tools/verify_edition_terminal.py --binary zig-out/bin/wikidict \
+  --indexed-page "$CASE_DIR" --language 'Norwegian Bokmål' --entry green \
+  --witness 'the closely mown area surrounding each hole' --report .tmp/green-pty
+```
+
+The report identifies the selected page-index row and the exact Reader files
+used for this check. Whole-edition checks still use `--root` and `complete.json`.
+
 Build just the reader or C ABI:
 
 ```sh

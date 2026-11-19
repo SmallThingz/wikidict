@@ -6,11 +6,57 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import choose_startup_language, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
+from verify_edition_terminal import choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
 from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_indexed_page_uses_the_successful_writer_selection_and_only_reader_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            case = parent / 'page-0000'
+            source = case / 'data'
+            (source / 'languages').mkdir(parents=True)
+            (source / 'languages.tsv').write_text('heading\nEnglish\n')
+            blob = source / 'languages' / ('a' * 64 + '.wikblb')
+            blob.write_bytes(b'original page')
+            (source / '.dict-cache').mkdir()
+            (source / '.dict-cache' / 'borrowed').write_text('do not copy')
+            coverage = source / 'page-coverage.json'
+            coverage.write_text(json.dumps(dict(version=1, start_page=12, index_byte_offset=831, pages_seen=1, requested_limit=1)))
+            receipt = case / 'ordinary-output-result.json'
+            page = dict(schema='wikidict.ordinary-indexed-output.v1', name=case.name, ordinal=12, index_byte_offset=831,
+                        complete=True, error_name=None, index_row_sha256='f' * 64)
+            receipt.write_text(json.dumps(page))
+            work = parent / 'work'
+            result = copy_indexed_page(case, work)
+            self.assertEqual(set(result['reader_files']), {'languages.tsv', 'languages/' + blob.name})
+            self.assertEqual(result['reader_files']['languages/' + blob.name]['sha256'], hashlib.sha256(blob.read_bytes()).hexdigest())
+            self.assertFalse((work / 'complete.json').exists())
+            self.assertFalse((work / '.dict-cache').exists())
+            for changed in [dict(complete=False), dict(error_name='UncompiledPresentation'), dict(ordinal=13), dict(index_byte_offset=17)]:
+                with self.subTest(changed=changed):
+                    receipt.write_text(json.dumps(page | changed))
+                    with self.assertRaises(CheckFailure):
+                        copy_indexed_page(case, parent / 'refused')
+                    self.assertFalse((parent / 'refused').exists())
+            receipt.write_text(json.dumps(page))
+            blob.unlink()
+            blob.symlink_to(receipt)
+            with self.assertRaisesRegex(CheckFailure, 'Invalid file'):
+                copy_indexed_page(case, parent / 'bad-member')
+
+    def test_whole_edition_cannot_opt_out_of_member_digest_verification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            source = parent / 'edition'
+            source.mkdir()
+            (source / 'languages.tsv').write_text('heading\nEnglish\n')
+            (source / 'complete.json').write_text(json.dumps({'status': 'built', 'publication_files': {'languages.tsv': None}}))
+            with self.assertRaisesRegex(CheckFailure, 'size and digest'):
+                copy_publication(source, parent / 'stage')
+            self.assertFalse((parent / 'stage').exists())
+
     def test_library_route_uses_only_keys_offered_by_the_rendered_chooser(self):
         names = [f'Heading {i}' for i in range(138)]
         display = [''] * 30
