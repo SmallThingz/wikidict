@@ -930,13 +930,149 @@ def read_small_json(path, max_bytes=64*1024):
 # State and build identities retain full native role/source authority. Use the
 # existing prepared-seal metadata ceiling, not the small snapshot bound.
 BUILD_ENVELOPE_MAX_BYTES = 64 * 1024 * 1024
+NATIVE_ROLE_DETAILS_NAME = '.native-tool-roles.json.gz'
+NATIVE_ROLE_DETAILS_KEY = 'native_tool_roles_details'
+NATIVE_ROLE_DETAILS_MIN_BYTES = 64 * 1024
+
+
+def _native_role_summary(roles):
+    if not isinstance(roles, dict) or not all(isinstance(row, dict) for row in roles.values()):
+        raise ValueError('Invalid native role provenance')
+    return {name: {key: value for key, value in row.items()
+                   if key not in ('source_paths', 'source_payload_files')}
+            for name, row in roles.items()}
+
+
+def _read_native_role_details(root, reference, max_bytes):
+    import io
+    keys = {'version', 'member', 'size', 'sha256', 'decoded_size', 'decoded_sha256'}
+    if (not isinstance(reference, dict) or set(reference) != keys
+            or type(reference['version']) is not int or reference['version'] != 1
+            or reference['member'] != NATIVE_ROLE_DETAILS_NAME
+            or any(type(reference[key]) is not int or not 0 < reference[key] <= BUILD_ENVELOPE_MAX_BYTES
+                   for key in ('size', 'decoded_size'))
+            or reference['decoded_size'] > max_bytes or reference['size'] > max_bytes
+            or any(not isinstance(reference[key], str) or not re.fullmatch('[0-9a-f]{64}', reference[key])
+                   for key in ('sha256', 'decoded_sha256'))):
+        raise ValueError('Invalid native role detail reference')
+    path = Path(root) / NATIVE_ROLE_DETAILS_NAME
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        before = os.fstat(source.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size != reference['size']:
+            raise ValueError('Invalid native role detail member')
+        encoded = source.read(reference['size'] + 1)
+        after = os.fstat(source.fileno())
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    linked = path.lstat()
+    if (any(getattr(before, key) != getattr(after, key) or getattr(after, key) != getattr(linked, key)
+            for key in fields) or len(encoded) != reference['size']
+            or hashlib.sha256(encoded).hexdigest() != reference['sha256']):
+        raise ValueError('Native role detail member changed')
+    with gzip.GzipFile(fileobj=io.BytesIO(encoded), mode='rb') as source:
+        decoded = source.read(reference['decoded_size'] + 1)
+    if (len(decoded) != reference['decoded_size']
+            or hashlib.sha256(decoded).hexdigest() != reference['decoded_sha256']):
+        raise ValueError('Native role detail decoded identity differs')
+    roles = json.loads(decoded)
+    _native_role_summary(roles)
+    return roles
+
+
+def restore_publication_build_identity(root, identity, *, max_bytes=BUILD_ENVELOPE_MAX_BYTES):
+    """Recover full producing authority; runtime and state identities stay full."""
+    if not isinstance(identity, dict) or NATIVE_ROLE_DETAILS_KEY not in identity:
+        return identity
+    roles = _read_native_role_details(root, identity[NATIVE_ROLE_DETAILS_KEY], max_bytes)
+    if identity.get('native_tool_roles') != _native_role_summary(roles):
+        raise ValueError('Native role detail summary differs')
+    restored = dict(identity, native_tool_roles=roles)
+    del restored[NATIVE_ROLE_DETAILS_KEY]
+    return restored
+
+
+def restore_publication_metadata(root, metadata, *, max_bytes=8*1024*1024):
+    if isinstance(metadata, dict) and isinstance(metadata.get('build_inputs'), dict):
+        identity = restore_publication_build_identity(root, metadata['build_inputs'], max_bytes=max_bytes)
+        if identity is not metadata['build_inputs']:
+            restored = dict(metadata, build_inputs=identity)
+            if len(json.dumps(restored).encode('utf-8')) > max_bytes:
+                raise ValueError('Decoded publication metadata exceeds its existing bound')
+            return restored
+    return metadata
+
+
+def read_publication_metadata(path, max_bytes=8*1024*1024):
+    return restore_publication_metadata(path.parent, read_small_json(path, max_bytes), max_bytes=max_bytes)
+
+
+def publication_build_identity(root, identity, *, create=False):
+    """Store large source inventories once, losslessly, beside publication data."""
+    full_text = build_envelope_text(identity)
+    saved_path = Path(root) / '.build-inputs.json'
+    if saved_path.exists() or saved_path.is_symlink():
+        saved = read_small_json(saved_path, BUILD_ENVELOPE_MAX_BYTES)
+        restored = restore_publication_build_identity(root, saved)
+        if restored == identity:
+            # Preserve legacy staging and existing encoded bytes on resume.
+            return saved
+        if not create:
+            raise ValueError('Published build identity differs from its producing details')
+        if isinstance(saved, dict) and NATIVE_ROLE_DETAILS_KEY in saved:
+            if restored.get('native_tool_roles') != identity.get('native_tool_roles'):
+                raise ValueError('Refusing to replace retained native role producing details')
+            return dict(identity, native_tool_roles=saved['native_tool_roles'],
+                        **{NATIVE_ROLE_DETAILS_KEY: saved[NATIVE_ROLE_DETAILS_KEY]})
+    roles = identity.get('native_tool_roles')
+    if roles is None:
+        return identity
+    decoded = json.dumps(roles, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    if len(decoded) < NATIVE_ROLE_DETAILS_MIN_BYTES:
+        return identity
+    summary = _native_role_summary(roles)
+    encoded = gzip.compress(decoded, compresslevel=6, mtime=0)
+    if len(encoded) > BUILD_ENVELOPE_MAX_BYTES:
+        raise ValueError('Native role detail encoding exceeds prepared seal metadata bound')
+    reference = dict(version=1, member=NATIVE_ROLE_DETAILS_NAME, size=len(encoded),
+        sha256=hashlib.sha256(encoded).hexdigest(), decoded_size=len(decoded),
+        decoded_sha256=hashlib.sha256(decoded).hexdigest())
+    record = dict(identity, native_tool_roles=summary, **{NATIVE_ROLE_DETAILS_KEY: reference})
+    record_bytes = (json.dumps(record, sort_keys=True) + '\n').encode('utf-8')
+    if len(record_bytes) + len(encoded) + 4096 >= len(full_text.encode('utf-8')):
+        return identity
+    path = Path(root) / NATIVE_ROLE_DETAILS_NAME
+    if create and not os.path.lexists(path):
+        temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.part')
+        try:
+            with temporary.open('xb') as output:
+                output.write(encoded); output.flush(); os.fsync(output.fileno())
+            try:
+                os.link(temporary, path)
+            except FileExistsError:
+                pass
+        finally:
+            temporary.unlink(missing_ok=True)
+        sync_shard_directory(Path(root))
+    if restore_publication_build_identity(root, record) != identity:
+        raise ValueError('Native role detail roundtrip differs')
+    return record
+
+
+def copy_publication_role_details(source, destination, identity):
+    if not isinstance(identity, dict) or NATIVE_ROLE_DETAILS_KEY not in identity:
+        return
+    restore_publication_build_identity(source, identity)
+    copy_verified_snapshot(Path(source) / NATIVE_ROLE_DETAILS_NAME,
+                           Path(destination) / NATIVE_ROLE_DETAILS_NAME,
+                           identity[NATIVE_ROLE_DETAILS_KEY]['sha256'])
+    restore_publication_build_identity(destination, identity)
 
 
 def read_build_envelope(path):
     value = read_small_json(path, BUILD_ENVELOPE_MAX_BYTES)
     if not isinstance(value, dict):
         raise ValueError(f'Invalid build envelope: {path}')
-    return value
+    return restore_publication_build_identity(path.parent, value) if path.name == '.build-inputs.json' else value
 
 
 def build_envelope_text(value):
@@ -2710,7 +2846,8 @@ def persist_build_identity(staging, identity):
     require_build_source(identity)
     path=staging/BUILD_IDENTITY_NAME
     temporary=path.with_suffix('.part')
-    temporary.write_text(build_envelope_text(identity))
+    record = publication_build_identity(staging, identity, create=True)
+    temporary.write_text(build_envelope_text(record))
     os.replace(temporary,path)
 
 
@@ -7339,7 +7476,7 @@ def publication_inventory(root, *, allow_raw=False, allow_fallback_pair=False):
     required={'languages.tsv','page-coverage.json','namespace-coverage.json'}
     fallback_names={FALLBACK_REPORT_NAME,FALLBACK_GZIP_NAME}
     metadata=required|fallback_names|{nonlexical.NAME,'compile-plan.tsv','module-compile-plan.tsv',BUILD_IDENTITY_NAME,
-                       INTERWIKI_SHA_NAME,AUXILIARY_SHA_NAME,NOW_UNIX_NAME}
+                       INTERWIKI_SHA_NAME,AUXILIARY_SHA_NAME,NOW_UNIX_NAME,NATIVE_ROLE_DETAILS_NAME}
     if root.is_symlink() or not root.is_dir():raise ValueError('Unsafe publication directory')
     pending=[root];files=[]
     while pending:
@@ -7364,6 +7501,15 @@ def publication_inventory(root, *, allow_raw=False, allow_fallback_pair=False):
         digest=sha256_file(path)
         if index_identity(path.stat())!=before:raise ValueError('Publication artifact changed while reading: '+name)
         inventory[name]={'size':before['size'],'sha256':digest}
+    if NATIVE_ROLE_DETAILS_NAME in inventory:
+        identity = read_small_json(root/BUILD_IDENTITY_NAME, BUILD_ENVELOPE_MAX_BYTES)
+        reference = identity.get(NATIVE_ROLE_DETAILS_KEY) if isinstance(identity, dict) else None
+        restore_publication_build_identity(root, identity)
+        if (not isinstance(reference, dict) or inventory[NATIVE_ROLE_DETAILS_NAME] != {
+                'size': reference['size'], 'sha256': reference['sha256']}):
+            raise ValueError('Unbound native role detail publication member')
+    elif (root/BUILD_IDENTITY_NAME).is_file():
+        read_build_envelope(root/BUILD_IDENTITY_NAME)
     fallback_members=fallback_names.intersection(inventory)
     if not required.issubset(inventory) or not fallback_members:
         raise ValueError('Missing required publication report or language manifest')
@@ -7661,7 +7807,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
         'namespace_coverage_report':'namespace-coverage.json','namespace_coverage_totals':namespace_totals,
         'publication_files':inventory}
     if fallback_name == FALLBACK_GZIP_NAME: metadata['fallback_report_decoded'] = fallback_decoded
-    if build_identity is not None:metadata['build_inputs']=build_identity
+    if build_identity is not None:metadata['build_inputs']=publication_build_identity(staging, build_identity)
     if recorded_now is not None: metadata['now_unix']=recorded_now
     if interwiki_sha is not None: metadata['interwiki_map_sha256']=interwiki_sha
     if auxiliary_hashes: metadata['auxiliary_snapshot_sha256']=auxiliary_hashes
@@ -7779,6 +7925,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         except (OSError,json.JSONDecodeError):
             metadata={}
         if not isinstance(metadata,dict): metadata={}
+        metadata=restore_publication_metadata(target,metadata)
         require_current_staging_version(target,metadata.get('dump_staging_version'))
         if metadata.get('edition')!=edition or metadata.get('date')!=date:
             raise ValueError('Existing output identifies a different edition or date')

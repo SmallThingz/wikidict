@@ -10237,6 +10237,143 @@ class InitialSealedGenerationTests(unittest.TestCase):
             self.assertFalse((f.workspace/'expander').exists())
             self.assertEqual(json.loads((f.workspace/'state.json').read_text()),dict(source='fresh',now_unix=123))
 
+class PublicationNativeRoleDetailsTests(unittest.TestCase):
+    def identity(self):
+        payloads = {('src/' + str(index) + '-source.zig'): dict(
+            path='/retained/source/' + str(index) + '-source.zig', bytes=index,
+            sha256=hashlib.sha256(str(index).encode()).hexdigest()) for index in range(700)}
+        return dict(source='synthetic-producing-source', files=[['testwiktionary', '20261001', 'dump', 1, 'sha1']],
+            native_tool_roles={'dict-blob-build': dict(artifact={'sha256': 'a'*64},
+                source={'sha256': 'b'*64}, source_paths=list(payloads), source_payload_files=payloads)})
+
+    def persist(self, root, identity):
+        with patch.object(b, 'require_build_source'):
+            b.persist_build_identity(root, identity)
+        return json.loads((root/b.BUILD_IDENTITY_NAME).read_text())
+
+    def test_lossless_publication_identity_and_exact_detail_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); identity = self.identity(); original = copy.deepcopy(identity)
+            record = self.persist(root, identity)
+            self.assertEqual(identity, original)
+            detail = root/b.NATIVE_ROLE_DETAILS_NAME
+            raw = detail.read_bytes(); before = detail.stat()
+            self.assertEqual(json.loads(gzip.decompress(raw)), identity['native_tool_roles'])
+            self.assertNotIn('source_payload_files', record['native_tool_roles']['dict-blob-build'])
+            self.assertEqual(b.read_build_envelope(root/b.BUILD_IDENTITY_NAME), identity)
+            b.require_build_identity(b.restore_publication_build_identity(root, record), identity)
+            self.assertEqual(b.publication_build_identity(root, identity), record)
+            self.assertEqual(self.persist(root, identity), record)
+            after = detail.stat()
+            self.assertEqual((before.st_ino, before.st_mtime_ns, before.st_ctime_ns),
+                             (after.st_ino, after.st_mtime_ns, after.st_ctime_ns))
+            self.assertEqual(detail.read_bytes(), raw)
+            self.assertLess((root/b.BUILD_IDENTITY_NAME).stat().st_size + len(raw),
+                            len(b.build_envelope_text(identity).encode()) // 2)
+            changed = copy.deepcopy(identity)
+            changed['native_tool_roles']['dict-blob-build']['source_payload_files']['src/0-source.zig']['sha256'] = 'c'*64
+            with self.assertRaisesRegex(ValueError, 'Refusing to replace'):
+                self.persist(root, changed)
+            self.assertEqual(detail.read_bytes(), raw)
+
+    def test_legacy_large_and_small_identity_remain_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); identity = self.identity()
+            legacy = b.build_envelope_text(identity)
+            (root/b.BUILD_IDENTITY_NAME).write_text(legacy)
+            self.assertEqual(self.persist(root, identity), identity)
+            self.assertEqual((root/b.BUILD_IDENTITY_NAME).read_text(), legacy)
+            self.assertFalse((root/b.NATIVE_ROLE_DETAILS_NAME).exists())
+            self.assertEqual(b.read_build_envelope(root/b.BUILD_IDENTITY_NAME), identity)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); identity = dict(source='small', native_tool_roles={'role': {'artifact': 'small'}})
+            self.assertEqual(self.persist(root, identity), identity)
+            self.assertFalse((root/b.NATIVE_ROLE_DETAILS_NAME).exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = dict(source='large non-inventory role metadata',
+                native_tool_roles={'role': {'scope': 'x' * (64*1024)}})
+            self.assertEqual(self.persist(root, identity), identity)
+            self.assertFalse((root/b.NATIVE_ROLE_DETAILS_NAME).exists())
+
+    def test_missing_changed_malformed_and_forged_details_fail_closed(self):
+        for kind in ('missing', 'changed', 'summary', 'member', 'decoded-size', 'decoded-sha', 'version', 'symlink', 'bad-gzip'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp); record = self.persist(root, self.identity()); path=root/b.NATIVE_ROLE_DETAILS_NAME
+                reference = record[b.NATIVE_ROLE_DETAILS_KEY]
+                if kind == 'missing': path.unlink()
+                elif kind == 'changed': path.write_bytes(path.read_bytes()[:-1] + b'x')
+                elif kind == 'summary': record['native_tool_roles']['dict-blob-build']['source']['sha256'] = 'c'*64
+                elif kind == 'member': reference['member'] = '../foreign.gz'
+                elif kind == 'decoded-size': reference['decoded_size'] = 10
+                elif kind == 'decoded-sha': reference['decoded_sha256'] = 'c'*64
+                elif kind == 'version': reference['version'] = True
+                elif kind == 'symlink':
+                    other = root/'other'; path.rename(other); path.symlink_to(other)
+                elif kind == 'bad-gzip':
+                    raw = b'x' * reference['size']; path.write_bytes(raw)
+                    reference['sha256'] = hashlib.sha256(raw).hexdigest()
+                with self.assertRaises((ValueError, OSError, EOFError)):
+                    b.restore_publication_build_identity(root, record)
+
+    def test_detail_collision_never_overwrites_or_publishes_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); detail=root/b.NATIVE_ROLE_DETAILS_NAME; detail.write_bytes(b'unique conflicting evidence')
+            with self.assertRaises(ValueError): self.persist(root, self.identity())
+            self.assertEqual(detail.read_bytes(), b'unique conflicting evidence')
+            self.assertFalse((root/b.BUILD_IDENTITY_NAME).exists())
+            self.assertFalse(list(root.glob('*.part')))
+
+    def test_controller_snapshot_and_manifest_import_recover_full_authority(self):
+        import corpus_controller as controller
+        from verify_edition_terminal import copy_publication
+        with tempfile.TemporaryDirectory() as tmp:
+            parent=Path(tmp); root=parent/'published';root.mkdir();identity=self.identity();record=self.persist(root,identity)
+            for name,raw in [('languages.tsv','heading\n'),('page-coverage.json','{}'),
+                             ('namespace-coverage.json','{}'),('fallback-pages.jsonl','')]:
+                (root/name).write_text(raw)
+            inventory=b.publication_inventory(root)
+            self.assertIn(b.NATIVE_ROLE_DETAILS_NAME, inventory)
+            metadata=dict(edition='testwiktionary',date='20261001',status='empty',
+                          publication_files=inventory,build_inputs=record)
+            complete=root/'complete.json';complete.write_text(json.dumps(metadata)+'\n')
+            expected=dict(metadata,build_inputs=identity)
+            self.assertEqual(b.read_publication_metadata(complete),expected)
+            self.assertEqual(controller.read_json(complete),expected)
+            self.assertEqual(controller.read_ref(controller.descriptor(complete)),expected)
+            snapshot=parent/'snapshot';snapshot.mkdir();(snapshot/'complete.json').write_bytes(complete.read_bytes())
+            with self.assertRaises(FileNotFoundError):controller.read_ref(controller.descriptor(snapshot/'complete.json'))
+            b.copy_publication_role_details(root,snapshot,record)
+            self.assertEqual(controller.read_ref(controller.descriptor(snapshot/'complete.json')),expected)
+            imported=parent/'imported';copy_publication(root,imported,expected_status='empty')
+            self.assertEqual(b.read_publication_metadata(imported/'complete.json'),expected)
+            (imported/b.NATIVE_ROLE_DETAILS_NAME).unlink()
+            with self.assertRaises(FileNotFoundError):b.read_publication_metadata(imported/'complete.json')
+
+    def test_normal_publication_and_resume_keep_full_identity_checks(self):
+        original=b.build_input_identity
+        def selected(*args,**kwargs):
+            identity=original(*args,**kwargs)
+            identity['native_tool_roles']=self.identity()['native_tool_roles']
+            return identity
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            with patch.object(b,'PROJECT',root),patch.object(b,'build_input_identity',side_effect=selected),patch.object(b,'run_checked'):
+                item,target,_=PublicationResumeTests().prepare(root)
+                raw=json.loads((target/'complete.json').read_text())
+                self.assertIn(b.NATIVE_ROLE_DETAILS_KEY,raw['build_inputs'])
+                expected=b.read_publication_metadata(target/'complete.json')['build_inputs']
+                self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'existing_output')
+                b.require_build_identity(b.read_build_envelope(target/b.BUILD_IDENTITY_NAME),expected)
+                detail=target/b.NATIVE_ROLE_DETAILS_NAME
+                saved=root/'retained-role-detail.gz';detail.rename(saved)
+                with self.assertRaises(FileNotFoundError):b.build_locked([item],root,root/'output','zig',1)
+                saved.rename(detail)
+                detail.write_bytes(detail.read_bytes()[:-1])
+                with self.assertRaises(ValueError):b.build_locked([item],root,root/'output','zig',1)
+
+
 class BuildEnvelopeTests(unittest.TestCase):
     def test_large_native_generation_and_build_identity_roundtrip_and_resume(self):
         fixture = InitialSealedGenerationTests()
@@ -10271,8 +10408,9 @@ class BuildEnvelopeTests(unittest.TestCase):
             with patch.object(b, 'require_build_source'):
                 b.persist_build_identity(staging, f.identity)
             b.require_build_identity(b.read_build_envelope(staging/b.BUILD_IDENTITY_NAME), f.identity)
-            with self.assertRaisesRegex(ValueError, 'Oversized snapshot'):
-                b.read_small_json(staging/b.BUILD_IDENTITY_NAME)
+            compact = b.read_small_json(staging/b.BUILD_IDENTITY_NAME)
+            self.assertEqual(compact[b.NATIVE_ROLE_DETAILS_KEY]['member'], b.NATIVE_ROLE_DETAILS_NAME)
+            self.assertLess((staging/b.BUILD_IDENTITY_NAME).stat().st_size, 64*1024)
 
     def test_actual_envelope_bound_and_symmetric_writer_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:

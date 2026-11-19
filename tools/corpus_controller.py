@@ -117,7 +117,13 @@ def descriptor(path):
 def read_json(path):
     path = Path(path)
     require(path.stat().st_size <= 8 * 1024**2, f'Metadata exceeds bound: {path}')
-    return json.loads(path.read_bytes())
+    value = json.loads(path.read_bytes())
+    if (path.name == 'complete.json' and isinstance(value, dict)
+            and isinstance(value.get('build_inputs'), dict)
+            and 'native_tool_roles_details' in value['build_inputs']):
+        from build_wiktionaries import restore_publication_metadata
+        return restore_publication_metadata(path.parent, value)
+    return value
 
 
 def read_ref(ref):
@@ -128,7 +134,13 @@ def read_ref(ref):
         data = stream.read(before.st_size + 1)
     actual = _checked_descriptor(path, before, hashlib.sha256(data).hexdigest())
     require(len(data) == before.st_size and actual == ref, 'Receipt bytes changed')
-    return json.loads(data)
+    value = json.loads(data)
+    if (path.name == 'complete.json' and isinstance(value, dict)
+            and isinstance(value.get('build_inputs'), dict)
+            and 'native_tool_roles_details' in value['build_inputs']):
+        from build_wiktionaries import restore_publication_metadata
+        return restore_publication_metadata(path.parent, value)
+    return value
 
 
 def write_json(path, value, *, replace=False):
@@ -2325,6 +2337,9 @@ def accept(cfg, edition, folder, phase, log_ref):
         f.write(Path(live['path']).read_bytes())
     snap = descriptor(snapshot)
     require((snap['bytes'], snap['sha256']) == (live['bytes'], live['sha256']), 'Completion changed during snapshot')
+    raw_identity = json.loads(snapshot.read_bytes()).get('build_inputs')
+    if isinstance(raw_identity, dict) and 'native_tool_roles_details' in raw_identity:
+        builder.copy_publication_role_details(root, folder, raw_identity)
     require(type(complete['input_pages']) is int and complete['input_pages'] >= 0, 'Invalid accepted page count')
     fallback_name, _ = builder.published_fallback_report(complete)
     report_names = (*REVIEW_COVERAGE_NAMES, fallback_name)
