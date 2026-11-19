@@ -3505,7 +3505,10 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 showCompactPane(false);
                 reading_->setFocus();
             } else focusSearch();
-            statusBar()->showMessage(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)), 4000);
+            const QString openedLabel = api_->kind() == QStringLiteral("language")
+                ? QStringLiteral("%1 · %2").arg(api_->language(), kindLabel(api_->kind()))
+                : kindLabel(api_->kind());
+            statusBar()->showMessage(QStringLiteral("Opened %1").arg(openedLabel), 4000);
         };
         // A modal Library worker can change files before its GUI notification.
         // Keep the actual result and intent unpublished until the dialog closes.

@@ -26311,6 +26311,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         QVERIFY2(window.api_ != nullptr, qPrintable(window.resultStatus_->text()));
         QCOMPARE(window.api_->kind(), QStringLiteral("thesaurus"));
+        QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("Opened Thesaurus"));
         QVERIFY(window.search_->isEnabled());
         QTest::keyClicks(window.search_, "cat");
         QTest::keyClick(window.search_, Qt::Key_Return);
@@ -26748,6 +26749,58 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.search_->isEnabled());
+
+        QTemporaryDir directory(QStringLiteral(".tmp/ui-opened-status-XXXXXX"));
+        QVERIFY(directory.isValid());
+        const QString component(80, QChar('x'));
+        const QString root = QDir(directory.path()).absoluteFilePath(
+            component + QChar('/') + component + QStringLiteral("/enwiktionary-20261001"));
+        QVERIFY(QDir().mkpath(root + QStringLiteral("/languages")));
+        const QString relative = QStringLiteral("/languages/")
+            + QString::fromLatin1(QCryptographicHash::hash(QByteArrayLiteral("English"), QCryptographicHash::Sha256).toHex())
+            + QStringLiteral(".wikblb");
+        QVERIFY(QFile::copy(fixture_ + relative, root + relative));
+        QFile manifest(root + QStringLiteral("/languages.tsv"));
+        QVERIFY(manifest.open(QIODevice::WriteOnly));
+        QCOMPARE(manifest.write("heading\nEnglish\n"), qint64(16));
+        manifest.close();
+        window.resize(640, 600);
+        // QStatusBar does not emit messageChanged for an identical current label.
+        window.statusBar()->clearMessage();
+        QVERIFY(window.statusBar()->currentMessage().isEmpty());
+        QSignalSpy statusMessages(window.statusBar(), &QStatusBar::messageChanged);
+        window.openRoot(root, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->root() == root, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const QString opened = QStringLiteral("Opened English · Dictionary");
+        bool openedShown = false;
+        for (const auto &message : statusMessages)
+            openedShown = openedShown || message.at(0).toString() == opened;
+        QVERIFY(openedShown);
+        QCoreApplication::processEvents();
+        QVERIFY(window.width() <= 640);
+        const QFontMetricsF metrics(window.statusBar()->font());
+        QVERIFY(metrics.horizontalAdvance(QStringLiteral("Opened %1").arg(QDir::toNativeSeparators(root)))
+            > window.statusBar()->contentsRect().width());
+        QVERIFY(metrics.horizontalAdvance(opened) + 40 < window.statusBar()->contentsRect().width());
+        QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), root);
+
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        bool fullPathAvailable = false;
+        QTimer::singleShot(0, &window, [&] {
+            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget())) {
+                for (const auto *label : dialog->findChildren<QLabel *>()) {
+                    if (label->accessibleName() == QStringLiteral("Dictionary folder"))
+                        fullPathAvailable = label->text() == root && label->wordWrap()
+                            && label->textInteractionFlags().testFlag(Qt::TextSelectableByMouse);
+                }
+                dialog->done(QDialog::Rejected);
+            }
+        });
+        window.chooseRoot();
+        QVERIFY(fullPathAvailable);
+        QCOMPARE(window.api_->root(), root);
+        QCOMPARE(title(window), QStringLiteral("cat"));
     }
 
     void searchPagesHaveNoMissingOrDuplicateWords() {
