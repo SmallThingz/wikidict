@@ -591,7 +591,8 @@ def dictionary_snapshot(root):
             require(identity not in seen, 'dictionary directory alias or cycle')
             seen.add(identity)
             names = sorted(name for name in os.listdir(path) if name != '.dict-cache')
-            cache = os.path.join(path, '.dict-cache')
+            prefix = path if path.endswith(os.sep) else path + os.sep
+            cache = prefix + '.dict-cache'
             try:
                 cache_state = state(cache, False)
             except FileNotFoundError:
@@ -601,7 +602,7 @@ def dictionary_snapshot(root):
                 cache_identity = cache_state[:5]
             rows.append((*row, names, cache_identity))
             for name in names:
-                visit(os.path.join(path, name), depth + 1, resolved, path)
+                visit(prefix + name, depth + 1, resolved, path)
         else:
             require(stat.S_ISREG(target[2]), 'nonregular dictionary member')
             rows.append(row)
