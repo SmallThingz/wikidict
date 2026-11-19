@@ -108,16 +108,11 @@ zig build ffi -Doptimize=fast
 
 The public header is installed as `zig-out/include/dict/dict.h`.
 
-Build the desktop application from the repository root after building the core:
+For the desktop app, configure CMake with the project's patched Qt and install the executable, GUI component and matching Qt runtime together. Follow the [desktop build and install instructions](apps/desktop/README.md). With the prefix used there, launch the app from the repository root:
 
 ```sh
-zig build cli ffi -Doptimize=fast
-cmake -S apps/desktop -B .tmp/desktop-build -DCMAKE_BUILD_TYPE=Release
-cmake --build .tmp/desktop-build --parallel 1
+./.tmp/desktop-install/bin/wikidict-gio
 ```
-
-The desktop install provides `wikidict` and the relative `wikidict-gio` symlink.
-The executable selects the GUI when invoked through that name.
 
 Build Android using its own Gradle root:
 
