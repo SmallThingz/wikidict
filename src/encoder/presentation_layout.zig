@@ -525,11 +525,41 @@ fn greekNounBulletSection(section: anytype, owner: ?[]const u8) bool {
         (remaining == 2 or greekNounSynonymNote(section.blocks[at + 2]));
 }
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, source_numbered };
+// The retained Estonian entry declares a noun-form section. This classifies
+// that section only; its language must already have an independent owner.
+fn estonianNounFormSection(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
+    const language = owner orelse return false;
+    if (!std.mem.eql(u8, wiki_id, "etwiktionary") or language.len == 0 or
+        std.mem.eql(u8, language, "Unclassified") or section.level != 3 or
+        !std.mem.eql(u8, section.title, "Nimisõnavorm")) return false;
+    if (@hasField(@TypeOf(section), "is_heading")) if (!section.is_heading) return false;
+    if (@hasField(@TypeOf(section), "title_depth")) if (section.title_depth != 0) return false;
+    if (@hasField(@TypeOf(section), "title_list_path")) if (section.title_list_path.len != 0) return false;
+    for (section.blocks, 0..) |block, index| if (estonianNounFormPlaceholder(block)) {
+        var next = index + 1;
+        while (next < section.blocks.len and section.blocks[next].kind == .blank) : (next += 1) {}
+        if (next < section.blocks.len and section.blocks[next].depth > 1) return false;
+    };
+    return true;
+}
+fn estonianNounFormPlaceholder(block: wiki.Block) bool {
+    return block.kind == .definition and block.depth == 1 and
+        std.mem.eql(u8, block.list_path, "#") and block.feature == null and
+        block.table == null and block.container == null and block.figure == null and block.flow == null and
+        sourceNumberedPlaceholder(block);
+}
+
+const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, source_numbered, estonian_noun_form };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
         .ordinary => {},
+        .estonian_noun_form => if (estonianNounFormPlaceholder(block)) {
+            // Keep the source block intact; only omit its empty sense address.
+            result.kind = .paragraph;
+            result.list_path = "";
+            result.depth = 0;
+        },
         .source_numbered => if (sourceNumberedBlock(block) and sourceNumberedText(block) and !sourceNumberedPlaceholder(block)) {
             result.kind = .definition;
             result.list_path = "#";
@@ -2198,7 +2228,8 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
         const declared_kind = if (unclassified and section.level == 2) null else
             partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else null;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
-        const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse if (unclassified) null else
+        const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
+        const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
@@ -2277,6 +2308,8 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
             else if (meaning_paragraph) |marker|
                 try analyzeSerbianMeaningParagraph(a, marker, i, section.blocks)
+            else if (estonian_form)
+                try analyzeProjected(a, name, i, origin, section.blocks, true, .estonian_noun_form)
             else if (grammar_kind != null)
                 try analyzeBulgarianVerb(a, name, i, origin, section.blocks)
             else if (declared_kind != null and greekNounBulletSection(section, owner))
@@ -13571,4 +13604,76 @@ test "source numbered POS projection preserves placeholders and refuses missing 
     try std.testing.expect(!sourceNumberedPlaceholder(changed));
     try std.testing.expectEqualDeep(placeholder, sections[0].blocks[0]);
     try std.testing.expectEqualDeep(meaning, sections[0].blocks[1]);
+}
+
+test "Estonian noun form preserves complete musoo Reader links and literal ellipsis without inventing a sense" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const encoder = @import("blob_encoder"); const T = encoder.presentation_types;
+    const bytes = @embedFile("testdata/et-musoo-owner/reader.json");
+    var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    try std.testing.expectEqualStrings("995d0bc6aba73d59568b27354589ba814b54430d5b35ec4f488a122f6bfae0bc", &std.fmt.bytesToHex(digest, .lower));
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, bytes, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("musoo", before.title);
+    try std.testing.expectEqualStrings("Unclassified", before.language.?);
+    try std.testing.expectEqualStrings("", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 6), before.sections[1].blocks.len);
+    const blocks = before.sections[1].blocks;
+    try std.testing.expect(blocks[0].spans[0].bold);
+    try std.testing.expectEqualStrings("[musóo]", blocks[1].spans[0].text);
+    try std.testing.expect(blocks[2].spans[0].italic);
+    try std.testing.expectEqualStrings("musu", blocks[2].spans[1].target);
+    try std.testing.expectEqualStrings("naine", blocks[3].spans[0].target);
+    try std.testing.expectEqualStrings("naine", blocks[4].spans[0].target);
+    try std.testing.expectEqualStrings(", ", blocks[4].spans[1].text);
+    try std.testing.expectEqualStrings("abikaasa", blocks[4].spans[2].target);
+    try std.testing.expectEqualStrings("...", blocks[5].spans[0].text);
+    try std.testing.expectEqualStrings("3", blocks[5].number);
+    const sections = try SerbianMeaningTest.projected(a, before);
+    const layout = try buildForDictionary(a, sections, false, "Mandinka", null, "etwiktionary");
+    const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{ .language = "Mandinka", .kind = "Noun form", .section = 1,
+        .introduction = &.{ 0, 1, 2 }, .definitions = &.{ .{ .block = 3 }, .{ .block = 4 } }, .other_blocks = &.{5} }}, .other_sections = &.{0} };
+    try std.testing.expectEqualDeep(expected, typed.value);
+    var after: T.Stored = .{ .entry = before }; after.entry.language = "Mandinka"; after.entry.language_code = "mnk"; after.entry.organization = typed.value;
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, after);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = "Mandinka", .code = "mnk" });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var restored = decoded; restored.entry.language = before.language; restored.entry.language_code = before.language_code; restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
+}
+
+test "Estonian noun form needs an exact independent heading and does not erase linked or nested ellipses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const S = struct { title: []const u8 = "Nimisõnavorm", level: u8 = 3, is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "", blocks: []const wiki.Block };
+    const gloss: wiki.Block = .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .kind = .link, .text = "naine", .target = "naine" }} };
+    const dots: wiki.Block = .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "..." }} };
+    const section: S = .{ .blocks = &.{ gloss, dots } };
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner| {
+        const layout = try buildForDictionary(a, &[_]S{section}, owner == null or owner.?.len == 0 or std.mem.eql(u8, owner.?, "Unclassified"), owner, null, "etwiktionary");
+        try std.testing.expectEqual(@as(usize, 0), layout.lexemes.len);
+    }
+    const foreign = try buildForDictionary(a, &[_]S{section}, false, "Mandinka", null, "enwiktionary");
+    try std.testing.expectEqual(@as(usize, 0), foreign.lexemes.len);
+    for (0..6) |case| {
+        var changed = section;
+        switch (case) { 0 => changed.title = "nimisõnavorm", 1 => changed.title = "Nimisõnavorm extra", 2 => changed.level = 2,
+            3 => changed.is_heading = false, 4 => changed.title_depth = 1, 5 => changed.title_list_path = "*", else => unreachable }
+        try std.testing.expect(!estonianNounFormSection(changed, "Mandinka", "etwiktionary"));
+    }
+    var linked = dots; linked.spans = &.{.{ .kind = .link, .text = "...", .target = "ellipsis" }};
+    try std.testing.expect(!estonianNounFormPlaceholder(linked));
+    const linked_layout = try buildForDictionary(a, &[_]S{.{ .blocks = &.{gloss, linked} }}, false, "Mandinka", null, "etwiktionary");
+    try std.testing.expectEqual(@as(usize, 2), linked_layout.lexemes[0].definitions.len);
+    var protected = dots; protected.spans = &.{.{ .text = "...", .provenance = .protected_literal }};
+    try std.testing.expect(!estonianNounFormPlaceholder(protected));
+    var nested = gloss; nested.depth = 2; nested.list_path = "##";
+    try std.testing.expect(!estonianNounFormSection(S{ .blocks = &.{ dots, nested } }, "Mandinka", "etwiktionary"));
+    var feature = dots; feature.flow = &.{};
+    try std.testing.expect(!estonianNounFormPlaceholder(feature));
 }

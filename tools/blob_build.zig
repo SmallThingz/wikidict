@@ -1969,6 +1969,12 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     var numbered_pos_seen = [_]bool{ false, false };
     var naslov_seen = [_]bool{ false, false };
     var naslov_proven = [_]bool{ false, false };
+    var et_literal_seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var keys = et_literal_seen.keyIterator();
+        while (keys.next()) |key| a.free(key.*);
+        et_literal_seen.deinit(a);
+    }
     var nom_template_seen = false;
     var parenthetical_template_seen = false;
     var equals_seen: std.StringHashMapUnmanaged(void) = .empty;
@@ -1981,6 +1987,14 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         const row = entry.row;
         const this_ordinal = entry.ordinal;
         const parenthetical_title = namespaces.ofTitle(row.title);
+        const et_literal = std.mem.eql(u8, namespaces.wiki, "etwiktionary") and
+            std.mem.eql(u8, namespaces.content_language, "et") and parenthetical_title.id == 10 and
+            registry.codes.contains(parenthetical_title.text);
+        if (et_literal) {
+            if (et_literal_seen.contains(parenthetical_title.text)) return error.DuplicateLanguageTemplateSource;
+            const key = try a.dupe(u8, parenthetical_title.text);
+            et_literal_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
+        }
         const equals_code: ?[]const u8 = if (parenthetical_title.id == 10 and parenthetical_title.text.len >= 3 and
             parenthetical_title.text[0] == '=' and parenthetical_title.text[parenthetical_title.text.len - 1] == '=' and
             registry.codes.contains(parenthetical_title.text[1 .. parenthetical_title.text.len - 1]))
@@ -2077,6 +2091,8 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         } else if (name_table) {
             _ = try importLiteralLanguageNameSwitch(a, registry, decoded orelse raw);
         } else if (message_link) {
+            if (et_literal and std.mem.eql(u8, row.content_model, "wikitext"))
+                try registry.addSourceLiteralPreferredHeading(namespaces.wiki, code, decoded orelse raw);
             if (source_language_banner.messageLinkTarget(decoded orelse raw, namespaces, code)) |target|
                 try registry.addLocalAlias(target, code);
         } else {
@@ -66803,6 +66819,119 @@ test "normal template loader conditions local noun adjective roles on exact prov
         try std.testing.expectEqualDeep(registry.source_numbered_pos, languageCodes(&registry, &ns).source_numbered_pos);
         try std.testing.expect(registry.resolveStrong("নাম") == null);
         try std.testing.expect(registry.resolveStrong("বিশেষণ") == null);
+    }
+}
+
+const EstonianMusooTest = struct {
+    const registry_bytes = @embedFile("testdata/et-musoo-owner/language-registry.tsv");
+    const namespaces = @embedFile("testdata/et-musoo-owner/namespace-registry.tsv");
+    const source = @embedFile("testdata/et-musoo-owner/raw.wikitext");
+    const reader = @embedFile("testdata/et-musoo-owner/reader.json");
+    fn providers(io: std.Io, a: std.mem.Allocator, root: []const u8, mode: usize) !void {
+        const code = if (mode == 3) "man" else "mnk";
+        const row = try std.fmt.allocPrint(a, "0\t0\tMall:{s}\t{s}\t154787\t1072518\t2026-10-01T00:00:00Z\tTest\t{s}\t{d}\t1\t0\n", .{
+            code, if (mode == 9) "Other" else "", if (mode == 8) "Scribunto" else "wikitext", @as(u8, if (mode == 7) 0 else 10) });
+        const index = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        const data = if (mode == 1) "" else if (mode == 6) try std.mem.concat(a, u8, &.{row, row}) else row;
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = data });
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        if (mode != 1) try templates.append(0, 154787, 1072518, if (mode == 2) "mandinka extra" else "mandinka");
+        if (mode == 6) try templates.append(1, 154787, 1072518, "mandinka");
+        try templates.finish(index);
+    }
+};
+
+test "Estonian scalar code provider proves only its existing exact preferred heading and refuses collisions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    try std.testing.expectEqualStrings("2ce0b7f514c458a0545a8570e8fba44b6570b854a9f8b84bae2e5f171d92fd39", try auditHash(a, EstonianMusooTest.registry_bytes));
+    for (0..10) |mode| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const ns_bytes = if (mode == 4) try std.mem.replaceOwned(u8, a, EstonianMusooTest.namespaces, "etwiktionary", "enwiktionary") else EstonianMusooTest.namespaces;
+        var ns = try namespace_registry.Registry.init(a, ns_bytes); defer ns.deinit();
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(EstonianMusooTest.registry_bytes);
+        try std.testing.expectEqualStrings("mnk", registry.resolve("Mandinka").?.code);
+        try std.testing.expect(registry.resolveTrusted("Mandinka") == null);
+        if (mode == 5) try registry.addLocalAlias("Mandinka", "en");
+        try EstonianMusooTest.providers(io, a, root, mode);
+        if (mode == 6) {
+            try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadSourceLanguageBanners(io, a, root, &ns, &registry));
+            continue;
+        }
+        try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+        try std.testing.expectEqual(mode == 0, registry.resolveTrusted("Mandinka") != null);
+        if (mode == 0) try std.testing.expectEqualStrings("mnk", registry.resolveTrusted("Mandinka").?.code);
+        // Neither scalar source spelling nor unrelated ISO labels become aliases.
+        try std.testing.expect(registry.resolveTrusted("mandinka") == null);
+        try std.testing.expect(registry.resolveTrusted("Mandingo") == null);
+    }
+    // Conflicting preferred rows are invalid input, not an ambiguous alias map.
+    var conflicting = language_registry.Registry.empty(a); defer conflicting.deinit();
+    try std.testing.expectError(error.ConflictingLanguageHeading,
+        conflicting.addTsv("# content-language\tet\n# iso-639-3\nmnk\tMandinka\nen\tEnglish\nzz\tMandinka\n"));
+    // Exercise the maintained terminal local-alias conflict on a valid registry.
+    var unknown = language_registry.Registry.empty(a); defer unknown.deinit();
+    try unknown.addTsv("# content-language\tet\n# iso-639-3\net\teesti\tEesti\tet\tEstonian\test\nmnk\tMandinka\nen\tEnglish\nzz\tOther\n");
+    try unknown.addLocalAlias("Mandinka", "mnk");
+    try unknown.addLocalAlias("Mandinka", "zz");
+    try std.testing.expectEqualStrings("mnk", unknown.resolve("Mandinka").?.code);
+    try unknown.addSourceLiteralPreferredHeading("etwiktionary", "mnk", "mandinka");
+    try std.testing.expect(unknown.resolveTrusted("Mandinka") == null);
+    for ([_][]const u8{ "{{mandinka}}", "mandinka\n", "[[mandinka]]", "mandinkA", "mandinka extra" }) |bad| {
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(EstonianMusooTest.registry_bytes);
+        try registry.addSourceLiteralPreferredHeading("etwiktionary", "mnk", bad);
+        try std.testing.expect(registry.resolveTrusted("Mandinka") == null);
+    }
+}
+
+test "normal Estonian musoo Writer retains all body links and both noun-form meanings under the proved owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const T = encoder.presentation_types;
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, EstonianMusooTest.reader, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    const before = saved.value.entries[0];
+    var ns = try namespace_registry.Registry.init(a, EstonianMusooTest.namespaces); defer ns.deinit();
+    for ([_]bool{ false, true }) |present| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        try EstonianMusooTest.providers(io, a, root, if (present) 0 else 1);
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        try registry.addTsv(EstonianMusooTest.registry_bytes);
+        try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+        const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{root, "output"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+        writer.language_codes = codes;
+        // This source has no transclusion or page-sensitive construct. Its
+        // literal source body is the normal compiler input in both arms.
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "musoo", EstonianMusooTest.source, EstonianMusooTest.source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const heading = if (present) "Mandinka" else "Unclassified";
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(heading, &filename)});
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(if (present) "mnk" else "", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find("musoo")).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var expected = before;
+        if (present) {
+            expected.language = "Mandinka"; expected.language_code = "mnk";
+            expected.organization = .{ .lexemes = &.{.{ .language = "Mandinka", .kind = "Noun form", .section = 1,
+                .introduction = &.{ 0, 1, 2 }, .definitions = &.{ .{ .block = 3 }, .{ .block = 4 } }, .other_blocks = &.{5} }}, .other_sections = &.{0} };
+        }
+        try std.testing.expectEqualDeep(expected, decoded.entry);
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+        const roundtrip = try encoder.presentation_codec.decodeAlloc(a, encoded, record.title, .language, metadata);
+        try std.testing.expectEqualDeep(decoded, roundtrip);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, roundtrip));
+        var restored = decoded; restored.entry.language = before.language; restored.entry.language_code = before.language_code; restored.entry.organization = before.organization;
+        try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
     }
 }
 

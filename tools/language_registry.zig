@@ -1540,6 +1540,22 @@ pub const Registry = struct {
         try self.local_aliases.put(owned, try owned.dupe(u8, name), try owned.dupe(u8, code_value));
     }
 
+    /// A code-named Estonian template may attest its already installed preferred
+    /// label. This creates no spelling or owner: the scalar source must equal
+    /// that label, allowing only its existing first ASCII letter to be lowercase.
+    pub fn addSourceLiteralPreferredHeading(self: *Registry, wiki_id: []const u8, code_value: []const u8, source: []const u8) !void {
+        if (!std.mem.eql(u8, wiki_id, "etwiktionary") or
+            !std.mem.eql(u8, self.content_code orelse "", "et") or !self.codes.contains(code_value)) return;
+        const preferred = self.headings.get(code_value) orelse return;
+        if (!self.localHeadingMatches(code_value, preferred) or preferred.len == 0 or
+            source.len != preferred.len or !validLocalHeading(source)) return;
+        if (!std.mem.eql(u8, source, preferred) and !(std.ascii.isUpper(preferred[0]) and
+            source[0] == std.ascii.toLower(preferred[0]) and std.mem.eql(u8, source[1..], preferred[1..]))) return;
+        // Existing trust and ambiguity rules remain authoritative. In particular,
+        // no alternate spelling in the scalar source becomes an alias.
+        try self.trustLocalHeading(code_value, preferred);
+    }
+
     /// Curated edition-local evidence may promote an existing exact label,
     /// never create an alias, change its owner or make unrelated ISO names trusted.
     fn trustLocalHeading(self: *Registry, code_value: []const u8, label: []const u8) !void {
