@@ -1082,6 +1082,26 @@ while count := r.read(1):
                         self.assertEqual(str(number).encode() + title.encode() + b'x' * (128 * 1024) + b'\n',
                                          result.read())
 
+    def test_browse_session_and_export_share_request_boundaries(self):
+        child = r'''
+import struct, sys
+r, w = sys.stdin.buffer, sys.stdout.buffer
+for offset in (0, 1000, 2**34):
+    assert struct.unpack('<BQ', r.read(9)) == (0, offset)
+    w.write(b'{\n  "offset": ' + str(offset).encode() + b'\n}\n\n')
+    w.flush()
+    assert r.read(7) == b'\x01\x00\x01\x00\x00\x00x'
+    w.write(b'{}\n\n')
+    w.flush()
+assert r.read() == b''
+'''
+        with audit.checked_export_session([sys.executable, '-c', child]) as request:
+            for offset in (0, 1000, 2**34):
+                with request([], None, browse_offset=offset) as response:
+                    self.assertEqual({'offset': offset}, json.load(response))
+                with request(['x'], None) as response:
+                    self.assertEqual({}, json.load(response))
+
     def test_export_session_never_yields_uncommitted_or_failed_output(self):
         for code, message in ((0, 'without completing the batch'), (3, 'status 3')):
             child = ("import sys; sys.stdin.buffer.read(9); "

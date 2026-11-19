@@ -166,26 +166,8 @@ fn run(init: std.process.Init) !u8 {
             }
         },
         .search => {
-            var task: search.Task = .{};
-            defer task.deinit(init.gpa);
-            const insensitive = !opts.case_sensitive and std.mem.trim(u8, opts.query, " \t\r\n").len != 0;
-            const range = if (insensitive) blk: {
-                const wanted = std.math.add(usize, opts.offset, opts.limit) catch return error.SearchWindowTooLarge;
-                try task.beginLimited(init.gpa, opts.query, wanted);
-                while (!task.complete) try task.step(init.gpa, &db, 4096);
-                break :blk store.Range{ .start = 0, .end = task.matches.items.len };
-            } else try db.prefix(if (opts.case_sensitive) opts.query else "");
-            response.match_mode = if (insensitive) "unicode-lowercase-prefix" else "exact-utf8-prefix";
-            response.total_matches = if (insensitive) task.total_matches else range.end - range.start;
-            response.offset = opts.offset;
-            const retained_total = range.end - range.start;
-            const start = range.start + @min(opts.offset, retained_total);
-            const end = start + @min(opts.limit, range.end - start);
-            const returned = end - start;
-            response.has_more = opts.offset +| returned < response.total_matches;
-            const matches = try a.alloc(output.Match, returned);
-            for (matches, start..) |*match, index| match.* = .{ .title = try model.utf8Text(a, try db.titleAt(if (insensitive) task.matches.items[index].index else index)) };
-            response.matches = matches;
+            try populateSearch(a, init.gpa, &db, opts, &response);
+            const matches = response.matches;
             if (opts.format == .json) try output.json(w, response) else {
                 for (matches) |match| {
                     try output.terminalText(w, match.title);
@@ -383,6 +365,29 @@ test {
     _ = @import("blob_storage");
 }
 
+fn populateSearch(a: std.mem.Allocator, gpa: std.mem.Allocator, db: *store.Store, opts: args.Options, response: *output.Response) !void {
+    var task: search.Task = .{};
+    defer task.deinit(gpa);
+    const insensitive = !opts.case_sensitive and std.mem.trim(u8, opts.query, " \t\r\n").len != 0;
+    const range = if (insensitive) blk: {
+        const wanted = std.math.add(usize, opts.offset, opts.limit) catch return error.SearchWindowTooLarge;
+        try task.beginLimited(gpa, opts.query, wanted);
+        while (!task.complete) try task.step(gpa, db, 4096);
+        break :blk store.Range{ .start = 0, .end = task.matches.items.len };
+    } else try db.prefix(if (opts.case_sensitive) opts.query else "");
+    response.match_mode = if (insensitive) "unicode-lowercase-prefix" else "exact-utf8-prefix";
+    response.total_matches = if (insensitive) task.total_matches else range.end - range.start;
+    response.offset = opts.offset;
+    const retained_total = range.end - range.start;
+    const start = range.start + @min(opts.offset, retained_total);
+    const end = start + @min(opts.limit, range.end - start);
+    const returned = end - start;
+    response.has_more = opts.offset +| returned < response.total_matches;
+    const matches = try a.alloc(output.Match, returned);
+    for (matches, start..) |*match, index| match.* = .{ .title = try model.utf8Text(a, try db.titleAt(if (insensitive) task.matches.items[index].index else index)) };
+    response.matches = matches;
+}
+
 fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer) !u8 {
     var input_buffer: [8192]u8 = undefined;
     var input = std.Io.File.stdin().readerStreaming(io, &input_buffer);
@@ -396,7 +401,29 @@ fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.I
             error.EndOfStream => return 0,
             else => return err,
         };
-        if (count == 0 or count > queries.len) return error.InvalidExportRequest;
+        // Zero titles tags an empty-query browse at the following little-endian offset.
+        if (count == 0) {
+            const offset = std.math.cast(usize, try r.takeInt(u64, .little)) orelse return error.InvalidExportRequest;
+            var arena = std.heap.ArenaAllocator.init(gpa);
+            defer arena.deinit();
+            const a = arena.allocator();
+            try db.requireUnchanged();
+            var page: output.Response = .{
+                .operation = .search,
+                .query = "",
+                .kind = db.selectionKind(),
+                .language = if (db.heading()) |heading| try model.utf8Text(a, heading) else null,
+                .record_count = db.count(),
+                .total_matches = 0,
+            };
+            try populateSearch(a, gpa, db, .{ .case_sensitive = true, .limit = 1000, .offset = offset }, &page);
+            try output.json(w, page);
+            try db.requireUnchanged();
+            try w.writeByte('\n');
+            try w.flush();
+            continue;
+        }
+        if (count > queries.len) return error.InvalidExportRequest;
         const mode = try r.takeByte();
         if (mode > 2) return error.InvalidExportRequest;
         const batch_hints = if (mode != 0) hints[0 .. @as(usize, count) * 64] else null;

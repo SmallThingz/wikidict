@@ -319,7 +319,7 @@ def emitted_views(root, catalog, query):
 
 
 def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list,
-         catalog_page_size=None, audit_alias_references=False, checkpoint=None, checkpoint_guard=None):
+         catalog_page_size=None, audit_alias_references=False, checkpoint=None, checkpoint_guard=None, browse_page=None):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0, image_alternatives=0,
@@ -372,8 +372,15 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
         while True:
             if checkpoint is not None:
                 checkpoint_guard()
-            page = ask('search', *selection, '--case-sensitive', '--limit', '1000',
-                       '--offset', str(offset), '--', '')
+            if browse_page is None:
+                page = ask('search', *selection, '--case-sensitive', '--limit', '1000',
+                           '--offset', str(offset), '--', '')
+            else:
+                result['commands'] += 1
+                page = browse_page(selection, offset)
+                require(isinstance(page, dict) and page.get('operation') == 'search' and
+                        page.get('query') == '' and page.get('match_mode') == 'exact-utf8-prefix',
+                        'invalid browse session response')
             require(page.get('kind') == view['kind'].replace('-', '_') and
                     page.get('language') == view['language'], 'search selection owner mismatch')
             total = page['total_matches']
@@ -707,15 +714,18 @@ def checked_export_stream(argv):
             yield decoded
 
 
-def exchange_export_batch(process, titles, hints, storage, alias_references=False):
-    mode = 0 if hints is None else 2 if alias_references else 1
-    process.stdin.write(bytes((len(titles), mode)))
-    if hints is not None:
-        process.stdin.write(''.join(hints).encode('ascii'))
-    for title in titles:
-        encoded = title.encode('utf-8')
-        process.stdin.write(struct.pack('<I', len(encoded)))
-        process.stdin.write(encoded)
+def exchange_export_batch(process, titles, hints, storage, alias_references=False, browse_offset=None):
+    if browse_offset is not None:
+        process.stdin.write(struct.pack('<BQ', 0, browse_offset))
+    else:
+        mode = 0 if hints is None else 2 if alias_references else 1
+        process.stdin.write(bytes((len(titles), mode)))
+        if hints is not None:
+            process.stdin.write(''.join(hints).encode('ascii'))
+        for title in titles:
+            encoded = title.encode('utf-8')
+            process.stdin.write(struct.pack('<I', len(encoded)))
+            process.stdin.write(encoded)
     process.stdin.flush()
     at_line_start = True
     with export_spool(storage, 'wb') as compressed:
@@ -737,12 +747,12 @@ def checked_export_session(argv, *, alias_references=False):
             stopped = False
 
             @contextmanager
-            def batch(titles, hints):
+            def batch(titles, hints, *, browse_offset=None):
                 nonlocal stopped
                 with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as storage:
                     deadline = time.monotonic() + 60
                     try:
-                        exchange = pool.submit(exchange_export_batch, process, titles, hints, storage, alias_references)
+                        exchange = pool.submit(exchange_export_batch, process, titles, hints, storage, alias_references, browse_offset)
                         if not exchange.result(timeout=60):
                             code = wait_export_child(process, max(0, deadline - time.monotonic()))
                             require(code == 0, f'export batch failed with status {code}')
@@ -965,6 +975,8 @@ def main():
                         help='Reuse confirmed fixed-feature redirect bodies with a compatible Reader')
     parser.add_argument('--audit-export-session', action='store_true',
                         help='Reuse the Store across batches on an unchanged view with a compatible Reader')
+    parser.add_argument('--audit-browse-session', action='store_true',
+                        help='Read empty-query search pages from the same native export session')
     parser.add_argument('--audit-alias-references', action='store_true',
                         help='Reuse validated redirect bodies when the target is absent in the selected language')
     parser.add_argument('--catalog-page-size', type=int, metavar='N',
@@ -972,6 +984,8 @@ def main():
     parser.add_argument('--checkpoint', type=Path,
                         help='Resume or create an audit checkpoint for this exact publication and Reader')
     args = parser.parse_args()
+    if args.audit_browse_session and not args.audit_export_session:
+        parser.error('--audit-browse-session requires --audit-export-session')
     if args.audit_alias_references and not (args.audit_reference_hints and args.audit_export_session):
         parser.error('--audit-alias-references requires --audit-reference-hints and --audit-export-session')
     if args.catalog_page_size is not None and not 1 <= args.catalog_page_size <= 1000:
@@ -1003,6 +1017,7 @@ def run_audit(args, report_files):
         return cli_query(args.binary, args.root, *parts)
 
     try:
+        browse_page = None
         exports = None
         checkpoint = None
         if args.batch_size > 1 or args.definition_dump or args.checkpoint:
@@ -1038,6 +1053,8 @@ def run_audit(args, report_files):
                                options=dict(batch_size=args.batch_size, reference_hints=args.audit_reference_hints,
                                             export_session=args.audit_export_session, alias_references=args.audit_alias_references,
                                             catalog_page_size=args.catalog_page_size))
+                if args.audit_browse_session:
+                    binding['options']['browse_session'] = True
                 checkpoint = AuditCheckpoint(report_files, path, json.loads(json.dumps(binding)))
                 checkpoint.guard = checkpoint_guard
                 if not checkpoint.get('stage_verified'):
@@ -1058,17 +1075,28 @@ def run_audit(args, report_files):
             if args.batch_size > 1:
                 hints = ({} if checkpoint is None else checkpoint.mapping('hints')) if args.audit_reference_hints else None
                 selected, exchange = None, None
+                def select_session(selection):
+                    nonlocal selected, exchange
+                    if selection != selected:
+                        sessions.close()
+                        unchanged()
+                        argv = [str(args.binary.resolve()), 'export', '--root', str(args.root),
+                                '--format', 'json', *selection, '--batch-session', '--case-sensitive']
+                        exchange = sessions.enter_context(checked_export_session(argv, alias_references=args.audit_alias_references))
+                        selected = selection
+                    return exchange
+
+                if args.audit_browse_session:
+                    def browse_page(selection, offset):
+                        unchanged()
+                        with select_session(selection)([], None, browse_offset=offset) as body:
+                            page = json.load(body)
+                        unchanged()
+                        return page
+
                 def exports(selection, matches):
                     def send(titles, batch_hints):
-                        nonlocal selected, exchange
-                        if selection != selected:
-                            sessions.close()
-                            unchanged()
-                            argv = [str(args.binary.resolve()), 'export', '--root', str(args.root),
-                                    '--format', 'json', *selection, '--batch-session', '--case-sensitive']
-                            exchange = sessions.enter_context(checked_export_session(argv, alias_references=args.audit_alias_references))
-                            selected = selection
-                        return exchange(titles, batch_hints)
+                        return select_session(selection)(titles, batch_hints)
                     return batch_exports(args.binary, args.root, selection, matches, args.batch_size,
                                          unchanged, hints, send if args.audit_export_session else None)
         with ExitStack() as resources:
@@ -1087,7 +1115,7 @@ def run_audit(args, report_files):
                 row_factory = lambda: checkpoint.rows(next(kinds))
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
                           audit_references=args.audit_reference_hints, row_factory=row_factory,
-                          catalog_page_size=args.catalog_page_size, checkpoint=checkpoint,
+                          catalog_page_size=args.catalog_page_size, checkpoint=checkpoint, browse_page=browse_page,
                           checkpoint_guard=checkpoint.guard if checkpoint is not None else None,
                           audit_alias_references=args.audit_alias_references)
             if review is not None:
