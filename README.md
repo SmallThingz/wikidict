@@ -475,8 +475,9 @@ catalog with no lexical entries. This command opens the Assamese edition from th
 checkout root.
 
 ```sh
-EDITION_DIR=data/build-artifacts-retained-small7-20261118-01/published/aswiktionary/20261001
-zig-out/bin/wikidict tui --root "$EDITION_DIR"
+EDITION_DIR=$(awk -F '\t' '$1 == "aswiktionary" && $2 == "built" { print $3 }' \
+    data/corpus-campaign-current01/local-editions.tsv)
+[ -n "$EDITION_DIR" ] && zig-out/bin/wikidict tui --root "$EDITION_DIR"
 ```
 
 [Local edition diagnostics](data/corpus-campaign-current01/local-edition-diagnostics.tsv)
