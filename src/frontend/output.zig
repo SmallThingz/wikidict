@@ -101,6 +101,7 @@ pub const PoemProjection = struct {
     lines: *std.ArrayList(terminal.PoemLine),
     // Optional TUI body width; absent for the existing unbounded CLI.
     table_columns: ?usize = null,
+    list_marker: ?struct { end: usize, cells: usize } = null,
     scanned: usize = 0,
     line_start: usize = 0,
     fn record(self: *PoemProjection, info: PoemInfo) !void {
@@ -109,7 +110,20 @@ pub const PoemProjection = struct {
             self.line_start = offset + 1;
         };
         self.scanned = text.len;
-        if (!info.marked) return;
+        if (!info.marked) {
+            if (self.list_marker) |marker| {
+                const first = self.line_start < marker.end;
+                try self.lines.append(self.allocator, .{
+                    .offset = self.line_start,
+                    .lead_bytes = if (first) marker.end - self.line_start else 0,
+                    .lead_cells = if (first) marker.cells else 0,
+                    .left = if (first) 0 else marker.cells,
+                    .continuation_left = marker.cells,
+                    .wrap_prose = true,
+                });
+            }
+            return;
+        }
         const prefix = terminal.cellWidth(text[self.line_start..]);
         const line: terminal.PoemLine = .{
             .offset = self.line_start,
@@ -2653,6 +2667,7 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             }
             continue;
         }
+        const marker_start = if (projection) |p| p.frame.written().len else 0;
         if (color) if (context.cell_style) |style| if (style.header) try w.writeAll("\x1b[1m");
         try w.splatByteAll(' ', @as(usize, @min(block.depth, 12)) * 2);
         switch (block.kind) {
@@ -2670,6 +2685,17 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             } else try w.writeAll("• "),
             .preformatted => try w.writeAll("    "),
             else => {},
+        }
+        // Rich projections own their layout. Ordinary lists pass the width of
+        // the emitted marker to the wrapper without adding bytes to CLI text.
+        const previous_marker = if (projection) |p| p.list_marker else null;
+        defer if (projection) |p| { p.list_marker = previous_marker; };
+        if (projection) |p| {
+            p.list_marker = null;
+            if ((block.kind == .list_item or block.kind == .definition) and block.figure == null and !has_flow) {
+                const frame = p.frame.written();
+                p.list_marker = .{ .end = frame.len, .cells = terminal.cellWidth(frame[marker_start..]) };
+            }
         }
         const style = context.cell_style orelse CellDisplayStyle{};
         var detail_depth: ?u8 = if (block.kind == .example or block.kind == .quotation) block.depth else null;
@@ -4989,6 +5015,38 @@ const NarrowTableTest = struct {
         return count;
     }
 };
+
+test "ordinary lists hang at the emitted marker width without changing their text" {
+    terminal.initLocale();
+    const a = std.testing.allocator;
+    const examples = [_]model.Block{
+        .{ .kind = .list_item, .depth = 1, .spans = &.{.{ .text = "Lesego o a kua/Lesego o buela kwa godimo" }} },
+        .{ .kind = .list_item, .depth = 1, .number = "１０", .spans = &.{ .{ .text = "one two three four" }, .{ .kind = .line_break }, .{ .text = "five" } } },
+        .{ .kind = .definition, .spans = &.{.{ .text = "one two three four" }} },
+    };
+    for ([_]bool{ false, true }) |color| {
+        var raw: std.Io.Writer.Allocating = .init(a);
+        defer raw.deinit();
+        try blocksText(&raw.writer, &examples, color);
+        var text: std.Io.Writer.Allocating = .init(a);
+        defer text.deinit();
+        var lines: std.ArrayList(terminal.PoemLine) = .empty;
+        defer lines.deinit(a);
+        var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &lines };
+        try blocksTextProjected(&text.writer, &examples, color, &projection);
+        try std.testing.expectEqualStrings(raw.written(), text.written());
+        try std.testing.expectEqual(@as(usize, 4), lines.items.len);
+        for (lines.items, [_]usize{ 4, 8, 8, 3 }) |line, cells| try std.testing.expectEqual(cells, line.continuation_left);
+        try std.testing.expectEqual(@as(usize, 8), lines.items[2].left);
+        const rows = try terminal.wrapStyledProjected(a, text.written(), 38, lines.items);
+        defer a.free(rows);
+        try std.testing.expectEqualStrings(if (color) "godimo\x1b[0m" else "godimo", rows[1].bytes);
+        try std.testing.expectEqual(@as(usize, 4), rows[1].left);
+        const narrow = try terminal.wrapStyledProjected(a, text.written(), 3, lines.items);
+        defer a.free(narrow);
+        for (narrow) |row| try std.testing.expect(row.left + terminal.cellWidth(row.bytes) <= 3);
+    }
+}
 
 test "list table markers share the first row without marking continuation tables" {
     const types = @import("blob_encoder").presentation_types;

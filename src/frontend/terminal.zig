@@ -546,7 +546,7 @@ pub fn styleAfter(initial: TextStyle, text: []const u8) TextStyle {
     return result;
 }
 
-pub const PoemLine = struct { offset: usize, lead_bytes: usize = 0, lead_cells: usize = 0, left: usize = 0, continuation_left: usize = 0, right: usize = 0 };
+pub const PoemLine = struct { offset: usize, lead_bytes: usize = 0, lead_cells: usize = 0, left: usize = 0, continuation_left: usize = 0, right: usize = 0, wrap_prose: bool = false };
 pub const RenderRow = struct { bytes: []const u8, carry: TextStyle, left: usize = 0, right: usize = 0 };
 pub fn wrapStyled(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
     return wrapStyledProjected(a, text, columns, &.{});
@@ -608,6 +608,7 @@ fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: 
     while (lines.next()) |line| {
         while (metadata_index < poem_lines.len and poem_lines[metadata_index].offset < line_offset) metadata_index += 1;
         const poem = if (metadata_index < poem_lines.len and poem_lines[metadata_index].offset == line_offset) poem_lines[metadata_index] else null;
+        const wrap_prose = if (poem) |p| p.wrap_prose else true;
         var rest = line;
         var first = true;
         while (true) {
@@ -624,14 +625,14 @@ fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: 
                     if (cell) {
                         if (moveWholeWord(rest, space, end, available)) end = space + 1;
                     } else if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 or
-                        (poem == null and moveWholeWord(rest, space, end, available))) end = space;
+                        (wrap_prose and moveWholeWord(rest, space, end, available))) end = space;
                 }
             };
             const slice = rest[0..end];
             try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
             style.scan(slice);
             rest = rest[end..];
-            if (!cell and poem == null and rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
+            if (!cell and wrap_prose and rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
             if (rest.len == 0) break;
             first = false;
         }
