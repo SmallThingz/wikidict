@@ -2160,6 +2160,15 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual((shard/'sentinel').read_text(),'retain')
 
     def test_noncontiguous_resumed_verifier_failure_preserves_later_shard(self):
+        self.check_resumed_shards(fail_later=True)
+
+    def test_noncontiguous_resume_verifies_each_shard_once_and_merges_in_order(self):
+        self.check_resumed_shards(fail_later=False)
+
+    def test_audited_resume_verifies_each_shard_once_and_merges_in_order(self):
+        self.check_resumed_shards(fail_later=False, audit_pages=1)
+
+    def check_resumed_shards(self, *, fail_later, audit_pages=None):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander'
             exp.mkdir(parents=True)
@@ -2177,23 +2186,34 @@ class BuildTest(PreparedToolsFixture):
                          '--limit-pages','1','--index-byte-offset',str(offsets[start])]
                 write_coverage(shard,command)
                 (shard/'.verified').write_text('verified\n')
-            (shards/'00000002/sentinel').write_text('retain')
+            if fail_later:
+                (shards/'00000002/sentinel').write_text('retain')
             calls=[]
             def run(command):
                 calls.append(command)
                 if blob_command(command,'build-blobs'):
                     dest=Path(tool_arguments(command)[1]);dest.mkdir()
                     write_coverage(dest,command)
-                elif blob_command(command,'verify-blobs') and str(shards/'00000002') in command:
+                elif fail_later and blob_command(command,'verify-blobs') and str(shards/'00000002') in command:
                     raise subprocess.CalledProcessError(137,command)
                 elif blob_command(command,'merge-blobs'):
-                    self.fail('Merge must not run after a verifier failure')
-            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run):
-                with self.assertRaises(subprocess.CalledProcessError):
-                    b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
-                                    [{'wiki':'test','date':'20260901'}],123)
-            self.assertEqual((shards/'00000002/sentinel').read_text(),'retain')
-            self.assertFalse(any(blob_command(c,'merge-blobs') for c in calls))
+                    self.assertFalse(fail_later,'Merge must not run after a verifier failure')
+                    merged, *parts = map(Path,tool_arguments(command))
+                    self.assertEqual(parts,[shards/f'{i:08d}' for i in range(3)])
+                    merged.mkdir()
+                    write_coverage(merged)
+            expected = self.assertRaises(subprocess.CalledProcessError) if fail_later else contextlib.nullcontext()
+            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run),expected:
+                b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',4,
+                                [{'wiki':'test','date':'20260901'}],123,presentation_audit_pages=audit_pages)
+            verified = [Path(tool_arguments(c)[0]) for c in calls if blob_command(c,'verify-blobs')]
+            self.assertEqual([p for p in verified if p.parent==shards],[shards/f'{i:08d}' for i in range(3)])
+            if fail_later:
+                self.assertEqual((shards/'00000002/sentinel').read_text(),'retain')
+                self.assertFalse(any(blob_command(c,'merge-blobs') for c in calls))
+            else:
+                self.assertEqual(verified[-1],root/'staging')
+                self.assertEqual(json.loads((root/'staging/page-coverage.json').read_text())['pages_seen'],3)
 
     def test_verified_publication_missing_coverage_preserves_staging(self):
         with tempfile.TemporaryDirectory() as tmp:

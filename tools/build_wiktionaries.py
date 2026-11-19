@@ -7170,7 +7170,6 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     shards_root=raw_shards_path if raw_shards_path is not None else workspace/'shards'
     shards_root.mkdir(exist_ok=True)
     cleanup_dead_private_shards(shards_root)
-    shard_paths=[]
     # A verified or complete-but-unmarked contiguous prefix is reusable after
     # a crash. The native continuous builder owns only an absent suffix, so it
     # cannot replace an existing shard directory.
@@ -7223,8 +7222,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         continuous_handled=True
     failed_shards=[]
     if not continuous_handled:
-        shard_paths=[]
-        for start in range(0,indexed_pages,interval):
+        # The contiguous prefix is already verified and in shard_paths.
+        for start in missing_starts:
             limit=min(interval,indexed_pages-start)
             offset=index['offsets'][start]
             check_shard_inputs()
