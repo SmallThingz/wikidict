@@ -1,0 +1,231 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "assamese",
+  "kind": "language",
+  "language": "ইংৰাজী",
+  "match_mode": "exact-utf8",
+  "record_count": 7,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2
+        ]
+      },
+      "title": "assamese",
+      "display_title": [],
+      "kind": "language",
+      "language": "ইংৰাজী",
+      "language_code": "en",
+      "sections": [
+        {
+          "level": 2,
+          "title": "ইংৰাজী",
+          "anchor": "",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "ইংৰাজী",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "title": "নাম",
+          "anchor": "নাম",
+          "anchor_fallback": ".E0.A6.A8.E0.A6.BE.E0.A6.AE",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "assamese",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "অসমীয়া ",
+                  "target": "অসমীয়া",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 2,
+          "title": "বিশেষণ",
+          "anchor": "বিশেষণ",
+          "anchor_fallback": ".E0.A6.AC.E0.A6.BF.E0.A6.B6.E0.A7.87.E0.A6.B7.E0.A6.A3",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "assamese",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "list_item",
+              "depth": 2,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "অসমীয়া ",
+                  "target": "অসমীয়া",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

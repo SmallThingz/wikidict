@@ -525,11 +525,16 @@ fn greekNounBulletSection(section: anytype, owner: ?[]const u8) bool {
         (remaining == 2 or greekNounSynonymNote(section.blocks[at + 2]));
 }
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet };
+const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, source_numbered };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
         .ordinary => {},
+        .source_numbered => if (sourceNumberedBlock(block) and sourceNumberedText(block) and !sourceNumberedPlaceholder(block)) {
+            result.kind = .definition;
+            result.list_path = "#";
+            result.depth = 1;
+        },
         .greek_noun_bullet => {
             if (greekNounMarkedGloss(block)) {
                 // Address projection only; authored list kind and body are unchanged.
@@ -2174,6 +2179,10 @@ fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
 }
 
 pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8) !Layout {
+    return buildForDictionaryWithSourceNumberedLexemes(a, sections, unclassified, owner, source_lexeme, wiki_id, &.{});
+}
+
+pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
     const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
@@ -2185,10 +2194,11 @@ pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[
     var related: std.ArrayList(usize) = .empty;
     var lemma_parent: ?struct { level: u8, kind: []const u8 } = null;
     for (sections, 0..) |section, i| {
+        const numbered_part = if (unclassified) null else sourceNumberedPart(section, i, owner, numbered_proofs);
         const declared_kind = if (unclassified and section.level == 2) null else
             partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else null;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
-        const named_kind = declared_kind orelse grammar_kind orelse if (unclassified) null else
+        const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse if (unclassified) null else
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
@@ -2261,7 +2271,9 @@ pub fn buildForDictionary(a: A, sections: anytype, unclassified: bool, owner: ?[
             }
             active = lexemes.items.len;
             active_level = if (nested_kind != null) section.level - 1 else section.level;
-            var lexical = if (paragraph_part) |marker|
+            var lexical = if (numbered_part != null)
+                try analyzeProjected(a, name, i, origin, section.blocks, false, .source_numbered)
+            else if (paragraph_part) |marker|
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
             else if (meaning_paragraph) |marker|
                 try analyzeSerbianMeaningParagraph(a, marker, i, section.blocks)
@@ -13462,4 +13474,101 @@ test "retained Corsican verb and adjective declarations organize real foreign en
         for (unknown.lexemes) |item| try std.testing.expectEqualStrings("", item.language);
         try std.testing.expectEqualStrings(case.label, sections[2].title);
     }
+}
+
+pub const SourceNumberedLexeme = struct { section: usize, kind: []const u8, numbered_count: usize, placeholder_count: usize };
+
+fn sourceNumberedBlock(block: wiki.Block) bool {
+    return block.kind == .list_item and (std.mem.eql(u8, block.list_path, ":#") or std.mem.eql(u8, block.list_path, ";#"));
+}
+fn sourceNumberedText(block: wiki.Block) bool {
+    for (block.spans) |span| if (std.mem.trim(u8, span.text, " \t\r\n").len != 0) return true;
+    return false;
+}
+fn sourceNumberedPlaceholder(block: wiki.Block) bool {
+    var dots: usize = 0;
+    for (block.spans) |span| {
+        if (span.kind != .text or span.generated_diagnostic or span.provenance != .parsed or
+            span.target.len != 0 or span.target_fragment != null or span.self_link or span.role != .normal or
+            span.inline_action_group != null or span.inline_padding_group != null or
+            span.ruby != null or span.image != null or
+            span.pending_figure != null or span.pending_container != null or span.pending_bidi_scope != null or
+            span.ordinary_action_origin != null or span.ordinary_action_script != null or span.generated_link != null) return false;
+        for (span.text) |byte| {
+            if (std.ascii.isWhitespace(byte)) continue;
+            if (byte != '.') return false;
+            dots += 1;
+        }
+    }
+    return dots == 3;
+}
+fn sourceNumberedPart(section: anytype, index: usize, owner: ?[]const u8, proofs: []const SourceNumberedLexeme) ?SourceNumberedLexeme {
+    if (owner == null or owner.?.len == 0 or std.mem.eql(u8, owner.?, "Unclassified") or section.level != 2) return null;
+    var selected: ?SourceNumberedLexeme = null;
+    for (proofs) |proof| if (proof.section == index) {
+        if (selected != null or (!std.mem.eql(u8, proof.kind, "Noun") and !std.mem.eql(u8, proof.kind, "Adjective"))) return null;
+        selected = proof;
+    };
+    const proof = selected orelse return null;
+    var count: usize = 0;
+    var placeholders: usize = 0;
+    for (section.blocks) |block| {
+        if (block.container != null) return null;
+        if (!sourceNumberedBlock(block)) continue;
+        count += 1;
+        if (sourceNumberedPlaceholder(block)) placeholders += 1;
+    }
+    if (count == 0 or count != proof.numbered_count or placeholders != proof.placeholder_count) return null;
+    return proof;
+}
+
+pub fn buildOwnedWithSourceNumberedLexemes(a: A, sections: anytype, owner: []const u8, legacy: ?SourceLexeme, proofs: []const SourceNumberedLexeme) !Layout {
+    return buildForDictionaryWithSourceNumberedLexemes(a, sections, false, owner, legacy, "", proofs);
+}
+
+test "source numbered POS projection preserves placeholders and refuses missing or mismatched section authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const S = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    const placeholder: wiki.Block = .{ .kind = .list_item, .list_path = ":#", .depth = 2, .spans = &.{.{ .text = "..." }} };
+    const meaning: wiki.Block = .{ .kind = .list_item, .list_path = ";#", .depth = 2, .spans = &.{.{ .kind = .link, .text = "retained", .target = "Target" }} };
+    const sections = [_]S{.{ .title = "নাম", .level = 2, .blocks = &.{ placeholder, meaning } }};
+    const proof: SourceNumberedLexeme = .{ .section = 0, .kind = "Noun", .numbered_count = 2, .placeholder_count = 1 };
+    const actual = try buildOwnedWithSourceNumberedLexemes(a, &sections, "Independent owner", null, &.{proof});
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes[0].definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{0}, actual.lexemes[0].introduction);
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &sections, "Independent owner")).lexemes.len);
+    for (0..5) |mode| {
+        var altered = proof;
+        switch (mode) {
+            0 => altered.section = 1,
+            1 => altered.kind = "Verb",
+            2 => altered.numbered_count = 1,
+            3 => altered.placeholder_count = 0,
+            4 => altered.placeholder_count = 2,
+            else => unreachable,
+        }
+        try std.testing.expectEqual(@as(usize, 0), (try buildOwnedWithSourceNumberedLexemes(a, &sections, "Independent owner", null, &.{altered})).lexemes.len);
+    }
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwnedWithSourceNumberedLexemes(a, &sections, "", null, &.{proof})).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwnedWithSourceNumberedLexemes(a, &sections, "Unclassified", null, &.{proof})).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwnedWithSourceNumberedLexemes(a, &sections, "Independent owner", null, &.{ proof, proof })).lexemes.len);
+    const empty_section = [_]S{.{ .title = "নাম", .level = 2, .blocks = &.{placeholder} }};
+    const empty_proof: SourceNumberedLexeme = .{ .section = 0, .kind = "Noun", .numbered_count = 1, .placeholder_count = 1 };
+    const empty = try buildOwnedWithSourceNumberedLexemes(a, &empty_section, "Independent owner", null, &.{empty_proof});
+    try std.testing.expectEqual(@as(usize, 1), empty.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), empty.lexemes[0].definitions.len);
+    var blank = placeholder; blank.spans = &.{.{ .text = " \t" }};
+    try std.testing.expect(!sourceNumberedText(blank));
+    try std.testing.expectEqual(wiki.Kind.list_item, lexicalProjection(blank, .source_numbered).kind);
+    var payload: wiki.Span = .{ .text = "...", .target = "Action" };
+    var changed = placeholder; changed.spans = &.{payload};
+    try std.testing.expect(!sourceNumberedPlaceholder(changed));
+    const T = @import("blob_encoder").presentation_types;
+    const group: T.InlinePaddingGroup(wiki.Span) = undefined;
+    payload.target = ""; payload.inline_padding_group = &group; changed.spans = &.{payload};
+    try std.testing.expect(!sourceNumberedPlaceholder(changed));
+    try std.testing.expectEqualDeep(placeholder, sections[0].blocks[0]);
+    try std.testing.expectEqualDeep(meaning, sections[0].blocks[1]);
 }

@@ -1966,6 +1966,7 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     var templates: ?*const dump_source.TemplateSource = null;
     var behavior: ?namespace_registry.behavior_switches.Registry = null;
     defer if (behavior) |*value| value.deinit();
+    var numbered_pos_seen = [_]bool{ false, false };
     var naslov_seen = [_]bool{ false, false };
     var naslov_proven = [_]bool{ false, false };
     var nom_template_seen = false;
@@ -1989,6 +1990,21 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
             // Iterator row storage may be reused on its next advance.
             const owned = try a.dupe(u8, selected_code);
             equals_seen.put(a, owned, {}) catch |err| { a.free(owned); return err; };
+        }
+        const numbered_pos_role: ?usize = if (parenthetical_title.id != 10) null else
+            if (std.mem.eql(u8, parenthetical_title.text, "-noun-")) 0 else
+            if (std.mem.eql(u8, parenthetical_title.text, "-adj-")) 1 else null;
+        if (numbered_pos_role) |index| numbered_role: {
+            if (numbered_pos_seen[index]) { registry.source_numbered_pos[index] = false; break :numbered_role; }
+            numbered_pos_seen[index] = true;
+            if (row.ns != 10 or row.redirect != null or !row.has_source or
+                !std.mem.eql(u8, row.content_model, "wikitext")) break :numbered_role;
+            const role_templates = (try view.templates(root, namespaces)) orelse return;
+            const raw_role = (try role_templates.lookup(this_ordinal, row.page_id, row.revision_id)) orelse return error.MissingLanguageTemplateSource;
+            if (raw_role.len > 4096) break :numbered_role;
+            const decoded_role = if (row.source_needs_decode) try xml_decode.decodeSinglePassAlloc(a, raw_role) else null;
+            defer if (decoded_role) |value| a.free(value);
+            registry.source_numbered_pos[index] = language_registry.sourceNumberedPosTemplate(decoded_role orelse raw_role, index);
         }
         const naslov_role: ?usize = if (parenthetical_title.id != 10) null else
             if (std.mem.eql(u8, parenthetical_title.text, "Наслов")) 0 else
@@ -2280,6 +2296,7 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
         .ctx = registry,
         .source_nom_name_format = registry.source_nom_role and registry.source_nom_name_format,
         .source_naslov_noun = registry.source_naslov_noun,
+        .source_numbered_pos = registry.source_numbered_pos,
         .source_nom_label_fn = if (registry.source_nom_role) struct {
             fn label(raw: ?*const anyopaque, code: []const u8) ?[]const u8 {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
@@ -66740,4 +66757,36 @@ test "MG source proved prefix preserves three owners and complete malformed tabl
     const entry = try F.entry(a, output, "Anglisy", "support-control");
     const body = try std.json.Stringify.valueAlloc(a, entry.sections, .{});
     for ([_][]const u8{ "SUPPORT", "SupportTarget", "ENGLISH", "NESTED" }) |word| try std.testing.expect(std.mem.indexOf(u8, body, word) != null);
+}
+
+test "normal template loader conditions local noun adjective roles on exact provider source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer ns.deinit();
+    const bodies = [_][]const u8{ "== নাম   ==\n\n<noinclude>\n[[Category:Template]] </noinclude>", "== বিশেষণ   ==\n\n<noinclude>\n[[Category:Template]] </noinclude>" };
+    const xml_bodies = [_][]const u8{ "== নাম   ==\n\n&lt;noinclude&gt;\n[[Category:Template]] &lt;/noinclude&gt;", "== বিশেষণ   ==\n\n&lt;noinclude&gt;\n[[Category:Template]] &lt;/noinclude&gt;" };
+    for (0..2) |role| {
+        try std.testing.expect(language_registry.sourceNumberedPosTemplate(bodies[role], role));
+        try std.testing.expect(!language_registry.sourceNumberedPosTemplate(bodies[role], 1 - role));
+        try std.testing.expect(!language_registry.sourceNumberedPosTemplate(try std.mem.concat(a, u8, &.{ bodies[role], " changed" }), role));
+    }
+    for (0..5) |mode| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const first = try std.fmt.allocPrint(a, "0\t0\tTemplate:{s}\t\t1959\t4738\t2023-01-01T00:00:00Z\tTest\twikitext\t10\t1\t1\n", .{if (mode == 3) "unrelated" else "-noun-"});
+        const second = "0\t0\tTemplate:-adj-\t\t1960\t4739\t2023-01-01T00:00:00Z\tTest\twikitext\t10\t1\t1\n";
+        const index = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index, .data = if (mode == 4) first else try std.mem.concat(a, u8, &.{ first, second }) });
+        var writer = try dump_source.TemplateSourceWriter.init(io, a, root); defer writer.deinit();
+        try writer.append(0, 1959, 4738, if (mode == 1) "== Noun ==" else xml_bodies[0]);
+        if (mode != 4) try writer.append(1, 1960, 4739, if (mode == 2) "== Adjective ==" else xml_bodies[1]);
+        try writer.finish(index);
+        var registry = language_registry.Registry.empty(a); defer registry.deinit();
+        try registry.addTsv("# mediawiki\nen\tEnglish\nas\tঅসমীয়া\n");
+        try loadSourceLanguageBanners(io, a, root, &ns, &registry);
+        try std.testing.expectEqual(mode != 1 and mode != 3, registry.source_numbered_pos[0]);
+        try std.testing.expectEqual(mode != 2 and mode != 4, registry.source_numbered_pos[1]);
+        try std.testing.expectEqualDeep(registry.source_numbered_pos, languageCodes(&registry, &ns).source_numbered_pos);
+        try std.testing.expect(registry.resolveStrong("নাম") == null);
+        try std.testing.expect(registry.resolveStrong("বিশেষণ") == null);
+    }
 }

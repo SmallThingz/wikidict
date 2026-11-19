@@ -1861,10 +1861,12 @@ pub fn compileReportedWithReferencesAndPhasesFragmentsAlloc(
 }
 /// Explicit publication authority from the producer's resolved source group.
 /// Generic compilation metadata alone is not evidence of a single owner.
+pub const SourceNumberedLexeme = struct { source: []const u8, heading_offset: usize, kind: []const u8, numbered_count: usize, placeholder_count: usize };
+
 pub const SourceLexeme = struct {
     source: []const u8, heading_offset: usize, kind: []const u8, definition_text: []const u8,
 };
-pub const ClassifiedLanguage = struct { heading: []const u8, code: []const u8, source_lexeme: ?SourceLexeme = null };
+pub const ClassifiedLanguage = struct { heading: []const u8, code: []const u8, source_lexeme: ?SourceLexeme = null, source_numbered_lexemes: []const SourceNumberedLexeme = &.{} };
 pub fn compileReportedWithReferencesAndPhasesFragmentsAndHeadingAnchorsAlloc(
     a: A,
     title: []const u8,
@@ -2091,6 +2093,22 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
     // block indices therefore refer to the final serialized array, including 0.
     const synthetic_unclassified = kind == .language and language_code.len == 0 and
         std.mem.eql(u8, language orelse "", "Unclassified");
+    var numbered_lexemes: std.ArrayList(semantic.SourceNumberedLexeme) = .empty;
+    defer numbered_lexemes.deinit(a);
+    if (classified_owner) |owner| for (owner.source_numbered_lexemes) |proof| {
+        if (proof.source.ptr != source.bytes.ptr or proof.source.len != source.bytes.len or source.unknown or source.lost_missing_range) continue;
+        var selected: ?usize = null;
+        var duplicate = false;
+        for (work.sections, 0..) |section, index| {
+            if (!section.is_heading or section.level != 2 or section.heading_source_offset != proof.heading_offset) continue;
+            if (selected != null) { duplicate = true; break; }
+            selected = index;
+        }
+        if (duplicate) continue;
+        const index = selected orelse continue;
+        try numbered_lexemes.append(a, .{ .section = index, .kind = proof.kind,
+            .numbered_count = proof.numbered_count, .placeholder_count = proof.placeholder_count });
+    };
     const source_lexeme: ?semantic.SourceLexeme = lexical: {
         const owner = classified_owner orelse break :lexical null;
         const proof = owner.source_lexeme orelse break :lexical null;
@@ -2103,9 +2121,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         }
         break :lexical .{ .section = selected orelse break :lexical null, .kind = proof.kind, .definition_text = proof.definition_text };
     };
-    const layout = try semantic.buildForDictionary(a, work.sections, synthetic_unclassified,
+    const layout = try semantic.buildForDictionaryWithSourceNumberedLexemes(a, work.sections, synthetic_unclassified,
         if (classified_owner) |owner| owner.heading else null, source_lexeme,
-        if (namespace_catalog) |catalog| catalog.wiki else "");
+        if (namespace_catalog) |catalog| catalog.wiki else "", numbered_lexemes.items);
     const codec_phase = consume_diagnostics.beginConsumePhase(.codec);
     defer consume_diagnostics.endConsumePhase(codec_phase);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);

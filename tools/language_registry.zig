@@ -100,6 +100,7 @@ pub const Registry = struct {
     source_nom_name_format: bool = false,
     source_nom_role: bool = false,
     source_naslov_noun: bool = false,
+    source_numbered_pos: [2]bool = .{ false, false },
     source_nom_names: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_headword_role: bool = false,
     source_headword_static_prefix: ?[]const u8 = null,
@@ -5888,4 +5889,17 @@ test "MG exact equals template labels remain source bound and reject collisions"
     try changed.addSourceEqualsLabel("br", "Bretôna");
     try changed.addTsv("# mediawiki\nen\tEnglish\tBretôna\n");
     try std.testing.expect(changed.sourceEqualsLabel("br") == null);
+}
+
+// Local static providers -noun- p1959/r4738 and -adj- p1960/r4739.
+// These exact bodies declare a role; they never select a language owner.
+pub fn sourceNumberedPosTemplate(source: []const u8, role: usize) bool {
+    const expected: []const u8 = switch (role) {
+        0 => "8c143433b042950fcbcaac1a244bc2a9e2bea28022ee26c7c9ba14b74497c1a9",
+        1 => "d9a254105b54665dfc7e05926bc4557f22bafb6412a1379da09f18cf68d114d0",
+        else => return false,
+    };
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), expected);
 }

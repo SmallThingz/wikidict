@@ -63,6 +63,7 @@ pub const LanguageCodes = struct {
     // Selected source formatter only; false retains the complete older grammar.
     source_nom_name_format: bool = false,
     source_naslov_noun: bool = false,
+    source_numbered_pos: [2]bool = .{ false, false },
     source_section_fn: ?*const fn (?*const anyopaque, []const u8) ?SourceSectionHeading = null,
     source_headword_fn: ?*const fn (?*const anyopaque, []const u8) ?ResolvedLanguage = null,
     source_headword_static_prefix: ?[]const u8 = null,
@@ -2134,6 +2135,78 @@ fn sourceNomHeadingOwner(codes: LanguageCodes, source: MissingText, raw: languag
 // The selected Наслов/Значење source pair declares POS independently of its
 // displayed H2. Only the first complete single-owner noun region is supported;
 // neither category spelling, edition nor the unused third argument supplies it.
+fn sourceNumberedLexemes(a: std.mem.Allocator, codes: LanguageCodes, raw: ?[]const u8,
+    source: MissingText, owner: ResolvedLanguage, observed: presentation_document.HeadingObservation,
+) ![]presentation_document.SourceNumberedLexeme {
+    if ((!codes.source_numbered_pos[0] and !codes.source_numbered_pos[1]) or owner.code.len == 0 or
+        source.unknown or source.lost_missing_range or !observed.page_wiki_scope_complete) return &.{};
+    const authored = raw orelse return &.{};
+    const observed_source = observed.page_html_source orelse return &.{};
+    if (observed_source.ptr != source.bytes.ptr or observed_source.len != source.bytes.len) return &.{};
+    var result: std.ArrayList(presentation_document.SourceNumberedLexeme) = .empty;
+    defer result.deinit(a);
+    for ([_][]const u8{ "{{-noun-}}", "{{-adj-}}" }, 0..) |marker, role| {
+        if (!codes.source_numbered_pos[role]) continue;
+        if (std.mem.count(u8, authored, marker) != 1) continue;
+        const call_at = std.mem.indexOf(u8, authored, marker).?;
+        if ((call_at != 0 and authored[call_at - 1] != '\n') or
+            !language_source.outsideNestedOrOpaque(authored, call_at)) continue;
+        const call_end = std.mem.indexOfScalarPos(u8, authored, call_at, '\n') orelse authored.len;
+        if (!std.mem.eql(u8, std.mem.trimEnd(u8, authored[call_at..call_end], " \t\r"), marker)) continue;
+        var lines: [64][]const u8 = undefined;
+        var count: usize = 0;
+        var placeholders: usize = 0;
+        var at = if (call_end < authored.len) call_end + 1 else call_end;
+        var invalid = false;
+        while (at < authored.len) {
+            const end = std.mem.indexOfScalarPos(u8, authored, at, '\n') orelse authored.len;
+            const line = std.mem.trimEnd(u8, authored[at..end], "\r");
+            if (blobs.wikitext_syntax.controlHeading(line, null) != null or std.mem.startsWith(u8, line, "{{-")) break;
+            if (std.mem.startsWith(u8, line, ":#") or std.mem.startsWith(u8, line, ";#")) {
+                if (count == lines.len or !language_source.outsideNestedOrOpaque(authored, at) or
+                    (line.len > 2 and std.mem.indexOfScalar(u8, ":;#*", line[2]) != null)) { invalid = true; break; }
+                lines[count] = line; count += 1;
+                if (std.mem.eql(u8, std.mem.trim(u8, line[2..], " \t"), "...")) placeholders += 1;
+            }
+            at = if (end < authored.len) end + 1 else end;
+        }
+        if (invalid or count == 0) continue;
+        const title = if (role == 0) "নাম" else "বিশেষণ";
+        var heading_at: ?usize = null;
+        var title_at: usize = 0;
+        var body_at: usize = 0;
+        var body_end = source.bytes.len;
+        for (observed.page_wiki_openings) |opening| {
+            if (opening >= source.bytes.len) { invalid = true; break; }
+            const end = std.mem.indexOfScalarPos(u8, source.bytes, opening, '\n') orelse source.bytes.len;
+            const heading = blobs.wikitext_syntax.controlHeading(source.bytes[opening..end], null) orelse continue;
+            if (heading_at != null and opening > heading_at.? and body_end == source.bytes.len) body_end = opening;
+            if (heading.level != 2 or !std.mem.eql(u8, heading.title, title)) continue;
+            if (heading_at != null or !calibratedBoundaryRangesClean(source, opening, end)) { invalid = true; break; }
+            heading_at = opening;
+            title_at = @intFromPtr(heading.title.ptr) - @intFromPtr(source.bytes.ptr);
+            body_at = if (end < source.bytes.len) end + 1 else end;
+        }
+        if (invalid or heading_at == null) continue;
+        var actual: usize = 0;
+        at = body_at;
+        while (at < body_end) {
+            const end = @min(std.mem.indexOfScalarPos(u8, source.bytes, at, '\n') orelse body_end, body_end);
+            const line = std.mem.trimEnd(u8, source.bytes[at..end], "\r");
+            if (std.mem.startsWith(u8, line, ":#") or std.mem.startsWith(u8, line, ";#")) {
+                if (actual == count or !std.mem.eql(u8, line, lines[actual]) or
+                    !calibratedBoundaryRangesClean(source, at, end)) { invalid = true; break; }
+                actual += 1;
+            }
+            at = if (end < body_end) end + 1 else end;
+        }
+        if (invalid or actual != count) continue;
+        try result.append(a, .{ .source = source.bytes, .heading_offset = title_at,
+            .kind = if (role == 0) "Noun" else "Adjective", .numbered_count = count, .placeholder_count = placeholders });
+    }
+    return try result.toOwnedSlice(a);
+}
+
 fn sourceNaslovLexeme(codes: LanguageCodes, title: []const u8, raw: ?[]const u8,
     source: MissingText, owner: ResolvedLanguage, observed: presentation_document.HeadingObservation,
 ) ?presentation_document.SourceLexeme {
@@ -5592,7 +5665,7 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        equals_prefix_candidate or literal_alias_candidate or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
+        equals_prefix_candidate or literal_alias_candidate or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_numbered_pos[0] or codes.source_numbered_pos[1] or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
     );
 
     var raw_heading_proof: PageRawHeadingProof = .{ .a = heading_arena.allocator(), .codes = codes, .title = title, .raw = raw_source };
@@ -5844,9 +5917,13 @@ fn processMain(
         // Captured edition-local support forms require corroborated raw and
         // expanded category authority and preserve the whole entry body.
         var telugu_support: ?ResolvedLanguage = null;
+        var assamese_support: ?ResolvedLanguage = null;
         const support = amharicSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
             arabicMeaningsSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items) orelse
-            assameseSupportLanguage(codes, source, raw_source) orelse telugu: {
+            assamese: {
+                assamese_support = assameseSupportLanguage(codes, source, raw_source);
+                break :assamese assamese_support;
+            } orelse telugu: {
                 // Preserve short-circuiting and retain the already-proved result;
                 // layout must not repeat source lookup or infer an edition owner.
                 telugu_support = try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
@@ -5907,6 +5984,16 @@ fn processMain(
             break :native language;
         };
         const language = explicit orelse native_default orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" };
+        // The selected AS support arm already proved the independent owner of
+        // this whole page. Bind its POS to the same physical observed headings;
+        // the local provider flags and unchanged numbered lines remain required.
+        const support_numbered_lexemes: []const presentation_document.SourceNumberedLexeme = lexical: {
+            const proved = assamese_support orelse break :lexical &.{};
+            if (proved.code.len == 0 or !std.mem.eql(u8, proved.code, language.code) or
+                !std.mem.eql(u8, proved.heading, language.heading)) break :lexical &.{};
+            break :lexical try sourceNumberedLexemes(page_allocator, codes, raw_source, source_missing, proved, heading_observation);
+        };
+        defer if (support_numbered_lexemes.len != 0) page_allocator.free(support_numbered_lexemes);
         const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
             page_allocator,
             title,
@@ -5923,12 +6010,16 @@ fn processMain(
             fallbacks,
             poem_phase,
             &.{},
-            null,
-            &.{},
+            if (support_numbered_lexemes.len != 0) &heading_observation else null,
+            if (support_numbered_lexemes.len != 0)
+                &.{.{ .owner_start = 0, .page_start = 0, .len = source.len }}
+            else &.{},
             // A successful paragraph arm selected the heading-free owner, so
             // earlier unrelated support cannot shadow its proof. Otherwise keep
             // existing SIMPLE/Telugu authority. Other rules/defaults grant none.
-            if (paragraph_support orelse simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
+            if (support_numbered_lexemes.len != 0)
+                .{ .heading = language.heading, .code = language.code, .source_numbered_lexemes = support_numbered_lexemes }
+            else if (paragraph_support orelse simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
                 std.mem.eql(u8, proved.heading, language.heading))
                 .{ .heading = proved.heading, .code = proved.code } else null else null,
             codes.table_styles,
@@ -6060,6 +6151,15 @@ fn processMain(
             bindOwnerTextClassTransition(source, source_raw, numbered.source, numbered.class_scope_transition, fragment);
             bindOwnerSourceElements(source, source_raw, final_source_projection, fragment);
         };
+        const source_numbered_lexemes: []const presentation_document.SourceNumberedLexeme = lexical: {
+            if (groups.items.len != 1 or !std.mem.eql(u8, group_missing.bytes, source) or
+                !completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "")) break :lexical &.{};
+            const proofs = try sourceNumberedLexemes(page_allocator, codes, raw_source, source_missing, group.language, heading_observation);
+            // The authenticated complete owner copy preserves physical offsets.
+            for (proofs) |*proof| proof.source = group_missing.bytes;
+            break :lexical proofs;
+        };
+        defer if (source_numbered_lexemes.len != 0) page_allocator.free(source_numbered_lexemes);
         const source_lexeme: ?presentation_document.SourceLexeme = lexical: {
             if (groups.items.len != 1 or !std.mem.eql(u8, group_missing.bytes, source) or
                 !completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "")) break :lexical null;
@@ -6088,7 +6188,7 @@ fn processMain(
             heading_projection,
             // This token follows source ownership resolution and grouping. An
             // unresolved group cannot turn arbitrary L2 labels into owners.
-            if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code, .source_lexeme = source_lexeme } else null,
+            if (group.language.code.len != 0) .{ .heading = group.language.heading, .code = group.language.code, .source_lexeme = source_lexeme, .source_numbered_lexemes = source_numbered_lexemes } else null,
             codes.table_styles,
             codes.figure_sizing,
             if (completeContentRanges(source, group.fragments.items, if (preserve_prefix) page_prefix else "") or
@@ -22444,4 +22544,149 @@ test "MG categorized neutral span preserves source lcfirst category without gran
     try std.testing.expectEqualStrings("fr", (resolveCategorizedSpanHeading(codes,
         "<span id=\"fr\">Frantsay [[sokajy:Frantsay]]</span>") orelse return error.TestUnexpectedResult).code);
     try std.testing.expect(codes.resolve("frantsay") == null);
+}
+
+const StaticNumberedPosTest = struct {
+    const raw = "={{en}}=\n{{-noun-}}\n'''word'''\n:# [[Target|retained meaning]]\n:# ...\n{{-adj-}}\n'''word'''\n;# retained [[Other]]\n== Support ==\n* [[Support]]\n";
+    const source = "=ইংৰাজী=\n== নাম   ==\n'''word'''\n:# [[Target|retained meaning]]\n:# ...\n== বিশেষণ   ==\n'''word'''\n;# retained [[Other]]\n== Support ==\n* [[Support]]\n";
+    fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+        return if (std.mem.eql(u8, name, "ইংৰাজী") or std.mem.eql(u8, name, "en")) .{ .code = "en", .heading = "ইংৰাজী" } else null;
+    }
+    fn codes(ns: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = ns, .source_numbered_pos = .{ true, true }, .resolve_fn = resolve, .strong_fn = resolve };
+    }
+};
+
+test "static local POS source binds numbered lines physical headings and independent owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry"); var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    const F = StaticNumberedPosTest;
+    const openings = [_]usize{0, std.mem.indexOf(u8, F.source, "== নাম").?, std.mem.indexOf(u8, F.source, "== বিশেষণ").?, std.mem.indexOf(u8, F.source, "== Support").?};
+    const observed: presentation_document.HeadingObservation = .{ .page_html_source = F.source,
+        .page_wiki_scope_complete = true, .page_wiki_openings = &openings };
+    const owner: ResolvedLanguage = .{ .code = "en", .heading = "ইংৰাজী" };
+    const proofs = try sourceNumberedLexemes(a, F.codes(&ns), F.raw, MissingText.untracked(F.source), owner, observed);
+    try std.testing.expectEqual(@as(usize, 2), proofs.len);
+    try std.testing.expectEqual(@as(usize, 2), proofs[0].numbered_count);
+    try std.testing.expectEqual(@as(usize, 1), proofs[0].placeholder_count);
+    try std.testing.expectEqualStrings("Adjective", proofs[1].kind);
+    for (0..8) |mode| {
+        var codes = F.codes(&ns); var input = MissingText.untracked(F.source); var observation = observed; var language = owner;
+        var raw: ?[]const u8 = F.raw;
+        switch (mode) {
+            0 => codes.source_numbered_pos = .{ false, false },
+            1 => raw = null,
+            2 => observation.page_wiki_scope_complete = false,
+            3 => observation.page_html_source = try a.dupe(u8, F.source),
+            4 => language.code = "",
+            5 => input.unknown = true,
+            6 => input.lost_missing_range = true,
+            7 => observation.page_wiki_openings = &.{0},
+            else => unreachable,
+        }
+        try std.testing.expectEqual(@as(usize, 0), (try sourceNumberedLexemes(a, codes, raw, input, language, observation)).len);
+    }
+    const one_source = "== নাম ==\n:# meaning\n";
+    const one_observed: presentation_document.HeadingObservation = .{ .page_html_source = one_source,
+        .page_wiki_scope_complete = true, .page_wiki_openings = &.{0} };
+    for ([_][]const u8{
+        "prefix {{-noun-}}\n:# meaning\n", "{{-noun-|override}}\n:# meaning\n",
+        "<nowiki>\n{{-noun-}}\n:# meaning\n</nowiki>", "<!--\n{{-noun-}}\n:# meaning\n-->",
+        "{{-noun-}}\n:# changed\n", "{{-noun-}}\n:# meaning\n{{-noun-}}\n:# meaning\n",
+        "== নাম ==\n:# meaning\n", "{{unrelated}}\n:# meaning\n",
+    }) |raw| try std.testing.expectEqual(@as(usize, 0), (try sourceNumberedLexemes(a, F.codes(&ns), raw, MissingText.untracked(one_source), owner, one_observed)).len);
+    var tainted = MissingText.untracked(one_source);
+    const meaning: u32 = @intCast(std.mem.indexOf(u8, one_source, ":#").?);
+    tainted.ranges = &.{.{ .start = meaning, .end = meaning + 1, .occurrence = 1 }};
+    try std.testing.expectEqual(@as(usize, 0), (try sourceNumberedLexemes(a, F.codes(&ns), "{{-noun-}}\n:# meaning\n", tainted, owner, one_observed)).len);
+}
+
+test "normal Writer source POS keeps full body links placeholders and codec while organizing numbered senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry"); var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    const F = StaticNumberedPosTest; const codes = F.codes(&ns); var absent = codes; absent.source_numbered_pos = .{ false, false };
+    var actual: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "word" };
+    var baseline: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "word" };
+    try actual.compileWithPhases(a, codes, F.source, F.raw, null, null, null, null);
+    try baseline.compileWithPhases(a, absent, F.source, F.raw, null, null, null, null);
+    try std.testing.expectEqual(@as(usize, 1), actual.records.items.len);
+    try std.testing.expectEqual(@as(usize, 1), baseline.records.items.len);
+    const codec = blobs.presentation_codec;
+    const owner: blob_format.LanguageMetadata = .{ .heading = "ইংৰাজী", .code = "en" };
+    const result = try codec.decodeAlloc(a, actual.records.items[0].payload, "word", .language, owner);
+    const before = try codec.decodeAlloc(a, baseline.records.items[0].payload, "word", .language, owner);
+    try std.testing.expectEqual(@as(usize, 0), before.entry.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 2), result.entry.organization.lexemes.len);
+    for (result.entry.organization.lexemes, 0..) |lexeme, index| {
+        try std.testing.expectEqualStrings(if (index == 0) "Noun" else "Adjective", lexeme.kind);
+        try std.testing.expectEqualStrings("ইংৰাজী", lexeme.language);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+    }
+    var unchanged = result; unchanged.entry.organization = before.entry.organization;
+    try std.testing.expectEqualDeep(before, unchanged);
+    try std.testing.expectEqualDeep(baseline.fallbacks, actual.fallbacks);
+    const encoded = try codec.encodeAlloc(a, result);
+    try std.testing.expectEqualDeep(result, try codec.decodeAlloc(a, encoded, "word", .language, owner));
+    try std.testing.expectEqualSlices(u8, encoded, actual.records.items[0].payload);
+}
+
+test "actual AS bare language support retains full assamese body and binds both source POS roles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = AssameseSupportFixture;
+    const T = blobs.presentation_types;
+    const codec = blobs.presentation_codec;
+    // The fixture instantiates the three exact retained static template bodies;
+    // the independent Reader below is the newly executed ordinary AS result.
+    const saved = try std.json.parseFromSlice(struct { entries: []T.Entry }, a,
+        @embedFile("testdata/as-source-pos/assamese-normal-reader01.json"), .{ .ignore_unknown_fields = true });
+    defer saved.deinit();
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    const before = saved.value.entries[0];
+    try std.testing.expectEqualStrings("assamese", before.title);
+    try std.testing.expectEqualStrings("ইংৰাজী", before.language.?);
+    try std.testing.expectEqualStrings("en", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0, 1, 2}, before.organization.other_sections);
+    try std.testing.expectEqual(@as(usize, 3), before.sections.len);
+    const Resolver = struct {
+        fn resolve(ctx: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            var owner = AssameseSupportFixture.resolve(ctx, name) orelse return null;
+            if (std.mem.eql(u8, owner.code, "en")) owner.heading = "ইংৰাজী";
+            return owner;
+        }
+    };
+    var ns = try F.catalog(a, "as"); defer ns.deinit();
+    var codes = F.codes(&ns); codes.resolve_fn = Resolver.resolve; codes.strong_fn = Resolver.resolve; codes.trusted_fn = Resolver.resolve;
+    const owner: blob_format.LanguageMetadata = .{ .heading = "ইংৰাজী", .code = "en" };
+    for ([_][2]bool{ .{false, false}, .{true, false}, .{false, true}, .{true, true} }) |providers| {
+        codes.source_numbered_pos = providers;
+        var page: PreparedPage = .{ .ns = .{ .id = 0, .kind = .language }, .title = "assamese" };
+        try page.compileWithPhases(a, codes, F.expanded, F.raw, null, null, null, null);
+        try std.testing.expectEqual(@as(usize, 1), page.records.items.len);
+        const result = try codec.decodeAlloc(a, page.records.items[0].payload, "assamese", .language, owner);
+        const expected_count: usize = @intFromBool(providers[0]) + @as(usize, @intFromBool(providers[1]));
+        try std.testing.expectEqual(expected_count, result.entry.organization.lexemes.len);
+        var lexeme_index: usize = 0;
+        for (providers, 0..) |present, role| if (present) {
+            const lexeme = result.entry.organization.lexemes[lexeme_index]; lexeme_index += 1;
+            try std.testing.expectEqualStrings(if (role == 0) "Noun" else "Adjective", lexeme.kind);
+            try std.testing.expectEqualStrings("ইংৰাজী", lexeme.language);
+            try std.testing.expectEqual(role + 1, lexeme.section);
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions[0].block);
+            const definition = result.entry.sections[role + 1].blocks[1];
+            try std.testing.expectEqualStrings(":#", definition.list_path);
+            try std.testing.expectEqualStrings("অসমীয়া ", definition.spans[0].text);
+            try std.testing.expectEqualStrings("অসমীয়া", definition.spans[0].target);
+        };
+        var expected_other: [3]usize = undefined; var other_count: usize = 1; expected_other[0] = 0;
+        for (providers, 0..) |present, role| if (!present) { expected_other[other_count] = role + 1; other_count += 1; };
+        try std.testing.expectEqualSlices(usize, expected_other[0..other_count], result.entry.organization.other_sections);
+        var restored = result.entry; restored.organization = before.organization;
+        try std.testing.expectEqualDeep(before, restored);
+        const encoded = try codec.encodeAlloc(a, result);
+        try std.testing.expectEqualDeep(result, try codec.decodeAlloc(a, encoded, "assamese", .language, owner));
+        try std.testing.expectEqualSlices(u8, page.records.items[0].payload, encoded);
+    }
 }
