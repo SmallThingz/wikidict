@@ -111,8 +111,10 @@ remain detectable. The default works with older Readers using ordinary exports.
 If an opted-in export fails, the audit reports an incomplete scan.
 
 For editions with hundreds of language headings or many redirects, the current
-Reader can check the catalog in pages and keep one export process per language.
-The following command asks for 64 titles per request. If a redirect target is
+Reader can keep the language index open while browsing and exporting entries.
+`--audit-browse-session` fetches each search page through that same process.
+This avoids reopening the redirect index for every 1,000 titles. The following
+command exports up to 64 titles per request. If a redirect target is
 absent in the selected language, the audit can reuse the original redirect
 record after checking its content identity. It still follows targets that exist
 in that language.
@@ -120,7 +122,7 @@ in that language.
 ```sh
 python3 tools/verify_presentation.py --binary "$reader" --root "$edition" \
     --report "$report" --definition-dump "$dump" --batch-size 64 \
-    --catalog-page-size 64 --audit-export-session --audit-reference-hints \
+    --catalog-page-size 64 --audit-export-session --audit-browse-session --audit-reference-hints \
     --audit-alias-references
 ```
 
