@@ -27,6 +27,29 @@ class SourceDefinitionTests(unittest.TestCase):
         raw = header + 'aa\tOne\taa\nfr\tfrançais\tFrench\n# iso-639-3\nzz\tTwo\tOne\n'
         self.assertEqual(localized_language_codes(raw.encode()), {'français': 'fr'})
 
+    def test_source_index_keeps_order_and_origin_across_insert_batches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dump = root / 'wiki-date-pages-meta-current.xml.bz2'
+            xml = ET.Element('mediawiki')
+            for number, body in enumerate(('{{ignored}}', '==French==\n' + '# sense\n' * 257,
+                                           '==French==\n# final'), 1):
+                page = ET.SubElement(xml, 'page')
+                ET.SubElement(page, 'title').text = str(number)
+                ET.SubElement(page, 'ns').text = '0'
+                ET.SubElement(page, 'id').text = str(number)
+                revision = ET.SubElement(page, 'revision')
+                ET.SubElement(revision, 'id').text = str(number + 4)
+                ET.SubElement(revision, 'text').text = body
+            compressed = bz2.compress(ET.tostring(xml))
+            dump.write_bytes(compressed)
+            member = ['wiki', 'date', dump.name, len(compressed), hashlib.sha1(compressed).hexdigest()]
+            (root / 'complete.json').write_text(json.dumps(dict(edition='wiki', date='date', build_inputs=dict(files=[member]))))
+            (root / 'languages.tsv').write_text('heading\nFrench\n')
+            with closing(SourceDefinitions('', root, [dump])) as audit:
+                rows = audit.db.execute('SELECT page,revision,line FROM sense ORDER BY rowid').fetchall()
+            self.assertEqual(rows, [('2', '6', n) for n in range(2, 259)] + [('3', '7', 2)])
+
     def test_links_bind_each_visible_range_with_its_own_destination(self):
         expected = simple_line('A [[猫|cat]] or [[mačka|cat]].', 'other')
         self.assertEqual(expected, ('A cat or cat.', ((2, 5, '猫'), (9, 12, 'mačka'))))

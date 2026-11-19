@@ -139,9 +139,9 @@ def compiled_emphasis(spans):
 def definitions(text, title, headings):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
-    lines = text.splitlines()
-    if any(marker in text for marker in ('{{', '}}', '<', '>', '{|')):
+    if '#' not in text or any(marker in text for marker in ('{{', '}}', '<', '>', '{|')):
         return
+    lines = text.splitlines()
     if '__' in text and any('__' in line and not re.fullmatch(r'#[ \t]*_+[ \t]*', line) for line in lines):
         return
     owner = None
@@ -188,7 +188,6 @@ class SourceDefinitions:
         self.matched_example = None
         try:
             self.db.execute('CREATE TABLE sense (title, owner, code, line, list_path, text, links, emphasis, page, revision, matched INTEGER DEFAULT 0)')
-            self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
             self.codes = {}
@@ -224,6 +223,7 @@ class SourceDefinitions:
                     if digest.hexdigest() != expected:
                         raise ValueError(f'Dump SHA-1 differs: {path.name}')
                     self.inputs[path.name] = expected
+            self.db.execute('CREATE INDEX by_owner ON sense (title, owner, line)')
             self.db.commit()
             self.has_definitions = self.db.execute('SELECT 1 FROM sense LIMIT 1').fetchone() is not None
         except (ET.ParseError, EOFError, sqlite3.Error) as error:
@@ -236,6 +236,9 @@ class SourceDefinitions:
     def _read_pages(self, xml, headings):
         events = ET.iterparse(xml, events=('start', 'end'))
         _, root = next(events)
+        insert = 'INSERT INTO sense (title,owner,code,line,list_path,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?,?)'
+        rows = []
+        characters = 0
         for event, page in events:
             if event != 'end' or page.tag.rsplit('}', 1)[-1] != 'page':
                 continue
@@ -244,11 +247,21 @@ class SourceDefinitions:
                 revision = page.find('{*}revision')
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
-                self.db.executemany('INSERT INTO sense (title,owner,code,line,list_path,text,links,emphasis,page,revision) VALUES (?,?,?,?,?,?,?,?,?,?)',
-                    ((title, owner, self.codes.get(owner), n, list_path, text, json.dumps(links, ensure_ascii=False), json.dumps(emphasis) if emphasis else None,
-                      page.findtext('{*}id'), revision.findtext('{*}id'))
-                     for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings)))
+                origin = None
+                for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings):
+                    if origin is None:
+                        origin = page.findtext('{*}id'), revision.findtext('{*}id')
+                    actions = json.dumps(links, ensure_ascii=False)
+                    rows.append((title, owner, self.codes.get(owner), n, list_path, text, actions,
+                                 json.dumps(emphasis) if emphasis else None, *origin))
+                    characters += len(title) + len(owner) + len(list_path) + len(text) + len(actions)
+                    if len(rows) == 256 or characters >= 128 * 1024:
+                        self.db.executemany(insert, rows)
+                        rows.clear()
+                        characters = 0
             root.remove(page)
+        if rows:
+            self.db.executemany(insert, rows)
 
     def observe(self, entry):
         if entry['kind'] != 'language':
