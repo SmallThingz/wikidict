@@ -2,7 +2,6 @@
 """Publish independently seekable XZ blobs without deleting the raw dictionary."""
 import argparse
 import concurrent.futures
-import hashlib
 import threading
 import lzma
 import os
@@ -21,9 +20,13 @@ def default_workers():
 
 
 def verify_round_trip(path, target):
-    with path.open('rb') as source, lzma.open(target,'rb') as decoded:
-        if hashlib.file_digest(source,'sha256').digest()!=hashlib.file_digest(decoded,'sha256').digest():
-            raise ValueError('Compression round trip failed: '+str(path))
+    with path.open('rb') as source, lzma.open(target, 'rb') as decoded:
+        while True:
+            expected = source.read(256 * 1024)
+            if decoded.read(256 * 1024) != expected:
+                raise ValueError('Compression round trip failed: ' + str(path))
+            if not expected:
+                return
 
 def _validate_raw_blob(path):
     with path.open('rb', buffering=0) as source:

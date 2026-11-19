@@ -16,6 +16,24 @@ compress_blobs = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(compress_blobs)
 
 
+class RoundTripTests(unittest.TestCase):
+    def test_exact_bytes_across_read_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / 'dictionary'
+            packed = Path(tmp) / 'dictionary.xz'
+            data = b'x' * (256 * 1024)
+            raw.write_bytes(data)
+            for label, payload in [('equal', data), ('extra', data + b'x'),
+                                   ('short', data[:-1]), ('changed', data[:-1] + b'y')]:
+                with self.subTest(label=label):
+                    packed.write_bytes(lzma.compress(payload, preset=0))
+                    if label == 'equal':
+                        compress_blobs.verify_round_trip(raw, packed)
+                    else:
+                        with self.assertRaisesRegex(ValueError, 'Compression round trip failed'):
+                            compress_blobs.verify_round_trip(raw, packed)
+
+
 class LargeXzWaveTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
