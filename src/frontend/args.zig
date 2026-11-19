@@ -15,6 +15,7 @@ pub const Options = struct {
     // Borrowed literal argv tail; only explicit bounded exact export uses it.
     batch_queries: []const []const u8 = &.{},
     batch_audit_hints: ?[]const u8 = null,
+    batch_session: bool = false,
     format: Format = .text,
     color: Color = .auto,
     theme: Theme = .terminal,
@@ -88,6 +89,11 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
                 batch_export = true;
                 continue;
             }
+            if (std.mem.eql(u8, arg, "--batch-session")) {
+                if (!std.mem.eql(u8, argv[0], "export") or out.batch_session or has_query) return error.Usage;
+                out.batch_session = true;
+                continue;
+            }
             if (std.mem.eql(u8, arg, "--details")) {
                 out.details = true;
                 continue;
@@ -113,19 +119,30 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
         }
     }
     if (out.help) return out;
+    if (out.batch_session and (batch_export or has_query or positional_only or !out.case_sensitive or out.format != .json)) return error.Usage;
     if (batch_export and (out.batch_queries.len == 0 or !out.case_sensitive or out.format != .json)) return error.Usage;
     if (out.batch_audit_hints) |hints| {
         if (!batch_export or hints.len != out.batch_queries.len * 64) return error.Usage;
         for (hints) |c| if (!(c >= '0' and c <= '9') and !(c >= 'a' and c <= 'f')) return error.Usage;
     }
     if (out.limit == 0 or out.limit > 1000 or out.root.len == 0 or out.language.len == 0) return error.Usage;
-    if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and (!has_query or out.query.len == 0)) return error.Usage;
+    if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and !out.batch_session and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
     if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history) return error.Usage;
     if (out.command == .search and !out.case_sensitive and std.mem.trim(u8, out.query, " \t\r\n").len != 0 and
         (out.offset > search.max_retained_matches or out.limit > search.max_retained_matches - out.offset)) return error.Usage;
     return out;
+}
+
+test "export sessions own exactly one explicit selection and accept no argv queries" {
+    const session = try parse(&.{ "export", "--batch-session", "--case-sensitive", "--language", "French" });
+    try std.testing.expect(session.batch_session);
+    try std.testing.expectEqualStrings("French", session.language);
+    try std.testing.expectError(error.Usage, parse(&.{ "lookup", "--batch-session", "--case-sensitive" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--batch-session" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--batch-session", "--case-sensitive", "chat" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "export", "--batch-session", "--case-sensitive", "--batch", "--", "chat" }));
 }
 test "CLI options are strict and lookup shorthand is unambiguous" {
     const opts = try parse(&.{ "search", "--format", "json", "--limit", "3", "--", "-a" });

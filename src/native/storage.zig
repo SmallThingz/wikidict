@@ -301,6 +301,7 @@ pub const File = struct {
     cache_saved: bool = false,
     payload_reads: u64 = 0,
     fingerprint: [32]u8,
+    cache_fingerprint: ?[32]u8 = null,
     pub fn open(io: std.Io, a: A, path: []const u8) !File {
         return openExact(io, a, path) catch |err| switch (err) {
             error.FileNotFound => {
@@ -326,6 +327,7 @@ pub const File = struct {
         const path_cache = try std.fmt.allocPrint(a, "{s}/.dict-cache/{s}.idx", .{ std.fs.path.dirname(path) orelse ".", std.fs.path.basename(path) });
         defer a.free(path_cache);
         var cache_bytes: []align(std.heap.page_size_min) const u8 = &.{};
+        var cache_fingerprint: ?[32]u8 = null;
         errdefer if (cache_bytes.len != 0) std.posix.munmap(cache_bytes);
         var cache_file = std.Io.Dir.cwd().openFile(io, path_cache, .{}) catch null;
         if (cache_file) |*f| {
@@ -333,7 +335,10 @@ pub const File = struct {
             const s = f.stat(io) catch null;
             if (s) |stat_cache| if (stat_cache.kind == .file and stat_cache.size >= 96 and stat_cache.size <= max_index_bytes + 1024 * 1024) {
                 const cache_len = std.math.cast(usize, stat_cache.size) orelse 0;
-                if (cache_len != 0) cache_bytes = std.posix.mmap(null, cache_len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, f.handle, 0) catch &.{};
+                if (cache_len != 0) {
+                    cache_bytes = std.posix.mmap(null, cache_len, .{ .READ = true }, .{ .TYPE = .PRIVATE }, f.handle, 0) catch &.{};
+                    if (cache_bytes.len != 0) cache_fingerprint = identity(stat_cache);
+                }
             };
         }
         var hit = false;
@@ -372,7 +377,17 @@ pub const File = struct {
         errdefer dir.deinit(a);
         const view = try format.openTrusted(dir.header);
         const owned_path = try a.dupe(u8, path);
-        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = bytes, .cache_bytes = cache_bytes, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint };
+        return .{ .io = io, .a = a, .handle = handle, .path = owned_path, .bytes = bytes, .cache_bytes = cache_bytes, .compressed = compressed, .directory = dir, .view = view, .size = size, .cache_hit = hit, .cache_saved = saved, .fingerprint = fingerprint, .cache_fingerprint = if (cache_bytes.len != 0) cache_fingerprint else null };
+    }
+    pub fn requireUnchanged(self: File) !void {
+        const cwd = std.Io.Dir.cwd();
+        if (!std.mem.eql(u8, &self.fingerprint, &identity(try self.handle.stat(self.io))) or
+            !std.mem.eql(u8, &self.fingerprint, &identity(try cwd.statFile(self.io, self.path, .{})))) return error.SourceChanged;
+        if (self.cache_fingerprint) |expected| {
+            const path = try std.fmt.allocPrint(self.a, "{s}/.dict-cache/{s}.idx", .{ std.fs.path.dirname(self.path) orelse ".", std.fs.path.basename(self.path) });
+            defer self.a.free(path);
+            if (!std.mem.eql(u8, &expected, &identity(try cwd.statFile(self.io, path, .{})))) return error.SourceChanged;
+        }
     }
     pub fn deinit(self: *File) void {
         self.directory.deinit(self.a);

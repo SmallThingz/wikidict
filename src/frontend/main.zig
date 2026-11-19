@@ -128,6 +128,7 @@ fn run(init: std.process.Init) !u8 {
         return 2;
     };
     defer db.deinit();
+    if (opts.batch_session) return exportSession(init.io, init.gpa, &db, w);
     if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, opts.batch_audit_hints, w);
     const color = switch (opts.color) {
         .always => true,
@@ -379,6 +380,50 @@ test {
     _ = @import("pipeline_tests.zig");
     _ = @import("library.zig");
     _ = @import("blob_storage");
+}
+
+fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.Io.Writer) !u8 {
+    var input_buffer: [8192]u8 = undefined;
+    var input = std.Io.File.stdin().readerStreaming(io, &input_buffer);
+    const r = &input.interface;
+    var titles: [65536]u8 = undefined;
+    var queries: [64][]const u8 = undefined;
+    var hints: [64 * 64]u8 = undefined;
+    while (true) {
+        // Only EOF at a request boundary is an orderly stop.
+        const count = r.takeByte() catch |err| switch (err) {
+            error.EndOfStream => return 0,
+            else => return err,
+        };
+        if (count == 0 or count > queries.len) return error.InvalidExportRequest;
+        const mode = try r.takeByte();
+        if (mode > 1) return error.InvalidExportRequest;
+        const batch_hints = if (mode == 1) hints[0 .. @as(usize, count) * 64] else null;
+        if (batch_hints) |bytes| {
+            try r.readSliceAll(bytes);
+            for (bytes) |c| if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return error.InvalidExportRequest;
+        }
+        var offset: usize = 0;
+        for (queries[0..count]) |*query| {
+            var bytes: [4]u8 = undefined;
+            try r.readSliceAll(&bytes);
+            const length = std.mem.readInt(u32, &bytes, .little);
+            if (length == 0 or length > titles.len - offset) return error.InvalidExportRequest;
+            const title = titles[offset..][0..length];
+            try r.readSliceAll(title);
+            if (!std.unicode.utf8ValidateSlice(title) or std.mem.indexOfScalar(u8, title, 0) != null) return error.InvalidExportRequest;
+            query.* = title;
+            offset += length;
+        }
+        try db.requireUnchanged();
+        const code = try exportBatch(gpa, db, queries[0..count], batch_hints, w);
+        if (code != 0) return code;
+        try db.requireUnchanged();
+        // JSON lines cannot be empty. The verifier can commit one batch only
+        // after receiving this separate completion record.
+        try w.writeByte('\n');
+        try w.flush();
+    }
 }
 
 // One ordinary Store selection and the same exact lookup/decoder/Response as

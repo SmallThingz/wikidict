@@ -144,6 +144,10 @@ pub const Store = struct {
         self.allocator.free(self.root);
         self.* = undefined;
     }
+    pub fn requireUnchanged(self: Store) !void {
+        try self.file.requireUnchanged();
+        if (self.aliases) |aliases| try aliases.requireUnchanged();
+    }
     pub fn count(self: Store) usize {
         return self.definitionCount() + self.alias_positions.len;
     }
