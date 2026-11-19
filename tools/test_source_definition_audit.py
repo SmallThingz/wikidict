@@ -141,6 +141,18 @@ class SourceDefinitionTests(unittest.TestCase):
                 self.assertEqual([row['line'] for row in report['examples']], [4, 5, 6, 7, 10])
                 self.assertEqual(report['examples'][2]['emphasis'], [0, 4, 'italic'])
                 self.assertEqual([row['list_path'] for row in report['examples'][-2:]], ['##', '###'])
+            with closing(SourceDefinitions('', root, [dump])) as audit:
+                # Plain source prose must not match either a spurious style or
+                # a combination outside the supported single-emphasis shape.
+                first = blocks[0]['spans'][0]
+                first.update(bold=True)
+                blocks[1]['spans'][0].update(bold=True, italic=True)
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 0)
+                first.update(bold=False)
+                blocks[1]['spans'][0].update(bold=False, italic=False)
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 2)
             registry = root / 'language-registry.tsv'
             registry.write_text('# wikidict-language-registry-v2\n# mediawiki\nfr\tFrench\tFrançais\n')
             manifest['build_inputs']['auxiliary_snapshot_sha256'] = {

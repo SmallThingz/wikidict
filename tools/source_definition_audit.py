@@ -274,7 +274,6 @@ class SourceDefinitions:
         # Plain and directly linked senses must occupy a definition block in
         # order. A coincidental match in a translation or example cannot pass.
         positions = defaultdict(list)
-        styled = any(row[-1] is not None for row in expected)
         position = 0
         for section in entry['sections']:
             for block in section['blocks']:
@@ -282,8 +281,9 @@ class SourceDefinitions:
                     list_path = block.get('list_path')
                     witness = compiled_line(block['spans'])
                     if witness is not None:
-                        positions[(list_path, *witness, None)].append(position)
-                        if styled and (emphasis := compiled_emphasis(block['spans'])) is not None:
+                        if not any(span['text'] and (span.get('bold') or span.get('italic')) for span in block['spans']):
+                            positions[(list_path, *witness, None)].append(position)
+                        elif (emphasis := compiled_emphasis(block['spans'])) is not None:
                             positions[(list_path, *witness, emphasis)].append(position)
                     position += 1
         cursor = 0
