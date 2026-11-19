@@ -78,6 +78,8 @@ pub const SourceLanguageBanner = struct {
     emitted_prefix: ?SourceLanguageBannerPrefix = null,
 };
 
+pub const SourceStaticSupport = struct { heading: []const u8, level: u8 };
+
 pub const SourceLanguageParagraph = struct { label: []const u8, category: []const u8 };
 
 // An exact selected source formatter, never an ordinary name or target alias.
@@ -106,6 +108,7 @@ pub const Registry = struct {
     reviewed_aliases: std.StringHashMapUnmanaged([]const u8) = .empty,
     reviewed_varieties: std.StringHashMapUnmanaged(void) = .empty,
     source_banners: std.StringHashMapUnmanaged(?SourceLanguageBanner) = .empty,
+    source_static_support: std.StringHashMapUnmanaged(?SourceStaticSupport) = .empty,
     source_equals_labels: std.StringHashMapUnmanaged(?[]const u8) = .empty,
     source_paragraphs: std.StringHashMapUnmanaged(?SourceLanguageParagraph) = .empty,
     source_code_declarations: std.StringHashMapUnmanaged(?[]const u8) = .empty,
@@ -156,6 +159,7 @@ pub const Registry = struct {
         self.reviewed_aliases.deinit(self.arena.allocator());
         self.reviewed_varieties.deinit(self.arena.allocator());
         self.source_banners.deinit(self.arena.allocator());
+        self.source_static_support.deinit(self.arena.allocator());
         self.source_equals_labels.deinit(self.arena.allocator());
         self.source_paragraphs.deinit(self.arena.allocator());
         self.source_code_declarations.deinit(self.arena.allocator());
@@ -532,6 +536,23 @@ pub const Registry = struct {
         // The authenticated formatter labels this parameter as the language.
         // The lemma, category and edition supply no owner or new global alias.
         return self.resolveStrong(name) orelse self.resolveTrusted(name);
+    }
+
+    pub fn addSourceStaticSupport(self: *Registry, token: []const u8, proof: SourceStaticSupport) !void {
+        if (token.len == 0 or token.len > 32 or proof.level < 3 or proof.level > 6 or proof.heading.len == 0) return;
+        for (token) |byte| if (!std.ascii.isLower(byte) and byte != '-') return;
+        if (self.source_static_support.getPtr(token)) |stored| {
+            if (stored.*) |previous| if (previous.level != proof.level or
+                !std.mem.eql(u8, previous.heading, proof.heading)) { stored.* = null; };
+            return;
+        }
+        const a = self.arena.allocator();
+        try self.source_static_support.put(a, try a.dupe(u8, token), .{
+            .heading = try a.dupe(u8, proof.heading), .level = proof.level,
+        });
+    }
+    pub fn sourceStaticSupport(self: *const Registry, token: []const u8) ?SourceStaticSupport {
+        return (self.source_static_support.get(token) orelse return null) orelse null;
     }
 
     /// A complete static =code= template certifies only its exact emitted label.

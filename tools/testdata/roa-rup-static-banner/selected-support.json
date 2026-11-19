@@ -1,0 +1,30 @@
+{
+  "schema": "roa-rup-selected-original-support-source.v1",
+  "scope": "Targeted two original NS10 support declarations only; no repeated ownership comparison, Reader, worker, native build or network.",
+  "selected_rows": {
+    "Format:-noun-": {
+      "model": "wikitext",
+      "page_id": 3599,
+      "revision_id": 15611,
+      "text": "===[[sumstantivu|Sumstantivu]]===\n<noinclude>\n[[Category:Template|noun]]</noinclude>\n<includeonly>[[Category:Sumstantivi]]</includeonly>",
+      "text_sha256": "b77f3a595244d392569ebe6cf4e2d319a8fa3a0bba111dfff4186f7bdbcc5584",
+      "timestamp": "2020-02-21T08:14:52Z",
+      "title": "Format:-noun-"
+    },
+    "Format:-num-": {
+      "model": "wikitext",
+      "page_id": 4572,
+      "revision_id": 13919,
+      "text": "===[[număr|Númir]]===\n<noinclude>\n[[Category:Template|num]]</noinclude>\n<includeonly>[[Category:Numări]]</includeonly>",
+      "text_sha256": "fc7ce7de7e342bf35211ff95aec22933c068d7e8a6fd1de1e7418152087801bf",
+      "timestamp": "2016-12-09T19:35:43Z",
+      "title": "Format:-num-"
+    }
+  },
+  "xml": {
+    "bytes": 315758,
+    "path": "/mnt/downloads/dev/wikidict/data/dumps/roa_rupwiktionary/20261001/roa_rupwiktionary-20261001-pages-meta-current.xml.bz2",
+    "sha1": "66c3f9e2bb18ce4e440ec633e0d0f04bc209b53d",
+    "sha256": "fc00e7808ceb65b6f725efa4460a6f036b0c5f56a7daab1997df8d76a23c2dca"
+  }
+}

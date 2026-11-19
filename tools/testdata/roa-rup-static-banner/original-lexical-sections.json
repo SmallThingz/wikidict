@@ -1,0 +1,125 @@
+{
+  "dump": "data/dumps/roa_rupwiktionary/20261001/roa_rupwiktionary-20261001-pages-meta-current.xml.bz2",
+  "dump_bytes": 315758,
+  "dump_sha1": "66c3f9e2bb18ce4e440ec633e0d0f04bc209b53d",
+  "pages": 2039,
+  "ordinary_numbered_section_occurrences": {
+    "num": 52,
+    "prep": 12,
+    "pronoun": 7,
+    "art": 7,
+    "adj": 45,
+    "phrase": 22,
+    "symbol": 32
+  },
+  "count_scope": "Standalone original section invocation followed by at least one top-level numbered line before the next heading or hyphen-template declaration. Counts sections, including multiple original languages in one article.",
+  "samples": {
+    "adj": "acru",
+    "art": "an",
+    "num": "bat",
+    "phrase": "basta",
+    "prep": "dans",
+    "pronoun": "I",
+    "symbol": "⯉"
+  },
+  "original_pages": {
+    "Format:-adj-": {
+      "namespace": 10,
+      "page": 3600,
+      "revision": 9911,
+      "text": "===[[adjectiv|Adjectiv]]===\n<includeonly>[[Category:Adjectivi]]</includeonly>\n<noinclude>\n[[Category:Template|adjective]]</noinclude>",
+      "sha256": "e0fd2b5dbb7ff9ebef07911cf3798378a390f83dcbf7d541b23a83f9a778a148"
+    },
+    "Format:-prep-": {
+      "namespace": 10,
+      "page": 4524,
+      "revision": 9987,
+      "text": "===[[prepoziții|Prepoziții]]===\n<noinclude>\n[[Category:Template|preposition]]</noinclude>",
+      "sha256": "0f3eea9b64aaa78b7d181f39a3acefa37315e1339bdc1a93f0d2e7983f159eb8"
+    },
+    "Format:-art-": {
+      "namespace": 10,
+      "page": 4526,
+      "revision": 9897,
+      "text": "===[[articul|Articul]]===\n<noinclude>\n[[Category:Template|article]]</noinclude>",
+      "sha256": "013d91bf6a9979611dd664172083dc3b3f296352d0fd707c028983706ea29ddd"
+    },
+    "Format:-phrase-": {
+      "namespace": 10,
+      "page": 4539,
+      "revision": 9978,
+      "text": "===[[expresii|Expresii]]===\n<noinclude>\n[[Category:Template|phrase]]</noinclude>",
+      "sha256": "79b801568fccf6d168993fae50a038a14b0e3779b0c9b5f67d5f4ab71cce2acf"
+    },
+    "Format:-num-": {
+      "namespace": 10,
+      "page": 4572,
+      "revision": 13919,
+      "text": "===[[număr|Númir]]===\n<noinclude>\n[[Category:Template|num]]</noinclude>\n<includeonly>[[Category:Numări]]</includeonly>",
+      "sha256": "fc7ce7de7e342bf35211ff95aec22933c068d7e8a6fd1de1e7418152087801bf"
+    },
+    "Format:-pronoun-": {
+      "namespace": 10,
+      "page": 4585,
+      "revision": 10138,
+      "text": "===[[pronuma|Pronuma]]===\n<noinclude>\n[[Category:Template|pronoun]]</noinclude>\n<includeonly>[[Category:Pronumi]]</includeonly>",
+      "sha256": "5d7a819c613543a0180b1a58a28fcaf6f806367bbf876cec48b4449aa8c4d3a5"
+    },
+    "dans": {
+      "namespace": 0,
+      "page": 4637,
+      "revision": 15631,
+      "text": "{{-fr-}}\n{{-prep-}}\n'''dans'''\n# [['n]]",
+      "sha256": "6e3ce5c008289b664c097f3b3d6b7a8f0a9f3a25d7e133159114ad29b36ac8ff"
+    },
+    "an": {
+      "namespace": 0,
+      "page": 4644,
+      "revision": 14501,
+      "text": "{{-en-}}\n{{-art-}}\n'''an'''\n# [['nâ]]",
+      "sha256": "eed56b9ce7aa4ceaf29a8a87e69de09526f6bdd6e9c0a8e9672f56e3828e8d15"
+    },
+    "basta": {
+      "namespace": 0,
+      "page": 4971,
+      "revision": 14576,
+      "text": "{{-es-}}\n{{-phrase-}}\n'''basta'''!\n# [[duri]]!\n\n{{-it-}}\n{{-phrase-}}\n'''basta'''!\n# [[duri]]!",
+      "sha256": "4b4b1aa626741ea968f5fca2e33601aae6712beaa79d681cc057efcca5784076"
+    },
+    "I": {
+      "namespace": 0,
+      "page": 5065,
+      "revision": 14443,
+      "text": "{{-en-}}\n{{-pronoun-}}\n'''I'''\n# [[io]]",
+      "sha256": "1dfeacdb897ee878027577305d80e527a4496ed6bc66ce3ef66b373d4a6d4346"
+    },
+    "bat": {
+      "namespace": 0,
+      "page": 5374,
+      "revision": 14577,
+      "text": "{{-eu-}}\n{{-num-}}\n'''bat'''\n# [[un]]",
+      "sha256": "6920573d7fb1140cb1c71c9b1d8fb90692823796f40785a64c2c27d34b30e3db"
+    },
+    "acru": {
+      "namespace": 0,
+      "page": 5449,
+      "revision": 14452,
+      "text": "{{-ro-}}\n{{-adj-}}\n'''acru'''\n# [[agru]]",
+      "sha256": "8b35885524957c4205499dee37af44abdfb43e36b38a9203afa1e11e9ca3b77b"
+    },
+    "Format:-symbol-": {
+      "namespace": 10,
+      "page": 5706,
+      "revision": 15774,
+      "text": "===Simbol===\n<noinclude>\n[[Category:Template|simbol]]</noinclude>",
+      "sha256": "906630d98a4fb8316567986fc61dbd6aca316390d5ca9cecc8d29704c917c2b2"
+    },
+    "⯉": {
+      "namespace": 0,
+      "page": 5722,
+      "revision": 16026,
+      "text": "{{-mul-}}\n__NOTOC__\n[[Fișier:Neptune monogram (fixed width).svg|80px|dreapta|faracadru|{{PAGENAME}}]]\n{{-symbol-}}\n# (astronomie) planeta [[Neptun]]\n==== Sinunim ====\n* [[♆]]\n\n==== Ved shi ====\n{{planet}}",
+      "sha256": "52edcdd3da382ac5f89a1dbafda7c9abdee8c8e67cbdd3d369f7050237e88265"
+    }
+  }
+}

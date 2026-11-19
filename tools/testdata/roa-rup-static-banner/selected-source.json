@@ -1,0 +1,342 @@
+{
+  "original_rows": 2039,
+  "root_comparison": {
+    "bytes": 11480,
+    "path": "/mnt/downloads/dev/wikidict/.tmp/roa-rup-complete-verifier-session01/original-first-line-owner-comparison01.json",
+    "sha256": "ee5b00051b34ef4b10d433d8ad15d0b0019b0d96cdf082fe48663fea3c014464"
+  },
+  "schema": "roa-rup-selected-original-static-source.v1",
+  "scope": "Only32 authenticated provider IDs and4 named original page sources retained. No Reader, expansion, build, network, index/cache extraction, or repeated corpus ownership comparison.",
+  "selected_rows": {
+    "Format:-an-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4583,
+      "revision_id": 10608,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|an]]</noinclude><includeonly>[[Category:Aragonezâ|Aragonezâ]]</includeonly>\n=[[Image:Flag_of_Aragon.svg|border|40px]] [[aragonezâ|Aragonezâ]]=",
+      "text_sha256": "2c11483b30dfff1e60f44c66878e6a77854295cdcd977d1a702df029a7f3c25b",
+      "title": "Format:-an-"
+    },
+    "Format:-ast-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4607,
+      "revision_id": 10206,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|ast]]</noinclude><includeonly>[[Category:Asturianâ|Asturianâ]]</includeonly>\n=[[Image:Flag_of_Asturias.svg|border|40px]] [[asturianâ|Asturianâ]]=",
+      "text_sha256": "34ed24be27ab76be30912ab9464967d4c214dcc5e34c16c943617db0b3e1e176",
+      "title": "Format:-ast-"
+    },
+    "Format:-bg-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4534,
+      "revision_id": 10002,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|bg]]</noinclude><includeonly>[[Category:Vârghâreaşci|Vârghâreaşci]]</includeonly>\n=[[Image:Flag_of_Bulgaria.svg|border|40px]] [[vârghâreaşci|Vârghâreaşci]]=",
+      "text_sha256": "2cb04161beee80fa0aa61e6b6ee55601a9b9269bc632a47a192d3c9fb20dbb19",
+      "title": "Format:-bg-"
+    },
+    "Format:-ca-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3929,
+      "revision_id": 10347,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|ca]]</noinclude><includeonly>[[Category:Catalanâ|Catalanâ]]</includeonly>\n=[[Image:Flag_of_Catalonia.svg|border|40px]] [[catalanâ|Catalanâ]]=",
+      "text_sha256": "ada843a01dd9060c1ad9347be40cc9bb63d24a563208cf088419aea11cf33d75",
+      "title": "Format:-ca-"
+    },
+    "Format:-cs-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4429,
+      "revision_id": 9871,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|cs]]</noinclude><includeonly>[[Category:Cecheaşci|Cecheaşci]]</includeonly>\n=[[Image:Flag_of_Czech Republic.svg|border|40px]] [[cecheaşci|Cecheaşci]]=",
+      "text_sha256": "88bdb9befbb80b9170613ccc76db2e488e5034de5017551814ccdda4922f11ca",
+      "title": "Format:-cs-"
+    },
+    "Format:-dlm-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4611,
+      "revision_id": 10210,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|dlm]]</noinclude><includeonly>[[Category:Dalmatâ|Dalmatâ]]</includeonly>\n=[[dalmatâ|Dalmatâ]]=",
+      "text_sha256": "01dc5f2d032ab31fa2578054e9273dc4f8def94906a3ecd8f1d8c423208acd20",
+      "title": "Format:-dlm-"
+    },
+    "Format:-el-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4518,
+      "revision_id": 10653,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|el]]</noinclude><includeonly>[[Category:Gârţeaşci|Gârţeaşci]]</includeonly>\n=[[Image:Flag_of_Greece.svg|border|40px]] [[gârţeaşci|Gârţeaşci]]=",
+      "text_sha256": "a1e320157305ce357552fc4fe0e165b66632bcc60b7e3f0584db66c31bcc7b5e",
+      "title": "Format:-el-"
+    },
+    "Format:-eml-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4759,
+      "revision_id": 10646,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|eml]]</noinclude><includeonly>[[Category:Emilianã-rumanjolã‎|Emilianã-rumanjolã‎]]</includeonly>\n=[[emilianã-rumanjolã‎|Emilianã-rumanjolã‎]]=",
+      "text_sha256": "6bdb87de6c4db4cc1cae4625180f8470dd2f7c24a2cb029403f5694a5f119c4c",
+      "title": "Format:-eml-"
+    },
+    "Format:-en-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3540,
+      "revision_id": 15612,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|en]]</noinclude><includeonly>[[Category:Inglezaşci|Inglezaşci]]</includeonly>\n=[[Image:Flag_of_United Kingdom.svg|border|40px]] [[inglezaşci|Inglezaşci]]=",
+      "text_sha256": "84af6723d784ab7a0c554ca2e3fd4f722c83a7efd4b108c583400359f750b828",
+      "title": "Format:-en-"
+    },
+    "Format:-eo-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 5748,
+      "revision_id": 15983,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|eo]]</noinclude><includeonly>[[Category:Esperanto|Esperanto]]</includeonly>\n=[[Image:Flag_of_Esperanto.svg|border|40px]] [[Esperanto|Esperanto]]=",
+      "text_sha256": "d094f31604b9d3d56188b9f37f6894a80d768a195b603cc5dc596a5341026fad",
+      "title": "Format:-eo-"
+    },
+    "Format:-es-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3541,
+      "revision_id": 9867,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|es]]</noinclude><includeonly>[[Category:Ispanjolã|Ispanjolã]]</includeonly>\n=[[Image:Flag_of_Spain.svg|border|40px]] [[ispanjolã|Ispanjolã]]=",
+      "text_sha256": "95e075a3b57de568355b1f45061876fcab190145dce1684214e7418c9188e62d",
+      "title": "Format:-es-"
+    },
+    "Format:-eu-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3656,
+      "revision_id": 10276,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|eu]]</noinclude><includeonly>[[Category:Bâhceaşci|Bâhceaşci]]</includeonly>\n=[[Image:Flag_of_Basque Country.svg|border|40px]] [[bâhceaşci|Bâhceaşci]]=",
+      "text_sha256": "352cbdd0a5fad7a7b07393f15af8e1661e8b5740bf6a69403bdfcdfda70eea13",
+      "title": "Format:-eu-"
+    },
+    "Format:-fi-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4589,
+      "revision_id": 10151,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|fi]]</noinclude><includeonly>[[Category:Finlandeză|Finlandeză]]</includeonly>\n=[[Image:Flag_of_Finland.svg|border|40px]] [[finlandeză|Finlandeză]]=",
+      "text_sha256": "9099753fc94ccad2741ee414dad084dd7a7c450128c8312337c2aedbaf4da1b0",
+      "title": "Format:-fi-"
+    },
+    "Format:-fr-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4516,
+      "revision_id": 15621,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|fr]]</noinclude><includeonly>[[Category:Frânţeaşci|Frânţeaşci]]</includeonly>\n=[[Image:Flag_of_France.svg|border|40px]] [[frânţeaşci|Frânţeaşci]]=",
+      "text_sha256": "5c997e8be214af54a02259e30f5d6dca826b9f96f4d1b0f81f069fd9ac615a54",
+      "title": "Format:-fr-"
+    },
+    "Format:-fur-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4761,
+      "revision_id": 15761,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|fur]]</noinclude><includeonly>[[Category:Friulană|Friulană]]</includeonly>\n=[[Image:Flag of Friuli-Venezia Giulia.svg|border|40px]] [[friulană|Friulană]]=",
+      "text_sha256": "0f073ba34c0cb7da88322710d328006bb4dd33e235fa034ef2f1bf0e36acef54",
+      "title": "Format:-fur-"
+    },
+    "Format:-gl-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4592,
+      "revision_id": 10186,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|gl]]</noinclude><includeonly>[[Category:Galiţianâ|Galiţianâ]]</includeonly>\n=[[Image:Flag_of_Galicia.svg|border|40px]] [[galiţianâ|Galiţianâ]]=",
+      "text_sha256": "4ed5244c4b4092d5f90ec7e87a3de3edb38ecc222a1c5caec6e6dc7b8ca74903",
+      "title": "Format:-gl-"
+    },
+    "Format:-io-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 5758,
+      "revision_id": 16017,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|eo]]</noinclude><includeonly>[[Category:Ido|Ido]]</includeonly>\n=[[Image:Flag_of_Ido.svg|border|40px]] [[Ido|Ido]]=",
+      "text_sha256": "d95d3f88824ce8a8551bd97621cf346439e94ec63b7661ddbad90d72cadf400f",
+      "title": "Format:-io-"
+    },
+    "Format:-it-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4515,
+      "revision_id": 9866,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|it]]</noinclude><includeonly>[[Category:Italianeaşci|Italianeaşci]]</includeonly>\n=[[Image:Flag_of_Italy.svg|border|40px]] [[italianeaşci|Italianeaşci]]=",
+      "text_sha256": "3ab89a1a5dd0ba23032f6c8793de9a627b43b0ead24870f5cd7bd0a55b73a4d3",
+      "title": "Format:-it-"
+    },
+    "Format:-la-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3552,
+      "revision_id": 9874,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|la]]</noinclude><includeonly>[[Category:Latineaşci|Latineaşci]]</includeonly>\n=[[Image:Flag_of_Vatican.svg|border|40px]] [[latineaşci|Latineaşci]]=",
+      "text_sha256": "12ca9168c3b5c48e61616bd79b5d0891bb86eff1d08f91935f7720ef498456e2",
+      "title": "Format:-la-"
+    },
+    "Format:-lij-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4753,
+      "revision_id": 10640,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|lij]]</noinclude><includeonly>[[Category:Liguriană|Liguriană]]</includeonly>\n=[[Image:Flag_of_Liguria.svg|border|40px]] [[liguriană|Liguriană]]=",
+      "text_sha256": "71e48ccf4470e41aa556ced46bf8c731483cfe67d56d9a0a38079fd48a6fa0c0",
+      "title": "Format:-lij-"
+    },
+    "Format:-lt-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4600,
+      "revision_id": 10193,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|lt]]</noinclude><includeonly>[[Category:Lituanianâ|Lituanianâ]]</includeonly>\n=[[Image:Flag_of_Lithuania.svg|border|40px]] [[lituanianâ|Lituanianâ]]=",
+      "text_sha256": "8aae35446225ebc1afca7e7c77655c2a4be347fdcab7faf8407cd02434634ac9",
+      "title": "Format:-lt-"
+    },
+    "Format:-nl-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4553,
+      "revision_id": 10030,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|nl]]</noinclude><includeonly>[[Category:Olandeză|Olandeză]]</includeonly>\n=[[Image:Flag_of_Netherlands.svg|border|40px]] [[olandeză|Olandeză]]=",
+      "text_sha256": "e9a3ef99b054b564a251980e718dc7d890110e3e8fd919d5c76d4eedf016c6f7",
+      "title": "Format:-nl-"
+    },
+    "Format:-oc-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4570,
+      "revision_id": 10069,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|oc]]</noinclude><includeonly>[[Category:Occitanâ|Occitanâ]]</includeonly>\n=[[Image:Flag_of_Occitania.svg|border|40px]] [[occitanâ|Occitanâ]]=",
+      "text_sha256": "e2ec5dc59bd55a4ab9b3c35aa7df92d410541dfe31aaeefedc216a0f410d1433",
+      "title": "Format:-oc-"
+    },
+    "Format:-pt-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4559,
+      "revision_id": 10043,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|pt]]</noinclude><includeonly>[[Category:Portughezâ|Portughezâ]]</includeonly>\n=[[Image:Flag_of_Portugal.svg|border|40px]] [[portughezâ|Portughezâ]]=",
+      "text_sha256": "be937bec05735ed7cda27c38ed825f0a034f39d735caf8afb00bc1ffb2c05ed9",
+      "title": "Format:-pt-"
+    },
+    "Format:-ro-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3539,
+      "revision_id": 15610,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|ro]]</noinclude><includeonly>[[Category:Rumãneaşci|Rumãneaşci]]</includeonly>\n=[[Image:Flag_of_Romania.svg|border|40px]] [[rumãneaşci|Rumãneaşci]]=",
+      "text_sha256": "bbace44429f7d1e8943177cb958f72eec94b22897a9c83a2df0927d99a14b767",
+      "title": "Format:-ro-"
+    },
+    "Format:-roa-rup-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 3536,
+      "revision_id": 15620,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|ro]]</noinclude><includeonly>[[Category:Armâneaşci|Armâneaşci]]</includeonly>\n=[[armâneaşci|Armâneaşci]]=",
+      "text_sha256": "d5805a2659790f4a01561debb6fb717e30dababa6da4ff983d08f26349405afc",
+      "title": "Format:-roa-rup-"
+    },
+    "Format:-sc-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4770,
+      "revision_id": 15448,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|sc]]</noinclude><includeonly>[[Category:Sardâ|Sardâ]]</includeonly>\n=[[Image:Flag of Sardinia, Italy.svg|border|40px]] [[sardâ|Sardâ]]=",
+      "text_sha256": "f5a7133adbba30ef7f1cb1d771e76048f89a59b1747d52c7901fffa75a44238d",
+      "title": "Format:-sc-"
+    },
+    "Format:-scn-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4514,
+      "revision_id": 15622,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|scn]]</noinclude><includeonly>[[Category:Sicilianeaşci|Sicilianeaşci]]</includeonly>\n=[[Image:Flag_of_Sicily.svg|border|40px]] [[sicilianeaşci|Sicilianeaşci]]=",
+      "text_sha256": "8c954b7a7d69d35091469114ef85acfe522884c29734114c6b13aa6b9ba5322d",
+      "title": "Format:-scn-"
+    },
+    "Format:-sgs-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4596,
+      "revision_id": 10188,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|sgs]]</noinclude><includeonly>[[Category:Samogiţianâ|Samogiţianâ]]</includeonly>\n=[[samogiţianâ|Samogiţianâ]]=",
+      "text_sha256": "7484b9013243f0b6a9c3663b2fb0268e1b2123170850fa4bc291f14e76914ce9",
+      "title": "Format:-sgs-"
+    },
+    "Format:-sq-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4519,
+      "revision_id": 9873,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|sq]]</noinclude><includeonly>[[Category:Arbiniseaşci|Arbiniseaşci]]</includeonly>\n=[[Image:Flag_of_Albania.svg|border|40px]] [[arbiniseaşci|Arbiniseaşci]]=",
+      "text_sha256": "5e80d339d70d811b16da40c4c4b5d6bb9815526eca614ebd9fb31fc73cc0058f",
+      "title": "Format:-sq-"
+    },
+    "Format:-tr-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4517,
+      "revision_id": 15623,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|tr]]</noinclude><includeonly>[[Category:Turţeasci|Turţeasci]]</includeonly>\n=[[Image:Flag_of_Turkey.svg|border|40px]] [[turţeasci|Turţeasci]]=",
+      "text_sha256": "e4e1a279f3f1deafa9bb7cdf04db312e1abf954ed0b538adf69de6292416a103",
+      "title": "Format:-tr-"
+    },
+    "Format:-vec-": {
+      "model": "wikitext",
+      "namespace": 10,
+      "page_id": 4757,
+      "revision_id": 10644,
+      "text": "__NOEDITSECTION__<noinclude>[[Category:Template|vec]]</noinclude><includeonly>[[Category:Venetu|Venetu]]</includeonly>\n=[[Image:Flag_of_Veneto.svg|border|40px]] [[venetu|Venetu]]=",
+      "text_sha256": "f63606d988bf07409c97c46851884c957eb69aecee53ab5389390b34f82c11d6",
+      "title": "Format:-vec-"
+    },
+    "limbã": {
+      "model": "wikitext",
+      "namespace": 0,
+      "page_id": 3530,
+      "revision_id": 14967,
+      "text": "{{-roa-rup-}}\n[[Image:Tongue.agr.jpg|thumb|limbã [1]]]\n{{-noun-}}\n'''limbã''' ''f'' (pl. '''[[limbe]]''')\n\n:[1] [[organ|Organ]]\n:[2] [[system|System]] ti comunicatsia anamisa di prãvdzãle cama analtsã shi ominjlji.\n\n{{-ety-}}\nlatinã ''[[lingua]]''\n\n{{-trans-}}\n:*{{sc}}: [[limba]]\n:*{{scn}}: [[lingua]] [1-2]\n:*{{it}}: [[lingua]] [1-2]\n:*{{es}}: [[lengua]] [1-2], [[idioma]] [2]\n:*{{fr}}: [[langue]] [1-2]\n:*{{en}}: [[tongue]] [1-2], [[language]] [2]\n:*{{la}}: [[lingua]] [1-2]\n:*{{ro}}: [[limbă‎]] [1-2]",
+      "text_sha256": "a712e9d69312784d7e048bda0271201fee0018a08e199c7c81e91408a8cef9d0",
+      "title": "limbã"
+    },
+    "tongue": {
+      "model": "wikitext",
+      "namespace": 0,
+      "page_id": 3546,
+      "revision_id": 15260,
+      "text": "{{-en-}}\n[[Image:Tongue.agr.jpg|thumb|tongue [1]]]\n{{-noun-}}\n'''tongue''' (pl. '''[[tongues]]''')\n# [[limbã]] ([[organ]])\n# [[limbã]] ([[system]] ti comunicatsia).\n\n{{-pron-}}\n: [ tʌŋ ]",
+      "text_sha256": "72fc67c111c9998bf9be07f20ca6060560fefb85da9c31d2374527708df70b92",
+      "title": "tongue"
+    },
+    "uno": {
+      "model": "wikitext",
+      "namespace": 0,
+      "page_id": 5369,
+      "revision_id": 15289,
+      "text": "{{-es-}}\n{{-num-}}\n'''unu'''\n# [[un]]\n\n{{-it-}}\n{{-num-}}\n'''unu'''\n# [[un]]",
+      "text_sha256": "57c8aa707b4d0cf4a05e3ee30341c9d3d4798b5f4384de02cc99e44632b52cb4",
+      "title": "uno"
+    },
+    "water": {
+      "model": "wikitext",
+      "namespace": 0,
+      "page_id": 3646,
+      "revision_id": 15336,
+      "text": "{{-en-}}\n{{-noun-}}\n'''water''' \n# [[apã]]",
+      "text_sha256": "25dfa80d8d4d7dc54ef845951632672437181eb789eefd4599bf79e7633e1e58",
+      "title": "water"
+    }
+  },
+  "xml": {
+    "bytes": 315758,
+    "path": "/mnt/downloads/dev/wikidict/data/dumps/roa_rupwiktionary/20261001/roa_rupwiktionary-20261001-pages-meta-current.xml.bz2",
+    "sha1": "66c3f9e2bb18ce4e440ec633e0d0f04bc209b53d",
+    "sha256": "fc00e7808ceb65b6f725efa4460a6f036b0c5f56a7daab1997df8d76a23c2dca"
+  }
+}

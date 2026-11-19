@@ -1977,6 +1977,14 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     }
     var nom_template_seen = false;
     var parenthetical_template_seen = false;
+    const roa_support_roles = std.mem.eql(u8, namespaces.wiki, "roa_rupwiktionary") and
+        std.mem.eql(u8, namespaces.content_language, "rup");
+    var support_seen: std.StringHashMapUnmanaged(void) = .empty;
+    defer {
+        var keys = support_seen.keyIterator();
+        while (keys.next()) |key| a.free(key.*);
+        support_seen.deinit(a);
+    }
     var equals_seen: std.StringHashMapUnmanaged(void) = .empty;
     defer {
         var keys = equals_seen.keyIterator();
@@ -1987,6 +1995,17 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         const row = entry.row;
         const this_ordinal = entry.ordinal;
         const parenthetical_title = namespaces.ofTitle(row.title);
+        // Reject duplicate selected -code- rows before model/redirect/body
+        // filtering; one convenient copy cannot lend support authority.
+        const selected_support = roa_support_roles and parenthetical_title.id == 10 and
+            parenthetical_title.text.len >= 4 and parenthetical_title.text[0] == '-' and
+            parenthetical_title.text[parenthetical_title.text.len - 1] == '-' and
+            registry.codes.contains(parenthetical_title.text[1 .. parenthetical_title.text.len - 1]);
+        if (selected_support) {
+            if (support_seen.contains(parenthetical_title.text)) return error.DuplicateLanguageTemplateSource;
+            const key = try a.dupe(u8, parenthetical_title.text);
+            support_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
+        }
         const et_literal = std.mem.eql(u8, namespaces.wiki, "etwiktionary") and
             std.mem.eql(u8, namespaces.content_language, "et") and parenthetical_title.id == 10 and
             registry.codes.contains(parenthetical_title.text);
@@ -2099,6 +2118,11 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
             // A complete static -code- declaration supplies one local label;
             // neither edition defaults nor the decorative file select its owner.
             if (std.mem.eql(u8, row.content_model, "wikitext")) {
+                if (roa_support_roles) {
+                    if (source_language_banner.roaRupStaticSupportDeclaration(decoded orelse raw, namespaces,
+                        if (behavior) |*value| value else null, code)) |proof|
+                        try registry.addSourceStaticSupport(code, proof);
+                }
                 if (source_language_banner.decoratedCategoryLabel(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |label|
                     try registry.addSourceTemplateLabel(label, code);
             }
@@ -2356,6 +2380,12 @@ fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*cons
                 return value.sourceEqualsLabel(code_value);
             }
         }.label else null,
+        .source_static_support_fn = if (registry.source_static_support.count() == 0) null else struct {
+            fn matches(raw: ?*const anyopaque, token: []const u8) bool {
+                const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
+                return value.sourceStaticSupport(token) != null;
+            }
+        }.matches,
         .source_banner_fn = struct {
             fn matches(raw: ?*const anyopaque, code_value: []const u8, heading: []const u8, level: u8) bool {
                 const value: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return false));
@@ -67574,4 +67604,348 @@ test "normal Chinese canonical module preserves estoire complete owner body refe
     try std.testing.expectEqual(@as(usize, 1), markers);
     try std.testing.expectEqual(@as(usize, 1), greek);
     try std.testing.expect(history and story);
+}
+
+const RoaRupStaticBannerTest = struct {
+    const T = encoder.presentation_types;
+    // Support retention separately proves NS10; article rows carry explicit NS.
+    const Row = struct { title: []const u8, namespace: i32 = 10, page_id: u64, revision_id: u64, model: []const u8, text: []const u8, text_sha256: []const u8 };
+    const Source = struct { selected_rows: std.json.ArrayHashMap(Row) };
+    fn rows(a: std.mem.Allocator) !Source {
+        const bytes = @embedFile("testdata/roa-rup-static-banner/selected-source.json");
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        try std.testing.expectEqualStrings("79f1f097137a5211f898b72cb701e023c6acbb8e8140b84ca5c1641272e3009b", &std.fmt.bytesToHex(digest, .lower));
+        return std.json.parseFromSliceLeaky(Source, a, bytes, .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
+    }
+    fn support(a: std.mem.Allocator) !Source {
+        return std.json.parseFromSliceLeaky(Source, a, @embedFile("testdata/roa-rup-static-banner/selected-support.json"),
+            .{ .allocate = .alloc_always, .ignore_unknown_fields = true });
+    }
+    fn row(a: std.mem.Allocator, title: []const u8) !Row {
+        const source = try rows(a);
+        return source.selected_rows.map.get(title) orelse return error.TestUnexpectedResult;
+    }
+    fn namespace(a: std.mem.Allocator) !namespace_registry.Registry {
+        var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/roa-rup-static-banner/namespace-registry.tsv"));
+        try ns.attachInterwikiMap(@embedFile("testdata/roa-rup-static-banner/interwiki-map.tsv"));
+        try std.testing.expectEqualStrings("roa_rupwiktionary", ns.wiki);
+        return ns;
+    }
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8) !void {
+        return installSupport(io, a, root, 0);
+    }
+    fn installSupport(io: std.Io, a: std.mem.Allocator, root: []const u8, support_mode: u2) !void {
+        const source = try rows(a);
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", @embedFile("testdata/roa-rup-static-banner/language-registry.tsv"));
+        try DvShyOwnerTest.file(io, a, root, "behavior-switches.tsv", @embedFile("testdata/roa-rup-static-banner/behavior-switches.tsv"));
+        var index: std.ArrayList(u8) = .empty;
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        var ordinal: usize = 0;
+        for (source.selected_rows.map.values()) |provider| {
+            if (provider.namespace != 10) continue;
+            try std.testing.expectEqualStrings("wikitext", provider.model);
+            var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(provider.text, &digest, .{});
+            try std.testing.expectEqualStrings(provider.text_sha256, &std.fmt.bytesToHex(digest, .lower));
+            // Maintained source-loader fixture index; real IDs/revisions/body,
+            // no claim that this fixture is the original full native index.
+            try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{provider.title, provider.page_id, provider.revision_id}));
+            try templates.append(ordinal, provider.page_id, provider.revision_id, provider.text); ordinal += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 32), ordinal);
+        if (support_mode != 0) {
+            const provider = (try support(a)).selected_rows.map.get("Format:-num-").?;
+            try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n", .{provider.title, provider.page_id, provider.revision_id}));
+            try templates.append(ordinal, provider.page_id, provider.revision_id, provider.text); ordinal += 1;
+            if (support_mode == 2) {
+                // The second selected title is deliberately a different model;
+                // duplicate refusal must precede that filter and source lookup.
+                try index.appendSlice(a, try std.fmt.allocPrint(a, "0\t0\t{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\tScribunto\t10\t1\t0\n", .{provider.title, provider.page_id, provider.revision_id}));
+                try templates.append(ordinal, provider.page_id, provider.revision_id, provider.text);
+            }
+        }
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", index.items);
+        try templates.finish(try std.fs.path.join(a, &.{root, "page-index.tsv"}));
+    }
+    fn transcluded(a: std.mem.Allocator, source: []const u8) ![]const u8 {
+        // These exact retained fixtures are fully static. Select ordinary
+        // transclusion, preserving controls, heading links, icons and all text.
+        var result = source;
+        while (std.mem.indexOf(u8, result, "<noinclude>")) |start| {
+            const end = (std.mem.indexOfPos(u8, result, start, "</noinclude>") orelse return error.TestUnexpectedResult) + "</noinclude>".len;
+            result = try std.mem.concat(a, u8, &.{result[0..start], result[end..]});
+        }
+        result = try std.mem.replaceOwned(u8, a, result, "<includeonly>", "");
+        return std.mem.replaceOwned(u8, a, result, "</includeonly>", "");
+    }
+    fn expanded(a: std.mem.Allocator, raw: []const u8) ![]const u8 {
+        var result = raw;
+        const source = try rows(a);
+        for (source.selected_rows.map.values()) |provider| {
+            if (provider.namespace != 10) continue;
+            const name = provider.title["Format:".len..];
+            const marker = try std.fmt.allocPrint(a, "{{{{{s}}}}}", .{name});
+            result = try std.mem.replaceOwned(u8, a, result, marker, try transcluded(a, provider.text));
+        }
+        const pos = try support(a);
+        for (pos.selected_rows.map.values()) |provider| {
+            const marker = try std.fmt.allocPrint(a, "{{{{{s}}}}}", .{provider.title["Format:".len..]});
+            result = try std.mem.replaceOwned(u8, a, result, marker, try transcluded(a, provider.text));
+        }
+        return result;
+    }
+};
+
+test "Aromanian complete static category declarations retain all 32 exact linked headings icons codes and prefix receipts" {
+    const F = RoaRupStaticBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    try F.install(io, a, root); var ns = try F.namespace(a); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    const source = try F.rows(a); var count: usize = 0;
+    for (source.selected_rows.map.values()) |provider| {
+        if (provider.namespace != 10) continue;
+        const local = ns.ofTitle(provider.title); const code = local.text[1 .. local.text.len - 1];
+        const proof = source_language_banner.parse(provider.text, &ns, null, &registry, code) orelse return error.TestUnexpectedResult;
+        const end = std.mem.lastIndexOfScalar(u8, provider.text, '\n').?;
+        const parsed = encoder.wikitext_syntax.controlHeading(provider.text[end + 1..], null).?;
+        try std.testing.expectEqualStrings(parsed.title, proof.heading); try std.testing.expectEqual(@as(u8, 1), proof.level);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(code, proof.heading, 1));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(code, proof.heading, 2));
+        const prefix = proof.emitted_prefix orelse return error.TestUnexpectedResult;
+        const bytes = try std.mem.concat(a, u8, &.{prefix.category, prefix.suffix});
+        try std.testing.expect(registry.matchesSourceLanguageBannerPrefix(code, proof.heading, 1, bytes));
+        try std.testing.expect(!registry.matchesSourceLanguageBannerPrefix(code, proof.heading, 1, try std.mem.concat(a, u8, &.{bytes, " visible"})));
+        count += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 32), count);
+    const aro = try F.row(a, "Format:-roa-rup-");
+    const proof = source_language_banner.parse(aro.text, &ns, null, &registry, "roa-rup").?;
+    try std.testing.expectEqualStrings("Armâneaşci", proof.label);
+    try std.testing.expectEqualStrings("armâneaşci", proof.target);
+    try std.testing.expectEqualStrings("roa-rup", registry.resolve("roa-rup").?.code);
+    try std.testing.expect(registry.resolve("Armâneaşci") == null and registry.resolveStrong("Armâneaşci") == null);
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("ro", proof.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("rup", proof.heading, 1));
+    const pos = try F.support(a);
+    try std.testing.expect(source_language_banner.parse(pos.selected_rows.map.get("Format:-noun-").?.text, &ns, null, &registry, "roa-rup") == null);
+    try std.testing.expect(source_language_banner.parse(pos.selected_rows.map.get("Format:-num-").?.text, &ns, null, &registry, "num") == null);
+}
+
+test "Aromanian static category proof rejects category sort link code dynamic and registry conflicts without creating an alias" {
+    const F = RoaRupStaticBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try F.namespace(a); defer ns.deinit(); var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/roa-rup-static-banner/language-registry.tsv"));
+    const provider = try F.row(a, "Format:-roa-rup-");
+    for ([_][2][]const u8{
+        .{ "Category:Armâneaşci|Armâneaşci", "Category:Rumãneaşci|Armâneaşci" },
+        .{ "Category:Armâneaşci|Armâneaşci", "Category:Armâneaşci|ro" },
+        .{ "[[armâneaşci|Armâneaşci]]", "[[armâneaşci#part|Armâneaşci]]" },
+        .{ "[[armâneaşci|Armâneaşci]]", "[[ro|Armâneaşci]]" },
+        .{ "[[armâneaşci|Armâneaşci]]", "[[armâneaşci|{{name}}]]" },
+        .{ "<includeonly>", "<onlyinclude>" }, .{ "__NOEDITSECTION__", "__TOC__" },
+        .{ "\n=", "\n===" }, .{ "</includeonly>\n", "</includeonly>visible\n" },
+    }) |mutation| {
+        try std.testing.expect(std.mem.indexOf(u8, provider.text, mutation[0]) != null);
+        const bad = try std.mem.replaceOwned(u8, a, provider.text, mutation[0], mutation[1]);
+        try std.testing.expect(source_language_banner.parse(bad, &ns, null, &registry, "roa-rup") == null);
+    }
+    try std.testing.expect(source_language_banner.parse(provider.text, &ns, null, &registry, "not-a-code") == null);
+    const proof = source_language_banner.parse(provider.text, &ns, null, &registry, "roa-rup").?;
+    try registry.addSourceLanguageBanner("roa-rup", proof);
+    try registry.addLocalAlias("Armâneaşci", "ro");
+    try std.testing.expect(source_language_banner.parse(provider.text, &ns, null, &registry, "roa-rup") == null);
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("roa-rup", proof.heading, 1));
+    const boundary = source_language_banner.categoryLinkedBoundary(provider.text, &ns, null, &registry, "roa-rup") orelse return error.TestUnexpectedResult;
+    try registry.addSourceLanguageBoundary("roa-rup", boundary);
+    try std.testing.expect(registry.matchesSourceLanguageBoundary("roa-rup", proof.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("roa-rup", proof.heading, 1));
+}
+
+test "Aromanian normal source-instantiated water and limbã excerpts preserve exact decorated owner headings senses actions and codec" {
+    const F = RoaRupStaticBannerTest; const doc = encoder.presentation_document; const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    const limb = try F.row(a, "limbã");
+    const start = std.mem.indexOf(u8, limb.text, "{{-noun-}}").?;
+    const end = std.mem.indexOf(u8, limb.text, "\n{{-ety-}}").?;
+    // Explicit source excerpt: omit the original media/etymology/translation
+    // regions here. Their full ordinary Writer acceptance remains separate.
+    const limb_excerpt = try std.mem.concat(a, u8, &.{ "{{-roa-rup-}}\n", limb.text[start..end] });
+    const water = try F.row(a, "water");
+    for ([_]struct { title: []const u8, code: []const u8, raw: []const u8 }{
+        .{ .title = water.title, .code = "en", .raw = water.text },
+        .{ .title = limb.title, .code = "roa-rup", .raw = limb_excerpt },
+    }) |case| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        try F.install(io, a, root); var ns = try F.namespace(a); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+        const owner = registry.resolve(case.code).?; const source = try F.expanded(a, case.raw);
+        const output = try std.fs.path.join(a, &.{root, "output"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, source, case.raw, null);
+        const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, case.title);
+        try std.testing.expectEqualStrings(case.code, actual.language_code);
+        var fallback: doc.Fallbacks = .{};
+        const expected_bytes = try doc.compileClassifiedWithHeadingAnchorsAlloc(a, case.title, .language, owner.heading, owner.code,
+            doc.MissingText.untracked(source), null, .{}, &ns, null, null, .{}, &fallback, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, case.title, .language, .{ .heading = owner.heading, .code = owner.code });
+        try std.testing.expectEqualDeep(expected.entry, actual);
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, case.code, "en")) "Inglezaşci" else "Armâneaşci", actual.sections[0].title);
+        if (std.mem.eql(u8, case.code, "en")) try std.testing.expect(actual.sections[0].blocks[0].spans[0].image != null);
+        var links: usize = 0;
+        for (actual.sections) |section| for (section.blocks) |block| for (block.spans) |span| if (span.kind == .link) { links += 1; };
+        try std.testing.expect(links >= 2);
+        // Independently check the qualified Layout result at the actual source
+        // section/block addresses, including the blank before limbã's :[1].
+        try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+        const noun = actual.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings(owner.heading, noun.language);
+        try std.testing.expectEqual(@as(usize, 1), noun.section);
+        const lexical = actual.sections[noun.section];
+        try std.testing.expectEqualStrings("Sumstantivu", lexical.title);
+        const targets: []const []const u8 = if (std.mem.eql(u8, case.code, "en")) &.{"apã"} else &.{"organ", "system"};
+        try std.testing.expectEqual(targets.len, noun.definitions.len);
+        var headword = false;
+        for (noun.introduction) |index| {
+            try std.testing.expect(index < lexical.blocks.len);
+            for (lexical.blocks[index].spans) |span| {
+                if (span.bold and std.mem.eql(u8, span.text, case.title)) headword = true;
+            }
+        }
+        try std.testing.expect(headword);
+        for (noun.definitions, targets, 0..) |sense, target, sense_index| {
+            try std.testing.expect(sense.block < lexical.blocks.len);
+            const block = lexical.blocks[sense.block];
+            try std.testing.expectEqualStrings(if (targets.len == 1) "#" else ":", block.list_path);
+            var exact_target = false;
+            for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, target)) {
+                try std.testing.expectEqualStrings(if (targets.len == 1) "apã" else if (sense_index == 0) "Organ" else "System", span.text);
+                exact_target = true;
+            };
+            try std.testing.expect(exact_target);
+            if (targets.len == 2) try std.testing.expectEqualStrings(if (sense_index == 0) "[1] " else "[2] ", block.spans[0].text);
+        }
+        const stored: T.Stored = .{ .entry = actual }; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, case.title, .language, .{ .heading = owner.heading, .code = owner.code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+test "Aromanian complete original uno static instantiation keeps Spanish Italian regions and numeral support without a default owner" {
+    const F = RoaRupStaticBannerTest; const doc = encoder.presentation_document; const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    try F.installSupport(io, a, root, 1); var ns = try F.namespace(a); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+    try std.testing.expect(registry.sourceStaticSupport("num") != null);
+    try std.testing.expectEqualStrings("num", registry.resolve("num").?.code);
+    const page = try F.row(a, "uno"); const source = try F.expanded(a, page.text);
+    const italian = try F.row(a, "Format:-it-");
+    const proof = source_language_banner.parse(italian.text, &ns, null, &registry, "it").?;
+    const marker = try std.fmt.allocPrint(a, "={s}=", .{proof.heading});
+    const cut = std.mem.indexOf(u8, source, marker).?;
+    const observed = try doc.observeHeadingAnchorsWithWikiScopeAlloc(a, page.title, doc.MissingText.untracked(source), .{}, &ns, null, null, .{}, null, true);
+    try std.testing.expect(observed.page_wiki_scope_complete);
+    const output = try std.fs.path.join(a, &.{root, "output"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Every selected provider is complete and static; this is an explicitly
+    // source-instantiated full original page, not a saved Worker response.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, page.title, source, page.text, null);
+    const stats = try writer.finish(codes);
+    var uno_stage: []const u8 = "language_records";
+    errdefer diagnostics.printLine("roa_uno_failure stage={s} language_records={d}\n", .{uno_stage, stats.language_records});
+    try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    for ([_][]const u8{"es", "it"}, 0..) |code, arm| {
+        const owner = registry.resolve(code).?;
+        const begin: usize = if (arm == 0) 0 else cut;
+        const end: usize = if (arm == 0) cut else source.len;
+        const region = source[begin..end];
+        const ranges = [_]doc.HeadingSourceRange{.{ .owner_start = 0, .page_start = begin, .len = region.len }};
+        var fallback: doc.Fallbacks = .{};
+        const expected_bytes = try doc.compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(a, page.title, .language,
+            owner.heading, owner.code, doc.MissingText.untracked(region), null, .{}, &ns, null, null, .{}, &fallback,
+            null, &.{}, &observed, &ranges, .{ .heading = owner.heading, .code = owner.code }, null, null, .parser_output);
+        const expected = try encoder.presentation_codec.decodeAlloc(a, expected_bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
+        uno_stage = code;
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, page.title);
+        try std.testing.expectEqualDeep(expected.entry, actual);
+        try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+        try std.testing.expectEqualStrings("Númir", actual.sections[1].title);
+        try std.testing.expect(actual.sections[0].blocks[0].spans[0].image != null);
+        const stored: T.Stored = .{ .entry = actual }; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, page.title, .language, .{ .heading = owner.heading, .code = owner.code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+}
+
+test "Aromanian source support intake requires genuine complete POS provider and rejects duplicate and conflicting proofs" {
+    const F = RoaRupStaticBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var ns = try F.namespace(a); defer ns.deinit();
+    const Lexical = struct { original_pages: std.json.ArrayHashMap(struct { text: []const u8, sha256: []const u8 }) };
+    const lexical = try std.json.parseFromSliceLeaky(Lexical, a, @embedFile("testdata/roa-rup-static-banner/original-lexical-sections.json"), .{ .ignore_unknown_fields = true });
+    for ([_][]const u8{ "num", "adj", "art" }) |token| {
+        const provider = lexical.original_pages.map.get(try std.fmt.allocPrint(a, "Format:-{s}-", .{token})).?;
+        var digest: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(provider.text, &digest, .{});
+        try std.testing.expectEqualStrings(provider.sha256, &std.fmt.bytesToHex(digest, .lower));
+        const selected = source_language_banner.roaRupStaticSupportDeclaration(provider.text, &ns, null, token) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u8, 3), selected.level);
+    }
+    const source = (try F.support(a)).selected_rows.map.get("Format:-num-").?;
+    const proof = source_language_banner.roaRupStaticSupportDeclaration(source.text, &ns, null, "num") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u8, 3), proof.level);
+    try std.testing.expectEqualStrings("[[număr|Númir]]", proof.heading);
+    for ([_][2][]const u8{
+        .{ "[[număr|Númir]]", "[[Niuafo'ou|Niuafo'ou]]" },
+        .{ "[[număr|Númir]]", "[[număr#part|Númir]]" },
+        .{ "Category:Template|num", "Category:Template|language" },
+        .{ "Category:Numări", "Category:Niuafo'ou" },
+        .{ "===", "==" },
+        .{ "<includeonly>", "<onlyinclude>" },
+    }) |mutation| {
+        const bad = try std.mem.replaceOwned(u8, a, source.text, mutation[0], mutation[1]);
+        try std.testing.expect(source_language_banner.roaRupStaticSupportDeclaration(bad, &ns, null, "num") == null);
+    }
+    try std.testing.expect(source_language_banner.roaRupStaticSupportDeclaration(source.text, &ns, null, "en") == null);
+    const saved_wiki = ns.wiki; ns.wiki = "anotherwiki";
+    try std.testing.expect(source_language_banner.roaRupStaticSupportDeclaration(source.text, &ns, null, "num") == null);
+    ns.wiki = saved_wiki;
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/roa-rup-static-banner/language-registry.tsv"));
+    try registry.addSourceStaticSupport("num", proof);
+    try std.testing.expect(registry.sourceStaticSupport("num") != null);
+    try std.testing.expectEqualStrings("num", registry.resolve("num").?.code);
+    try registry.addSourceStaticSupport("num", .{ .heading = "[[other|Other]]", .level = 3 });
+    try std.testing.expect(registry.sourceStaticSupport("num") == null);
+    try registry.addSourceStaticSupport("num", proof);
+    try std.testing.expect(registry.sourceStaticSupport("num") == null);
+    var missing = std.testing.tmpDir(.{}); defer missing.cleanup(); const missing_root = try missing.dir.realPathFileAlloc(io, ".", a);
+    try F.install(io, a, missing_root);
+    var no_provider = try loadLanguageRegistry(io, a, missing_root, &ns); defer no_provider.deinit();
+    try std.testing.expect(no_provider.sourceStaticSupport("num") == null);
+    const page = try F.row(a, "uno"); const expanded = try F.expanded(a, page.text);
+    const output = try std.fs.path.join(a, &.{missing_root, "output"}); const codes = languageCodes(&no_provider, &ns);
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, page.title, expanded, page.text, null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+    const unknown = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", page.title);
+    try std.testing.expectEqualStrings("", unknown.language_code);
+    // Missing support authority retains the complete article, including both
+    // source language headings, both numeral headings and both authored links.
+    var meanings: usize = 0; var language_headings: usize = 0;
+    for (unknown.sections) |section| {
+        if (section.level == 1) language_headings += 1;
+        for (section.blocks) |block| for (block.spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "un")) { meanings += 1; };
+    }
+    try std.testing.expectEqual(@as(usize, 2), meanings);
+    try std.testing.expectEqual(@as(usize, 2), language_headings);
+    var duplicate = std.testing.tmpDir(.{}); defer duplicate.cleanup(); const duplicate_root = try duplicate.dir.realPathFileAlloc(io, ".", a);
+    try F.installSupport(io, a, duplicate_root, 2);
+    try std.testing.expectError(error.DuplicateLanguageTemplateSource, loadLanguageRegistry(io, a, duplicate_root, &ns));
 }

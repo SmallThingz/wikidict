@@ -60,6 +60,7 @@ pub const LanguageCodes = struct {
     source_banner_boundary_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8) bool = null,
     source_banner_prefix_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, u8, []const u8) bool = null,
     source_equals_fn: ?*const fn (?*const anyopaque, []const u8) ?[]const u8 = null,
+    source_static_support_fn: ?*const fn (?*const anyopaque, []const u8) bool = null,
     source_paragraph_fn: ?*const fn (?*const anyopaque, []const u8, []const u8, []const u8) bool = null,
     source_nom_label_fn: ?*const fn (?*const anyopaque, []const u8) ?[]const u8 = null,
     // Selected source formatter only; false retains the complete older grammar.
@@ -2800,6 +2801,17 @@ fn sourceBannerPrefixOwner(codes: LanguageCodes, complete_partition: bool, raw: 
     return if (std.mem.eql(u8, owner.code, code)) owner else null;
 }
 
+// A selected static provider may emit hidden categories before its heading.
+// This receipt proves only that exact first prefix; the full ordered partition
+// below still independently proves every original and rendered boundary.
+fn sourceBannerDeclaredPrelude(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section, prefix: []const u8) bool {
+    if (prefix.len == 0 or prefix.len > 4096 or !raw.hyphen_marker or rendered.hyphen_marker) return false;
+    const matches = codes.source_banner_prefix_fn orelse return false;
+    const line = rendered.source[0 .. std.mem.indexOfScalar(u8, rendered.source, '\n') orelse rendered.source.len];
+    const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return false;
+    return matches(codes.ctx, raw.heading, heading.title, heading.level, prefix);
+}
+
 fn sourceBannerPartition(codes: LanguageCodes, original: []const u8, source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section) bool {
     if (raw.len < 2 or raw.len > 64 or raw.len != rendered.len or source.unknown or source.lost_missing_range) return false;
     const matches = codes.source_banner_fn orelse return false;
@@ -2807,7 +2819,8 @@ fn sourceBannerPartition(codes: LanguageCodes, original: []const u8, source: Mis
     var cursor = std.math.sub(usize, @intFromPtr(rendered[0].source.ptr), @intFromPtr(source.bytes.ptr)) catch return false;
     if (raw_cursor > original.len or cursor > source.bytes.len or std.mem.trim(u8, original[0..raw_cursor], " \t\r\n").len != 0) return false;
     const prefix = std.mem.trim(u8, source.bytes[0..cursor], " \t\r\n");
-    if (!sourceBannerPrelude(codes, prefix) or !calibratedBoundaryRangesClean(source, 0, cursor)) return false;
+    if ((!sourceBannerPrelude(codes, prefix) and !sourceBannerDeclaredPrelude(codes, raw[0], rendered[0], prefix)) or
+        !calibratedBoundaryRangesClean(source, 0, cursor)) return false;
     var first_code: ?[]const u8 = null;
     var distinct = false;
     for (raw, rendered) |authored, expanded| {
@@ -3870,6 +3883,9 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
         .accepts = struct {
             fn accepts(raw: ?*const anyopaque, value: []const u8) bool {
                 const markers: *const LanguageMarkers = @ptrCast(@alignCast(raw.?));
+                if (markers.codes.source_static_support_fn) |is_support| {
+                    if (is_support(markers.codes.ctx, value)) return false;
+                }
                 const language = markers.codes.resolve(value) orelse return false;
                 if (markers.represented) |codes| {
                     for (codes) |code| if (std.mem.eql(u8, code, language.code)) return true;
@@ -23204,4 +23220,95 @@ test "ordinary whole-page Writer preserves estoire's planned citation and later 
     try std.testing.expect(history and story);
     try std.testing.expectEqual(@as(usize, 1), markers);
     try std.testing.expectEqual(@as(usize, 1), greek_actions);
+}
+
+test "source banner category prelude requires the exact first provider receipt and complete clean partition" {
+    const raw_source = "{{-fr-}}\n# first\n{{-en-}}\n# second";
+    const prefix = "[[category:French]]\n[[Category:French]]";
+    const source = prefix ++ "\n== French (fr) ==\n# first\n== English (en) ==\n# second";
+    const raw_cut = std.mem.indexOf(u8, raw_source, "{{-en-}}").?;
+    const start = prefix.len + 1;
+    const cut = std.mem.indexOf(u8, source, "== English").?;
+    const Resolver = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "fr")) return .{ .code = "fr", .heading = "French" };
+            if (std.mem.eql(u8, name, "en")) return .{ .code = "en", .heading = "English" };
+            return null;
+        }
+        fn matches(_: ?*const anyopaque, code: []const u8, heading: []const u8, level: u8) bool {
+            return level == 2 and ((std.mem.eql(u8, code, "fr") and std.mem.eql(u8, heading, "French (fr)")) or
+                (std.mem.eql(u8, code, "en") and std.mem.eql(u8, heading, "English (en)")));
+        }
+        fn first(ctx: ?*const anyopaque, code: []const u8, heading: []const u8, level: u8, emitted: []const u8) bool {
+            return matches(ctx, code, heading, level) and std.mem.eql(u8, code, "fr") and
+                std.mem.eql(u8, emitted, "[[category:French]]\n[[Category:French]]");
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Resolver.resolve, .source_banner_fn = Resolver.matches, .source_banner_prefix_fn = Resolver.first };
+    var raw = [_]language_source.Section{
+        .{ .heading = "fr", .source = raw_source[0..raw_cut], .hyphen_marker = true },
+        .{ .heading = "en", .source = raw_source[raw_cut..], .hyphen_marker = true },
+    };
+    var rendered = [_]language_source.Section{
+        .{ .heading = "French (fr)", .source = source[start..cut] },
+        .{ .heading = "English (en)", .source = source[cut..] },
+    };
+    const tracked = MissingText.untracked(source);
+    try std.testing.expect(sourceBannerPartition(codes, raw_source, tracked, &raw, &rendered));
+    var absent = codes; absent.source_banner_prefix_fn = null;
+    try std.testing.expect(!sourceBannerPartition(absent, raw_source, tracked, &raw, &rendered));
+    absent = codes; absent.source_banner_fn = null;
+    try std.testing.expect(!sourceBannerPartition(absent, raw_source, tracked, &raw, &rendered));
+    const saved_raw = raw[0]; raw[0] = raw[1];
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, tracked, &raw, &rendered)); raw[0] = saved_raw;
+    const saved = rendered[1]; rendered[1].source = rendered[1].source[0 .. rendered[1].source.len - 1];
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, tracked, &raw, &rendered)); rendered[1] = saved;
+    var missing = tracked; missing.unknown = true;
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, missing, &raw, &rendered));
+    missing = tracked; missing.lost_missing_range = true;
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, missing, &raw, &rendered));
+    missing = tracked; missing.ranges = &.{.{ .start = 2, .end = 3, .occurrence = 1 }};
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, missing, &raw, &rendered));
+    missing = tracked; missing.literal_curly_ranges = &.{.{ .start = 2, .end = 3 }};
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, missing, &raw, &rendered));
+    try std.testing.expect(!sourceBannerDeclaredPrelude(codes, raw[0], rendered[0], prefix ++ " visible"));
+    try std.testing.expect(!sourceBannerDeclaredPrelude(codes, raw[0], rendered[0], "[[Category:English]]"));
+    try std.testing.expect(!sourceBannerDeclaredPrelude(codes, raw[1], rendered[1], prefix));
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, tracked, raw[0..1], rendered[0..1]));
+    // Hidden categories alone do not invent a retained visible break or row.
+    try std.testing.expect(!sourceBannerRetainsBreak(codes, true, prefix));
+}
+
+test "source static support veto affects only proved hyphen markers and leaves explicit language codes intact" {
+    const Resolver = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "es")) return .{ .code = "es", .heading = "Spanish" };
+            if (std.mem.eql(u8, name, "it")) return .{ .code = "it", .heading = "Italian" };
+            if (std.mem.eql(u8, name, "num")) return .{ .code = "num", .heading = "Niuafo'ou" };
+            return null;
+        }
+        fn support(_: ?*const anyopaque, name: []const u8) bool { return std.mem.eql(u8, name, "num"); }
+    };
+    const raw = "{{-es-}}\n{{-num-}}\n'''unu'''\n# [[un]]\n\n{{-it-}}\n{{-num-}}\n'''unu'''\n# [[un]]";
+    const cut = std.mem.indexOf(u8, raw, "{{-it-}}").?;
+    const codes: LanguageCodes = .{ .resolve_fn = Resolver.resolve, .source_static_support_fn = Resolver.support };
+    const markers: LanguageMarkers = .{ .codes = &codes };
+    var good = languageSections(raw, &markers);
+    const first = good.next().?; const second = good.next().?;
+    try std.testing.expectEqualStrings("es", first.heading);
+    try std.testing.expectEqualStrings(raw[0..cut], first.source);
+    try std.testing.expectEqualStrings("it", second.heading);
+    try std.testing.expectEqualStrings(raw[cut..], second.source);
+    try std.testing.expect(good.next() == null);
+    var absent = codes; absent.source_static_support_fn = null;
+    const incomplete: LanguageMarkers = .{ .codes = &absent };
+    var bad = languageSections(raw, &incomplete); var count: usize = 0;
+    while (bad.next()) |_| count += 1;
+    try std.testing.expectEqual(@as(usize, 4), count);
+    try std.testing.expectEqualStrings("num", codes.resolve("num").?.code);
+    const explicit = "{{=num=}}\n# language";
+    var equals = languageSections(explicit, &markers);
+    const declared = equals.next().?;
+    try std.testing.expectEqualStrings("num", declared.heading);
+    try std.testing.expect(!declared.hyphen_marker and equals.next() == null);
 }
