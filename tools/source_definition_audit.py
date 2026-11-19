@@ -273,19 +273,26 @@ def definitions(text, title, headings, trail_rule=None):
 
 
 def localized_language_codes(raw):
-    """Use unambiguous MediaWiki names and their explicitly registered initial capitals."""
+    """Use unambiguous MediaWiki names, registered capitals and explicitly trusted headings."""
     lines = raw.decode('utf-8').splitlines()
     if not lines or lines[0] != '# wikidict-language-registry-v2' or '# mediawiki' not in lines:
         raise ValueError('Expected a v2 language registry with MediaWiki names')
     claims = defaultdict(set)
     candidates = {}
+    local_headings = defaultdict(set)
+    local_aliases = defaultdict(set)
+    reviewed_aliases = defaultdict(set)
     mediawiki = False
     for line in lines[1:]:
         fields = line.split('\t')
         if line in ('# mediawiki', '# iso-639-3'):
             mediawiki = line == '# mediawiki'
         elif fields[0] == '# reviewed-alias' and len(fields) == 5:
-            claims[fields[2]].add(fields[1])
+            reviewed_aliases[fields[2]].add(fields[1])
+        elif fields[0] == '# local-heading' and len(fields) == 3:
+            local_headings[fields[2]].add(fields[1])
+        elif fields[0] == '# local-alias' and len(fields) == 3:
+            local_aliases[fields[2]].add(fields[1])
         elif len(fields) >= 2 and not line.startswith('#'):
             for name in fields:
                 claims[name].add(fields[0])
@@ -296,6 +303,14 @@ def localized_language_codes(raw):
                 capitalized = initial + name[1:]
                 if len(initial) == 1 and capitalized != name and capitalized in fields[2:]:
                     candidates[capitalized] = (fields[0], name)
+    for spelling, owners in local_headings.items():
+        # The native registry promotes an existing exact name. A local heading
+        # cannot introduce a spelling or resolve conflicting owners.
+        if (len(owners) == 1 and spelling not in owners and claims.get(spelling) == owners
+                and local_aliases[spelling].issubset(owners)):
+            candidates[spelling] = (next(iter(owners)), spelling)
+    for spelling, owners in reviewed_aliases.items():
+        claims[spelling].update(owners)
     return {spelling: code for spelling, (code, primary) in candidates.items()
             if spelling and claims[spelling] == claims[primary] == {code}}
 

@@ -73,6 +73,16 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertEqual(localized_language_codes(raw),
                          {'svenska': 'sv', 'Svenska': 'sv', 'finska': 'fi', 'engelska': 'en'})
 
+    def test_local_heading_promotes_only_an_existing_unambiguous_name(self):
+        raw = ('# wikidict-language-registry-v2\n# mediawiki\n'
+               'xh\tዞሳኛ\tXhosa\tIsiXhosa\nko\tኮሪያኛ\tKorean\n'
+               '# local-heading\txh\tXhosa\n# local-heading\txh\tInvented\n'
+               '# local-heading\tko\tKorean\n# local-alias\txh\tKorean\n'
+               '# local-alias\txh\tIsiXhosa\n'
+               '# reviewed-alias\txh\tReviewed only\trole\tdigest\n'
+               '# local-heading\txh\tReviewed only\n').encode()
+        self.assertEqual(localized_language_codes(raw), {'ዞሳኛ': 'xh', 'ኮሪያኛ': 'ko', 'Xhosa': 'xh'})
+
     def test_source_index_keeps_order_and_origin_across_insert_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
