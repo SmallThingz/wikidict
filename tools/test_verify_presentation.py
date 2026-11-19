@@ -1,3 +1,4 @@
+import bz2
 import gzip
 import json
 import hashlib
@@ -576,6 +577,36 @@ class PresentationDiagnosticTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 self.assertEqual(self.run_report(**kwargs), self.run_report(**kwargs, compressed=True))
                 self.assertEqual(self.run_report(**kwargs), self.run_report(**kwargs, compressed=True, summary_json=True))
+
+    def test_cli_saves_locations_beyond_the_source_example_limit(self):
+        with Fixture() as f:
+            f.language('English', [])
+            (f.root / 'languages.tsv').write_text('heading\nEnglish\n')
+            body = '==English==\n' + '# missing\n' * 35
+            raw = bz2.compress(('<mediawiki><page><title>absent</title><ns>0</ns><id>17</id>'
+                                '<revision><id>25</id><text>' + body + '</text></revision></page></mediawiki>').encode())
+            dump = f.root / 'wiki-date-pages-meta-current.xml.bz2'
+            dump.write_bytes(raw)
+            member = ['wiki', 'date', dump.name, len(raw), hashlib.sha1(raw).hexdigest()]
+            manifest = dict(edition='wiki', date='date', build_inputs=dict(files=[member]))
+            (f.root / 'complete.json').write_text(json.dumps(manifest))
+            binary = f.root / 'dict'
+            binary.touch()
+            report = f.root / 'report.json.gz'
+            argv = ['verify_presentation.py', '--root', str(f.root), '--binary', str(binary),
+                    '--report', str(report), '--definition-dump', str(dump)]
+            def query(_binary, _root, *parts):
+                return f.query(*parts)
+
+            with (mock.patch('sys.argv', argv), mock.patch.object(audit, 'cli_query', side_effect=query),
+                  mock.patch('builtins.print')):
+                self.assertEqual(audit.main(), 1)
+            with gzip.open(report) as stream:
+                result = json.load(stream)
+            self.assertEqual(result['source_definitions']['unmatched'], 35)
+            self.assertEqual(len(result['source_definitions']['examples']), 32)
+            self.assertEqual(result['additional_unmatched_definitions'],
+                             [dict(title='absent', owner='English', page='17', revision='25', line=n) for n in (34, 35, 36)])
 
     def test_report_larger_than_one_write_preserves_exact_bytes(self):
         result = {'issues': [{'title': f'词{n}', 'text': 'მცდარი\n[[target]]'} for n in range(2050)]}

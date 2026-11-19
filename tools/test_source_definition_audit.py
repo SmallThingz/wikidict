@@ -85,6 +85,15 @@ class SourceDefinitionTests(unittest.TestCase):
             (root / 'languages.tsv').write_text('heading\nFrench\n')
             with closing(SourceDefinitions('', root, [dump])) as audit:
                 rows = audit.db.execute('SELECT page,revision,line FROM sense ORDER BY rowid').fetchall()
+                audit.db.execute('UPDATE sense SET matched=1 WHERE page=? AND line=?', ('2', 50))
+                report = audit.report()
+                examples = report['examples']
+                rest = list(audit.unmatched_locations(after_examples=len(examples)))
+                self.assertEqual(len(examples), 32)
+                self.assertEqual(len(examples) + len(rest), report['unmatched'])
+                self.assertEqual([(r['page'], r['revision'], r['line']) for r in examples + rest],
+                                 [row for row in rows if row != ('2', '6', 50)])
+                self.assertEqual(rest[-1], dict(title='3', owner='French', page='3', revision='7', line=2))
             self.assertEqual(rows, [('2', '6', n) for n in range(2, 259)] + [('3', '7', 2)])
 
     def test_links_bind_each_visible_range_with_its_own_destination(self):

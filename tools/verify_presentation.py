@@ -798,9 +798,16 @@ def run_audit(args, report_files):
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
                           audit_references=args.audit_reference_hints, row_factory=lambda: ReportRows(report_files))
             if review is not None:
-                result['source_definitions'] = review.report()
-                if result['source_definitions']['unmatched']:
+                definitions = review.report()
+                result['source_definitions'] = definitions
+                if definitions['unmatched']:
                     result['status'] = 'failed'
+                examples = len(definitions['examples'])
+                if definitions['unmatched'] > examples:
+                    locations = ReportRows(report_files)
+                    for location in review.unmatched_locations(after_examples=examples):
+                        locations.append(location)
+                    result['additional_unmatched_definitions'] = locations
         if args.batch_size > 1 or args.definition_dump:
             unchanged()
         if args.batch_size > 1:

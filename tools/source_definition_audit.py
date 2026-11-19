@@ -410,5 +410,11 @@ class SourceDefinitions:
                     examples=examples, matched_example=self.matched_example,
                     scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Where a verified registry supplies a unique primary name, require its code. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
+    def unmatched_locations(self, *, after_examples):
+        rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '
+                               'ORDER BY rowid LIMIT -1 OFFSET ?', (after_examples,))
+        for title, owner, page, revision, line in rows:
+            yield dict(title=title, owner=owner, page=page, revision=revision, line=line)
+
     def close(self):
         self.db.close()
