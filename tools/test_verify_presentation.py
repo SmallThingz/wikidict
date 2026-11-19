@@ -121,6 +121,25 @@ class PresentationDiagnosticTests(unittest.TestCase):
         self.assertEqual([('entry', 'Lua example without error.')], fields)
         self.assertEqual([], audit.diagnostic_categories(fields[0][1]))
 
+    def test_image_alternatives_are_checked_independently_of_tooltips_and_body(self):
+        with Fixture() as f:
+            entry = f.entry('icons', '', language='English')
+            images = [dict(file='Vraagteken-2.svg'), dict(file='X mark.svg', alt='איקס', tooltip='איקס'),
+                      dict(file='Yes check.svg', alt='וי', tooltip='וי'), dict(file='decorative.svg', alt=''),
+                      dict(file='example.svg', alt='[missing template]', tooltip='')]
+            spans = [dict(kind='text', text='', image=image) for image in images]
+            entry['sections'] = [dict(blocks=[dict(spans=spans)])]
+            f.language('English', [entry])
+            result = audit.scan(f.root, f.query)
+            self.assertEqual(4, result['image_alternatives'])
+            self.assertEqual('failed', result['status'])
+            self.assertEqual([('entry.sections[0].blocks[0].spans[4].image.alt',
+                               'image-alternative', ['unavailable-template'])],
+                             [(row['path'], row['interpretation'], row['categories']) for row in result['issues']])
+            self.assertEqual(['איקס', 'וי'], [row['text'] for row in result['annotations']])
+            self.assertEqual([], list(audit.action_fields(spans)))
+            self.assertEqual([('entry', '')], list(audit.text_fields(spans)))
+
     def test_explanations_traverse_span_lists_tables_and_references_once(self):
         span = dict(kind='text', text='body', trail='', explanation='literal {{x}}')
         entry = dict(sections=[dict(blocks=[dict(spans=[span], table=dict(

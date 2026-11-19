@@ -142,6 +142,8 @@ def attribute_fields(value, path='entry'):
             # Match the native Reader's effectiveAdvisory. An explicit empty
             # image title suppresses advice inherited from the surrounding span.
             image = value.get('image')
+            if isinstance(image, dict) and isinstance(image.get('alt'), str):
+                yield 'image_alt', path + '.image.alt', image['alt']
             if isinstance(image, dict) and image.get('tooltip') is not None:
                 tooltip, origin = image['tooltip'], '.image.tooltip'
             else:
@@ -168,7 +170,7 @@ def attribute_fields(value, path='entry'):
 
 
 def annotation_fields(value, path='entry'):
-    return ((p, text) for field, p, text in attribute_fields(value, path) if field != 'target')
+    return ((p, text) for field, p, text in attribute_fields(value, path) if field in ('explanation', 'tooltip'))
 
 
 def unresolved_action_target(target):
@@ -280,7 +282,7 @@ def emitted_views(root, catalog, query):
 def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
-                  duplicate_destinations=0, alias_views=0, commands=0,
+                  duplicate_destinations=0, alias_views=0, commands=0, image_alternatives=0,
                   diagnostic_only=True, semantic_acceptance=False, scan_complete=False,
                   scope=dict(record_kinds=list(SUPPORTED_KINDS),
                              inventory='native language accounting and emitted fixed-kind files',
@@ -404,7 +406,16 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
                 for field, path, text in attribute_fields(content):
-                    if field in ('explanation', 'tooltip'):
+                    if field == 'image_alt':
+                        result['image_alternatives'] += 1
+                        categories = diagnostic_categories(text)
+                        if categories:
+                            result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                                view_kind=view['kind'], view_language=view['language'], query_title=title,
+                                source_title=redirect['source_title'] if redirect else title,
+                                redirect=redirect, path=path, text=text[:500], categories=categories,
+                                interpretation='image-alternative'))
+                    elif field in ('explanation', 'tooltip'):
                         result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,
                             source_title=redirect['source_title'] if redirect else title,
