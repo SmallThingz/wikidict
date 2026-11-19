@@ -744,6 +744,57 @@ class PresentationDiagnosticTests(unittest.TestCase):
 
 
 class ResumeAuditTests(unittest.TestCase):
+    def test_checkpoint_rejects_a_partial_compressed_report_group(self):
+        with tempfile.TemporaryDirectory() as out, ExitStack() as resources:
+            checkpoint = audit.AuditCheckpoint(resources, Path(out) / 'audit.sqlite', {})
+            rows = checkpoint.rows('issues', paged=True)
+            for index in range(10):
+                rows.append({'title': str(index)})
+            rows.flush()
+            checkpoint.db.execute('UPDATE report SET row_count=9')
+            with self.assertRaisesRegex(ValueError, 'row count'):
+                list(rows.chunks(audit.nested_json, audit.row_body))
+            checkpoint.db.execute('UPDATE report SET row_count=0')
+            with self.assertRaisesRegex(ValueError, 'row group'):
+                list(rows.chunks(audit.nested_json, audit.row_body))
+
+    def test_older_checkpoint_and_compressed_pages_resume_in_report_order(self):
+        with tempfile.TemporaryDirectory() as out:
+            path = Path(out) / 'audit.sqlite'
+            binding = {'fixture': 'mixed rows'}
+            initial = {'title': 'først'}
+            with ExitStack() as resources:
+                checkpoint = audit.AuditCheckpoint(resources, path, binding)
+                # Recreate the previous on-disk report schema with a committed finding.
+                checkpoint.db.execute('DROP TABLE report')
+                checkpoint.db.execute('CREATE TABLE report (seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL)')
+                checkpoint.db.execute('CREATE INDEX report_kind ON report(kind,seq)')
+                checkpoint.db.execute('INSERT INTO report(kind,value) VALUES (?,?)', ('issues', json.dumps(initial)))
+                checkpoint.db.commit()
+            expected = [initial]
+            final_cursor = [0, 173, 300, 'last']
+            counts = dict.fromkeys(('records', 'search_matches', 'duplicate_destinations', 'alias_views', 'commands', 'image_alternatives'), 0)
+            with ExitStack() as resources:
+                checkpoint = audit.AuditCheckpoint(resources, path, binding)
+                rows = checkpoint.rows('issues', paged=True)
+                annotations = checkpoint.rows('annotations', paged=True)
+                item = {}
+                for index in range(173):
+                    item['title'] = f'語-{index}'
+                    expected.append(item.copy())
+                    rows.append(item)
+                annotations.append({'text': 'one annotation'})
+                checkpoint.save_page(counts, 0, {}, final_cursor)
+                for index in range(130):
+                    rows.append({'discard': index})  # Includes a full group in the interrupted transaction.
+            with ExitStack() as resources:
+                checkpoint = audit.AuditCheckpoint(resources, path, binding)
+                self.assertEqual(checkpoint.get('cursor'), final_cursor)
+                self.assertEqual(len(checkpoint.rows('issues')), 174)
+                for kind, wanted in [('issues', expected), ('annotations', [{'text': 'one annotation'}])]:
+                    got = ''.join(checkpoint.rows(kind).chunks(audit.nested_json, audit.row_body))
+                    self.assertEqual(got, audit.nested_json(wanted))
+
     def test_mode_two_reuses_only_previously_committed_alias_across_view_restart(self):
         with Fixture() as f, tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

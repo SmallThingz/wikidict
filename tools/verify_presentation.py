@@ -1117,7 +1117,7 @@ def run_audit(args, report_files):
                 row_factory = lambda: ReportRows(report_files)
             else:
                 kinds = iter(('issues', 'annotations'))
-                row_factory = lambda: checkpoint.rows(next(kinds))
+                row_factory = lambda: checkpoint.rows(next(kinds), paged=True)
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
                           audit_references=args.audit_reference_hints, row_factory=row_factory,
                           catalog_page_size=args.catalog_page_size, checkpoint=checkpoint, browse_page=browse_page,
