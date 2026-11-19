@@ -13,6 +13,7 @@ HEADING = re.compile(r'==\s*([^=\[\]{}<>|]+?)\s*==')
 LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
 PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
 BARE_URL = re.compile(r'https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[A-Za-z0-9_./~-]*)?')
+LABELED_URL = re.compile(r'\[(' + BARE_URL.pattern + r') ([^\[\]{}<>|&#=\n]+)\]')
 
 
 def registry_link_trail(raw):
@@ -68,6 +69,17 @@ def registry_link_trail(raw):
 def simple_line(source, title, trail_rule=None):
     """Return visible prose and the code-point range of each authored link."""
     if '://' in source:
+        if '[' in source:
+            link = LABELED_URL.search(source)
+            if link is None:
+                return None
+            before, after = source[:link.start()], source[link.end():]
+            label = link[2]
+            if (not label.strip() or label.strip() != label or '://' in label or
+                    any("''" in part or '://' in part or (part and not PLAIN.fullmatch(part))
+                        for part in (before, after)) or "''" in label):
+                return None
+            return before + label + after, ((len(before), len(before) + len(label), link[1], 'external'),)
         # This observer recognizes a terminal bare URL after simple prose. A
         # scheme elsewhere may have different delimiters or a bracketed label.
         url = BARE_URL.search(source)
@@ -140,9 +152,11 @@ def compiled_line(spans):
                 return None
             links.append((offset, offset + len(text), span['target']))
         elif span['kind'] == 'external_link':
-            if span.get('trail') or text != span.get('target') or not BARE_URL.fullmatch(text):
+            target = span.get('target') or ''
+            if (span.get('trail') or not text or not BARE_URL.fullmatch(target) or
+                    ('://' in text and text != target)):
                 return None
-            links.append((offset, offset + len(text), span['target'], 'external'))
+            links.append((offset, offset + len(text), target, 'external'))
         parts.append(text)
         offset += len(text)
     text = ''.join(parts)
@@ -164,6 +178,8 @@ def source_line(source, title, trail_rule=None):
     if opening != closing or opening not in ("''", "'''") or not marked.strip():
         return None
     unmarked = before + marked + after
+    if LABELED_URL.search(unmarked):
+        return None  # Emphasis offsets require mapping through the bracketed URL and its label.
     plain = simple_line(unmarked, title, trail_rule)
     if plain is None:
         return None

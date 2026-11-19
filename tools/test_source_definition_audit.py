@@ -167,6 +167,22 @@ class SourceDefinitionTests(unittest.TestCase):
                             "Wild ht''tp''s://example.org"):
             self.assertIsNone(source_line(unsupported, 'word'))
 
+    def test_labeled_citation_checks_visible_unicode_range_and_original_url(self):
+        # Amharic edition, ǀeeki p5032/r21605, under its separate references heading.
+        url = 'https://open.uct.ac.za/server/api/core/bitstreams/eff77f15-54d4-4053-a2b2-f65e91cb9256/content'
+        before, label, after = 'Ouma Geelmeid “', 'Ouma Geelmeind ke kxʼu ǁxaǁxa Nǀuu', '” Centre for African Language Diversity (2016)'
+        original = f'{before}[{url} {label}]{after}'
+        expected = (before + label + after, ((len(before), len(before) + len(label), url, 'external'),))
+        self.assertEqual(simple_line(original, 'ǀeeki'), expected)
+        spans = [dict(kind='text', text=before), dict(kind='external_link', text=label, target=url),
+                 dict(kind='text', text=after)]
+        self.assertEqual(compiled_line(spans), expected)
+        for change in (dict(kind='text'), dict(target=url + '/other'), dict(text=label[:-1]), dict(trail='x')):
+            self.assertNotEqual(compiled_line([spans[0], {**spans[1], **change}, spans[2]]), expected)
+        for unsupported in (f'[{url}]', f'[{url}  ]', f'[{url} [[inside]]]', f'[[outside]] [{url} label]',
+                            f'[{url} label] [{url} other]', f"[{url} ''styled'']", f"''[{url} label]''"):
+            self.assertIsNone(source_line(unsupported, 'ǀeeki'))
+
     def test_emphasis_uses_visible_unicode_offsets_and_preserves_link_targets(self):
         self.assertEqual(source_line("[[këmbë|këmbë]] (''skaj'')", 'foot'),
                          ('këmbë (skaj)', ((0, 5, 'këmbë'),), (7, 11, 'italic')))
