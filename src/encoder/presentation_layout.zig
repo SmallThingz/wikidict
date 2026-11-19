@@ -2200,22 +2200,34 @@ fn portugueseNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const 
     return hasTopLevelNumberedGloss(section.blocks);
 }
 
-// Format:-noun- emits this linked H3 in the Aromanian dictionary. It labels
-// English and other entries too. The caller already knows the language owner.
-fn aromanianNounHeading(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
-    if (!std.mem.eql(u8, wiki_id, "roa_rupwiktionary") or section.level != 3 or
-        !std.mem.eql(u8, section.title, "Sumstantivu")) return false;
-    const language = owner orelse return false;
-    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return false;
+// The Aromanian edition's Format templates use these exact H3 labels and
+// targets for entries in several languages. Only -symbol- emits plain text.
+fn aromanianSectionPart(section: anytype, owner: ?[]const u8, wiki_id: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, wiki_id, "roa_rupwiktionary") or section.level != 3) return null;
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return null;
     const S = @TypeOf(section);
     if (!@hasField(S, "title_spans") or !@hasField(S, "is_heading") or
-        !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return false;
-    if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0 or
-        section.title_spans.len != 1) return false;
-    const link = section.title_spans[0];
-    return link.kind == .link and link.provenance == .parsed and !link.generated_diagnostic and
-        !link.flags.code and !link.self_link and link.role == .normal and
-        std.mem.eql(u8, link.text, section.title) and std.mem.eql(u8, link.target, "sumstantivu");
+        !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return null;
+    if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0 or section.title_spans.len != 1) return null;
+    const span = section.title_spans[0];
+    if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or span.self_link or
+        span.role != .normal or !std.mem.eql(u8, span.text, section.title)) return null;
+    if (span.kind == .text and span.target.len == 0 and std.mem.eql(u8, span.text, "Simbol")) return "Symbol";
+    if (span.kind != .link) return null;
+    const Label = struct { title: []const u8, target: []const u8, part: []const u8 };
+    for ([_]Label{
+        .{ .title = "Sumstantivu", .target = "sumstantivu", .part = "Noun" },
+        .{ .title = "Adjectiv", .target = "adjectiv", .part = "Adjective" },
+        .{ .title = "Articul", .target = "articul", .part = "Article" },
+        .{ .title = "Númir", .target = "număr", .part = "Numeral" },
+        .{ .title = "Expresii", .target = "expresii", .part = "Phrase" },
+        .{ .title = "Prepoziții", .target = "prepoziții", .part = "Preposition" },
+        .{ .title = "Pronuma", .target = "pronuma", .part = "Pronoun" },
+    }) |label| {
+        if (std.mem.eql(u8, section.title, label.title) and std.mem.eql(u8, span.target, label.target)) return label.part;
+    }
+    return null;
 }
 
 // The entry limbã uses :[1], :[2] in place of ordinary # definitions. Keep
@@ -2305,6 +2317,66 @@ test "Aromanian dictionary linked noun headings preserve ordinary and bracketed 
     }
 }
 
+test "Aromanian dictionary indexes seven source-declared lexical sections under their supplied language" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8,
+        level: u8 = 3,
+        is_heading: bool = true,
+        title_list_path: []const u8 = "",
+        title_depth: u8 = 0,
+        title_spans: []const wiki.Span,
+        blocks: []const wiki.Block,
+    };
+    // Original edition's POS headings and lexical sections. The symbol's
+    // following synonyms and the second language on basta are separate sections.
+    const Case = struct { title: []const u8, code: []const u8, heading: []const u8, body: []const u8, part: []const u8, target: []const u8 };
+    const cases = [_]Case{
+        .{ .title = "acru", .code = "ro", .heading = "[[adjectiv|Adjectiv]]", .body = "'''acru'''\n# [[agru]]", .part = "Adjective", .target = "agru" },
+        .{ .title = "an", .code = "en", .heading = "[[articul|Articul]]", .body = "'''an'''\n# [['nâ]]", .part = "Article", .target = "'nâ" },
+        .{ .title = "bat", .code = "eu", .heading = "[[număr|Númir]]", .body = "'''bat'''\n# [[un]]", .part = "Numeral", .target = "un" },
+        .{ .title = "basta", .code = "es", .heading = "[[expresii|Expresii]]", .body = "'''basta'''!\n# [[duri]]!", .part = "Phrase", .target = "duri" },
+        .{ .title = "dans", .code = "fr", .heading = "[[prepoziții|Prepoziții]]", .body = "'''dans'''\n# [['n]]", .part = "Preposition", .target = "'n" },
+        .{ .title = "I", .code = "en", .heading = "[[pronuma|Pronuma]]", .body = "'''I'''\n# [[io]]", .part = "Pronoun", .target = "io" },
+        .{ .title = "⯉", .code = "mul", .heading = "Simbol", .body = "# (astronomie) planeta [[Neptun]]", .part = "Symbol", .target = "Neptun" },
+    };
+    for (cases) |case| {
+        var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = case.title } };
+        const heading = (try renderer.renderBody(case.heading))[0].spans;
+        const body = try renderer.renderBody(case.body);
+        const sections = [_]Section{.{ .title = heading[0].text, .title_spans = heading, .blocks = body }};
+        const layout = try buildForDictionary(a, &sections, false, case.code, null, "roa_rupwiktionary");
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const encoded = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections,
+            layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+        const stored = try encoder.presentation_codec.decodeAlloc(a, encoded, case.title, .language, .{ .heading = case.code, .code = case.code });
+        const lexeme = stored.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings(case.code, lexeme.language);
+        try std.testing.expectEqualStrings(case.part, lexeme.kind);
+        try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+        const block = stored.entry.sections[0].blocks[lexeme.definitions[0].block];
+        try std.testing.expectEqualStrings("#", block.list_path);
+        var targets: usize = 0;
+        for (block.spans) |span| if (span.kind == .link) {
+            try std.testing.expectEqualStrings(case.target, span.target);
+            targets += 1;
+        };
+        try std.testing.expectEqual(@as(usize, 1), targets);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, stored));
+        try std.testing.expect(aromanianSectionPart(sections[0], null, "roa_rupwiktionary") == null);
+        try std.testing.expect(aromanianSectionPart(sections[0], case.code, "otherwiki") == null);
+        var wrong = sections[0];
+        const spans = try a.dupe(wiki.Span, heading);
+        spans[0].target = "unrelated";
+        wrong.title_spans = spans;
+        try std.testing.expect(aromanianSectionPart(wrong, case.code, "roa_rupwiktionary") == null);
+    }
+}
+
 fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
     if (section.level != 3) return null;
     const headings = .{
@@ -2341,14 +2413,15 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
     var lemma_parent: ?struct { level: u8, kind: []const u8 } = null;
     for (sections, 0..) |section, i| {
         const numbered_part = if (unclassified) null else sourceNumberedPart(section, i, owner, numbered_proofs);
-        const aromanian_noun = !unclassified and aromanianNounHeading(section, owner, wiki_id);
+        const aromanian_part = if (unclassified) null else aromanianSectionPart(section, owner, wiki_id);
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id) or (aromanian_noun and hasTopLevelNumberedGloss(section.blocks))) @as(?[]const u8, "Noun") else null;
+            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else if (aromanian_part != null and hasTopLevelNumberedGloss(section.blocks)) aromanian_part else null;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
             ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
+        const aromanian_noun = if (aromanian_part) |kind| std.mem.eql(u8, kind, "Noun") else false;
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse (if (aromanian_noun) aromanianIndentedSenses(section.blocks) else null) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
         const meaning_paragraph = if (named_kind == null and paragraph_part == null and !unclassified)
             serbianMeaningParagraph(section.blocks, owner, section.level) else null;
