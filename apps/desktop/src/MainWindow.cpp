@@ -238,6 +238,22 @@ qreal documentBodyEm(const QTextDocument *document, qreal points) {
 }
 
 
+QString currentInlineImageDescription(const QTextDocument *document) {
+    QStringList descriptions;
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next())
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+            const QTextImageFormat format = fragment.charFormat().toImageFormat();
+            const QString alt = format.stringProperty(QTextFormat::ImageAltText);
+            if (!alt.isEmpty()) descriptions.append(alt);
+            const QString status = format.stringProperty(SemanticHtml::inlineImageStatusProperty);
+            if (!status.isEmpty()) descriptions.append(status);
+        }
+    descriptions.removeDuplicates();
+    return descriptions.join(QStringLiteral(" · "));
+}
+
 void requestCurrentInlineImages(QTextBrowser *browser, QSet<QUrl> resources = {}) {
     const QPointer<QTextBrowser> widget(browser);
     const QPointer<QTextDocument> document(browser->document());
@@ -3407,9 +3423,20 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     ++readingComposition_;
                     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
                     if (!clearReadingProjection()) return;
+                    const QPointer<MainWindow> descriptionOwner(this);
+                    const QPointer<QTextBrowser> descriptionBrowser(reading_);
+                    const QPointer<QTextDocument> descriptionDocument(reading_->document());
+                    const quint64 descriptionComposition = readingComposition_;
                     reading_->setHtml(loaded->emptyLibrary
                         ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
                         : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
+                    if (descriptionOwner && descriptionBrowser && descriptionDocument
+                        && descriptionBrowser->document() == descriptionDocument
+                        && descriptionOwner->readingComposition_ == descriptionComposition
+                        && descriptionDocument->toPlainText() == (loaded->emptyLibrary
+                        ? QStringLiteral("No dictionaries are installed yet.\nOpen Library to import a dictionary, download one, or choose an existing folder.")
+                        : QStringLiteral("Could not open this dictionary.\nOpen Library to import a dictionary, download one, or choose an existing folder.")))
+                        descriptionBrowser->setAccessibleDescription(QString());
                     resultStatus_->setText(QStringLiteral("No dictionary open"));
                 }
                 return;
@@ -3443,7 +3470,16 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             meta_->setText(QStringLiteral("%1 · %2").arg(api_->kind() == QStringLiteral("language") ? api_->language() : QStringLiteral("All languages"), kindLabel(api_->kind())));
             ++readingComposition_;
             if (!clearReadingProjection()) return;
+            const QPointer<MainWindow> descriptionOwner(this);
+            const QPointer<QTextBrowser> descriptionBrowser(reading_);
+            const QPointer<QTextDocument> descriptionDocument(reading_->document());
+            const quint64 descriptionComposition = readingComposition_;
             reading_->setHtml(QStringLiteral("<p>Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.</p><p>Ctrl+L focuses search. Alt+Left and Alt+Right revisit words.</p>"));
+            if (descriptionOwner && descriptionBrowser && descriptionDocument
+                && descriptionBrowser->document() == descriptionDocument
+                && descriptionOwner->readingComposition_ == descriptionComposition
+                && descriptionDocument->toPlainText() == QStringLiteral("Type a word to search. Press Enter to open it, or use the arrow keys to choose a suggestion.\nCtrl+L focuses search. Alt+Left and Alt+Right revisit words."))
+                descriptionBrowser->setAccessibleDescription(QString());
             json_->clear();
             QSettings().setValue(QStringLiteral("reader/root"), QDir(root).absolutePath());
             QSettings().setValue(QStringLiteral("reader/language"), api_->language());
@@ -3924,7 +3960,16 @@ void MainWindow::setupUi() {
             ++readingComposition_;
             static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
             if (!clearReadingProjection()) return;
+            const QPointer<MainWindow> descriptionOwner(this);
+            const QPointer<QTextBrowser> descriptionBrowser(reading_);
+            const QPointer<QTextDocument> descriptionDocument(reading_->document());
+            const quint64 descriptionComposition = readingComposition_;
             reading_->setHtml(QStringLiteral("<p>Opening cancelled.</p><p><a href='library:'>Open Library</a> to import a dictionary or choose another folder.</p>"));
+            if (descriptionOwner && descriptionBrowser && descriptionDocument
+                && descriptionBrowser->document() == descriptionDocument
+                && descriptionOwner->readingComposition_ == descriptionComposition
+                && descriptionDocument->toPlainText() == QStringLiteral("Opening cancelled.\nOpen Library to import a dictionary or choose another folder."))
+                descriptionBrowser->setAccessibleDescription(QString());
         }
         resultStatus_->setText(QStringLiteral("Opening cancelled. Choose a folder to try again."));
     });
@@ -4632,6 +4677,7 @@ void MainWindow::bindInlineImages() {
                             pending->images.clear();
                             return;
                         }
+                        const quint64 appliedGeneration = pending->generation, appliedComposition = pending->composition;
                         auto updates = std::exchange(pending->images, {});
                         for (auto it = updates.begin(); it != updates.end();) {
                             if (!SemanticHtml::inlineImageBlockResource(it.key()).isEmpty() && it->density != widget->devicePixelRatioF()) it = updates.erase(it);
@@ -4719,7 +4765,9 @@ void MainWindow::bindInlineImages() {
                             if (self) statusBar()->showMessage(QStringLiteral("This content could not be updated. Reopen the entry to try again."));
                             return;
                         }
-                        if (!self || !widget || !document || widget->document() != document) return;
+                        if (!self || !widget || !document || widget->document() != document
+                            || appliedGeneration != inlineImageGeneration_
+                            || (document == reading_->document() && appliedComposition != readingComposition_)) return;
                         descriptions.removeDuplicates();
                         widget->setAccessibleDescription(descriptions.join(QStringLiteral(" · ")));
                         widget->viewport()->update();
@@ -5155,6 +5203,8 @@ bool MainWindow::refreshReading() {
             const QString message = QStringLiteral("This entry could not be displayed. Your dictionary data is unchanged. Choose another entry or language.");
             browser->setHtml(QStringLiteral("<p>%1</p>").arg(message.toHtmlEscaped()));
             if (!current() || document->toPlainText() != message) return;
+            browser->setAccessibleDescription(QString());
+            if (!current() || document->toPlainText() != message) return;
             // Only this explicit failure surface may use stock layout. Never
             // re-enable partially expanded paragraphs/figures after a refusal.
             document->setLayoutEnabled(true);
@@ -5564,6 +5614,10 @@ bool MainWindow::refreshReading() {
     missingReader->requestLocalScrollSync();
     CompiledContent::require(sameSource());
     browser->verticalScrollBar()->setValue(scroll);
+    CompiledContent::require(sameSource());
+    // The description belongs to this complete composition, including when it
+    // has no images. Pending callbacks may only describe their current page.
+    browser->setAccessibleDescription(currentInlineImageDescription(document));
     CompiledContent::require(sameSource());
     // setHtml replaces image formats but Qt retains explicitly added resources.
     // Reapply current assets through the same guarded provider even when that

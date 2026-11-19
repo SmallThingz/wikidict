@@ -19499,11 +19499,13 @@ private slots:
                 blocks = QJsonArray{container};
             }
             failedEntry.insert("sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 2}, {"blocks", blocks}}});
+            reader->setAccessibleDescription(QStringLiteral("Previous composition description"));
             QVERIFY(!window.renderResponse(response(failedEntry)));
             QCOMPARE(window.currentEntry_, failedEntry);
             QCOMPARE(QJsonDocument::fromJson(window.currentJson_).object().value("entries").toArray().first().toObject(), failedEntry);
             QVERIFY(window.readingUncommitted_); QVERIFY(!window.loading_);
             QCOMPARE(reader->document()->toPlainText(), failure);
+            QVERIFY(reader->accessibleDescription().isEmpty());
             QVERIFY(reader->document()->isLayoutEnabled());
             QVERIFY(window.readingLogicalOwners_.isEmpty());
             QCOMPARE(LogicalFlow::inventory(reader->document()), LogicalFlow::Status::Stock);
@@ -19526,6 +19528,7 @@ private slots:
             QVERIFY(accessible && accessible->textInterface());
             auto *accessibleText = accessible->textInterface();
             QCOMPARE(accessibleText->text(0, accessibleText->characterCount()), failure);
+            QVERIFY(accessible->text(QAccessible::Description).isEmpty());
             QVERIFY(window.back_->isEnabled());
             if (variant == 0 || variant == 2) {
                 for (int width : {900, 640}) {
@@ -19610,7 +19613,9 @@ private slots:
         // An intentionally empty body is a successful entry, not a failed or loading surface.
         const QJsonObject empty{{"title", "Controlled empty entry"}, {"language", "English"},
             {"language_code", "en"}, {"kind", "language"}, {"sections", QJsonArray{}}, {"media", QJsonArray{}}};
+        reader->setAccessibleDescription(QStringLiteral("Description before empty composition"));
         QVERIFY(window.renderResponse(response(empty)));
+        QVERIFY(reader->accessibleDescription().isEmpty());
         QVERIFY(!window.readingUncommitted_ && !window.loading_);
         QVERIFY(!reader->document()->toPlainText().contains(failure));
         QVERIFY(window.listen_->isEnabled() && window.bookmark_->isEnabled());
@@ -19632,12 +19637,14 @@ private slots:
             if (replaced || !document || !document->toPlainText().contains(authored)) return;
             replaced = true; replacement = QString(document->characterCount() - 1, QChar('Z'));
             document->setPlainText(replacement);
+            window.reading_->setAccessibleDescription(QStringLiteral("Callback-owned description"));
         });
         const auto cleanup = qScopeGuard([&] { disconnect(connection); });
         QVERIFY(!window.refreshReading());
         QVERIFY(replaced && document);
         QCOMPARE(window.currentEntry_, entry);
         QCOMPARE(document->toPlainText(), replacement);
+        QCOMPARE(window.reading_->accessibleDescription(), QStringLiteral("Callback-owned description"));
         QVERIFY(!document->isLayoutEnabled());
         QVERIFY(window.readingUncommitted_ && window.readingLogicalOwners_.isEmpty());
         QCOMPARE(window.statusBar()->currentMessage(), QStringLiteral("This entry could not be displayed."));
@@ -19645,6 +19652,7 @@ private slots:
         QVERIFY(window.refreshReading());
         QVERIFY(document->isLayoutEnabled());
         QVERIFY(document->toPlainText().contains(authored));
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
     }
 
     void readingOldRegistrationClearPreservesRawReplacement() {
@@ -20714,6 +20722,83 @@ private slots:
         QVERIFY(!window.reading_->accessibleDescription().contains("Flag alternative"));
         QVERIFY(document->toPlainText().contains("Replacement body"));
         QVERIFY(!document->toPlainText().contains("Final semantic sentinel"));
+        // A completed image description must disappear for a no-image page,
+        // including while the former page still has queued provider work.
+        QJsonObject plain = replacement;
+        plain.insert("title", "Plain replacement");
+        plain.insert("sections", QJsonArray{QJsonObject{{"level", 2}, {"title", "Plain section"},
+            {"blocks", QJsonArray{QJsonObject{{"kind", "paragraph"},
+                {"spans", QJsonArray{text("Plain body without image alternatives")}}}}}}});
+        render(plain);
+        QCOMPARE(window.currentEntry_, plain);
+        QVERIFY(images().isEmpty());
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
+        const QString plainText = document->toPlainText();
+        render(replacement); // Queue the former image's ordinary provider again.
+        render(plain);
+        bool obsoleteImageWorkDrained = false;
+        QTimer::singleShot(0, document, [&] {
+            QTimer::singleShot(0, document, [&] { obsoleteImageWorkDrained = true; });
+        });
+        QTRY_VERIFY(obsoleteImageWorkDrained);
+        QCOMPARE(document->toPlainText(), plainText);
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
+        auto *accessible = QAccessible::queryAccessibleInterface(window.reading_);
+        QVERIFY(accessible);
+        QVERIFY(accessible->text(QAccessible::Description).isEmpty());
+
+        // A real history restore looks up the original cat record again; it
+        // must not inherit the controlled dog page's image alternatives.
+        QVERIFY(window.openWord(QStringLiteral("cat")));
+        const QString catReading = document->toPlainText();
+        QJsonObject illustratedDog = replacement;
+        illustratedDog.insert("title", "dog");
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries", QJsonArray{illustratedDog}}}).toJson(), true));
+        QTRY_VERIFY_WITH_TIMEOUT(images().size() == 1
+            && images().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Error)
+            && window.reading_->accessibleDescription().contains("Replacement alternative"), 10000);
+        window.navigate(-1);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(document->toPlainText(), catReading);
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
+
+        // Unsuccessful or cancelled dictionary selection keeps the old content
+        // and its description. Only a published new dataset clears both.
+        render(replacement);
+        QTRY_VERIFY_WITH_TIMEOUT(images().size() == 1
+            && images().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Error)
+            && window.reading_->accessibleDescription().contains("Replacement alternative"), 10000);
+        const QString retainedText = document->toPlainText();
+        const QString retainedDescription = window.reading_->accessibleDescription();
+        const QString unavailableRoot = fixture_ + QStringLiteral("/description-missing-dictionary");
+        window.openRoot(unavailableRoot);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QCOMPARE(document->toPlainText(), retainedText);
+        QCOMPARE(window.reading_->accessibleDescription(), retainedDescription);
+        window.openRoot(unavailableRoot);
+        QVERIFY(window.loading_);
+        const auto watchers = window.findChildren<QFutureWatcherBase *>();
+        QVERIFY(!watchers.isEmpty());
+        const QPointer<QFutureWatcherBase> cancelled = watchers.last();
+        window.cancelOpening_->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!cancelled || cancelled->isFinished(), 30000);
+        QCoreApplication::processEvents();
+        QCOMPARE(document->toPlainText(), retainedText);
+        QCOMPARE(window.reading_->accessibleDescription(), retainedDescription);
+        window.loadDataset(fixture_, window.api_->language(), window.api_->kind(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QVERIFY(window.currentEntry_.isEmpty());
+        QVERIFY(document->toPlainText().contains("Type a word to search."));
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
+
+        render(replacement);
+        QTRY_VERIFY_WITH_TIMEOUT(images().size() == 1
+            && images().first().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Error)
+            && window.reading_->accessibleDescription().contains("Replacement alternative"), 10000);
+        QJsonObject empty = plain; empty.insert("sections", QJsonArray{});
+        render(empty);
+        QVERIFY(images().isEmpty());
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
     }
 
     void initialInlineImageNormalizationBatchesFormatsAndRestoresLayout() {
@@ -23133,9 +23218,11 @@ private slots:
         QTemporaryDir empty(QDir::currentPath() + QStringLiteral("/.tmp/empty-library-XXXXXX"));
         QVERIFY(empty.isValid());
         MainWindow window(empty.path());
+        window.reading_->setAccessibleDescription(QStringLiteral("Description before empty library publication"));
         window.show();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         QVERIFY(!window.api_);
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
         QCOMPARE(window.title_->toPlainText(), QStringLiteral("Open your dictionaries"));
         QCOMPARE(window.resultStatus_->text(), QStringLiteral("No dictionary open"));
         const QString guidance = window.reading_->toPlainText();
@@ -23186,13 +23273,34 @@ private slots:
                 if (problem == QStringLiteral("edition")) QVERIFY(write(QStringLiteral(".desktop-edition"), QByteArrayLiteral("invalid edition")));
             }
             MainWindow failed(path);
+            failed.reading_->setAccessibleDescription(QStringLiteral("Description before failed initial publication"));
             failed.show();
             QTRY_VERIFY_WITH_TIMEOUT(!failed.loading_, 30000);
             QVERIFY(!failed.api_);
+            QVERIFY(failed.reading_->accessibleDescription().isEmpty());
             QVERIFY(failed.reading_->toPlainText().contains(QStringLiteral("Could not open this dictionary.")));
             QVERIFY(!failed.reading_->toPlainText().contains(QStringLiteral("No dictionaries are installed yet.")));
             QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), QDir(empty.path()).absolutePath());
         }
+        // A synchronous contents callback owns its replacement, including
+        // its description; the completed loader must not clear that text.
+        MainWindow replaced(empty.path());
+        QPointer<QTextDocument> replacementDocument(replaced.reading_->document());
+        bool replacementObserved = false;
+        const QString replacementText = QStringLiteral("Callback-owned empty-library replacement");
+        const QString replacementDescription = QStringLiteral("Callback-owned empty-library description");
+        const auto replacementConnection = connect(replacementDocument, &QTextDocument::contentsChanged, &replaced, [&] {
+            if (replacementObserved || !replacementDocument
+                || !replacementDocument->toPlainText().contains(QStringLiteral("No dictionaries are installed yet."))) return;
+            replacementObserved = true;
+            replacementDocument->setPlainText(replacementText);
+            replaced.reading_->setAccessibleDescription(replacementDescription);
+        });
+        const auto restoreReplacementConnection = qScopeGuard([&] { disconnect(replacementConnection); });
+        QTRY_VERIFY_WITH_TIMEOUT(!replaced.loading_, 30000);
+        QVERIFY(replacementObserved && replacementDocument);
+        QCOMPARE(replacementDocument->toPlainText(), replacementText);
+        QCOMPARE(replaced.reading_->accessibleDescription(), replacementDescription);
         // Synthetic empty-library state, captured before ordinary recovery.
         window.resize(780, 480);
         QCoreApplication::processEvents();
@@ -25741,6 +25849,7 @@ private slots:
         QVERIFY(window.sections_->count() > 1);
         QVERIFY(window.sections_->isEnabled());
         QVERIFY(window.bookmark_->isEnabled());
+        window.reading_->setAccessibleDescription(QStringLiteral("Description before dictionary removal"));
         const QString query = window.search_->text();
         QStringList history;
         for (const auto &entry : window.learning_.history()) history.append(entry.key);
@@ -25791,6 +25900,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(window.findChildren<QFutureWatcherBase *>().isEmpty(), 30000);
         QCoreApplication::processEvents();
         QVERIFY(window.currentEntry_.isEmpty());
+        QVERIFY(window.reading_->accessibleDescription().isEmpty());
         QVERIFY(window.currentJson_.isEmpty());
         QVERIFY(window.json_->toPlainText().isEmpty());
         QCOMPARE(window.search_->text(), query);
