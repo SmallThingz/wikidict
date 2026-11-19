@@ -127,7 +127,22 @@ void LearningStore::save() {
 }
 
 void LearningStore::record(const SavedWord &word) {
-    if (!settingsValue_.historyEnabled || !validWord(word)) return;
+    if (!validWord(word)) return;
+    bool bookmarkChanged = false;
+    if (!word.originRoot.isEmpty() && !word.originEdition.isEmpty()) {
+        auto bookmark = std::find_if(bookmarks_.begin(), bookmarks_.end(), [&](const SavedWord &saved) {
+            return saved.key == word.key && saved.originRoot == word.originRoot && saved.originEdition == word.originEdition
+                && saved.title == word.title && saved.kind == word.kind && saved.language == word.language;
+        });
+        if (bookmark != bookmarks_.end() && bookmark->clue != word.clue) {
+            bookmark->clue = word.clue;
+            bookmarkChanged = true;
+        }
+    }
+    if (!settingsValue_.historyEnabled) {
+        if (bookmarkChanged) save();
+        return;
+    }
     SavedWord next = word;
     next.lastViewed = QDateTime::currentMSecsSinceEpoch();
     auto it = std::find_if(history_.begin(), history_.end(), [&](const SavedWord &value) { return value.key == word.key; });

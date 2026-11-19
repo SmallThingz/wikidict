@@ -28260,6 +28260,18 @@ private slots:
         QCOMPARE(store.bookmarks().size(), 1026);
         expected.prepend(store.bookmarks().first()); // Keep the actual assigned savedAt timestamp.
         compareWords(store.bookmarks(), expected);
+        store.setHistoryEnabled(false);
+        const auto previousHistory = store.history();
+        added.clue = QStringLiteral("Updated meaning from the same dictionary");
+        store.record(added);
+        expected.first().clue = added.clue;
+        SavedWord otherEdition = added;
+        otherEdition.originEdition = QStringLiteral("different-edition");
+        otherEdition.clue = QStringLiteral("Unrelated meaning");
+        store.record(otherEdition);
+        compareWords(store.history(), previousHistory);
+        compareWords(LearningStore().bookmarks(), expected);
+        store.setHistoryEnabled(true);
         store.record(added);
         store.setTheme(QStringLiteral("dark"));
         storage.sync();
