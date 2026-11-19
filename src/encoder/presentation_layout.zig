@@ -2178,11 +2178,26 @@ fn afParticipleMeanings(sections: anytype, index: usize) bool {
     if (section.level != 4 or !std.mem.eql(u8, section.title, "Betekenisse") or index == 0) return false;
     const parent = sections[index - 1];
     if (parent.level != 3 or !std.mem.eql(u8, parent.title, "Deelwoord")) return false;
-    for (section.blocks, 0..) |block, i| {
+    return hasTopLevelNumberedGloss(section.blocks);
+}
+
+fn hasTopLevelNumberedGloss(blocks: []const wiki.Block) bool {
+    for (blocks, 0..) |block, i| {
         if (block.kind == .definition and std.mem.eql(u8, block.list_path, "#") and
-            !standaloneEmptyDefinition(section.blocks, i)) return true;
+            !standaloneEmptyDefinition(blocks, i)) return true;
     }
     return false;
+}
+
+fn portugueseNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
+    if (section.level != 2 or !std.mem.eql(u8, section.title, "Substantivo") or
+        !std.mem.eql(u8, wiki_id, "ptwiktionary")) return false;
+    const language = owner orelse return false;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return false;
+    if (@hasField(@TypeOf(section), "is_heading")) if (!section.is_heading) return false;
+    if (@hasField(@TypeOf(section), "title_depth")) if (section.title_depth != 0) return false;
+    if (@hasField(@TypeOf(section), "title_list_path")) if (section.title_list_path.len != 0) return false;
+    return hasTopLevelNumberedGloss(section.blocks);
 }
 
 fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
@@ -2198,11 +2213,7 @@ fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
     };
     inline for (headings) |heading| {
         if (std.mem.eql(u8, section.title, heading[0])) {
-            for (section.blocks, 0..) |block, i| {
-                if (block.kind == .definition and std.mem.eql(u8, block.list_path, "#") and
-                    !standaloneEmptyDefinition(section.blocks, i)) return heading[1];
-            }
-            return null;
+            return if (hasTopLevelNumberedGloss(section.blocks)) heading[1] else null;
         }
     }
     return null;
@@ -2226,7 +2237,7 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
     for (sections, 0..) |section, i| {
         const numbered_part = if (unclassified) null else sourceNumberedPart(section, i, owner, numbered_proofs);
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else null;
+            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else null;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
@@ -2533,6 +2544,58 @@ test "Afrikaans participle meanings use their own numbered blocks and keep examp
     sections[1].level = 4;
     sections[1].blocks = &.{};
     try std.testing.expect(!afParticipleMeanings(&sections, 1));
+}
+
+test "Portuguese dictionary noun section preserves the German Absolution sense and its link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const enc = @import("blob_encoder");
+    const document = @import("presentation_document.zig");
+    var ns = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tptwiktionary\n# dump-date\t20261001\n# content-language\tpt\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tPredefinição\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategoria\tCategory\tcase-sensitive\t0\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const source = "= [[alemão#Português|Alemão]] =\n==Substantivo==\n'''Absolution'''\n# [[absolvição]] (dos pecados)";
+    const bytes = try document.compileClassifiedWithHeadingAnchorsAlloc(a, "Absolution", .language, "Alemão", "de",
+        document.MissingText.untracked(source), null, .{}, &ns, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "Alemão", .code = "de" });
+    const decoded = try enc.presentation_codec.decodeAlloc(a, bytes, "Absolution", .language, .{ .heading = "Alemão", .code = "de" });
+    try std.testing.expectEqualSlices(u8, bytes, try enc.presentation_codec.encodeAlloc(a, decoded));
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+    const noun = decoded.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Alemão", noun.language);
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    const section = decoded.entry.sections[noun.section];
+    try std.testing.expectEqualStrings("Substantivo", section.title);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const gloss = section.blocks[noun.definitions[0].block];
+    try std.testing.expectEqual(.definition, gloss.kind);
+    try std.testing.expectEqual(.link, gloss.spans[0].kind);
+    try std.testing.expectEqualStrings("absolvição", gloss.spans[0].target);
+    try std.testing.expectEqualStrings("absolvição", gloss.spans[0].text);
+    try std.testing.expectEqualStrings(" (dos pecados)", gloss.spans[1].text);
+
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const Section = struct { title: []const u8 = "Substantivo", level: u8 = 2, is_heading: bool = true, blocks: []const wiki.Block };
+    var checked: Section = .{ .blocks = try renderer.renderBody("# [[absolvição]] (dos pecados)") };
+    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "glwiktionary"));
+    try std.testing.expect(!portugueseNounSection(checked, null, "ptwiktionary"));
+    try std.testing.expect(!portugueseNounSection(checked, "Unclassified", "ptwiktionary"));
+    for ([_][]const u8{ "Substantivo feminino", "Substantivo 2", "substantivo" }) |other| {
+        checked.title = other;
+        try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    }
+    checked.title = "Substantivo";
+    checked.is_heading = false;
+    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    checked.is_heading = true;
+    checked.level = 3;
+    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    checked.level = 2;
+    checked.blocks = try renderer.renderBody("* [[absolvição]]");
+    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
 }
 
 test "Quechua dictionary POS headings organize authored definitions and preserve owners and actions" {
