@@ -83,6 +83,7 @@ LibraryDialog::LibraryDialog(QWidget *parent, const QString &root,
     rootLabel_->setTextFormat(Qt::PlainText);
     rootLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     rootLabel_->setAccessibleName(QStringLiteral("Dictionary folder"));
+    rootLabel_->setAccessibleDescription(root_);
     chooseButton_ = new QPushButton(QStringLiteral("Choose folder..."), this);
     chooseButton_->setObjectName(QStringLiteral("chooseDictionaryFolder"));
     folderRow->addWidget(rootLabel_, 1);
@@ -376,6 +377,7 @@ void LibraryDialog::chooseRoot() {
     noteRootChange(root_); // Choosing the original folder explicitly reloads external changes.
     changed_ = true;
     rootLabel_->setText(root_);
+    rootLabel_->setAccessibleDescription(root_);
     status_->clear();
     refreshInstalled();
 }

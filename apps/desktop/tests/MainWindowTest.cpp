@@ -26044,6 +26044,16 @@ private slots:
                 QTRY_VERIFY_WITH_TIMEOUT(!library->findChild<QProgressBar *>(QStringLiteral("libraryProgress"))->isVisible(), 30000);
                 auto *choose = library->findChild<QPushButton *>(QStringLiteral("chooseDictionaryFolder"));
                 QVERIFY(choose);
+                QLabel *folder = nullptr;
+                for (auto *label : library->findChildren<QLabel *>())
+                    if (label->accessibleName() == QStringLiteral("Dictionary folder")) folder = label;
+                QVERIFY(folder);
+                QCOMPARE(folder->text(), QDir(fixture_).absolutePath());
+                QCOMPARE(folder->accessibleDescription(), folder->text());
+                auto *accessibleFolder = QAccessible::queryAccessibleInterface(folder);
+                QVERIFY(accessibleFolder);
+                QCOMPARE(accessibleFolder->text(QAccessible::Name), QStringLiteral("Dictionary folder"));
+                QCOMPARE(accessibleFolder->text(QAccessible::Description), folder->text());
                 QTimer deadline;
                 deadline.setSingleShot(true);
                 QObject::connect(&deadline, &QTimer::timeout, library, [library] {
@@ -26060,6 +26070,10 @@ private slots:
                 QTest::mouseClick(choose, Qt::LeftButton);
                 deadline.stop();
                 QVERIFY(selected);
+                QCOMPARE(folder->text(), rejectedRoot);
+                QCOMPARE(folder->accessibleDescription(), rejectedRoot);
+                QCOMPARE(accessibleFolder->text(QAccessible::Description), rejectedRoot);
+                QVERIFY(folder->wordWrap());
             });
             window.chooseRoot();
             QVERIFY(selected);
@@ -26792,6 +26806,7 @@ private slots:
                 for (const auto *label : dialog->findChildren<QLabel *>()) {
                     if (label->accessibleName() == QStringLiteral("Dictionary folder"))
                         fullPathAvailable = label->text() == root && label->wordWrap()
+                            && label->accessibleDescription() == root
                             && label->textInteractionFlags().testFlag(Qt::TextSelectableByMouse);
                 }
                 dialog->done(QDialog::Rejected);
