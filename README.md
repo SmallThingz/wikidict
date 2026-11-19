@@ -191,6 +191,14 @@ place. Keep the directory intact until the retry finishes. This also works when
 the previous attempt completed the repack and failed later while compiling an
 entry.
 
+For an edition that repeatedly fails late in a shard, the Python corpus builder
+accepts `--shard-pages 1000` to verify and checkpoint every 1,000 indexed pages.
+The default is 100,000. Keep the same interval when resuming a build so the
+builder can reuse its verified shards. Smaller intervals reduce the number of
+completed pages at risk of recompilation and increase per-shard verification,
+compression and merge overhead. The corpus controller also accepts `shard_pages`
+in the edition's `edition_options` entry.
+
 Completed output and verified staging must record the current page-aligned dump
 version. Older builds are preserved but cannot be accepted as complete by a new
 run: rebuild into a new output directory to requalify them against the full dump.
