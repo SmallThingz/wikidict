@@ -225,7 +225,8 @@ pub const Registry = struct {
               std.mem.eql(u8, revision.string, "f45897451256aa3799aecc5d7ee320ade22beaec") or
               std.mem.eql(u8, revision.string, "992ad5e3679f848254828e823860ba8b3ad3b39b") or
               std.mem.eql(u8, revision.string, "bfe24921d500b20f2938fb8fe2a09cf5cac80161") or
-              std.mem.eql(u8, revision.string, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2")))
+              std.mem.eql(u8, revision.string, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or
+              std.mem.eql(u8, revision.string, "f03f1fdaa2d112807b6ce63170eb50e86de615bd")))
         {
             if (general.object.get("rtl")) |rtl| if (rtl == .bool) {
                 const default_width = if (value.object.get("profile")) |profile|

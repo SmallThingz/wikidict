@@ -30,7 +30,7 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // The reviewed 992ad source changes only metadata-map storage, description
 // short URLs and unrelated config; V4 geometry stays the same. The response
 // must still prove each exact approved extension registration independently.
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2" };
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd" };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -717,7 +717,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2")) return .{
+    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
     };
@@ -7525,6 +7525,76 @@ test "retained TCY core6c5 media inventory keeps exact complete registration" {
     const core = try string(site_general, "git-hash");
     try std.testing.expectEqualStrings("6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", core);
     try std.testing.expectEqualStrings("tcywiktionary", try string(site_general, "wikiid"));
+    try std.testing.expectEqualStrings("MediaWiki 1.48.0-wmf.5", try string(site_general, "generator"));
+    var expected: Value = .{ .object = .empty };
+    for (media_extensions, mediaVariant(core).?) |pair, revision| try expected.object.put(a, pair[0], .{ .string = revision });
+    _ = try mediaRegistration(query, try mediaProfileSet(expected));
+    try expected.object.put(a, "TimedMediaHandler", .{ .string = "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663" });
+    try std.testing.expectError(invalid, mediaRegistration(query, try mediaProfileSet(expected)));
+}
+
+test "ET coref03 complete media set preserves normal aggregate and streamed sizing" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "f03f1fdaa2d112807b6ce63170eb50e86de615bd" }) |core| {
+        const baseline = try Wmf4EpochTestSource.width(temp, &ns, true, false, replay_contract_v3, core);
+        var original = try ResponseEpochTestSource.init(a, baseline, &ns, false, false); defer original.deinit();
+        for ([_]bool{ false, true }) |streamed| {
+            const input = try ObservedMediaVariantTestSource.make(temp, &ns, core, streamed);
+            var registry = try ResponseEpochTestSource.init(a, input, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqualDeep(original.records, registry.records);
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, 228));
+        }
+    }
+}
+
+test "ET coref03 media set rejects crossed sets and profile site substitution" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "f03f1fdaa2d112807b6ce63170eb50e86de615bd" }) |core| {
+        const valid = try ObservedMediaVariantTestSource.make(temp, &ns, core, false);
+        for (0..5) |mode| {
+            var doc = try RegistrationEpochTestSource.document(temp, valid.projection);
+            const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, valid.raw, .{ .allocate = .alloc_always });
+            const batches = try temp.dupe(RawFileBatch, source.batches);
+            var value = try std.json.parseFromSliceLeaky(Value, temp, batches[batches.len - 1].response, .{ .allocate = .alloc_always });
+            const extensions = value.object.getPtr("query").?.object.getPtr("extensions").?;
+            if (mode == 0) {
+                for (wmf4_media_extensions) |pair| try doc.source_profile.object.getPtr("media_extensions").?.object.put(temp, pair[0], .{ .string = pair[1] });
+            } else if (mode == 1 or mode == 2) {
+                for (extensions.array.items) |*extension| if (equal(try string(extension.*, "name"), "TimedMediaHandler")) {
+                    const wrong = if (mode == 2) "0000000000000000000000000000000000000000" else "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663";
+                    try extension.object.put(temp, "vcs-version", .{ .string = wrong });
+                };
+            } else if (mode == 3) {
+                try extensions.array.append(extensions.array.items[0]);
+            } else {
+                _ = extensions.array.orderedRemove(0);
+            }
+            batches[batches.len - 1].response = try std.json.Stringify.valueAlloc(temp, value, .{});
+            for ([_]bool{ false, true }) |streamed| {
+                const bad = try ResponseEpochTestSource.seal(temp, doc, batches, valid.site, streamed, replay_contract_v3);
+                try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+            }
+        }
+    }
+}
+
+
+test "retained ET coref03 media inventory keeps exact complete registration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const raw = @embedFile("testdata/et-coref03/file-response.json");
+    var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expectEqualStrings("0ea98f77ec96ac4a9c9fbca8f65a58600a1ec70f0e72c464fc040cca3edd2bf1", &std.fmt.bytesToHex(hash, .lower));
+    const value = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    const query = try field(value, "query");
+    const site_general = try field(query, "general");
+    const core = try string(site_general, "git-hash");
+    try std.testing.expectEqualStrings("f03f1fdaa2d112807b6ce63170eb50e86de615bd", core);
+    try std.testing.expectEqualStrings("etwiktionary", try string(site_general, "wikiid"));
     try std.testing.expectEqualStrings("MediaWiki 1.48.0-wmf.5", try string(site_general, "generator"));
     var expected: Value = .{ .object = .empty };
     for (media_extensions, mediaVariant(core).?) |pair, revision| try expected.object.put(a, pair[0], .{ .string = revision });
