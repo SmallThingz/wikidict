@@ -3,12 +3,59 @@ import hashlib
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import build_python_tooling
 from build_python_tooling import normal_build_catalog, PythonTooling
 
 
 class NormalCatalogTests(unittest.TestCase):
+    def test_first_selection_checks_source_before_and_after_install(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            def reference(path):
+                data = path.read_bytes()
+                return dict(path=str(path), bytes=len(data), sha256=hashlib.sha256(data).hexdigest(),
+                            mode=path.stat().st_mode & 0o777)
+            modules = {}
+            for role in ('build_wiktionaries', 'corpus_controller'):
+                path = root / (role + '.py')
+                path.write_text('VALUE = 1\n')
+                modules[role] = reference(path)
+            st = root.stat()
+            directory = dict(path=str(root), device=st.st_dev, inode=st.st_ino,
+                             uid=st.st_uid, mode=st.st_mode & 0o777)
+            spec = dict(source_root=directory, workspace_root=directory,
+                        selector=reference(Path(build_python_tooling.__file__)), modules=modules)
+            role = 'build_wiktionaries'
+            path = Path(modules[role]['path'])
+            def select(origin=path):
+                return build_python_tooling.select(spec, role=role, origin=origin)
+            with (patch.object(build_python_tooling, '_ACTIVE', None),
+                  patch.dict(build_python_tooling.sys.modules),
+                  patch.object(PythonTooling, 'install') as install,
+                  patch.object(build_python_tooling, '_regular', wraps=build_python_tooling._regular) as read):
+                for name in modules:
+                    build_python_tooling.sys.modules.pop(name, None)
+                with self.assertRaisesRegex(ValueError, 'differs from selected tooling role'):
+                    select(root / 'other.py')
+                install.assert_not_called()
+                read.reset_mock()
+                install.side_effect = lambda: self.assertEqual(read.call_count, len(modules) + 1)
+                active = select()
+                self.assertEqual(read.call_count, 2 * (len(modules) + 1))
+                self.assertIs(select(), active)
+                self.assertEqual(read.call_count, 3 * (len(modules) + 1))
+                install.assert_called_once()
+                path.write_text('VALUE = 2\n')
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    select()
+                path.write_text('VALUE = 1\n')
+                build_python_tooling._ACTIVE = None
+                install.side_effect = lambda: path.write_text('VALUE = 3\n')
+                with self.assertRaisesRegex(ValueError, 'identity changed'):
+                    select()
+
     def test_unused_stale_qa_is_omitted_without_changing_required_refs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

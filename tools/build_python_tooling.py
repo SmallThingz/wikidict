@@ -177,6 +177,9 @@ class PythonTooling:
 
     def require_role(self, role, origin):
         self.require_unchanged()
+        return self._check_role_origin(role, origin)
+
+    def _check_role_origin(self, role, origin):
         if role not in ('build_wiktionaries', 'corpus_controller') or Path(origin).resolve() != Path(self.spec['modules'][role]['path']):
             raise ValueError('Actual production script differs from selected tooling role')
         return self
@@ -197,7 +200,9 @@ def select(spec, *, role, origin):
     global _ACTIVE
     if _ACTIVE is None:
         selected = PythonTooling(spec)
-        selected.require_role(role, origin)
+        # Construction already verified the entire catalog. Check the script
+        # before installing its finder, then revalidate after installation.
+        selected._check_role_origin(role, origin)
         selected.install()
         _ACTIVE = selected
     elif _ACTIVE.spec != spec:
