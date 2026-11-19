@@ -48,6 +48,12 @@ fn readingHints(columns: usize) []const u8 {
     // Reserve the existing left/right footer margins and measure terminal cells.
     return if (term.cellWidth(wide) <= columns -| 4) wide else "Esc back ↑↓ e fold d details ? help";
 }
+
+fn emptyLanguageBody(entry: model.Entry) bool {
+    return entry.kind == .language and entry.alias == null and entry.sections.len == 0 and
+        entry.preamble_spans.len == 0 and entry.references.len == 0 and entry.media.len == 0 and
+        entry.organization.lexemes.len == 0 and entry.organization.other_sections.len == 0;
+}
 fn studyMeaning(entry: model.Entry) error{InvalidPresentation}!?model.Block {
     if (entry.organization.lexemes.len != 0) {
         var selected: ?model.Block = null;
@@ -917,6 +923,9 @@ const State = struct {
                         const selected = if (self.section_indices.items.len == 0) 0 else self.section_indices.items[self.section];
                         self.section_offset = try output.entryTextFoldedProjected(&formatted, doc.entry, self.color, preferences, self.expanded.items, selected, &projection);
                     } else try output.entryTextWithDetailsProjected(&formatted.writer, doc.entry, self.color, self.details, &projection);
+                    if (self.nav != .learn and emptyLanguageBody(doc.entry)) {
+                        try formatted.writer.writeAll("\nNo entry content in this dictionary.\n");
+                    }
                 }
             } else try formatted.writer.writeAll(if (self.searchPending()) "Searching dictionary...\n\nKeep typing to refine the search; Ctrl-U clears it." else switch (self.nav) {
                 .saved => "No saved words yet.\n\nOpen a word, then press s to save it.\nPress / to find a word.",
@@ -1346,6 +1355,28 @@ test "terminal neutral redirect selection has no invented library heading" {
     try std.testing.expect(std.mem.indexOf(u8, state.text, "Missing") != null);
     try std.testing.expect(std.mem.indexOf(u8, state.text, "English") == null);
     try std.testing.expect(db.heading() == null);
+}
+
+test "terminal empty language body distinguishes a title from entry content" {
+    const title: model.Entry = .{ .kind = .language, .title = "czytać", .language = "polski", .language_code = "pl" };
+    try std.testing.expect(emptyLanguageBody(title));
+    var entry = title;
+    entry.display_title = &.{.{ .text = "Czytać" }};
+    try std.testing.expect(emptyLanguageBody(entry));
+    entry.kind = .supplemental;
+    try std.testing.expect(!emptyLanguageBody(entry));
+    entry = title;
+    entry.sections = &.{.{ .level = 2, .title = "wymowa" }};
+    try std.testing.expect(!emptyLanguageBody(entry));
+    entry = title;
+    entry.preamble_spans = &.{.{ .text = "wstęp" }};
+    try std.testing.expect(!emptyLanguageBody(entry));
+    entry = title;
+    entry.media = &.{.{ .file = "Pl-czytać.ogg", .kind = .audio, .caption = "" }};
+    try std.testing.expect(!emptyLanguageBody(entry));
+    entry = title;
+    entry.references = &.{.{ .number = 1, .group_number = null, .spans = &.{.{ .text = "przypis" }} }};
+    try std.testing.expect(!emptyLanguageBody(entry));
 }
 
 test "terminal missing structured meaning preserves body and cannot grade quiz typing or cards" {
