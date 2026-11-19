@@ -118,8 +118,7 @@ def read_json(path):
     path = Path(path)
     require(path.stat().st_size <= 8 * 1024**2, f'Metadata exceeds bound: {path}')
     value = json.loads(path.read_bytes())
-    if (path.name == 'complete.json' and isinstance(value, dict)
-            and isinstance(value.get('build_inputs'), dict)
+    if (isinstance(value, dict) and isinstance(value.get('build_inputs'), dict)
             and 'native_tool_roles_details' in value['build_inputs']):
         from build_wiktionaries import restore_publication_metadata
         return restore_publication_metadata(path.parent, value)
@@ -135,8 +134,7 @@ def read_ref(ref):
     actual = _checked_descriptor(path, before, hashlib.sha256(data).hexdigest())
     require(len(data) == before.st_size and actual == ref, 'Receipt bytes changed')
     value = json.loads(data)
-    if (path.name == 'complete.json' and isinstance(value, dict)
-            and isinstance(value.get('build_inputs'), dict)
+    if (isinstance(value, dict) and isinstance(value.get('build_inputs'), dict)
             and 'native_tool_roles_details' in value['build_inputs']):
         from build_wiktionaries import restore_publication_metadata
         return restore_publication_metadata(path.parent, value)
