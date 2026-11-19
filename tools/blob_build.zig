@@ -67177,3 +67177,65 @@ test "IU conflicting category declaration retains only exact boundary and never 
     try registry.addSourceLanguageBoundary("iu", proof);
     try std.testing.expect(!registry.matchesSourceLanguageBoundary("iu", proof.heading, 2));
 }
+
+test "Finnish Writer separates exact authored Bwaidoka and Molima category owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const ns_source = @embedFile("testdata/fi-jaamerenvoikukat/namespace-registry.tsv");
+    const registry_source = "# wikidict-language-registry-v2\n# content-language\tfi\n# mediawiki\nfi\tsuomi\n# iso-639-3\nbwd\tBwaidoka\tbwd\nmox\tMolima\tmox\n";
+    // Finnish dump p11163/r3072206 and p11169/r95065. Both are literal wikitext.
+    const auna = "==Bwaidoka==\n===Verbi===\n'''auna'''\n#[[haistaa]]\n\n[[Luokka:Bwaidokan sanat-au|na]]";
+    const matauta = "==Bwaidoka==\n===Verbi===\n'''matauta'''\n#[[pelätä]]\n\n==Molima==\n===Verbi===\n'''matauta'''\n#[[pelätä]]\n\n[[Luokka:Bwaidokan sanat-ma|tauta]]\n[[Luokka:Moliman sanat-ma|tauta]]";
+    var namespaces = try namespace_registry.Registry.init(a, ns_source);
+    defer namespaces.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(registry_source);
+    try std.testing.expect(registry.resolveTrusted("Bwaidoka") == null);
+    try std.testing.expect(registry.resolveTrusted("Molima") == null);
+    const codes = languageCodes(&registry, &namespaces);
+    for (0..4) |variant| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        var writer = try encoder.blob_builder.Writer.init(io, a, root);
+        defer writer.deinit();
+        writer.language_codes = codes;
+        const paired = switch (variant) {
+            0 => matauta,
+            1 => try std.mem.replaceOwned(u8, a, matauta, "sanat-ma|tauta", "sanat-ma|other"),
+            2 => try std.mem.replaceOwned(u8, a, matauta, "[[Luokka:Moliman sanat-ma|tauta]]", "<!--[[Luokka:Moliman sanat-ma|tauta]]-->"),
+            else => matauta ++ "\n[[Luokka:Bwaidokan sanat-ma|tauta]]",
+        };
+        // The companion category sort, protected category and duplicate are
+        // independently insufficient to split either owner's body.
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "matauta", paired, paired, null);
+        if (variant == 0) try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "auna", auna, auna, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, if (variant == 0) 3 else 1), stats.language_records);
+        if (variant == 0) {
+            for ([_][]const u8{ "Bwaidoka", "Molima" }, [_][]const u8{ "bwd", "mox" }) |heading, code| {
+                const entry = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, heading, "matauta");
+                try std.testing.expectEqualStrings(code, entry.language_code);
+                try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(entry, "pelätä"));
+                try std.testing.expectEqual(@as(usize, 2), entry.sections.len);
+                try std.testing.expectEqualStrings(heading, entry.sections[0].title);
+                const blocks = entry.sections[1].blocks;
+                try std.testing.expectEqualStrings("Verbi", entry.sections[1].title);
+                try std.testing.expectEqual(@as(usize, 2), blocks.len);
+                try std.testing.expect(blocks[0].spans[0].bold);
+                try std.testing.expectEqualStrings("matauta", blocks[0].spans[0].text);
+                try std.testing.expectEqual(encoder.presentation_types.BlockKind.definition, blocks[1].kind);
+                try std.testing.expectEqualStrings("#", blocks[1].list_path);
+            }
+            const single = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, "Bwaidoka", "auna");
+            try std.testing.expectEqualStrings("bwd", single.language_code);
+            try std.testing.expectEqual(@as(usize, 1), GaHtmlLanguageBoundaryFixture.targetCount(single, "haistaa"));
+        } else {
+            const fallback = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, "Unclassified", "matauta");
+            try std.testing.expectEqual(@as(usize, 2), GaHtmlLanguageBoundaryFixture.targetCount(fallback, "pelätä"));
+        }
+    }
+}

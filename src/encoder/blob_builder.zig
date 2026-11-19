@@ -2515,9 +2515,48 @@ fn literalAliasPairCandidate(codes: LanguageCodes, sections: []const language_so
     return false;
 }
 
+// Finnish literal vocabulary pages independently name each language in a
+// namespace-14 category. Accept this exact sort-key format only when every
+// authored peer has its own registered name and category.
+fn finnishLiteralCategoryPage(codes: LanguageCodes, title: []const u8, raw_page: []const u8,
+    sections: []const language_source.Section) bool
+{
+    const namespaces = codes.namespace_catalog orelse return false;
+    if (!std.mem.eql(u8, namespaces.wiki, "fiwiktionary") or title.len <= 2 or raw_page.len > 4096 or
+        sections.len == 0 or sections.len > 8 or std.mem.indexOfAny(u8, raw_page, "{}<>") != null or
+        std.mem.indexOf(u8, raw_page, "n sanat-") == null) return false;
+    if (!std.ascii.isLower(title[0]) or !std.ascii.isLower(title[1])) return false;
+    for (sections, 0..) |section, i| {
+        const label = literalL2Name(section) orelse return false;
+        if (codes.isLanguageBoundary(label) or knownOuterSupportOrPos(label)) return false;
+        const owner = codes.resolve(label) orelse return false;
+        if (owner.code.len == 0 or !std.mem.eql(u8, owner.heading, label)) return false;
+        for (sections[0..i]) |peer| if (std.mem.eql(u8, label, peer.heading)) return false;
+        var found = false;
+        var lines = std.mem.splitScalar(u8, raw_page, '\n');
+        while (lines.next()) |raw_line| {
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
+            if (!std.mem.startsWith(u8, line, "[[") or !std.mem.endsWith(u8, line, "]]")) continue;
+            const body = line[2 .. line.len - 2];
+            const pipe = std.mem.indexOfScalar(u8, body, '|') orelse continue;
+            if (!std.mem.startsWith(u8, body, "Luokka:") or !std.mem.eql(u8, body[pipe + 1 ..], title[2..])) continue;
+            const category = namespaces.ofTitle(body[0..pipe]);
+            if (category.id != 14 or !std.mem.startsWith(u8, category.text, label)) continue;
+            const suffix = category.text[label.len..];
+            const marker = "n sanat-";
+            if (!std.mem.startsWith(u8, suffix, marker) or !std.mem.eql(u8, suffix[marker.len..], title[0..2])) continue;
+            if (found) return false;
+            found = true;
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
 fn pairedLiteralAliasOwner(codes: LanguageCodes, raw_page: []const u8, source: MissingText,
     raw_sections: []const language_source.Section, rendered_sections: []const language_source.Section,
-    section: language_source.Section, raw_roots: []const usize, rendered_roots: []const usize) ?ResolvedLanguage
+    section: language_source.Section, raw_roots: []const usize, rendered_roots: []const usize,
+    category_proven: bool) ?ResolvedLanguage
 {
     if (source.lost_missing_range) return null;
     missing_dependency.generated_link.validateRanges(source.bytes, source.generated_source, source.generated_links) catch return null;
@@ -2548,7 +2587,7 @@ fn pairedLiteralAliasOwner(codes: LanguageCodes, raw_page: []const u8, source: M
         std.mem.trimEnd(u8, section.source[0..rendered_end], "\r"))) return null;
     // Use the existing weak-name corroboration rule on the matched raw region,
     // not inline lang attributes, inferred defaults, or surrounding owners.
-    if (!sourceConfirmsLanguage(codes, raw.source, owner.code)) return null;
+    if (!category_proven and !sourceConfirmsLanguage(codes, raw.source, owner.code)) return null;
     return owner;
 }
 
@@ -5742,6 +5781,8 @@ fn processMain(
     const simple_pos_candidate = if (early_heading_observation == null and std.mem.eql(u8, source, source_raw))
         simpleEnglishPosCandidate(codes, raw_sections.items, page_sections.items, raw_aligned and !sections.mixed_levels and !raw_conflicts.present)
     else null;
+    const finnish_category_page = raw_aligned and raw_source != null and !raw_conflicts.present and !sections.mixed_levels and
+        finnishLiteralCategoryPage(codes, title, raw_source.?, raw_sections.items) and literalAliasPairCandidate(codes, page_sections.items);
     const literal_alias_candidate = !raw_aligned and raw_source != null and literalAliasPairCandidate(codes, page_sections.items);
     const heading_observation = early_heading_observation orelse try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(
         heading_arena.allocator(),
@@ -5753,10 +5794,22 @@ fn processMain(
         codes.image_options,
         reference_context,
         poem_phase,
-        equals_prefix_candidate or literal_alias_candidate or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_numbered_pos[0] or codes.source_numbered_pos[1] or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
+        equals_prefix_candidate or literal_alias_candidate or finnish_category_page or template_peer_candidate or simple_pos_candidate != null or source_category_candidate or calibrated_peer_candidate or linked_peer_candidate or headword_candidate or sr_mul_candidate or codes.source_naslov_noun or codes.source_numbered_pos[0] or codes.source_numbered_pos[1] or codes.source_nom_label_fn != null or codes.source_section_fn != null or codes.source_linked_heading_fn != null or codes.figure_sizing != null or codes.table_styles != null or local_targets_selected,
     );
 
     var raw_heading_proof: PageRawHeadingProof = .{ .a = heading_arena.allocator(), .codes = codes, .title = title, .raw = raw_source };
+    const finnish_owners: ?[8]ResolvedLanguage = blk: {
+        if (!finnish_category_page or !heading_observation.page_wiki_scope_complete) break :blk null;
+        const proof = (try raw_heading_proof.get()) orelse break :blk null;
+        var owners: [8]ResolvedLanguage = undefined;
+        for (page_sections.items, raw_sections.items, 0..) |rendered, authored, index| {
+            if (!std.mem.eql(u8, rendered.heading, authored.heading)) break :blk null;
+            owners[index] = pairedLiteralAliasOwner(codes, raw_source.?, source_missing, raw_sections.items,
+                page_sections.items, rendered, proof.page_wiki_openings, heading_observation.page_wiki_openings, true) orelse break :blk null;
+        }
+        break :blk owners;
+    };
+
 
     if ((codes.source_linked_heading_fn != null or codes.source_nom_label_fn != null) and heading_observation.page_wiki_scope_complete)
         simpleApplyRootScope(source, page_sections.items, heading_observation.page_wiki_openings);
@@ -5877,10 +5930,11 @@ fn processMain(
                 resolved = matched;
             }
         }
+        if (resolved == null) if (finnish_owners) |owners| { resolved = owners[index]; };
         if (resolved == null and literal_alias_candidate and heading_observation.page_wiki_scope_complete) {
             if (try raw_heading_proof.get()) |proof| {
                 resolved = pairedLiteralAliasOwner(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, section,
-                    proof.page_wiki_openings, heading_observation.page_wiki_openings);
+                    proof.page_wiki_openings, heading_observation.page_wiki_openings, false);
             }
         }
         if (resolved == null) resolved = sourceLinkedHeadingOwner(codes, source_missing, section);
@@ -21388,15 +21442,15 @@ test "unaligned literal language regions require unique rooted matching raw corr
     };
     const source = MissingText.untracked(expanded);
     try std.testing.expect(literalAliasPairCandidate(codes, &sections));
-    const actual = pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }) orelse return error.TestUnexpectedResult;
+    const actual = pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }, false) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("enm", actual.code);
     try std.testing.expectEqualStrings("Средњи Енглески", actual.heading);
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{}, &.{ 0, split }) == null);
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{0}, &.{split}) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{}, &.{ 0, split }, false) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &sections, sections[0], &.{0}, &.{split}, false) == null);
     const duplicate_raw = [_]language_source.Section{ raw_sections[0], raw_sections[0] };
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &duplicate_raw, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &duplicate_raw, &sections, sections[0], &.{0}, &.{ 0, split }, false) == null);
     const duplicate_output = [_]language_source.Section{ sections[0], sections[0], sections[1] };
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &duplicate_output, sections[0], &.{0}, &.{ 0, split }) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, source, &raw_sections, &duplicate_output, sections[0], &.{0}, &.{ 0, split }, false) == null);
     for ([_][]const u8{
         "==Middle English==\n===Noun===\n{{cs-noun}}\n# foreign\n",
         "==Middle English==\n===Noun===\n'''woman'''\n# no raw language declaration\n",
@@ -21404,14 +21458,14 @@ test "unaligned literal language regions require unique rooted matching raw corr
         "== Middle English ==\n{{enm-noun}}\n# changed physical heading\n",
     }) |bad| {
         const bad_sections = [_]language_source.Section{.{ .heading = "Middle English", .source = bad }};
-        try std.testing.expect(pairedLiteralAliasOwner(codes, bad, source, &bad_sections, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
+        try std.testing.expect(pairedLiteralAliasOwner(codes, bad, source, &bad_sections, &sections, sections[0], &.{0}, &.{ 0, split }, false) == null);
     }
     const tainted: MissingText = .{ .bytes = expanded, .ranges = &.{.{ .start = 2, .end = 16, .occurrence = 1 }} };
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, tainted, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, tainted, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }, false) == null);
     const protected: MissingText = .{ .bytes = expanded, .literal_curly_ranges = &.{.{ .start = 2, .end = 16 }} };
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, protected, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, protected, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }, false) == null);
     const lost: MissingText = .{ .bytes = expanded, .lost_missing_range = true };
-    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, lost, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }) == null);
+    try std.testing.expect(pairedLiteralAliasOwner(codes, raw, lost, &raw_sections, &sections, sections[0], &.{0}, &.{ 0, split }, false) == null);
     const unknown = [_]language_source.Section{.{ .heading = "Unowned", .source = "==Unowned==\n{{enm-noun}}\n" }};
     try std.testing.expect(!literalAliasPairCandidate(codes, &unknown));
 }
