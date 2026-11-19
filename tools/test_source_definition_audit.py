@@ -107,6 +107,12 @@ class SourceDefinitionTests(unittest.TestCase):
         for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part|cat]]'):
             self.assertIsNone(simple_line(source, 'other'))
 
+    def test_clipped_semantics_are_not_simple_definition_witnesses(self):
+        plain = dict(kind='text', text='meaning')
+        self.assertEqual(compiled_line([plain]), simple_line('meaning', 'word'))
+        clipped = dict(kind='text', text='', clipped_absolute=dict(children=[dict(kind='text', text='also spoken')]))
+        self.assertIsNone(compiled_line([plain, clipped]))
+
     def test_literal_apostrophes_preserve_text_and_link_positions(self):
         text = "Liquidu trasparente chì si trova in a natura e ch'hè necissariu par a vita."
         self.assertEqual(simple_line(text, 'acqua'), (text, ()))

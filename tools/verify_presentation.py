@@ -140,6 +140,12 @@ def attribute_fields(value, path='entry'):
         if 'kind' in value and 'text' in value:
             if isinstance(value.get('explanation'), str) and value['explanation']:
                 yield 'explanation', path + '.explanation', value['explanation']
+            clipped = value.get('clipped_absolute')
+            if isinstance(clipped, dict):
+                # The native Reader omits these children from paint but exposes
+                # their text and actions to accessibility. Keep the runs separate.
+                for child_path, text in text_fields(clipped['children'], path + '.clipped_absolute.children'):
+                    yield 'clipped_text', child_path, text
             # Match the native Reader's effectiveAdvisory. An explicit empty
             # image title suppresses advice inherited from the surrounding span.
             image = value.get('image')
@@ -407,15 +413,16 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
                 for field, path, text in attribute_fields(content):
-                    if field == 'image_alt':
-                        result['image_alternatives'] += 1
+                    if field in ('image_alt', 'clipped_text'):
+                        if field == 'image_alt':
+                            result['image_alternatives'] += 1
                         categories = diagnostic_categories(text)
                         if categories:
                             result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                                 view_kind=view['kind'], view_language=view['language'], query_title=title,
                                 source_title=redirect['source_title'] if redirect else title,
                                 redirect=redirect, path=path, text=text[:500], categories=categories,
-                                interpretation='image-alternative'))
+                                interpretation='image-alternative' if field == 'image_alt' else 'clipped-semantic-text'))
                     elif field in ('explanation', 'tooltip'):
                         result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,

@@ -141,6 +141,23 @@ class PresentationDiagnosticTests(unittest.TestCase):
             self.assertEqual([], list(audit.action_fields(spans)))
             self.assertEqual([('entry', '')], list(audit.text_fields(spans)))
 
+    def test_clipped_semantic_body_and_action_survive_separately_from_painted_text(self):
+        with Fixture() as f:
+            entry = f.entry('clipped', '', language='English')
+            children = [dict(kind='text', text='Lua '), dict(kind='link', text='error', target='{{target}}')]
+            spans = [dict(kind='text', text='before'), dict(kind='text', text='',
+                     clipped_absolute=dict(children=children)), dict(kind='text', text='after')]
+            entry['sections'] = [dict(blocks=[dict(spans=spans)])]
+            f.language('English', [entry])
+            self.assertEqual([('entry', 'beforeafter')], list(audit.text_fields(spans)))
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('failed', result['status'])
+            self.assertEqual(0, result['image_alternatives'])
+            prefix = 'entry.sections[0].blocks[0].spans[1].clipped_absolute.children'
+            self.assertEqual([(prefix, 'clipped-semantic-text', ['error-prose']),
+                              (prefix + '[1].target', None, ['unresolved-action-target'])],
+                             [(row['path'], row.get('interpretation'), row['categories']) for row in result['issues']])
+
     def test_explanations_traverse_span_lists_tables_and_references_once(self):
         span = dict(kind='text', text='body', trail='', explanation='literal {{x}}')
         entry = dict(sections=[dict(blocks=[dict(spans=[span], table=dict(

@@ -123,7 +123,7 @@ def compiled_line(spans):
     offset = 0
     for span in spans:
         if span['kind'] not in ('text', 'link', 'external_link') or any(span.get(key) is not None for key in (
-                'inline_action_group', 'inline_padding_group', 'inline_box_group', 'ruby', 'image')):
+                'inline_action_group', 'inline_padding_group', 'inline_box_group', 'clipped_absolute', 'ruby', 'image')):
             return None
         text = span['text'] + span.get('trail', '')
         if span['kind'] == 'link':
