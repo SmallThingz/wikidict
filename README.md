@@ -492,7 +492,9 @@ to its compressed report. `batch_source_check` records whether the batch's final
 source check passed, failed, or could not be confirmed from its receipt.
 `batch_source_evidence` links to that receipt or the failure investigation when
 available. Blank measurements indicate that this audit series has no result for
-the selected output. Visual and keyboard checks are separate.
+the selected output. The [local terminal reading results](data/corpus-campaign-current01/local-edition-terminal-checks.tsv)
+link the selected entries to their 90- and 45-column screens, keyboard results,
+and retained failures.
 
 [Local edition build times](data/corpus-campaign-current01/local-edition-build-times.tsv)
 lists the elapsed build time, input XML pages, and pages per second for each
