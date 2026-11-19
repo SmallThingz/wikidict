@@ -21,7 +21,9 @@ class SiteInfoSnapshotTests(unittest.TestCase):
         work = Path(os.environ.get('WIKIDICT_SITE_INFO_TEST_ROOT',
             str(HERE.parent / '.tmp' / 'site-info-tests')))
         work.mkdir(parents=True, exist_ok=True)
-        self.root = Path(tempfile.mkdtemp(prefix='case-', dir=work))
+        case = tempfile.TemporaryDirectory(prefix='case-', dir=work)
+        self.addCleanup(case.cleanup)
+        self.root = Path(case.name)
 
     def fixture(self, name='capture', lang='en', server='//actual.example'):
         root = self.root / name

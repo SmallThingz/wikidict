@@ -17,7 +17,9 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         work = Path(os.environ.get('WIKIDICT_DISK_TEST_ROOT',
             str(HERE.parent / '.tmp' / 'disk-merge-admission-tests')))
         work.mkdir(parents=True, exist_ok=True)
-        self.root = Path(tempfile.mkdtemp(prefix='case-', dir=work))
+        case = tempfile.TemporaryDirectory(prefix='case-', dir=work)
+        self.addCleanup(case.cleanup)
+        self.root = Path(case.name)
         self.destination = self.root / 'merged'
 
     def shard(self, name='shard', count=9, heading='English'):
