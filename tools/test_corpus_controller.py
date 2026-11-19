@@ -5465,6 +5465,83 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
                     cwd=str(root), environment=dict(TMPDIR='/foreign/old-sr/tmp', WIKIDICT_PHASE_TIMING='1'),
                     output=root, roles=roles, source_refs=[ref('input')], scope='selected actual whole command')
 
+    def large_selected(self, root):
+        selected = self.selected(root)
+        roles = selected['roles']
+        roles['dict-bundle-build']['source_evidence'] = ''
+        value = json.dumps(roles, sort_keys=True, separators=(',', ':'))
+        roles['dict-bundle-build']['source_evidence'] = 'x' * (849801 - len(value.encode()))
+        selected['argv'][-1] = json.dumps(roles, sort_keys=True, separators=(',', ':'))
+        self.assertEqual(len(selected['argv'][-1].encode()), 849801)
+        return selected
+
+    def test_direct_large_record_is_execable_idempotent_and_bound(self):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = self.large_selected(Path(tmp) / 'ordinary')
+            original = copy.deepcopy(selected)
+            first = controller.ordinary_command_record(**selected)
+            path = selected['output'] / 'retained-native-roles.json'
+            fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            identity = tuple(getattr(path.stat(), field) for field in fields)
+            second = controller.ordinary_command_record(**selected)
+            self.assertEqual(first, second)
+            self.assertEqual(tuple(getattr(path.stat(), field) for field in fields), identity)
+            self.assertEqual(selected, original)
+            self.assertEqual(controller.logical_role_argv(first['argv']), selected['argv'])
+            reference = json.loads(first['argv'][-1])
+            self.assertIn(reference, first['source_refs'])
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(len(first['argv']), len(selected['argv']))
+            self.assertLess(max(len(os.fsencode(v)) + 1 for v in first['argv']),
+                            32 * os.sysconf('SC_PAGE_SIZE'))
+            subprocess.run([sys.executable, '-c', 'pass', *first['argv']], check=True)
+            print('ORDINARY_ROLE_ARGV ' + json.dumps(dict(logical_max_bytes=849801,
+                physical_argc=len(first['argv']),
+                physical_max_argument_bytes=max(len(os.fsencode(v)) for v in first['argv']))))
+
+    def test_direct_large_record_rejects_changed_file_and_conflicting_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = self.large_selected(Path(tmp))
+            first = controller.ordinary_command_record(**selected)
+            path = Path(tmp) / 'retained-native-roles.json'
+            raw = path.read_bytes()
+            path.write_bytes(raw.replace(b'xxxx', b'yyyy', 1))
+            changed = path.read_bytes()
+            with self.assertRaisesRegex(ValueError, 'changed|conflict'):
+                controller.ordinary_command_record(**selected)
+            self.assertEqual(path.read_bytes(), changed)
+            with self.assertRaisesRegex(ValueError, 'changed'):
+                controller.logical_role_argv(first['argv'])
+
+    def test_direct_large_record_refuses_symlink_shared_or_partial_file(self):
+        for kind in ('symlink', 'shared', 'partial', 'hardlink'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                selected = self.large_selected(Path(tmp))
+                path = Path(tmp) / 'retained-native-roles.json'
+                if kind == 'symlink':
+                    other = Path(tmp) / 'foreign'
+                    other.write_text(selected['argv'][-1])
+                    path.symlink_to(other)
+                else:
+                    path.write_text(selected['argv'][-1] if kind != 'partial' else '{')
+                    path.chmod(0o666 if kind == 'shared' else 0o600)
+                    if kind == 'hardlink':
+                        os.link(path, Path(tmp) / 'alias')
+                with self.assertRaises((ValueError, OSError)):
+                    controller.ordinary_command_record(**selected)
+                self.assertEqual(sorted(p.name for p in Path(tmp).glob('*.part')), [])
+
+    def test_invalid_large_record_does_not_publish_role_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            selected = self.large_selected(Path(tmp))
+            selected['roles']['dict-blob-build'].pop('qualification_closure')
+            selected['argv'][-1] = json.dumps(selected['roles'])
+            with self.assertRaisesRegex(ValueError, 'closure'):
+                controller.ordinary_command_record(**selected)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
     def test_large_role_argument_survives_exec_and_preserves_validations(self):
         import build_wiktionaries as builder
         import subprocess

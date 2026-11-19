@@ -2045,14 +2045,66 @@ def compact_role_argv(argv, folder):
     if '--retained-native-roles-json' not in argv:
         return argv
     index = argv.index('--retained-native-roles-json')
+    require(argv.count('--retained-native-roles-json') == 1 and index + 1 < len(argv)
+            and '--retained-native-roles-ref' not in argv, 'Invalid retained native role arguments')
     value = argv[index + 1]
     # Linux limits each argument to 32 pages including its terminating NUL.
     if len(os.fsencode(value)) < 32 * os.sysconf('SC_PAGE_SIZE'):
         return argv
-    path = folder / 'retained-native-roles.json'
-    with path.open('x', encoding='utf-8') as stream:
-        stream.write(value)
-    reference = descriptor(path)
+    import stat
+    folder = Path(folder)
+    require(folder.is_absolute() and folder.resolve() == folder,
+            'Unsafe retained native role directory')
+    name = 'retained-native-roles.json'
+    temporary = name + '.' + uuid.uuid4().hex + '.part'
+    created = False
+    raw = value.encode('utf-8')
+    require(0 < len(raw) <= 64 * 1024**2, 'Retained native role metadata exceeds bound')
+    folder.mkdir(mode=0o700, exist_ok=True)
+    directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        owned = os.fstat(directory)
+        require(owned.st_uid == os.geteuid() and not owned.st_mode & 0o022,
+                'Unsafe retained native role directory ownership')
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory)
+        created = True
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # Publish complete bytes once; a retry or concurrent constructor
+            # must authenticate the existing file instead of replacing it.
+            os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory,
+                    follow_symlinks=False)
+        except FileExistsError:
+            pass
+        os.unlink(temporary, dir_fd=directory)
+        created = False
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
+                    and before.st_nlink == 1 and not before.st_mode & 0o022
+                    and before.st_size == len(raw), 'Unsafe or conflicting retained native role file')
+            actual = stream.read(len(raw) + 1)
+            after = os.fstat(stream.fileno())
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_gid',
+                  'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        linked = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        require(actual == raw and all(getattr(before, key) == getattr(after, key)
+                == getattr(linked, key) for key in fields),
+                'Retained native role file changed or conflicts with selected provenance')
+        current = folder.stat()
+        require((current.st_dev, current.st_ino, current.st_mode, current.st_uid, current.st_gid)
+                == (owned.st_dev, owned.st_ino, owned.st_mode, owned.st_uid, owned.st_gid)
+                and folder.resolve() == folder, 'Retained native role directory changed')
+        reference = dict(path=str(folder / name), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    finally:
+        if created:
+            os.unlink(temporary, dir_fd=directory)
+        os.close(directory)
     return [*argv[:index], '--retained-native-roles-ref', json.dumps(reference), *argv[index + 2:]]
 
 
@@ -2103,8 +2155,16 @@ def ordinary_command_record(*, argv, cwd, environment, output, roles, source_ref
             'Ordinary command Writer lacks its actual closure')
     env = dict(environment)
     env['TMPDIR'] = str(output / 'runtime01' / 'tmp')
-    return dict(argv=list(argv), cwd=str(cwd), env=env,
-                qualification_root=str(output / 'runtime01'), source_refs=copy.deepcopy(source_refs),
+    physical = compact_role_argv(argv, output)
+    refs = copy.deepcopy(source_refs)
+    if '--retained-native-roles-ref' in physical:
+        reference = json.loads(physical[physical.index('--retained-native-roles-ref') + 1])
+        require(not any(row.get('path') == reference['path'] and row != reference for row in refs),
+                'Retained native role file conflicts with source custody')
+        if reference not in refs:
+            refs.append(reference)
+    return dict(argv=list(physical), cwd=str(cwd), env=env,
+                qualification_root=str(output / 'runtime01'), source_refs=refs,
                 independent_role_origins=origins,
                 current_production_closure=copy.deepcopy(writer['qualification_closure']), scope=scope)
 
