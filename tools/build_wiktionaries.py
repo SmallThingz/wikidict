@@ -6162,8 +6162,16 @@ class RetainedNativeToolRoles:
             st=path.stat()
             if path.is_symlink() or (st.st_dev,st.st_ino,st.st_mode,st.st_uid)!=expected:
                 raise ValueError('Retained native working directory changed')
+        # Many retained files are siblings. Reuse only the path spellings;
+        # check each symlink and file identity anew for every dependency.
+        ancestor_names = {}
         for path, stamp in self.inputs.items():
-            if any(parent.is_symlink() for parent in (path, *path.parents)):
+            parent = path.parent
+            names = ancestor_names.get(parent)
+            if names is None:
+                names = tuple(map(os.fspath, (parent, *parent.parents)))
+                ancestor_names[parent] = names
+            if os.path.islink(path) or any(map(os.path.islink, names)):
                 raise ValueError('Retained native dependency parent changed')
             current = path.lstat()
             if (current.st_dev, current.st_ino, current.st_mode, current.st_size,
