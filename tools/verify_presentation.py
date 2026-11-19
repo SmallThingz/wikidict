@@ -10,14 +10,17 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import re
 import os
 import select
 import shutil
 import stat
+import struct
 import sqlite3
 import tempfile
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -232,6 +235,34 @@ def coverage_rows(root):
     return rows
 
 
+def language_catalog(query, page_size):
+    if page_size is None:
+        return query('languages')
+    rows = []
+    total = None
+    while total is None or len(rows) < total:
+        offset = len(rows)
+        page = query('languages', '--catalog-page-size', str(page_size), '--offset', str(offset))
+        require(page.get('schema') == 'dict.languages.page.v1' and
+                natural(page.get('offset')) and page['offset'] == offset and
+                natural(page.get('total_headings')), 'invalid catalog page metadata')
+        if total is None:
+            total = page['total_headings']
+        require(total == page['total_headings'], 'catalog size changed during scan')
+        batch = page.get('accounting')
+        require(isinstance(batch, list) and len(batch) == min(page_size, total - offset),
+                'incomplete catalog page')
+        for row in batch:
+            require(isinstance(row, dict) and isinstance(row.get('heading'), str) and row['heading'] and
+                    natural(row.get('records')) and isinstance(row.get('code'), str), 'invalid catalog row')
+            code = row['code']
+            classification = 'translingual' if code == 'mul' else 'language' if code else 'unverified'
+            require(row.get('classification') == classification, 'invalid catalog row classification')
+            require(not rows or rows[-1]['heading'] < row['heading'], 'catalog headings out of order')
+            rows.append(row)
+    return dict(languages=[row['heading'] for row in rows], accounting=rows)
+
+
 def emitted_views(root, catalog, query):
     """Native catalog accounting owns language names; fixed filenames own kinds."""
     headings, accounting = catalog['languages'], catalog['accounting']
@@ -286,7 +317,8 @@ def emitted_views(root, catalog, query):
     return views
 
 
-def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list):
+def scan(root, query, export_page=None, *, observe_record=None, audit_references=False, row_factory=list,
+         catalog_page_size=None, audit_alias_references=False):
     require(root.is_dir(), 'root does not exist')
     result = dict(records=0, issues=row_factory(), annotations=row_factory(), views=[], search_matches=0,
                   duplicate_destinations=0, alias_views=0, commands=0, image_alternatives=0,
@@ -307,7 +339,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
 
     destinations = {}
     destination_references = {}
-    for view in emitted_views(root, ask('languages'), ask):
+    for view in emitted_views(root, language_catalog(ask, catalog_page_size), ask):
         summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0)
         result['views'].append(summary)
         # Args requires a nonempty language; this reserved selector is only a
@@ -376,9 +408,14 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                 identity = (actual_kind, owner, actual_title)
                 if reference is not None:
                     require(isinstance(reference, str) and re.fullmatch('[0-9a-f]{64}', reference) is not None and
-                            view['kind'] == 'language' and actual_kind != 'language' and actual_kind != 'alias' and
-                            owner is None and redirect is not None and redirect.get('followed') is True,
-                            'invalid cross-feature audit reference')
+                            view['kind'] == 'language' and owner is None and redirect is not None,
+                            'invalid destination audit reference')
+                    if actual_kind == 'alias':
+                        require(audit_alias_references and redirect.get('followed') is False and
+                                redirect['source_title'] == actual_title == title, 'invalid alias audit reference')
+                    else:
+                        require(actual_kind != 'language' and redirect.get('followed') is True,
+                                'invalid cross-feature audit reference')
                 if reused is not None:
                     require(reference in destination_references and destination_references[reference] == identity and
                             identity in destinations, 'unknown or conflicting destination reference')
@@ -582,7 +619,7 @@ def wait_export_child(process, timeout):
     try:
         poller = select.poll()
         poller.register(fd, select.POLLIN)
-        events = poller.poll(timeout * 1000)
+        events = poller.poll(math.ceil(timeout * 1000))
         if not events:
             code = process.poll()
             if code is None:
@@ -593,6 +630,15 @@ def wait_export_child(process, timeout):
         return process.wait()
     finally:
         os.close(fd)
+
+
+def stop_export_child(process, birth):
+    try:
+        if process.poll() is None and birth is not None:
+            require(process_birth(process.pid) == birth, 'export child identity changed')
+            process.kill()
+    finally:
+        process.wait()
 
 
 @contextmanager
@@ -613,12 +659,7 @@ def checked_export_stream(argv):
                     birth = process_birth(process.pid)
                     code = wait_export_child(process, 60)
                 except BaseException:
-                    try:
-                        if process.poll() is None and birth is not None:
-                            require(process_birth(process.pid) == birth, 'export child identity changed')
-                            process.kill()
-                    finally:
-                        process.wait()
+                    stop_export_child(process, birth)
                     raise
                 copied.result()
                 require(code == 0, f'export batch failed with status {code}')
@@ -627,7 +668,78 @@ def checked_export_stream(argv):
             yield decoded
 
 
-def batch_exports(binary, root, selection, matches, batch_size, unchanged, reference_hints=None):
+def exchange_export_batch(process, titles, hints, storage, alias_references=False):
+    mode = 0 if hints is None else 2 if alias_references else 1
+    process.stdin.write(bytes((len(titles), mode)))
+    if hints is not None:
+        process.stdin.write(''.join(hints).encode('ascii'))
+    for title in titles:
+        encoded = title.encode('utf-8')
+        process.stdin.write(struct.pack('<I', len(encoded)))
+        process.stdin.write(encoded)
+    process.stdin.flush()
+    at_line_start = True
+    with export_spool(storage, 'wb') as compressed:
+        while part := process.stdout.readline(128 * 1024):
+            if at_line_start and part == b'\n':
+                return True
+            compressed.write(part)
+            at_line_start = part.endswith(b'\n')
+    return False
+
+
+@contextmanager
+def checked_export_session(argv, *, alias_references=False):
+    """One native Store for the current selection, one transaction per request."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        with process.stdin, process.stdout:
+            birth = None
+            stopped = False
+
+            @contextmanager
+            def batch(titles, hints):
+                nonlocal stopped
+                with tempfile.SpooledTemporaryFile(max_size=2 * 1024 * 1024) as storage:
+                    deadline = time.monotonic() + 60
+                    try:
+                        exchange = pool.submit(exchange_export_batch, process, titles, hints, storage, alias_references)
+                        if not exchange.result(timeout=60):
+                            code = wait_export_child(process, max(0, deadline - time.monotonic()))
+                            require(code == 0, f'export batch failed with status {code}')
+                            raise ScanError('export session ended without completing the batch')
+                    except BaseException as error:
+                        stopped = True
+                        try:
+                            stop_export_child(process, birth)
+                        finally:
+                            # Release storage only after the transfer has joined.
+                            pool.shutdown(wait=True)
+                        if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+                            raise subprocess.TimeoutExpired(argv, 60) from error
+                        raise
+                    storage.seek(0)
+                    with export_spool(storage, 'rb') as decoded:
+                        yield decoded
+
+            try:
+                birth = process_birth(process.pid)
+                yield batch
+                process.stdin.close()
+                code = wait_export_child(process, 60)
+                require(code == 0, f'export session failed with status {code}')
+            except BaseException:
+                if not stopped:
+                    if birth is None:
+                        # No request has been sent. EOF lets an unproved child
+                        # terminate without a signal, even if birth lookup failed.
+                        process.stdin.close()
+                        process.stdout.close()
+                    stop_export_child(process, birth)
+                raise
+
+
+def batch_exports(binary, root, selection, matches, batch_size, unchanged, reference_hints=None, session=None):
     require(1 <= batch_size <= 64, 'invalid export batch size')
     offset = 0
     while offset < len(matches):
@@ -654,14 +766,16 @@ def batch_exports(binary, root, selection, matches, batch_size, unchanged, refer
             offset += 1
             continue
         unchanged()
-        argv = [str(binary.resolve()), 'export', '--root', str(root),
-                '--format', 'json', *selection, '--batch', '--case-sensitive']
-        hints = None
-        if reference_hints is not None:
-            hints = [reference_hints.get(title, '0' * 64) for title in titles]
-            argv.extend(['--audit-reference-hints', ''.join(hints)])
-        argv.extend(['--', *titles])
-        with checked_export_stream(argv) as spool:
+        hints = [reference_hints.get(title, '0' * 64) for title in titles] if reference_hints is not None else None
+        if session is None:
+            argv = [str(binary.resolve()), 'export', '--root', str(root),
+                    '--format', 'json', *selection, '--batch', '--case-sensitive']
+            if hints is not None:
+                argv.extend(['--audit-reference-hints', ''.join(hints)])
+            stream = checked_export_stream([*argv, '--', *titles])
+        else:
+            stream = session(titles, hints)
+        with stream as spool:
             unchanged()
             for index, title in enumerate(titles):
                 line = spool.readline()
@@ -793,13 +907,25 @@ def main():
                         help='Exact exports per Reader process (default: 32 with the installed wikidict, 1 with another binary)')
     parser.add_argument('--audit-reference-hints', action='store_true',
                         help='Reuse confirmed fixed-feature redirect bodies with a compatible Reader')
+    parser.add_argument('--audit-export-session', action='store_true',
+                        help='Reuse the Store across batches on an unchanged view with a compatible Reader')
+    parser.add_argument('--audit-alias-references', action='store_true',
+                        help='Reuse validated redirect bodies when the target is absent in the selected language')
+    parser.add_argument('--catalog-page-size', type=int, metavar='N',
+                        help='Read N language indexes per native catalog request (1–1000)')
     args = parser.parse_args()
+    if args.audit_alias_references and not (args.audit_reference_hints and args.audit_export_session):
+        parser.error('--audit-alias-references requires --audit-reference-hints and --audit-export-session')
+    if args.catalog_page_size is not None and not 1 <= args.catalog_page_size <= 1000:
+        parser.error('--catalog-page-size must be between 1 and 1000')
     if args.definition_registry and not args.definition_dump:
         parser.error('--definition-registry requires --definition-dump')
     if args.batch_size is None:
         args.batch_size = 32 if args.binary.resolve() == installed_reader.resolve() else 1
     if args.audit_reference_hints and args.batch_size == 1:
         parser.error('--audit-reference-hints requires batch export')
+    if args.audit_export_session and args.batch_size == 1:
+        parser.error('--audit-export-session requires batch export')
 
     with ExitStack() as report_files:
         return run_audit(args, report_files)
@@ -820,16 +946,30 @@ def run_audit(args, report_files):
                 require(dictionary_snapshot(args.binary) == binary_before, 'CLI binary changed during audit')
             if args.batch_size > 1:
                 hints = {} if args.audit_reference_hints else None
+                selected, exchange = None, None
                 def exports(selection, matches):
-                    return batch_exports(args.binary, args.root, selection, matches, args.batch_size, unchanged, hints)
+                    def send(titles, batch_hints):
+                        nonlocal selected, exchange
+                        if selection != selected:
+                            sessions.close()
+                            unchanged()
+                            argv = [str(args.binary.resolve()), 'export', '--root', str(args.root),
+                                    '--format', 'json', *selection, '--batch-session', '--case-sensitive']
+                            exchange = sessions.enter_context(checked_export_session(argv, alias_references=args.audit_alias_references))
+                            selected = selection
+                        return exchange(titles, batch_hints)
+                    return batch_exports(args.binary, args.root, selection, matches, args.batch_size,
+                                         unchanged, hints, send if args.audit_export_session else None)
         with ExitStack() as resources:
+            sessions = resources.enter_context(ExitStack())
             review = None
             if args.definition_dump:
                 from source_definition_audit import SourceDefinitions
                 review = SourceDefinitions('', args.root, args.definition_dump, args.definition_registry)
                 resources.callback(review.close)
             result = scan(args.root, query, exports, observe_record=review.observe if review and review.has_definitions else None,
-                          audit_references=args.audit_reference_hints, row_factory=lambda: ReportRows(report_files))
+                          audit_references=args.audit_reference_hints, row_factory=lambda: ReportRows(report_files),
+                          catalog_page_size=args.catalog_page_size, audit_alias_references=args.audit_alias_references)
             if review is not None:
                 definitions = review.report()
                 result['source_definitions'] = definitions

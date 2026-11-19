@@ -13,6 +13,48 @@ from unittest import mock
 import verify_presentation as audit
 
 
+class PagedCatalogTests(unittest.TestCase):
+    def test_joins_empty_exact_and_partial_pages(self):
+        owners = [('Afrikaans', 'af', 'language'), ('Translingual', 'mul', 'translingual'),
+                  ('未分類', '', 'unverified')]
+        for count in range(4):
+            with self.subTest(count=count):
+                rows = [dict(heading=h, code=c, classification=k, records=i)
+                        for i, (h, c, k) in enumerate(owners[:count])]
+                calls = []
+
+                def query(command, size_flag, size, offset_flag, offset):
+                    calls.append((command, size_flag, size, offset_flag, offset))
+                    start = int(offset)
+                    return dict(schema='dict.languages.page.v1', offset=start, total_headings=count,
+                                accounting=rows[start:start + int(size)])
+
+                catalog = audit.language_catalog(query, 2)
+                self.assertEqual([r['heading'] for r in rows], catalog['languages'])
+                self.assertEqual(rows, catalog['accounting'])
+                self.assertEqual([('languages', '--catalog-page-size', '2', '--offset', str(i))
+                                  for i in range(0, max(count, 1), 2)], calls)
+
+    def test_rejects_wrong_or_incomplete_second_page(self):
+        first = dict(heading='A', code='en', classification='language', records=0)
+        last = dict(first, heading='B')
+        for mutation in [dict(schema='other'), dict(offset=True), dict(total_headings=3),
+                         dict(accounting=[]), dict(accounting=[first]), dict(accounting=[last, last]),
+                         dict(accounting=[dict(last, records=False)]),
+                         dict(accounting=[dict(last, classification='unverified')])]:
+            with self.subTest(mutation=mutation):
+                def query(*args):
+                    offset = int(args[-1])
+                    page = dict(schema='dict.languages.page.v1', offset=offset, total_headings=2,
+                                accounting=[last if offset else first])
+                    if offset:
+                        page.update(mutation)
+                    return page
+
+                with self.assertRaises(audit.ScanError):
+                    audit.language_catalog(query, 1)
+
+
 class PresentationDiagnosticTests(unittest.TestCase):
     def test_category_prescreen_preserves_multiple_matches_and_unicode(self):
         self.assertEqual(audit.diagnostic_categories('ſcript ERROR: [[猫]] __NOTOC__ [MISSING TEMPLATE]'),
@@ -844,6 +886,47 @@ class BatchExportBoundaryTests(unittest.TestCase):
                             self.assertEqual(limit == 64, storage._rolled)
                             self.assertLess(storage.tell(), len(payload) // 10)
 
+    def test_export_session_reuses_child_and_frames_long_records(self):
+        child = '''
+import struct, sys
+r, w = sys.stdin.buffer, sys.stdout.buffer
+number = 0
+while count := r.read(1):
+    number += 1
+    hints = r.read(1)[0]
+    if hints:
+        assert r.read(count[0] * 64) == b'0' * (count[0] * 64)
+    for _ in range(count[0]):
+        length, = struct.unpack('<I', r.read(4))
+        title = r.read(length)
+        w.write(str(number).encode() + title + b'x' * (128 * 1024) + b'\\n')
+    w.write(b'\\n')
+    w.flush()
+'''
+        with audit.checked_export_session([sys.executable, '-c', child]) as request:
+            for number, title, hints in ((1, '猫', None), (2, '-dash', ['0' * 64])):
+                with request([title], hints) as result:
+                    self.assertEqual(str(number).encode() + title.encode() + b'x' * (128 * 1024) + b'\n',
+                                     result.read())
+
+    def test_export_session_never_yields_uncommitted_or_failed_output(self):
+        for code, message in ((0, 'without completing the batch'), (3, 'status 3')):
+            child = ("import sys; sys.stdin.buffer.read(9); "
+                     "sys.stdout.write('partial\\n'); " + f"sys.exit({code})")
+            with self.subTest(code=code), self.assertRaisesRegex(audit.ScanError, message):
+                with audit.checked_export_session([sys.executable, '-c', child]) as request:
+                    with request(['cat'], None):
+                        self.fail('Failed request yielded a body')
+
+    def test_export_session_closes_the_request_pipe_on_unproved_birth(self):
+        child = 'import sys; sys.stdin.buffer.read()'
+        with (mock.patch.object(audit, 'process_birth', side_effect=OSError('birth unavailable')),
+              mock.patch.object(audit.subprocess.Popen, 'kill') as kill,
+              self.assertRaisesRegex(OSError, 'birth unavailable')):
+            with audit.checked_export_session([sys.executable, '-c', child]):
+                self.fail('Session proceeded without its child birth')
+        kill.assert_not_called()
+
     @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
     def test_failed_and_truncated_batch_never_yields_a_success(self, _pidfd):
         class Child:
@@ -996,6 +1079,35 @@ class BatchExportBoundaryTests(unittest.TestCase):
                 yield {}
             with self.assertRaisesRegex(audit.ScanError, 'extra batch export'):
                 audit.scan(f.root, f.query, extra)
+
+    def test_missing_target_reference_preserves_ordinary_alias_report(self):
+        with Fixture() as f:
+            token = 'e' * 64
+            edge = dict(source_title='old', target_title='other', fragment='sense', followed=False)
+            record = dict(f.entry('old', '__NOTOC__', kind='alias'), redirect=edge)
+            for owner in ('Dutch', 'French'):
+                f.language(owner, [], aliases={'old': record})
+            expected = audit.scan(f.root, f.query)
+
+            def exports(mode):
+                def run(selection, matches):
+                    for match in matches:
+                        value = f.query('export', *selection, '--case-sensitive', '--', match['title'])
+                        value['audit_reference'] = token
+                        if selection[-1] == 'French':
+                            reused = dict(kind='alias', title='old', redirect=dict(edge))
+                            if mode == 'followed': reused['redirect']['followed'] = True
+                            if mode == 'unseen': value['audit_reference'] = 'f' * 64
+                            value.update(entries=[], audit_reused=reused)
+                        yield value
+                return run
+
+            actual = audit.scan(f.root, f.query, exports('valid'), audit_references=True, audit_alias_references=True)
+            self.assertEqual(expected, actual)
+            self.assertEqual((1, 1, 2), (actual['records'], actual['duplicate_destinations'], actual['alias_views']))
+            for mode, enabled in [('valid', False), ('followed', True), ('unseen', True)]:
+                with self.subTest(mode=mode), self.assertRaises(audit.ScanError):
+                    audit.scan(f.root, f.query, exports(mode), audit_references=True, audit_alias_references=enabled)
 
     def test_confirmed_feature_reference_preserves_report_and_refuses_conflicts(self):
         with Fixture() as f:
