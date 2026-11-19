@@ -957,6 +957,8 @@ def test_cache_report_command(argv, *, report, recorder, context):
     """Resolve the same already-selected graph separately; never alter its result."""
     import hashlib, json
     assert argv[1] == 'build' and argv[2] in ('prepare-tests', 'test')
+    if any(arg == '--global-cache-dir' or arg.startswith('--global-cache-dir=') for arg in argv[3:]):
+        raise ValueError('Set ZIG_GLOBAL_CACHE_DIR in the build environment for this toolchain')
     assert not any(a.startswith('-Dqualification-cache-') for a in argv)
     family = 'prepare' if argv[2] == 'prepare-tests' else 'full'
     token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -972,6 +974,7 @@ def test_cache_report_command(argv, *, report, recorder, context):
 def record_test_cache_artifacts(output, cache_local, context, pairs):
     """Build.Run passes actual LazyPath outputs; read metadata, never ELF bytes."""
     import json, os, re, stat
+    import tempfile
     from pathlib import Path
     output = _retention_path(output); cache_local = _retention_path(cache_local)
     assert re.fullmatch('[0-9a-f]{64}', context)
@@ -1007,9 +1010,14 @@ def record_test_cache_artifacts(output, cache_local, context, pairs):
         payload.update(schema='wikidict.qualification-test-cache-paths.v2', dependencies=dependencies,
             coverage=dict(selected_graph_complete=not unknown, unknown_graph_steps=sorted(set(unknown)),
                           runtime_spawned_artifacts='unknown'))
-    with output.open('x') as stream:
-        json.dump(payload, stream, indent=2, sort_keys=True); stream.write('\n')
-        stream.flush(); os.fsync(stream.fileno())
+    # A concurrent reader can open the final name immediately. Publish only a
+    # complete report, retaining exclusive-create semantics for competing writers.
+    with tempfile.TemporaryDirectory(dir=output.parent) as staging:
+        staged = Path(staging) / 'report.json'
+        with staged.open('x') as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True); stream.write('\n')
+            stream.flush(); os.fsync(stream.fileno())
+        os.link(staged, output)
     return payload
 
 

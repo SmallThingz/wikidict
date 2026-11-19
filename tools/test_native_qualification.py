@@ -3192,6 +3192,36 @@ class TestCacheRetentionTests(unittest.TestCase):
             self.assertEqual(argv[2],'prepare-tests')
             self.assertNotIn('-Dprepare-test-group=encoder_compile',exported)
 
+    def test_cache_report_flags_use_the_build_environment_for_global_cache(self):
+        for flags in (['--global-cache-dir', '/cache/global'], ['--global-cache-dir=/cache/global']):
+            with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, 'ZIG_GLOBAL_CACHE_DIR'):
+                qualification.test_cache_report_command(['zig', 'build', 'prepare-tests', *flags],
+                                                        report='/out', recorder='/recorder', context={})
+
+    def test_interrupted_report_leaves_no_final_file_and_retry_preserves_the_first_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / 'local'
+            pair = self.pair(cache, 'a' * 32)
+            final = root / 'result.json'
+            args = (final, cache, 'c' * 64, ['tools', str(pair / 'test')])
+
+            def interrupted(payload, stream, **kwargs):
+                stream.write('{')
+                stream.flush()
+                self.assertFalse(final.exists())
+                raise OSError('interrupted write')
+
+            with patch('json.dump', side_effect=interrupted), self.assertRaisesRegex(OSError, 'interrupted'):
+                qualification.record_test_cache_artifacts(*args)
+            self.assertEqual(set(root.iterdir()), {cache})
+            qualification.record_test_cache_artifacts(*args)
+            original = self.descriptor(final)
+            with self.assertRaises(FileExistsError):
+                qualification.record_test_cache_artifacts(final, cache, 'd' * 64, args[3])
+            self.assertEqual(self.descriptor(final), original)
+            self.assertEqual(set(root.iterdir()), {cache, final})
+
     def test_report_refuses_wrong_root_duplicate_group_symlink_and_drift(self):
         import os
         with tempfile.TemporaryDirectory() as directory:
