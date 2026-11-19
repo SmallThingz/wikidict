@@ -328,6 +328,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                              inventory='native language accounting and emitted fixed-kind files',
                              aliases='selected CLI export view, including one-hop follows; not raw DAL1 coverage',
                              protected_literal_provenance=False,
+                             empty_language_records='Distinct language records with no decoded body, organization, display title, references or media. One example per view.',
                              annotations='decoded plain attribute text; separate literal evidence, never markup execution or lexical body',
                              behavior_aliases='literal double-underscore word pattern; not an exhaustive registry'),
                   status_meaning='failed: review candidates; passed: no candidates in supported views; error: incomplete scan')
@@ -359,7 +360,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
         if index < len(result['views']):
             summary = result['views'][index]
         else:
-            summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0)
+            summary = dict(view, matches=0, unique_records=0, duplicate_destinations=0, empty_language_records=0)
             result['views'].append(summary)
         # Args requires a nonempty language; this reserved selector is only a
         # neutral-store transport argument, never an inferred record owner.
@@ -462,6 +463,16 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                 destinations[identity] = digest
                 result['records'] += 1
                 summary['unique_records'] += 1
+                if (actual_kind == 'language' and entry.get('sections') == [] and entry.get('alias') is None
+                        and entry.get('organization') == {'lexemes': [], 'other_sections': []}
+                        and all(entry.get(key) == [] for key in ('display_title', 'preamble_spans', 'references', 'media'))):
+                    # One example per view keeps a dictionary with many empty entries cheap to report.
+                    if summary['empty_language_records'] == 0:
+                        result['issues'].append(dict(kind=actual_kind, language=owner, title=actual_title,
+                            view_kind=view['kind'], view_language=view['language'], query_title=title,
+                            source_title=redirect['source_title'] if redirect else title, redirect=redirect,
+                            path='entry', text='', categories=['empty-language-body']))
+                    summary['empty_language_records'] += 1
                 if observe_record is not None:
                     observe_record(entry)
                 for path, text in text_fields(content):
@@ -509,6 +520,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
             if not page['has_more']:
                 break
         require(offset == expected_total, 'incomplete view')
+    result['empty_language_records'] = sum(view['empty_language_records'] for view in result['views'])
     result['view_count'] = len(result['views'])
     result['scan_complete'] = True
     result['status'] = 'failed' if result['issues'] else 'passed'
@@ -1101,7 +1113,7 @@ def run_audit(args, report_files):
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
     (write_checkpoint_report if args.checkpoint else write_report)(args.report, result)
     if args.summary_json:
-        summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records') if k in result}
+        summary = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records', 'empty_language_records') if k in result}
         if 'issues' in result:
             summary['review_fields'] = len(result['issues'])
         if 'source_definitions' in result:

@@ -58,6 +58,27 @@ class PagedCatalogTests(unittest.TestCase):
 
 
 class PresentationDiagnosticTests(unittest.TestCase):
+    def test_empty_language_bodies_are_counted_once_with_one_example_per_view(self):
+        with Fixture() as f:
+            blank = dict(kind='language', language='polski', language_code='pl', display_title=[],
+                         organization={'lexemes': [], 'other_sections': []}, preamble_spans=[],
+                         sections=[], references=[], media=[], redirect=None, alias=None)
+            first = dict(blank, title='czytać')
+            entries = [first, dict(blank, title='other')]
+            for field in ('display_title', 'preamble_spans', 'sections', 'references', 'media'):
+                entries.append(dict(blank, title=field, **{field: [dict(text='visible')]}))
+            entries.append(dict(blank, title='lexeme', organization={'lexemes': ['lexical'], 'other_sections': []}))
+            entries.append(f.entry('legacy', '', language='polski'))
+            alias = dict(first, redirect=dict(source_title='alias', target_title='czytać', followed=True))
+            f.language('polski', entries, aliases={'alias': alias})
+            report = audit.scan(f.root, f.query)
+            self.assertEqual(report['status'], 'failed')
+            self.assertEqual(report['empty_language_records'], 2)
+            self.assertEqual(report['views'][0]['empty_language_records'], 2)
+            self.assertEqual([(r['categories'], r['title']) for r in report['issues']],
+                             [(['empty-language-body'], 'czytać')])
+            self.assertEqual(report['duplicate_destinations'], 1)
+
     def test_category_prescreen_preserves_multiple_matches_and_unicode(self):
         self.assertEqual(audit.diagnostic_categories('ſcript ERROR: [[猫]] __NOTOC__ [MISSING TEMPLATE]'),
                          ['source-markup', 'behavior-switch', 'error-prose', 'unavailable-template'])
@@ -602,7 +623,7 @@ class PresentationDiagnosticTests(unittest.TestCase):
             self.assertEqual(raw, (json.dumps(result, ensure_ascii=False, indent=2) + '\n').encode())
             stdout = printed.call_args.args[0]
             if summary_json:
-                expected = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records') if k in result}
+                expected = {k: result[k] for k in ('status', 'scan_complete', 'semantic_acceptance', 'error', 'records', 'empty_language_records') if k in result}
                 if 'issues' in result:
                     expected['review_fields'] = len(result['issues'])
                 self.assertEqual(json.loads(stdout), expected)
