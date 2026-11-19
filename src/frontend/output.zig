@@ -2686,13 +2686,14 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
             .preformatted => try w.writeAll("    "),
             else => {},
         }
-        // Rich projections own their layout. Ordinary lists pass the width of
-        // the emitted marker to the wrapper without adding bytes to CLI text.
+        // For ordinary list and indent blocks, keep continuation lines under
+        // the body. The prefix is already present in the unwrapped text.
         const previous_marker = if (projection) |p| p.list_marker else null;
         defer if (projection) |p| { p.list_marker = previous_marker; };
         if (projection) |p| {
             p.list_marker = null;
-            if ((block.kind == .list_item or block.kind == .definition) and block.figure == null and !has_flow) {
+            const has_prefix = block.kind == .list_item or block.kind == .definition or (block.kind == .indent and block.depth != 0);
+            if (has_prefix and block.figure == null and !has_flow) {
                 const frame = p.frame.written();
                 p.list_marker = .{ .end = frame.len, .cells = terminal.cellWidth(frame[marker_start..]) };
             }
@@ -5045,6 +5046,28 @@ test "ordinary lists hang at the emitted marker width without changing their tex
         const narrow = try terminal.wrapStyledProjected(a, text.written(), 3, lines.items);
         defer a.free(narrow);
         for (narrow) |row| try std.testing.expect(row.left + terminal.cellWidth(row.bytes) <= 3);
+    }
+}
+
+test "indented paragraphs keep their authored depth across wraps and line breaks" {
+    terminal.initLocale();
+    const a = std.testing.allocator;
+    const block: model.Block = .{ .kind = .indent, .depth = 1, .list_path = ":", .spans = &.{
+        .{ .text = "[2] System ti comunicatsia" }, .{ .kind = .line_break }, .{ .text = "anamisa" },
+    } };
+    var text: std.Io.Writer.Allocating = .init(a);
+    defer text.deinit();
+    var lines: std.ArrayList(terminal.PoemLine) = .empty;
+    defer lines.deinit(a);
+    var projection: PoemProjection = .{ .frame = &text, .allocator = a, .lines = &lines };
+    try blocksTextProjected(&text.writer, &.{block}, false, &projection);
+    try std.testing.expectEqualStrings("  [2] System ti comunicatsia\nanamisa\n", text.written());
+    const rows = try terminal.wrapStyledProjected(a, text.written(), 15, lines.items);
+    defer a.free(rows);
+    try std.testing.expect(rows.len >= 3);
+    try std.testing.expect(std.mem.startsWith(u8, rows[0].bytes, "  [2]"));
+    for (rows[1..]) |row| {
+        if (row.bytes.len != 0) try std.testing.expectEqual(@as(usize, 2), row.left);
     }
 }
 
