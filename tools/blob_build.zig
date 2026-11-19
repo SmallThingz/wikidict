@@ -67240,6 +67240,126 @@ test "Finnish Writer separates exact authored Bwaidoka and Molima category owner
     }
 }
 
+const SmSourceBannerTest = struct {
+    const namespaces =
+        "# wikidict-namespace-registry-v1\n# wiki\tsmwiktionary\n# dump-date\t20261001\n# content-language\tsm\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tfirst-letter\t0\t0\t0\twikitext\tcompile_only\tcategories\n";
+    const languages = "# content-language\tsm\n# mediawiki\nen\tEnglish\ten\teng\nfr\tFrench\tFrançais\tfrançais\tfr\tfra\tfre\nsm\tGagana Samoa\tsm\tSamoan\tsmo\n";
+};
+
+test "Samoan static banner requires agreeing category heading and emphasized language code" {
+    const a = std.testing.allocator;
+    var ns = try namespace_registry.Registry.init(a, SmSourceBannerTest.namespaces);
+    defer ns.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(SmSourceBannerTest.languages);
+    const heading = "Faʻa Peretania <small><small><small> '''(en)''' </small></small></small>";
+    const category = "<includeonly>[[Category:Faʻa Peretania]]</includeonly>\n";
+    const tail = "\n<br><noinclude>\n<!--[[Category:Language templates]]-->\n</noinclude>";
+    const source = category ++ "== " ++ heading ++ " ==" ++ tail;
+    const proof = source_language_banner.parse(source, &ns, null, &registry, "en").?;
+    try std.testing.expectEqualStrings(heading, proof.heading);
+    try std.testing.expectEqualStrings("Faʻa Peretania", proof.label);
+    try std.testing.expectEqual(@as(u8, 2), proof.level);
+    try registry.addSourceLanguageBanner("en", proof);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("en", heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("fr", heading, 2));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("en", "Faʻa Peretania (en)", 2));
+    const french = "[[category:Faʻa Farani]]\n<includeonly>[[Category:Faʻa Farani]]</includeonly>\n" ++
+        "== Faʻa Farani <small><small><small> '''(fr)''' </small></small></small> ==" ++ tail;
+    try std.testing.expectEqualStrings("Faʻa Farani", source_language_banner.parse(french, &ns, null, &registry, "fr").?.label);
+    try std.testing.expect(source_language_banner.parse(source, &ns, null, &registry, "fr") == null);
+    for ([_][]const u8{
+        "<includeonly>[[Category:Different]]</includeonly>\n== " ++ heading ++ " ==" ++ tail,
+        "<includeonly>[[:Category:Faʻa Peretania]]</includeonly>\n== " ++ heading ++ " ==" ++ tail,
+        "[[Category:Different]]\n" ++ source,
+        category ++ "=== " ++ heading ++ " ===" ++ tail,
+        category ++ "== Faʻa Peretania <small style=\"display:none\"><small><small>'''(en)'''</small></small></small> ==" ++ tail,
+        category ++ "== Faʻa Peretania <small><small><small>'''({{{1}}})'''</small></small></small> ==" ++ tail,
+        source ++ "outside documentation",
+        "<onlyinclude>" ++ source ++ "</onlyinclude>",
+    }) |invalid| try std.testing.expect(source_language_banner.parse(invalid, &ns, null, &registry, "en") == null);
+}
+
+test "Writer assigns the source-declared English owner of Samoan able and preserves heading style and definition link" {
+    const source = @embedFile("testdata/sm-source-banner/able.raw.wikitext");
+    const expanded = @embedFile("testdata/sm-source-banner/able.expanded.wikitext");
+    const english = @embedFile("testdata/sm-source-banner/template-en.wikitext");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const cwd = std.Io.Dir.cwd();
+    try cwd.writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "manifest.jsonl" }), .data = "" });
+    try cwd.writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "language-registry.tsv" }), .data = SmSourceBannerTest.languages });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    try cwd.writeFile(io, .{ .sub_path = index_path, .data = "0\t0\tTemplate:-en-\t\t2236\t63910\t2022-11-26T12:58:41Z\tFehufanga\twikitext\t10\t1\t1\n" });
+    var templates = try dump_source.TemplateSourceWriter.init(io, a, root);
+    defer templates.deinit();
+    try templates.append(0, 2236, 63910, english);
+    try templates.finish(index_path);
+    var ns = try namespace_registry.Registry.init(a, SmSourceBannerTest.namespaces);
+    defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns);
+    defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const output = try std.fs.path.join(a, &.{ root, "blobs" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "able", expanded, source, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mismatched-template", expanded, "{{-fr-}}\n# [[e mafai]]", null);
+    _ = try writer.finish(codes);
+    var name: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+    var mapped = try mmapPath(io, try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename("English", &name) }));
+    defer mapped.deinit();
+    const blob = try encoder.blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("able")) orelse return error.TestExpectedEqual;
+    try std.testing.expect(try index.find("mismatched-template") == null);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqualStrings("en", decoded.entry.language_code);
+    try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var source_formatting: encoder.presentation_document.Fallbacks = .{};
+    const original_payload = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, "able", .language, "English", "en", expanded, null, .{}, &ns, &source_formatting);
+    const original = try encoder.presentation_codec.decodeAlloc(a, original_payload, "able", .language, metadata);
+    try std.testing.expectEqualDeep(original.entry.sections, decoded.entry.sections);
+    try std.testing.expectEqualDeep(original.entry.references, decoded.entry.references);
+    try std.testing.expectEqualDeep(original.entry.media, decoded.entry.media);
+    var code_markers: usize = 0;
+    var links: usize = 0;
+    var headwords: usize = 0;
+    for (decoded.entry.sections) |section| {
+        for (section.blocks) |block| {
+            for (block.spans) |span| {
+                if (block.kind == .heading and std.mem.eql(u8, span.text, "(en)")) {
+                    try std.testing.expectEqual(@as(u8, 2), section.level);
+                    try std.testing.expectEqualStrings("Faʻa Peretania  (en)", section.title);
+                    try std.testing.expect(span.kind == .text and span.bold and !span.small);
+                    try std.testing.expect(span.font_scale_basis == .context);
+                    // Each of the three authored <small> elements scales its parent by 1/1.2.
+                    const expected_scale: f32 = 1.0 / (1.2 * 1.2 * 1.2);
+                    try std.testing.expectApproxEqAbs(expected_scale, span.font_scale orelse return error.TestExpectedEqual, 0.000001);
+                    code_markers += 1;
+                }
+                if (span.bold and std.mem.eql(u8, span.text, "able")) headwords += 1;
+                if (block.kind == .definition and span.kind == .link and std.mem.eql(u8, span.target, "e mafai") and std.mem.eql(u8, span.text, "e mafai")) links += 1;
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), code_markers);
+    try std.testing.expectEqual(@as(usize, 1), headwords);
+    try std.testing.expectEqual(@as(usize, 1), links);
+}
+
 const ZhOldFrenchCaptured = struct {
     fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, snapshot: bool) !void {
         try std.Io.Dir.cwd().createDirPath(io, try std.fs.path.join(a, &.{ root, "modules" }));

@@ -39,7 +39,52 @@ pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*con
     return parseKnownNames(source, ns, behavior, registry, code) orelse
         parseFlaggedName(source, ns, behavior, registry, code) orelse
         parseLiteralCode(source, ns, behavior, registry, code) orelse
+        parseEmphasizedCode(source, ns, behavior, registry, code) orelse
         parseCategoryLinkedHeading(source, ns, behavior, registry, code);
+}
+
+fn bannerCategoryName(link: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior) ?[]const u8 {
+    if (!std.mem.startsWith(u8, link, "[[") or !std.mem.endsWith(u8, link, "]]") or
+        !hiddenCategory(link, ns, behavior) or std.mem.indexOfAny(u8, link, "|#") != null) return null;
+    return ns.ofTitle(link[2 .. link.len - 2]).text;
+}
+
+// Some static banners declare an ordinary H2 label followed by an emphasized
+// language code. Keep the complete authored heading, including its styling.
+fn parseEmphasizedCode(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    if (source.len > 4096 or !registry.codes.contains(code) or
+        std.mem.indexOf(u8, source, "<onlyinclude>") != null or std.mem.indexOf(u8, source, "</onlyinclude>") != null) return null;
+    const open = "<includeonly>";
+    const close = "</includeonly>";
+    const begin = std.mem.indexOf(u8, source, open) orelse return null;
+    const end = std.mem.indexOfPos(u8, source, begin + open.len, close) orelse return null;
+    const category = source[begin + open.len .. end];
+    const label = bannerCategoryName(category, ns, behavior) orelse return null;
+    if (!plain(label) or std.mem.indexOfAny(u8, label, ":#") != null or
+        !registry.sourceBannerLiteralCodeNameCompatible(code, label)) return null;
+    if (begin != 0) {
+        // The French provider repeats the identical category outside includeonly.
+        if (source[begin - 1] != '\n') return null;
+        const first = std.mem.trimEnd(u8, source[0..begin], "\r\n");
+        const repeated = bannerCategoryName(first, ns, behavior) orelse return null;
+        if (!std.mem.eql(u8, repeated, label)) return null;
+    }
+    const after = source[end + close.len ..];
+    if (!std.mem.startsWith(u8, after, "\n") and !std.mem.startsWith(u8, after, "\r\n")) return null;
+    const body = std.mem.trimStart(u8, after, "\r\n");
+    const newline = std.mem.indexOfScalar(u8, body, '\n') orelse return null;
+    const heading = syntax.controlHeading(std.mem.trimEnd(u8, body[0..newline], "\r"), null) orelse return null;
+    if (heading.level != 2 or !std.mem.startsWith(u8, heading.title, label)) return null;
+    const rest = heading.title[label.len..];
+    if (rest.len == 0 or rest[0] != ' ') return null;
+    var suffix = std.mem.trimStart(u8, rest, " ");
+    for (0..3) |_| suffix = unwrapNeutral(suffix, "small") orelse return null;
+    if (suffix.len != code.len + 8 or !std.mem.startsWith(u8, suffix, "'''(") or
+        !std.mem.endsWith(u8, suffix, ")'''") or !std.mem.eql(u8, suffix[4 .. suffix.len - 4], code)) return null;
+    const tail = std.mem.trim(u8, body[newline + 1 ..], "\r\n");
+    if (!std.mem.startsWith(u8, tail, "<br><noinclude>")) return null;
+    if ((excludedDocumentationEnd(tail, "<br>".len) orelse return null) != tail.len) return null;
+    return .{ .heading = heading.title, .level = heading.level, .target = label, .label = label, .authority = .literal_code };
 }
 
 // A source-authenticated literal banner may prefix its known language name
