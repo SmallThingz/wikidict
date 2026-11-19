@@ -968,7 +968,7 @@ const State = struct {
                 self.row_origins = layout.origins;
                 self.float_unsupported = layout.unsupported;
             } else {
-                const rows = try term.wrapStyledProjected(self.a, self.text, width, self.poem_lines.items);
+                const rows = try term.wrapPaneProse(self.a, self.text, width, self.poem_lines.items);
                 self.a.free(self.rows);
                 self.a.free(self.visual_text);
                 self.visual_text = &.{};

@@ -350,6 +350,7 @@ fn pageHint(io: std.Io, opts: args.Options, total: usize, count: usize) !void {
 }
 
 test {
+    _ = @import("terminal.zig");
     _ = desktop_dispatch;
     _ = args;
     _ = @import("languages.zig");

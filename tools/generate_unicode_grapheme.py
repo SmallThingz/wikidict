@@ -7,6 +7,7 @@ Builds and the reader never fetch Unicode data.
 import hashlib
 from pathlib import Path
 import sys
+import unicodedata
 from urllib.request import urlopen
 
 VERSION = "16.0.0"
@@ -32,25 +33,45 @@ def main():
         if prop in ("Extend", "SpacingMark"):
             parts = span.split("..")
             ranges.append((int(parts[0], 16), int(parts[-1], 16)))
+    # Older terminal width tables can advance a mark that newer libc treats
+    # as nonspacing. Keep established narrow combining marks and protocol
+    # selectors at zero. This allowance is only used when wrapping pane prose.
+    historic = unicodedata.ucd_3_2_0
     merged = []
     for low, high in sorted(ranges):
-        if merged and low <= merged[-1][1] + 1:
-            merged[-1] = (merged[-1][0], max(high, merged[-1][1]))
-        else:
-            merged.append((low, high))
+        for cp in range(low, high + 1):
+            category = historic.category(chr(cp))
+            if 0xfe00 <= cp <= 0xfe0f or 0xe0100 <= cp <= 0xe01ef or 0xe0020 <= cp <= 0xe007f:
+                advance = 0
+            elif category != 'Cn' and historic.east_asian_width(chr(cp)) in ('W', 'F'):
+                advance = 2
+            else:
+                advance = int(category not in ('Mn', 'Me', 'Cf'))
+            if merged and cp == merged[-1][1] + 1 and advance == merged[-1][2]:
+                merged[-1] = (merged[-1][0], cp, advance)
+            else:
+                merged.append((cp, cp, advance))
     text = f"//! Generated Unicode {VERSION} Grapheme_Cluster_Break Extend/SpacingMark ranges.\n//! Source: {URL}\n//! SHA-256: {SHA256}\n//! Unicode data license: UNICODE-LICENSE.txt.\n"
-    text += "const Range = struct { first: u21, last: u21 };\nconst ranges = [_]Range{\n"
-    text += "".join("    .{ .first = 0x%x, .last = 0x%x },\n" % row for row in merged)
+    text += "const Range = struct { first: u21, last: u21, legacy_advance: u2 = 0 };\nconst ranges = [_]Range{\n"
+    for low, high, advance in merged:
+        extra = f", .legacy_advance = {advance}" if advance else ""
+        text += f"    .{{ .first = 0x{low:x}, .last = 0x{high:x}{extra} }},\n"
     text += """};
-pub fn isExtendOrSpacingMark(cp: u21) bool {
+fn markRange(cp: u21) ?Range {
     var low: usize = 0;
     var high: usize = ranges.len;
     while (low < high) {
         const mid = low + (high - low) / 2;
         const range = ranges[mid];
-        if (cp < range.first) high = mid else if (cp > range.last) low = mid + 1 else return true;
+        if (cp < range.first) high = mid else if (cp > range.last) low = mid + 1 else return range;
     }
-    return false;
+    return null;
+}
+pub fn isExtendOrSpacingMark(cp: u21) bool {
+    return markRange(cp) != null;
+}
+pub fn legacyMarkAdvance(cp: u21) u2 {
+    return if (markRange(cp)) |r| r.legacy_advance else 0;
 }
 """
     output.write_text(text, encoding="utf-8")

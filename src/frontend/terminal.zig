@@ -42,6 +42,10 @@ fn segmentWidth(text: []const u8, start: usize, end: usize) usize {
     return result;
 }
 pub fn prefixBytes(text: []const u8, cells: usize) usize {
+    return prefixWithin(text, cells, false);
+}
+
+fn prefixWithin(text: []const u8, cells: usize, guard_marks: bool) usize {
     var pos: usize = 0;
     var used: usize = 0;
     while (pos < text.len) {
@@ -51,7 +55,18 @@ pub fn prefixBytes(text: []const u8, cells: usize) usize {
         }
         const end = nextClusterEnd(text, pos);
         if (end <= pos) break;
-        const w = clusterWidth(text, pos, end);
+        var w = clusterWidth(text, pos, end);
+        if (guard_marks and (w == 0 or end - pos > (std.unicode.utf8ByteSequenceLength(text[pos]) catch 1))) {
+            var at = pos;
+            while (at < end) {
+                const cp = codepointAt(text, at);
+                if (cp >= 0x300) {
+                    const advance = @import("unicode_grapheme_data.zig").legacyMarkAdvance(cp);
+                    if (advance != 0 and width(cp) == 0) w += advance;
+                }
+                at += std.unicode.utf8ByteSequenceLength(text[at]) catch 1;
+            }
+        }
         if (used + w > cells) break;
         used += w;
         pos = end;
@@ -184,7 +199,7 @@ pub fn wrap(a: std.mem.Allocator, text: []const u8, columns: usize) ![][]const u
             if (end < rest.len) {
                 if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                     if (nextClusterEnd(rest, space) == space + 1 and
-                        (space > end / 2 or moveWholeWord(rest, space, end, @max(columns, 2)))) end = space;
+                        (space > end / 2 or moveWholeWord(rest, space, end, @max(columns, 2), false))) end = space;
                 }
             }
             try rows.append(a, rest[0..end]);
@@ -414,6 +429,36 @@ test "terminal input survives split escape sequences and multibyte paste" {
     _ = input.feed(27);
     try std.testing.expectEqual(Key.escape, input.flushEscape().?.key);
 }
+test "pane prose wraps uncertain marks without changing source or ordinary cell geometry" {
+    initLocale();
+    const a = std.testing.allocator;
+    const witness = "တူဝ်ထိသၢမ် ၼႂ်းတူဝ်မႄႈလိၵ်ႈတႆး သိပ်းၵဝ်ႈတူဝ်၊ ဢၢၼ်ႇ ဝႃႈ ငႃႉ။";
+    const source = "  1. \x1b[1m" ++ witness ++ "\x1b[0m";
+    const marker: PoemLine = .{ .offset = 0, .lead_bytes = 5, .lead_cells = 5, .continuation_left = 5, .wrap_prose = true };
+    const rows = try wrapPaneProse(a, source, 56, &.{marker});
+    defer a.free(rows);
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    try std.testing.expectEqualStrings("ငႃႉ။\x1b[0m", rows[1].bytes);
+    try std.testing.expect(rows[1].carry.bold);
+    try std.testing.expectEqual(@as(usize, 5), rows[1].left);
+    try std.testing.expectEqualStrings(rows[0].bytes, source[0..rows[0].bytes.len]);
+    try std.testing.expectEqual(@as(u8, ' '), source[rows[0].bytes.len]);
+    try std.testing.expectEqualStrings(rows[1].bytes, source[rows[0].bytes.len + 1 ..]);
+    // A mark that both width repertoires combine occupies no extra budget.
+    // Grapheme edits, plain clipping, emoji presentation, and original ANSI bytes
+    // still use their normal terminal cells.
+    for ([_][]const u8{ "éé", "👩‍💻", "1️⃣", "🇦🇺" }) |stable| {
+        const width_cells = cellWidth(stable);
+        try std.testing.expectEqual(stable.len, prefixWithin(stable, width_cells, true));
+    }
+    try std.testing.expectEqual(@as(usize, 1), cellWidth("ဝ်"));
+    try std.testing.expectEqual(@as(usize, 0), prefixWithin("ဝ်", 1, true));
+    try std.testing.expectEqual("ဝ်".len, prefixBytes("ဝ်", 1));
+    const tiny = try wrapPaneProse(a, "ဝ်x", 2, &.{});
+    defer a.free(tiny);
+    try std.testing.expectEqualStrings("ဝ်", tiny[0].bytes);
+}
+
 test "cell wrapping preserves CJK and combining marks without splitting UTF8" {
     initLocale();
     try std.testing.expectEqual(@as(usize, 5), cellWidth("猫é猫"));
@@ -568,7 +613,7 @@ fn textByteCount(text: []const u8) usize {
 
 // If prose has already started and the next word fits on a fresh line, keep it
 // intact. Only inspect at most a line's worth of the following word.
-fn moveWholeWord(line: []const u8, space: usize, end: usize, columns: usize) bool {
+fn moveWholeWord(line: []const u8, space: usize, end: usize, columns: usize, guard_marks: bool) bool {
     if (line[end] == ' ') return false;
     var pos: usize = 0;
     while (pos < space) {
@@ -580,7 +625,7 @@ fn moveWholeWord(line: []const u8, space: usize, end: usize, columns: usize) boo
     }
     if (pos == space) return false;
     const following = line[space + 1 ..];
-    const fit = prefixBytes(following, columns);
+    const fit = prefixWithin(following, columns, guard_marks);
     return fit == following.len or std.mem.indexOfScalar(u8, following[0 .. fit + 1], ' ') != null;
 }
 
@@ -590,15 +635,21 @@ pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usiz
 }
 /// Continue wrapping an original slice without losing its incoming SGR state.
 pub fn wrapStyledProjectedFromStyle(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle) ![]RenderRow {
-    return wrapRows(a, text, columns, poem_lines, initial, false);
+    return wrapRows(a, text, columns, poem_lines, initial, false, false);
+}
+
+/// The terminal may advance newer combining marks independently of libc. Budget
+/// for that possibility at prose wrap boundaries without changing paint or offsets.
+pub fn wrapPaneProse(a: std.mem.Allocator, text: []const u8, columns: usize, lines: []const PoemLine) ![]RenderRow {
+    return wrapRows(a, text, columns, lines, .{}, false, true);
 }
 
 /// Table rows retain every byte, including the separator when a word wraps.
 pub fn wrapStyledCell(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
-    return wrapRows(a, text, columns, &.{}, .{}, true);
+    return wrapRows(a, text, columns, &.{}, .{}, true, false);
 }
 
-fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle, cell: bool) ![]RenderRow {
+fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle, cell: bool, pane: bool) ![]RenderRow {
     var rows: std.ArrayList(RenderRow) = .empty;
     errdefer rows.deinit(a);
     var style: TextStyle = initial;
@@ -609,6 +660,7 @@ fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: 
         while (metadata_index < poem_lines.len and poem_lines[metadata_index].offset < line_offset) metadata_index += 1;
         const poem = if (metadata_index < poem_lines.len and poem_lines[metadata_index].offset == line_offset) poem_lines[metadata_index] else null;
         const wrap_prose = if (poem) |p| p.wrap_prose else true;
+        const guard_marks = pane and wrap_prose;
         var rest = line;
         var first = true;
         while (true) {
@@ -617,15 +669,15 @@ fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: 
             const left = @min(requested_left, columns -| (lead_cells + 2));
             const right = @min(if (poem) |p| p.right else 0, columns -| (left + lead_cells + 2));
             const available = @max(columns -| (left + right), 2);
-            var end = prefixBytes(rest, available);
+            var end = prefixWithin(rest, available, guard_marks);
             if (rest.len != 0 and (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0))) end = overflowPrefixEnd(rest);
             if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                 const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
                 if ((poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1) {
                     if (cell) {
-                        if (moveWholeWord(rest, space, end, available)) end = space + 1;
+                        if (moveWholeWord(rest, space, end, available, guard_marks)) end = space + 1;
                     } else if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 or
-                        (wrap_prose and moveWholeWord(rest, space, end, available))) end = space;
+                        (wrap_prose and moveWholeWord(rest, space, end, available, guard_marks))) end = space;
                 }
             };
             const slice = rest[0..end];
