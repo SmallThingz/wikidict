@@ -7,10 +7,47 @@ from contextlib import closing
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from source_definition_audit import SourceDefinitions, compiled_emphasis, compiled_line, definitions, localized_language_codes, simple_line, source_line
+from source_definition_audit import (SourceDefinitions, compiled_emphasis, compiled_line, definitions,
+                                     localized_language_codes, registry_link_trail, simple_line, source_actions_match, source_line)
 
 
 class SourceDefinitionTests(unittest.TestCase):
+    def test_hindi_link_trail_stops_at_the_source_boundary(self):
+        rule = registry_link_trail(b'# link-trail-ranges\t002D,0061-007A,0900-0963,0966-A8E0,A8FF\n')
+        mark = '\u200e'
+        text, expected = simple_line(f'[[کوشک]]{mark} (kušk), [[قصر{mark}]] (qasr)।', 'کاخ', rule)
+        self.assertEqual(text, f'کوشک{mark} (kušk), قصر{mark} (qasr)।')
+        self.assertEqual(expected, ((0, 5, 'کوشک', 4), (14, 18, f'قصر{mark}')))
+        fragments = ((0, 4, 'کوشک'), (4, 5, 'کوشک'), expected[1])
+        self.assertTrue(source_actions_match(expected, fragments))
+        self.assertTrue(source_actions_match(expected, ((0, 5, 'کوشک'), expected[1])))
+        for incorrect in (fragments[:1] + fragments[2:], ((0, 1, 'کوشک'), (1, 5, 'کوشک'), expected[1]),
+                          fragments[:2] + ((14, 18, 'قصر'),), fragments[:1] + ((4, 5, 'قصر'), expected[1])):
+            self.assertFalse(source_actions_match(expected, incorrect))
+        _, adjacent = simple_line('[[cat]]s[[cat]]', 'word', rule)
+        self.assertTrue(source_actions_match(adjacent, ((0, 4, 'cat'), (4, 7, 'cat'))))
+        self.assertFalse(source_actions_match(adjacent, ((0, 7, 'cat'),)))
+        self.assertIsNone(source_line("[[cat]]''s''", 'word', rule))
+
+    def test_registry_trails_reject_invalid_ranges_and_respect_empty_rules(self):
+        for value in ('007A-0061', '0070,0070', 'D7FF-E000', '110000', '0020-', '0042,'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                registry_link_trail(('# link-trail-ranges\t' + value).encode())
+        disabled = registry_link_trail(b'# link-trail-ranges\t\n')
+        self.assertEqual(simple_line('[[cat]]s', 'word', disabled), ('cats', ((0, 3, 'cat'),)))
+
+    def test_guarded_apostrophe_and_longest_sequence_keep_their_source_actions(self):
+        guarded = registry_link_trail(b'# link-trail-ranges\t0061-007A\n# link-trail-not-double\t0027')
+        _, expected = simple_line("[[cat]]'s", 'word', guarded)
+        self.assertFalse(source_actions_match(expected, ((0, 3, 'cat'),)))
+        self.assertTrue(source_actions_match(expected, ((0, 5, 'cat'),)))
+        self.assertIsNone(guarded.match("''s"))
+        sequence = registry_link_trail(b'# link-trail-ranges\t0061-007A\n# link-trail-sequences\t0063+0027,0063+0027+0048')
+        self.assertEqual(simple_line("[[mot]]c'H!", 'word', sequence), ("motc'H!", ((0, 6, 'mot', 3),)))
+        for declaration in ('sequences\t0063', 'not-double\t0027,0027', 'ranges\t0061\n# link-trail-ranges\t0062'):
+            with self.subTest(declaration=declaration), self.assertRaises(ValueError):
+                registry_link_trail(('# link-trail-' + declaration).encode())
+
     def test_source_boundaries(self):
         text = '==English==\n===Noun===\n# [[cat|cats]]\n#: Example\n## subsense\n# [[self]]\n==Unknown==\n# stray meaning'
         self.assertEqual(list(definitions(text, 'self', {'English'})), [
@@ -111,7 +148,7 @@ class SourceDefinitionTests(unittest.TestCase):
             dump = root / 'wiki-date-pages-meta-current1.xml-p1p3.bz2'
             xml = ET.fromstring('<mediawiki><page><title>word</title><id>1</id><ns>0</ns>'
                                 '<revision><id>2</id><text/></revision></page></mediawiki>')
-            xml.find('page/revision/text').text = "==French==\n# first\n# [[second]]\n# first\n# prose\n# ''[[chat]]''\n## kitten\n##: example\n##* quotation\n### young kitten"
+            xml.find('page/revision/text').text = "==French==\n# first\n# [[second]]\n# first\n# prose\n# ''[[chat]]''\n## kitten\n##: example\n##* quotation\n### young kitten\n# [[chat]]s"
             dump.write_bytes(bz2.compress(ET.tostring(xml)))
             checksum = hashlib.sha1(dump.read_bytes()).hexdigest()
             member = ['wiki', 'date', dump.name, dump.stat().st_size, checksum]
@@ -154,7 +191,7 @@ class SourceDefinitionTests(unittest.TestCase):
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 2)
             registry = root / 'language-registry.tsv'
-            registry.write_text('# wikidict-language-registry-v2\n# mediawiki\nfr\tFrench\tFrançais\n')
+            registry.write_text('# wikidict-language-registry-v2\n# link-trail-ranges\t0061-007A\n# mediawiki\nfr\tFrench\tFrançais\n')
             manifest['build_inputs']['auxiliary_snapshot_sha256'] = {
                 'language-registry': hashlib.sha256(registry.read_bytes()).hexdigest()}
             (root / 'complete.json').write_text(json.dumps(manifest))
@@ -162,7 +199,7 @@ class SourceDefinitionTests(unittest.TestCase):
             with closing(SourceDefinitions('', root, [dump], registry)) as audit:
                 record['language_code'] = 'en'
                 audit.observe(record)
-                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (7, 0))
+                self.assertEqual((audit.report()['eligible'], audit.report()['matched']), (8, 0))
                 self.assertIsNone(audit.report()['matched_example'])
                 record.update(language='Français', language_code='fr')
                 audit.observe(record)
@@ -175,6 +212,14 @@ class SourceDefinitionTests(unittest.TestCase):
                 blocks[-2]['list_path'], blocks[-1]['list_path'] = '##', '###'
                 audit.observe(record)
                 self.assertEqual(audit.report()['matched'], 5)
+                plural = block('definition', 'chat', 'link', target='chat')
+                plural['spans'].append(dict(kind='text', text='s'))
+                blocks.append(plural)
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 5)
+                plural['spans'][1].update(kind='link', target='chat')
+                audit.observe(record)
+                self.assertEqual(audit.report()['matched'], 6)
             registry.write_text(registry.read_text() + '\n')
             with closing(SourceDefinitions('', root, [dump])) as audit:
                 self.assertFalse(audit.has_definitions)

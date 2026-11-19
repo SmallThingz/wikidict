@@ -15,7 +15,57 @@ PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
 BARE_URL = re.compile(r'https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[A-Za-z0-9_./~-]*)?')
 
 
-def simple_line(source, title):
+def registry_link_trail(raw):
+    """Read the same scalar, sequence and lookahead rules as the build-time tokenizer."""
+    fields = {}
+    for row in raw.decode('utf-8').splitlines():
+        if row.startswith('# link-trail-'):
+            key, separator, value = row[len('# link-trail-'):].partition('\t')
+            if not separator or key not in ('ranges', 'sequences', 'not-double') or key in fields:
+                raise ValueError('Invalid link-trail declaration')
+            fields[key] = value
+    if not fields:
+        return None
+
+    def scalar(value):
+        if not re.fullmatch('[0-9A-Fa-f]{1,6}', value):
+            raise ValueError('Invalid link-trail scalar')
+        code = int(value, 16)
+        if code > 0x10ffff or 0xd800 <= code <= 0xdfff:
+            raise ValueError('Invalid link-trail scalar')
+        return chr(code)
+
+    sequences = []
+    if 'sequences' in fields:
+        for seq in fields['sequences'].split(','):
+            chars = ''.join(scalar(value) for value in seq.split('+'))
+            if len(chars) < 2:
+                raise ValueError('Invalid link-trail sequence')
+            sequences.append(chars)
+    alternatives = [re.escape(seq) for seq in sorted(sequences, key=len, reverse=True)]
+    intervals = []
+    previous = -1
+    ranges = fields.get('ranges', '0061-007A')
+    for field in ranges.split(',') if ranges else ():
+        start, dash, stop = field.partition('-')
+        first, last = ord(scalar(start)), ord(scalar(stop if dash else start))
+        if not previous < first <= last or (first <= 0xdfff and last >= 0xd800):
+            raise ValueError('Invalid or overlapping link-trail range')
+        intervals.append(re.escape(chr(first)) + '-' + re.escape(chr(last)))
+        previous = last
+    if intervals:
+        alternatives.append('[' + ''.join(intervals) + ']')
+    if 'not-double' in fields:
+        guarded = [scalar(value) for value in fields['not-double'].split(',')]
+        if len(guarded) != len(set(guarded)):
+            raise ValueError('Duplicate guarded link-trail scalar')
+        for char in guarded:
+            token = re.escape(char)
+            alternatives.append(token + '(?!' + token + ')')
+    return re.compile('(?:' + '|'.join(alternatives) + ')+') if alternatives else re.compile('(?!)')
+
+
+def simple_line(source, title, trail_rule=None):
     """Return visible prose and the code-point range of each authored link."""
     if BARE_URL.fullmatch(source) and not source.endswith('.'):
         return source, ((0, len(source), source, 'external'),)
@@ -27,14 +77,24 @@ def simple_line(source, title):
             return None
         target, label = match[1], match[2] or match[1]
         if (target.strip() != target or target.casefold() == title.casefold() or "''" in label
-                or (match.end() < len(source) and source[match.end()].isalpha())):
+                or (trail_rule is None and match.end() < len(source) and source[match.end()].isalpha())):
             # A self-link may lose its action. Link trails depend on the edition.
             return None
         parts.extend((literal, label))
         offset += len(literal)
-        links.append((offset, offset + len(label), target))
-        offset += len(label)
         end = match.end()
+        label_end = offset + len(label)
+        trail = trail_rule.match(source, end) if trail_rule is not None else None
+        if trail:
+            if not PLAIN.fullmatch(trail[0]) or "''" in trail[0]:
+                return None
+            parts.append(trail[0])
+            end = trail.end()
+            links.append((offset, label_end + len(trail[0]), target, label_end))
+            offset = label_end + len(trail[0])
+        else:
+            links.append((offset, label_end, target))
+            offset = label_end
     tail = source[end:]
     if tail and ("''" in tail or not PLAIN.fullmatch(tail)):
         return None
@@ -82,8 +142,8 @@ def compiled_line(spans):
     return text[leading:end], tuple((start - leading, stop - leading, *action) for start, stop, *action in links)
 
 
-def source_line(source, title):
-    plain = simple_line(source, title)
+def source_line(source, title, trail_rule=None):
+    plain = simple_line(source, title, trail_rule)
     if plain is not None:
         return (*plain, None)
     # One balanced emphasis pair outside link syntax. Links may be entirely
@@ -95,12 +155,15 @@ def source_line(source, title):
     if opening != closing or opening not in ("''", "'''") or not marked.strip():
         return None
     unmarked = before + marked + after
-    plain = simple_line(unmarked, title)
+    plain = simple_line(unmarked, title, trail_rule)
     if plain is None:
         return None
     boundaries = [len(before), len(before) + len(marked)]
     display_offsets = boundaries.copy()
     for link in LINK.finditer(unmarked):
+        trail = trail_rule.match(unmarked, link.end()) if trail_rule is not None else None
+        if trail and any(link.end() <= at < trail.end() for at in boundaries):
+            return None  # Removing emphasis syntax would join separately authored tokens.
         for i, at in enumerate(boundaries):
             if link.start() < at < link.end():
                 return None
@@ -136,7 +199,27 @@ def compiled_emphasis(spans):
     return interval
 
 
-def definitions(text, title, headings):
+def source_actions_match(expected, actual):
+    """Permit a span break only at the source-proved boundary between label and trail."""
+    pos = 0
+    for action in expected:
+        if pos == len(actual):
+            return False
+        if len(action) == 4 and isinstance(action[3], int):
+            start, end, target, split = action
+            if actual[pos] == (start, split, target):
+                pos += 1
+                if pos == len(actual):
+                    return False
+                start = split
+            action = (start, end, target)
+        if actual[pos] != action:
+            return False
+        pos += 1
+    return pos == len(actual)
+
+
+def definitions(text, title, headings, trail_rule=None):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
     if '#' not in text or any(marker in text for marker in ('{{', '}}', '<', '>', '{|')):
@@ -155,7 +238,7 @@ def definitions(text, title, headings):
         if body.startswith((':', '*', ';')):
             continue
         list_path = line[:len(line) - len(body)]
-        witness = source_line(body.strip(), title)
+        witness = source_line(body.strip(), title, trail_rule)
         if witness is not None:
             yield owner, number, list_path, *witness
 
@@ -191,6 +274,7 @@ class SourceDefinitions:
             manifest = json.loads((root / 'complete.json').read_bytes())
             headings = set((root / 'languages.tsv').read_text().splitlines()[1:])
             self.codes = {}
+            self.trail_rule = None
             self.registry_sha256 = None
             if registry is not None:
                 raw = registry.read_bytes()
@@ -198,6 +282,7 @@ class SourceDefinitions:
                 if self.registry_sha256 != manifest['build_inputs'].get('auxiliary_snapshot_sha256', {}).get('language-registry'):
                     raise ValueError('Language registry differs from the selected build input')
                 self.codes = localized_language_codes(raw)
+                self.trail_rule = registry_link_trail(raw)
                 headings.update(self.codes)
             members = {name: (size, sha1) for wiki, date, name, size, sha1 in manifest['build_inputs']['files']
                        if wiki == manifest['edition'] and date == manifest['date']
@@ -248,7 +333,7 @@ class SourceDefinitions:
                 if revision is None or not title:
                     raise ValueError('Main-namespace source page lacks a title or revision')
                 origin = None
-                for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings):
+                for owner, n, list_path, text, links, emphasis in definitions(revision.findtext('{*}text', ''), title, headings, self.trail_rule):
                     if origin is None:
                         origin = page.findtext('{*}id'), revision.findtext('{*}id')
                     actions = json.dumps(links, ensure_ascii=False)
@@ -273,7 +358,7 @@ class SourceDefinitions:
             return
         # Plain and directly linked senses must occupy a definition block in
         # order. A coincidental match in a translation or example cannot pass.
-        positions = defaultdict(list)
+        positions = defaultdict(lambda: defaultdict(list))
         position = 0
         for section in entry['sections']:
             for block in section['blocks']:
@@ -281,23 +366,32 @@ class SourceDefinitions:
                     list_path = block.get('list_path')
                     witness = compiled_line(block['spans'])
                     if witness is not None:
+                        text, actions = witness
                         if not any(span['text'] and (span.get('bold') or span.get('italic')) for span in block['spans']):
-                            positions[(list_path, *witness, None)].append(position)
+                            positions[(list_path, text, None)][actions].append(position)
                         elif (emphasis := compiled_emphasis(block['spans'])) is not None:
-                            positions[(list_path, *witness, emphasis)].append(position)
+                            positions[(list_path, text, emphasis)][actions].append(position)
                     position += 1
         cursor = 0
         for rowid, list_path, text, links, emphasis in expected:
             actions = tuple(tuple(action) for action in json.loads(links))
-            candidates = positions.get((list_path, text, actions, tuple(json.loads(emphasis)) if emphasis else None), ())
-            index = bisect_left(candidates, cursor)
-            if index < len(candidates):
+            layouts = positions.get((list_path, text, tuple(json.loads(emphasis)) if emphasis else None), {})
+            if any(len(action) == 4 and isinstance(action[3], int) for action in actions):
+                choices = (places for actual, places in layouts.items() if source_actions_match(actions, actual))
+            else:
+                choices = (layouts.get(actions, ()),)
+            next_position = None
+            for places in choices:
+                index = bisect_left(places, cursor)
+                if index < len(places) and (next_position is None or places[index] < next_position):
+                    next_position = places[index]
+            if next_position is not None:
                 self.db.execute('UPDATE sense SET matched=1 WHERE rowid=?', (rowid,))
                 if self.matched_example is None:
                     page, revision, line = self.db.execute('SELECT page,revision,line FROM sense WHERE rowid=?', (rowid,)).fetchone()
                     self.matched_example = dict(exact_title=entry['title'], owner_heading=entry['language'],
                                                 visible_definition_witness=text, page=page, revision=revision, line=line)
-                cursor = candidates[index] + 1
+                cursor = next_position + 1
 
     def report(self):
         count, matched = self.db.execute('SELECT count(*),coalesce(sum(matched),0) FROM sense').fetchone()
@@ -306,7 +400,10 @@ class SourceDefinitions:
         for title, owner, line, list_path, text, links, emphasis, page, revision in missing:
             actions = json.loads(links)
             target = actions[0][2] if len(actions) == 1 and actions[0][:2] == [0, len(text)] else None
-            examples.append(dict(title=title, owner=owner, line=line, list_path=list_path, text=text, links=actions, emphasis=json.loads(emphasis) if emphasis else None, target=target, page=page, revision=revision))
+            # The report describes authored links. The permissible span split is
+            # an internal comparison detail, not a fourth action type.
+            public_actions = [action[:3] if isinstance(action[-1], int) else action for action in actions]
+            examples.append(dict(title=title, owner=owner, line=line, list_path=list_path, text=text, links=public_actions, emphasis=json.loads(emphasis) if emphasis else None, target=target, page=page, revision=revision))
         return dict(eligible=count, matched=matched, unmatched=count-matched, dump_sha1=self.inputs,
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
