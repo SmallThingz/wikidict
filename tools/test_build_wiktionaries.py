@@ -15434,4 +15434,77 @@ class RetainedCompilerIdentityReuseTests(unittest.TestCase):
                 tools=b.prepare_blob_tools(workspace,str(compiler),'testwiktionary','20261001',identity)
             self.assertEqual(set(tools),set(b.BLOB_TOOL_NAMES));self.assertEqual(reads,[compiler,compiler])
 
+class LanguageMessagePairTests(unittest.TestCase):
+    def test_pair_preserves_complete_state_and_replays_once_per_boundary(self):
+        import prepare_language_messages as messages
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots=write_language_messages_fixture(Path(tmp))
+            expected={name:b.validated_auxiliary_capture(name,path,'arwiktionary','20261001')
+                      for name,path in snapshots.items()}
+            with patch.object(messages,'verify',wraps=messages.verify) as verify:
+                first=b._validated_auxiliary_state(snapshots,'arwiktionary','20261001')
+                self.assertEqual(verify.call_count,1)
+                second=b._validated_auxiliary_state(snapshots,'arwiktionary','20261001')
+                self.assertEqual(verify.call_count,2)
+            self.assertEqual(first,second)
+            self.assertEqual(first[0],{name:b.sha256_file(path) for name,path in snapshots.items()})
+            self.assertEqual({name:(row[0],row[1]) for name,row in first[1].items()},expected)
+
+    def test_independent_roots_and_legacy_singles_keep_original_validation(self):
+        import prepare_language_messages as messages
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);first=write_language_messages_fixture(root/'a');second=write_language_messages_fixture(root/'b')
+            mixed={'interface-messages':first['interface-messages'],'language-fallbacks':second['language-fallbacks']}
+            self.assertIsNone(b.validated_language_message_pair(mixed))
+            with patch.object(messages,'verify',wraps=messages.verify) as verify:
+                b._validated_auxiliary_state(mixed,'arwiktionary','20261001')
+                self.assertEqual(verify.call_count,2)
+            legacy=root/'interface-messages.tsv';legacy.write_text('en\tparentheses\t($1)\n')
+            self.assertIsNone(b.validated_language_message_pair({'interface-messages':legacy}))
+            self.assertEqual(b.verified_auxiliary_hashes({'interface-messages':legacy}),{'interface-messages':b.sha256_file(legacy)})
+
+    def test_pair_requires_both_manifests_marker_and_exact_edition(self):
+        import prepare_language_messages as messages
+        for mutation in ('manifest','marker','edition','payload'):
+            with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as tmp:
+                snapshots=write_language_messages_fixture(Path(tmp));root=snapshots['interface-messages'].parent
+                if mutation=='manifest':(root/'language-fallbacks.manifest.json').unlink()
+                elif mutation=='marker':(root/messages.COMPLETE).unlink()
+                elif mutation=='payload':snapshots['language-fallbacks'].write_bytes(b'corrupt')
+                with self.assertRaises((ValueError,OSError)):
+                    b._validated_auxiliary_state(snapshots,'wrongwiktionary' if mutation=='edition' else 'arwiktionary','20261001')
+
+    def test_pair_refuses_transient_mutation_after_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            snapshots=write_language_messages_fixture(Path(tmp));pair=b.validated_language_message_pair(snapshots)
+            path=snapshots['language-fallbacks'];original=path.read_bytes();path.write_bytes(original+b'x');path.write_bytes(original)
+            with self.assertRaisesRegex(ValueError,'changed during auxiliary validation'):pair[1]()
+
+    def test_pair_refuses_changes_between_roles_and_at_boundary_end(self):
+        for target in ('language-fallbacks','interface-messages'):
+            with self.subTest(target=target),tempfile.TemporaryDirectory() as tmp:
+                snapshots=write_language_messages_fixture(Path(tmp));original=b.sha256_file;changed=False
+                def digest(path):
+                    nonlocal changed
+                    value=original(path)
+                    if Path(path)==snapshots[target] and not changed:
+                        changed=True;Path(path).write_bytes(Path(path).read_bytes()+b'x')
+                    return value
+                with patch.object(b,'sha256_file',side_effect=digest):
+                    with self.assertRaisesRegex(ValueError,'changed during auxiliary validation'):
+                        b._validated_auxiliary_state(snapshots)
+
+    def test_pair_refuses_unsafe_capture_names_and_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);snapshots=write_language_messages_fixture(root/'original')
+            alias=root/'alias';alias.symlink_to(snapshots['interface-messages'].parent,target_is_directory=True)
+            with self.assertRaises((ValueError,OSError)):
+                b._validated_auxiliary_state({name:alias/path.name for name,path in snapshots.items()})
+            manifest=snapshots['interface-messages'].with_suffix('.manifest.json')
+            record=json.loads(manifest.read_text());record['artifacts']['../foreign']={'sha256':'0'*64}
+            manifest.write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError,'Unsafe language/message capture inventory'):
+                b.validated_language_message_pair(snapshots)
+
+
 if __name__=='__main__':unittest.main()

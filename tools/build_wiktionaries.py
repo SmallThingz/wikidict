@@ -2024,9 +2024,60 @@ def preflight_selected_auxiliary_inputs(snapshots, *, captured_selection=None):
                 raise ValueError(f'Auxiliary manifest is not a file: {manifest}')
 
 
+def validated_language_message_pair(snapshots, edition=None, date=None):
+    """Replay a complete co-located pair once within one validation boundary."""
+    names=('interface-messages','language-fallbacks')
+    if not all(name in (snapshots or {}) for name in names):return None
+    paths={name:Path(snapshots[name]) for name in names}
+    root=paths[names[0]].parent
+    if any(path.parent!=root or path.name!=name+'.tsv' for name,path in paths.items()):return None
+    helpers=[auxiliary_capture_helper(name,paths[name]) for name in names]
+    helper=helpers[0]
+    if (helper is None or helpers[1] is not helper or helper.__name__ not in
+            ('prepare_language_messages','prepare_language_messages_v2','prepare_language_messages_union')):
+        return None
+    manifests={name:name+'.manifest.json' for name in names}
+    raw={name:helper.evidence.small(root/filename,helper.MAX_MANIFEST)
+         for name,filename in manifests.items()}
+    records={name:helper.evidence.decode(body) for name,body in raw.items()}
+    files=set(manifests.values())|{helper.COMPLETE}
+    for name,record in records.items():
+        if (not isinstance(record,dict) or
+                (edition is not None and record.get('wiki')!=edition) or
+                (date is not None and record.get('date')!=date)):
+            raise ValueError('Auxiliary capture edition/date mismatch: '+name)
+        inventory=record.get('artifacts')
+        if not isinstance(inventory,dict):raise ValueError('Incomplete language/message capture inventory')
+        files.update(inventory)
+    if any(not isinstance(name,str) or Path(name).name!=name or name in ('.','..') for name in files):
+        raise ValueError('Unsafe language/message capture inventory')
+    def identity():
+        return (_figure_replay_identity(root,directory=True),
+                {name:_figure_replay_identity(root/name) for name in sorted(files)})
+    initial=identity()
+    verified=helper.verify(root)
+    if verified!=records:raise ValueError('Language/message manifests changed during validation')
+    marker_hashes={filename:hashlib.sha256(raw[name]).hexdigest()
+                   for name,filename in manifests.items()}
+    marker_hashes[helper.COMPLETE]=helper.evidence.digest(
+        helper.evidence.small(root/helper.COMPLETE,helper.MAX_MANIFEST))
+    captures={}
+    for name,record in records.items():
+        inventory={filename:row['sha256'] for filename,row in record['artifacts'].items()}
+        inventory.update(marker_hashes)
+        if name+'.tsv' not in inventory:raise ValueError('Incomplete language/message capture inventory')
+        if any(not isinstance(value,str) or not re.fullmatch('[0-9a-f]{64}',value) for value in inventory.values()):
+            raise ValueError('Unsafe language/message capture digest')
+        captures[name]=(record,inventory)
+    def unchanged():
+        if identity()!=initial:raise ValueError('Language/message capture changed during auxiliary validation')
+    unchanged()
+    return captures,unchanged
+
+
 def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_selection=None):
     preflight_selected_auxiliary_inputs(snapshots,captured_selection=captured_selection)
-    hashes={};namespace_inputs={};captures={}
+    hashes={};namespace_inputs={};captures={};message_pair=None
     figure_paths={name:Path(path) for name,path in (snapshots or {}).items() if name in FIGURE_SNAPSHOT_FILES}
     provider=(snapshots or {}).get('file-metadata')
     if provider is not None and Path(provider).parent in {path.parent for path in figure_paths.values()}:
@@ -2071,7 +2122,12 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
             if name not in AUXILIARY_SNAPSHOT_NAMES:
                 raise ValueError(f'Unknown auxiliary snapshot: {name}')
             path=Path(source)
-            capture=figures[name] if name in figures else validated_auxiliary_capture(name,path,edition,date)
+            if name in ('interface-messages','language-fallbacks'):
+                if message_pair is None:
+                    message_pair=validated_language_message_pair(snapshots,edition,date) or False
+                if message_pair:message_pair[1]()
+            capture=(message_pair[0][name] if message_pair and name in message_pair[0] else
+                     figures[name] if name in figures else validated_auxiliary_capture(name,path,edition,date))
             if captured_selection is not None and name!='language-registry':
                 selected_capture,selected_sources,capture_root=captured_selection
                 # Share only this freshly validated result with the adjacent source
@@ -2152,6 +2208,7 @@ def _validated_auxiliary_state(snapshots, edition=None, date=None, *, captured_s
         if any(Path(snapshots[name])!=figure_paths[name] or
                 figure_output_identity(figure_paths[name])!=figure_identities[name] for name in figures):
             raise ValueError('Figure output changed during auxiliary validation')
+    if message_pair:message_pair[1]()
     return hashes,captures
 
 
