@@ -31481,6 +31481,22 @@ private slots:
         QCOMPARE(window.clueFor(entry), QStringLiteral("Useful linked prose example.wav"));
     }
 
+    void savedPreviewReadsBodyTableBeforeReferences() {
+        MainWindow window{QString()};
+        // The Ido abako meanings are a list item and an indent inside one table cell.
+        const auto entry = QJsonDocument::fromJson(R"({
+          "sections":[{"blocks":[{"kind":"table","table":{"rows":[{"cells":[{
+            "blocks":[{"kind":"list_item","spans":[{"kind":"text","text":"Parto supra di la "},
+              {"kind":"link","text":"kapitelo","target":"kapitelo"}]},
+              {"kind":"indent","spans":[{"kind":"text","text":"Kalkulala utensilo"}]}],
+            "spans":[{"kind":"text","text":"duplicate"}]}]}]}}]}],
+          "references":[{"spans":[],"blocks":[{"kind":"paragraph","spans":[{"kind":"text","text":"Reference"}]}]}]
+        })").object();
+        const QString expected = QStringLiteral("Parto supra di la kapitelo · Kalkulala utensilo");
+        QCOMPARE(window.clueFor(entry), expected);
+        QCOMPARE(window.savedWord(entry).clue, expected);
+    }
+
     void savedPreviewKeepsCapturedUnclassifiedBody() {
         MainWindow window{QString()};
         const auto paragraph = [](const QString &text) {

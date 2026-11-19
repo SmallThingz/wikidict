@@ -7314,66 +7314,65 @@ QString MainWindow::clueFor(const QJsonObject &entry) const {
     }
     // A headword or language paragraph can precede useful unclassified body text.
     QString fallback;
+    const auto append = [&](const QString &text) {
+        if (text.isEmpty()) return true;
+        const QString separator = fallback.isEmpty() ? QString() : QStringLiteral(" · ");
+        const qsizetype available = 420 - fallback.size() - separator.size();
+        if (available <= 0) return false;
+        qsizetype end = std::min(text.size(), available);
+        if (end < text.size() && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
+        if (end > 0) fallback += separator + text.left(end);
+        return end == text.size() && fallback.size() < 420;
+    };
     for (const QJsonValue &sectionValue : entry.value(QStringLiteral("sections")).toArray()) {
         const QJsonObject section = sectionValue.toObject();
         const QJsonArray blocks = section.value(QStringLiteral("blocks")).toArray();
         const bool companion = !sectionHeadingSpans(section).isEmpty();
         for (qsizetype i = 0; i < blocks.size(); ++i) {
             if (i == 0 && companion) continue; // Already rendered as the section heading.
-            const QString separator = fallback.isEmpty() ? QString() : QStringLiteral(" · ");
-            const qsizetype available = 420 - fallback.size() - separator.size();
-            if (available <= 0) return fallback;
-            const QString text = textFor(blocks[i].toObject().value(QStringLiteral("spans")).toArray());
-            if (text.isEmpty()) continue;
-            qsizetype end = std::min(text.size(), available);
-            if (end < text.size() && end > 0 && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
-            if (end == 0) return fallback;
-            fallback += separator + text.left(end);
-            if (end < text.size()) return fallback;
+            if (!append(textFor(blocks[i].toObject().value(QStringLiteral("spans")).toArray()))) return fallback;
         }
     }
     if (fallback.isEmpty()) {
-        const auto blockText = [&](auto &&visit, const QJsonObject &block, int depth) -> QString {
-            QStringList pieces;
-            const auto append = [&](const QString &text) { if (!text.isEmpty()) pieces.append(text); };
+        const auto appendBlock = [&](auto &&visit, const QJsonObject &block, int depth) -> bool {
             if (block.value(QStringLiteral("table")).isObject()) {
-                if (depth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
-                const auto tableText = [&](auto &&tables, const QJsonObject &table, int tableDepth) -> void {
+                const auto appendTable = [&](auto &&tables, const QJsonObject &table, int tableDepth) -> bool {
                     if (tableDepth > CompiledContent::maxTableDepth) throw DictApiError("nested table depth exceeds presentation limit");
-                    append(textFor(table.value(QStringLiteral("caption")).toArray()));
+                    if (!append(textFor(table.value(QStringLiteral("caption")).toArray()))) return false;
                     for (const QJsonValue &row : table.value(QStringLiteral("rows")).toArray())
                         for (const QJsonValue &cellValue : row.toObject().value(QStringLiteral("cells")).toArray()) {
                             const QJsonObject cell = cellValue.toObject();
                             const QJsonValue children = cell.value(QStringLiteral("blocks"));
                             if (!children.isUndefined() && !children.isNull()) {
-                                for (const QJsonValue &child : children.toArray()) append(visit(visit, child.toObject(), tableDepth + 1));
+                                for (const QJsonValue &child : children.toArray())
+                                    if (!visit(visit, child.toObject(), tableDepth + 1)) return false;
                             } else {
-                                append(textFor(cell.value(QStringLiteral("spans")).toArray()));
-                                if (cell.value(QStringLiteral("nested_table")).isObject()) tables(tables, cell.value(QStringLiteral("nested_table")).toObject(), tableDepth + 1);
+                                if (!append(textFor(cell.value(QStringLiteral("spans")).toArray()))) return false;
+                                const auto nested = cell.value(QStringLiteral("nested_table"));
+                                if (nested.isObject() && !tables(tables, nested.toObject(), tableDepth + 1)) return false;
                             }
                         }
+                    return true;
                 };
-                tableText(tableText, block.value(QStringLiteral("table")).toObject(), depth);
-            } else {
-                if (block.value(QStringLiteral("figure")).isObject())
-                    append(textFor(QJsonArray{CompiledContent::figureSpan(block.value(QStringLiteral("figure")).toObject())}));
-                append(textFor(block.value(QStringLiteral("spans")).toArray()));
+                return appendTable(appendTable, block.value(QStringLiteral("table")).toObject(), depth);
             }
-            return pieces.join(QStringLiteral(" · "));
+            const auto figure = block.value(QStringLiteral("figure"));
+            if (figure.isObject() && !append(textFor(QJsonArray{CompiledContent::figureSpan(figure.toObject())}))) return false;
+            return append(textFor(block.value(QStringLiteral("spans")).toArray()));
         };
+        // Some editions put the whole meaning in a body table, including nested lists and links.
+        for (const QJsonValue &section : entry.value(QStringLiteral("sections")).toArray()) {
+            for (const QJsonValue &value : section.toObject().value(QStringLiteral("blocks")).toArray()) {
+                const QJsonObject block = value.toObject();
+                if (block.value(QStringLiteral("table")).isObject() && !appendBlock(appendBlock, block, 1)) return fallback;
+            }
+        }
+        if (!fallback.isEmpty()) return fallback;
         for (const QJsonValue &reference : entry.value(QStringLiteral("references")).toArray()) {
             const QJsonValue contents = referenceBlocks(reference.toObject());
             if (contents.isUndefined() || contents.isNull()) continue;
-            for (const QJsonValue &block : contents.toArray()) {
-                const QString text = blockText(blockText, block.toObject(), 1);
-                if (text.isEmpty()) continue;
-                const QString separator = fallback.isEmpty() ? QString() : QStringLiteral(" · ");
-                const qsizetype available = 420 - fallback.size() - separator.size();
-                if (available <= 0) break;
-                qsizetype end = std::min(text.size(), available);
-                if (end < text.size() && end > 0 && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) --end;
-                fallback += separator + text.left(end);
-            }
+            for (const QJsonValue &block : contents.toArray())
+                if (!appendBlock(appendBlock, block.toObject(), 1)) return fallback;
         }
     }
     return fallback.isEmpty() ? QStringLiteral("Definition unavailable in this entry.") : fallback;
