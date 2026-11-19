@@ -5,10 +5,11 @@ Native Android reader for Wiktionary dictionaries produced by
 same repository as the compiler and desktop readers.
 
 The app reads compiled WIKBLB08 dictionaries directly. Its native Kotlin decoder
-recognizes DPR2 through DPR9, DPRA through DPRV, and the supported DPRY and DPRZ
-feature flags. These versions carry formatting such as ruby annotations, nested
-tables and reference fragments. A reader that reports an unsupported record
-version or feature combination needs a compatible build.
+recognizes DPR2 through DPR9, DPRA through DPRV, and the supported DPRY, DPRZ and
+DPRa feature flags. These versions carry formatting such as ruby annotations,
+nested tables, reference fragments, inherited cell ink and automatic inline-box
+sizing. A reader that reports an unsupported record version or feature combination
+needs a compatible build.
 
 ## Data path
 

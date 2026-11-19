@@ -1,6 +1,71 @@
 # Android validation
 
-## Current full-suite and unsigned-package qualification — 2026-11-18
+## Current scoped MG/HU integration and unsigned package — 2026-11-19
+
+The current Android product is commit
+`fd1718bbdb6b6a015d2e38fa127d8a6f2805773d`, **Render inherited cell ink and
+auto-sized inline boxes on Android**. Its 24 files comprise 18 main, three JVM-test
+and three instrumentation-test files, including six new files. The
+[commit bridge][mg-hu-bridge] records exact equality between the integrated files
+and the qualified private inputs. The canonical source inventory contains 962
+files. The changes use the ordinary decoder and entry-rendering paths; they are
+not an unmerged private candidate.
+
+Host146 passed **25 fresh JVM correctness checks, with no failures, skips or
+carried cases**: 14 new controls and 11 maintained regressions. All three Kotlin
+routes compiled: 161 main, 147 unit-test and 95 instrumentation inputs. The 11
+relevant device controls (four new and seven maintained) were **compiled only**.
+The [Host146 audit][host146] binds the raw cases, compiler inputs and independent
+source/process/lock closure. Its outer remote-command terminal was unavailable;
+saved worker success and independent physical closure are established, while the
+outer exit and reaping status remain unknown. No repeated test run was used to
+replace that missing transport observation.
+
+The current declared suite contains **1,163 cases**. No full 1,163-case pass or
+carry of the other cases is claimed. Host144's 1,149 fresh passes below remain a
+historical full-suite result on the earlier FR source.
+
+**Package147 is the current verified unsigned host artifact**, built from the
+integrated `fd1718bb` source. Release Kotlin compilation, R8, `packageRelease`,
+`assembleRelease` and release vital checks passed. Resource optimization and the
+vital report task were up to date. The 497 native inputs and four optimized JNI
+libraries were verified and reused. Packaging repeated no JVM tests,
+instrumentation tests, JNI compilation or full lint. Unlike Host146, Package147
+has its original successful remote-command terminal and completed physical
+closure. The [saved package audit][package147] records:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, non-debuggable;
+  **minimum API 31, target API 37**.
+- **10,898,401 bytes (10.39 MiB)**, 16,384 bytes larger than Package145.
+  SHA-256: `d61bc7b01a8e902293331e7327523202e4dd684e9853a8c3813b64e602cdf51e`.
+- 99 ZIP members. `classes.dex` and both baseline-profile members changed;
+  `META-INF/services/fw` became `META-INF/services/gw` with the same payload.
+  JNI libraries, fonts and licences retain their verified bytes.
+- **Unsigned**: no APK signing block or JAR signatures. The signature verifier
+  exits 1 with `DOES NOT VERIFY` and `Missing META-INF/MANIFEST.MF`. This artifact
+  is not installable as-is; no signer qualification or signing is claimed.
+- VCS metadata reports `NO_SUPPORTED_VCS_FOUND`. The authenticated source manifest
+  and commit bridge establish provenance; no embedded revision is inferred.
+
+The retained build is [Package147's release-unsigned.apk][apk147]. Package145 and
+the earlier unsigned archives, signed102, installed62 and user data are preserved.
+The pre-ADB namespace `EACCES` has no established access recovery. Current phone
+pixels, hover, touch, selection, copy, accessibility, IME, media and lifecycle
+validation require permitted physical access and an authorized compatible signed
+installation. No current rendered Android frame is claimed for these new controls.
+Genuine producer/Writer/reader interoperability remains a separate qualification.
+No signing, installation, publication or physical-access change was performed.
+
+[mg-hu-bridge]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/android-mg-hu-auto-canonical-commit-bridge01.json
+[host146]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host146/saved-result-peer-reader01.json
+[package147]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package147/saved-result-peer-reader01.json
+[apk147]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package147/artifacts/release-unsigned.apk
+
+## Historical full-suite and Package145 qualification — 2026-11-18
+
+This section retains the earlier FR source, full-suite and package evidence.
+References to current qualification here apply to that earlier boundary;
+the current MG/HU scope and Package147 are recorded above.
 
 The current Android product is commit
 `a22f5f12b1928421762907e5b6e5f50cb7c3c67d`. Host144 ran the complete discovered
