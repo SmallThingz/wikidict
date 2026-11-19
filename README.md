@@ -531,6 +531,10 @@ The [full-edition attempt log](data/corpus-campaign-current01/local-full-build-a
 lists the retained native driver's completed invocations, including failures. It
 reports production time only when the builder recorded its end. Command time
 includes setup and shutdown. A successful build can appear in both tables.
+The [per-edition retry times](data/corpus-campaign-current01/local-edition-retry-times.tsv)
+combine the historical timings and later attempts, counting each recorded build
+once. The table identifies unknown durations and leaves the rate blank when
+there is no selected output or the recorded times are incomplete.
 
 The native verifier checks the selected directory.
 
