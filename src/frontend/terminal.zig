@@ -590,6 +590,15 @@ pub fn wrapStyledProjected(a: std.mem.Allocator, text: []const u8, columns: usiz
 }
 /// Continue wrapping an original slice without losing its incoming SGR state.
 pub fn wrapStyledProjectedFromStyle(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle) ![]RenderRow {
+    return wrapRows(a, text, columns, poem_lines, initial, false);
+}
+
+/// Table rows retain every byte, including the separator when a word wraps.
+pub fn wrapStyledCell(a: std.mem.Allocator, text: []const u8, columns: usize) ![]RenderRow {
+    return wrapRows(a, text, columns, &.{}, .{}, true);
+}
+
+fn wrapRows(a: std.mem.Allocator, text: []const u8, columns: usize, poem_lines: []const PoemLine, initial: TextStyle, cell: bool) ![]RenderRow {
     var rows: std.ArrayList(RenderRow) = .empty;
     errdefer rows.deinit(a);
     var style: TextStyle = initial;
@@ -611,15 +620,18 @@ pub fn wrapStyledProjectedFromStyle(a: std.mem.Allocator, text: []const u8, colu
             if (rest.len != 0 and (end == 0 or (end < rest.len and cellWidth(rest[0..end]) == 0))) end = overflowPrefixEnd(rest);
             if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
                 const lead_bytes = if (poem) |p| if (first) p.lead_bytes else 0 else 0;
-                if ((poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1 and
-                    (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 or
-                        (poem == null and moveWholeWord(rest, space, end, available)))) end = space;
+                if ((poem == null or space > lead_bytes) and nextClusterEnd(rest, space) == space + 1) {
+                    if (cell) {
+                        if (moveWholeWord(rest, space, end, available)) end = space + 1;
+                    } else if (textByteCount(rest[0..space]) > textByteCount(rest[0..end]) / 2 or
+                        (poem == null and moveWholeWord(rest, space, end, available))) end = space;
+                }
             };
             const slice = rest[0..end];
             try rows.append(a, .{ .bytes = slice, .carry = style, .left = left, .right = right });
             style.scan(slice);
             rest = rest[end..];
-            if (poem == null and rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
+            if (!cell and poem == null and rest.len != 0 and rest[0] == ' ' and nextClusterEnd(rest, 0) == 1) rest = rest[1..];
             if (rest.len == 0) break;
             first = false;
         }
@@ -633,6 +645,22 @@ pub fn writeRenderRow(w: *std.Io.Writer, row: RenderRow, columns: usize, base: [
     try w.splatByteAll(' ', left);
     try row.carry.write(w);
     try writeStyled(w, row.bytes[0..prefixBytes(row.bytes, columns - left - right)], base);
+}
+
+test "narrow translation cells keep fitting labels whole and retain literal spacing and style" {
+    initLocale();
+    const a = std.testing.allocator;
+    const source = "  • \x1b[1m[image] indonezcə\x1b[0m  \n\nABCDEFGHIJK";
+    const rows = try wrapStyledCell(a, source, 9);
+    defer a.free(rows);
+    const expected = [_][]const u8{ "  • ", "\x1b[1m[image] ", "indonezcə\x1b[0m", "  ", "", "ABCDEFGHI", "JK" };
+    try std.testing.expectEqual(expected.len, rows.len);
+    for (expected, rows) |want, row| {
+        try std.testing.expectEqualStrings(want, row.bytes);
+        try std.testing.expect(cellWidth(row.bytes) <= 9);
+    }
+    try std.testing.expect(rows[2].carry.bold);
+    try std.testing.expect(!rows[3].carry.bold);
 }
 
 test "styled wrapping preserves generated emphasis across Unicode cell boundaries" {

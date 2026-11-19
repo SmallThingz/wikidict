@@ -799,13 +799,7 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
 
 // Cell-local line metadata preserves literal spaces at wrap boundaries. It is
 // never appended to PoemProjection.lines or serialized presentation data.
-fn tableCellRows(a: std.mem.Allocator, text: []const u8, columns: usize) ![]terminal.RenderRow {
-    var lines: std.ArrayList(terminal.PoemLine) = .empty;
-    defer lines.deinit(a);
-    try lines.append(a, .{ .offset = 0 });
-    for (text, 0..) |byte, i| if (byte == '\n') try lines.append(a, .{ .offset = i + 1 });
-    return terminal.wrapStyledProjected(a, text, columns, lines.items);
-}
+const tableCellRows = terminal.wrapStyledCell;
 // Cell fill owns its two padding spaces but never the neutral frame/borders.
 // Span resets restore the cell base without inheriting the previous span font.
 fn tableWrappedLine(w: *std.Io.Writer, line: terminal.RenderRow, width: usize, color: bool, background: ?[3]u8, padding: usize) !void {
