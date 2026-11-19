@@ -663,6 +663,20 @@ import reviewed_nonlexical as nonlexical
 
 PROJECT = _PYTHON_TOOLING.source_root if _PYTHON_TOOLING is not None else Path(__file__).resolve().parent.parent
 SHARD_PAGES = 100_000
+
+
+def selected_shard_pages(value=None):
+    if value is None:
+        return SHARD_PAGES
+    if type(value) is not int or value <= 0:
+        raise ValueError('Shard pages must be a positive integer')
+    return value
+
+
+def shard_page_options(value):
+    selected_shard_pages(value)
+    return {} if value is None else {'shard_pages': value}
+
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 3
 AUXILIARY_SNAPSHOT_NAMES = (
@@ -2845,7 +2859,8 @@ def source_fingerprint():
     return _source_fingerprints()[0]
 
 
-def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None, *, validate_auxiliary=False, native_roles=None):
+def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_timeout_ms, auxiliary_snapshots=None, downloads=None, reviewed_nonlexical=None, *, validate_auxiliary=False, native_roles=None, shard_pages=None):
+    selected_shard_pages(shard_pages)
     if validate_auxiliary and auxiliary_hashes is not None:
         raise ValueError('Fresh auxiliary validation does not accept supplied hashes')
     executable=shutil.which(zig)
@@ -2869,6 +2884,8 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
                 zig_sha256=compiler_digest,
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
+    if selected_shard_pages(shard_pages) != SHARD_PAGES:
+        identity['shard_pages']=selected_shard_pages(shard_pages)
     if _PYTHON_TOOLING is not None:
         identity['python_tooling']=(runtime_source[2] if runtime_source is not None
                                     else _PYTHON_TOOLING.require_unchanged())
@@ -3227,7 +3244,8 @@ def index_identity(stat):
     return dict(device_major=os.major(stat.st_dev),device_minor=os.minor(stat.st_dev),inode=stat.st_ino,size=stat.st_size,mtime_ns=stat.st_mtime_ns)
 
 
-def inspect_page_index(path):
+def inspect_page_index(path, shard_pages=None):
+    interval=selected_shard_pages(shard_pages)
     count=offset=0
     offsets={}
     digest=hashlib.sha256()
@@ -3240,7 +3258,7 @@ def inspect_page_index(path):
                 raise ValueError('Page index line exceeds size limit')
             digest.update(line)
             if line.rstrip(b'\n') and not line.startswith(b'#'):
-                if count % SHARD_PAGES == 0: offsets[count]=0 if count==0 else offset
+                if count % interval == 0: offsets[count]=0 if count==0 else offset
                 count+=1
             offset+=len(line)
         if index_identity(os.fstat(source.fileno()))!=identity:
@@ -3319,7 +3337,8 @@ def cleanup_dead_private_shards(shards_root):
         remove_artifact_tree(partial)
 
 
-def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None, *, build_identity=None):
+def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None, *, build_identity=None, shard_pages=None):
+    interval=selected_shard_pages(shard_pages)
     if build_identity is not None and 'retained_runtime_source' in build_identity:
         source, production_source = require_build_source(build_identity)
     else:
@@ -3332,7 +3351,7 @@ def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxilia
         'registry_sha256':sha256_file(registry),
         'source':source,
         'production_source':production_source,
-        'shard_pages':SHARD_PAGES,
+        'shard_pages':interval,
     }
     if now_unix is not None: state['now_unix']=now_unix
     if reviewed_nonlexical is not None:state['reviewed_nonlexical_source_review_sha256']=reviewed_nonlexical['sha256']
@@ -7004,7 +7023,8 @@ def extraction_cache_args(cache_root, staged):
             '--verified-index-sha256',staged['index_sha256']]
 
 
-def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, provider_update=None):
+def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, provider_update=None, shard_pages=None):
+    interval=selected_shard_pages(shard_pages)
     if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)):
         raise ValueError('Retained roles require ordinary compressed sharded execution')
     if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
@@ -7109,7 +7129,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     expander=expander_build/'.bundle-expander'
     with build_phase(edition,date,'page_index_count') as result:
         index_path=expander/'page-index.tsv'
-        index=inspect_page_index(index_path)
+        index=inspect_page_index(index_path, **shard_page_options(shard_pages))
         indexed_pages=index['rows']
         result['pages']=indexed_pages
         result['sha256']=index['sha256']
@@ -7150,12 +7170,12 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     # A verified or complete-but-unmarked contiguous prefix is reusable after
     # a crash. The native continuous builder owns only an absent suffix, so it
     # cannot replace an existing shard directory.
-    shard_starts=list(range(0,indexed_pages,SHARD_PAGES))
+    shard_starts=list(range(0,indexed_pages,interval))
     prefix=[]
     for start in ([] if compress_shards else shard_starts):
         shard=shards_root/f'{start:08d}'
         if not shard.exists(): break
-        limit=min(SHARD_PAGES,indexed_pages-start)
+        limit=min(interval,indexed_pages-start)
         check_shard_inputs()
         try:
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
@@ -7183,13 +7203,13 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                    '--expander-root',str(expander),'--start-page',str(first),
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
-                   '--shard-pages',str(SHARD_PAGES),
+                   '--shard-pages',str(interval),
                    '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args],
                   edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
         check_shard_inputs()
         for start in missing_starts:
             shard=shards_root/f'{start:08d}'
-            limit=min(SHARD_PAGES,indexed_pages-start)
+            limit=min(interval,indexed_pages-start)
             validate_page_coverage(shard,start,limit,index,index['offsets'][start])
             verifier.run([str(shard)],
                       edition,date,'shard_verify',start_page=start,pages=limit)
@@ -7200,8 +7220,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     failed_shards=[]
     if not continuous_handled:
         shard_paths=[]
-        for start in range(0,indexed_pages,SHARD_PAGES):
-            limit=min(SHARD_PAGES,indexed_pages-start)
+        for start in range(0,indexed_pages,interval):
+            limit=min(interval,indexed_pages-start)
             offset=index['offsets'][start]
             check_shard_inputs()
             shard=shards_root/f'{start:08d}'
@@ -7288,8 +7308,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     coverage_complete=False,publication_created=False)
         raise first
     check_shard_inputs()
-    actual_pages=sum(validate_page_coverage(path,start,min(SHARD_PAGES,indexed_pages-start),index,index['offsets'][start])['pages_seen']
-                     for path,start in zip(shard_paths,range(0,indexed_pages,SHARD_PAGES)))
+    actual_pages=sum(validate_page_coverage(path,start,min(interval,indexed_pages-start),index,index['offsets'][start])['pages_seen']
+                     for path,start in zip(shard_paths,range(0,indexed_pages,interval)))
     if actual_pages!=indexed_pages: raise ValueError('Incomplete total shard page coverage')
     coverage=dict(version=1,start_page=0,requested_limit=None,index_byte_offset=0,pages_seen=actual_pages,
                   expected_input_pages=indexed_pages,page_index_identity=index['identity'],page_index_sha256=index['sha256'],page_index_rows=indexed_pages)
@@ -7349,7 +7369,8 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     cleanup_shard_workspace(workspace)
 
 
-def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+def build(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+    selected_shard_pages(shard_pages)
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     selected_staged_input_root(items,staged_input_root,output,raw_shard_root,extraction_cache_root)
     validate_llvm_workers(llvm_workers)
@@ -7384,7 +7405,7 @@ def build(items, downloads, output, zig, compression_workers=None, expansion_wor
                 # Legitimate producers share this edition lock; success still overrides.
                 if (parent / date / 'complete.json').exists():
                     result['execution_mode']='existing_output'
-                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
+                mode=build_locked(items, downloads, output, zig, compression_workers, expansion_workers, interwiki_snapshot, auxiliary_snapshots, **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'now_unix':now_unix} if now_unix is not None else {}), **({'raw_shard_root':raw_shard_root} if raw_shard_root is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical_review=reviewed_nonlexical_review, **({'llvm_workers':llvm_workers} if llvm_workers is not None else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
                 result['execution_mode']=mode
                 return mode
         except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
@@ -7885,7 +7906,8 @@ def publish_verified_staging(staging, target, edition, date, compression_workers
         blobs,fallback_pages=_publish_verified_staging(staging,target,edition,date,compression_workers,interwiki_sha,auxiliary_hashes,build_identity,namespace_snapshot,site_info_snapshot,**({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}))
         result.update(blobs=blobs,fallback_pages=fallback_pages)
 
-def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+def build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+    selected_shard_pages(shard_pages)
     if retained_roles is not None and not isinstance(retained_roles,RetainedNativeToolRoles):
         raise ValueError('Invalid retained native input guards')
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
@@ -7901,13 +7923,14 @@ def build_locked(items, downloads, output, zig, compression_workers=None, expans
             return _build_locked(items,downloads,output,zig,compression_workers,expansion_workers,
             interwiki_snapshot,auxiliary_snapshots,expansion_timeout_ms,now_unix,raw_shard_root,
             compress_shards,extraction_cache_root,reviewed_nonlexical_review,llvm_workers,borrowed,input_guard,
-            **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
+            **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
 
         finally:
             input_guard()
 
 
-def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False):
+def _build_locked(items, downloads, output, zig, compression_workers=None, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, raw_shard_root=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, shard_pages=None):
+    interval=selected_shard_pages(shard_pages)
     if retained_roles is not None and (not compress_shards or not isinstance(retained_roles, RetainedNativeToolRoles)):
         raise ValueError('Retained roles require ordinary compressed sharded execution')
     if (retained_roles is not None and (getattr(_PREPARED_SOURCE,'request',None) is not None
@@ -7954,7 +7977,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         else:
             interwiki_sha=None
         reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
-        build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True, **({'native_roles':retained_roles} if retained_roles is not None else {}))
+        build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True, **({'native_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
         generation=getattr(_PREPARED_SOURCE,'value',None)
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
@@ -8059,7 +8082,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     provider_update={}
     with build_phase(phase_edition,phase_date,'workspace_setup'):
         workspace=target.with_name(date+'.shards')
-        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed,**({'build_identity':build_identity} if 'retained_runtime_source' in build_identity else {}))
+        expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed,**({'build_identity':build_identity} if 'retained_runtime_source' in build_identity else {}), **shard_page_options(shard_pages))
         raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
         update_args={}
         if (getattr(_PREPARED_SOURCE,'value',None) is None and getattr(_PREPARED_SOURCE,'request',None) is None
@@ -8118,10 +8141,10 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         result.update(provider_installed=page_redirects_snapshot is not None,sha256=page_redirects_sha)
     # XML compression ratio does not bound the writer's whole-bucket sort.
     # Reuse the verified repack for either path, retaining it after failures.
-    if (source_pages>SHARD_PAGES or reviewed is not None or presentation_audit_pages is not None
+    if (source_pages>interval or reviewed is not None or presentation_audit_pages is not None
             or retained_roles is not None or getattr(_PREPARED_SOURCE,'request',None) is not None):
-        print(f'Sharding {edition}: {source_pages:,} verified source pages in {SHARD_PAGES:,}-page chunks',flush=True)
-        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}),**({'provider_update':provider_update} if provider_update else {}))
+        print(f'Sharding {edition}: {source_pages:,} verified source pages in {interval:,}-page chunks',flush=True)
+        build_sharded(dump,staging,workspace,registry,zig,workers,items,now_unix,expansion_workers,pinned,interwiki_sha,aux_pinned,auxiliary_hashes, build_identity=build_identity, **({'page_links_snapshot':page_links_snapshot} if page_links_snapshot is not None else {}), **({'page_redirects_snapshot':page_redirects_snapshot} if page_redirects_snapshot is not None else {}), **({'expansion_timeout_ms':expansion_timeout_ms} if expansion_timeout_ms is not None else {}), **({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}), **({'compress_shards':True} if compress_shards else {}), **({'extraction_cache_root':extraction_cache_root} if extraction_cache_root is not None else {}), reviewed_nonlexical=reviewed, **({'llvm_workers':llvm_workers} if llvm_explicit else {}), **({'staged_input_root':staged_input_root} if staged_input_root is not None else {}), **({'_staged_input_guard':_staged_input_guard} if _staged_input_guard is not None else {}), **({'presentation_audit_pages':presentation_audit_pages} if presentation_audit_pages is not None else {}), **({'continue_failed_shards':True} if continue_failed_shards else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}),**({'provider_update':provider_update} if provider_update else {}), **shard_page_options(shard_pages))
     else:
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')
@@ -8187,7 +8210,8 @@ def smallest_first_group_key(entry):
     return size, key
 
 
-def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, continue_failed_shards=False):
+def build_groups(groups, downloads, output, zig, threads, jobs, expansion_workers=None, interwiki_snapshot=None, auxiliary_snapshots=None, expansion_timeout_ms=None, now_unix=None, edition_options=None, admission_wait_seconds=RESOURCE_ADMISSION_WAIT_SECONDS, cpu_admission='load', raw_shard_root=None, adaptive_workers=False, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical_review=None, llvm_workers=None, staged_input_root=None, presentation_audit_pages=None, continue_failed_shards=False, shard_pages=None):
+    selected_shard_pages(shard_pages)
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     if staged_input_root is not None and len(groups)!=1:raise ValueError('Borrowed staged inputs require exactly one edition')
     from build_resource_limits import MAX_WATCHDOG_WALL_SECONDS
@@ -8223,6 +8247,7 @@ def build_groups(groups, downloads, output, zig, threads, jobs, expansion_worker
                     break
                 key,group=pending.pop(0)
                 options={}
+                options.update(shard_page_options(shard_pages))
                 if reviewed_nonlexical_review is not None:options['reviewed_nonlexical_review']=reviewed_nonlexical_review
                 if expansion_workers is not None: options['expansion_workers']=expansion_workers
                 if llvm_workers is not None: options['llvm_workers']=llvm_workers
@@ -8323,6 +8348,7 @@ def main():
     p.add_argument('--output','--out',type=Path,metavar='DIR')
     p.add_argument('--continue-failed-shards',action='store_true',help='With an audit bound, continue only authenticated presentation rejections; retain verified shards and refuse merge/publication if any shard fails')
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
+    p.add_argument('--shard-pages',type=int,metavar='N',help='Positive verified shard checkpoint interval; default 100000 pages. Smaller shards increase verification/compression/merge overhead.')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
     p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack input directory for exactly one edition; validates existing marker and bytes, never copies or retires it')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
@@ -8363,6 +8389,8 @@ def main():
         p.add_argument('--'+name+'-snapshot',type=Path,
                        help='Optional '+name+' snapshot; its SHA-256 is part of the shard identity')
     a=p.parse_args()
+    try:selected_shard_pages(a.shard_pages)
+    except ValueError as error:p.error(str(error))
     try: workspace=workspace_root(json.loads(a.workspace_root_spec) if a.workspace_root_spec is not None else None)
     except (ValueError,OSError) as error: p.error(str(error))
     if a.downloads is None:a.downloads=workspace/'data/dumps'
@@ -8479,7 +8507,7 @@ def main():
                                              a.interwiki_map_snapshot.resolve() if a.interwiki_map_snapshot else None)
         except (ValueError,OSError) as error:p.error(str(error))
     failures=build_groups(groups,a.downloads.resolve(),a.output.resolve(),a.zig,a.threads,a.jobs,
-                          None if a.expansion_workers is None else expansion_workers,**options)
+                          None if a.expansion_workers is None else expansion_workers,**options,**shard_page_options(a.shard_pages))
     if failures:raise SystemExit(f'{len(failures)} editions failed or were not started; no incomplete editions were published')
 def cli():
     from build_resource_limits import ContainmentUnavailable, inside_envelope, inside_watchdog, supervise, supervise_watchdog

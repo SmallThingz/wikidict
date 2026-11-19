@@ -5615,5 +5615,19 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
             selected['argv'][3]='/next/output'
             self.assertEqual(command,before)
 
+
+
+
+class ConfigurableShardPagesControllerTests(unittest.TestCase):
+    def test_edition_interval_is_explicit_positive_and_context_bound(self):
+        self.assertEqual(controller.edition_cli_options({},'toy'),[])
+        cfg={'edition_options':{'toy':{'shard_pages':2500}}}
+        self.assertEqual(controller.edition_cli_options(cfg,'toy'),['--shard-pages','2500'])
+        for value in (None,0,-1,True,1.5,'2'):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                controller.edition_cli_options({'edition_options':{'toy':{'shard_pages':value}}},'toy')
+        base={key:key for key in controller.CONTEXT_KEYS}
+        self.assertNotEqual(controller.production_context(base),controller.production_context(dict(base,edition_options=cfg['edition_options'])))
+
 if __name__ == '__main__':
     unittest.main()

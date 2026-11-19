@@ -1118,10 +1118,10 @@ def write_namespace_coverage(root, count):
 def write_coverage(root, command=None):
     if command and '--shard-pages' in command:
         index=Path(command[command.index('--expander-root')+1])/'page-index.tsv'
-        inspected=b.inspect_page_index(index)
+        step=int(command[command.index('--shard-pages')+1])
+        inspected=b.inspect_page_index(index,shard_pages=step)
         start=int(command[command.index('--start-page')+1])
         total=int(command[command.index('--limit-pages')+1])
-        step=int(command[command.index('--shard-pages')+1])
         for shard_start in range(start,start+total,step):
             shard=root/f'{shard_start:08d}'
             shard.mkdir(parents=True,exist_ok=True)
@@ -8560,7 +8560,7 @@ class RetainedNativeRoleTests(unittest.TestCase):
                 and any(isinstance(child,ast.Name) and child.id=='source_pages' for child in ast.walk(node.test)))
             scope=dict(b.__dict__)
             scope.update(source_pages=1,reviewed=None,presentation_audit_pages=None,retained_roles=selected,
-                continue_failed_shards=False,provider_update={},
+                continue_failed_shards=False,provider_update={},interval=b.SHARD_PAGES,shard_pages=None,
                 edition='testwiktionary',date='20261001',dump=root/'dump',staging=root/'staging',
                 workspace=root/'work',registry=root/'registry',zig=str(compiler),workers=1,items=[],now_unix=1,
                 expansion_workers=1,pinned=None,interwiki_sha=None,aux_pinned={},auxiliary_hashes={},
@@ -15508,5 +15508,198 @@ class LanguageMessagePairTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'Unsafe language/message capture inventory'):
                 b.validated_language_message_pair(snapshots)
 
+
+
+
+
+
+class ConfigurableShardPagesTests(PreparedToolsFixture):
+    def test_positive_interval_refuses_before_side_effects_and_cli_routing(self):
+        root=Path('/unused-shard-pages')
+        for value in (0,-1,True,1.5,'2'):
+            for entry,args in ((b.build,([],root,root/'out','zig')),
+                               (b.build_locked,([],root,root/'out','zig')),
+                               (b.build_sharded,(root/'dump',root/'out',root/'work',root/'registry','zig',1,[],123)),
+                               (b.build_groups,({},root,root/'out','zig',1,1))):
+                with self.subTest(value=value,entry=entry.__name__),patch.object(b,'artifact_path') as artifact:
+                    with self.assertRaisesRegex(ValueError,'Shard pages'):entry(*args,shard_pages=value)
+                    artifact.assert_not_called()
+        for value in ('0','-1','x'):
+            with patch.object(sys,'argv',['build_wiktionaries.py','--shard-pages',value]),patch.object(b,'workspace_root') as workspace:
+                with self.assertRaises(SystemExit):b.main()
+                workspace.assert_not_called()
+
+    def test_index_offsets_and_legacy_identity_bind_the_selected_interval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);index=root/'index';index.write_bytes(b'# header\nzero\none\ntwo\nthree\nfour\n')
+            default=b.inspect_page_index(index);explicit=b.inspect_page_index(index,shard_pages=100000)
+            self.assertEqual(default,explicit)
+            small=b.inspect_page_index(index,shard_pages=2)
+            self.assertEqual(small['offsets'],{0:0,2:18,4:28})
+            self.assertEqual({k:v for k,v in small.items() if k!='offsets'},{k:v for k,v in default.items() if k!='offsets'})
+            tool=root/'zig';tool.write_bytes(b'compiler');registry=root/'registry';registry.write_bytes(b'en\tEnglish\n')
+            items=[dict(wiki='testwiktionary',date='20261001',name='dump',size=1,sha1='a'*40)]
+            with patch.object(b.shutil,'which',return_value=str(tool)),patch.object(b,'source_fingerprint',return_value='source'):
+                identity=b.build_input_identity(items,'zig',{},None,None)
+                self.assertEqual(identity,b.build_input_identity(items,'zig',{},None,None,shard_pages=100000))
+                self.assertNotIn('shard_pages',identity)
+                custom=b.build_input_identity(items,'zig',{},None,None,shard_pages=2)
+                self.assertEqual(custom,dict(identity,shard_pages=2))
+                with self.assertRaisesRegex(ValueError,'Build inputs'):b.require_build_identity(identity,custom)
+            with patch.object(b,'_source_fingerprints',return_value=('source','production')):
+                state=b.shard_state(items,registry)
+                self.assertEqual(state,b.shard_state(items,registry,shard_pages=100000))
+                self.assertEqual(b.shard_state(items,registry,shard_pages=2),dict(state,shard_pages=2))
+
+    def test_cli_scheduler_and_per_edition_override_preserve_legacy_default(self):
+        with tempfile.TemporaryDirectory() as tmp,contextlib.chdir(tmp):
+            root=Path(tmp);write_test_manifest(root,{'files':[dict(wiki='testwiktionary',date='20261001',name='test.xml.bz2',url='https://dumps.wikimedia.org/testwiktionary/20261001/test.xml.bz2',size=1,sha1='a'*40)]})
+            argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'out'),'--threads','1','--jobs','1']
+            for extra,expected in (([],None),(['--shard-pages','2'],2),(['--shard-pages','100000'],100000)):
+                with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv+extra),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1),patch.object(b,'build_groups',return_value=[]) as groups:b.main()
+                self.assertEqual(groups.call_args.kwargs.get('shard_pages'),expected)
+            with patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1),patch.object(b,'build',return_value='built') as build:
+                b.build_groups({('testwiktionary','20261001'):['item']},root,root/'out','zig',1,1,cpu_admission='affinity',shard_pages=7,edition_options={('testwiktionary','20261001'):{'shard_pages':2}})
+            self.assertEqual(build.call_args.kwargs['shard_pages'],2)
+
+    def test_selected_interval_normal_failed_merge_resume_preserves_outputs(self):
+        # Exercise the ordinary Python producer/verification/publication route.
+        # Only native child execution is replaced, as in the existing merge
+        # recovery fixture; this test earns no native dictionary acceptance.
+        for compressed, interval in ((False,1),(True,1),(False,2),(True,2)):
+            edited='tools/corpus_controller.py'
+            with self.subTest(compressed=compressed, edited=edited),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);ShardSourceIdentityTests.fixture(self,root)
+                folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+                name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+                data=bz2.compress(b'<mediawiki>'+b'<page>word</page>'*3+b'</mediawiki>')
+                (folder/name).write_bytes(data)
+                item=dict(wiki='testwiktionary',date='20260901',name=name,
+                    url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                    size=len(data),sha1=hashlib.sha1(data).hexdigest())
+                tool=root/'zig';tool.write_bytes(b'unchanged compiler executable')
+                workspace=root/'output/testwiktionary/20260901.shards'
+                calls=[];merges=[];retained={}
+                def run(command):
+                    calls.append(list(command))
+                    if 'build-dictionary' in command:
+                        dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                        (dest/'.incomplete').write_text('expander ready')
+                        (exp/'page-index.tsv').write_text('0\n1\n2\n')
+                        (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                    elif blob_command(command,'build-blobs'):
+                        dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
+                        write_coverage(dest,command)
+                    elif blob_command(command,'merge-blobs'):
+                        merges.append(list(command))
+                        if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                        for relative,(contents,inode) in retained.items():
+                            path=workspace/relative
+                            self.assertEqual(path.read_bytes(),contents)
+                            self.assertEqual(path.stat().st_ino,inode)
+                        args=tool_arguments(command)
+                        if args[0]=='--compress-output':args=args[1:]
+                        dest=Path(args[0]);dest.mkdir()
+                        write_namespace_coverage(dest,sum(json.loads((Path(p)/'page-coverage.json').read_text())['pages_seen'] for p in args[1:]))
+                with patch.object(b,'PROJECT',root),                     patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+                    audit_before=b.source_fingerprint()
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        b.build([item],root,root/'output','zig',1,compress_shards=compressed,shard_pages=interval)
+                    state=json.loads((workspace/'state.json').read_text())
+                    self.assertEqual(state['source'],audit_before)
+                    relatives=['state.json','input/.complete.json','expander/.incomplete',
+                        'expander/.bundle-expander/page-index.tsv','expander/.bundle-expander/dict-bundle-expander']
+                    relatives += [f'shards/{start:08d}/{name}'for start in range(0,3,interval)for name in ('page-coverage.json','.verified')]
+                    for relative in relatives:
+                        path=workspace/relative;retained[relative]=(path.read_bytes(),path.stat().st_ino)
+                    first_builds=[c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')]
+                    boundary=len(calls)
+                    (root/edited).write_bytes(b'changed reporting only')
+                    audit_after=b.source_fingerprint();self.assertNotEqual(audit_before,audit_after)
+                    b.build([item],root,root/'output','zig',1,compress_shards=compressed,shard_pages=interval)
+                    self.assertEqual([c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')],first_builds)
+                    verified={Path(tool_arguments(c)[0]) for c in calls[boundary:] if blob_command(c,'verify-blobs')}
+                    self.assertTrue({workspace/f'shards/{start:08d}'for start in range(0,3,interval)}<=verified)
+                    self.assertEqual(len(merges),2)
+                    self.assertFalse(workspace.exists())
+                    complete=json.loads((root/'output/testwiktionary/20260901/complete.json').read_text())
+                    self.assertEqual(complete['input_pages'],3)
+                    self.assertEqual(complete['build_inputs']['source'],audit_after)
+                    self.assertEqual(complete['build_inputs']['zig_sha256'],hashlib.sha256(tool.read_bytes()).hexdigest())
+
+class ShardPagesCliResumeTests(PreparedToolsFixture):
+    def test_cli_verified_resume_and_interval_output_equivalence(self):
+        # Exercise the ordinary Python producer/verification/publication route.
+        # Only native child execution is replaced, as in the existing merge
+        # recovery fixture; this test earns no native dictionary acceptance.
+        outputs=[]
+        for compressed, interval in ((False,1),(True,1),(False,2),(True,2)):
+            edited='tools/corpus_controller.py'
+            with self.subTest(compressed=compressed, edited=edited),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);ShardSourceIdentityTests.fixture(self,root)
+                folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
+                name='testwiktionary-20260901-pages-meta-current.xml.bz2'
+                data=bz2.compress(b'<mediawiki>'+b'<page>word</page>'*3+b'</mediawiki>')
+                (folder/name).write_bytes(data)
+                item=dict(wiki='testwiktionary',date='20260901',name=name,
+                    url='https://dumps.wikimedia.org/testwiktionary/20260901/'+name,
+                    size=len(data),sha1=hashlib.sha1(data).hexdigest())
+                tool=root/'zig';tool.write_bytes(b'unchanged compiler executable')
+                workspace=root/'output/testwiktionary/20260901.shards'
+                calls=[];merges=[];retained={}
+                def run(command):
+                    calls.append(list(command))
+                    if 'build-dictionary' in command:
+                        dest=Path(tool_arguments(command)[1]);exp=dest/'.bundle-expander';exp.mkdir(parents=True)
+                        (dest/'.incomplete').write_text('expander ready')
+                        (exp/'page-index.tsv').write_text('0\n1\n2\n')
+                        (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
+                    elif blob_command(command,'build-blobs'):
+                        dest=Path(tool_arguments(command)[1]);dest.mkdir(parents=True,exist_ok=True)
+                        write_coverage(dest,command)
+                    elif blob_command(command,'merge-blobs'):
+                        merges.append(list(command))
+                        if len(merges)==1:raise subprocess.CalledProcessError(1,command)
+                        for relative,(contents,inode) in retained.items():
+                            path=workspace/relative
+                            self.assertEqual(path.read_bytes(),contents)
+                            self.assertEqual(path.stat().st_ino,inode)
+                        args=tool_arguments(command)
+                        if args[0]=='--compress-output':args=args[1:]
+                        dest=Path(args[0]);dest.mkdir()
+                        write_namespace_coverage(dest,sum(json.loads((Path(p)/'page-coverage.json').read_text())['pages_seen'] for p in args[1:]))
+                write_test_manifest(root,{'files':[item]})
+                argv=['build_wiktionaries.py','--resource-mode=watchdog','--cpu-admission=affinity','--downloads',str(root),'--output',str(root/'output'),'--zig',str(tool),'--threads','1','--jobs','1','--shard-pages',str(interval),'--now-unix','123']+(['--compress-shards']if compressed else [])
+                with patch.object(sys,'argv',argv),patch.object(b,'safe_worker_budget',return_value=1),patch.object(b,'affinity_worker_budget',return_value=1),patch.object(b,'PROJECT',root),                     patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b.time,'time',return_value=123),patch.object(b,'run_checked',side_effect=run):
+                    audit_before=b.source_fingerprint()
+                    with self.assertRaises(SystemExit):
+                        b.main()
+                    state=json.loads((workspace/'state.json').read_text())
+                    self.assertEqual(state['source'],audit_before)
+                    relatives=['state.json','input/.complete.json','expander/.incomplete',
+                        'expander/.bundle-expander/page-index.tsv','expander/.bundle-expander/dict-bundle-expander']
+                    relatives += [f'shards/{start:08d}/{name}'for start in range(0,3,interval)for name in ('page-coverage.json','.verified')]
+                    for relative in relatives:
+                        path=workspace/relative;retained[relative]=(path.read_bytes(),path.stat().st_ino)
+                    first_builds=[c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')]
+                    boundary=len(calls)
+                    (root/edited).write_bytes(b'changed reporting only')
+                    audit_after=b.source_fingerprint();self.assertNotEqual(audit_before,audit_after)
+                    b.main()
+                    self.assertEqual([c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')],first_builds)
+                    verified={Path(tool_arguments(c)[0]) for c in calls[boundary:] if blob_command(c,'verify-blobs')}
+                    self.assertTrue({workspace/f'shards/{start:08d}'for start in range(0,3,interval)}<=verified)
+                    self.assertEqual(len(merges),2)
+                    self.assertFalse(workspace.exists())
+                    complete=json.loads((root/'output/testwiktionary/20260901/complete.json').read_text())
+                    self.assertEqual(complete['input_pages'],3)
+                    self.assertEqual(complete['build_inputs']['source'],audit_after)
+                    self.assertEqual(complete['build_inputs']['zig_sha256'],hashlib.sha256(tool.read_bytes()).hexdigest())
+
+                final=root/'output/testwiktionary/20260901'
+                outputs.append((final/'languages.tsv').read_bytes())
+        self.assertTrue(all(value==outputs[0]for value in outputs))
 
 if __name__=='__main__':unittest.main()

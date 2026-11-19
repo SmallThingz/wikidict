@@ -1932,9 +1932,15 @@ def edition_cli_options(cfg, edition):
                             or (root/(cfg['date']+'.shards')/name).is_symlink() for name in RETIRED_PROVIDER_MARKERS),
                     'Retired provider-copy workspace requires a fresh whole-attempt output; retained captures unchanged')
     options = cfg.get('edition_options', {}).get(edition, {})
-    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards'},
+    require(isinstance(options, dict) and set(options) <= {'extraction_cache_root', 'staged_input_root', 'auxiliary_snapshots', 'interwiki_snapshot', 'presentation_audit_pages', 'continue_failed_shards', 'shard_pages'},
             'Unknown edition option')
     argv = []
+    if 'shard_pages' in options:
+        from build_wiktionaries import selected_shard_pages
+        pages=options['shard_pages']
+        require(pages is not None, 'Shard pages must be explicitly positive')
+        selected_shard_pages(pages)
+        argv += ['--shard-pages', str(pages)]
     if 'continue_failed_shards' in options:
         from build_wiktionaries import validate_presentation_audit_pages
         validate_presentation_audit_pages(options.get('presentation_audit_pages'), options['continue_failed_shards'])
