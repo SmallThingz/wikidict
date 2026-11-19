@@ -1081,7 +1081,8 @@ const State = struct {
             if (self.notice.len != 0) try self.put(w, 3, 3, sz.cols - 4, self.notice, p.accent);
             try self.dock(w);
         } else {
-            const split_at = if (self.nav == .learn) 0 else self.split();
+            const empty_personal_list = (self.nav == .saved or self.nav == .history) and self.count() == 0;
+            const split_at = if (self.nav == .learn or empty_personal_list) 0 else self.split();
             const content_col = if (split_at == 0) 3 else split_at + 3;
             const content_width = sz.cols - content_col - 1;
             try self.prepare(content_width);
@@ -1100,7 +1101,7 @@ const State = struct {
             const query_view = try queryDisplay(self.a, self.query[0..self.len], self.cursor, input_width);
             defer self.a.free(query_view.text);
             try self.put(w, 4, 13, input_width, if (self.nav == .learn) "Tab game; Esc search" else query_view.text, p.base);
-            const show_matches = split_at != 0 or self.focus != .entry;
+            const show_matches = !empty_personal_list and (split_at != 0 or self.focus != .entry);
             if (show_matches) {
                 const cols = if (split_at == 0) sz.cols - 4 else split_at - 4;
                 try self.put(w, 6, 3, cols, try std.fmt.bufPrint(&buf, "MATCHES  {d}", .{self.count()}), if (self.focus != .entry) p.accent else p.muted);
@@ -1112,18 +1113,15 @@ const State = struct {
                     try self.put(w, 7 + i, 3, cols, title, if (n == self.selected) p.selected else p.base);
                 }
                 if (self.count() == 0) {
-                    try self.put(w, 7, 3, cols, switch (self.nav) {
-                        .saved => "No saved words yet.",
-                        .history => "No viewed words yet.",
-                        else => if (self.searchPending()) "Searching..." else "No matching words.",
-                    }, p.muted);
-                    try self.put(w, 8, 3, cols, if (self.nav == .saved) "Open a word; s saves it." else "/ search; Ctrl-U clear", p.muted);
+                    try self.put(w, 7, 3, cols, if (self.searchPending()) "Searching..." else "No matching words.", p.muted);
+                    try self.put(w, 8, 3, cols, "/ search; Ctrl-U clear", p.muted);
                 }
             }
             if (split_at != 0) for (5..sz.rows - 1) |row| try self.put(w, row, split_at, 1, "│", p.muted);
             const empty_search_in_matches = show_matches and self.nav == .search and self.count() == 0;
-            if ((split_at != 0 or self.focus == .entry) and !empty_search_in_matches) {
-                try self.put(w, 6, content_col, content_width, "READING", if (self.focus == .entry) p.accent else p.muted);
+            if ((empty_personal_list or split_at != 0 or self.focus == .entry) and !empty_search_in_matches) {
+                const heading = if (!empty_personal_list) "READING" else if (self.nav == .saved) "SAVED" else "HISTORY";
+                try self.put(w, 6, content_col, content_width, heading, if (self.focus == .entry) p.accent else p.muted);
                 if (self.count() != 0 and content_width > 12) {
                     const title = try self.db.titleAt(self.recordIndex(self.selected));
                     const saved = if (self.reading) |r| ReadingState.contains(r.data.saved, title) else false;
@@ -1139,7 +1137,7 @@ const State = struct {
             }
             const hints: []const u8 = if (self.nav == .learn)
                 (if (self.count() != 0 and !self.study_has_meaning and !self.roundComplete()) "c Cards  o Open  n Skip  Esc search" else "Tab game  Esc search  Ctrl-C quit")
-            else switch (self.focus) {
+            else if (empty_personal_list) "/ search  5 Settings  ? help  q quit" else switch (self.focus) {
                 .search => if (sz.cols < 81) "type  ↑↓ select  Enter read  ^C quit" else "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
                 .matches => if (self.nav == .history) "Enter read  Del remove  / search  ? help" else "/ search  ↑↓ select  Enter read  PgUp/PgDn page  ? help  q quit",
                 .entry => readingHints(sz.cols),

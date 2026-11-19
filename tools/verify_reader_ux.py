@@ -364,6 +364,15 @@ def exercise(reader: ReaderPty, initial_width: int) -> None:
     require(reader.cli("saved") == [], "Fixture copy started with saved words")
     require(reader.cli("history") == [], "Preview unexpectedly recorded history before opening a word")
 
+    reader.action(b"\t1", lambda: reader.page_is("saved", count=0), "open empty Saved")
+    require(reader.text().count("No saved words yet.") == 1 and "Press / to find a word." in reader.text(),
+            "Empty Saved should explain once how to find a word")
+    reader.action("2", lambda: reader.page_is("history", count=0), "open empty History")
+    require(reader.text().count("No viewed words yet.") == 1 and
+            "Open a word with Enter to remember it." in " ".join(reader.text().split()),
+            "Empty History should explain once how to remember words")
+    reader.action(ESCAPE, lambda: reader.page_is("search", 1, len(TITLES)), "return from empty History")
+
     reader.action(b"\x15missing-fixture-word", lambda: reader.page_is("search", count=0)
                   and reader.text().count("No matching words.") == 1,
                   "empty search shows one explanation")
