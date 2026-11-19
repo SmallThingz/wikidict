@@ -1,6 +1,86 @@
 # Android validation
 
-## Current scoped MG/HU integration and unsigned package — 2026-11-19
+## Current HU/RT, empty-entry and preview integration — 2026-11-19
+
+The current Android product is commit
+`c733b84d26638bfa9e34eb11ed503bf7b67adb0e`, **Android: render ruby margins and
+improve entry previews**. The [commit bridge][current-bridge-153] proves that its
+24 files match the qualified private inputs: 14 main, six JVM-test and four
+instrumentation-test files, including six new files. The canonical source
+inventory contains 970 files. These changes are integrated into the ordinary
+decoder, entry view and saved-entry paths, not a separate private candidate.
+
+The changes support ruby annotation margins and intrinsic two-line inline boxes,
+show an accessible notice for entries with no content, and include table senses
+in history/bookmark clues when no explicit definition or prose clue is available.
+The Ido `abako` control retains both source-derived senses; the output remains
+bounded to 420 UTF-16 units without splitting a supplementary character. Existing
+explicit definitions and prose keep priority. Saved clues refresh through the
+normal entry-revisit path.
+
+[Host152][host152] ran **34 fresh JVM correctness checks: 34 passed, zero failed,
+skipped or carried**. These include 23 HU/RT checks, four empty-entry checks and
+seven Ido preview checks. Main and unit Kotlin compilation passed. That invocation
+failed instrumentation compilation because one new fixture selected a font-family
+enum value that the model does not support; its original failure remains recorded.
+The correction changes only four matching font selections in that device fixture,
+preserving every assertion and all production/JVM source bytes.
+
+[Host153][host153] then passed instrumentation Kotlin compilation, with main Kotlin
+and instrumentation Java up to date. It ran **zero new JVM cases** and retained the
+exact 34 Host152 passes. The source routes bind 163 main, 150 unit-test and 97
+instrumentation inputs. The 11 relevant device controls (nine new, two maintained)
+are **compiled only**. Both runs have their original command terminal and independent
+process, lock and source closure.
+
+The current declared suite contains **1,187 cases**; a full current-suite pass is
+not claimed. [Host150's 1,165 fresh passes][host150] apply to the preceding
+`6ee35c48` product. [Host151's one genuine Korean blob check][host151] was later
+integrated as the test/resource-only commit `8581e646`; it proves decode, complete
+entry and logical-range behavior, not glyph, hit-test or accessibility rendering.
+Neither historical result is relabeled as a full pass on the new product.
+
+**Package154 is the current verified unsigned host artifact**, built from the
+integrated `c733b84d` product. Release Kotlin compilation, R8, packaging, assembly
+and ordinary release-vital checks passed. Resource optimization and the vital
+report task were up to date. The [saved package audit][package154] records:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, non-debuggable;
+  **minimum API 31, target API 37**.
+- **10,914,785 bytes**, 16,384 bytes larger than Package149.
+  SHA-256: `b6dba78903a2ae39fbbe4b5c1df7ef2bf03adad34556e260284cdd6b04634ddc`.
+- 99 ZIP members, with no members added or removed. Only `classes.dex` and the
+  two baseline-profile members changed. The 497 native source inputs, four
+  optimized JNI libraries, packaged fonts and licences retain their verified bytes.
+- **Unsigned**: no APK signing block or JAR signatures; release signing is not
+  configured. The signature verifier exits 1 with `DOES NOT VERIFY` and
+  `Missing META-INF/MANIFEST.MF`. No signing or signer qualification is claimed.
+- VCS metadata reports `NO_SUPPORTED_VCS_FOUND`; the exact source manifest and
+  commit bridge establish provenance, not an embedded revision.
+- No JVM, instrumentation, JNI compilation or full lint was repeated by packaging.
+  Its original command returned successfully and all owned processes and locks
+  were independently closed.
+
+The retained artifact is [Package154's release-unsigned.apk][apk154]. Package149
+and the older unsigned archives, signed102 and installed62 artifact roles remain
+preserved. No signing, installation, user-data operation or publication occurred.
+The pre-ADB namespace `EACCES` still has no established recovery. Current phone
+pixels and interaction require permitted physical access and an authorized
+compatible signed installation; no current Android rendered frame is claimed.
+Genuine producer-to-reader interoperability remains a separate qualification.
+This documentation-only update follows packaging and changes no production, test,
+resource or build-configuration input. Older sections retain their results at
+their recorded boundaries.
+
+[current-bridge-153]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/chemical-intrinsic01/canonical-commit-bridge01.json
+[host152]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host152/saved-result-peer-reader01.json
+[host153]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host153/saved-result-peer-reader01.json
+[host150]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host150/saved-result-peer-reader01.json
+[host151]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host151/saved-result-peer-reader01.json
+[package154]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package154/saved-result-peer-reader01.json
+[apk154]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package154/artifacts/release-unsigned.apk
+
+## Historical scoped MG/HU integration and unsigned package — 2026-11-19
 
 The current Android product is commit
 `fd1718bbdb6b6a015d2e38fa127d8a6f2805773d`, **Render inherited cell ink and
