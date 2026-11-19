@@ -12,6 +12,7 @@ import io
 import json
 import re
 import os
+import select
 import shutil
 import stat
 import sqlite3
@@ -562,6 +563,31 @@ def compress_exports(stream, storage):
         shutil.copyfileobj(stream, compressed, length=128 * 1024)
 
 
+def wait_export_child(process, timeout):
+    """Wait for the owned child without timed waitpid sleep polling when possible."""
+    pidfd_open = getattr(os, 'pidfd_open', None)
+    if pidfd_open is None or not hasattr(select, 'poll'):
+        return process.wait(timeout=timeout)
+    try:
+        fd = pidfd_open(process.pid)
+    except OSError:
+        return process.wait(timeout=timeout)
+    try:
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        events = poller.poll(timeout * 1000)
+        if not events:
+            code = process.poll()
+            if code is None:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            return code
+        if not events[0][1] & (select.POLLIN | select.POLLHUP):
+            raise OSError('Export child pidfd did not report exit')
+        return process.wait()
+    finally:
+        os.close(fd)
+
+
 @contextmanager
 def checked_export_stream(argv):
     # The CLI can emit megabytes of repeated JSON per title. Retain the whole
@@ -578,7 +604,7 @@ def checked_export_stream(argv):
                 birth = None
                 try:
                     birth = process_birth(process.pid)
-                    code = process.wait(timeout=60)
+                    code = wait_export_child(process, 60)
                 except BaseException:
                     try:
                         if process.poll() is None and birth is not None:

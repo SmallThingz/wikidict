@@ -711,7 +711,8 @@ class Fixture:
 
 
 class BatchExportBoundaryTests(unittest.TestCase):
-    def test_previous_decoded_response_is_released_before_next_native_or_fallback_response(self):
+    @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
+    def test_previous_decoded_response_is_released_before_next_native_or_fallback_response(self, _pidfd):
         import weakref
         original_loads = json.loads
         class Response(dict):
@@ -794,7 +795,8 @@ class BatchExportBoundaryTests(unittest.TestCase):
             (root/'.dict-cache'/'a.idx').write_bytes(b'derived')
             self.assertEqual(before, audit.dictionary_snapshot(root))
 
-    def test_batch_stream_retains_duplicate_unicode_dash_queries_and_rejects_extra(self):
+    @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
+    def test_batch_stream_retains_duplicate_unicode_dash_queries_and_rejects_extra(self, _pidfd):
         responses = [dict(schema='dict.results.v1', operation='lookup', query=q,
                           match_mode='exact-utf8', entries=[dict(title=q)]) for q in ['猫', '-dash', '猫']]
         class Child:
@@ -825,7 +827,8 @@ class BatchExportBoundaryTests(unittest.TestCase):
                             self.assertEqual(limit == 64, storage._rolled)
                             self.assertLess(storage.tell(), len(payload) // 10)
 
-    def test_failed_and_truncated_batch_never_yields_a_success(self):
+    @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
+    def test_failed_and_truncated_batch_never_yields_a_success(self, _pidfd):
         class Child:
             pid = 123
             def __init__(self, argv, **kw): pass
@@ -845,7 +848,8 @@ class BatchExportBoundaryTests(unittest.TestCase):
                 list(audit.batch_exports(Path('/binary'), Path('/root'), [], [dict(title='cat')], 1, changed))
             spawn.assert_not_called()
 
-    def test_timeout_signals_only_same_birth_owned_child_and_waits(self):
+    @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
+    def test_timeout_signals_only_same_birth_owned_child_and_waits(self, _pidfd):
         class Child:
             pid = 123
             def __init__(self, argv, **kw): self.calls = 0; self.killed = False
@@ -868,6 +872,30 @@ class BatchExportBoundaryTests(unittest.TestCase):
         self.assertFalse(child.killed)
         self.assertEqual(child.calls, 2)
 
+    @unittest.skipUnless(hasattr(audit.select, 'poll'), 'poll is unavailable')
+    def test_pidfd_wait_uses_deadline_and_reaps_signed_status(self):
+        child = mock.Mock(pid=123, args=['export'])
+        child.wait.return_value = -9
+        child.poll.return_value = None
+        with (mock.patch.object(audit.os, 'pidfd_open', return_value=73, create=True) as pidfd,
+              mock.patch.object(audit.select, 'poll') as poll,
+              mock.patch.object(audit.os, 'close') as close):
+            poller = poll.return_value
+            poller.poll.return_value = [(73, audit.select.POLLIN)]
+            self.assertEqual(audit.wait_export_child(child, 60), -9)
+            pidfd.assert_called_once_with(123)
+            poller.register.assert_called_once_with(73, audit.select.POLLIN)
+            poller.poll.assert_called_once_with(60000)
+            child.wait.assert_called_once_with()
+            close.assert_called_once_with(73)
+
+            poller.poll.return_value = []
+            with self.assertRaises(subprocess.TimeoutExpired) as error:
+                audit.wait_export_child(child, 60)
+            self.assertEqual(error.exception.timeout, 60)
+            child.wait.assert_called_once_with()
+            self.assertEqual(close.call_args_list, [mock.call(73), mock.call(73)])
+
     def test_guard_rejects_file_edit_then_restore_and_directory_link_retarget(self):
         with tempfile.TemporaryDirectory() as d:
             parent = Path(d); a = parent/'a'; b = parent/'b'; a.mkdir(); b.mkdir()
@@ -880,7 +908,8 @@ class BatchExportBoundaryTests(unittest.TestCase):
             root.unlink(); root.symlink_to(b, target_is_directory=True)
             self.assertNotEqual(before, audit.dictionary_snapshot(root))
 
-    def test_birth_read_failures_always_join_without_unproved_signal(self):
+    @mock.patch.object(audit.os, 'pidfd_open', side_effect=OSError, create=True)
+    def test_birth_read_failures_always_join_without_unproved_signal(self, _pidfd):
         class Child:
             pid = 123
             def __init__(self): self.waits = 0; self.killed = False
