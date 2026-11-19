@@ -17,7 +17,7 @@ import tempfile
 import time
 import unittest
 import urllib.parse
-from unittest.mock import patch
+from unittest.mock import call, patch
 from types import SimpleNamespace
 import build_wiktionaries as b
 import build_resource_limits as limits
@@ -15095,6 +15095,50 @@ class CanonicalFigureOverlapTests(unittest.TestCase):
 
 class RetainedCompilerIdentityReuseTests(unittest.TestCase):
     fixture = RetainedNativeRoleTests.fixture
+
+    def test_build_identity_reuses_only_verified_compiler_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roles, compiler, expected = self.selection(root)
+            alias = root / 'zig-path'
+            alias.symlink_to(compiler)
+            with patch.object(b, 'source_fingerprint', return_value=expected['source']), \
+                    patch.object(b, 'sha256_file', wraps=b.sha256_file) as digest:
+                def identify(selected):
+                    return b.build_input_identity([], str(alias), {}, None, 60000, native_roles=selected)
+
+                retained = identify(roles)
+                self.assertEqual(retained['native_tool_roles'], expected['native_tool_roles'])
+                self.assertEqual(retained['zig_sha256'], expected['zig_sha256'])
+                self.assertNotIn(call(compiler), digest.call_args_list)
+                self.assertNotIn(call(alias), digest.call_args_list)
+                self.assertEqual(identify(None)['zig_sha256'], expected['zig_sha256'])
+                self.assertIn(call(alias), digest.call_args_list)
+
+                foreign = root / 'other-zig'
+                foreign.write_bytes(b'other compiler')
+                foreign.chmod(0o755)
+                alias.unlink()
+                alias.symlink_to(foreign)
+                with self.assertRaisesRegex(ValueError, 'Selected compiler differs'):
+                    identify(roles)
+                self.assertIn(call(foreign), digest.call_args_list)
+
+    def test_build_identity_refuses_compiler_replacement_during_source_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roles, compiler, expected = self.selection(root)
+
+            def replace_compiler():
+                replacement = root / 'replacement'
+                replacement.write_bytes(compiler.read_bytes())
+                replacement.chmod(compiler.stat().st_mode)
+                replacement.replace(compiler)
+                return expected['source']
+
+            with patch.object(b, 'source_fingerprint', side_effect=replace_compiler):
+                with self.assertRaisesRegex(ValueError, 'dependency identity changed'):
+                    b.build_input_identity([], str(compiler), {}, None, 60000, native_roles=roles)
 
     def selection(self, root):
         roles, compiler = self.fixture(root)

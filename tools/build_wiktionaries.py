@@ -2661,17 +2661,22 @@ def build_input_identity(items, zig, auxiliary_hashes, interwiki_sha, expansion_
     runtime_source = (retained_runtime_fingerprints(runtime_scope, provenance)
                       if runtime_scope is not None else None)
     source = runtime_source[0] if runtime_source is not None else source_fingerprint()
+    compiler = Path(executable)
+    if native_roles is None:
+        compiler_digest = sha256_file(compiler)
+    else:
+        compiler_digest = native_roles.bind_input(compiler.resolve(strict=True))['sha256']
+        if compiler_digest != native_roles.zig_sha256:
+            raise ValueError('Selected compiler differs from retained native roles')
     identity=dict(version=1, source=source,
                 files=sorted([[i['wiki'],i['date'],i['name'],i['size'],i['sha1']] for i in items]),
-                zig_sha256=sha256_file(Path(executable)),
+                zig_sha256=compiler_digest,
                 auxiliary_snapshot_sha256=auxiliary_hashes or {},
                 interwiki_map_sha256=interwiki_sha, expansion_timeout_ms=expansion_timeout_ms)
     if _PYTHON_TOOLING is not None:
         identity['python_tooling']=(runtime_source[2] if runtime_source is not None
                                     else _PYTHON_TOOLING.require_unchanged())
     if native_roles is not None:
-        if not isinstance(native_roles, RetainedNativeToolRoles):
-            raise ValueError('Invalid retained native role selection')
         identity['native_tool_roles']=provenance
     if runtime_scope is not None:
         identity['retained_runtime_source']=runtime_scope
