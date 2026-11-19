@@ -4274,6 +4274,8 @@ def initial_sealed_blob_successor(original, native_roles):
             # These already-authenticated roles retain their original emission,
             # source projection and artifact. They still join the ABI check below.
             continue
+        if not {'previous_role_binding','compilation_recipe','actual_emission_result','qualification_closure'} <= set(after):
+            raise ValueError('Initial sealed successor selected different native roles without closed emission authority')
         if ({k:v for k,v in before.items() if k not in allowed} !=
                 {k:v for k,v in after.items() if k not in allowed}
                 or prepared_metadata(after['previous_role_binding']) != original):
@@ -4328,6 +4330,8 @@ def initial_sealed_role_successor(original, native_roles):
                'compilation_recipe','actual_emission_result','qualification_closure','qualified_source_handoff',
                'qualification_scope','previous_role_binding','dependencies','embedded_writer'}
     writer, driver = current['dict-blob-build'], current['dict-bundle-build']
+    if any(not {'previous_role_binding','compilation_recipe','actual_emission_result','qualification_closure'} <= set(row) for row in (writer,driver)):
+        raise ValueError('Initial sealed successor selected different native roles without closed emission authority')
     authority_keys = ('compilation_recipe','actual_emission_result','qualification_closure','source')
     split_targets = any(writer[key] != driver[key] for key in authority_keys)
     if split_targets: allowed.add('source_payload_git')

@@ -4396,7 +4396,7 @@ class WatchdogMemoryLimitCliTests(unittest.TestCase):
                     self.assertEqual(dict(wall_seconds=7200,
                         disk_paths=(root/'.tmp',output),
                         address_space_limit_bytes='unlimited',
-                        memory_limit_bytes=mib*1024**2), kwargs)
+                        memory_limit_bytes=mib*1024**2,child_nice=7), kwargs)
                     with self.assertRaises(limits.ContainmentUnavailable):
                         b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                     return 0
@@ -4405,6 +4405,7 @@ class WatchdogMemoryLimitCliTests(unittest.TestCase):
                       '--watchdog-memory-limit-mib='+str(mib),
                       '--output',str(output)]
                 with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
+                     patch.object(b.os,'getpriority',return_value=7), \
                      patch.object(limits,'inside_watchdog',return_value=False), \
                      patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog, \
                      patch.object(limits,'supervise') as cgroup,patch.object(b,'main') as main:
@@ -4462,7 +4463,7 @@ class WatchdogAddressSpaceCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, contextlib.chdir(tmp):
             root=Path(tmp);output=root/'output';raw=root/'raw'
             def supervised(**kwargs):
-                self.assertEqual(kwargs,dict(wall_seconds=123,disk_paths=(root/'.tmp',output,raw),address_space_limit_bytes='unlimited'))
+                self.assertEqual(kwargs,dict(wall_seconds=123,disk_paths=(root/'.tmp',output,raw),address_space_limit_bytes='unlimited',child_nice=7))
                 with self.assertRaises(limits.ContainmentUnavailable):
                     b.acquire_build_resource_lock(root/'.tmp/build-resources.lock')
                 return 0
@@ -4470,7 +4471,8 @@ class WatchdogAddressSpaceCliTests(unittest.TestCase):
                   '--cpu-admission=affinity','--threads=4','--jobs=1','--expansion-workers=4',
                   '--build-timeout-seconds=123','--output',str(output),'--raw-shard-root',str(raw)]
             with patch.object(b,'PROJECT',root),patch.object(sys,'argv',argv), \
-                 patch.object(limits,'inside_watchdog',return_value=False), \
+                 patch.object(b.os,'getpriority',return_value=7), \
+                     patch.object(limits,'inside_watchdog',return_value=False), \
                  patch.object(limits,'supervise_watchdog',side_effect=supervised) as watchdog, \
                  patch.object(limits,'supervise') as cgroup,patch.object(b,'main') as main:
                 with self.assertRaises(SystemExit) as result:b.cli()
@@ -6049,14 +6051,15 @@ class RetainedWorkspaceTests(unittest.TestCase):
                         with self.assertRaises(limits.ContainmentUnavailable):b.acquire_build_resource_lock(shared)
                         if mode=='watchdog':
                             self.assertEqual(options,dict(wall_seconds=7200,
-                                disk_paths=(workspace/'.tmp',workspace/'data/dictionaries')))
+                                disk_paths=(workspace/'.tmp',workspace/'data/dictionaries'),child_nice=7))
                         else:self.assertEqual(options,{})
                         if fail:raise failure
                         return 0
                     argv=['build_wiktionaries.py','--resource-mode',mode,
                           '--workspace-root-spec',json.dumps(spec)]
                     selected='supervise_watchdog' if mode=='watchdog' else 'supervise'
-                    with patch.object(sys,'argv',argv),patch.object(limits,'inside_watchdog',return_value=False), \
+                    with patch.object(sys,'argv',argv),patch.object(b.os,'getpriority',return_value=7), \
+                     patch.object(limits,'inside_watchdog',return_value=False), \
                          patch.object(limits,'inside_envelope',return_value=False), \
                          patch.object(limits,selected,side_effect=supervised),patch.object(b,'main') as main:
                         if fail:
@@ -10497,6 +10500,7 @@ class OwnedRootInitialSealedTests(unittest.TestCase):
             f=self.fixture(Path(tmp));self.active(f)
             with self.contexts(f)[0],self.contexts(f)[1] as frozen,self.contexts(f)[2]:
                 self.adopt(f)
+                f.roles.closed_native_origin=f.seal
                 with patch.object(b,'expander_ready',return_value=True) as ready,patch.object(b,'inspect_page_index',side_effect=ReachedIndex) as index,patch.object(b,'prepare_blob_tools') as prepare,patch.object(b,'remove_artifact_tree') as remove:
                     with self.assertRaises(ReachedIndex):
                         b.build_sharded(f.dump,f.root/'output/staging',f.destination,f.root/'registry','zig',1,[dict(wiki='viwiktionary',date='20261001')],123,compress_shards=True,build_identity=f.identity,auxiliary_hashes=f.expected['auxiliary_snapshot_sha256'],interwiki_sha=f.expected['interwiki_map_sha256'],retained_roles=f.roles)
