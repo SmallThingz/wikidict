@@ -3230,7 +3230,7 @@ fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const
     // record only after the namespace profile attachment has succeeded.
     var figure_core_revision: ?[]const u8 = null;
     if (general.object.get("git-hash")) |revision| if (revision == .string) {
-        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec" }) |known_revision| {
+        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2" }) |known_revision| {
             if (std.mem.eql(u8, revision.string, known_revision)) figure_core_revision = known_revision;
         }
     };
@@ -67237,6 +67237,58 @@ test "Finnish Writer separates exact authored Bwaidoka and Molima category owner
             const fallback = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, root, "Unclassified", "matauta");
             try std.testing.expectEqual(@as(usize, 2), GaHtmlLanguageBoundaryFixture.targetCount(fallback, "pelätä"));
         }
+    }
+}
+
+test "retained MT core6c5 normal Figure defaults preserve source and reject foreign or unreviewed identity" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    const root = try std.Io.Dir.cwd().realPathFileAlloc(io, try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path}), a);
+    const namespace_bytes = @embedFile("testdata/core6c5/mt-defaults/site-info.namespace-registry.tsv");
+    const response_bytes = @embedFile("testdata/core6c5/mt-defaults/site-info.01.raw.json");
+    var response_sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(response_bytes, &response_sha, .{});
+    try std.testing.expectEqualStrings("d212404606e4d0fd7d1f9e8ed30669ebb52d242a89299ba4fd824b9a724f5abc", &std.fmt.bytesToHex(response_sha, .lower));
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(a, &.{ root, "namespace-registry.tsv" }), .data = namespace_bytes });
+    var ns = try namespace_registry.Registry.init(a, namespace_bytes); defer ns.deinit();
+    const ns_digest = std.fmt.bytesToHex(ns.source_sha256, .lower);
+    const role_path = try std.fs.path.join(a, &.{ root, "figure-siteinfo.raw.json" });
+    for (0..4) |mode| {
+        var response = try std.json.parseFromSliceLeaky(std.json.Value, a, response_bytes, .{ .allocate = .alloc_always });
+        const query = response.object.getPtr("query").?;
+        const general = query.object.getPtr("general").?;
+        if (mode == 1) try general.object.put(a, "git-hash", .{ .string = "0000000000000000000000000000000000000000" });
+        if (mode == 2) try general.object.put(a, "lang", .{ .string = "as" });
+        const data = try std.json.Stringify.valueAlloc(a, .{
+            .schema = "wikidict.site-info.v2", .wiki = ns.wiki, .date = ns.dump_date,
+            .profile = "general-statistics-and-figure-default-options",
+            .content_language = ns.content_language,
+            .namespace_registry_sha256 = if (mode == 3) "wrong-registry" else ns_digest[0..],
+            .query = query.*,
+        }, .{});
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = role_path, .data = data });
+        if (mode == 0) {
+            const main_page = try parseSiteMainPage(a, data, &ns);
+            try std.testing.expectEqualStrings("6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", main_page.figure_core_revision orelse return error.TestUnexpectedResult);
+            const site = (try loadFigureSite(io, a, root, &ns)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualStrings("6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", site.core_revision);
+            try std.testing.expectEqual(@as(?u32, 250), site.source_context.defaults.default_thumbnail_width);
+            try std.testing.expect(!site.source_context.defaults.rtl);
+            try std.testing.expect(site.source_context.missing_media_profile == null);
+            var expected_sha: [32]u8 = undefined;
+            std.crypto.hash.sha2.Sha256.hash(data, &expected_sha, .{});
+            try std.testing.expectEqualSlices(u8, &expected_sha, &site.source_sha256);
+        } else if (mode == 1) {
+            try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSite(io, a, root, &ns));
+        } else if (mode == 2) {
+            try std.testing.expectError(error.InvalidLanguageConversionProfile, loadFigureSite(io, a, root, &ns));
+        } else {
+            try std.testing.expectError(error.InvalidSiteMainPage, loadFigureSite(io, a, root, &ns));
+        }
+        try std.testing.expect(ns.figure_source_defaults == null);
+        try std.testing.expect(ns.manual_conversion_context == null);
+        try std.testing.expect(ns.language_conversion == null);
     }
 }
 

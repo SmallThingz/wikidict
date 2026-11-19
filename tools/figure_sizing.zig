@@ -27,7 +27,10 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // The twenty retained 93f1cd leaves and four media IDs match bb3b67 exactly.
 // The twenty a2f179 media leaves match 93f1cd exactly; response identities
 // and all registration/replay-contract checks remain independently required.
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802" };
+// The reviewed 992ad source changes only metadata-map storage, description
+// short URLs and unrelated config; V4 geometry stays the same. The response
+// must still prove each exact approved extension registration independently.
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2" };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -712,6 +715,34 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
     };
     return if (registrationEpoch(core) and equal(name, "TimedMediaHandler")) registration_tmh else prior;
 }
+// Keep complete reviewed sets, not independently interchangeable revisions.
+fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
+    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2")) return .{
+        "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
+        "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
+    };
+    if (equal(core, "bfe24921d500b20f2938fb8fe2a09cf5cac80161")) return .{
+        "39dc5f487287a6921e3ba8ca6affdd6412ac1870", "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663",
+        "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
+    };
+    return null;
+}
+fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
+    var original = true;
+    for (media_extensions, actual) |pair, revision| {
+        if (!equal(revision, mediaRevision(core, pair[0], pair[1]))) original = false;
+    }
+    if (original) return true;
+    const variant = mediaVariant(core) orelse return false;
+    for (variant, actual) |expected, revision| if (!equal(expected, revision)) return false;
+    return true;
+}
+fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
+    if (value != .object or value.object.count() != media_extensions.len) return invalid;
+    var revisions: [media_extensions.len][]const u8 = undefined;
+    for (media_extensions, 0..) |pair, i| revisions[i] = try string(value, pair[0]);
+    return revisions;
+}
 fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
     const gif = gifProfile(value);
     const webp = webpProfile(value);
@@ -745,15 +776,15 @@ fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
             !equal(try string(item, "mediatype"), webp_handler.mediatype)) return invalid;
     }
     const extensions = try field(value, "media_extensions");
-    if (extensions != .object or extensions.object.count() != media_extensions.len) return invalid;
-    for (media_extensions) |pair| if (!equal(try string(extensions, pair[0]), mediaRevision(core, pair[0], pair[1]))) return invalid;
+    if (!mediaSetAccepted(core, try mediaProfileSet(extensions))) return invalid;
     if (!digestMatches(site_bytes, try string(value, "site_raw_sha256"))) return invalid;
 }
-fn mediaRegistration(query: Value) !void {
+fn mediaRegistration(query: Value, expected: ?[media_extensions.len][]const u8) ![media_extensions.len][]const u8 {
     const core = try string(try field(query, "general"), "git-hash");
     const extensions = try field(query, "extensions");
     if (extensions != .array or extensions.array.items.len > 1024) return invalid;
     var seen: [media_extensions.len]bool = @splat(false);
+    var revisions: [media_extensions.len][]const u8 = undefined;
     for (extensions.array.items) |item| {
         if (item != .object) return invalid;
         const kind = item.object.get("type") orelse continue;
@@ -761,12 +792,16 @@ fn mediaRegistration(query: Value) !void {
         const name = try string(item, "name"); const revision = try string(item, "vcs-version");
         var found = false;
         for (media_extensions, 0..) |pair, i| if (equal(name, pair[0])) {
-            if (seen[i] or !equal(revision, mediaRevision(core, pair[0], pair[1]))) return invalid;
+            if (seen[i]) return invalid;
+            if (expected) |set| if (!equal(revision, set[i])) return invalid;
+            revisions[i] = revision;
             seen[i] = true; found = true; break;
         };
         if (!found) return invalid;
     }
     for (seen) |present| if (!present) return invalid;
+    if (!mediaSetAccepted(core, revisions)) return invalid;
+    return revisions;
 }
 
 fn observedUrlBase(value: Value) ?[]const u8 {
@@ -1041,7 +1076,7 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
         !equal(doc.generator_sha256, "7bce7ec0bd0acdf6a9d726ed50c1e85a64bc089731d0347d048f1787003d4c0b")))) return invalid;
     const server = try officialServer(a, ns.wiki);
     const site_query = try generalWithEpoch(registration, ns.wiki, ns.content_language, server, doc.core_revision, epochs);
-    try mediaRegistration(site_query);
+    _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
     if ((try timestamp(try string(registration, "curtimestamp"))).fraction.len != 0) return invalid;
     return server;
 }
@@ -1179,12 +1214,12 @@ const TiffCompanion = struct {
     observed: Timestamp,
     requests: usize = 0,
 
-    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize, epochs: bool) !TiffCompanion {
+    fn init(a: A, raw: []const u8, ns: *const namespaces.Registry, server: []const u8, core: []const u8, request_count: usize, epochs: bool, parent_media: [media_extensions.len][]const u8) !TiffCompanion {
         if (raw.len == 0) return invalid;
         try preflight(raw, false);
         const root = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
         const query = try generalWithEpoch(root, ns.wiki, ns.content_language, server, core, epochs);
-        try mediaRegistration(query);
+        _ = try mediaRegistration(query, parent_media);
         const observed = try timestamp(try string(root, "curtimestamp"));
         if (observed.fraction.len != 0) return invalid;
         for ([_][]const u8{ "interwiki", "converted" }) |name| {
@@ -1520,7 +1555,7 @@ pub const Registry = struct {
         const server = try officialServer(a, ns.wiki);
         const query = try general(source, ns.wiki, ns.content_language, server, doc.core_revision);
         const site_query = try general(registration, ns.wiki, ns.content_language, server, doc.core_revision);
-        try mediaRegistration(site_query);
+        _ = try mediaRegistration(site_query, try mediaProfileSet(try field(doc.source_profile, "media_extensions")));
         const observed = try timestamp(doc.observation_utc);
         if (observed.fraction.len != 0 or !equal(try string(source, "curtimestamp"), doc.observation_utc)) return invalid;
         const site_observed = try timestamp(try string(registration, "curtimestamp"));
@@ -1781,9 +1816,9 @@ pub const Registry = struct {
             const query = try generalWithEpoch(source, ns.wiki, ns.content_language, server, batch_core, epochs);
             var tiff_companion: ?TiffCompanion = if (batch.tiff_metadata_response) |response| blk: {
                 if (supplement or (!contract and !equal(doc.generator_sha256, file_generator_sha256))) return invalid;
-                break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs);
+                break :blk try TiffCompanion.init(temp, response, ns, server, batch_core, batch.requests.len, epochs, try mediaRegistration(query, null));
             } else null;
-            try mediaRegistration(query);
+            _ = try mediaRegistration(query, null);
             const observed = try timestamp(try string(source, "curtimestamp"));
             if (observed.fraction.len != 0) return invalid;
             const pages = try field(query, "pages");
@@ -7307,4 +7342,193 @@ test "Figure stream diagnostic position identifies unread record without changin
         try std.testing.expectError(error.InvalidFigureSizingSource, input.line(std.testing.allocator, 16));
         try std.testing.expectEqual(@as(u64, 9), input.diagnosticPosition());
     }
+}
+
+const ObservedMediaVariantTestSource = struct {
+    fn response(a: A, raw: []const u8, core: []const u8) ![]const u8 {
+        var value = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+        const query = value.object.getPtr("query").?;
+        if (!equal(try string(try field(query.*, "general"), "git-hash"), core)) return raw;
+        const revisions = mediaVariant(core).?;
+        for (query.object.getPtr("extensions").?.array.items) |*extension| {
+            for (media_extensions, revisions) |pair, revision| {
+                if (equal(try string(extension.*, "name"), pair[0])) try extension.object.put(a, "vcs-version", .{ .string = revision });
+            }
+        }
+        return std.json.Stringify.valueAlloc(a, value, .{});
+    }
+    fn make(a: A, ns: *const namespaces.Registry, core: []const u8, streamed: bool) !ObservedSvgTestSource.Fixture {
+        const base = try Wmf4EpochTestSource.width(a, ns, true, false, replay_contract_v3, core);
+        var doc = try RegistrationEpochTestSource.document(a, base.projection);
+        const revisions = mediaVariant(core).?;
+        for (media_extensions, revisions) |pair, revision| try doc.source_profile.object.getPtr("media_extensions").?.object.put(a, pair[0], .{ .string = revision });
+        const site = try response(a, base.site, core);
+        var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(site, &hash, .{});
+        try doc.source_profile.object.put(a, "site_raw_sha256", .{ .string = try a.dupe(u8, &std.fmt.bytesToHex(hash, .lower)) });
+        const source = try std.json.parseFromSliceLeaky(RawFileBatches, a, base.raw, .{ .allocate = .alloc_always });
+        const batches = try a.dupe(RawFileBatch, source.batches);
+        for (batches) |*batch| batch.response = try response(a, batch.response, core);
+        return ResponseEpochTestSource.seal(a, doc, batches, site, streamed, replay_contract_v3);
+    }
+};
+
+test "observed complete media variants preserve normal aggregate and streamed sizing" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161" }) |core| {
+        const baseline = try Wmf4EpochTestSource.width(temp, &ns, true, false, replay_contract_v3, core);
+        var original = try ResponseEpochTestSource.init(a, baseline, &ns, false, false); defer original.deinit();
+        for ([_]bool{ false, true }) |streamed| {
+            const input = try ObservedMediaVariantTestSource.make(temp, &ns, core, streamed);
+            var registry = try ResponseEpochTestSource.init(a, input, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqualDeep(original.records, registry.records);
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, 228));
+        }
+    }
+}
+
+test "observed media variants reject crossed sets and profile site substitution" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161" }) |core| {
+        const valid = try ObservedMediaVariantTestSource.make(temp, &ns, core, false);
+        for (0..5) |mode| {
+            var doc = try RegistrationEpochTestSource.document(temp, valid.projection);
+            const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, valid.raw, .{ .allocate = .alloc_always });
+            const batches = try temp.dupe(RawFileBatch, source.batches);
+            var value = try std.json.parseFromSliceLeaky(Value, temp, batches[batches.len - 1].response, .{ .allocate = .alloc_always });
+            const extensions = value.object.getPtr("query").?.object.getPtr("extensions").?;
+            if (mode == 0) {
+                for (wmf4_media_extensions) |pair| try doc.source_profile.object.getPtr("media_extensions").?.object.put(temp, pair[0], .{ .string = pair[1] });
+            } else if (mode == 1 or mode == 2) {
+                for (extensions.array.items) |*extension| if (equal(try string(extension.*, "name"), "TimedMediaHandler")) {
+                    const wrong = if (mode == 2) "0000000000000000000000000000000000000000" else if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b")) "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663" else "7755b61c361899ff83792940cf1eb20923a69bba";
+                    try extension.object.put(temp, "vcs-version", .{ .string = wrong });
+                };
+            } else if (mode == 3) {
+                try extensions.array.append(extensions.array.items[0]);
+            } else {
+                _ = extensions.array.orderedRemove(0);
+            }
+            batches[batches.len - 1].response = try std.json.Stringify.valueAlloc(temp, value, .{});
+            for ([_]bool{ false, true }) |streamed| {
+                const bad = try ResponseEpochTestSource.seal(temp, doc, batches, valid.site, streamed, replay_contract_v3);
+                try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+            }
+        }
+    }
+}
+
+test "retained AS KW media registrations retain exact complete inventories" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    inline for (.{ @embedFile("testdata/observed-media-registrations/aswiktionary/figure-sizing.site.json"), @embedFile("testdata/observed-media-registrations/kwwiktionary/figure-sizing.site.json") }) |raw| {
+        const value = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+        const query = try field(value, "query");
+        const core = try string(try field(query, "general"), "git-hash");
+        var expected: Value = .{ .object = .empty };
+        for (media_extensions, mediaVariant(core).?) |pair, revision| try expected.object.put(a, pair[0], .{ .string = revision });
+        _ = try mediaRegistration(query, try mediaProfileSet(expected));
+        try expected.object.put(a, "TimedMediaHandler", .{ .string = "740f9aee79a2ed80dee5957cd6b9cbe9d0fc6fad" });
+        try std.testing.expectError(invalid, mediaRegistration(query, try mediaProfileSet(expected)));
+    }
+}
+
+
+test "same core TIFF companion requires its exact parent media registration set" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    const tiff = try TiffCompanionTestSource.make(temp, &ns, true);
+    const fixture = ObservedSvgTestSource.Fixture{ .projection = tiff.projection, .raw = tiff.raw, .site = TestSource.site };
+    const original = try RegistrationEpochTestSource.rebind(temp, &ns, fixture, current_core, &.{current_core}, false, replay_contract_v3);
+    const doc = try RegistrationEpochTestSource.document(temp, original.projection);
+    const parsed = try std.json.parseFromSliceLeaky(RawFileBatches, temp, original.raw, .{});
+    for ([_][]const u8{ "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161" }) |core| {
+        const batches = try temp.dupe(RawFileBatch, parsed.batches);
+        batches[0].response = try ObservedMediaVariantTestSource.response(temp, try Wmf4EpochTestSource.response(temp, batches[0].response, core), core);
+        const baseline_companion = try Wmf4EpochTestSource.response(temp, batches[0].tiff_metadata_response.?, core);
+        const current_companion = try ObservedMediaVariantTestSource.response(temp, baseline_companion, core);
+        for ([_]bool{ false, true }) |streamed| {
+            batches[0].tiff_metadata_response = current_companion;
+            const good = try ResponseEpochTestSource.seal(temp, doc, batches, original.site, streamed, replay_contract_v3);
+            var registry = try ResponseEpochTestSource.init(a, good, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TiffCompanionTestSource.file, .thumbnail, 250, null));
+            batches[0].tiff_metadata_response = baseline_companion;
+            const bad = try ResponseEpochTestSource.seal(temp, doc, batches, original.site, streamed, replay_contract_v3);
+            try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+        }
+    }
+}
+
+test "core6c5 complete media set preserves normal aggregate and streamed sizing" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2" }) |core| {
+        const baseline = try Wmf4EpochTestSource.width(temp, &ns, true, false, replay_contract_v3, core);
+        var original = try ResponseEpochTestSource.init(a, baseline, &ns, false, false); defer original.deinit();
+        for ([_]bool{ false, true }) |streamed| {
+            const input = try ObservedMediaVariantTestSource.make(temp, &ns, core, streamed);
+            var registry = try ResponseEpochTestSource.init(a, input, &ns, streamed, false); defer registry.deinit();
+            try std.testing.expectEqualDeep(original.records, registry.records);
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, null));
+            try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(&registry, a, TestSource.file, .thumbnail, 250, 228));
+        }
+    }
+}
+
+test "core6c5 media set rejects crossed sets and profile site substitution" {
+    const a = std.testing.allocator;
+    var ns = try TestSource.namespace(a); defer ns.deinit();
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    for ([_][]const u8{ "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2" }) |core| {
+        const valid = try ObservedMediaVariantTestSource.make(temp, &ns, core, false);
+        for (0..5) |mode| {
+            var doc = try RegistrationEpochTestSource.document(temp, valid.projection);
+            const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, valid.raw, .{ .allocate = .alloc_always });
+            const batches = try temp.dupe(RawFileBatch, source.batches);
+            var value = try std.json.parseFromSliceLeaky(Value, temp, batches[batches.len - 1].response, .{ .allocate = .alloc_always });
+            const extensions = value.object.getPtr("query").?.object.getPtr("extensions").?;
+            if (mode == 0) {
+                for (wmf4_media_extensions) |pair| try doc.source_profile.object.getPtr("media_extensions").?.object.put(temp, pair[0], .{ .string = pair[1] });
+            } else if (mode == 1 or mode == 2) {
+                for (extensions.array.items) |*extension| if (equal(try string(extension.*, "name"), "TimedMediaHandler")) {
+                    const wrong = if (mode == 2) "0000000000000000000000000000000000000000" else "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663";
+                    try extension.object.put(temp, "vcs-version", .{ .string = wrong });
+                };
+            } else if (mode == 3) {
+                try extensions.array.append(extensions.array.items[0]);
+            } else {
+                _ = extensions.array.orderedRemove(0);
+            }
+            batches[batches.len - 1].response = try std.json.Stringify.valueAlloc(temp, value, .{});
+            for ([_]bool{ false, true }) |streamed| {
+                const bad = try ResponseEpochTestSource.seal(temp, doc, batches, valid.site, streamed, replay_contract_v3);
+                try std.testing.expectError(invalid, ResponseEpochTestSource.init(a, bad, &ns, streamed, false));
+            }
+        }
+    }
+}
+
+
+test "retained TCY core6c5 media inventory keeps exact complete registration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const raw = @embedFile("testdata/core6c5/tcy-file-response.json");
+    var hash: [32]u8 = undefined; std.crypto.hash.sha2.Sha256.hash(raw, &hash, .{});
+    try std.testing.expectEqualStrings("5d2ae55c48f287e79604c7b15bd7334310e7bfb10ebc235dd6ca94dc91246a2b", &std.fmt.bytesToHex(hash, .lower));
+    const value = try std.json.parseFromSliceLeaky(Value, a, raw, .{ .allocate = .alloc_always });
+    const query = try field(value, "query");
+    const site_general = try field(query, "general");
+    const core = try string(site_general, "git-hash");
+    try std.testing.expectEqualStrings("6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", core);
+    try std.testing.expectEqualStrings("tcywiktionary", try string(site_general, "wikiid"));
+    try std.testing.expectEqualStrings("MediaWiki 1.48.0-wmf.5", try string(site_general, "generator"));
+    var expected: Value = .{ .object = .empty };
+    for (media_extensions, mediaVariant(core).?) |pair, revision| try expected.object.put(a, pair[0], .{ .string = revision });
+    _ = try mediaRegistration(query, try mediaProfileSet(expected));
+    try expected.object.put(a, "TimedMediaHandler", .{ .string = "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663" });
+    try std.testing.expectError(invalid, mediaRegistration(query, try mediaProfileSet(expected)));
 }
