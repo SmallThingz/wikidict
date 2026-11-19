@@ -498,8 +498,11 @@ and retained failures.
 
 [Local edition build times](data/corpus-campaign-current01/local-edition-build-times.tsv)
 lists the elapsed build time, input XML pages, and pages per second for each
-selected output. Separate columns record known retry time and the number of
-attempts whose duration is unknown.
+selected output. The retry columns cover campaign attempts through sequence 351.
+The [full-edition attempt log](data/corpus-campaign-current01/local-full-build-attempts.tsv)
+lists the retained native driver's completed invocations, including failures. It
+reports production time only when the builder recorded its end. Command time
+includes setup and shutdown. A successful build can appear in both tables.
 
 The native verifier checks the selected directory.
 
