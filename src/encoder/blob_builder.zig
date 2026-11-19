@@ -4072,6 +4072,57 @@ fn plainBoldPrefixOwner(codes: LanguageCodes, source: []const u8) ?ResolvedLangu
     return corroborated;
 }
 
+// These entries introduce the headword directly and expand a translation
+// heading below it. A translation's language does not own the entry.
+fn tsongaLabelledHeadword(codes: LanguageCodes, title: []const u8, raw_source: ?[]const u8, expanded: MissingText) ?ResolvedLanguage {
+    const ns = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, ns.wiki, "tswiktionary") or !std.mem.eql(u8, ns.content_language, "ts")) return null;
+    const raw = raw_source orelse return null;
+    if (title.len == 0 or expanded.unknown or expanded.lost_missing_range or expanded.ranges.len != 0 or
+        expanded.literal_curly_ranges.len != 0 or expanded.generated_links.len != 0 or expanded.generated_source != null) return null;
+    const raw_count = tsongaTranslationSections(ns, title, raw, false) orelse return null;
+    const expanded_count = tsongaTranslationSections(ns, title, expanded.bytes, true) orelse return null;
+    if (raw_count != expanded_count) return null;
+    const owner = plainBoldPrefixAuthority(codes, "Xitsonga") orelse return null;
+    if (!std.mem.eql(u8, owner.code, "ts") or !std.mem.eql(u8, ns.wiki, "tswiktionary") or
+        !std.mem.eql(u8, ns.content_language, "ts")) return null;
+    return owner;
+}
+
+fn tsongaTranslationSections(ns: *const @import("namespace_registry").Registry, title: []const u8, text: []const u8, expanded: bool) ?usize {
+    const after_label = for ([_][]const u8{ "'''Xitsonga:'''", "''Xitsonga:''", "''Xitsonga: ku''" }) |label| {
+        if (std.mem.startsWith(u8, text, label)) break text[label.len..];
+    } else return null;
+    if (after_label.len == 0 or (after_label[0] != ' ' and after_label[0] != '\t')) return null;
+    const end = std.mem.indexOfAny(u8, after_label, "<\n") orelse return null;
+    if (!std.mem.eql(u8, std.mem.trim(u8, after_label[0..end], " \t\r"), title)) return null;
+
+    const heading = if (expanded) "=====[[vuhundzuluxi|Vuhundzuluxi]]=====" else "{{-vuhundzuluxi-}}";
+    var sections: usize = 0;
+    var rest = after_label[end..];
+    while (std.mem.indexOfAny(u8, rest, "<={}")) |offset| {
+        rest = rest[offset..];
+        if (std.mem.startsWith(u8, rest, heading)) {
+            sections += 1;
+            rest = rest[heading.len..];
+        } else if (std.mem.startsWith(u8, rest, "<br />")) {
+            rest = rest["<br />".len..];
+        } else return null;
+    }
+    // The edition's authored category is a separate record at the end of this
+    // form. An escaped link or a template inside a category sort key is insufficient.
+    if (sections == 0 or !std.mem.endsWith(u8, std.mem.trimEnd(u8, text, " \t\r\n"), "[[Category:Marito a Xitsonga]]")) return null;
+    var categories: language_source.CategoryIterator = .{ .source = text };
+    var corroborated = false;
+    while (categories.next()) |target| {
+        const category = ns.ofTitle(target);
+        if (category.id != 14) continue;
+        if (corroborated or !std.mem.eql(u8, category.text, "Marito a Xitsonga")) return null;
+        corroborated = true;
+    }
+    return if (corroborated) sections else null;
+}
+
 fn unsectionedPlainBoldPrefixLanguage(codes: LanguageCodes, raw_source: ?[]const u8, source: []const u8) ?ResolvedLanguage {
     const raw = raw_source orelse return null;
     // A root label and a literal category must independently agree in both
@@ -6081,6 +6132,7 @@ fn processMain(
                     paragraph_support = rawPrefixParagraphLanguage(codes, raw_source, source, raw_sections.items, page_sections.items);
                     break :paragraph paragraph_support;
                 } orelse
+                tsongaLabelledHeadword(codes, title, raw_source, source_missing) orelse
                 unsectionedPlainBoldPrefixLanguage(codes, raw_source, source) orelse
                 unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
@@ -17577,6 +17629,88 @@ test "normal Writer retained Tswana nnyaa preserves complete body and explicit o
     try std.testing.expectEqual(@as(usize, 4), breaks);
     try std.testing.expectEqual(@as(usize, 4), bold_runs);
     try std.testing.expectEqual(@as(usize, 1), italic_runs);
+}
+
+test "Tsonga labelled headwords keep the complete ordinary Writer body under the corroborated owner" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\ttswiktionary\n# dump-date\t20261001\n# content-language\tts\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\t\tmain\tdictionary_entries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\t\tcompile_only\tstandard_build_input\n" ++
+        "14\tCategory\tCategory\tcase-sensitive\t0\t0\t0\t\tcompile_only\tstandard_build_input\n");
+    defer namespaces.deinit();
+    const Local = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, name, "Xitsonga")) return .{ .code = "ts", .heading = "Xitsonga" };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .namespace_catalog = &namespaces, .trusted_fn = Local.resolve, .resolve_fn = Local.resolve };
+    const category = "[[Category:Marito a Xitsonga]]";
+    const call = "{{-vuhundzuluxi-}}";
+    const provider = "\n=====[[vuhundzuluxi|Vuhundzuluxi]]=====";
+    const cases = [_]struct { title: []const u8, raw: []const u8 }{
+        .{ .title = "ina", .raw = "'''Xitsonga:''' ina\n<br />\n<br />\n''{{-vuhundzuluxi-}}\n''\n<br />\n'''English:''' yes\n\n[[Category:Marito a Xitsonga]]" },
+        .{ .title = "xuxa", .raw = "''Xitsonga:'' \txuxa\t<br /> <br /> {{-vuhundzuluxi-}}\n <br /> '''English:''' \tchat\n\n[[Category:Marito a Xitsonga]]" },
+        .{ .title = "chava", .raw = "''Xitsonga: ku'' chava <br /> <br /> verb <br /> <br /> {{-vuhundzuluxi-}}\n  <br /> '''English/Xinghezi: ''' <br />1 fear, be afraid of, be or get frightened, dread, stand in awe of, panic. <br />2 respect, show respect for. Chava! look out! stand aside! make way! (Idiom) ~ malebvu ya nghala, -chavela ekule, be apprehensive of something from mere speculation. <br /> <br /> ---------------------------------------------------------------- <br /> return to:''  http://ts.wiktionary.org/wiki/Special:Allpages\n\n[[Category:Marito a Xitsonga]]" },
+    };
+    const baseline_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/before", .{tmp.sub_path});
+    const fixed_root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/after", .{tmp.sub_path});
+    var baseline = try Writer.init(std.testing.io, a, baseline_root);
+    defer baseline.deinit();
+    var fixed = try Writer.init(std.testing.io, a, fixed_root);
+    defer fixed.deinit();
+    baseline.language_codes = codes;
+    fixed.language_codes = codes;
+    for (cases) |case| {
+        const expanded = try std.mem.replaceOwned(u8, a, case.raw, call, provider);
+        const without_category = try std.mem.replaceOwned(u8, a, case.raw, category, "");
+        const owner = tsongaLabelledHeadword(codes, case.title, case.raw, .{ .bytes = expanded }) orelse return error.ExpectedLabelledOwner;
+        try std.testing.expectEqualStrings("ts", owner.code);
+        try std.testing.expect(tsongaLabelledHeadword(codes, "different", case.raw, .{ .bytes = expanded }) == null);
+        try std.testing.expect(tsongaLabelledHeadword(codes, case.title, without_category, .{ .bytes = expanded }) == null);
+        try std.testing.expect(tsongaLabelledHeadword(codes, case.title, case.raw, .{ .bytes = expanded, .unknown = true }) == null);
+        try std.testing.expect(tsongaLabelledHeadword(codes, case.title, case.raw, .{ .bytes = expanded, .lost_missing_range = true }) == null);
+        try std.testing.expect(tsongaLabelledHeadword(codes, case.title, case.raw, .{ .bytes = expanded, .generated_source = expanded }) == null);
+        // Insert before the terminal category so each independently exercises its own refusal.
+        for ([_][]const u8{ "==English==", "[[Category:English]]", provider, "{{unresolved}}" }) |extra| {
+            const replacement = try std.mem.concat(a, u8, &.{ extra, "\n", category });
+            const altered = try std.mem.replaceOwned(u8, a, expanded, category, replacement);
+            try std.testing.expect(tsongaLabelledHeadword(codes, case.title, case.raw, .{ .bytes = altered }) == null);
+        }
+        try baseline.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, expanded, without_category, null);
+        try fixed.addExpandedPage(a, .{ .id = 0, .kind = .language }, case.title, expanded, case.raw, null);
+    }
+    _ = try baseline.finish(codes);
+    _ = try fixed.finish(codes);
+    var old = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, baseline_root, "Unclassified"));
+    defer old.deinit();
+    var new = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, fixed_root, "Xitsonga"));
+    defer new.deinit();
+    const old_blob = try blob_format.inspect(old.bytes);
+    const new_blob = try blob_format.inspect(new.bytes);
+    var old_index = try old_blob.buildTrustedIndexAlloc(a);
+    defer old_index.deinit(a);
+    var new_index = try new_blob.buildTrustedIndexAlloc(a);
+    defer new_index.deinit(a);
+    for (cases) |case| {
+        const before = (try old_index.find(case.title)).?;
+        const after = (try new_index.find(case.title)).?;
+        const previous = try blobs.presentation_codec.decodeAlloc(a, before.payload, case.title, .language, try old_blob.languageMetadata());
+        const current = try blobs.presentation_codec.decodeAlloc(a, after.payload, case.title, .language, try new_blob.languageMetadata());
+        try std.testing.expectEqualStrings("ts", current.entry.language_code);
+        try std.testing.expectEqualStrings("Xitsonga", current.entry.sections[0].title);
+        try std.testing.expectEqualStrings("Unclassified", previous.entry.sections[0].title);
+        try std.testing.expect(current.entry.sections.len >= 2);
+        try std.testing.expectEqualStrings("Vuhundzuluxi", current.entry.sections[1].title);
+        try std.testing.expectEqualDeep(previous.entry.sections[0].blocks, current.entry.sections[0].blocks);
+        try std.testing.expectEqualDeep(previous.entry.sections[1..], current.entry.sections[1..]);
+        try std.testing.expectEqualSlices(u8, after.payload, try blobs.presentation_codec.encodeAlloc(a, current));
+    }
 }
 
 test "unsectioned plain bold prefix needs independent literal language authority" {
