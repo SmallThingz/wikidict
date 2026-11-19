@@ -33,12 +33,27 @@ instrumentation inputs. The 11 relevant device controls (nine new, two maintaine
 are **compiled only**. Both runs have their original command terminal and independent
 process, lock and source closure.
 
-The current declared suite contains **1,187 cases**; a full current-suite pass is
-not claimed. [Host150's 1,165 fresh passes][host150] apply to the preceding
-`6ee35c48` product. [Host151's one genuine Korean blob check][host151] was later
-integrated as the test/resource-only commit `8581e646`; it proves decode, complete
-entry and logical-range behavior, not glyph, hit-test or accessibility rendering.
-Neither historical result is relabeled as a full pass on the new product.
+[Host155][host155] subsequently ran the normal, unfiltered JVM target and passed
+**all 1,187 current cases freshly: zero failures, skips or carried cases**.
+This includes 1,185 correctness tests and two benchmark-named controls, with no
+performance claim. Main and unit Kotlin compilation were up to date; the test
+task executed. All 152 report files and their case identities, source inputs and
+timestamps were audited. The original command returned successfully, and owned
+processes and locks were independently closed. No instrumentation, lint, JNI or
+package task was repeated.
+
+The full-suite inputs match Package154's production, test, resource and build
+inputs; only the intervening validation-document update differs. **Package154
+therefore has full current JVM qualification without a rebuild.** The earlier
+[Host155 disk-admission refusal][host155-refusal] remains recorded separately:
+it stopped before Gradle and ran zero tests. The successful continuation retained
+the original source, caches and limits after verified storage cleanup.
+
+[Host150's 1,165 fresh passes][host150] remain historical evidence for the preceding
+`6ee35c48` product. [Host151's genuine Korean blob check][host151], integrated as
+test/resource-only commit `8581e646`, is now included in the full current run. It
+proves decode, complete entry and logical-range behavior, not glyph, hit-test or
+accessibility rendering.
 
 **Package154 is the current verified unsigned host artifact**, built from the
 integrated `c733b84d` product. Release Kotlin compilation, R8, packaging, assembly
@@ -75,6 +90,8 @@ their recorded boundaries.
 [current-bridge-153]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/chemical-intrinsic01/canonical-commit-bridge01.json
 [host152]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host152/saved-result-peer-reader01.json
 [host153]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host153/saved-result-peer-reader01.json
+[host155]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host155-dispatch02/saved-result-peer-reader01.json
+[host155-refusal]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host155/saved-prechild-peer-reader01.json
 [host150]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host150/saved-result-peer-reader01.json
 [host151]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host151/saved-result-peer-reader01.json
 [package154]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/package154/saved-result-peer-reader01.json
