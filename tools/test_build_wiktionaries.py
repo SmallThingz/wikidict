@@ -67,6 +67,10 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
             'tools/test_corpus_controller.py':b'controller timing tests',
             'tools/native_qualification.py':b'standalone native qualification',
             'tools/test_native_qualification.py':b'qualification controls',
+            'tools/verify_presentation.py':b'standalone finished-dictionary verifier',
+            'tools/test_verify_presentation.py':b'presentation verifier controls',
+            'tools/source_definition_audit.py':b'compare source and decoded entries',
+            'tools/test_source_definition_audit.py':b'source comparison controls',
             'tools/nested/native_qualification.py':b'unreviewed same basename remains included',
             'tools/nested/test_native_qualification.py':b'unreviewed nested test remains included',
             'tools/nested/corpus_controller.py':b'unreviewed same basename remains included',
@@ -110,7 +114,9 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
                         for relative,data in retained.items():self.assertEqual((workspace/relative).read_bytes(),data)
 
     def test_qualification_edits_reuse_workspace_but_keep_audit_and_publication_guards(self):
-        for name in ('tools/native_qualification.py','tools/test_native_qualification.py'):
+        for name in ('tools/native_qualification.py', 'tools/test_native_qualification.py',
+                     'tools/verify_presentation.py', 'tools/test_verify_presentation.py',
+                     'tools/source_definition_audit.py', 'tools/test_source_definition_audit.py'):
             with self.subTest(name=name),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);sources,registry,items=self.fixture(root)
                 tool=root/'zig';tool.write_bytes(b'unchanged compiler executable')
@@ -150,8 +156,9 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
         # Exercise the ordinary Python producer/verification/publication route.
         # Only native child execution is replaced, as in the existing merge
         # recovery fixture; this test earns no native dictionary acceptance.
-        for compressed in (False,True):
-            with self.subTest(compressed=compressed),tempfile.TemporaryDirectory() as tmp:
+        for compressed, edited in ((False, 'tools/corpus_controller.py'), (True, 'tools/corpus_controller.py'),
+                                   (False, 'tools/source_definition_audit.py')):
+            with self.subTest(compressed=compressed, edited=edited),tempfile.TemporaryDirectory() as tmp:
                 root=Path(tmp);self.fixture(root)
                 folder=root/'testwiktionary/20260901';write_namespace_fixture(folder)
                 name='testwiktionary-20260901-pages-meta-current.xml.bz2'
@@ -199,7 +206,7 @@ class ShardSourceIdentityTests(PreparedToolsFixture):
                         path=workspace/relative;retained[relative]=(path.read_bytes(),path.stat().st_ino)
                     first_builds=[c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')]
                     boundary=len(calls)
-                    (root/'tools/corpus_controller.py').write_bytes(b'changed reporting only')
+                    (root/edited).write_bytes(b'changed reporting only')
                     audit_after=b.source_fingerprint();self.assertNotEqual(audit_before,audit_after)
                     b.build([item],root,root/'output','zig',1,compress_shards=compressed)
                     self.assertEqual([c for c in calls if 'build-dictionary' in c or blob_command(c,'build-blobs')],first_builds)
