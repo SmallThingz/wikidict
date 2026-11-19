@@ -488,8 +488,11 @@ An edition without a completed build has blank counts.
 [Local Reader checks](data/corpus-campaign-current01/local-edition-reader-checks.tsv)
 lists the selected edition digest, scanned records, flagged fields, and original
 source lines compared with the decoded text and links. Each completed scan links
-to its compressed report. Blank measurements indicate that this audit series
-has no result for the selected output. Visual and keyboard checks are separate.
+to its compressed report. `batch_source_check` records whether the batch's final
+source check passed, failed, or could not be confirmed from its receipt.
+`batch_source_evidence` links to that receipt or the failure investigation when
+available. Blank measurements indicate that this audit series has no result for
+the selected output. Visual and keyboard checks are separate.
 
 [Local edition build times](data/corpus-campaign-current01/local-edition-build-times.tsv)
 lists the elapsed build time, input XML pages, and pages per second for each
