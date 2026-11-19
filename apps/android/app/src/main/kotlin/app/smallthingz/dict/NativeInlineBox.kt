@@ -38,15 +38,20 @@ internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val paddin
     val border: NativeInlineBoxBorders, overlays: List<NativeInlineBoxOverlay>,
     val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null,
     val atomicLayout: NativeInlineAtomicBoxFormat? = null, val radiusPercentage: Boolean = false,
-    val atomicAutoLayout: NativeInlineAtomicAutoBoxFormat? = null) {
-    val isAtomic: Boolean get() = atomicLayout != null || atomicAutoLayout != null
+    val atomicAutoLayout: NativeInlineAtomicAutoBoxFormat? = null,
+    val intrinsicLinesLayout: NativeInlineIntrinsicLinesFormat? = null) {
+    val isAtomic: Boolean get() = atomicLayout != null || atomicAutoLayout != null || intrinsicLinesLayout != null
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
     val rightAdvance = nativeInlineBoxCoordinate(padding.right.toDouble() + border.right.width)
     init {
         nativeInlineBoxCoordinate(leftAdvance.toDouble() + rightAdvance)
         require(!radiusPercentage || radius != null)
-        require(atomicLayout == null || atomicAutoLayout == null)
+        require(listOf(atomicLayout != null, atomicAutoLayout != null, intrinsicLinesLayout != null).count { it } <= 1)
+        if (intrinsicLinesLayout != null && (overlays.isNotEmpty() || radius != null ||
+                listOf(padding.top, padding.right, padding.bottom, padding.left,
+                    border.top.width, border.right.width, border.bottom.width, border.left.width).any { it != 0f }))
+            throw UnsupportedFloatLayout("Intrinsic line owner requires its undecorated content box")
         radius?.let { value ->
             if (!value.isFinite()) throw UnsupportedFloatLayout("Rounded inline radius is unavailable")
             if (!radiusPercentage) nativeInlineBoxCoordinates(value)

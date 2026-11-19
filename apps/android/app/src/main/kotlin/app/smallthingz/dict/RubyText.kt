@@ -2,7 +2,7 @@ package app.smallthingz.dict
 
 /** A logical source range, before native shaping or empty-clip visual excision. */
 internal enum class RubyTextRole {
-    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup, OverlayContent, OverlayText, ClippedAbsolute, ClippedText,
+    Text, Owner, Segment, SegmentGap, Base, BaseGap, BaseText, Annotation, AnnotationGap, AnnotationText, PaddingGroup, ActionGroup, BoxGroup, OverlayContent, OverlayText, ClippedAbsolute, ClippedText, IntrinsicLineBreak,
 }
 
 internal data class RubyTextRange(
@@ -16,6 +16,8 @@ internal data class RubyTextRange(
     val annotation: RubyAnnotation? = null,
     val overlayContent: InlineBoxOverlayContent? = null,
     val overlayIndex: Int? = null,
+    val intrinsicLine: InlineBoxIntrinsicLine? = null,
+    val intrinsicLineIndex: Int? = null,
 )
 
 internal data class RubyTextProjection(val text: String, val ranges: List<RubyTextRange>)
@@ -127,6 +129,15 @@ private class RubyGraphicalTextBuilder {
                 appendSpans(clipped.children, "$childPath/clippedAbsolute/children", RubyTextRole.ClippedText)
             } else if (box != null) group(RubyTextRange(RubyTextRole.BoxGroup, childPath, start, start, span = span)) {
                 for (boundary in 0..box.spans.size) {
+                    box.intrinsicLinesLayout?.lines?.forEachIndexed { lineIndex, line ->
+                        if (line.endChild == boundary.toLong() && line.breakAfter) {
+                            val breakStart = text.length
+                            text.append('\n')
+                            ranges += RubyTextRange(RubyTextRole.IntrinsicLineBreak,
+                                "$childPath/inlineBoxGroup/intrinsicLinesLayout/lines/$lineIndex",
+                                breakStart, text.length, intrinsicLine = line, intrinsicLineIndex = lineIndex)
+                        }
+                    }
                     box.overlays.forEachIndexed { overlayIndex, overlay ->
                         overlay.content?.takeIf { it.beforeChild == boundary.toLong() }?.let { body ->
                             val bodyPath = "$childPath/inlineBoxGroup/overlays/$overlayIndex/content"
@@ -280,10 +291,21 @@ internal fun rubyFallbackText(spans: List<Span>): String =
 
 /** Logical traversal only. The normal-flow builder must continue to use box.spans. */
 internal fun inlineBoxSourceSpans(box: InlineBoxGroup): List<Span> = buildList {
+    val sourceBreaks = StringBuilder()
     for (boundary in 0..box.spans.size) {
+        box.intrinsicLinesLayout?.lines?.forEach { line ->
+            if (line.endChild == boundary.toLong() && line.breakAfter) sourceBreaks.append('\n')
+        }
         box.overlays.forEach { overlay ->
             overlay.content?.takeIf { it.beforeChild == boundary.toLong() }?.let { addAll(it.spans) }
         }
-        if (boundary < box.spans.size) add(box.spans[boundary])
+        if (boundary < box.spans.size) {
+            val child = box.spans[boundary]
+            // Terminal/base text lowers the stored BR onto the following real, actionless
+            // child. No source child or metric placeholder is added to the original group.
+            add(if (sourceBreaks.isEmpty()) child else child.copy(text = sourceBreaks.toString() + child.text))
+            sourceBreaks.setLength(0)
+        }
     }
+    check(sourceBreaks.isEmpty()) { "Intrinsic source break requires its following original child" }
 }

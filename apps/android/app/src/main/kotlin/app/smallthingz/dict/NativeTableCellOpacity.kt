@@ -34,7 +34,7 @@ internal fun nativeCellOpacityTableShape(table: Table): Boolean {
             value.inlineActionGroup != null || value.clippedAbsolute != null || value.audioControl != null ||
             value.citationMarker != null || value.isQualifiedCitationBacklink) return false
         val box = value.inlineBoxGroup
-        return box == null || !child && box.atomicLayout == null && box.atomicAutoLayout == null && box.overlays.isEmpty() &&
+        return box == null || !child && box.atomicLayout == null && box.atomicAutoLayout == null && box.intrinsicLinesLayout == null && box.overlays.isEmpty() &&
             box.spans.all { span(it, true, actions) }
     }
     return table.style?.collapse != TableCollapse.Collapse && table.style?.isInline != true &&

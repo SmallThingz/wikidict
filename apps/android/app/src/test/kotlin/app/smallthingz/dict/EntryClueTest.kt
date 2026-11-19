@@ -382,4 +382,114 @@ class EntryClueTest {
         assertEquals(listOf(entry.key), after.bookmarks.map { it.key })
         assertEquals(before.study, after.study)
     }
+
+    @Test fun actualIdoTableSensesAppearInSavedClueWithoutMediaControlsOrSourceChanges() {
+        // Exact first three blocks at abako.json /entries/0/sections/0/blocks/1/table/rows/0/cells/0/blocks.
+        val source = listOf(
+            Block("paragraph", 0, listOf(
+                Span("link", "(1)", target = "File:Abacus - architecture (PSF).png", classes = "wikidict-media wikidict-media-file-416261637573202d206172636869746563747572652028505346292e706e67"),
+                Span("text", " "),
+                Span("link", "(2)", target = "File:Boulier1.JPG", classes = "wikidict-media wikidict-media-file-426f756c696572312e4a5047")), listPath = ""),
+            Block("list_item", 1, listOf(
+                Span("text", "Semantiko: (1) ("),
+                Span("link", "arkitekt.", target = "arkitekt."),
+                Span("text", ") "),
+                Span("link", "Parto", target = "parto"),
+                Span("text", " "),
+                Span("link", "supra", target = "supra"),
+                Span("text", " "),
+                Span("link", "di", target = "di"),
+                Span("text", " "),
+                Span("link", "la", target = "la"),
+                Span("text", " "),
+                Span("link", "kapitelo", target = "kapitelo"),
+                Span("text", " "),
+                Span("link", "di", target = "di"),
+                Span("text", " "),
+                Span("link", "kolono", target = "kolono"),
+                Span("text", ", "),
+                Span("link", "qua", target = "qua"),
+                Span("text", " "),
+                Span("link", "havas", target = "havar"),
+                Span("text", " "),
+                Span("link", "la", target = "la"),
+                Span("text", " "),
+                Span("link", "formo", target = "formo"),
+                Span("text", " "),
+                Span("link", "di", target = "di"),
+                Span("text", " "),
+                Span("link", "tableto", target = "tableto"),
+                Span("text", ". ")), listPath = "*"),
+            Block("indent", 1, listOf(
+                Span("text", "(2) ("),
+                Span("link", "matem.", target = "matem."),
+                Span("text", ") "),
+                Span("link", "Kalkulala", target = "kalkulala"),
+                Span("text", " "),
+                Span("link", "utensilo", target = "utensilo"),
+                Span("text", " "),
+                Span("link", "kun", target = "kun"),
+                Span("text", " "),
+                Span("link", "globeti", target = "globeto"),
+                Span("text", " "),
+                Span("link", "glitinta", target = "glitar"),
+                Span("text", " "),
+                Span("link", "en", target = "en"),
+                Span("text", " "),
+                Span("link", "stangi", target = "stango"),
+                Span("text", ". ")), listPath = ":"))
+        val table = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, blocks = source))))
+        val body = Block("table", 0, emptyList(), table = table)
+        val value = Entry("abako", emptyList(), "language", "Ido", "io",
+            listOf(Section(2, "Ido", listOf(body))), emptyList())
+        val expected = "Semantiko: (1) (arkitekt.) Parto supra di la kapitelo di kolono, qua havas la formo di tableto." +
+            " · (2) (matem.) Kalkulala utensilo kun globeti glitinta en stangi."
+        assertEquals(expected, value.clue())
+        assertFalse(value.clue().contains("File:"))
+        assertEquals("(1) (2)", textOf(source[0].spans))
+        assertSame(table, value.sections.single().blocks.single().table)
+        assertSame(source, table.rows.single().single().blocks)
+        assertEquals("havar", source[1].spans.single { it.text == "havas" }.target)
+        assertEquals("stango", source[2].spans.single { it.text == "stangi" }.target)
+    }
+
+    @Test fun tableClueUsesAuthoritativeCaptionCellsAndNestedOrderAfterProsePriority() {
+        fun text(value: String) = listOf(Span("text", value))
+        fun paragraph(value: String) = Block("paragraph", 0, text(value))
+        val nested = Table(text("Nested caption"), listOf(listOf(Cell(text("Nested cell"), false, 1, 1))))
+        val table = Table(emptyList(), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, blocks = listOf(paragraph("First cell"),
+                Block("table", 0, emptyList(), table = nested))),
+            Cell(text("Legacy cell"), false, 1, 1),
+            Cell(emptyList(), false, 1, 1, nestedTable = nested))),
+            captionBlocks = listOf(paragraph("Caption")))
+        val body = Block("table", 0, emptyList(), table = table)
+        assertEquals("Caption · First cell · Nested caption · Nested cell · Legacy cell · Nested caption · Nested cell",
+            entry(body).clue())
+        assertEquals("Prose", entry(body, paragraph("Prose")).clue())
+        assertEquals("Definition", entry(body, paragraph("Prose"), sense("Definition", "#")).clue())
+        val empty = table.copy(captionBlocks = emptyList(), rows = emptyList())
+        assertEquals("Definition unavailable.", entry(body.copy(table = empty)).clue())
+    }
+
+    @Test fun tableClueCapsUnicodeAndStopsBeforeReadingLaterCellBodies() {
+        var armed = false
+        val later = object : AbstractList<Block>() {
+            override val size: Int get() = 1
+            override fun get(index: Int): Block {
+                check(!armed) { "Preview must stop before the later cell body" }
+                return Block("paragraph", 0, listOf(Span("text", "Unvisited later body")))
+            }
+        }
+        val first = "x".repeat(419) + "😀tail"
+        val table = Table(emptyList(), listOf(listOf(
+            Cell(listOf(Span("text", first)), false, 1, 1),
+            Cell(emptyList(), false, 1, 1, blocks = later))))
+        val value = entry(Block("table", 0, emptyList(), table = table))
+        armed = true
+        val clue = value.clue()
+        assertEquals("x".repeat(419), clue)
+        assertFalse(Character.isHighSurrogate(clue.last()))
+        assertEquals(first, table.rows.single()[0].spans.single().text)
+    }
 }

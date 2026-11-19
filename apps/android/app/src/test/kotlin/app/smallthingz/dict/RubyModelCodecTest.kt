@@ -74,7 +74,7 @@ class RubyModelCodecTest {
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
                 (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0) or
-                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0) or (if (value.inlineBoxGroup?.let { it.atomicLayout != null || it.atomicAutoLayout != null } == true) 0x40 else 0)
+                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0) or (if (value.inlineBoxGroup?.let { it.atomicLayout != null || it.atomicAutoLayout != null || it.intrinsicLinesLayout != null } == true) 0x40 else 0)
             mark("$label.fontFields"); byte(fields)
             value.fontScale?.let { f32(it); byte(value.fontScaleBasis.ordinal) }
             value.fontFeatures?.let { byte(it.ordinal) }
@@ -244,7 +244,7 @@ class RubyModelCodecTest {
             mark("$label.childrenEnd")
             value.radius?.let { mark("$label.radius"); byte(it.unit.ordinal); f32(it.value) }
             value.atomicLayout?.let { atomic ->
-                if (version == 'a' && yFlags and 0x20000 != 0) { mark("$label.variant"); byte(0) }
+                if (version == 'a' && yFlags and 0xa0000 != 0) { mark("$label.variant"); byte(0) }
                 mark("$label.atomic")
                 boxLength(atomic.width, "$label.atomic.width"); boxLength(atomic.height, "$label.atomic.height")
                 listOf(atomic.margins.top, atomic.margins.right, atomic.margins.bottom, atomic.margins.left)
@@ -277,6 +277,27 @@ class RubyModelCodecTest {
                     is InlineLineHeight.FontRelative -> { byte(2); f32(height.factor); fontSnapshot(height.font, "$label.auto.heightFont") }
                 }
                 mark("$label.auto.end")
+            }
+            value.intrinsicLinesLayout?.let { intrinsic ->
+                require(version == 'a' && yFlags and 0x80000 != 0 && value.atomicLayout == null && value.atomicAutoLayout == null)
+                mark("$label.variant"); byte(2); mark("$label.intrinsic")
+                mark("$label.intrinsic.bottom"); byte(intrinsic.marginBottom.unit.ordinal); f32(intrinsic.marginBottom.value)
+                mark("$label.intrinsic.vertical"); byte(intrinsic.verticalAlign.unit.ordinal); f32(intrinsic.verticalAlign.value)
+                mark("$label.intrinsic.align"); byte(intrinsic.textAlign.ordinal)
+                mark("$label.intrinsic.wrap"); byte(intrinsic.wrap.ordinal)
+                mark("$label.intrinsic.lineHeight")
+                when (val height = intrinsic.lineHeight) {
+                    null -> byte(0)
+                    is InlineLineHeight.Computed -> { byte(1); f32(height.value.value); byte(height.value.fontScaleBasis.ordinal) }
+                    is InlineLineHeight.FontRelative -> { byte(2); f32(height.factor); fontSnapshot(height.font, "$label.intrinsic.heightFont") }
+                }
+                require(intrinsic.lines.size == 2)
+                intrinsic.lines.forEachIndexed { index, line ->
+                    mark("$label.intrinsic.line$index.end"); u32(line.endChild)
+                    mark("$label.intrinsic.line$index.kind"); byte(line.sourceKind.ordinal)
+                    mark("$label.intrinsic.line$index.break"); byte(if (line.breakAfter) 1 else 0)
+                }
+                mark("$label.intrinsic.end")
             }
             mark("$label.end")
         }
@@ -768,7 +789,14 @@ class RubyModelCodecTest {
                     rubyOwner(annotation.owner, "$name.owner")
                     spans(annotation.gapBefore, "$name.gap"); spans(annotation.spans, "$name.body")
                     spans(annotation.fallbackBefore, "$name.before"); spans(annotation.fallbackAfter, "$name.after")
-                    mark("$name.explicit"); byte(if (annotation.explicitFallback) 1 else 0)
+                    require(annotation.margins == null || version == 'a' && yFlags and 0x40000 != 0)
+                    mark("$name.explicit"); byte((if (annotation.explicitFallback) 1 else 0) or
+                        (if (annotation.margins != null) 2 else 0))
+                    annotation.margins?.let { margins ->
+                        mark("$name.margins.top"); byte(margins.top.unit.ordinal); f32(margins.top.value)
+                        mark("$name.margins.bottom"); byte(margins.bottom.unit.ordinal); f32(margins.bottom.value)
+                    }
+                    mark("$name.margins.end")
                 }
             }
         }
@@ -6801,5 +6829,519 @@ class RubyModelCodecTest {
         PresentationSpanVisitor { spans, _ -> seen.addAll(spans) }.block(
             Block("table", 0, listOf(source), table = prefixTable(0)))
         assertEquals(listOf(link), seen) // Validation does not invent display callbacks for the raw prefix.
+    }
+
+    private fun marginRubyOwner(margins: RubyAnnotationMargins? = RubyAnnotationMargins(
+        StyleLength(StyleLengthUnit.Em, .25f), StyleLength(StyleLengthUnit.Em, .25f)),
+        explicit: Boolean = false, reading: String = "かん"): Span {
+        val context = RubyOwner(InlineFontSnapshot(.6f, FontScaleBasis.NormalBody, language = "ja"))
+        val value = annotation(text(reading), context = context,
+            before = if (explicit) listOf(Span("link", "〈", "Original RP")) else emptyList(),
+            after = if (explicit) listOf(text("〉")) else emptyList(), explicit = explicit).copy(margins = margins)
+        return owner(listOf(base(text("漢"))), listOf(value))
+    }
+
+    @Test fun rubyAnnotationMarginsRetainExactOwnerArraysNullZeroAndScalarDomain() {
+        val reading = Span("external_link", "べにさ", "https://example.test/original-reading", tooltip = "Original RT")
+        val before = listOf(Span("link", "〈", "Original RP", targetFragment = "opening"))
+        val after = listOf(text("〉"))
+        val context = RubyOwner(InlineFontSnapshot(.6f, FontScaleBasis.NormalBody, language = "ja"), "ltr")
+        val old = annotation(reading, context = context, before = before, after = after, explicit = true)
+        val pair = RubyAnnotationMargins(StyleLength(StyleLengthUnit.Em, .25f), StyleLength(StyleLengthUnit.Px, 3f))
+        val marked = old.copy(margins = pair)
+        val source = owner(listOf(base(Span("link", "漢", "Original base"))), listOf(marked))
+        val stored = source.ruby!!.segments.single().annotations.single()
+        assertNull(old.margins); assertSame(marked, stored); assertSame(pair, stored.margins)
+        assertSame(context, stored.owner); assertSame(reading, stored.spans.single())
+        assertSame(before, stored.fallbackBefore); assertSame(after, stored.fallbackAfter)
+        assertEquals(old, stored.copy(margins = null))
+        assertEquals(.6f, checkNotNull(stored.owner.font.fontScale), 0f)
+        assertEquals(.25f, checkNotNull(stored.margins).top.value, 0f) // raw annotation em, never pre-scaled.
+        assertEquals(3f, checkNotNull(stored.margins).bottom.value, 0f)
+        val zero = RubyAnnotationMargins(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Em, 0f))
+        assertNotEquals(old, old.copy(margins = zero))
+        assertEquals(zero, old.copy(margins = zero).copy(gapBefore = emptyList()).margins)
+        // The new field does not narrow RubyOwner's existing inherited-font domain.
+        assertNotNull(owner(listOf(base(text("漢"))), listOf(annotation().copy(margins = zero))))
+        val gap = listOf(text(" "))
+        val first = old.copy(margins = pair)
+        val second = annotation(text("さ"), start = 1).copy(gapBefore = gap)
+        val segment = RubySegment(emptyList(), listOf(base(text("漢")), base(text("字"))), listOf(first, second))
+        assertSame(gap, segment.annotations[1].gapBefore); assertNull(segment.annotations[1].margins)
+        assertSame(reading, segment.annotations[0].spans.single())
+        for (unit in StyleLengthUnit.entries) for (bad in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
+            invalid("Top must retain the finite nonnegative StyleLength domain") {
+                RubyAnnotationMargins(StyleLength(unit, bad), pair.bottom)
+            }
+            invalid("Bottom must retain the finite nonnegative StyleLength domain") {
+                RubyAnnotationMargins(pair.top, StyleLength(unit, bad))
+            }
+        }
+        val zeroReading = old.copy(spans = emptyList(), fallbackBefore = emptyList(), fallbackAfter = emptyList(),
+            explicitFallback = false, margins = zero)
+        assertTrue(owner(listOf(base(text("漢"))), listOf(zeroReading)).ruby!!.segments.single()
+            .annotations.single().spans.isEmpty()) // layout hiding is not inferred here.
+    }
+
+    @Test fun rubyAnnotationMarginsRoundtripEverySinkWithLiteralFlagsAndExactOldNullBytes() {
+        val source = marginRubyOwner()
+        for (sink in Sink.entries) {
+            val wire = Wire('a', 0x40000)
+            val bytes = wire.document(listOf(source), sink)
+            val actual = selected(read(bytes), sink)
+            assertEquals(sink.name, source, actual)
+            assertEquals(source.ruby!!.segments.single().annotations.single().margins,
+                actual.ruby!!.segments.single().annotations.single().margins)
+        }
+        val emQuarter = byteArrayOf(1, 0, 0, 0x80.toByte(), 0x3e)
+        for (explicit in listOf(false, true)) {
+            val marked = marginRubyOwner(explicit = explicit)
+            val ordinaryBox = percentCircleOwner()
+            val wire = Wire('a', 0x40000 or 4)
+            val bytes = wire.document(listOf(marked, ordinaryBox))
+            val name = "root.0.segment0.annotation0"
+            val flag = wire.at.getValue("$name.explicit")
+            val end = wire.at.getValue("$name.margins.end")
+            assertEquals(if (explicit) 3 else 2, bytes[flag].toInt())
+            assertEquals(flag + 1, wire.at.getValue("$name.margins.top"))
+            assertEquals(flag + 6, wire.at.getValue("$name.margins.bottom"))
+            assertEquals(flag + 11, end)
+            assertArrayEquals(emQuarter + emQuarter, bytes.copyOfRange(flag + 1, end))
+            assertEquals(marked, read(bytes).displayTitle.first())
+            val nullOwner = marginRubyOwner(margins = null, explicit = explicit)
+            val legacy = Wire('Y', 4).document(listOf(nullOwner, ordinaryBox))
+            val noPair = changed(replace(bytes, flag + 1, end, byteArrayOf()), flag, if (explicit) 1 else 0)
+            val oldHeader = changed(replace(noPair, 4, 8, byteArrayOf(4)), 3, 'Y'.code)
+            assertArrayEquals(legacy, oldHeader)
+            assertEquals(nullOwner, read(oldHeader).displayTitle.first())
+            assertNull(read(oldHeader).displayTitle.first().ruby!!.segments.single().annotations.single().margins)
+        }
+        val zero = RubyAnnotationMargins(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Px, 0f))
+        val zeroWire = Wire('a', 0x40000)
+        val zeroBytes = zeroWire.document(listOf(marginRubyOwner(zero)))
+        val zeroFlag = zeroWire.at.getValue("root.0.segment0.annotation0.explicit")
+        assertArrayEquals(byteArrayOf(2) + ByteArray(10), zeroBytes.copyOfRange(zeroFlag, zeroFlag + 11))
+        assertEquals(zero, read(zeroBytes).displayTitle.single().ruby!!.segments.single().annotations.single().margins)
+        // Multiple null and present annotations keep the old association/cursor, including another level.
+        val annotations = listOf(annotation(text("a")).copy(margins = zero), annotation(text("b"), start = 1),
+            annotation(text("ab"), count = 2, level = 1).copy(margins = source.ruby!!.segments.single().annotations.single().margins))
+        val multiple = owner(listOf(base(text("A")), base(text("B"))), annotations)
+        assertEquals(multiple, read(Wire('a', 0x40000).document(listOf(multiple))).displayTitle.single())
+    }
+
+    @Test fun rubyAnnotationMarginsRejectInvalidFlagsUnitsSuffixesAndIndependentFeatureDebt() {
+        val source = marginRubyOwner()
+        val wire = Wire('a', 0x40000)
+        val bytes = wire.document(listOf(source))
+        val name = "root.0.segment0.annotation0"
+        val flag = wire.at.getValue("$name.explicit")
+        val top = wire.at.getValue("$name.margins.top")
+        val bottom = wire.at.getValue("$name.margins.bottom")
+        val end = wire.at.getValue("$name.margins.end")
+        for (bad in 4..255) reject("Unknown annotation flag $bad", changed(bytes, flag, bad))
+        for (at in listOf(top, bottom)) {
+            for (unit in listOf(2, 3, 255)) reject("Only px/em margins exist", changed(bytes, at, unit))
+            for (value in listOf(-.25f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                reject("Each margin is finite and nonnegative", changed32(bytes, at + 1, value.toRawBits().toLong() and 0xffff_ffffL))
+        }
+        for (length in 0 until 10) reject("Every short fixed pair is refused", bytes.copyOf(top + length))
+        reject("Pair has no third scalar", replace(bytes, end, end, byteArrayOf(0)))
+        reject("Trailing data remains refused", bytes + byteArrayOf(0))
+        for (mask in listOf(0L, 4L, 256L, 0x10000L, 0x20000L or 4L, 0x40000L or 1024L,
+            0x40000L or 2048L, 0x40000L or 0x80000L, 0x80040000L, 0xffffffffL))
+            reject("Only the actual independently owned feature may authorize the pair: $mask", changed32(bytes, 4, mask))
+        for (mask in listOf(0x40000L or 0x10000L, 0x40000L or 0x20000L or 4L))
+            reject("RT cannot pay unrelated MG or HU census debt", changed32(bytes, 4, mask))
+        reject("An advertised RT feature must have an actual pair",
+            Wire('a', 0x40000).document(listOf(marginRubyOwner(margins = null))))
+        reject("Removing the sole pair leaves exact census debt",
+            changed(replace(bytes, flag + 1, end, byteArrayOf()), flag, 0))
+        for (header in listOf('S', 'Y', 'Z')) {
+            val oldWord = when (header) { 'Y' -> byteArrayOf(4); 'Z' -> byteArrayOf(0, 1); else -> byteArrayOf() }
+            reject("Old $header annotations still reject local flags2/3",
+                changed(replace(bytes, 4, 8, oldWord), 3, header.code))
+        }
+        val explicit = Wire('a', 0x40000)
+        val explicitBytes = explicit.document(listOf(marginRubyOwner(explicit = true)))
+        reject("Margins do not relax explicit RP ownership",
+            changed(explicitBytes, explicit.at.getValue("$name.explicit"), 2))
+        // The pair does not grant unrelated Span-local or CellStyle namespace bits.
+        val fields = wire.at.getValue("root.0.fontFields")
+        reject("Held inline-float remains unsupported", changed(bytes, fields, bytes[fields].toInt() or 0x80))
+        assertEquals(source, read(bytes).displayTitle.single())
+    }
+
+    @Test fun rubyAnnotationMarginsKeepHiddenNestedAndMixedMgHuPayloadCensusIndependent() {
+        val pair = RubyAnnotationMargins(StyleLength(StyleLengthUnit.Px, 0f), StyleLength(StyleLengthUnit.Em, .25f))
+        val hidden = marginRubyOwner(pair, reading = "漢")
+        val empty = marginRubyOwner(pair, reading = "")
+        for (value in listOf(hidden, empty)) {
+            val actual = read(Wire('a', 0x40000).document(listOf(value))).displayTitle.single()
+            assertEquals(value, actual)
+            assertEquals(pair, actual.ruby!!.segments.single().annotations.single().margins)
+        }
+        val nested = marginRubyOwner(pair)
+        val holders = listOf(
+            owner(listOf(base(nested)), listOf(annotation(text("outer")))),
+            owner(listOf(base(text("base"))), listOf(annotation(nested))),
+            owner(listOf(base(text("base"))), listOf(annotation(text("outer"), before = listOf(nested), explicit = true))),
+            owner(listOf(base(text("base"))), listOf(annotation(text("outer"), after = listOf(nested), explicit = true))))
+        for (value in holders) assertEquals(value, read(Wire('a', 0x40000).document(listOf(value))).displayTitle.single())
+        invalid("Margins do not admit Ruby inside a whitespace gap") {
+            val annotation = annotation(text("outer")).copy(gapBefore = listOf(nested), margins = pair)
+            owner(listOf(base(text("base"))), listOf(annotation))
+        }
+        for (bad in listOf(Span("line_break", ""), Span("link", "media", "File:Probe.ogg", classes = "wikidict-media"))) {
+            invalid("Hidden reading still validates every child") {
+                owner(listOf(base(text("漢"))), listOf(annotation(bad).copy(margins = pair)))
+            }
+            invalid("Zero margins do not relax RP child validity") {
+                owner(listOf(base(text("漢"))), listOf(annotation(text("漢"), before = listOf(bad), explicit = true).copy(margins = pair)))
+            }
+        }
+        val mixedTable = opacityTable(CellStyle(opacity = .2f, foreground = CellForeground.Inherit),
+            listOf(nested, atomicAutoWireOwner()))
+        val writer = Wire('a', 0x70000 or 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = mixedTable), "mixedMargins") } }
+        val bytes = writer.document(emptyList(), Sink.Body)
+        assertEquals(mixedTable, read(bytes).sections.single().blocks.single().table)
+        for (missing in listOf(0x10000, 0x20000, 0x40000))
+            reject("Each of MG, HU and RT owns its own capability", changed32(bytes, 4, ((0x70000 or 4) and missing.inv()).toLong()))
+        val ownerFont = RubyOwner(InlineFontSnapshot(.6f, FontScaleBasis.NormalBody, fontFamily = ContainerFontFamily.SansSerif))
+        val family = owner(listOf(base(text("漢"))), listOf(annotation(text("漢"), context = ownerFont).copy(margins = pair)))
+        assertEquals(family, read(Wire('a', 0x40000).document(listOf(family), features = 4)).displayTitle.single())
+        reject("A hidden annotation font keeps its own family feature debt", Wire('a', 0x40000).document(listOf(family)))
+        reject("Margins alone do not earn font-family feature4", Wire('a', 0x40000).document(listOf(nested), features = 4))
+    }
+
+    @Test fun rubyAnnotationMarginsKeepExactScalarFreeBudgetsDepthAndIgnoredPrefixCustody() {
+        val source = marginRubyOwner()
+        val old = marginRubyOwner(margins = null)
+        val limit = 1 shl 20
+        fun block(rows: Int, value: Span) = Block("table", 0, emptyList(), table = Table(listOf(value),
+            java.util.Collections.nCopies(rows, emptyList<Cell>())))
+        fun model(rows: Int, value: Span) = Entry("Budget", emptyList(), "language", "Japanese", "ja",
+            listOf(Section(2, "Body", listOf(block(rows, value)))), emptyList())
+        // Block1 + Span1 + segment1 + base/owner/body3 + annotation/owner/body3 =9.
+        // Margins add two scalars, not another item; both null and present meet the same cap.
+        for (value in listOf(old, source)) {
+            assertEquals(limit - 9, model(limit - 9, value).sections.single().blocks.single().table!!.rows.size)
+            invalid("A scalar pair does not change or reset complete model work") { model(limit - 8, value) }
+        }
+        fun literal(rows: Int) = Wire('a', 0x40000).apply { paragraphOverride = {
+            positionedBlock(block(rows, source), "marginBudget") } }.document(emptyList(), Sink.Body)
+        assertEquals(limit - 10, read(literal(limit - 10)).sections.single().blocks.single().table!!.rows.size)
+        reject("Existing section item still participates", literal(limit - 9))
+        for (depth in listOf(15, 16)) {
+            val bytes = Wire('a', 0x40000).document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 15) assertNotNull(read(bytes)) else reject("Margins do not reset existing Ruby content depth", bytes)
+        }
+        for (depth in listOf(MaxTableDepth, MaxTableDepth + 1)) {
+            val bytes = Wire('a', 0x40000).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(source), Sink.Body)
+            if (depth == MaxTableDepth) assertNotNull(read(bytes)) else reject("Margins do not reset nested Table depth", bytes)
+        }
+        val link = Span("link", "visible", "Original visible target")
+        fun table(rows: Int) = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()) +
+            listOf(listOf(Cell(listOf(link), false, 1, 1))))
+        fun ignored(rows: Int) = Wire('a', 0x40000).apply { paragraphOverride = {
+            audioPrefixTable(table(rows)) } }.document(listOf(source), Sink.Body)
+        // Serialized Section/Block/real row/cell/link5 plus the complete original Ruby8.
+        val actual = read(ignored(limit - 13))
+        assertEquals(listOf(source), actual.sections.single().blocks.single().spans)
+        assertEquals(listOf(link), actual.sections.single().blocks.single().table!!.rows.last().single().spans)
+        reject("Ignored serialized prefixes retain complete work", ignored(limit - 12))
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> seen.addAll(spans) }.block(Block("table", 0, listOf(source), table = table(0)))
+        assertEquals(listOf(link), seen)
+        // No new direct-only traversal admission is implied by a pair of immutable scalars.
+        PresentationSpanVisitor { _, _ -> }.block(Block("table", 0,
+            java.util.Collections.nCopies(limit + 1, text("legacy ignored")), table = table(0)))
+    }
+
+    private fun intrinsicWireLayout(height: InlineLineHeight? = null) = InlineBoxIntrinsicLinesLayout(
+        InlineBoxSignedLength(StyleLengthUnit.Em, -.3f), InlineBoxSignedLength(StyleLengthUnit.Em, -.4f),
+        height, InlineBoxOverlayTextAlign.Left, TextWrap.Normal, listOf(
+            InlineBoxIntrinsicLine(0, InlineBoxIntrinsicLineKind.Sup, true),
+            InlineBoxIntrinsicLine(1, InlineBoxIntrinsicLineKind.Sub, false)))
+    private fun intrinsicWireOwner(layout: InlineBoxIntrinsicLinesLayout = intrinsicWireLayout(),
+        digit: String = "2", direction: String = "", explicitPolicies: Boolean = false,
+        family: ContainerFontFamily? = null): Span {
+        val fixed = atomicWireOwner(atomicWireLayout(layout.lineHeight, layout.wrap), digit, direction, explicitPolicies, family)
+        return fixed.copy(inlineBoxGroup = fixed.inlineBoxGroup!!.copy(atomicLayout = null, intrinsicLinesLayout = layout))
+    }
+
+    @Test fun intrinsicLinesKeepOneOriginalDigitExplicitBreakAndSignedLocalScalars() {
+        val source = intrinsicWireOwner()
+        val group = checkNotNull(source.inlineBoxGroup)
+        val layout = checkNotNull(group.intrinsicLinesLayout)
+        assertEquals("2", group.spans.single().text)
+        assertSame(layout.lines[0], group.intrinsicLinesLayout!!.lines[0])
+        assertEquals(0L, layout.lines[0].endChild); assertTrue(layout.lines[0].breakAfter)
+        assertEquals(1L, layout.lines[1].endChild); assertFalse(layout.lines[1].breakAfter)
+        assertEquals(InlineBoxIntrinsicLineKind.Sup, layout.lines[0].sourceKind)
+        assertEquals(InlineBoxIntrinsicLineKind.Sub, layout.lines[1].sourceKind)
+        assertFalse(group.spans.single().superscript); assertFalse(group.spans.single().subscript)
+        assertNull(group.atomicLayout); assertNull(group.atomicAutoLayout)
+        assertFalse(source.hasInternalAction()); assertFalse(group.spans.single().hasInternalAction())
+        assertEquals(-.3f, layout.marginBottom.value, 0f); assertEquals(-.4f, layout.verticalAlign.value, 0f)
+        for (unit in StyleLengthUnit.entries) for (value in listOf(-Float.MAX_VALUE, -1f, -0f, 0f, 1f, Float.MAX_VALUE)) {
+            val signed = InlineBoxSignedLength(unit, value)
+            assertEquals(value.toRawBits(), signed.value.toRawBits())
+            assertNotNull(intrinsicWireOwner(layout.copy(marginBottom = signed, verticalAlign = signed)))
+        }
+        for (unit in StyleLengthUnit.entries) for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+            invalid("Only local finite signed lengths are admitted") { InlineBoxSignedLength(unit, bad) }
+        invalid("Ordinary lengths remain nonnegative") { StyleLength(StyleLengthUnit.Em, -.3f) }
+        for (digit in '0'..'9') for (direction in listOf("", "ltr", "rtl")) {
+            val original = intrinsicWireOwner(digit = digit.toString(), direction = direction)
+            assertEquals(digit.toString(), original.inlineBoxGroup!!.spans.single().text)
+        }
+        for (bad in listOf("", "22", "a", "a b", " ", "\u00a0", "\u0662", "2\n", "2\u2028"))
+            invalid("Initial typed body is exactly one ASCII digit") { intrinsicWireOwner(digit = bad) }
+        invalid("Auto direction is not a resolved atomic font direction") { intrinsicWireOwner(direction = "auto") }
+        invalid("Initial wrap is normal") { layout.copy(wrap = TextWrap.BreakWord) }
+        invalid("A fixed policy cannot coexist") { group.copy(atomicLayout = atomicWireLayout()) }
+        invalid("An automatic policy cannot coexist") { group.copy(atomicAutoLayout = atomicAutoWireLayout()) }
+        invalid("No radius belongs to this source shape") { group.copy(radius = StyleWidth(StyleWidthUnit.Px, 0f)) }
+        invalid("No second real child is invented") { group.copy(spans = group.spans + group.spans) }
+        invalid("No authored source padding is synthesized") {
+            group.copy(padding = group.padding.copy(top = StyleLength(StyleLengthUnit.Px, 1f)))
+        }
+        invalid("No border belongs to the intrinsic source shape") {
+            group.copy(border = group.border.copy(top = InlineBoxBorderEdge.Hidden))
+        }
+        val child = group.spans.single()
+        invalid("The child does not receive a second script transform") {
+            source.copy(inlineBoxGroup = group.copy(spans = listOf(child.copy(subscript = true))))
+        }
+        invalid("Both normalized font scales must remain positive") {
+            val bad = child.copy(fontScale = 0f)
+            source.copy(fontScale = 0f, inlineBoxGroup = group.copy(spans = listOf(bad)))
+        }
+        invalid("Normalized child font remains identical") {
+            source.copy(inlineBoxGroup = group.copy(spans = listOf(child.copy(bold = !child.bold))))
+        }
+        invalid("Whole-owner action cannot borrow intrinsic metadata") { source.copy(kind = "link", target = "Target") }
+        invalid("Child action remains refused") {
+            group.copy(spans = listOf(child.copy(kind = "link", target = "Target")))
+        }
+        val lines = layout.lines.toMutableList()
+        val retained = source.copy(inlineBoxGroup = group.copy(intrinsicLinesLayout = layout.copy(lines = lines)))
+        val original = lines[0]
+        for (bad in listOf(original.copy(endChild = 1), original.copy(sourceKind = InlineBoxIntrinsicLineKind.Sub),
+            original.copy(breakAfter = false))) {
+            lines[0] = bad
+            invalid("Complete validation rechecks mutable line metadata") { PresentationSpanVisitor { _, _ -> }.spans(listOf(retained)) }
+        }
+        lines[0] = original
+        assertSame(retained, listOf(retained).single())
+        PresentationSpanVisitor { _, _ -> }.spans(listOf(retained))
+        lines.add(original)
+        invalid("Mutable extra descriptor cannot evade the fixed two-line shape") { retained.copy(tooltip = "Revalidate") }
+        lines.removeAt(2)
+        assertEquals(source, retained)
+        for (bad in listOf(-1L, 0x1_0000_0000L))
+            invalid("Source child indices are u32") { InlineBoxIntrinsicLine(bad, InlineBoxIntrinsicLineKind.Sup, true) }
+    }
+
+    @Test fun intrinsicLinesUseLiteralSubtypeTwoAndPreserveOldNullFixedAutoAndRtBytes() {
+        val source = intrinsicWireOwner()
+        for (sink in Sink.entries) {
+            val encoded = Wire('a', 0x80000 or 4).document(listOf(source), sink, headingTitle = "\n2")
+            val actual = selected(read(encoded), sink)
+            assertEquals(sink.name, source, actual)
+            assertEquals("2", actual.inlineBoxGroup!!.spans.single().text)
+            assertEquals(listOf(true, false), actual.inlineBoxGroup!!.intrinsicLinesLayout!!.lines.map { it.breakAfter })
+            assertFalse(actual.hasInternalAction())
+        }
+        val wire = Wire('a', 0x80000 or 4)
+        val bytes = wire.document(listOf(source))
+        assertArrayEquals(byteArrayOf(68, 80, 82, 97, 4, 0, 8, 0), bytes.copyOfRange(0, 8))
+        val start = wire.at.getValue("root.0.box.variant")
+        val body = wire.at.getValue("root.0.box.intrinsic")
+        val end = wire.at.getValue("root.0.box.intrinsic.end")
+        assertEquals(1, body - start); assertEquals(25, end - body)
+        val literal = byteArrayOf(2, 1, 0x9a.toByte(), 0x99.toByte(), 0x99.toByte(), 0xbe.toByte(),
+            1, 0xcd.toByte(), 0xcc.toByte(), 0xcc.toByte(), 0xbe.toByte(), 1, 0, 0,
+            0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0)
+        assertArrayEquals(literal, bytes.copyOfRange(start, end))
+        assertEquals(0x40, bytes[wire.at.getValue("root.0.fontFields")].toInt() and 0x40)
+        val fixed = atomicWireOwner()
+        val oldFixedWire = Wire('Y', 4); val oldFixed = oldFixedWire.isolatedSpan(fixed)
+        val taggedWire = Wire('a', 0x80000 or 4); val tagged = taggedWire.isolatedSpan(fixed)
+        val fixedTag = taggedWire.at.getValue("isolated.box.variant")
+        assertEquals(0, tagged[fixedTag].toInt())
+        assertArrayEquals(oldFixed, replace(tagged, fixedTag, fixedTag + 1, byteArrayOf()))
+        assertEquals(34, taggedWire.at.getValue("isolated.box.atomic.end") - taggedWire.at.getValue("isolated.box.atomic"))
+        val automatic = atomicAutoWireOwner()
+        assertArrayEquals(Wire('a', 0x20000 or 4).isolatedSpan(automatic),
+            Wire('a', 0xa0000 or 4).isolatedSpan(automatic))
+        val unmarked = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(intrinsicLinesLayout = null))
+        assertArrayEquals(Wire('Y', 4).isolatedSpan(unmarked), Wire('a', 0x80000 or 4).isolatedSpan(unmarked))
+        assertEquals(unmarked, read(Wire('Y', 4).document(listOf(unmarked))).displayTitle.single())
+        val reading = marginRubyOwner()
+        assertArrayEquals(Wire('a', 0x40000 or 4).isolatedSpan(reading), Wire('a', 0xc0000 or 4).isolatedSpan(reading))
+        assertEquals(reading, read(Wire('a', 0x40000).document(listOf(reading))).displayTitle.single())
+        val mixed = listOf(fixed, source, automatic, reading)
+        assertEquals(mixed, read(Wire('a', 0xe0000 or 4).document(mixed)).displayTitle)
+    }
+
+    @Test fun intrinsicLinesRejectMissingFeaturesMalformedBreaksAndEveryTruncatedSuffix() {
+        val wire = Wire('a', 0x80000 or 4)
+        val bytes = wire.document(listOf(intrinsicWireOwner()))
+        val name = "root.0.box.intrinsic"
+        for (mask in listOf(4L, 0x80000L, 0x20004L, 0x40004L, 0x10004L, 0x180004L, 0x80404L, 0x80804L))
+            reject("New feature and existing Box capability have independent custody", changed32(bytes, 4, mask))
+        for (tag in listOf(3, 255)) reject("Unknown atomic subtype", changed(bytes, wire.at.getValue("root.0.box.variant"), tag))
+        for (field in listOf("bottom", "vertical")) {
+            val at = wire.at.getValue("$name.$field")
+            for (unit in listOf(2, 255)) reject("Signed offsets have only Px/Em units", changed(bytes, at, unit))
+            for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                reject("Signed offset remains finite", changed32(bytes, at + 1, bad.toRawBits().toLong() and 0xffff_ffffL))
+        }
+        reject("Unknown text alignment", changed(bytes, wire.at.getValue("$name.align"), 4))
+        for (tag in listOf(1, 2, 255)) reject("Initial intrinsic lines use normal wrap", changed(bytes, wire.at.getValue("$name.wrap"), tag))
+        reject("Unknown line height", changed(bytes, wire.at.getValue("$name.lineHeight"), 3))
+        for (line in 0..1) {
+            val prefix = "$name.line$line"
+            for (tag in listOf(2, 255)) reject("Strict source line kind", changed(bytes, wire.at.getValue("$prefix.kind"), tag))
+            for (tag in listOf(2, 255)) reject("Source break is canonical boolean", changed(bytes, wire.at.getValue("$prefix.break"), tag))
+        }
+        reject("The first original source line is empty", changed32(bytes, wire.at.getValue("$name.line0.end"), 1))
+        for (boundary in listOf(0L, 2L, 0xffff_ffffL))
+            reject("The last boundary owns exactly the one original digit", changed32(bytes, wire.at.getValue("$name.line1.end"), boundary))
+        reject("First source kind is SUP", changed(bytes, wire.at.getValue("$name.line0.kind"), 1))
+        reject("Second source kind is SUB", changed(bytes, wire.at.getValue("$name.line1.kind"), 0))
+        reject("Original BR cannot be lost", changed(bytes, wire.at.getValue("$name.line0.break"), 0))
+        reject("No trailing BR is invented", changed(bytes, wire.at.getValue("$name.line1.break"), 1))
+        for (end in wire.at.getValue("root.0.box.variant") until wire.at.getValue("$name.end"))
+            reject("Every intrinsic suffix truncation is rejected", bytes.copyOf(end))
+        reject("Final EOF is still strict", bytes + byteArrayOf(0))
+        val local = wire.at.getValue("root.0.fontFields")
+        reject("Same owner local0x40 is required", changed(bytes, local, bytes[local].toInt() and 0xbf))
+        reject("Held float bit remains unsupported", changed(bytes, local, bytes[local].toInt() or 0x80))
+        reject("Actual same-owner Box is required", changed(bytes, wire.at.getValue("root.0.box"), 0))
+        val childLocal = wire.at.getValue("root.0.box.body.0.fontFields")
+        reject("Child cannot borrow the owner's intrinsic suffix", changed(bytes, childLocal, bytes[childLocal].toInt() or 0x40))
+        reject("Old Y cannot advertise new subtype", changed(replace(bytes, 4, 8, byteArrayOf(4)), 3, 'Y'.code))
+        reject("Old Z cannot advertise new subtype", changed(replace(bytes, 4, 8, byteArrayOf(0, 1)), 3, 'Z'.code))
+        reject("Unused intrinsic feature is invalid", Wire('a', 0x80000 or 4).document(listOf(atomicWireOwner())))
+        assertEquals(intrinsicWireOwner(), read(bytes).displayTitle.single())
+    }
+
+    @Test fun intrinsicLinesKeepAllFourHighFeaturesAndFullOwnerTypographyIndependent() {
+        val source = intrinsicWireOwner()
+        val marked = opacityTable(CellStyle(opacity = .2f, foreground = CellForeground.Inherit),
+            listOf(source, atomicAutoWireOwner(), atomicWireOwner(), marginRubyOwner()))
+        val wire = Wire('a', 0xf0000 or 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = marked), "mixedIntrinsic") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        assertEquals(marked, read(bytes).sections.single().blocks.single().table)
+        for (missing in listOf(0x10000, 0x20000, 0x40000, 0x80000))
+            reject("MG/HU/RT/intrinsic presence each owns its global feature",
+                changed32(bytes, 4, ((0xf0000 or 4) and missing.inv()).toLong()))
+        for (extra in listOf(0x10000, 0x20000, 0x40000))
+            reject("Intrinsic alone cannot earn another high feature", Wire('a', 0x80000 or extra or 4).document(listOf(source)))
+        val family = intrinsicWireOwner(family = ContainerFontFamily.SansSerif)
+        val font = atomicWireFont(family)
+        val heights = listOf<InlineLineHeight?>(null,
+            InlineLineHeight.Computed(InlineComputedLength(1f, FontScaleBasis.NormalBody)),
+            InlineLineHeight.Computed(InlineComputedLength(12f, FontScaleBasis.CssPx)),
+            InlineLineHeight.FontRelative(1f, font))
+        for (height in heights) for (explicit in listOf(false, true)) {
+            val value = intrinsicWireOwner(intrinsicWireLayout(height), explicitPolicies = explicit, family = ContainerFontFamily.SansSerif)
+            val features = 4 or if (explicit) 16 else 0
+            assertEquals(value, read(Wire('a', 0x80000 or 4).document(listOf(value), features = features)).displayTitle.single())
+            reject("Original owner family keeps its existing feature debt", Wire('a', 0x80000 or 4)
+                .document(listOf(value), features = features and 4.inv()))
+        }
+        reject("Intrinsic fixed wrap itself does not earn text-flow feature16",
+            Wire('a', 0x80000 or 4).document(listOf(source), features = 16))
+        reject("Intrinsic scalars do not earn font-family feature4",
+            Wire('a', 0x80000 or 4).document(listOf(source), features = 4))
+        for (bad in listOf(0f, -1f)) invalid("Explicit line height must be positive") {
+            intrinsicWireLayout(InlineLineHeight.FontRelative(bad, atomicWireFont(source)))
+        }
+        invalid("Font-relative height retains the exact declaring owner") {
+            intrinsicWireOwner(intrinsicWireLayout(InlineLineHeight.FontRelative(1f, font.copy(bold = !font.bold))),
+                family = ContainerFontFamily.SansSerif)
+        }
+        val group = source.inlineBoxGroup!!
+        invalid("Ordinary Box cannot contain an intrinsic atom") { group.copy(intrinsicLinesLayout = null, spans = listOf(source)) }
+        invalid("Padding cannot contain an intrinsic atom") {
+            InlinePaddingGroup(StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 0f), listOf(source))
+        }
+        invalid("Ruby body cannot contain an intrinsic atom") { owner(listOf(base(source)), listOf(annotation(text("reading")))) }
+        invalid("Action group cannot contain an intrinsic atom") {
+            Span("link", "", "Target", inlineActionGroup = InlineActionGroup(listOf(source)))
+        }
+        val children = group.spans.toMutableList()
+        val retained = source.copy(inlineBoxGroup = group.copy(spans = children))
+        val original = children.single()
+        children[0] = original.copy(text = "a")
+        invalid("Complete graph validation rechecks mutable original children") { PresentationSpanVisitor { _, _ -> }.spans(listOf(retained)) }
+        children[0] = original
+        PresentationSpanVisitor { _, _ -> }.spans(listOf(retained))
+    }
+
+    @Test fun intrinsicLinesChargeLayoutAndBothLinesWithoutResettingHiddenWorkOrDepth() {
+        val source = intrinsicWireOwner()
+        val limit = 1 shl 20
+        fun block(rows: Int) = Block("table", 0, emptyList(), table = Table(listOf(source),
+            java.util.Collections.nCopies(rows, emptyList<Cell>())))
+        fun model(rows: Int) = Entry("Budget", emptyList(), "language", "Hungarian", "hu",
+            listOf(Section(2, "Body", listOf(block(rows)))), emptyList())
+        // Original Block1 + owner/child2 + layout1 + two line records2 =6.
+        assertEquals(limit - 6, model(limit - 6).sections.single().blocks.single().table!!.rows.size)
+        invalid("Both explicit source lines share complete model work") { model(limit - 5) }
+        fun literal(rows: Int) = Wire('a', 0x80000 or 4).apply {
+            paragraphOverride = { positionedBlock(block(rows), "intrinsicBudget") }
+        }.document(emptyList(), Sink.Body)
+        assertEquals(limit - 7, read(literal(limit - 7)).sections.single().blocks.single().table!!.rows.size)
+        reject("Serialized section and both source lines share the exact cap", literal(limit - 6))
+        for (depth in listOf(15, 16)) {
+            val encoded = Wire('a', 0x80000 or 4).document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 15) assertNotNull(read(encoded)) else reject("Intrinsic metadata does not reset Box content depth", encoded)
+        }
+        for (depth in listOf(MaxTableDepth, MaxTableDepth + 1)) {
+            val encoded = Wire('a', 0x80000 or 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(source), Sink.Body)
+            if (depth == MaxTableDepth) assertNotNull(read(encoded)) else reject("Table depth remains independent", encoded)
+        }
+        val link = Span("link", "visible", "Original target")
+        fun table(rows: Int) = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()) +
+            listOf(listOf(Cell(listOf(link), false, 1, 1))))
+        val legacy = java.util.Collections.nCopies(limit + 1, text("ignored"))
+        PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, legacy, table = table(0)))
+        invalid("Actual intrinsic presence selects the complete ignored-prefix validator") {
+            PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, legacy + source, table = table(0)))
+        }
+        fun prefix(rows: Int) = Wire('a', 0x80000 or 4).apply {
+            paragraphOverride = { audioPrefixTable(table(rows)) }
+        }.document(listOf(source), Sink.Body)
+        // Section/Block/real row/cell/link5 plus ignored owner/child/layout/two lines5.
+        val actual = read(prefix(limit - 10))
+        assertEquals(listOf(source), actual.sections.single().blocks.single().spans)
+        assertEquals(listOf(link), actual.sections.single().blocks.single().table!!.rows.last().single().spans)
+        reject("Ignored intrinsic source retains all serialized work", prefix(limit - 9))
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> seen.addAll(spans) }.block(Block("table", 0, listOf(source), table = table(0)))
+        assertEquals(listOf(link), seen)
+        val group = source.inlineBoxGroup!!
+        val nestedChildren = mutableListOf(text("initial"))
+        val ordinary = Span("text", "", inlineBoxGroup = group.copy(intrinsicLinesLayout = null, spans = nestedChildren))
+        nestedChildren[0] = source
+        invalid("Ignored nested Box cannot hide an intrinsic source owner") {
+            PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, listOf(ordinary), table = table(0)))
+        }
+        val lines = group.intrinsicLinesLayout!!.lines.toMutableList()
+        val retained = source.copy(inlineBoxGroup = group.copy(intrinsicLinesLayout = group.intrinsicLinesLayout!!.copy(lines = lines)))
+        lines[0] = lines[0].copy(breakAfter = false)
+        for (kind in listOf("table", "rule")) invalid("Raw structural prefix cannot hide malformed original BR") {
+            PresentationSpanVisitor { _, _ -> }.block(Block(kind, 0, listOf(retained), table = if (kind == "table") table(0) else null))
+        }
+        lines[0] = lines[0].copy(breakAfter = true)
+        PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, listOf(retained), table = table(0)))
     }
 }

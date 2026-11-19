@@ -616,6 +616,11 @@ internal fun headingDestination(entry: Entry, target: String): HeadingDestinatio
 /** Compatibility for callers interested only in the owning lazy row. */
 internal fun headingScrollKey(entry: Entry, target: String): String? = headingDestination(entry, target)?.rowKey
 
+/** Missing published content is different from folded or intentionally blank authored rows. */
+internal fun entryHasNoContent(entry: Entry): Boolean =
+    entry.kind != "alias" && entry.redirect == null && entry.sections.isEmpty() &&
+        entry.preamble.isEmpty() && entry.references.isEmpty() && entry.media.isEmpty()
+
 /** Match only actual compiled reference identities; no source or fragment interpretation. */
 /** Items before the section rows: title/actions, visible explanations and preamble. */
 internal fun entryReadingStartIndex(entry: Entry, folded: Set<String>): Int =

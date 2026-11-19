@@ -316,6 +316,29 @@ internal fun prepareNativeFloatText(
     fun sourceLength(span: Span): Int = if (ruby == null) listOf(span).nativeLogicalLength() else
         (if (span.image != null || span.kind == "line_break") 1 else span.text.length) + span.trail.length
     fun hasDirectionControls(span: Span): Boolean = ruby == null && span.usesInlineDirectionIsolate()
+    val intrinsicBreaks = ruby?.projection?.ranges.orEmpty().filter { it.role == RubyTextRole.IntrinsicLineBreak }
+    if (intrinsicBreaks.isNotEmpty()) {
+        var covered = 0
+        (checkNotNull(ruby).leaves.map { it.range } + intrinsicBreaks)
+            .sortedWith(compareBy({ it.start }, { it.end })).forEach { range ->
+                check(range.start == covered && range.end >= range.start) { "Intrinsic source offsets lost their original leaf or BR" }
+                if (range.role == RubyTextRole.IntrinsicLineBreak)
+                    check(range.end == range.start + 1 && annotated.text[range.start] == '\n')
+                covered = range.end
+            }
+        check(covered == annotated.length) { "Intrinsic source coverage changed the logical text" }
+    }
+    val parentDirectionText = if (intrinsicBreaks.isEmpty()) annotated.text else {
+        val text = annotated.text.toCharArray()
+        checkNotNull(ruby).projection.ranges.filter {
+            it.role == RubyTextRole.BoxGroup && it.span?.inlineBoxGroup?.intrinsicLinesLayout != null
+        }.forEach { range -> for (at in range.start until range.end) text[at] = '\ufffc' }
+        String(text)
+    }
+    fun leafStart(index: Int, legacy: Int): Int = if (intrinsicBreaks.isEmpty()) legacy else
+        checkNotNull(ruby).leaves[index].range.start
+    fun leafEnd(index: Int, legacy: Int): Int = if (intrinsicBreaks.isEmpty()) legacy else
+        checkNotNull(ruby).leaves[index].range.end
     val rubyGaps = ruby?.projection?.ranges.orEmpty().filter {
         it.role == RubyTextRole.SegmentGap || it.role == RubyTextRole.BaseGap || it.role == RubyTextRole.AnnotationGap
     }
@@ -361,7 +384,8 @@ internal fun prepareNativeFloatText(
         (range.start to range.end) to remember(NativeCitationOccurrenceIdentity(range.span, range.start, range.end)) { Any() }
     }
     val paragraphBreaks = annotated.text.indices.filter { offset ->
-        annotated.text[offset] == '\n' && rubyGaps.none { offset in it.start until it.end }
+        annotated.text[offset] == '\n' && rubyGaps.none { offset in it.start until it.end } &&
+            intrinsicBreaks.none { offset in it.start until it.end }
     }
     require(effective.fontSize.isSp)
     val captionScope = LocalFigureCaptionLinkScope.current.takeIf { !figureImageActions && missingLinkPaint == null }
@@ -460,8 +484,8 @@ internal fun prepareNativeFloatText(
     }
     var familyOffset = 0
     val familyRanges = visibleSpans.mapIndexed { index, span ->
-        val start = familyOffset
-        familyOffset += sourceLength(span)
+        val start = leafStart(index, familyOffset)
+        familyOffset = leafEnd(index, familyOffset + sourceLength(span))
         val inherited = ruby?.leaves?.get(index)
         NativeSourceFamilyRange(start, familyOffset, span.fontFamily ?: inherited?.sourceFamily,
             span.legacyFontFamily() ?: inherited?.legacyFamily.takeIf { span.fontFamily == null })
@@ -506,8 +530,8 @@ internal fun prepareNativeFloatText(
     }
     var inlineOffset = 0
     val inlineSources = visibleSpans.mapIndexedNotNull { index, span ->
-        val start = inlineOffset
-        inlineOffset += sourceLength(span)
+        val start = leafStart(index, inlineOffset)
+        inlineOffset = leafEnd(index, inlineOffset + sourceLength(span))
         val rubyLeaf = ruby?.leaves?.get(index)
         val hasSourceLine = sourceRangeHasLine(start, inlineOffset)
         span.inlineStyle?.takeIf { hasSourceLine }?.let { authored ->
@@ -731,7 +755,8 @@ internal fun prepareNativeFloatText(
                     ?: when (staticInlineParent?.direction ?: ownerDirection) {
                         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
                         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
+                        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection,
+                            paragraphBreaks.takeIf { intrinsicBreaks.isNotEmpty() })
                     }
                 }
             }
@@ -804,6 +829,18 @@ internal fun prepareNativeFloatText(
                             length(atomic.margins.bottom), length(atomic.margins.left)), atomic.boxSizing,
                         atomic.textAlign, atomic.wrap, atomic.intrinsicWrap, policy)
                 }
+                val intrinsicLines = model.intrinsicLinesLayout?.let { lines ->
+                    val policy = when (val value = lines.lineHeight) {
+                        null -> NativeLineHeightPolicy.Normal
+                        is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(inlineLength(value.value))
+                        is InlineLineHeight.FontRelative -> NativeLineHeightPolicy.Pixels(
+                            nativeInlineBoxCoordinate(paint.textSize.toDouble() * value.factor))
+                    }
+                    NativeInlineIntrinsicLinesFormat(
+                        nativeInlineIntrinsicSignedLength(lines.marginBottom, paint.textSize, density.density),
+                        nativeInlineIntrinsicSignedLength(lines.verticalAlign, paint.textSize, density.density),
+                        lines.textAlign, policy)
+                }
                 NativeInlineBoxFormat(boxOwners.getValue(path), resolvedPadding, resolvedBorders,
                     model.overlays.map { overlay -> NativeInlineBoxOverlay(NativeInlineBoxInsets(
                         inset(overlay.insets.top), inset(overlay.insets.right),
@@ -814,7 +851,8 @@ internal fun prepareNativeFloatText(
                             StyleWidthUnit.Percent -> it.value
                             StyleWidthUnit.Em -> throw UnsupportedFloatLayout("Rounded inline radius cannot use em")
                         }
-                    }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent, atomicAutoLayout = atomicAuto)
+                    }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent, atomicAutoLayout = atomicAuto,
+                    intrinsicLinesLayout = intrinsicLines)
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
@@ -835,10 +873,14 @@ internal fun prepareNativeFloatText(
                     NativeClippedAbsoluteMargins(margin(model.margin.top), margin(model.margin.right),
                         margin(model.margin.bottom), margin(model.margin.left)), scope)
             }
+            val annotationMargins = range.annotation?.margins?.let {
+                nativeRubyAnnotationMargins(it, paint.textSize, density.density)
+            }
             rubyFormats[path] = NativeRubyGroupFormat(paint, groupDirection, height, shift,
                 authored?.wrap, underline, authored?.cursor, sourceDirection, localBaselineShift = localShift,
                 padding = padding, actionPaint = if (range in groupActions) groupPaintAt(range) else null,
-                actionOwner = actionGroupOwners[path], box = box, clippedAbsolute = clipped)
+                actionOwner = actionGroupOwners[path], box = box, clippedAbsolute = clipped,
+                annotationMargins = annotationMargins)
         } catch (failure: UnsupportedFloatLayout) {
             inlineFailure = failure.message ?: "Ruby declaring geometry is unavailable"
         }
@@ -931,6 +973,7 @@ internal fun prepareNativeFloatText(
     val imageDarkTheme = LocalReaderDarkTheme.current
     var offset = 0
     visibleSpans.forEachIndexed { id, span ->
+        offset = leafStart(id, offset)
         if (hasDirectionControls(span)) offset++
         span.image?.let { image ->
             val bitmapColorFilter = rememberInlineImageColorFilter(image)
@@ -1002,6 +1045,7 @@ internal fun prepareNativeFloatText(
         offset += if (span.image != null) 1 else if (span.kind == "line_break") 1 else span.text.length
         offset += span.trail.length
         if (hasDirectionControls(span)) offset++
+        check(offset == leafEnd(id, offset)) { "Native source leaf changed its original range" }
     }
     check(offset == annotated.length) { "Native context must retain the original logical string" }
     // Shape once per text/font request, then resize the immutable ink without reshaping it.
@@ -1011,8 +1055,9 @@ internal fun prepareNativeFloatText(
             paint.letterSpacing, paint.textScaleX, paint.textSkewX, paint.color, paint.bgColor,
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
             group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
-            group.padding, group.actionPaint, group.actionOwner, group.clippedAbsolute?.let { listOf(it.width, it.height, it.margins) },
-            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint, it.atomicLayout, it.atomicAutoLayout) })
+            group.padding, group.actionPaint, group.actionOwner, group.annotationMargins,
+            group.clippedAbsolute?.let { listOf(it.width, it.height, it.margins) },
+            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint, it.atomicLayout, it.atomicAutoLayout, it.intrinsicLinesLayout) })
     }
     val shapeKey = listOf(annotated, nativeAnnotation, clippedAbsoluteScope?.revisionKey, nativeRuns, effective, ruby, actionGroupOwners, boxOwners, clippedOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },
@@ -1042,7 +1087,8 @@ internal fun prepareNativeFloatText(
     val direction = when (staticInlineParent?.direction ?: ownerDirection) {
         BidiResolvedDirection.Ltr -> TextDirectionHeuristics.LTR
         BidiResolvedDirection.Rtl -> TextDirectionHeuristics.RTL
-        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection)
+        null -> nativeParagraphDirection(annotated, rtl, rubyTableTextDirection, bodyTextDirection, columnTextDirection,
+                            paragraphBreaks.takeIf { intrinsicBreaks.isNotEmpty() })
     }
     val nativeSource: ((Int) -> Spanned)? =
         if (nativeRuns.isNotEmpty() && prepared.size != nativeRuns.size) null else { width ->
@@ -1065,13 +1111,13 @@ internal fun prepareNativeFloatText(
                     val end = paragraphStarts.getOrNull(index + 1) ?: annotated.length
                     val paragraphStyle = annotated.paragraphStyles.filter { it.start <= start && it.end >= end }
                         .fold(effective.toParagraphStyle()) { merged, range -> merged.merge(range.item) }
-                    val paragraphText = if (detachedDirectionRanges.isEmpty()) annotated.text.substring(start, end) else buildString {
+                    val paragraphText = if (detachedDirectionRanges.isEmpty()) parentDirectionText.substring(start, end) else buildString {
                         var at = start
                         detachedDirectionRanges.filter { it.start < end && it.end > start }.sortedBy { it.start }.forEach { range ->
-                            append(annotated.text, at, maxOf(at, range.start))
+                            append(parentDirectionText, at, maxOf(at, range.start))
                             at = minOf(end, range.end)
                         }
-                        append(annotated.text, at, end)
+                        append(parentDirectionText, at, end)
                     }
                     val staticParents = clippedRanges.filter { it.start < end && it.end > start }
                         .map { checkNotNull(checkNotNull(it.span).clippedAbsolute).staticParentDirection }.distinct()
@@ -1571,13 +1617,14 @@ internal fun prepareNativeFloatText(
 /** Public native paragraph heuristic retains authored paragraph direction without inserting isolates. */
 private fun nativeParagraphDirection(text: AnnotatedString, fallbackRtl: Boolean,
     tableDirection: TableContainingDirection?, bodyDirection: BidiResolvedDirection? = null,
-    columnDirection: BidiResolvedDirection? = null): TextDirectionHeuristic {
+    columnDirection: BidiResolvedDirection? = null, outerParagraphBreaks: List<Int>? = null): TextDirectionHeuristic {
     val fallback = when (compiledBodyParagraphDirection(tableDirection, bodyDirection, columnDirection)) {
         TextDirection.Ltr -> TextDirectionHeuristics.LTR
         TextDirection.Rtl -> TextDirectionHeuristics.RTL
         else -> if (fallbackRtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR
     }
-    val starts = listOf(0) + text.text.indices.filter { text.text[it] == '\n' && it + 1 < text.length }.map { it + 1 }
+    val starts = listOf(0) + (outerParagraphBreaks
+        ?: text.text.indices.filter { text.text[it] == '\n' }).filter { it + 1 < text.length }.map { it + 1 }
     val policies = starts.map { start ->
         when (text.paragraphStyles.lastOrNull { start >= it.start && start < it.end }?.item?.textDirection) {
             TextDirection.Ltr -> TextDirectionHeuristics.LTR

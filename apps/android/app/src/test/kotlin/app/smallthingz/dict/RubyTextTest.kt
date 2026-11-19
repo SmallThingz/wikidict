@@ -803,4 +803,109 @@ class RubyTextTest {
         assertSame(empty, first.inlineActionGroup!!.spans.single()); assertSame(empty, second.inlineActionGroup!!.spans.single())
     }
 
+
+    private fun chemicalIntrinsicOwner(digit: String = "2"): Span {
+        val height = InlineLineHeight.Computed(InlineComputedLength(.8f, FontScaleBasis.NormalBody))
+        val style = InlineTextStyle(fontNormalized = true, lineHeight = height, wrap = TextWrap.Normal)
+        val child = Span("text", digit, fontScale = .8f, fontScaleBasis = FontScaleBasis.NormalBody,
+            language = "hu", inlineStyle = style)
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val layout = InlineBoxIntrinsicLinesLayout(
+            marginBottom = InlineBoxSignedLength(StyleLengthUnit.Em, -.3f),
+            verticalAlign = InlineBoxSignedLength(StyleLengthUnit.Em, -.4f),
+            lineHeight = height, textAlign = InlineBoxOverlayTextAlign.Left, wrap = TextWrap.Normal,
+            lines = listOf(InlineBoxIntrinsicLine(0, InlineBoxIntrinsicLineKind.Sup, true),
+                InlineBoxIntrinsicLine(1, InlineBoxIntrinsicLineKind.Sub, false)))
+        return child.copy(text = "", inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            none, spans = listOf(child), intrinsicLinesLayout = layout))
+    }
+
+    @Test fun intrinsicSourceBreakOwnsItsRangeWithoutInventingAChildOrNeighborAction() {
+        val owner = chemicalIntrinsicOwner()
+        val box = owner.inlineBoxGroup!!
+        val child = box.spans.single()
+        val before = Span("link", "H", "hydrogen", targetFragment = "symbol")
+        val after = Span("link", "O", "oxygen", targetFragment = "symbol")
+        val unit = Span("external_link", " mol", "https://example.test/unit")
+        val source = listOf(before, owner, after, unit)
+        val projection = rubyGraphicalProjection(source, "chemical")
+        assertEquals("H\n2O mol", projection.text)
+        val group = projection.ranges.single { it.role == RubyTextRole.BoxGroup }
+        val br = projection.ranges.single { it.role == RubyTextRole.IntrinsicLineBreak }
+        val digit = projection.ranges.single { it.span === child }
+        assertEquals(1 to 3, group.start to group.end)
+        assertEquals(1 to 2, br.start to br.end)
+        assertEquals(2 to 3, digit.start to digit.end)
+        assertEquals("chemical/spans/1/inlineBoxGroup/intrinsicLinesLayout/lines/0", br.path)
+        assertEquals("chemical/spans/1/inlineBoxGroup/spans/0", digit.path)
+        assertSame(owner, group.span)
+        assertSame(box.intrinsicLinesLayout!!.lines[0], br.intrinsicLine)
+        assertEquals(0, br.intrinsicLineIndex)
+        assertNull(br.span)
+        assertSame(child, digit.span)
+        assertEquals("\n", projection.text.substring(br.start, br.end))
+        assertEquals("2", projection.text.substring(digit.start, digit.end))
+        assertEquals(listOf(before, child, after, unit), rubyGraphicalSpans(source))
+        rubyGraphicalSpans(source).zip(listOf(before, child, after, unit)).forEach { (a, b) -> assertSame(a, b) }
+        assertEquals(listOf(before, after, unit), projection.ranges.mapNotNull { it.span }
+            .filter { it.hasInternalAction() || it.kind == "external_link" })
+        assertEquals(listOf(0 to 1, 3 to 4, 4 to 8), projection.ranges.filter {
+            it.span === before || it.span === after || it.span === unit }.map { it.start to it.end })
+        assertEquals(2, group.end - group.start) // Actual BR plus the one original digit.
+        assertEquals(1, box.spans.size)
+        assertSame(child, box.spans.single())
+        assertEquals("2", child.text)
+        assertFalse(child.superscript); assertFalse(child.subscript)
+        assertEquals(3, source.count { it.hasInternalAction() || it.kind == "external_link" })
+
+        val repeated = rubyGraphicalProjection(listOf(owner, owner), "repeat")
+        assertEquals("\n2\n2", repeated.text)
+        assertEquals(listOf(0 to 1, 2 to 3), repeated.ranges.filter {
+            it.role == RubyTextRole.IntrinsicLineBreak }.map { it.start to it.end })
+        assertEquals(2, repeated.ranges.filter { it.role == RubyTextRole.IntrinsicLineBreak }.map { it.path }.distinct().size)
+        assertTrue(repeated.ranges.filter { it.role == RubyTextRole.IntrinsicLineBreak }.all {
+            it.intrinsicLine === box.intrinsicLinesLayout!!.lines[0] })
+    }
+
+    @Test fun intrinsicSourceBreakSurvivesTerminalBaseAndAnonymousCopyWithoutChangingLegacyGroups() {
+        val owner = chemicalIntrinsicOwner("7") // Projection is not hardcoded to the genuine source's digit.
+        val child = owner.inlineBoxGroup!!.spans.single()
+        val prefix = Span("link", "H", "hydrogen")
+        val suffix = Span("link", "O", "oxygen")
+        val source = listOf(prefix, owner, suffix)
+        assertEquals("H\n7O", rubyGraphicalText(source))
+        assertEquals("H\n7O", rubyBaseText(source))
+        assertEquals("H\n7O", rubyFallbackText(source))
+        val fallback = rubyFallbackSpans(source)
+        assertEquals(3, fallback.size)
+        assertSame(prefix, fallback[0]); assertSame(suffix, fallback[2])
+        assertEquals(child.copy(text = "\n7"), fallback[1])
+        assertEquals("text", fallback[1].kind); assertTrue(fallback[1].target.isEmpty())
+        assertNull(fallback[1].inlineBoxGroup); assertEquals("7", child.text)
+        val terminal = rubyNativeTerminalProjection(source, "terminal")
+        assertSame(source, terminal.source)
+        assertEquals("H\n7O", terminal.projection.text)
+        assertEquals("H\n7O", rubyVisualFallbackSpans(source).joinToString("") { it.text + it.trail })
+        val semantic = anonymousInlineSemantic(source, rubyGraphicalText(source))
+        assertEquals(listOf(0 to 1, 1 to 2, 2 to 3, 3 to 4), semantic.map { it.start to it.end })
+        assertEquals(listOf("H", "\n", "7", "O"), semantic.map { it.text })
+        assertTrue(semantic.none { it.replacement })
+        assertEquals("H\n7O", semantic.joinToString("") { it.text })
+        assertEquals("H 7O", textOf(source)) // Existing preview whitespace normalization remains explicit.
+        assertThrows(IllegalArgumentException::class.java) {
+            owner.inlineBoxGroup!!.intrinsicLinesLayout!!.copy(lines = listOf(
+                InlineBoxIntrinsicLine(0, InlineBoxIntrinsicLineKind.Sup, false),
+                InlineBoxIntrinsicLine(1, InlineBoxIntrinsicLineKind.Sub, false)))
+        }
+        val ordinary = owner.copy(inlineBoxGroup = owner.inlineBoxGroup!!.copy(intrinsicLinesLayout = null))
+        assertEquals("7", rubyGraphicalText(listOf(ordinary)))
+        assertEquals("7", rubyBaseText(listOf(ordinary)))
+        assertEquals("7", rubyFallbackText(listOf(ordinary)))
+        assertTrue(rubyGraphicalProjection(listOf(ordinary)).ranges.none { it.role == RubyTextRole.IntrinsicLineBreak })
+        assertSame(child, rubyFallbackSpans(listOf(ordinary)).single())
+        assertSame(child, rubyGraphicalSpans(listOf(ordinary)).single())
+        assertSame(child, owner.inlineBoxGroup!!.spans.single())
+    }
 }

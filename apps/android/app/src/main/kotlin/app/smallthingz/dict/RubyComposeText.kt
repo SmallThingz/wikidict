@@ -206,7 +206,21 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
     val inheritedContext = LocalNativeContainerTextContext.current
     val cellWeight = LocalCellWeight.current
     val inheritedForeground = LocalFigureCaptionForeground.current
+    val sourceBreaks = contexts.projection.ranges.filter { it.role == RubyTextRole.IntrinsicLineBreak }
+    var sourceBreakIndex = 0
+    fun appendSourceBreaks(end: Int) {
+        while (builder.length < end) {
+            val range = sourceBreaks.getOrNull(sourceBreakIndex++)
+                ?: error("Unowned gap in the original inline source")
+            check(range.span == null && range.intrinsicLine?.breakAfter == true &&
+                range.start == builder.length && range.end == range.start + 1 && range.end <= end &&
+                contexts.projection.text[range.start] == '\n')
+            builder.append('\n')
+        }
+        check(builder.length == end)
+    }
     for (leaf in contexts.leaves) {
+        appendSourceBreaks(leaf.range.start)
         val span = checkNotNull(leaf.range.span)
         if (leaf.range.role == RubyTextRole.ClippedText && !measureClippedChildren) {
             // Retain genuine source/actions, without asking a clipped descendant for a font or glyph probe.
@@ -240,6 +254,8 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
         builder.append(annotation)
         builder.pop()
     }
+    appendSourceBreaks(contexts.projection.text.length)
+    check(sourceBreakIndex == sourceBreaks.size)
     // The declaring action owns one interval. Its normal paint already entered the
     // inherited context; these annotations must not overwrite explicit child paints.
     contexts.groups.values.filter { it.range.role == RubyTextRole.PaddingGroup ||

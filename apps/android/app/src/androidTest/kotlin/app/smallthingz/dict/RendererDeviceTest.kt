@@ -7107,4 +7107,59 @@ class RendererDeviceTest {
         }
     }
 
+
+    @Test fun emptyPublishedEntryNoticeIsAccessibleAndClearsWhenSameEntryGainsContent() {
+        val empty = Entry("czytać", emptyList(), "language", "polski", "pl", emptyList(), emptyList(),
+            organization = PresentationOrganization(emptyList(), emptyList()))
+        val current = mutableStateOf(empty)
+        val message = "No entry content is available in this dictionary."
+        try {
+            compose.runOnUiThread {
+                compose.activity.setContent {
+                    val density = LocalDensity.current
+                    CompositionLocalProvider(LocalDensity provides Density(density.density, 2f)) {
+                        DictTheme("system") {
+                            androidx.compose.material3.Surface(Modifier.fillMaxSize()) {
+                                Box(Modifier.fillMaxSize()) {
+                                    Box(Modifier.width(280.dp).fillMaxSize().testTag("empty-entry-viewport")) {
+                                        EntryView(current.value, false, {}, settings = AppSettings(collapseOtherSections = false))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            val notice = compose.onNodeWithTag("entry-empty-message")
+            notice.assertIsDisplayed().assertTextEquals(message).assertHasNoClickAction()
+            compose.onAllNodesWithText(message).assertCountEquals(1)
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            notice.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            assertFalse(layout.didOverflowWidth); assertFalse(layout.didOverflowHeight)
+            assertTrue(layout.lineCount > 0)
+            assertEquals(2f, layout.layoutInput.density.fontScale, 0f)
+            val bounds = notice.fetchSemanticsNode().boundsInRoot
+            val viewport = compose.onNodeWithTag("empty-entry-viewport").fetchSemanticsNode().boundsInRoot
+            assertEquals(with(layout.layoutInput.density) { 280.dp.toPx() }, viewport.width, 1f)
+            assertTrue(bounds.left >= viewport.left && bounds.right <= viewport.right)
+            compose.onNodeWithTag("entry-title").assertTextEquals("czytać")
+            val populated = empty.copy(organization = null, sections = listOf(Section(3, "Meaning",
+                listOf(Block("definition", 0, listOf(Span("text", "Retained definition")))))))
+            for (entry in listOf(populated,
+                empty.copy(preamble = listOf(Span("text", "Retained preamble"))),
+                empty.copy(kind = "alias"),
+                empty.copy(media = listOf(Media("Retained.ogg", "audio", "Retained audio"))),
+                empty.copy(references = listOf(Reference(1, 1L, "", listOf(Span("text", "Retained reference"))))))) {
+                compose.runOnIdle { current.value = entry }
+                notice.assertDoesNotExist()
+                compose.onNodeWithTag("entry-title").assertTextEquals("czytać")
+            }
+            compose.runOnIdle { current.value = empty }
+            notice.assertIsDisplayed().assertTextEquals(message)
+        } finally {
+            compose.runOnUiThread { compose.activity.setContent {} }
+            compose.waitForIdle()
+        }
+    }
 }

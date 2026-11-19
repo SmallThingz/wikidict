@@ -1895,4 +1895,48 @@ class ReadingLayoutTest {
             listOf(Block("paragraph", 0, listOf(image, link))))))
         assertEquals(listOf("Actual image advice", "Link advice"), noBox.textDetails.map { it.description })
     }
+
+    @Test fun publishedPolishEmptyEntryGetsNoticeWithoutChangingOriginalIdentityOrRows() {
+        // Exact empty fields of retained pl-owner-000.stdout: czytać, selected owner polski.
+        val entry = Entry("czytać", emptyList(), "language", "polski", "pl", emptyList(), emptyList(),
+            organization = PresentationOrganization(emptyList(), emptyList()))
+        val key = entry.key
+        assertTrue(entryHasNoContent(entry))
+        assertEquals("language\u0000polski\u0000czytać", key)
+        assertEquals(emptyList<ReadingRow>(), entry.readingRows)
+        assertEquals(1, entryReadingStartIndex(entry, emptySet()))
+        assertEquals(1, entryReadingStartIndex(entry, setOf("preamble", "references", "media")))
+        assertTrue(entryHasNoContent(entry.copy(displayTitle = listOf(Span("text", "czytać")))))
+        assertTrue(entryHasNoContent(entry.copy(organization = null)))
+        assertEquals(key, entry.key)
+        assertTrue(entry.sections.isEmpty()); assertTrue(entry.preamble.isEmpty())
+        assertTrue(entry.references.isEmpty()); assertTrue(entry.media.isEmpty())
+    }
+
+    @Test fun emptyEntryNoticeDoesNotReplaceAuthoredRowsAliasesMediaOrReferences() {
+        val empty = Entry("czytać", emptyList(), "language", "polski", "pl", emptyList(), emptyList())
+        val body = Block("definition", 0, listOf(Span("text", "Retained definition")))
+        val source = listOf(Section(3, "Meaning", listOf(body)))
+        val nonempty = empty.copy(sections = source)
+        val reference = Reference(1, 1L, "", listOf(Span("text", "Retained reference")))
+        val media = Media("Retained.ogg", "audio", "Retained audio")
+        for (entry in listOf(nonempty,
+            empty.copy(sections = listOf(Section(3, "Authored heading", emptyList()))),
+            empty.copy(sections = listOf(Section(2, "", listOf(Block("blank", 0, emptyList()))))),
+            empty.copy(preamble = listOf(Span("text", "Retained preamble"))),
+            empty.copy(kind = "alias"),
+            empty.copy(redirect = Redirect("czytać", "Target", "Meaning", false)),
+            empty.copy(media = listOf(media)), empty.copy(references = listOf(reference)))) {
+            assertFalse(entry.toString(), entryHasNoContent(entry))
+        }
+        assertSame(source, nonempty.sections); assertSame(body, nonempty.sections.single().blocks.single())
+        assertEquals("heading-0", headingScrollKey(nonempty, "#Meaning"))
+        assertFalse(entryHasNoContent(nonempty))
+        assertEquals(listOf("heading-0"), visibleEntryReadingRows(nonempty, setOf("heading-0")).map { it.key })
+        assertEquals(1, entryReadingStartIndex(nonempty, setOf("heading-0")))
+        assertEquals(2, entryReadingStartIndex(empty.copy(preamble = listOf(Span("text", "About"))), emptySet()))
+        val referenced = empty.copy(references = listOf(reference))
+        assertSame(reference, referenced.references.single())
+        assertEquals(1, metadataReferencesStartIndex(referenced, emptySet()))
+    }
 }

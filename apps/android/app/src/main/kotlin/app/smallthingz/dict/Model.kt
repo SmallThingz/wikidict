@@ -370,6 +370,32 @@ data class InlineBoxAtomicAutoLayout(val maxWidth: StyleLength, val margins: Sty
     }
 }
 
+/** Signed CSS offsets are local to intrinsic inline lines; ordinary StyleLength stays nonnegative. */
+data class InlineBoxSignedLength(val unit: StyleLengthUnit, val value: Float) {
+    init { require(value.isFinite()) { "Invalid intrinsic inline signed length" } }
+}
+enum class InlineBoxIntrinsicLineKind { Sup, Sub }
+/** An exclusive original-child boundary; breakAfter owns the source BR without adding a child. */
+data class InlineBoxIntrinsicLine(val endChild: Long, val sourceKind: InlineBoxIntrinsicLineKind,
+    val breakAfter: Boolean) {
+    init { require(endChild in 0L..0xffff_ffffL) { "Invalid intrinsic inline child boundary" } }
+}
+data class InlineBoxIntrinsicLinesLayout(val marginBottom: InlineBoxSignedLength,
+    val verticalAlign: InlineBoxSignedLength, val lineHeight: InlineLineHeight?,
+    val textAlign: InlineBoxOverlayTextAlign, val wrap: TextWrap, val lines: List<InlineBoxIntrinsicLine>) {
+    init { require(validIntrinsicInlineLines(this)) { "Invalid intrinsic inline source lines" } }
+}
+private fun validIntrinsicInlineLines(value: InlineBoxIntrinsicLinesLayout): Boolean =
+    value.marginBottom.value.isFinite() && value.verticalAlign.value.isFinite() && value.wrap == TextWrap.Normal &&
+        value.lines.size == 2 && value.lines[0].endChild == 0L &&
+        value.lines[0].sourceKind == InlineBoxIntrinsicLineKind.Sup && value.lines[0].breakAfter &&
+        value.lines[1].endChild == 1L && value.lines[1].sourceKind == InlineBoxIntrinsicLineKind.Sub &&
+        !value.lines[1].breakAfter && when (val height = value.lineHeight) {
+            null -> true
+            is InlineLineHeight.Computed -> height.value.value > 0f
+            is InlineLineHeight.FontRelative -> height.factor > 0f
+        }
+
 private fun sameAtomicLineHeight(first: InlineLineHeight?, second: InlineLineHeight?): Boolean = when (first) {
     null -> second == null
     is InlineLineHeight.Computed -> second is InlineLineHeight.Computed &&
@@ -403,8 +429,10 @@ private fun validAtomicInlineChild(span: Span): Boolean = validRubyBodyChild(spa
 private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
     val fixed = group.atomicLayout
     val automatic = group.atomicAutoLayout
-    val wrap = fixed?.wrap ?: checkNotNull(automatic).wrap
-    val height = if (fixed != null) fixed.lineHeight else checkNotNull(automatic).lineHeight
+    val intrinsic = group.intrinsicLinesLayout
+    val wrap = fixed?.wrap ?: automatic?.wrap ?: checkNotNull(intrinsic).wrap
+    val height = if (fixed != null) fixed.lineHeight else if (automatic != null) automatic.lineHeight
+        else checkNotNull(intrinsic).lineHeight
     require(owner.kind == "text" && owner.target.isEmpty() && owner.targetFragment == null &&
         owner.audioControl == null && owner.citationMarker == null && !owner.isQualifiedCitationBacklink &&
         owner.linkPaint == null && owner.direction in setOf("", "ltr", "rtl") && validAtomicInlineStyle(owner, wrap, height)) {
@@ -423,7 +451,8 @@ private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
 /** Child boundaries order detached text; overlay array order also retains authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
     val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleWidth? = null,
-    val atomicLayout: InlineBoxAtomicLayout? = null, val atomicAutoLayout: InlineBoxAtomicAutoLayout? = null) {
+    val atomicLayout: InlineBoxAtomicLayout? = null, val atomicAutoLayout: InlineBoxAtomicAutoLayout? = null,
+    val intrinsicLinesLayout: InlineBoxIntrinsicLinesLayout? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
@@ -508,9 +537,12 @@ private fun sameRubyFont(a: InlineFontSnapshot, b: InlineFontSnapshot): Boolean 
         a.fontFeatures == b.fontFeatures && a.fontFamily == b.fontFamily
 }
 data class RubyBase(val owner: RubyOwner, val gapBefore: List<Span>, val spans: List<Span>)
+/** Physical annotation margins; em retains the original annotation owner font basis. */
+data class RubyAnnotationMargins(val top: StyleLength, val bottom: StyleLength)
 data class RubyAnnotation(val baseStart: Long, val baseCount: Long, val level: Long, val owner: RubyOwner,
     val gapBefore: List<Span>, val spans: List<Span>, val fallbackBefore: List<Span>,
-    val fallbackAfter: List<Span>, val explicitFallback: Boolean) {
+    val fallbackAfter: List<Span>, val explicitFallback: Boolean,
+    val margins: RubyAnnotationMargins? = null) {
     init {
         require(baseStart in 0L..0xffff_ffffL && baseCount in 1L..0xffff_ffffL &&
             level in 0L..0xffff_ffffL) { "Invalid ruby annotation association" }
@@ -1319,7 +1351,8 @@ private fun hasAtomicOrOverlayContent(values: List<Span>): Boolean {
         if (seen.put(span, true) != null) continue
         val box = span.inlineBoxGroup
         if (box != null) {
-            if (box.atomicLayout != null || box.atomicAutoLayout != null || box.overlays.any { it.content != null }) return true
+            if (box.atomicLayout != null || box.atomicAutoLayout != null || box.intrinsicLinesLayout != null ||
+                box.overlays.any { it.content != null }) return true
             work.addLast(box.spans.iterator())
         }
         span.inlinePaddingGroup?.let { work.addLast(it.spans.iterator()) }
@@ -1419,7 +1452,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             require(span.clippedAbsolute == null || !rubyChild && !boxChild && !clippedChild) {
                 "Clipped absolute inline cannot nest in a structural inline owner"
             }
-            require(span.inlineBoxGroup?.let { it.atomicLayout == null && it.atomicAutoLayout == null } != false ||
+            require(span.inlineBoxGroup?.let { it.atomicLayout == null && it.atomicAutoLayout == null &&
+                it.intrinsicLinesLayout == null } != false ||
                 !rubyChild && !boxChild && !clippedChild && actionOwner == null) {
                 "Atomic inline box cannot nest in another structural inline owner"
             }
@@ -1471,8 +1505,19 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
         strictBody: Boolean = false, owner: Span? = null) {
-        require(value.atomicLayout == null || value.atomicAutoLayout == null) { "Inline box atomic variants are exclusive" }
-        if (value.atomicLayout != null || value.atomicAutoLayout != null) {
+        require(listOf(value.atomicLayout, value.atomicAutoLayout, value.intrinsicLinesLayout).count { it != null } <= 1) {
+            "Inline box atomic variants are exclusive"
+        }
+        value.intrinsicLinesLayout?.let { intrinsic ->
+            charge(2) // Both original source-line descriptors, in addition to the shared atomic record below.
+            require(validIntrinsicInlineLines(intrinsic) && value.spans.size == 1 &&
+                value.spans[0].text.length == 1 && value.spans[0].text[0] in '0'..'9' &&
+                listOf(value.padding.top, value.padding.right, value.padding.bottom, value.padding.left).all { it.value == 0f } &&
+                listOf(value.border.top, value.border.right, value.border.bottom, value.border.left).all { it == InlineBoxBorderEdge.None }) {
+                "Intrinsic inline lines require an empty first source line and one undecorated original digit"
+            }
+        }
+        if (value.atomicLayout != null || value.atomicAutoLayout != null || value.intrinsicLinesLayout != null) {
             charge(1)
             require(value.spans.size <= remaining) { "Atomic inline children exceed the presentation budget" }
             require(!strictBody && actionOwner == null && value.radius == null && value.overlays.isEmpty() &&
@@ -1923,7 +1968,9 @@ data class Entry(
             fallback.append(separator).append(text, 0, end)
             if (end < text.length) break
         }
-        return fallback.toString().ifEmpty { "Definition unavailable." }
+        // Table-authored meanings are a last resort: ordinary prose keeps its saved clue.
+        if (fallback.isEmpty()) return tableClue().ifEmpty { "Definition unavailable." }
+        return fallback.toString()
     }
 
     /** A study answer retains its first meaning and one immediate child, never a deepest leaf. */
@@ -1957,6 +2004,34 @@ data class Entry(
         }
         return fallback
     }
+}
+
+private object TableClueComplete : RuntimeException(null, null, false, false)
+
+private fun Entry.tableClue(): String {
+    val result = StringBuilder(420)
+    try {
+        for (section in sections) for (block in section.blocks) block.table?.visitSpanRuns { spans, _ ->
+            val text = textOf(spans.filterNot { span ->
+                span.classes.split(previewClassWhitespace).any { it == "wikidict-media" || it == "audiotable" }
+            })
+            if (text.isNotBlank()) {
+                val separator = if (result.isEmpty()) "" else " · "
+                val available = 420 - result.length - separator.length
+                if (available <= 0) throw TableClueComplete
+                var end = minOf(text.length, available)
+                if (end < text.length && end > 0 && Character.isHighSurrogate(text[end - 1]) &&
+                    Character.isLowSurrogate(text[end])) end--
+                if (end == 0) throw TableClueComplete
+                result.append(separator).append(text, 0, end)
+                // Stop the structural walk too; do not collect the remainder of a large table.
+                if (end < text.length || result.length >= 417) throw TableClueComplete
+            }
+        }
+    } catch (_: TableClueComplete) {
+        // The existing visitor owns caption/cell/block precedence and recursion limits.
+    }
+    return result.toString()
 }
 
 private fun Block.cluePreview(): String {

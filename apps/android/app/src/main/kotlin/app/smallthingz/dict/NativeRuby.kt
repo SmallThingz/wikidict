@@ -40,6 +40,7 @@ internal class NativeRubyGroupFormat(
     val actionOwner: NativeInlineActionOwner? = null,
     val box: NativeInlineBoxFormat? = null,
     val clippedAbsolute: NativeClippedAbsoluteFormat? = null,
+    val annotationMargins: NativeRubyAnnotationMargins? = null,
 ) {
     val paint = TextPaint(paint)
     init {
@@ -880,6 +881,9 @@ internal class NativeRubyPlacedProjection(val compiled: NativeRubyLayout,
 
     fun isHardLineBreak(offset: Int): Boolean {
         require(offset in 0 until length)
+        children.firstOrNull { it.atomic && it.owns(offset) }?.let { child ->
+            return child.geometry.isHardLineBreak(offset - child.start)
+        }
         return textOwner(offset)?.let { !it.collapsed && compiled.source[offset] == '\n' } == true
     }
 
@@ -1586,6 +1590,9 @@ internal data class NativeRubyRow(val start: Int, val end: Int, val geometry: Fl
     val script: NativeRubyScriptState, val localShift: Float,
     val line: Int = 0, val ranges: List<Pair<Int, Int>> = listOf(start to end),
     val padding: NativeRubyRowPadding? = null) {
+    // Every visible row fragment retains its original annotation's pair once.
+    // Reflow may replace content metrics, so the reservation is derived here.
+    val reservation: NativeUsedLineMetrics get() = format.annotationMargins?.reservation(content) ?: content
     fun withoutSpaces(offsets: Set<Int>): NativeRubyRow {
         val selected = offsets.filter { at -> ranges.any { at >= it.first && at < it.second } }.map { it - start }.toSet()
         val native = geometry as? NativeFloatGeometry ?: return this
@@ -1998,7 +2005,20 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         }
     }
 
-    private val paragraphSource by lazy { original.toString() }
+    private val paragraphSource by lazy {
+        // The original BR remains public source inside the atom, but it is not
+        // a hard paragraph boundary in the containing inline formatting context.
+        val text = original.toString().toCharArray()
+        nativeInlineRanges(original, NativeRubyPreparedSource::class.java).forEach { marker ->
+            marker.value.projection.ranges.filter {
+                it.role == RubyTextRole.BoxGroup && marker.value.groups[it.path]?.box?.intrinsicLinesLayout != null
+            }.forEach { range ->
+                for (at in marker.start + range.start until marker.start + range.end)
+                    if (text[at] == '\n') text[at] = '\ufffc'
+            }
+        }
+        String(text)
+    }
     private val paragraphStarts by lazy {
         buildList { add(0); paragraphSource.forEachIndexed { index, c -> if (c == '\n') add(index + 1) } }.toIntArray()
     }
@@ -2187,7 +2207,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 throw UnsupportedFloatLayout("Atomic inline box requires its original independent group")
             val parentRtl = enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl }
                 ?: atomicParentRtl(prepared, sourceStart + range.start)
-            if (box.atomicAutoLayout != null) atomicAutoBox(prepared, range, sourceStart, parentRtl)
+            if (box.intrinsicLinesLayout != null) intrinsicLinesBox(prepared, range, sourceStart, parentRtl)
+            else if (box.atomicAutoLayout != null) atomicAutoBox(prepared, range, sourceStart, parentRtl)
             else atomicBox(prepared, range, sourceStart, parentRtl)
             return
         }
@@ -2311,7 +2332,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
     }
 
     private val atomicParentText by lazy {
-        val result = original.toString().toCharArray()
+        val result = paragraphSource.toCharArray()
         val intervals = nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
             marker.value.projection.ranges.filter { range ->
                 range.role == RubyTextRole.OverlayContent || range.role == RubyTextRole.Owner ||
@@ -2394,6 +2415,70 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         fun emit() {
             val at = native.length
             val atom = NativeInlineAtomicBox(format, sourceStart + range.start, sourceStart + range.end, geometry)
+            native.append('\ufffc')
+            pieces += NativeRubyPiece.AtomicBox(at, atom)
+            val first = breakText.length
+            breakText.append('\ufffc')
+            breakEdges[first] = at
+            breakEdges[breakText.length] = native.length
+        }
+        if (checkNotNull(range.span).usesInlineDirectionIsolate()) isolate(rtl, ::emit) else emit()
+    }
+
+    private fun intrinsicLinesBox(prepared: NativeRubyPreparedSource, range: RubyTextRange,
+        sourceStart: Int, enclosingRtl: Boolean) {
+        if (!exactAdvances) throw UnsupportedFloatLayout("Intrinsic lines require exact native rows")
+        val format = checkNotNull(prepared.groups[range.path])
+        val policy = checkNotNull(format.box?.intrinsicLinesLayout)
+        val descendants = prepared.projection.ranges.filter { it.path.startsWith(range.path + "/") }
+        val lineBreak = descendants.singleOrNull { it.role == RubyTextRole.IntrinsicLineBreak }
+        val leaves = descendants.filter { it.span != null }
+        if (format.actionOwner != null || format.sourceDirection !in setOf("", "ltr", "rtl") ||
+            descendants.any { it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup,
+                RubyTextRole.ActionGroup, RubyTextRole.BoxGroup, RubyTextRole.OverlayContent) } ||
+            range.end - range.start != 2 || prepared.projection.text[range.start] != '\n' ||
+            prepared.projection.text[range.start + 1] !in '0'..'9' ||
+            lineBreak == null || lineBreak.start != range.start || lineBreak.end != range.start + 1 ||
+            leaves.size != 1 || leaves.single().start != range.start + 1 || leaves.single().end != range.end)
+            throw UnsupportedFloatLayout("Intrinsic lines lost the original BR and single decimal child")
+        val rtl = when (format.sourceDirection) { "ltr" -> false; "rtl" -> true; else -> enclosingRtl }
+        val geometry = prepared.atomicChild(range.path, rtl) {
+            val styled = SpannableString(prepared.source.subSequence(range.start, range.end))
+            styled.getSpans(0, styled.length, Any::class.java).filter { it !is CharacterStyle }.forEach(styled::removeSpan)
+            val childPaint = TextPaint(format.paint).apply { bgColor = 0; baselineShift = 0 }
+            // Cover the genuine LF as well as the digit: the first empty line has
+            // the owner's strut without an empty Span, measurement glyph or 1px row.
+            styled.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(childPaint), policy.lineHeight,
+                strut = true, independentNormalStrut = true), 0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            styled.setSpan(NativeAuthoredTextWrap(TextWrap.Normal, inheritedOwner = true),
+                0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val childDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val compiler = NativeRubyCompiler(SpannedString(styled), childPaint, childDirection, null, true)
+            compiler.text(0, styled.length)
+            val compiled = compiler.finish()
+            val widths = nativeFloatRowIntrinsicWidths(compiled.native, childPaint, childDirection,
+                breakWordMinimum = false)
+            if (widths.minimum != widths.maximum)
+                throw UnsupportedFloatLayout("Intrinsic decimal line unexpectedly has a soft break opportunity")
+            val alignment = when (policy.textAlign) {
+                InlineBoxOverlayTextAlign.Start -> Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Left -> if (rtl) Layout.Alignment.ALIGN_OPPOSITE else Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Right -> if (rtl) Layout.Alignment.ALIGN_NORMAL else Layout.Alignment.ALIGN_OPPOSITE
+                InlineBoxOverlayTextAlign.Center -> Layout.Alignment.ALIGN_CENTER
+            }
+            val raw = NativeFloatGeometry.build(compiled.native, childPaint,
+                kotlin.math.floor(widths.maximum).toInt(), emptyList(), alignment = alignment,
+                textDirection = childDirection, includeFontPadding = false, exactAvailableWidth = widths.maximum)
+            if (raw.shapedLineCount != 2)
+                throw UnsupportedFloatLayout("Intrinsic lines changed the two original source lines")
+            raw.withRubyProjection(compiled)
+        }
+        val width = geometry.nativeRubyMeasuredAdvance(1, 2)
+        val allocation = nativeInlineIntrinsicLinesAllocation(width, geometry.textBottom, policy.marginBottom)
+        fun emit() {
+            val at = native.length
+            val atom = NativeInlineAtomicBox(format, sourceStart + range.start, sourceStart + range.end,
+                geometry, allocation, policy.verticalAlign)
             native.append('\ufffc')
             pieces += NativeRubyPiece.AtomicBox(at, atom)
             val first = breakText.length
@@ -2928,7 +3013,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                             gapRow(prepared, annotationGaps[index], sourceStart, format, ownerRtl,
                                 ownerPlacement.state, annotation = true,
                                 retained = retainedAnnotationGaps[index] && index !in trimmedAnnotationGaps) else null }
-                        val levelMetrics = (indices.map { annotations[it].content } + gaps.values.mapNotNull {
+                        val levelMetrics = (indices.map { annotations[it].reservation } + gaps.values.mapNotNull {
                             it?.takeIf { it.geometry !is NativeRubyEmptyGeometry }?.content
                         })
                             .reduce(NativeUsedLineMetrics::including)
@@ -2940,7 +3025,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                         val placedMetrics = (indices.map { index ->
                             val annotation = annotations[index]
                             val ownBaseline = baseline + annotation.localShift
-                            NativeUsedLineMetrics(ownBaseline + annotation.content.top, ownBaseline + annotation.content.bottom)
+                            NativeUsedLineMetrics(ownBaseline + annotation.reservation.top, ownBaseline + annotation.reservation.bottom)
                         } + gaps.values.mapNotNull { gap -> gap?.takeIf { it.geometry !is NativeRubyEmptyGeometry }?.content?.let {
                             NativeUsedLineMetrics(baseline + it.top, baseline + it.bottom)
                         } }).reduce(NativeUsedLineMetrics::including)

@@ -617,6 +617,11 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     }
                     if (entry.displayTitle.isNotEmpty()) StyledText(entry.displayTitle, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium, onLink = readerLink)
                     else Text(entry.title, Modifier.fillMaxWidth().testTag("entry-title"), style = MaterialTheme.typography.displayMedium.copy(textDirection=TextDirection.Content))
+                    if (entryHasNoContent(entry)) {
+                        Text("No entry content is available in this dictionary.",
+                            Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp).testTag("entry-empty-message"),
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (entryTextSections.isNotEmpty() || disclosureIndex.owners.any { !disclosureState.isExpanded(it) }) {
                         TextButton(onClick = {
                             entryTextSections.forEach { folded[it] = false }

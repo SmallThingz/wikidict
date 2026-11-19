@@ -19,8 +19,8 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (cellForegroundHeader) r.u32().also {
             // Retain the implemented lower-word union; held Figure capabilities stay unknown.
-            require(it and 0x30000L != 0L && it and 0x3f3ffL == it &&
-                (it and 0x20000L == 0L || it and 4L != 0L) &&
+            require(it and 0xf0000L != 0L && it and 0xff3ffL == it &&
+                (it and 0xa0000L == 0L || it and 4L != 0L) &&
                 (it and 32768L == 0L || it and 16384L != 0L && it and 1L != 0L)) {
                 "Invalid wide presentation feature flags"
             }
@@ -35,6 +35,8 @@ object BlobDecoder {
         r.ownerGeometry = ownerGeometry
         r.cellForegrounds = ownerGeometryFlags and 0x10000 != 0
         r.atomicAutoLayouts = ownerGeometryFlags and 0x20000 != 0
+        r.rubyAnnotationMargins = ownerGeometryFlags and 0x40000 != 0
+        r.intrinsicLinesLayouts = ownerGeometryFlags and 0x80000 != 0
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
@@ -205,6 +207,8 @@ object BlobDecoder {
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
         require(r.cellForegrounds == r.hasCellForeground) { "Cell foreground feature does not match payload" }
         require(r.atomicAutoLayouts == r.hasAtomicAutoLayout) { "Automatic inline box feature does not match payload" }
+        require(r.rubyAnnotationMargins == r.hasRubyAnnotationMargins) { "Ruby annotation margins feature does not match payload" }
+        require(r.intrinsicLinesLayouts == r.hasIntrinsicLinesLayout) { "Intrinsic inline lines feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -234,6 +238,10 @@ object BlobDecoder {
         var hasCellForeground = false
         var atomicAutoLayouts = false
         var hasAtomicAutoLayout = false
+        var rubyAnnotationMargins = false
+        var hasRubyAnnotationMargins = false
+        var intrinsicLinesLayouts = false
+        var hasIntrinsicLinesLayout = false
         var positionedContainers = false
         var hasPositionedContainers = false
         var tableMinimumWidths = false
@@ -530,6 +538,37 @@ object BlobDecoder {
             return InlineBoxAtomicAutoLayout(maximum, margins, sizing, align, wrap, intrinsicWrap, height)
                 .also { hasAtomicAutoLayout = true }
         }
+        private fun inlineBoxSignedLength(): InlineBoxSignedLength {
+            require(buffer.remaining() >= 5) { "Truncated intrinsic inline signed length" }
+            val unit = StyleLengthUnit.entries.getOrNull(byte()) ?: error("Unknown intrinsic inline signed unit")
+            return InlineBoxSignedLength(unit, buffer.float)
+        }
+        private fun inlineBoxIntrinsicLinesLayout(): InlineBoxIntrinsicLinesLayout {
+            require(intrinsicLinesLayouts && containerFonts && extendedFontFamilies &&
+                remainingItems >= 3 && buffer.remaining() >= 25) {
+                "Intrinsic inline lines require their capability and presentation budget"
+            }
+            remainingItems -= 3 // Layout plus both source-line records; signed scalars add no items.
+            val bottom = inlineBoxSignedLength(); val alignOffset = inlineBoxSignedLength()
+            val align = InlineBoxOverlayTextAlign.entries.getOrNull(byte()) ?: error("Unknown intrinsic inline text alignment")
+            val wrap = when (byte()) {
+                0 -> TextWrap.Normal
+                1 -> TextWrap.BreakWord
+                else -> error("Unknown intrinsic inline wrapping")
+            }
+            val height = when (byte()) {
+                0 -> null
+                1 -> InlineLineHeight.Computed(inlineComputedLength())
+                2 -> InlineLineHeight.FontRelative(buffer.float, inlineFontSnapshot())
+                else -> error("Unknown intrinsic inline line-height tag")
+            }
+            val lines = List(2) {
+                InlineBoxIntrinsicLine(u32(), InlineBoxIntrinsicLineKind.entries.getOrNull(byte())
+                    ?: error("Unknown intrinsic inline source kind"), presence())
+            }
+            return InlineBoxIntrinsicLinesLayout(bottom, alignOffset, height, align, wrap, lines)
+                .also { hasIntrinsicLinesLayout = true }
+        }
         private fun inlineBoxOverlayContent(): InlineBoxOverlayContent = content {
             // Boundary + complete normalized font + height/alignment tags + child count.
             require(buffer.remaining() >= 26) { "Truncated inline box overlay content" }
@@ -546,7 +585,7 @@ object BlobDecoder {
         }
         private fun inlineBoxGroup(radiusDeclared: Boolean, atomicDeclared: Boolean): InlineBoxGroup = content {
             require(buffer.remaining() >= 32 + (if (radiusDeclared) 5 else 0) +
-                (if (!atomicDeclared) 0 else if (atomicAutoLayouts) 31 else 34)) {
+                (if (!atomicDeclared) 0 else if (intrinsicLinesLayouts) 26 else if (atomicAutoLayouts) 31 else 34)) {
                 "Truncated inline box group"
             }
             val padding = styleEdges()
@@ -575,14 +614,16 @@ object BlobDecoder {
             } else null
             var atomic: InlineBoxAtomicLayout? = null
             var automatic: InlineBoxAtomicAutoLayout? = null
+            var intrinsic: InlineBoxIntrinsicLinesLayout? = null
             if (atomicDeclared) {
-                when (if (atomicAutoLayouts) byte() else 0) {
+                when (if (atomicAutoLayouts || intrinsicLinesLayouts) byte() else 0) {
                     0 -> atomic = inlineBoxAtomicLayout()
                     1 -> automatic = inlineBoxAtomicAutoLayout()
+                    2 -> intrinsic = inlineBoxIntrinsicLinesLayout()
                     else -> error("Unknown inline box atomic variant")
                 }
             }
-            InlineBoxGroup(padding, border, overlays, children, radius, atomic, automatic).also { hasInlineBoxGroup = true }
+            InlineBoxGroup(padding, border, overlays, children, radius, atomic, automatic, intrinsic).also { hasInlineBoxGroup = true }
         }
         fun bodyTypography(directions: Boolean): BodyTypography {
             require(remainingItems > 0) { "Body typography exceeds the presentation budget" }
@@ -612,12 +653,22 @@ object BlobDecoder {
                     val before = spans()
                     RubyBase(rubyOwner(), before, spans())
                 }
-                val annotations = List(count(47)) {
-                    RubyAnnotation(u32(), u32(), u32(), rubyOwner(), spans(), spans(), spans(), spans(), presence())
-                }
+                val annotations = List(count(47)) { rubyAnnotation() }
                 RubySegment(gap, bases, annotations)
             }
             Ruby(segments).also { hasRuby = true }
+        }
+        private fun rubyAnnotation(): RubyAnnotation {
+            val baseStart = u32(); val baseCount = u32(); val level = u32()
+            val owner = rubyOwner()
+            val gap = spans(); val body = spans(); val before = spans(); val after = spans()
+            val flags = byte()
+            require(flags in 0..(if (rubyAnnotationMargins) 3 else 1)) { "Invalid ruby annotation flags" }
+            val margins = if (flags and 2 != 0) {
+                require(buffer.remaining() >= 10) { "Truncated ruby annotation margins" }
+                RubyAnnotationMargins(styleLength(), styleLength()).also { hasRubyAnnotationMargins = true }
+            } else null
+            return RubyAnnotation(baseStart, baseCount, level, owner, gap, body, before, after, flags and 1 != 0, margins)
         }
         private fun rubyOwner(): RubyOwner {
             require(remainingItems > 0 && buffer.remaining() >= 18) { "Ruby owner exceeds the presentation budget" }

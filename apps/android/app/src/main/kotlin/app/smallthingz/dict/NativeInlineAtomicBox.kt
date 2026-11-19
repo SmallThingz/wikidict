@@ -21,10 +21,14 @@ internal class NativeInlineAtomicBox(
     sourceEnd: Int,
     geometry: NativeFloatGeometry,
     val allocation: NativeInlineAtomicBoxAllocation = checkNotNull(format.box?.atomicLayout).allocation,
+    verticalAlign: Float = 0f,
 ) : NativeAtomicInlineMetrics {
     private val box = checkNotNull(format.box)
     private val baseline = nativeInlineAtomicBoxBaseline(allocation,
-        geometry.textBaselines?.last ?: throw UnsupportedFloatLayout("Atomic inline box requires a real inner line"))
+        geometry.textBaselines?.last ?: throw UnsupportedFloatLayout("Atomic inline box requires a real inner line")).let {
+        if (verticalAlign == 0f) it else nativeInlineIntrinsicLinesBaseline(allocation,
+            it.baselineFromMarginTop, verticalAlign)
+    }
     val advance: Float get() = allocation.marginWidth
     val metrics: NativeUsedLineMetrics get() = baseline.metrics
     override val nativeUsedMetrics: NativeUsedLineMetrics get() = metrics

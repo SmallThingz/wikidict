@@ -7,6 +7,12 @@ internal fun anonymousInlineSemantic(spans: List<Span>, nativeText: String): Lis
         check(nativeText == projection.text) { "Anonymous ruby source drift" }
         return buildList {
             projection.ranges.forEach { range ->
+                if (range.role == RubyTextRole.IntrinsicLineBreak) {
+                    check(range.span == null && range.intrinsicLine?.breakAfter == true &&
+                        range.end == range.start + 1 && projection.text[range.start] == '\n')
+                    add(AnonymousInlineTextPart(range.start, range.end, "\n"))
+                    return@forEach
+                }
                 val span = range.span ?: return@forEach
                 if (range.role == RubyTextRole.Owner || range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup || range.role == RubyTextRole.BoxGroup ||
                     range.role == RubyTextRole.ClippedAbsolute) return@forEach
