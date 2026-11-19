@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import fcntl
 import gzip
 import hashlib
 import itertools
@@ -13,6 +14,9 @@ import re
 import shutil
 import tempfile
 import time
+from contextlib import ExitStack, closing
+from dataclasses import dataclass
+from typing import BinaryIO
 
 from verify_reader_ux import DOWN, ENTER, ReaderPty, normalized, require
 
@@ -41,8 +45,81 @@ def screen_projection(name):
     return pyte, ReaderPty
 
 
-def copy_publication(source, destination, expected_digest=None, *, expected_status='built'):
-    raw = (source / 'complete.json').read_bytes()
+@dataclass
+class VerifiedSeed:
+    identity: tuple
+    digest: str
+    snapshot: BinaryIO
+    source: BinaryIO  # Keep the original inode allocated until the group ends.
+
+    def close(self):
+        self.snapshot.close()
+        self.source.close()
+
+
+def clone_file(source, destination):
+    try:
+        fcntl.ioctl(destination.fileno(), fcntl.FICLONE, source.fileno())
+    except OSError:
+        return False
+    return True
+
+
+class PublicationSeeds:
+    """Private authenticated reflinks for consecutive cases selecting one manifest."""
+
+    def __init__(self):
+        self.members = {}
+        self.root = None
+
+    def close(self):
+        for member in self.members.values():
+            member.close()
+        self.members.clear()
+
+    def check_sources(self):
+        for path, member in self.members.items():
+            require(path.resolve() == path and binary_identity(path.lstat()) == member.identity,
+                    f'Publication member changed while staging: {path}')
+
+    def copy(self, original, target, expected):
+        with original.open('rb') as source, target.open('w+b') as out:
+            identity = binary_identity(os.fstat(source.fileno()))
+            require(original.resolve() == original and binary_identity(original.lstat()) == identity,
+                    f'Publication member changed before staging: {original}')
+            seed = self.members.get(original)
+            if seed and (seed.identity != identity or seed.digest != expected['sha256']):
+                self.members.pop(original).close()
+                seed = None
+            if not clone_file(seed.snapshot if seed else source, out):
+                return False
+            require(os.fstat(out.fileno()).st_size == expected['size'], f'Publication member differs: {original}')
+            if not seed:
+                require(hashlib.file_digest(out, 'sha256').hexdigest() == expected['sha256'],
+                        f'Publication member differs: {original}')
+                # The Reader can write its own copy. Keep an anonymous private
+                # clone of the authenticated bytes, without copying payload blocks.
+                if len(self.members) < 32:
+                    with ExitStack() as handles:
+                        try:
+                            snapshot = handles.enter_context(tempfile.TemporaryFile(dir=target.parent))
+                            if clone_file(out, snapshot):
+                                pinned = handles.enter_context(os.fdopen(os.dup(source.fileno()), 'rb'))
+                                self.members[original] = VerifiedSeed(identity, expected['sha256'], snapshot, pinned)
+                                handles.pop_all()
+                        except OSError:
+                            # The current copy is already authenticated. A later
+                            # case can use its ordinary hash if seed storage is full.
+                            pass
+            require(binary_identity(os.fstat(source.fileno())) == identity == binary_identity(original.lstat()),
+                    f'Publication member changed during staging: {original}')
+            return True
+
+
+def copy_publication(source, destination, expected_digest=None, *, expected_status='built', seeds=None):
+    manifest_path = source / 'complete.json'
+    manifest_identity = binary_identity(manifest_path.lstat()) if seeds is not None else None
+    raw = manifest_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     require(expected_digest is None or digest == expected_digest, 'Selected edition manifest has changed')
     manifest = json.loads(raw)
@@ -51,12 +128,19 @@ def copy_publication(source, destination, expected_digest=None, *, expected_stat
     members = manifest['publication_files']
     require(isinstance(members, dict) and all(isinstance(value, dict) for value in members.values()),
             'Expected size and digest for every publication member')
-    copy_members(source, destination, members)
+    if seeds is not None and seeds.root != source:
+        seeds.close()
+        seeds.root = source
+    copy_members(source, destination, members, seeds=seeds)
+    if seeds is not None:
+        seeds.check_sources()
+        require(manifest_path.read_bytes() == raw and binary_identity(manifest_path.lstat()) == manifest_identity,
+                'Selected edition manifest has changed')
     (destination / 'complete.json').write_bytes(raw)
     return digest
 
 
-def copy_members(source, destination, members):
+def copy_members(source, destination, members, *, seeds=None):
     require('languages.tsv' in members, 'Missing language catalog')
     destination.mkdir()
     copied = {}
@@ -69,6 +153,9 @@ def copy_members(source, destination, members):
         require(original.resolve() == original and original.is_file(), f'Invalid file {name!r}')
         target = destination / rel
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Hashing small members is cheaper than retaining their file handles.
+        if seeds is not None and expected['size'] >= 1024 * 1024 and seeds.copy(original, target, expected):
+            continue
         shutil.copyfile(original, target)
         with target.open('rb') as f:
             size = os.fstat(f.fileno()).st_size
@@ -304,7 +391,7 @@ def choose_startup_language(reader, root, language):
 
 
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
-             indexed_page=False, redirect_target=None):
+             indexed_page=False, redirect_target=None, seeds=None):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
@@ -317,7 +404,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             if indexed_page:
                 result['indexed_page'] = copy_indexed_page(source, root)
             else:
-                result['complete_sha256'] = copy_publication(source, root, expected_digest)
+                result['complete_sha256'] = copy_publication(source, root, expected_digest, seeds=seeds)
             require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
@@ -417,15 +504,19 @@ def main(argv=None):
     if args.cases:
         parent = Path(tempfile.mkdtemp(prefix='edition-batch-', dir=parent))
     failures = 0
-    for root, language, entry, witness, digest, kind, redirect_target in cases:
-        path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
-                                digest, parent, args.screen_projection, kind, args.implicit_language,
-                                indexed_page=args.indexed_page is not None, redirect_target=redirect_target)
-        if args.cases:
-            with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
-                ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),
-                                        ensure_ascii=False) + '\n')
-        failures += not passed
+    for _, selections in itertools.groupby(cases, key=lambda case: (case[0], case[4])):
+        group = list(selections)
+        with closing(PublicationSeeds()) as retained:
+            seeds = retained if len(group) > 1 and hasattr(fcntl, 'FICLONE') else None
+            for root, language, entry, witness, digest, kind, redirect_target in group:
+                path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
+                                        digest, parent, args.screen_projection, kind, args.implicit_language,
+                                        indexed_page=args.indexed_page is not None, redirect_target=redirect_target, seeds=seeds)
+                if args.cases:
+                    with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
+                        ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),
+                                                ensure_ascii=False) + '\n')
+                failures += not passed
     return int(failures != 0)
 
 

@@ -1,12 +1,13 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
+from verify_edition_terminal import PublicationSeeds, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
 from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
@@ -216,6 +217,49 @@ class EditionTerminalTests(unittest.TestCase):
             catalog.write_bytes(b'x' * len(data))
             with self.assertRaisesRegex(CheckFailure, 'member differs'):
                 copy_publication(source, parent / 'bad')
+
+    def test_authenticated_seed_rechecks_source_and_keeps_each_case_writable(self):
+        def copy_fd(source, target):
+            target.write(os.pread(source.fileno(), os.fstat(source.fileno()).st_size, 0))
+            target.flush()
+            target.seek(0)
+            return True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            source = work / 'edition'
+            source.mkdir()
+            member = source / 'languages.tsv'
+            data = b'x' * (1024 * 1024 + 1)
+            member.write_bytes(data)
+            manifest = {'status': 'built', 'publication_files': {'languages.tsv': {
+                'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}}}
+            (source / 'complete.json').write_text(json.dumps(manifest))
+            seeds = PublicationSeeds()
+            self.addCleanup(seeds.close)
+            with patch('verify_edition_terminal.clone_file', side_effect=copy_fd), \
+                    patch('verify_edition_terminal.hashlib.file_digest', wraps=hashlib.file_digest) as digest:
+                copy_publication(source, work / 'first', seeds=seeds)
+                (work / 'first/languages.tsv').write_bytes(b'own case data')
+                copy_publication(source, work / 'second', seeds=seeds)
+                self.assertEqual(digest.call_count, 1)
+                self.assertEqual((work / 'second/languages.tsv').read_bytes(), data)
+                stamp = member.stat()
+                member.write_bytes(b'y' + data[1:])
+                os.utime(member, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                with self.assertRaisesRegex(CheckFailure, 'member differs'):
+                    copy_publication(source, work / 'corrupt', seeds=seeds)
+                member.unlink()
+                with self.assertRaisesRegex(CheckFailure, 'Invalid file'):
+                    copy_publication(source, work / 'missing', seeds=seeds)
+                member.write_bytes(data)
+                copy_publication(source, work / 'restored', seeds=seeds)
+                self.assertEqual(digest.call_count, 3)
+            with patch('verify_edition_terminal.clone_file', return_value=False), \
+                    patch('verify_edition_terminal.hashlib.file_digest', wraps=hashlib.file_digest) as digest:
+                copy_publication(source, work / 'ordinary', seeds=seeds)
+                digest.assert_called_once()
+                self.assertEqual((work / 'ordinary/languages.tsv').read_bytes(), data)
 
     def test_copying_a_verified_empty_catalog_requires_explicit_empty_status(self):
         with tempfile.TemporaryDirectory() as tmp:
