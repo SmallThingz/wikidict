@@ -257,14 +257,18 @@ fn save(io: std.Io, a: A, path: []const u8, fingerprint: [32]u8, dir: Directory)
     const padding = std.mem.alignForward(usize, before_rows, cache_row_alignment) - before_rows;
     var zeros: [cache_row_alignment - 1]u8 = @splat(0);
     try hashed(w, &hash, zeros[0..padding]);
-    for (dir.rows) |r| {
-        std.mem.writeInt(u64, &word, r.offset, .little);
-        try hashed(w, &hash, &word);
-        var small: [4]u8 = undefined;
-        std.mem.writeInt(u32, &small, r.length, .little);
-        try hashed(w, &hash, &small);
-        std.mem.writeInt(u32, &small, r.title, .little);
-        try hashed(w, &hash, &small);
+    if (@import("builtin").target.cpu.arch.endian() == .little) {
+        try hashed(w, &hash, std.mem.sliceAsBytes(dir.rows));
+    } else {
+        for (dir.rows) |r| {
+            std.mem.writeInt(u64, &word, r.offset, .little);
+            try hashed(w, &hash, &word);
+            var small: [4]u8 = undefined;
+            std.mem.writeInt(u32, &small, r.length, .little);
+            try hashed(w, &hash, &small);
+            std.mem.writeInt(u32, &small, r.title, .little);
+            try hashed(w, &hash, &small);
+        }
     }
     try hashed(w, &hash, dir.titles);
     try w.flush();
