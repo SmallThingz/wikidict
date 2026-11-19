@@ -22,6 +22,7 @@ import os
 from pathlib import Path
 import re
 import resource
+import select
 import signal
 import subprocess
 import sys
@@ -3459,7 +3460,7 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
     source_observation = None
     control_verified = False
     try:
-        with (folder / 'build.log').open('xb') as log:
+        with (folder / 'build.log').open('xb') as log, ExitStack() as handles:
             launch_options={}
             if start_ref is not None:
                 environment=dict(os.environ)
@@ -3476,13 +3477,24 @@ def execute(cfg, edition, workers, folder, sequence, context, locks, memory_limi
                 prior=builder.prepared_metadata(prepared_authorization['authorization'])
                 active_prepared=authorize_prepared_source(cfg,start,start_ref,folder/'launch.json',
                     prior['prepared_source_authorization']['generation'],process=process,inherited=prepared_authorization)
+            # Wake on this child's exit while checking locks and staged input at least once a second.
+            # An empty poll set retains the timed check on systems without usable pidfds.
+            child_exit = select.poll()
+            if hasattr(os, 'pidfd_open'):
+                try:
+                    pidfd = os.pidfd_open(process.pid)
+                except OSError:
+                    pass
+                else:
+                    handles.callback(os.close, pidfd)
+                    child_exit.register(pidfd, select.POLLIN)
             while process.poll() is None:
                 if start_ref is not None and active_prepared is None and (folder/'prepared-generation.json').is_file():
                     active_prepared=authorize_prepared_source(cfg,start,start_ref,folder/'launch.json',
                         descriptor(folder/'prepared-generation.json'),process=process)
                 for lock in locks:
                     lock.check()
-                time.sleep(1)
+                child_exit.poll(1000)
             rc = process.wait()
     except BaseException as exc:
         error = f'{type(exc).__name__}: {exc}'

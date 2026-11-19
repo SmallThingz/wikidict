@@ -2823,7 +2823,7 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
             with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp); cfg = ControllerMemoryPolicyTests().cfg(root); cfg['campaign'] = {}
                 folder = root / 'attempt'; code = 0 if status == 'success' else 1
-                process = mock.Mock(pid=900123); process.poll.return_value=code; process.wait.return_value=code
+                process = mock.Mock(pid=900123); process.poll.side_effect = (None, code, code); process.wait.return_value=code
                 start = dict(edition='arwiktionary', date='20261001', phase='edition_build', event='start')
                 end = dict(start, event='end', status=status, seconds=3.25, execution_mode='existing_output')
                 def spawn(*args, **kwargs):
@@ -2832,13 +2832,29 @@ class ControllerCampaignSelectionTests(unittest.TestCase):
                     kwargs['stdout'].write(('BUILD_PHASE '+json.dumps(start)+'\nBUILD_PHASE '+json.dumps(end)+'\n').encode())
                     kwargs['stdout'].flush()
                     return process
-                with mock.patch.object(controller, 'ROOT', root), \
+                def open_child(pid):
+                    self.assertEqual(pid, process.pid)
+                    if status == 'error':
+                        raise PermissionError('pidfd unavailable')
+                    return os.open(os.devnull, os.O_RDONLY)
+                with mock.patch.object(controller.os, 'pidfd_open', side_effect=open_child, create=True), \
+                     mock.patch.object(controller.select, 'poll') as poll, \
+                     mock.patch.object(controller, 'ROOT', root), \
                      mock.patch.object(controller.subprocess, 'Popen', side_effect=spawn), \
                      mock.patch.object(controller, 'process_identity', return_value=dict(pid=900123, start_time_ticks=1)), \
                      mock.patch.object(controller, 'watchdog_closed', return_value=True), \
                      mock.patch.object(controller, 'source_guard'), \
                      mock.patch.object(controller, 'accept', return_value=dict(input_pages=10)):
                     row, _ = controller.execute(cfg, 'arwiktionary', 4, folder, 1, 'context', [])
+                events = poll.return_value
+                events.poll.assert_called_once_with(1000)
+                if status == 'error':
+                    events.register.assert_not_called()
+                else:
+                    fd, mask = events.register.call_args.args
+                    self.assertEqual(mask, controller.select.POLLIN)
+                    with self.assertRaises(OSError):
+                        os.fstat(fd)
                 self.assertTrue(row['verification_only']); self.assertFalse(row['production_started'])
                 self.assertIsNone(row['production_elapsed_seconds']); self.assertEqual(row['verification_elapsed_seconds'], 3.25)
                 self.assertEqual(row['edition_build'], end); self.assertGreaterEqual(row['controller_elapsed_seconds'], 0)
