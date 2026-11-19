@@ -172,6 +172,16 @@ The build pipeline:
 Existing output directories are not modified in place. Failed builds retain an
 `.incomplete` marker.
 
+When retrying one edition under a different output directory, pass
+`--staged-input-root /path/to/previous/YYYYMMDD.shards/input` to reuse its
+completed XML repack. This directory contains `pages.xml.zst`,
+`pages-index.txt.bz2` and `.complete.json`. Keep it outside the new build's
+output, shard and extraction-cache directories. The builder checks the selected
+dump identity and both compressed files against the marker, then reads them in
+place. Keep the directory intact until the retry finishes. This also works when
+the previous attempt completed the repack and failed later while compiling an
+entry.
+
 Completed output and verified staging must record the current page-aligned dump
 version. Older builds are preserved but cannot be accepted as complete by a new
 run: rebuild into a new output directory to requalify them against the full dump.
