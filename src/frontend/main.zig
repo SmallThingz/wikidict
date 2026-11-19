@@ -129,7 +129,7 @@ fn run(init: std.process.Init) !u8 {
     };
     defer db.deinit();
     if (opts.batch_session) return exportSession(init.io, init.gpa, &db, w);
-    if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, opts.batch_audit_hints, w);
+    if (opts.batch_queries.len != 0) return exportBatch(init.gpa, &db, opts.batch_queries, opts.batch_audit_hints, false, w);
     const color = switch (opts.color) {
         .always => true,
         .never => false,
@@ -370,6 +370,7 @@ fn pageHint(io: std.Io, opts: args.Options, total: usize, count: usize) !void {
 test {
     _ = desktop_dispatch;
     _ = args;
+    _ = @import("languages.zig");
     _ = store;
     _ = model;
     _ = output;
@@ -397,8 +398,8 @@ fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.I
         };
         if (count == 0 or count > queries.len) return error.InvalidExportRequest;
         const mode = try r.takeByte();
-        if (mode > 1) return error.InvalidExportRequest;
-        const batch_hints = if (mode == 1) hints[0 .. @as(usize, count) * 64] else null;
+        if (mode > 2) return error.InvalidExportRequest;
+        const batch_hints = if (mode != 0) hints[0 .. @as(usize, count) * 64] else null;
         if (batch_hints) |bytes| {
             try r.readSliceAll(bytes);
             for (bytes) |c| if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return error.InvalidExportRequest;
@@ -416,7 +417,7 @@ fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.I
             offset += length;
         }
         try db.requireUnchanged();
-        const code = try exportBatch(gpa, db, queries[0..count], batch_hints, w);
+        const code = try exportBatch(gpa, db, queries[0..count], batch_hints, mode == 2, w);
         if (code != 0) return code;
         try db.requireUnchanged();
         // JSON lines cannot be empty. The verifier can commit one batch only
@@ -429,7 +430,7 @@ fn exportSession(io: std.Io, gpa: std.mem.Allocator, db: *store.Store, w: *std.I
 // One ordinary Store selection and the same exact lookup/decoder/Response as
 // single export. Each line is independently associated by its unchanged query;
 // duplicates remain duplicates. Stop after the first empty result or error.
-fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []const u8, hints: ?[]const u8, w: *std.Io.Writer) !u8 {
+fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []const u8, hints: ?[]const u8, reuse_missing_language_target: bool, w: *std.Io.Writer) !u8 {
     for (queries, 0..) |query, position| {
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
@@ -446,6 +447,7 @@ fn exportBatch(gpa: std.mem.Allocator, db: *store.Store, queries: []const []cons
         var audit: store.Store.AuditReference = .{
             .arena = a,
             .hint = if (hints) |values| values[position * 64 ..][0..64] else "",
+            .reuse_missing_language_target = reuse_missing_language_target,
         };
         if (try db.find(query)) |index| {
             response.total_matches = 1;

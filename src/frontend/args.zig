@@ -21,6 +21,7 @@ pub const Options = struct {
     theme: Theme = .terminal,
     limit: usize = 20,
     offset: usize = 0,
+    catalog_page_size: ?usize = null,
     details: bool = false,
     case_sensitive: bool = false,
     sha256: []const u8 = "",
@@ -108,6 +109,9 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
             if (std.mem.eql(u8, arg, "--audit-reference-hints")) {
                 if (out.batch_audit_hints != null) return error.Usage;
                 out.batch_audit_hints = value;
+            } else if (std.mem.eql(u8, arg, "--catalog-page-size")) {
+                if (out.catalog_page_size != null) return error.Usage;
+                out.catalog_page_size = std.fmt.parseInt(usize, value, 10) catch return error.Usage;
             } else if (std.mem.eql(u8, arg, "--sha256")) out.sha256 = value else if (std.mem.eql(u8, arg, "--root")) out.root = value else if (std.mem.eql(u8, arg, "--language")) {
                 out.language = value;
                 out.language_explicit = true;
@@ -119,6 +123,9 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
         }
     }
     if (out.help) return out;
+    if (out.catalog_page_size) |size| {
+        if (out.command != .languages or has_query or out.format != .json or size == 0 or size > 1000) return error.Usage;
+    }
     if (out.batch_session and (batch_export or has_query or positional_only or !out.case_sensitive or out.format != .json)) return error.Usage;
     if (batch_export and (out.batch_queries.len == 0 or !out.case_sensitive or out.format != .json)) return error.Usage;
     if (out.batch_audit_hints) |hints| {
@@ -129,10 +136,22 @@ pub fn parseWithDefaults(argv: []const []const u8, defaults: Options) !Options {
     if ((out.command == .lookup or out.command == .save or out.command == .unsave or out.command == .install) and !out.batch_session and (!has_query or out.query.len == 0)) return error.Usage;
     if ((out.command == .stats or out.command == .saved or out.command == .history) and has_query) return error.Usage;
     if (out.command == .tui and out.format != .text) return error.Usage;
-    if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history) return error.Usage;
+    if (out.offset != 0 and out.command != .search and out.command != .saved and out.command != .history and out.catalog_page_size == null) return error.Usage;
     if (out.command == .search and !out.case_sensitive and std.mem.trim(u8, out.query, " \t\r\n").len != 0 and
         (out.offset > search.max_retained_matches or out.limit > search.max_retained_matches - out.offset)) return error.Usage;
     return out;
+}
+
+test "catalog pagination is exclusive to unfiltered JSON languages" {
+    const opts = try parse(&.{ "languages", "--format", "json", "--catalog-page-size", "1000", "--offset", "12" });
+    try std.testing.expectEqual(@as(?usize, 1000), opts.catalog_page_size);
+    try std.testing.expectEqual(@as(usize, 12), opts.offset);
+    try std.testing.expect((try parse(&.{ "languages", "--format", "json", "cat" })).catalog_page_size == null);
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "json", "--offset", "1" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--catalog-page-size", "4" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "json", "cat", "--catalog-page-size", "4" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "json", "--catalog-page-size", "0" }));
+    try std.testing.expectError(error.Usage, parse(&.{ "languages", "--format", "json", "--catalog-page-size", "1001" }));
 }
 
 test "export sessions own exactly one explicit selection and accept no argv queries" {

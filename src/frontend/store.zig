@@ -233,6 +233,7 @@ pub const Store = struct {
     pub const AuditReference = struct {
         arena: std.mem.Allocator,
         hint: []const u8,
+        reuse_missing_language_target: bool = false,
         id: ?[64]u8 = null,
         reused: ?struct { kind: Kind, title: []const u8, redirect: Redirect } = null,
     };
@@ -290,7 +291,30 @@ pub const Store = struct {
             return target;
         }
         if (kind == self.file.view.kind) {
-            const target_index = self.file.find(alias.target_key) orelse return aliasView(source, alias);
+            const target_index = self.file.find(alias.target_key) orelse {
+                if (audit) |value| if (kind == .language and value.reuse_missing_language_target) {
+                    // As in ordinary lookup, both the one-hop alias and the selected
+                    // language lookup missed. Only the original DAL1 record is shown.
+                    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+                    hash.update("wikidict-audit-missing-language-target-v1\x00");
+                    hash.update(source.title);
+                    hash.update("\x00");
+                    hash.update(source.payload);
+                    value.id = std.fmt.bytesToHex(hash.finalResult(), .lower);
+                    if (std.mem.eql(u8, &value.id.?, value.hint)) {
+                        const title = try value.arena.dupe(u8, alias.source_title);
+                        value.reused = .{ .kind = .alias, .title = title, .redirect = .{
+                            .source_title = title,
+                            .target_title = try value.arena.dupe(u8, alias.target_title),
+                            .fragment = try value.arena.dupe(u8, alias.fragment),
+                            .followed = false,
+                        } };
+                        source.deinit();
+                        return null;
+                    }
+                };
+                return aliasView(source, alias);
+            };
             var target = try readFile(a, &self.file, target_index);
             target.source_alias = source;
             target.record.setRedirect(redirectInfo(alias, true));
@@ -625,6 +649,28 @@ test "alias overlay preserves order and follows exactly one compiled target" {
 
         const english_index = (try db.find("Feature")).?;
         const unknown: [64]u8 = @splat('0');
+        const missing_index = (try german.find("Alpha")).?;
+        var missing: Store.AuditReference = .{ .arena = fixture, .hint = &unknown, .reuse_missing_language_target = true };
+        var missing_raw = (try german.recordAuditAlloc(a, missing_index, &missing)).?;
+        defer missing_raw.deinit();
+        var missing_doc = try model.fromRecord(a, missing_raw.record);
+        defer missing_doc.deinit();
+        try std.testing.expectEqualDeep(doc.entry, missing_doc.entry);
+        const missing_id = missing.id.?;
+        var matching: Store.AuditReference = .{ .arena = fixture, .hint = &missing_id, .reuse_missing_language_target = true };
+        try std.testing.expect((try german.recordAuditAlloc(a, missing_index, &matching)) == null);
+        try std.testing.expectEqual(Kind.alias, matching.reused.?.kind);
+        try std.testing.expectEqualStrings(doc.entry.title, matching.reused.?.title);
+        try std.testing.expectEqualDeep(doc.entry.redirect.?, matching.reused.?.redirect);
+        var legacy: Store.AuditReference = .{ .arena = fixture, .hint = &missing_id };
+        var legacy_raw = (try german.recordAuditAlloc(a, missing_index, &legacy)).?;
+        defer legacy_raw.deinit();
+        try std.testing.expect(legacy.id == null and legacy.reused == null);
+        var present: Store.AuditReference = .{ .arena = fixture, .hint = &missing_id, .reuse_missing_language_target = true };
+        var resolved = (try db.recordAuditAlloc(a, (try db.find("Alpha")).?, &present)).?;
+        defer resolved.deinit();
+        try std.testing.expect(present.id == null and present.reused == null);
+        try std.testing.expect(resolved.record.redirect().?.followed);
         var observed: Store.AuditReference = .{ .arena = fixture, .hint = &unknown };
         var first = (try db.recordAuditAlloc(a, english_index, &observed)).?;
         defer first.deinit();
