@@ -42015,6 +42015,9 @@ pub const Renderer = struct {
             // Inline bullets retain a flat list's reading order, but cannot
             // represent nested ownership or a list continuation path.
             if (block_value.list_path.len > 1 and std.mem.indexOfAny(u8, block_value.list_path, "*#") != null) return true;
+            // The span-only cell can draw a bullet or number, but a line break
+            // alone loses the indentation of a wiki colon or definition detail.
+            if (block_value.kind == .indent or block_value.kind == .list_detail) return true;
             // The cell already represents its inherited alignment. A null child
             // under a known value remains distinct: an unresolved local scope
             // must not be flattened as though it proved that inherited value.
@@ -90916,6 +90919,41 @@ test "nested wiki cell lists retain typed hierarchy while flat sibling cells kee
     };
     try std.testing.expectEqual(@as(usize, 2), links);
     const stored = try FormattingScopeTest.encode(a, &r, blocks);
+    const codec = @import("blob_encoder").presentation_codec;
+    const encoded = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, encoded, "formatting scope", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+}
+
+test "wiki table cells keep colon indentation and definition details" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "{|\n| Label\n* qırğızca\n: [[Bir]]\n:: [[İki]]\n| Gloss\n;term: [[Meaning]]\n| Plain\n* [[Flat]]\n|}";
+    const blocks = try renderer.renderBody(source);
+    const cells = blocks[0].table.?.rows[0].cells;
+    try std.testing.expectEqual(@as(usize, 3), cells.len);
+    const indented = cells[0].blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 4), indented.len);
+    for (indented[2..], [_][]const u8{ ":", "::" }, [_][]const u8{ "Bir", "İki" }) |line, path, title| {
+        try std.testing.expectEqual(Kind.indent, line.kind);
+        try std.testing.expectEqualStrings(path, line.list_path);
+        try std.testing.expectEqual(path.len, @as(usize, line.depth));
+        try std.testing.expectEqual(@as(usize, 1), line.spans.len);
+        try std.testing.expectEqualStrings(title, line.spans[0].text);
+        try std.testing.expectEqualStrings(title, line.spans[0].target);
+    }
+    const gloss = cells[1].blocks orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 3), gloss.len);
+    try std.testing.expectEqual(Kind.term, gloss[1].kind);
+    try std.testing.expectEqual(Kind.list_detail, gloss[2].kind);
+    try std.testing.expectEqualStrings(":", gloss[2].list_path);
+    try std.testing.expectEqualStrings("Meaning", gloss[2].spans[0].target);
+    try std.testing.expect(cells[2].blocks == null);
+    try std.testing.expectEqualStrings("Plain\n• Flat", try flattened(a, cells[2].spans));
+    const stored = try FormattingScopeTest.encode(a, &renderer, blocks);
     const codec = @import("blob_encoder").presentation_codec;
     const encoded = try codec.encodeAlloc(a, stored);
     const decoded = try codec.decodeAlloc(a, encoded, "formatting scope", .language, .{ .code = "en", .heading = "English" });
