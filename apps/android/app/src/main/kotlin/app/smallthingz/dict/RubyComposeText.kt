@@ -26,6 +26,7 @@ internal data class RubyGroupTextContext(
     val parentGroupPath: String?,
     val legacyFamily: LegacySpanFontFamily?,
     val fontBasisStyle: TextStyle,
+    val cellForeground: NativeCellForegroundContext? = null,
 )
 
 internal data class RubyLeafTextContext(
@@ -35,6 +36,7 @@ internal data class RubyLeafTextContext(
     val parentGroupPath: String?,
     val legacyFamily: LegacySpanFontFamily?,
     val fontBasisStyle: TextStyle,
+    val cellForeground: NativeCellForegroundContext? = null,
 )
 
 internal data class RubyStyledTextContexts(
@@ -108,6 +110,7 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
     val projection = remember(sourceIdentity) { rubyGraphicalProjection(spans) }
     val inheritedContext = LocalNativeContainerTextContext.current
     val inheritedForeground = LocalFigureCaptionForeground.current
+    val rootCellForeground = LocalNativeCellForeground.current?.withAuthored(inheritedForeground)
     val rootFamily = inheritedContext?.fontFamily
     val rootLegacy = if (LocalNativePreformattedText.current) LegacySpanFontFamily.Code else null
     val effectiveWeight = weight ?: LocalCellWeight.current
@@ -119,6 +122,7 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
     for (range in projection.ranges) {
         val parent = groups.values.lastOrNull { range.path.startsWith(it.range.path + "/") }
         val enclosing = parent?.style?.rubyChildStyle() ?: rootStyle
+        val cellForeground = parent?.cellForeground ?: rootCellForeground
         val familyOwner = groups.values.lastOrNull { group ->
             if (!range.path.startsWith(group.range.path + "/")) false else {
                 val declared = group.range.span ?: inlineFontSnapshotSpan(group.range.overlayContent?.ownerFont
@@ -153,24 +157,38 @@ internal fun rubyStyledTextContexts(spans: List<Span>, weight: FontWeight?, styl
                 LocalCellWeight provides (effectiveWeight.takeIf { inheritsRootTraits }),
                 LocalNativeContainerTextContext provides (if (inheritsRootTraits)
                     inheritedContext else ContainerTextContext(fontFamily = family.takeIf { legacy == null })),
-                LocalFigureCaptionForeground provides (enclosing.color.takeIf { it != Color.Unspecified }?.toArgb()
-                    ?: inheritedForeground)) {
+                LocalNativeCellForeground provides cellForeground,
+                LocalFigureCaptionForeground provides (if (cellForeground != null) cellForeground.authored else
+                    enclosing.color.takeIf { it != Color.Unspecified }?.toArgb() ?: inheritedForeground)) {
                 resolved = if (declaredFont == null) rubySpanTextStyle(source, effectiveWeight.takeIf { inheritsRootTraits }, fontSeed,
                     declaringAction = range.role == RubyTextRole.PaddingGroup || range.role == RubyTextRole.ActionGroup ||
                         range.role == RubyTextRole.BoxGroup || range.role == RubyTextRole.ClippedAbsolute)
                     else rubyFontSnapshotStyle(declaredFont, fontSeed, rootStyle)
             }
-            if (owner != null) resolved = resolved.copy(
-                color = owner.foreground?.let(::canonicalColorArgb)?.let { Color(it) } ?: resolved.color,
-                background = owner.background?.let(::canonicalColorArgb)?.let { Color(it) } ?: Color.Unspecified)
-            groups[range.path] = RubyGroupTextContext(range, resolved, enclosing, family, parent?.range?.path, legacy, rootStyle)
+            if (owner != null) {
+                // The snapshot resolves font traits only. Its seed color is not the
+                // computed ink of this separately painted base/annotation owner.
+                val ownerForeground = if (cellForeground == null) owner.foreground?.let(::canonicalColorArgb)?.toInt()
+                    else nativeCellPlainForeground(cellForeground, owner.foreground?.let(::canonicalColorArgb)?.toInt(),
+                        cellForeground.authored, owner.background, owner.background ?: cellForeground.background, false)
+                resolved = resolved.copy(color = ownerForeground?.let { Color(it) } ?: resolved.color,
+                    background = owner.background?.let(::canonicalColorArgb)?.let { Color(it) } ?: Color.Unspecified)
+            }
+            val ownsPaint = source.foreground != null || source.background != null ||
+                source.hasInternalAction() || externalLinkUrl(source) != null || source.linkPaint != null ||
+                owner?.foreground != null || owner?.background != null
+            val childForeground = cellForeground?.let {
+                if (ownsPaint) it.inGroup(true, resolved.color.toArgb()) else it
+            }
+            groups[range.path] = RubyGroupTextContext(range, resolved, enclosing, family, parent?.range?.path, legacy, rootStyle,
+                childForeground)
         } else if (range.span != null) {
             // Nullable family/features/language retain their existing inheritance rules;
             // only the complete Boolean traits and cumulative Context size reset here.
             val inherited = if (parent == null) enclosing else enclosing.copy(fontSize = rootStyle.fontSize,
                 fontWeight = FontWeight.Normal, fontStyle = FontStyle.Normal, baselineShift = BaselineShift.None,
                 fontFamily = inheritedFamily?.let(::nativeTerminalFontFamily) ?: inheritedFace)
-            leaves += RubyLeafTextContext(range, inherited, inheritedFamily, parent?.range?.path, inheritedLegacy, rootStyle)
+            leaves += RubyLeafTextContext(range, inherited, inheritedFamily, parent?.range?.path, inheritedLegacy, rootStyle, cellForeground)
         }
     }
     return remember(sourceIdentity, projection, groups, leaves) {
@@ -211,8 +229,9 @@ internal fun rubyStyledTextAnnotation(contexts: RubyStyledTextContexts, weight: 
             LocalCellWeight provides cellWeight.takeIf { leaf.parentGroupPath == null },
             LocalNativeContainerTextContext provides (if (leaf.parentGroupPath == null) inheritedContext else
                 ContainerTextContext(fontFamily = leaf.sourceFamily.takeIf { leaf.legacyFamily == null })),
-            LocalFigureCaptionForeground provides (leaf.enclosingStyle.color.takeIf { it != Color.Unspecified }?.toArgb()
-                ?: inheritedForeground)) {
+            LocalNativeCellForeground provides leaf.cellForeground,
+            LocalFigureCaptionForeground provides (if (leaf.cellForeground != null) leaf.cellForeground.authored else
+                leaf.enclosingStyle.color.takeIf { it != Color.Unspecified }?.toArgb() ?: inheritedForeground)) {
             annotation = styledTextAnnotationWithoutDirectionControls(listOf(span),
                 weight.takeIf { leaf.parentGroupPath == null }, leaf.enclosingStyle, onLink)
         }

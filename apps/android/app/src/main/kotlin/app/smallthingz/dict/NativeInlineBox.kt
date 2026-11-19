@@ -37,18 +37,21 @@ internal data class NativeInlineBoxOverlay(val insets: NativeInlineBoxInsets, va
 internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val padding: NativeInlineBoxEdges,
     val border: NativeInlineBoxBorders, overlays: List<NativeInlineBoxOverlay>,
     val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null,
-    val atomicLayout: NativeInlineAtomicBoxFormat? = null, val radiusPercentage: Boolean = false) {
+    val atomicLayout: NativeInlineAtomicBoxFormat? = null, val radiusPercentage: Boolean = false,
+    val atomicAutoLayout: NativeInlineAtomicAutoBoxFormat? = null) {
+    val isAtomic: Boolean get() = atomicLayout != null || atomicAutoLayout != null
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
     val rightAdvance = nativeInlineBoxCoordinate(padding.right.toDouble() + border.right.width)
     init {
         nativeInlineBoxCoordinate(leftAdvance.toDouble() + rightAdvance)
         require(!radiusPercentage || radius != null)
+        require(atomicLayout == null || atomicAutoLayout == null)
         radius?.let { value ->
             if (!value.isFinite()) throw UnsupportedFloatLayout("Rounded inline radius is unavailable")
             if (!radiusPercentage) nativeInlineBoxCoordinates(value)
             val first = border.top
-            if (value < 0f || overlays.isNotEmpty() || atomicLayout != null || first.color == null || first.color ushr 24 != 255 ||
+            if (value < 0f || overlays.isNotEmpty() || isAtomic || first.color == null || first.color ushr 24 != 255 ||
                 listOf(border.top, border.right, border.bottom, border.left).any {
                     it.dotted != first.dotted || it.width != first.width || it.color != first.color
                 }) throw UnsupportedFloatLayout("Rounded inline box requires equal solid or dotted RGB borders without overlays")
@@ -157,7 +160,7 @@ internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: Nativ
     return plain(x) && plain(y) && parent.shift == 0f && child.shift == 0f &&
         x.paint.equalsForTextMeasurement(y.paint) && x.lineHeight == y.lineHeight &&
         child.box.owner.path.startsWith(parent.box.owner.path + "/") &&
-        a.atomicLayout == null && b.atomicLayout == null && a.overlays.isEmpty() && b.overlays.isEmpty() &&
+        !a.isAtomic && !b.isAtomic && a.overlays.isEmpty() && b.overlays.isEmpty() &&
         zero(a.padding) && zero(b.padding) && a.radius == null &&
         a.border.top.width > 0f && !a.border.top.dotted &&
         a.border.left.width == 0f && a.border.right.width == 0f && a.border.bottom.width == 0f &&

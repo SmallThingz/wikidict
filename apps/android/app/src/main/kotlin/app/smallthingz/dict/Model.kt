@@ -350,6 +350,26 @@ data class InlineBoxAtomicLayout(val width: StyleLength, val height: StyleLength
     }
 }
 
+enum class InlineBoxIntrinsicWrap { Normal, Anywhere }
+
+/** Both dimensions are source-auto; maxWidth and em edges use the declaring Box font once. */
+data class InlineBoxAtomicAutoLayout(val maxWidth: StyleLength, val margins: StyleEdges,
+    val boxSizing: ContainerBoxSizing, val textAlign: InlineBoxOverlayTextAlign, val wrap: TextWrap,
+    val intrinsicWrap: InlineBoxIntrinsicWrap, val lineHeight: InlineLineHeight?) {
+    init {
+        require(maxWidth.value > 0f) { "Automatic inline box maximum width must be positive" }
+        require(wrap == TextWrap.Normal || wrap == TextWrap.BreakWord) { "Unsupported automatic inline box wrapping" }
+        require(intrinsicWrap != InlineBoxIntrinsicWrap.Anywhere || wrap == TextWrap.BreakWord) {
+            "Anywhere intrinsic wrapping requires break-word layout"
+        }
+        require(when (lineHeight) {
+            null -> true
+            is InlineLineHeight.Computed -> lineHeight.value.value > 0f
+            is InlineLineHeight.FontRelative -> lineHeight.factor > 0f
+        }) { "Automatic inline box line height must be positive or proven normal" }
+    }
+}
+
 private fun sameAtomicLineHeight(first: InlineLineHeight?, second: InlineLineHeight?): Boolean = when (first) {
     null -> second == null
     is InlineLineHeight.Computed -> second is InlineLineHeight.Computed &&
@@ -367,11 +387,11 @@ private fun atomicInlineFont(span: Span): InlineFontSnapshot {
         true, span.bold, span.italic, span.code, span.language, span.classes, span.role, span.fontFeatures, span.fontFamily)
 }
 
-private fun validAtomicInlineStyle(span: Span, layout: InlineBoxAtomicLayout): Boolean {
+private fun validAtomicInlineStyle(span: Span, wrap: TextWrap, lineHeight: InlineLineHeight?): Boolean {
     val style = span.inlineStyle ?: return false
     return style.fontNormalized && !span.underline && !span.strike && style.decoration == null &&
-        style.baselineShift == null && style.cursor == null && (style.wrap == null || style.wrap == layout.wrap) &&
-        (style.lineHeight == null || sameAtomicLineHeight(style.lineHeight, layout.lineHeight))
+        style.baselineShift == null && style.cursor == null && (style.wrap == null || style.wrap == wrap) &&
+        (style.lineHeight == null || sameAtomicLineHeight(style.lineHeight, lineHeight))
 }
 
 private fun validAtomicInlineChild(span: Span): Boolean = validRubyBodyChild(span) &&
@@ -381,27 +401,29 @@ private fun validAtomicInlineChild(span: Span): Boolean = validRubyBodyChild(spa
     span.inlineBoxGroup == null && span.clippedAbsolute == null && span.citationMarker == null && !span.isQualifiedCitationBacklink
 
 private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
-    val layout = checkNotNull(group.atomicLayout)
+    val fixed = group.atomicLayout
+    val automatic = group.atomicAutoLayout
+    val wrap = fixed?.wrap ?: checkNotNull(automatic).wrap
+    val height = if (fixed != null) fixed.lineHeight else checkNotNull(automatic).lineHeight
     require(owner.kind == "text" && owner.target.isEmpty() && owner.targetFragment == null &&
         owner.audioControl == null && owner.citationMarker == null && !owner.isQualifiedCitationBacklink &&
-        owner.linkPaint == null && owner.direction in setOf("", "ltr", "rtl") && validAtomicInlineStyle(owner, layout)) {
+        owner.linkPaint == null && owner.direction in setOf("", "ltr", "rtl") && validAtomicInlineStyle(owner, wrap, height)) {
         "Invalid atomic inline box owner"
     }
     val font = atomicInlineFont(owner)
-    val height = layout.lineHeight
     require(height !is InlineLineHeight.FontRelative || sameRubyFont(font, height.font)) {
         "Atomic inline line-height font differs from its declaring owner"
     }
     for (child in group.spans) {
         require(sameRubyFont(font, atomicInlineFont(child)) && child.direction == owner.direction &&
-            validAtomicInlineStyle(child, layout)) { "Atomic inline child metrics differ from its declaring owner" }
+            validAtomicInlineStyle(child, wrap, height)) { "Atomic inline child metrics differ from its declaring owner" }
     }
 }
 
 /** Child boundaries order detached text; overlay array order also retains authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
     val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleWidth? = null,
-    val atomicLayout: InlineBoxAtomicLayout? = null) {
+    val atomicLayout: InlineBoxAtomicLayout? = null, val atomicAutoLayout: InlineBoxAtomicAutoLayout? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
@@ -1060,15 +1082,19 @@ sealed interface CellLineHeightValue {
 }
 data class CellLineHeight(val height: CellLineHeightValue, val strut: CellTextStrut? = null)
 
+/** Explicit enclosing ink; null keeps this cell's established automatic contrast policy. */
+enum class CellForeground { Inherit }
+
 data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? = null,
     val textAlign: CellTextAlign? = null, val borderEdges: CellBorderEdges? = null,
     val letterSpacing: StyleLength? = null, val width: StyleWidth? = null,
     val minWidth: StyleLength? = null, val verticalAlign: CellVerticalAlign? = null,
-    val lineHeight: CellLineHeight? = null, val opacity: Float? = null) {
+    val lineHeight: CellLineHeight? = null, val opacity: Float? = null,
+    val foreground: CellForeground? = null) {
     init {
         require(border != null || padding != null || textAlign != null || borderEdges != null ||
             letterSpacing != null || width != null || minWidth != null || verticalAlign != null ||
-            lineHeight != null || opacity != null) { "Empty cell style" }
+            lineHeight != null || opacity != null || foreground != null) { "Empty cell style" }
         require(opacity == null || opacity.isFinite() && opacity in 0f..1f) { "Invalid cell opacity" }
     }
 }
@@ -1293,7 +1319,7 @@ private fun hasAtomicOrOverlayContent(values: List<Span>): Boolean {
         if (seen.put(span, true) != null) continue
         val box = span.inlineBoxGroup
         if (box != null) {
-            if (box.atomicLayout != null || box.overlays.any { it.content != null }) return true
+            if (box.atomicLayout != null || box.atomicAutoLayout != null || box.overlays.any { it.content != null }) return true
             work.addLast(box.spans.iterator())
         }
         span.inlinePaddingGroup?.let { work.addLast(it.spans.iterator()) }
@@ -1393,7 +1419,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
             require(span.clippedAbsolute == null || !rubyChild && !boxChild && !clippedChild) {
                 "Clipped absolute inline cannot nest in a structural inline owner"
             }
-            require(span.inlineBoxGroup?.atomicLayout == null || !rubyChild && !boxChild && !clippedChild && actionOwner == null) {
+            require(span.inlineBoxGroup?.let { it.atomicLayout == null && it.atomicAutoLayout == null } != false ||
+                !rubyChild && !boxChild && !clippedChild && actionOwner == null) {
                 "Atomic inline box cannot nest in another structural inline owner"
             }
             if (clippedChild) require(validClippedAbsoluteChild(span)) { "Invalid clipped absolute inline child" }
@@ -1444,7 +1471,8 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     }
     fun inlineBoxGroup(value: InlineBoxGroup, contentDepth: Int = 0, actionOwner: Span? = null,
         strictBody: Boolean = false, owner: Span? = null) {
-        value.atomicLayout?.let {
+        require(value.atomicLayout == null || value.atomicAutoLayout == null) { "Inline box atomic variants are exclusive" }
+        if (value.atomicLayout != null || value.atomicAutoLayout != null) {
             charge(1)
             require(value.spans.size <= remaining) { "Atomic inline children exceed the presentation budget" }
             require(!strictBody && actionOwner == null && value.radius == null && value.overlays.isEmpty() &&

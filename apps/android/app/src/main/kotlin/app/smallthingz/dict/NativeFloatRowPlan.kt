@@ -278,16 +278,17 @@ internal data class NativeFloatRowIntrinsicWidths(val minimum: Float, val maximu
 
 /** Preserve native advances until a caller actually publishes an integer measurement. */
 internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, direction: TextDirectionHeuristic,
-    breakWordMinimum: Boolean): NativeFloatRowIntrinsicWidths {
+    breakWordMinimum: Boolean, intrinsicWrap: InlineBoxIntrinsicWrap? = null): NativeFloatRowIntrinsicWidths {
     NativeClippedAbsoluteProjection.create(source)?.let { clipped ->
         if (!clipped.hasFlow) return NativeFloatRowIntrinsicWidths(0f, 0f)
-        return nativeFloatRowIntrinsicWidths(clipped.visual, paint, direction, breakWordMinimum)
+        return nativeFloatRowIntrinsicWidths(clipped.visual, paint, direction, breakWordMinimum, intrinsicWrap)
     }
-    nativeRubyLayout(source, paint, direction, exactAdvances = true)?.let { unbroken ->
-        val maximum = nativeFloatRowIntrinsicWidths(unbroken.native, paint, direction, breakWordMinimum).maximum
+    nativeRubyLayout(source, paint, direction, exactAdvances = true,
+        intrinsicWidth = NativeRubyIntrinsicWidth.Maximum)?.let { unbroken ->
+        val maximum = nativeFloatRowIntrinsicWidths(unbroken.native, paint, direction, breakWordMinimum, intrinsicWrap).maximum
         val fragmented = checkNotNull(nativeRubyLayout(source, paint, direction,
-            NativeRubyBands(0f, allowEmergency = false), exactAdvances = true))
-        val minimum = nativeFloatRowIntrinsicWidths(fragmented.native, paint, direction, breakWordMinimum).minimum
+            NativeRubyBands(0f, allowEmergency = false), exactAdvances = true, intrinsicWidth = NativeRubyIntrinsicWidth.Minimum))
+        val minimum = nativeFloatRowIntrinsicWidths(fragmented.native, paint, direction, breakWordMinimum, intrinsicWrap).minimum
         if (minimum > maximum) throw UnsupportedFloatLayout("Exact ruby minimum exceeds its unbroken width")
         return NativeFloatRowIntrinsicWidths(minimum, maximum)
     }
@@ -295,6 +296,13 @@ internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, di
     val runs = NativeFloatRowRuns(source, paint, direction)
     val wrap = NativeTextWrapPlan.create(source, paint)
     wrap?.noWrap?.requireLinePresence()
+    if (intrinsicWrap == InlineBoxIntrinsicWrap.Anywhere && wrap?.noWrap != null)
+        throw UnsupportedFloatLayout("Anywhere intrinsic wrapping conflicts with a no-wrap owner")
+    val emergencyMinimumRequested = when (intrinsicWrap) {
+        InlineBoxIntrinsicWrap.Anywhere -> true
+        InlineBoxIntrinsicWrap.Normal -> false
+        null -> breakWordMinimum
+    }
     var maximum = 0f
     var minimum = 0f
     var authoredMinimum = 0f
@@ -317,11 +325,13 @@ internal fun nativeFloatRowIntrinsicWidths(source: Spanned, paint: TextPaint, di
             while (end > first && nativeFloatRowLineEndSpace(source[end - 1])) end--
             val value = advance(first, end)
             minimum = maxOf(minimum, value)
-            if (wrap?.ordinaryMinimum(first, end, breakWordMinimum) == true) authoredMinimum = maxOf(authoredMinimum, value)
+            if (intrinsicWrap != InlineBoxIntrinsicWrap.Anywhere &&
+                wrap?.ordinaryMinimum(first, end, emergencyMinimumRequested) == true)
+                authoredMinimum = maxOf(authoredMinimum, value)
         }
     }
     if (wrap?.noWrap != null) minimum = maximum
-    else if (breakWordMinimum) {
+    else if (emergencyMinimumRequested) {
         var emergencyMinimum = 0f
         val emergencyEnds = nativeFloatRowEmergencyEnds(runs)
         for (paragraph in runs.paragraphs) {

@@ -2729,4 +2729,332 @@ class RubyComposeTextDeviceTest {
         }
     }
 
+    @Test fun autoInlineBoxUsesFullContainingWidthAndRealInnerLinesWithoutLosingSourceCustody() = control {
+        // Controlled complete font snapshots: 12sp is the original body basis,
+        // .9 is the surrounding text, and .81/1.13 are already-normalized owners.
+        // The 22em maximum, .1em vertical padding and 1.2 line factor are source-shaped;
+        // no article's full font chain or rendered page is claimed by this fixture.
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val padding = StyleEdges(StyleLength(StyleLengthUnit.Em, .1f), zero,
+            StyleLength(StyleLengthUnit.Em, .1f), zero)
+        val noBorder = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val normalized = InlineTextStyle(fontNormalized = true)
+        data class Source(val spans: List<Span>, val owner: Span?, val child: Span?, val prefix: Span?,
+            val following: Span, val scale: Float, val intrinsic: InlineBoxIntrinsicWrap,
+            val factor: Float?, val rtl: Boolean)
+        fun source(intrinsic: InlineBoxIntrinsicWrap = InlineBoxIntrinsicWrap.Anywhere,
+            scale: Float = .81f, factor: Float? = 1.2f, rtl: Boolean = false,
+            clustersOnly: Boolean = false): Source {
+            val language = if (rtl) "he" else "hu"
+            val direction = if (rtl) "rtl" else "ltr"
+            val font = InlineFontSnapshot(fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody,
+                fontNormalized = true, language = language)
+            val body = when {
+                clustersOnly -> "A\u0301A\u0301"
+                rtl -> "\u05d0\u05b7\u05d1\u05d2\u05d3\u05d4\u05d5\u05d6\u05d7\u05d8\u05d9\u05db\u05dc\u05de\u05e0\u05e1\u05e2\u05e4\u05e6\u05e7\u05e8\u05e9\u05ea \u05d0\u05d1\u05d2 \u05d3\u05d4\u05d5 \u05d6\u05d7\u05d8 \u05d9\u05db\u05dc \u05de\u05e0\u05e1"
+                else -> "A\u0301BCDEFGHIJKLMNOPQRSTUVWXYZ words follow after this tail"
+            }
+            val child = Span("text", body, fontScale = scale, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = language, direction = direction, inlineStyle = normalized)
+            val layout = InlineBoxAtomicAutoLayout(StyleLength(StyleLengthUnit.Em, 22f), edges,
+                ContainerBoxSizing.ContentBox, InlineBoxOverlayTextAlign.Start, TextWrap.BreakWord,
+                intrinsic, factor?.let { InlineLineHeight.FontRelative(it, font) })
+            val owner = child.copy(text = "", background = "#d0d0d0", inlineBoxGroup = InlineBoxGroup(
+                padding, noBorder, spans = listOf(child), atomicAutoLayout = layout))
+            val prefix = if (clustersOnly) null else Span("text", if (rtl) "\u05d0\u05d1\u05d2\u05d3\u05d4\u05d5\u05d6\u05d7\u05d8\u05d9 " else "MMMMMMMMMM ",
+                fontScale = .9f, fontScaleBasis = FontScaleBasis.NormalBody, language = language,
+                direction = direction, inlineStyle = normalized)
+            val following = Span("link", if (rtl) " \u05d6" else " Z", target = "original-auto-neighbor",
+                targetFragment = "kept-fragment", fontScale = .9f, fontScaleBasis = FontScaleBasis.NormalBody,
+                language = language, direction = direction, inlineStyle = normalized, foreground = "#3366cc")
+            return Source(listOfNotNull(prefix, owner, following), owner, child, prefix, following,
+                scale, intrinsic, factor, rtl)
+        }
+        val anywhere = source()
+        val normalMinimum = source(InlineBoxIntrinsicWrap.Normal)
+        val normalHeight = source(factor = null)
+        val largerOwner = source(scale = 1.13f)
+        val rtl = source(rtl = true)
+        val clusters = source(clustersOnly = true)
+        val removed = anywhere.copy(spans = listOfNotNull(anywhere.prefix, anywhere.following), owner = null, child = null)
+        data class Phase(val source: Source, val widthDp: Int, val density: Float = 1f,
+            val zoom: Float = 1f, val gutter: Float = 0f)
+        val phases = listOf(Phase(anywhere, 260), Phase(anywhere, 80), Phase(normalMinimum, 80),
+            Phase(anywhere, 180, gutter = 12.25f), // Existing native indent: fitting lane != containing C.
+            Phase(anywhere, 220, density = 1.25f), Phase(anywhere, 280, zoom = 1.2f),
+            Phase(largerOwner, 300), Phase(normalHeight, 80), Phase(rtl, 260), Phase(rtl, 80),
+            Phase(clusters, 6), Phase(removed, 260), Phase(anywhere, 260))
+        val selected = mutableStateOf(0)
+        val calls = mutableListOf<EntryLink>()
+        val onLink: (EntryLink) -> Unit = { calls += it }
+        val focusDestination = androidx.compose.ui.focus.FocusRequester()
+        var prepared: PreparedNativeFloatText? = null
+        var committed = -1
+        var failure: String? = null
+        val observe: (String) -> Unit = { failure = it }
+        compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+            val index = selected.value
+            val phase = phases[index]
+            val density = Density(phase.density, phase.zoom)
+            MaterialTheme(typography = MaterialTheme.typography.copy(bodyLarge = TextStyle(
+                fontSize = 12.sp, fontFamily = FontFamily.Monospace, letterSpacing = 0.sp))) {
+                CompositionLocalProvider(LocalDensity provides density,
+                    LocalLayoutDirection provides if (phase.source.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
+                    LocalNativeFloatContextFailureObserver provides observe) {
+                    val style = TextStyle(fontSize = 10.8.sp, fontFamily = FontFamily.Monospace,
+                        letterSpacing = 0.sp, textDirection = if (phase.source.rtl) TextDirection.Rtl else TextDirection.Ltr)
+                    val annotated = styledTextAnnotation(phase.source.spans, null, style, onLink)
+                    val value = prepareNativeFloatText(phase.source.spans, annotated,
+                        egyptianTextRuns(phase.source.spans), style, MaterialTheme.colorScheme.primary,
+                        emptyList(), AppSettings(allowImages = false, allowAudio = false), "", onLink,
+                        indentPixels = phase.gutter, nativeLineHeight = NativeLineHeightPolicy.Normal)
+                    SideEffect { prepared = value; committed = index }
+                    Box(Modifier.fillMaxSize().safeDrawingPadding().padding(8.dp).background(Color.White)
+                        .testTag("auto-inline-control-root").focusRequester(focusDestination).focusable()) {
+                        NativeFloatContextLayout(listOf(NativeFloatContextSpec.Text(value, 0f)),
+                            Modifier.width(phase.widthDp.dp), MaterialTheme.colorScheme.primary) { _, _ ->
+                            error("Auto inline box control has no delegated child")
+                        }
+                    }
+                }
+            }
+        } }
+        fun views(root: android.view.View): List<NativeFloatTextView> = buildList {
+            if (root is NativeFloatTextView) add(root)
+            if (root is android.view.ViewGroup) repeat(root.childCount) { addAll(views(root.getChildAt(it))) }
+        }
+        fun sameRect(a: android.graphics.RectF, b: android.graphics.RectF) {
+            assertEquals(a.left, b.left, .02f); assertEquals(a.top, b.top, .02f)
+            assertEquals(a.right, b.right, .02f); assertEquals(a.bottom, b.bottom, .02f)
+        }
+        var initialBorder: android.graphics.RectF? = null
+        var initialHeight = 0
+        var initialView: NativeFloatTextView? = null
+        var narrowAnywhereWidth = 0f
+        for (index in phases.indices) {
+            compose.runOnIdle { failure = null; selected.value = index }
+            compose.waitForIdle()
+            var movedFocus = false
+            compose.runOnIdle {
+                val view = views(compose.activity.window.decorView).single()
+                if (view.hasFocus()) {
+                    assertTrue(focusDestination.requestFocus(androidx.compose.ui.focus.FocusDirection.Enter))
+                    movedFocus = true
+                }
+            }
+            if (movedFocus) compose.onNodeWithTag("auto-inline-control-root").assertIsFocused()
+            var overflowInScreen: android.graphics.RectF? = null
+            compose.runOnIdle {
+                assertEquals(index, committed); assertNull(failure)
+                val phase = phases[index]
+                val fixture = phase.source
+                val expected = fixture.prefix?.text.orEmpty() + fixture.child?.text.orEmpty() + fixture.following.text
+                val value = checkNotNull(prepared)
+                assertNull(value.stateDescription)
+                val view = views(compose.activity.window.decorView).single()
+                if (initialView == null) initialView = view else assertSame(initialView, view)
+                val actual = checkNotNull(view.currentMeasuredGeometry)
+                val surface = actual as NativeSurfaceGeometry
+                val containing = with(Density(phase.density, phase.zoom)) { phase.widthDp.dp.roundToPx() }
+                assertEquals(containing, surface.content.width)
+                val raw = checkNotNull(value.geometryAtWidth).invoke(containing.toFloat(), emptyList(), false)
+                assertEquals(expected, value.text.toString()); assertEquals(expected, raw.text.toString())
+                assertEquals(expected, view.logicalText.toString()); assertFalse(expected.contains('\ufffc'))
+                val action = actual.nodes.single()
+                assertEquals(FloatInteractionKind.LINK, action.kind)
+                assertEquals(expected.length - fixture.following.text.length, action.start)
+                assertEquals(expected.length, action.end)
+                assertEquals(fixture.following.text, action.label.toString())
+                val native = checkNotNull(value.native)
+                val child = fixture.child
+                if (child != null) {
+                    val source = native.source(containing)
+                    val marker = source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).single()
+                    val range = marker.projection.ranges.single { it.role == RubyTextRole.BoxGroup }
+                    assertSame(fixture.owner, range.span)
+                    assertSame(child, marker.projection.ranges.single { it.span === child }.span)
+                    assertSame(fixture.following, marker.projection.ranges.single { it.span === fixture.following }.span)
+                    val format = marker.groups.getValue(range.path)
+                    val box = checkNotNull(format.box)
+                    assertNotNull(box.atomicAutoLayout); assertNull(box.atomicLayout)
+                    val fontPixels = 12f * phase.density * phase.zoom * fixture.scale
+                    assertEquals(fontPixels, format.paint.textSize, .01f) // Complete owner, not parent .9 times owner.
+                    val independent = TextPaint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                        textSize = fontPixels; typeface = android.graphics.Typeface.MONOSPACE
+                        textLocale = java.util.Locale.forLanguageTag(child.language)
+                    }
+                    val measured = android.graphics.text.MeasuredText.Builder(child.text.toCharArray()).setComputeLayout(true)
+                        .appendStyleRun(independent, child.text.length, fixture.rtl).build()
+                    val characters = android.icu.text.BreakIterator.getCharacterInstance(independent.textLocale).apply { setText(child.text) }
+                    val boundaries = buildList {
+                        var next = characters.first()
+                        while (next != android.icu.text.BreakIterator.DONE) { add(next); next = characters.next() }
+                    }
+                    assertFalse(1 in boundaries) // Initial letter + combining mark is one real typographic unit.
+                    val preferred = measured.getWidth(0, child.text.length)
+                    val minimum = if (fixture.intrinsic == InlineBoxIntrinsicWrap.Anywhere)
+                        boundaries.zipWithNext().maxOf { (start, end) -> measured.getWidth(start, end) }
+                    else Regex("[^ ]+").findAll(child.text).maxOf { measured.getWidth(it.range.first, it.range.last + 1) }
+                    val expectedContent = minOf(22f * fontPixels, minOf(maxOf(minimum, containing.toFloat()), preferred))
+                    val atom = raw.nativeRubyShapingSource.getSpans(0, raw.nativeRubyShapingSource.length,
+                        NativeInlineAtomicBox::class.java).single()
+                    val inner = atom.child.geometry as NativeFloatGeometry
+                    val allocation = atom.allocation
+                    assertEquals(child.text, inner.text.toString())
+                    assertEquals(expectedContent, allocation.contentWidth, .02f)
+                    assertEquals(expectedContent, atom.advance, .02f)
+                    val rect = checkNotNull(raw.inlineBoxGroupRects(box.owner, range.start, range.end)).single()
+                    assertEquals(expectedContent, rect.width(), .02f)
+                    val breaker = android.graphics.text.LineBreaker.Builder()
+                        .setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_SIMPLE)
+                        .setHyphenationFrequency(android.graphics.text.LineBreaker.HYPHENATION_FREQUENCY_NONE).build()
+                    val fitted = breaker.computeLineBreaks(measured,
+                        android.graphics.text.LineBreaker.ParagraphConstraints().apply { setWidth(expectedContent) }, 0)
+                    val ends = List(fitted.lineCount) { fitted.getLineBreakOffset(it) }
+                    assertEquals(ends.size, inner.shapedLineCount)
+                    assertTrue(ends.all { it in boundaries })
+                    val fm = independent.fontMetrics
+                    var innerHeight = 0f
+                    var lineStart = 0
+                    val baselines = ends.mapIndexed { line, end ->
+                        val factor = fixture.factor
+                        val top: Float
+                        val bottom: Float
+                        if (factor != null) {
+                            val halfLeading = (factor * fontPixels - (fm.descent - fm.ascent)) / 2f
+                            top = fm.ascent - halfLeading; bottom = fm.descent + halfLeading
+                        } else {
+                            // Normal retains the public shaper's actual fallback envelope.
+                            // Primary-font half-leading is an authored-height oracle only.
+                            val shaped = android.graphics.text.TextRunShaper.shapeTextRun(child.text,
+                                lineStart, end - lineStart, 0, child.text.length, 0f, 0f, fixture.rtl, independent)
+                            top = minOf(fitted.getLineAscent(line), shaped.ascent)
+                            bottom = maxOf(fitted.getLineDescent(line), shaped.descent)
+                        }
+                        val baseline = innerHeight - top
+                        innerHeight += bottom - top
+                        lineStart = end
+                        baseline
+                    }
+                    val firstBaseline = baselines.first()
+                    val lastBaseline = baselines.last()
+                    assertEquals(firstBaseline, checkNotNull(inner.textBaselines?.first), .02f)
+                    assertEquals(lastBaseline, checkNotNull(inner.textBaselines?.last), .02f)
+                    assertEquals(innerHeight, inner.textBottom, .02f)
+                    assertEquals(innerHeight, allocation.contentHeight, .02f)
+                    assertEquals(innerHeight + .2f * fontPixels, rect.height(), .02f)
+                    assertEquals(rect.height(), atom.metrics.bottom - atom.metrics.top, .02f)
+                    var start = 0
+                    ends.forEachIndexed { line, end ->
+                        assertEquals(start to end, inner.nativeRangeOfLine(line))
+                        assertEquals(baselines[line], inner.baselineForOffset(start), .02f)
+                        start = end
+                    }
+                    val outerBaseline = raw.baselineForOffset(range.end - 1)
+                    assertEquals(outerBaseline - .1f * fontPixels - lastBaseline, rect.top, .02f)
+                    if (index == 0 || index == phases.lastIndex) {
+                        val prefixPaint = TextPaint(independent).apply { textSize = 12f * phase.density * phase.zoom * .9f }
+                        val prefixWidth = prefixPaint.measureText(checkNotNull(fixture.prefix).text)
+                        assertTrue(expectedContent + prefixWidth > containing)
+                        assertTrue(expectedContent <= containing)
+                        assertTrue("Atom must move intact instead of shrinking to the remaining first line",
+                            raw.baselineForOffset(range.start - 2) < outerBaseline)
+                        assertEquals(outerBaseline, raw.baselineForOffset(range.end + 1), .02f)
+                        assertTrue(kotlin.math.abs(expectedContent - kotlin.math.round(expectedContent)) > .05f)
+                    }
+                    if (index == 1) narrowAnywhereWidth = expectedContent
+                    if (fixture === normalMinimum) {
+                        assertTrue(expectedContent > narrowAnywhereWidth)
+                        assertTrue(rect.width() > containing)
+                        assertTrue(actual.width > surface.content.width)
+                    }
+                    if (phase.gutter > 0f) {
+                        assertEquals(containing.toFloat(), expectedContent, .02f)
+                        assertTrue(expectedContent > containing - phase.gutter)
+                        assertTrue(rect.right > containing)
+                    }
+                    if (fixture === clusters) {
+                        assertEquals(listOf(2, 4), ends)
+                        assertEquals(2, inner.shapedLineCount)
+                    }
+                    val rawChars = raw.characterRects(0, expected.length)
+                    val actualChars = actual.characterRects(0, expected.length)
+                    assertTrue(rawChars.all { it != null }); assertTrue(actualChars.all { it != null })
+                    val dx = actualChars.first()!!.left - rawChars.first()!!.left
+                    val dy = actualChars.first()!!.top - rawChars.first()!!.top
+                    rawChars.zip(actualChars).forEach { (a, b) ->
+                        sameRect(android.graphics.RectF(checkNotNull(a)).apply { offset(dx, dy) }, checkNotNull(b))
+                    }
+                    if (phase.gutter > 0f) {
+                        val location = IntArray(2); view.getLocationOnScreen(location)
+                        overflowInScreen = android.graphics.RectF(maxOf(rect.left, containing.toFloat() + .5f),
+                            rect.top, rect.right, rect.bottom).apply {
+                            offset(dx + location[0] + view.paddingLeft, dy + location[1] + view.paddingTop)
+                        }
+                    }
+                    val up = NativeTextCaret(range.end, NativeTextAffinity.Upstream)
+                    val down = NativeTextCaret(range.end, NativeTextAffinity.Downstream)
+                    assertTrue(view.requestFocus())
+                    view.setSelection(up, up); assertEquals(up, view.selectionExtentCaret)
+                    if (index == 0) {
+                        val upRect = actual.caretRect(up); val downRect = actual.caretRect(down)
+                        assertTrue(kotlin.math.abs(upRect.left - downRect.left) > .1f || kotlin.math.abs(upRect.top - downRect.top) > .1f)
+                        assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                            android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_DPAD_RIGHT)))
+                        assertEquals(down, view.selectionExtentCaret)
+                        initialBorder = android.graphics.RectF(rect); initialHeight = actual.height
+                    }
+                    if (index == phases.lastIndex) {
+                        sameRect(checkNotNull(initialBorder), rect); assertEquals(initialHeight, actual.height)
+                    }
+                } else assertTrue(raw.nativeRubyShapingSource.getSpans(0, raw.nativeRubyShapingSource.length,
+                    NativeInlineAtomicBox::class.java).isEmpty())
+                val provider = checkNotNull(view.accessibilityNodeProvider)
+                val host = checkNotNull(provider.createAccessibilityNodeInfo(android.view.accessibility.AccessibilityNodeProvider.HOST_VIEW_ID))
+                try { assertEquals(expected, host.text.toString()); assertEquals(1, host.childCount) }
+                finally { host.recycle() }
+                val info = checkNotNull(provider.createAccessibilityNodeInfo(action.id))
+                try { assertEquals(fixture.following.text, info.text.toString()); assertTrue(info.isClickable) }
+                finally { info.recycle() }
+                view.setSelection(0, expected.length); assertEquals(expected, view.selectedTextForCopy())
+                assertTrue(view.performAccessibilityAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                assertNull(view.selectedTextForCopy())
+                assertTrue(view.requestFocus())
+                assertTrue(provider.performAction(action.id, android.view.accessibility.AccessibilityNodeInfo.ACTION_FOCUS, null))
+                val before = calls.size
+                assertTrue(view.onKeyDown(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_ENTER)))
+                assertEquals(before + 1, calls.size)
+                view.onKeyUp(android.view.KeyEvent.KEYCODE_ENTER,
+                    android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_ENTER))
+                assertEquals(before + 1, calls.size); assertEquals(fixture.following.entryLink(), calls.last())
+            }
+            overflowInScreen?.let { screen ->
+                // Native context owns painting; its interaction View is not the paint surface.
+                val root = compose.onNodeWithTag("auto-inline-control-root")
+                val node = root.fetchSemanticsNode()
+                val rootView = (checkNotNull(node.root) as androidx.compose.ui.platform.ViewRootForTest).view
+                val bitmap = root.captureToImage().asAndroidBitmap()
+                try {
+                    val location = IntArray(2); compose.runOnIdle { rootView.getLocationOnScreen(location) }
+                    val bounds = node.boundsInRoot
+                    screen.offset(-(location[0] + bounds.left.roundToInt()).toFloat(),
+                        -(location[1] + bounds.top.roundToInt()).toFloat())
+                    val left = kotlin.math.ceil(screen.left.toDouble()).toInt()
+                    val top = kotlin.math.ceil(screen.top.toDouble()).toInt()
+                    val right = kotlin.math.floor(screen.right.toDouble()).toInt()
+                    val bottom = kotlin.math.floor(screen.bottom.toDouble()).toInt()
+                    assertTrue(left >= 0 && top >= 0 && right <= bitmap.width && bottom <= bitmap.height)
+                    var visibleBackground = 0
+                    for (y in top until bottom) for (x in left until right)
+                        if (bitmap.getPixel(x, y) == android.graphics.Color.rgb(208, 208, 208)) visibleBackground++
+                    assertTrue("The actual overflow-visible atom must paint beyond its original containing allocation", visibleBackground >= 4)
+                } finally { bitmap.recycle() }
+            }
+        }
+        assertEquals(phases.size, calls.size)
+    }
+
 }

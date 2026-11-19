@@ -792,6 +792,18 @@ internal fun prepareNativeFloatText(
                             length(atomic.margins.bottom), length(atomic.margins.left)), atomic.boxSizing),
                         atomic.textAlign, atomic.wrap, policy)
                 }
+                val atomicAuto = model.atomicAutoLayout?.let { atomic ->
+                    val policy = when (val value = atomic.lineHeight) {
+                        null -> NativeLineHeightPolicy.Normal
+                        is InlineLineHeight.Computed -> NativeLineHeightPolicy.Pixels(inlineLength(value.value))
+                        is InlineLineHeight.FontRelative -> NativeLineHeightPolicy.Pixels(
+                            nativeInlineBoxCoordinate(paint.textSize.toDouble() * value.factor))
+                    }
+                    NativeInlineAtomicAutoBoxFormat(length(atomic.maxWidth),
+                        NativeInlineBoxEdges(length(atomic.margins.top), length(atomic.margins.right),
+                            length(atomic.margins.bottom), length(atomic.margins.left)), atomic.boxSizing,
+                        atomic.textAlign, atomic.wrap, atomic.intrinsicWrap, policy)
+                }
                 NativeInlineBoxFormat(boxOwners.getValue(path), resolvedPadding, resolvedBorders,
                     model.overlays.map { overlay -> NativeInlineBoxOverlay(NativeInlineBoxInsets(
                         inset(overlay.insets.top), inset(overlay.insets.right),
@@ -802,7 +814,7 @@ internal fun prepareNativeFloatText(
                             StyleWidthUnit.Percent -> it.value
                             StyleWidthUnit.Em -> throw UnsupportedFloatLayout("Rounded inline radius cannot use em")
                         }
-                    }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent)
+                    }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent, atomicAutoLayout = atomicAuto)
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(
@@ -1000,7 +1012,7 @@ internal fun prepareNativeFloatText(
             paint.isUnderlineText, paint.isStrikeThruText, group.direction, group.lineHeight,
             group.baselineShift, group.localBaselineShift, group.wrap, group.underline, group.cursor, group.sourceDirection,
             group.padding, group.actionPaint, group.actionOwner, group.clippedAbsolute?.let { listOf(it.width, it.height, it.margins) },
-            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint, it.atomicLayout) })
+            group.box?.let { listOf(it.owner, it.padding, it.border, it.overlays, it.currentColorPaint, it.atomicLayout, it.atomicAutoLayout) })
     }
     val shapeKey = listOf(annotated, nativeAnnotation, clippedAbsoluteScope?.revisionKey, nativeRuns, effective, ruby, actionGroupOwners, boxOwners, clippedOwners, citationOwners, rubyMetricRevision, density.density, density.fontScale, inlineRevision, familyFailure, sourceFamily, familyRanges, legacyOwnerFamily, ownerFont, cellMetricRevision, sourceLineStarts,
         paintedLinks.filter { it.span.linkPaint != null }.map { it.start to it.end },

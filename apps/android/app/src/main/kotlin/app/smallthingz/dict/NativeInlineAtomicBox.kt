@@ -20,9 +20,9 @@ internal class NativeInlineAtomicBox(
     sourceStart: Int,
     sourceEnd: Int,
     geometry: NativeFloatGeometry,
+    val allocation: NativeInlineAtomicBoxAllocation = checkNotNull(format.box?.atomicLayout).allocation,
 ) : NativeAtomicInlineMetrics {
     private val box = checkNotNull(format.box)
-    val allocation = checkNotNull(box.atomicLayout).allocation
     private val baseline = nativeInlineAtomicBoxBaseline(allocation,
         geometry.textBaselines?.last ?: throw UnsupportedFloatLayout("Atomic inline box requires a real inner line"))
     val advance: Float get() = allocation.marginWidth
@@ -63,5 +63,5 @@ internal class NativeInlineAtomicBox(
 internal fun nativeHasAtomicInlineBoxes(source: Spanned): Boolean =
     source.getSpans(0, source.length, NativeInlineAtomicBox::class.java).isNotEmpty() ||
         source.getSpans(0, source.length, NativeRubyPreparedSource::class.java).any { prepared ->
-            prepared.groups.values.any { it.box?.atomicLayout != null }
+            prepared.groups.values.any { it.box?.isAtomic == true }
         }

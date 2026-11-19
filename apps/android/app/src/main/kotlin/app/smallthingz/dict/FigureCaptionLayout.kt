@@ -69,7 +69,8 @@ internal fun FigureCaptionBlock(block: Block, previous: Block?, trailingGap: Boo
     CompositionLocalProvider(LocalNativeSemanticMeasurement provides semanticMeasurement) {
     Layout(modifier = semanticMeasurement.modifier.then(captionInput?.modifier ?: Modifier).fillMaxWidth(), content = {
         if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
-            style = inheritedCellTextStyle(MaterialTheme.typography.labelMedium), color = MaterialTheme.colorScheme.primary)
+            style = inheritedCellTextStyle(MaterialTheme.typography.labelMedium),
+            color = nativeMarkedCellForeground()?.let { androidx.compose.ui.graphics.Color(it) } ?: MaterialTheme.colorScheme.primary)
         CompositionLocalProvider(LocalStaticCaptionInput provides childCaptionInput.takeIf { captionInput != null }) { when {
             block.table != null -> FigureCaptionTable(block.table, childContext, childStyle, reader, publishChild)
             block.container != null -> UnavailableSelectionContent("Caption container needs its original child selection geometry", publishChild)

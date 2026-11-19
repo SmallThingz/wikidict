@@ -397,7 +397,8 @@ internal data class NativeContainerLeaf(val block: Block, val previous: Block?, 
     val align: CellTextAlign?, val inContainer: Boolean, val inScrollport: Boolean = false,
     val ownerWrap: TextWrap? = null, val bodyTypographyExcluded: Boolean = false,
     val staticInlineParent: NativeStaticInlineParent? = null,
-    val clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = null)
+    val clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = null,
+    val cellForeground: NativeCellForegroundContext? = null)
 
 private data class NativePositionedParent(val paddingTop: Float)
 
@@ -651,7 +652,15 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign,
                         nextClippedScope, hiddenChild)
                 }
-                CompositionLocalProvider(LocalAuthoredBackground provides background) {
+                val cellForeground = LocalNativeCellForeground.current?.let { inherited ->
+                    when (resolved.box.background) {
+                        is ContainerColor.Rgb, is ContainerColor.LightDark ->
+                            inherited.atBackground(background, LocalFigureCaptionForeground.current)
+                        null, ContainerColor.Transparent -> inherited
+                    }
+                }
+                CompositionLocalProvider(LocalAuthoredBackground provides background,
+                    LocalNativeCellForeground provides cellForeground) {
                     if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
                         androidx.compose.ui.platform.LocalLayoutDirection provides
                             if (columnRtl) androidx.compose.ui.unit.LayoutDirection.Rtl else androidx.compose.ui.unit.LayoutDirection.Ltr,
@@ -733,7 +742,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         id(paths[index] + "/leaf"), paths[index], grids[index], if (inside) 0f else gaps[index],
                         roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
                         inside, inScrollport, ownerWrap.takeUnless { rendered.kind == "heading" }, bodyTypographyExcluded = excludesBody,
-                        staticInlineParent = staticInlineParent, clippedAbsoluteScope = clippedScope)
+                        staticInlineParent = staticInlineParent, clippedAbsoluteScope = clippedScope,
+                        cellForeground = LocalNativeCellForeground.current)
                     fun bindColumnPolicy(prepared: NativeFloatContextSpec): NativeFloatContextSpec {
                         val policy = original.columnBreakInside ?: return prepared
                         // A non-Text fallback keeps its original body. The column adapter

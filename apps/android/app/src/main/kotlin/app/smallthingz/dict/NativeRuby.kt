@@ -116,6 +116,10 @@ internal class NativeRubyPreparedSource(
     private val atomicChildren = mutableMapOf<Pair<String, Boolean>, NativeFloatGeometry>()
     internal fun atomicChild(path: String, rtl: Boolean, create: () -> NativeFloatGeometry): NativeFloatGeometry =
         atomicChildren.getOrPut(path to rtl, create)
+    private val atomicAutoChildren = mutableMapOf<Pair<String, Boolean>, NativeInlineAtomicAutoChild>()
+    internal fun atomicAutoChild(path: String, rtl: Boolean,
+        create: () -> NativeInlineAtomicAutoChild): NativeInlineAtomicAutoChild =
+        atomicAutoChildren.getOrPut(path to rtl, create)
     init {
         require(this.source.toString() == projection.text) { "Ruby source must keep its graphical UTF-16 text" }
         require(parentScript.applied.isFinite() && kotlin.math.abs(parentScript.applied) <= TablePixelLimit)
@@ -1949,14 +1953,16 @@ private class NativeRubyMaterializer(selections: List<NativeRubyColumnSelection>
 /** The metadata compiler is local to this one immutable shape. It creates no Compose,
  * image, focus, action, or lifecycle owner and never changes the public source buffer. */
 internal fun nativeRubyLayout(source: Spanned, paint: TextPaint,
-    direction: TextDirectionHeuristic, bands: NativeRubyBands? = null, exactAdvances: Boolean = false): NativeRubyLayout? {
+    direction: TextDirectionHeuristic, bands: NativeRubyBands? = null, exactAdvances: Boolean = false,
+    containingWidth: Float? = null, intrinsicWidth: NativeRubyIntrinsicWidth? = null): NativeRubyLayout? {
     val markers = nativeInlineRanges(source, NativeRubyPreparedSource::class.java).sortedBy { it.start }
     if (markers.isEmpty()) return null
     if (markers.any { it.start < 0 || it.end < it.start || it.end > source.length ||
             source.subSequence(it.start, it.end).toString() != it.value.projection.text } ||
         markers.zipWithNext().any { (a, b) -> a.end > b.start })
         throw UnsupportedFloatLayout("Ruby preparation lost its exact aggregate source range")
-    val compiler = NativeRubyCompiler(source, paint, direction, bands, exactAdvances)
+    val compiler = NativeRubyCompiler(source, paint, direction, bands, exactAdvances,
+        containingWidth, intrinsicWidth)
     var cursor = 0
     markers.forEach { marker ->
         compiler.text(cursor, marker.start)
@@ -1973,7 +1979,8 @@ internal fun nativeRubyLayout(source: Spanned, paint: TextPaint,
 
 private class NativeRubyCompiler(private val original: Spanned, private val paint: TextPaint,
     private val direction: TextDirectionHeuristic, private val bands: NativeRubyBands?,
-    private val exactAdvances: Boolean) {
+    private val exactAdvances: Boolean, private val containingWidth: Float? = null,
+    private val intrinsicWidth: NativeRubyIntrinsicWidth? = null) {
     private val native = SpannableStringBuilder()
     private val pieces = mutableListOf<NativeRubyPiece>()
     private val breakText = StringBuilder()
@@ -2000,7 +2007,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
             marker.value.projection.ranges.filter { range ->
                 range.role == RubyTextRole.OverlayContent || range.role == RubyTextRole.Owner ||
-                    marker.value.groups[range.path]?.box?.atomicLayout != null || range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
+                    marker.value.groups[range.path]?.box?.isAtomic == true || range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
             }.map { range -> Triple(marker.start + range.start, marker.start + range.end,
                 range.role != RubyTextRole.OverlayContent) }
         }.filter { it.first < it.second }.sortedWith(compareBy({ it.first }, { -it.second }))
@@ -2097,7 +2104,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val rootText = buildString {
             events.forEach { range ->
                 if (range.role == RubyTextRole.OverlayContent) Unit
-                else if (range.role == RubyTextRole.Owner || prepared.groups[range.path]?.box?.atomicLayout != null ||
+                else if (range.role == RubyTextRole.Owner || prepared.groups[range.path]?.box?.isAtomic == true ||
                     range.span?.usesInlineDirectionIsolate() == true ||
                     range.span?.citationMarker?.isolation != null) append('\ufffc')
                 else if (range.role in setOf(RubyTextRole.ActionGroup, RubyTextRole.BoxGroup)) append(directText(prepared, range))
@@ -2175,11 +2182,13 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         parent: ActionContext?, enclosingRtl: Boolean, enclosingScopeDirection: BidiResolvedDirection?) {
         val format = checkNotNull(prepared.groups[range.path])
         val box = format.box
-        if (box?.atomicLayout != null) {
+        if (box?.isAtomic == true) {
             if (parent != null || range.role != RubyTextRole.BoxGroup)
                 throw UnsupportedFloatLayout("Atomic inline box requires its original independent group")
-            atomicBox(prepared, range, sourceStart, enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl }
-                ?: atomicParentRtl(prepared, sourceStart + range.start))
+            val parentRtl = enclosingScopeDirection?.let { it == BidiResolvedDirection.Rtl }
+                ?: atomicParentRtl(prepared, sourceStart + range.start)
+            if (box.atomicAutoLayout != null) atomicAutoBox(prepared, range, sourceStart, parentRtl)
+            else atomicBox(prepared, range, sourceStart, parentRtl)
             return
         }
         val key = format.actionOwner
@@ -2306,7 +2315,7 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         val intervals = nativeInlineRanges(original, NativeRubyPreparedSource::class.java).flatMap { marker ->
             marker.value.projection.ranges.filter { range ->
                 range.role == RubyTextRole.OverlayContent || range.role == RubyTextRole.Owner ||
-                    marker.value.groups[range.path]?.box?.atomicLayout != null ||
+                    marker.value.groups[range.path]?.box?.isAtomic == true ||
                     range.span?.usesInlineDirectionIsolate() == true || range.span?.citationMarker?.isolation != null
             }.map { marker.start + it.start to marker.start + it.end }
         }.sortedBy { it.first }
@@ -2385,6 +2394,78 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         fun emit() {
             val at = native.length
             val atom = NativeInlineAtomicBox(format, sourceStart + range.start, sourceStart + range.end, geometry)
+            native.append('\ufffc')
+            pieces += NativeRubyPiece.AtomicBox(at, atom)
+            val first = breakText.length
+            breakText.append('\ufffc')
+            breakEdges[first] = at
+            breakEdges[breakText.length] = native.length
+        }
+        if (checkNotNull(range.span).usesInlineDirectionIsolate()) isolate(rtl, ::emit) else emit()
+    }
+
+    private fun atomicAutoBox(prepared: NativeRubyPreparedSource, range: RubyTextRange,
+        sourceStart: Int, enclosingRtl: Boolean) {
+        if (!exactAdvances) throw UnsupportedFloatLayout("Auto inline box requires exact native rows")
+        val format = checkNotNull(prepared.groups[range.path])
+        val box = checkNotNull(format.box)
+        val atomic = checkNotNull(box.atomicAutoLayout)
+        if (format.actionOwner != null || format.sourceDirection !in setOf("", "ltr", "rtl") ||
+            prepared.projection.ranges.any { it.path.startsWith(range.path + "/") &&
+                it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup, RubyTextRole.BoxGroup) })
+            throw UnsupportedFloatLayout("Auto inline box requires the admitted plain source owner")
+        val rtl = when (format.sourceDirection) { "ltr" -> false; "rtl" -> true; else -> enclosingRtl }
+        val child = prepared.atomicAutoChild(range.path, rtl) {
+            // Preserve the fixed atom's source compiler: local normal-space collapse,
+            // original CharacterStyles, independent declaring strut and real wrap policy.
+            val styled = SpannableString(prepared.source.subSequence(range.start, range.end))
+            styled.getSpans(0, styled.length, Any::class.java).filter { it !is CharacterStyle }.forEach(styled::removeSpan)
+            if (styled.isEmpty() || styled.all { it == ' ' })
+                throw UnsupportedFloatLayout("Auto inline box requires a real inner text line")
+            if (styled.any { it.code < 0x20 || it == '\u007f' || it == '\u2028' || it == '\u2029' })
+                throw UnsupportedFloatLayout("Auto inline box contains an unsupported paragraph boundary")
+            val childPaint = TextPaint(format.paint).apply { bgColor = 0; baselineShift = 0 }
+            styled.setSpan(NativeRunLineMetrics(NativePrimaryFontMetrics.from(childPaint), atomic.lineHeight,
+                strut = true, independentNormalStrut = true), 0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            styled.setSpan(NativeAuthoredTextWrap(atomic.wrap, inheritedOwner = true),
+                0, styled.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val childDirection = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+            val compiler = NativeRubyCompiler(SpannedString(styled), childPaint, childDirection, null, true)
+            var at = 0
+            while (at < styled.length) {
+                val space = styled[at] == ' '
+                var end = at + 1
+                while (end < styled.length && (styled[end] == ' ') == space) end++
+                if (space) compiler.text(at, end, collapsed = true,
+                    collapsedText = if (at == 0 || end == styled.length) "" else " ")
+                else compiler.text(at, end)
+                at = end
+            }
+            val alignment = when (atomic.textAlign) {
+                InlineBoxOverlayTextAlign.Start -> Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Left -> if (rtl) Layout.Alignment.ALIGN_OPPOSITE else Layout.Alignment.ALIGN_NORMAL
+                InlineBoxOverlayTextAlign.Right -> if (rtl) Layout.Alignment.ALIGN_NORMAL else Layout.Alignment.ALIGN_OPPOSITE
+                InlineBoxOverlayTextAlign.Center -> Layout.Alignment.ALIGN_CENTER
+            }
+            NativeInlineAtomicAutoChild(compiler.finish(), childPaint, childDirection, alignment, atomic.intrinsicWrap)
+        }
+        val borders = NativeInlineBoxEdges(box.border.top.width, box.border.right.width,
+            box.border.bottom.width, box.border.left.width)
+        val widths = nativeInlineAtomicAutoWidths(child.intrinsic.minimum, child.intrinsic.maximum,
+            atomic.maxWidth, box.padding, borders, atomic.boxSizing)
+        val contentWidth = when (intrinsicWidth) {
+            NativeRubyIntrinsicWidth.Minimum -> widths.minimum
+            NativeRubyIntrinsicWidth.Maximum -> widths.maximum
+            null -> nativeInlineAtomicAutoContentWidth(widths,
+                containingWidth ?: throw UnsupportedFloatLayout("Auto inline box has no containing content width"),
+                box.padding, borders, atomic.margins)
+        }
+        val geometry = child.geometry(contentWidth, intrinsicWidth)
+        val allocation = nativeInlineAtomicAutoAllocation(contentWidth, geometry.textBottom,
+            box.padding, borders, atomic.margins)
+        fun emit() {
+            val at = native.length
+            val atom = NativeInlineAtomicBox(format, sourceStart + range.start, sourceStart + range.end, geometry, allocation)
             native.append('\ufffc')
             pieces += NativeRubyPiece.AtomicBox(at, atom)
             val first = breakText.length

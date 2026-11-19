@@ -4,7 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 
-/** Direct DPR2-DPRV, DPRY and DPRZ decoder. Dictionary presentation never passes through JSON or source text. */
+/** Direct DPR2-DPRV, DPRY, DPRZ and DPRa decoder. Dictionary presentation never passes through JSON or source text. */
 object BlobDecoder {
     private val kinds = listOf("paragraph", "blank", "definition", "example", "quotation", "list_item", "list_detail", "indent", "term", "heading", "preformatted", "rule", "table", "container")
     private val roles = listOf("normal", "label", "pronunciation", "headword", "example", "quotation", "citation", "reference")
@@ -13,10 +13,18 @@ object BlobDecoder {
         val r = Reader(bytes)
         require(r.byte() == 68 && r.byte() == 80 && r.byte() == 82) { "Unsupported presentation format" }
         val magicVersion = r.byte()
-        require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89 || magicVersion == 90) { "Unsupported presentation format" }
-        val extendedFeatures = magicVersion == 90
+        require(magicVersion in 50..57 || magicVersion in 65..86 || magicVersion == 89 || magicVersion == 90 || magicVersion == 97) { "Unsupported presentation format" }
+        val cellForegroundHeader = magicVersion == 97
+        val extendedFeatures = magicVersion == 90 || cellForegroundHeader
         val ownerGeometry = magicVersion == 89 || extendedFeatures
-        val ownerGeometryFlags = if (extendedFeatures) r.u16().also {
+        val ownerGeometryFlags = if (cellForegroundHeader) r.u32().also {
+            // Retain the implemented lower-word union; held Figure capabilities stay unknown.
+            require(it and 0x30000L != 0L && it and 0x3f3ffL == it &&
+                (it and 0x20000L == 0L || it and 4L != 0L) &&
+                (it and 32768L == 0L || it and 16384L != 0L && it and 1L != 0L)) {
+                "Invalid wide presentation feature flags"
+            }
+        }.toInt() else if (extendedFeatures) r.u16().also {
             // All implemented Y low bits compose with the existing Z high features.
             require(it and 62208 != 0 && it and 62463 == it &&
                 (it and 32768 == 0 || it and 16384 != 0 && it and 1 != 0)) { "Invalid extended presentation feature flags" }
@@ -25,6 +33,8 @@ object BlobDecoder {
         } else 0
         val positionedContainers = ownerGeometryFlags and 256 != 0
         r.ownerGeometry = ownerGeometry
+        r.cellForegrounds = ownerGeometryFlags and 0x10000 != 0
+        r.atomicAutoLayouts = ownerGeometryFlags and 0x20000 != 0
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
@@ -193,6 +203,8 @@ object BlobDecoder {
             "Y/Z features do not match owner geometry payload"
         }
         require(r.citationNavigation == r.hasCitationNavigation) { "Citation feature does not match payload" }
+        require(r.cellForegrounds == r.hasCellForeground) { "Cell foreground feature does not match payload" }
+        require(r.atomicAutoLayouts == r.hasAtomicAutoLayout) { "Automatic inline box feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -218,6 +230,10 @@ object BlobDecoder {
         var citationNavigation = false
         var hasCitationNavigation = false
         var ownerGeometry = false
+        var cellForegrounds = false
+        var hasCellForeground = false
+        var atomicAutoLayouts = false
+        var hasAtomicAutoLayout = false
         var positionedContainers = false
         var hasPositionedContainers = false
         var tableMinimumWidths = false
@@ -491,6 +507,29 @@ object BlobDecoder {
             }
             return InlineBoxAtomicLayout(width, height, margins, boxSizing, align, wrap, lineHeight)
         }
+        private fun inlineBoxAtomicAutoLayout(): InlineBoxAtomicAutoLayout {
+            require(atomicAutoLayouts && containerFonts && extendedFontFamilies && remainingItems > 0 && buffer.remaining() >= 30) {
+                "Automatic inline layout requires its capability and presentation budget"
+            }
+            remainingItems--
+            val maximum = styleLength(); val margins = styleEdges()
+            val sizing = ContainerBoxSizing.entries.getOrNull(byte()) ?: error("Unknown automatic inline box sizing")
+            val align = InlineBoxOverlayTextAlign.entries.getOrNull(byte()) ?: error("Unknown automatic inline text alignment")
+            val wrap = when (byte()) {
+                0 -> TextWrap.Normal
+                1 -> TextWrap.BreakWord
+                else -> error("Unknown automatic inline wrapping")
+            }
+            val intrinsicWrap = InlineBoxIntrinsicWrap.entries.getOrNull(byte()) ?: error("Unknown intrinsic wrapping")
+            val height = when (byte()) {
+                0 -> null
+                1 -> InlineLineHeight.Computed(inlineComputedLength())
+                2 -> InlineLineHeight.FontRelative(buffer.float, inlineFontSnapshot())
+                else -> error("Unknown automatic inline line-height tag")
+            }
+            return InlineBoxAtomicAutoLayout(maximum, margins, sizing, align, wrap, intrinsicWrap, height)
+                .also { hasAtomicAutoLayout = true }
+        }
         private fun inlineBoxOverlayContent(): InlineBoxOverlayContent = content {
             // Boundary + complete normalized font + height/alignment tags + child count.
             require(buffer.remaining() >= 26) { "Truncated inline box overlay content" }
@@ -506,7 +545,8 @@ object BlobDecoder {
             InlineBoxOverlayContent(boundary, font, height, align, spans())
         }
         private fun inlineBoxGroup(radiusDeclared: Boolean, atomicDeclared: Boolean): InlineBoxGroup = content {
-            require(buffer.remaining() >= 32 + (if (radiusDeclared) 5 else 0) + (if (atomicDeclared) 34 else 0)) {
+            require(buffer.remaining() >= 32 + (if (radiusDeclared) 5 else 0) +
+                (if (!atomicDeclared) 0 else if (atomicAutoLayouts) 31 else 34)) {
                 "Truncated inline box group"
             }
             val padding = styleEdges()
@@ -533,8 +573,16 @@ object BlobDecoder {
                 require(buffer.remaining() >= 4) { "Truncated inline box radius" }
                 StyleWidth(unit, buffer.float)
             } else null
-            val atomic = if (atomicDeclared) inlineBoxAtomicLayout() else null
-            InlineBoxGroup(padding, border, overlays, children, radius, atomic).also { hasInlineBoxGroup = true }
+            var atomic: InlineBoxAtomicLayout? = null
+            var automatic: InlineBoxAtomicAutoLayout? = null
+            if (atomicDeclared) {
+                when (if (atomicAutoLayouts) byte() else 0) {
+                    0 -> atomic = inlineBoxAtomicLayout()
+                    1 -> automatic = inlineBoxAtomicAutoLayout()
+                    else -> error("Unknown inline box atomic variant")
+                }
+            }
+            InlineBoxGroup(padding, border, overlays, children, radius, atomic, automatic).also { hasInlineBoxGroup = true }
         }
         fun bodyTypography(directions: Boolean): BodyTypography {
             require(remainingItems > 0) { "Body typography exceeds the presentation budget" }
@@ -1102,10 +1150,17 @@ object BlobDecoder {
             else -> error("Unknown style border side")
         }
         private fun cellStyle(): CellStyle? {
-            if (!tableStyles || !presence()) return null
-            val flags = byte()
-            val allowed = if (containerFonts) 0xff else 0x07
-            require(flags != 0 && flags and allowed.inv() == 0) { "Invalid cell style flags" }
+            if (!tableStyles) return null
+            val present = byte()
+            if (present == 0) return null
+            val extended = present == 2
+            require(present == 1 || extended && cellForegrounds && containerFonts) { "Invalid cell style presence" }
+            val flags = if (extended) u16() else byte()
+            val allowed = (if (containerFonts) 0xff else 0x07) or (if (extended) 0x100 else 0)
+            require(flags != 0 && flags and allowed.inv() == 0 && (!extended || flags and 0x100 != 0)) {
+                "Invalid cell style flags"
+            }
+            val foreground = if (extended) CellForeground.Inherit.also { hasCellForeground = true } else null
             val border = if (flags and 1 != 0) styleBorder() else null
             val padding = if (flags and 2 != 0) styleEdges() else null
             val align = if (flags and 4 != 0) when (byte()) {
@@ -1121,7 +1176,7 @@ object BlobDecoder {
             } else null
             return CellStyle(border = border, padding = padding, textAlign = align, width = width, minWidth = minimum,
                 verticalAlign = vertical, lineHeight = if (flags and 8 != 0) cellLineHeight() else null,
-                opacity = if (flags and 16 != 0) buffer.float else null)
+                opacity = if (flags and 16 != 0) buffer.float else null, foreground = foreground)
         }
         private fun cellMetricBasis(): FontScaleBasis = when (byte()) {
             1 -> FontScaleBasis.NormalBody

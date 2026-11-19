@@ -31,6 +31,8 @@ class RubyModelCodecTest {
 
     /** Independent little-endian fixture writer, deliberately not the production encoder. */
     private class Wire(private val version: Char = 'S', private val yFlags: Int = 0) {
+        private val extendedFeatures = version == 'Z' || version == 'a'
+        private val ownerFeatures = version == 'Y' || extendedFeatures
         private val out = ByteArrayOutputStream()
         val at = linkedMapOf<String, Int>()
         var rootOverride: ((String) -> Unit)? = null
@@ -72,7 +74,7 @@ class RubyModelCodecTest {
             byte(if (value.background == null) 0 else 1); value.background?.let { string(it) }
             val fields = (if (value.fontScale != null) 1 else 0) or (if (value.fontFeatures != null) 2 else 0) or
                 (if (value.linkPaint != null) 4 else 0) or (if (value.inlineStyle != null) 8 else 0) or (if (value.fontFamily != null) 16 else 0) or
-                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0) or (if (value.inlineBoxGroup?.atomicLayout != null) 0x40 else 0)
+                (if (value.inlineBoxGroup?.radius != null) 0x20 else 0) or (if (value.inlineBoxGroup?.let { it.atomicLayout != null || it.atomicAutoLayout != null } == true) 0x40 else 0)
             mark("$label.fontFields"); byte(fields)
             value.fontScale?.let { f32(it); byte(value.fontScaleBasis.ordinal) }
             value.fontFeatures?.let { byte(it.ordinal) }
@@ -90,7 +92,7 @@ class RubyModelCodecTest {
                 image.widthPx?.let(::u32); image.heightPx?.let(::u32)
                 image.alt?.let { string(it) }; image.tooltip?.let { string(it) }
                 image.verticalAlign?.let { byte(it.ordinal) }
-                if ((version == 'Y' || version == 'Z') && yFlags and 32 != 0) {
+                if (ownerFeatures && yFlags and 32 != 0) {
                     mark("$label.image.occurrence"); byte(if (image.occurrenceLayout == null) 0 else 1)
                     image.occurrenceLayout?.let { layout ->
                         listOf("x" to layout.x, "y" to layout.y, "left" to layout.paddingLeft, "right" to layout.paddingRight)
@@ -103,11 +105,11 @@ class RubyModelCodecTest {
             }
             byte(if (value.targetFragment == null) 0 else 1); value.targetFragment?.let { string(it) }
             mark("$label.tooltip"); byte(if (value.tooltip == null) 0 else 1); value.tooltip?.let { string(it) }
-            if (version == 'S' || version == 'T' || version == 'U' || version == 'V' || (version == 'Y' || version == 'Z')) {
+            if (version == 'S' || version == 'T' || version == 'U' || version == 'V' || ownerFeatures) {
                 mark("$label.ruby"); byte(if (value.ruby == null) 0 else 1)
                 value.ruby?.let { ruby(it, label) }
             } else require(value.ruby == null)
-            if (version == 'U' || version == 'V' || (version == 'Y' || version == 'Z')) {
+            if (version == 'U' || version == 'V' || ownerFeatures) {
                 mark("$label.padding"); byte(if (value.inlinePaddingGroup == null) 0 else 1)
                 value.inlinePaddingGroup?.let { group ->
                     mark("$label.padding.left"); byte(group.left.unit.ordinal); f32(group.left.value)
@@ -116,15 +118,15 @@ class RubyModelCodecTest {
                 }
             } else require(value.inlinePaddingGroup == null)
             mark("$label.padding.end")
-            if (version == 'V' || (version == 'Y' || version == 'Z')) {
+            if (version == 'V' || ownerFeatures) {
                 mark("$label.action"); byte(if (value.inlineActionGroup == null) 0 else 1)
                 value.inlineActionGroup?.let { spans(it.spans, "$label.action.body") }
             } else require(value.inlineActionGroup == null)
-            if ((version == 'Y' || version == 'Z') && yFlags and 4 != 0) {
+            if (ownerFeatures && yFlags and 4 != 0) {
                 mark("$label.box"); byte(if (value.inlineBoxGroup == null) 0 else 1)
                 value.inlineBoxGroup?.let { inlineBox(it, "$label.box") }
             } else require(value.inlineBoxGroup == null)
-            if ((version == 'Y' || version == 'Z') && yFlags and 64 != 0) {
+            if (ownerFeatures && yFlags and 64 != 0) {
                 val name = "$label.citation"
                 mark(name); byte(if (value.citationMarker == null) 0 else 1)
                 value.citationMarker?.let { marker ->
@@ -145,9 +147,9 @@ class RubyModelCodecTest {
                     }
                 }
             } else require(value.citationMarker == null)
-            if (version == 'Z' && yFlags and 8192 != 0) audioTail(value.audioControl, "$label.audio")
+            if (extendedFeatures && yFlags and 8192 != 0) audioTail(value.audioControl, "$label.audio")
             else require(value.audioControl == null)
-            if ((version == 'Y' || version == 'Z') && yFlags and 128 != 0) {
+            if (ownerFeatures && yFlags and 128 != 0) {
                 mark("$label.clipped"); byte(if (value.clippedAbsolute == null) 0 else 1)
                 value.clippedAbsolute?.let { clipped ->
                     mark("$label.clipped.staticParentDirection")
@@ -242,6 +244,7 @@ class RubyModelCodecTest {
             mark("$label.childrenEnd")
             value.radius?.let { mark("$label.radius"); byte(it.unit.ordinal); f32(it.value) }
             value.atomicLayout?.let { atomic ->
+                if (version == 'a' && yFlags and 0x20000 != 0) { mark("$label.variant"); byte(0) }
                 mark("$label.atomic")
                 boxLength(atomic.width, "$label.atomic.width"); boxLength(atomic.height, "$label.atomic.height")
                 listOf(atomic.margins.top, atomic.margins.right, atomic.margins.bottom, atomic.margins.left)
@@ -257,10 +260,28 @@ class RubyModelCodecTest {
                 }
                 mark("$label.atomic.end")
             }
+            value.atomicAutoLayout?.let { automatic ->
+                require(version == 'a' && yFlags and 0x20000 != 0 && value.atomicLayout == null)
+                mark("$label.variant"); byte(1); mark("$label.auto")
+                boxLength(automatic.maxWidth, "$label.auto.maximum")
+                listOf(automatic.margins.top, automatic.margins.right, automatic.margins.bottom, automatic.margins.left)
+                    .forEachIndexed { index, edge -> boxLength(edge, "$label.auto.margin$index") }
+                mark("$label.auto.sizing"); byte(automatic.boxSizing.ordinal)
+                mark("$label.auto.align"); byte(automatic.textAlign.ordinal)
+                mark("$label.auto.wrap"); byte(automatic.wrap.ordinal)
+                mark("$label.auto.intrinsic"); byte(automatic.intrinsicWrap.ordinal)
+                mark("$label.auto.lineHeight")
+                when (val height = automatic.lineHeight) {
+                    null -> byte(0)
+                    is InlineLineHeight.Computed -> { byte(1); f32(height.value.value); byte(height.value.fontScaleBasis.ordinal) }
+                    is InlineLineHeight.FontRelative -> { byte(2); f32(height.factor); fontSnapshot(height.font, "$label.auto.heightFont") }
+                }
+                mark("$label.auto.end")
+            }
             mark("$label.end")
         }
         private fun referenceBlock(value: Block, label: String) {
-            if (version == 'Z') { positionedBlock(value, label); return }
+            if (extendedFeatures) { positionedBlock(value, label); return }
             val container = value.container
             when {
                 value == Block("paragraph", 0, value.spans) -> {
@@ -294,7 +315,7 @@ class RubyModelCodecTest {
                 is ContainerLineHeight.Multiplier -> { byte(1); f32(height.value) }
                 is ContainerLineHeight.Length -> { byte(2); boxLength(height.value, "$label.length") }
             }
-            if ((version == 'Y' || version == 'Z') && yFlags and 16 != 0) {
+            if (ownerFeatures && yFlags and 16 != 0) {
                 mark("$label.direction"); byte(when (value.direction) {
                     null -> 0
                     BidiResolvedDirection.Ltr -> 1
@@ -305,7 +326,7 @@ class RubyModelCodecTest {
         }
         /** Raw Y owners exercise depth beyond constructor admission without a second codec. */
         fun boxChain(depth: Int, label: String) {
-            require((version == 'Y' || version == 'Z') && yFlags and 4 != 0)
+            require(ownerFeatures && yFlags and 4 != 0)
             mark("$label.count"); u32(1)
             fun nested(left: Int, name: String) {
                 if (left == 0) { span(Span("text", "leaf"), name); return }
@@ -317,7 +338,7 @@ class RubyModelCodecTest {
         }
         /** Reuses one literal overlay record, without a million test-only offset keys. */
         fun boxBudget(count: Int, label: String, following: Span? = null) {
-            require((version == 'Y' || version == 'Z') && yFlags and 4 != 0)
+            require(ownerFeatures && yFlags and 4 != 0)
             mark("$label.count"); u32(if (following == null) 1 else 2)
             out.write(Wire('V').isolatedSpan(Span("text", ""))); byte(1)
             repeat(4) { length() }; repeat(4) { byte(0) }; u32(count.toLong())
@@ -327,7 +348,7 @@ class RubyModelCodecTest {
             repeat(count) { out.write(record) }
             spans(listOf(Span("text", "x")), "$label.0.box.body")
             if (yFlags and 64 != 0) byte(0) // No marker on the raw Box owner.
-            if (version == 'Z' && yFlags and 8192 != 0) byte(0) // No AUDIO policy on the raw Box owner.
+            if (extendedFeatures && yFlags and 8192 != 0) byte(0) // No AUDIO policy on the raw Box owner.
             if (yFlags and 128 != 0) byte(0) // The raw Box owner also has the nullable clipped tail.
             following?.let { span(it, "$label.1") }
         }
@@ -353,7 +374,7 @@ class RubyModelCodecTest {
             u32((0x1000000 or (if (scale != null) 0x10000 else 0) or (if (family != null) 0x400000 else 0)).toLong())
             scale?.let(::f32); family?.let(::fontFamily)
             fontSnapshot(owner, "$label.owner")
-            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+            if (extendedFeatures && yFlags and 256 != 0) byte(0)
         }
         fun ownedParagraph(owner: InlineFontSnapshot, empty: Boolean = false) {
             prefix(13); byte(0); tail(); containerOwnerStyle(owner)
@@ -364,7 +385,7 @@ class RubyModelCodecTest {
         /** Repeated records share no test offset map; the wire still contains each real owner. */
         fun ownerBudget(count: Int, owner: InlineFontSnapshot) {
             prefix(13); byte(0); tail(); u32(0)
-            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+            if (extendedFeatures && yFlags and 256 != 0) byte(0)
             u32(count.toLong())
             val record = Wire(version, yFlags).apply { ownedParagraph(owner, empty = true) }.out.toByteArray()
             repeat(count) { out.write(record) }
@@ -453,7 +474,7 @@ class RubyModelCodecTest {
             value.positioning?.let { require(it == ContainerPositioning.RelativeAuto); byte(0) }
             value.fontFamily?.let(::fontFamily)
             value.ownerFont?.let { fontSnapshot(it, "$label.owner") }
-            if (version == 'Z' && yFlags and 256 != 0) {
+            if (extendedFeatures && yFlags and 256 != 0) {
                 mark("$label.extension")
                 byte((if (value.absolutePosition != null) 1 else 0) or (if (value.textWrap != null) 2 else 0) or (if (value.absoluteStatic != null) 4 else 0) or (if (disclosure != null) 8 else 0))
                 value.absolutePosition?.let {
@@ -517,7 +538,7 @@ class RubyModelCodecTest {
             val extension = (if (value.display != null) 1 else 0) or (if (value.verticalAlign != null) 2 else 0) or
                 (if (value.lineHeight != null) 4 else 0) or (if (value.marginValues != null) 8 else 0) or (if (value.containingDirection != null) 16 else 0) or
                 (if (value.cornerRadii != null) 32 else 0) or (if (value.minWidth != null) 64 else 0)
-            require(value.minWidth == null || version == 'Z' && yFlags and 512 != 0)
+            require(value.minWidth == null || extendedFeatures && yFlags and 512 != 0)
             mark("$label.flags"); byte(flags); mark("$label.extension"); byte(extension)
             value.background?.let { string(it) }
             value.border?.let { border -> when (border) {
@@ -568,14 +589,17 @@ class RubyModelCodecTest {
         }
         /** Existing CellStyle field order, with the scalar opacity suffix after line height. */
         private fun opacityCellStyle(value: CellStyle?, label: String) {
-            mark("$label.presence"); byte(if (value == null) 0 else 1)
+            val extended = value?.foreground != null
+            mark("$label.presence"); byte(if (value == null) 0 else if (extended) 2 else 1)
             if (value == null) return
+            require(!extended || version == 'a' && yFlags and 0x10000 != 0)
             require(value.borderEdges == null && value.letterSpacing == null)
             val flags = (if (value.border != null) 1 else 0) or (if (value.padding != null) 2 else 0) or
                 (if (value.textAlign != null) 4 else 0) or (if (value.lineHeight != null) 8 else 0) or
                 (if (value.opacity != null) 16 else 0) or (if (value.width != null) 32 else 0) or
-                (if (value.minWidth != null) 64 else 0) or (if (value.verticalAlign != null) 128 else 0)
-            mark("$label.flags"); byte(flags)
+                (if (value.minWidth != null) 64 else 0) or (if (value.verticalAlign != null) 128 else 0) or
+                (if (extended) 0x100 else 0)
+            mark("$label.flags"); if (extended) u16(flags) else byte(flags)
             value.border?.let { border -> when (border) {
                 StyleBorder.None -> byte(0)
                 is StyleBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); string(border.color) }
@@ -657,7 +681,7 @@ class RubyModelCodecTest {
             listOf(padding.top, padding.right, padding.bottom, padding.left).forEach { byte(it.unit.ordinal); f32(it.value) }
             byte(0); byte(0); byte(0); byte(0); byte(0); byte(0)
             fontSnapshot(checkNotNull(value.ownerFont), "$label.owner")
-            if (version == 'Z' && yFlags and 256 != 0) byte(0)
+            if (extendedFeatures && yFlags and 256 != 0) byte(0)
         }
         private fun referenceLayoutColor(value: ContainerColor) {
             when (value) {
@@ -761,7 +785,7 @@ class RubyModelCodecTest {
             repeat(3) { byte(0) } // paragraph style, Figure, anonymous flow
         }
         private fun columnLayoutTail(value: ColumnBreakInside? = null, label: String? = null) {
-            if (version == 'Z' && yFlags and 4096 != 0) {
+            if (extendedFeatures && yFlags and 4096 != 0) {
                 label?.let { mark(it) }
                 byte(when (value) { null -> 0; ColumnBreakInside.Auto -> 1; ColumnBreakInside.Avoid -> 2 })
             } else require(value == null)
@@ -810,7 +834,7 @@ class RubyModelCodecTest {
                         prefix(13); byte(0); tail()
                         val style = containerStyleOverride
                         if (style == null) {
-                            u32(0); if (version == 'Z' && yFlags and 256 != 0) byte(0)
+                            u32(0); if (extendedFeatures && yFlags and 256 != 0) byte(0)
                         } else style("container$index")
                         u32(1)
                     }
@@ -838,7 +862,7 @@ class RubyModelCodecTest {
         private fun headingStyle(extensions: Boolean) {
             u32((1 or 2 or 16 or 2048 or 4096 or 65536 or 4194304).toLong())
             repeat(8) { length() }; byte(0); byte(0); byte(0); f32(1f); byte(0)
-            if (version == 'Z' && yFlags and 256 != 0) { mark("heading.extension"); byte(0) }
+            if (extendedFeatures && yFlags and 256 != 0) { mark("heading.extension"); byte(0) }
             byte(1); f32(1f); byte(1); byte(0); string("ja"); string(""); byte(0); byte(0)
             if (extensions) byte(0)
         }
@@ -849,7 +873,8 @@ class RubyModelCodecTest {
             referenceBatches: List<ReferenceBatchPlacement>? = null): ByteArray {
             selected = values
             out.write("DPR$version".encodeToByteArray())
-            if (version == 'Z') { mark("yFeatures"); u16(yFlags) }
+            if (version == 'a') { mark("yFeatures"); u32(yFlags.toLong()) }
+            else if (version == 'Z') { mark("yFeatures"); u16(yFlags) }
             else if (version == 'Y') { mark("yFeatures"); byte(yFlags) }
             if (sink == Sink.Display) root("root") else spans(emptyList(), "display")
             val bodyOwner = sink !in listOf(Sink.Display, Sink.Preamble, Sink.Reference, Sink.ReferenceBlocks)
@@ -896,13 +921,13 @@ class RubyModelCodecTest {
             bodyTypography?.let { this.bodyTypography(it) }
             val referenceOwners = referenceValues?.map { it.bodyTypography }
                 ?: if (reference) listOf(referenceTypography) else emptyList()
-            if ((version == 'Y' || version == 'Z') && yFlags and 8 != 0) referenceOwners.forEachIndexed { index, typography ->
+            if (ownerFeatures && yFlags and 8 != 0) referenceOwners.forEachIndexed { index, typography ->
                 val label = "referenceTypography.$index"
                 mark("$label.presence"); byte(if (typography == null) 0 else 1)
                 typography?.let { this.bodyTypography(it, label) }
             } else require(referenceOwners.all { it == null })
             val backlinkLists = referenceValues?.map { it.backlinks } ?: if (reference) listOf(emptyList()) else emptyList()
-            if ((version == 'Y' || version == 'Z') && yFlags and 64 != 0) backlinkLists.forEachIndexed { index, values ->
+            if (ownerFeatures && yFlags and 64 != 0) backlinkLists.forEachIndexed { index, values ->
                 val label = "backlinks.$index"
                 mark("$label.count"); u32(values.size.toLong())
                 values.forEachIndexed { position, value ->
@@ -910,7 +935,7 @@ class RubyModelCodecTest {
                     mark("$name.occurrence"); u32(value.occurrence); span(value.span, "$name.span")
                 }
             } else require(backlinkLists.all { it.isEmpty() })
-            if (version == 'Z' && yFlags and 16384 != 0) {
+            if (extendedFeatures && yFlags and 16384 != 0) {
                 mark("referenceBatches.presence"); byte(if (referenceBatches == null) 0 else 1)
                 referenceBatches?.let { batches ->
                     mark("referenceBatches.count"); u32(batches.size.toLong())
@@ -925,7 +950,7 @@ class RubyModelCodecTest {
                     }
                 }
             } else require(referenceBatches == null)
-            if (version == 'Z' && yFlags and 32768 != 0) referenceLayouts(checkNotNull(referenceBatches))
+            if (extendedFeatures && yFlags and 32768 != 0) referenceLayouts(checkNotNull(referenceBatches))
             return out.toByteArray()
         }
         /** Raw table edges do not consume content depth; a rich caption does. */
@@ -6297,5 +6322,484 @@ class RubyModelCodecTest {
         assertTrue(seen.any { it === atom })
         assertTrue(seen.any { it === bodies.single().content!!.spans.single() })
         assertSame(atom, ignored.spans.last())
+    }
+
+    @Test fun cellForegroundModelRetainsSymbolicPolicyAndIndependentNestedSource() {
+        val policy = CellStyle(foreground = CellForeground.Inherit)
+        assertEquals(CellForeground.Inherit, policy.foreground)
+        assertEquals(policy, policy.copy())
+        invalid("Absent foreground does not make the old empty style valid") { CellStyle() }
+        val old = CellStyle(border = StyleBorder.None)
+        assertNull(old.foreground)
+        assertEquals(old, old.copy(foreground = null))
+        val explicit = Span("text", "explicit", foreground = "#123456")
+        val link = Span("link", "action", "Original target", targetFragment = "part", tooltip = "Original title")
+        val nested = opacityTable(CellStyle(opacity = .2f), listOf(explicit, link))
+        val rows = listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nested,
+            background = "#abcdef", style = policy)))
+        val table = Table(listOf(text("caption")), rows)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(table)
+        assertSame(rows, table.rows)
+        assertSame(nested, table.rows.single().single().nestedTable)
+        assertSame(explicit, seen[1]); assertSame(link, seen[2])
+        assertNull(nested.rows.single().single().style!!.foreground)
+        assertEquals("#123456", seen[1].foreground)
+        assertEquals(EntryLink("Original target", "part"), seen[2].entryLink())
+        // A symbolic field adds no empty-cell prohibition and does not remove prior scalar validation.
+        PresentationSpanVisitor { _, _ -> }.table(Table(emptyList(), listOf(listOf(
+            Cell(emptyList(), true, 1, 1, style = policy)))))
+        for (alpha in listOf(0f, .2f, 1f)) assertEquals(alpha, policy.copy(opacity = alpha).opacity)
+        for (alpha in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY))
+            invalid("Foreground cannot waive opacity validity") { policy.copy(opacity = alpha) }
+    }
+
+    @Test fun cellForegroundDPRaUsesLiteralWidenedFlagsAndPreservesEveryOldCellByte() {
+        val name = "foreground.table.row0.cell0.style"
+        fun encode(style: CellStyle?, version: Char = 'a', flags: Int = 0x10000): Pair<Wire, ByteArray> {
+            val wire = Wire(version, flags).apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = opacityTable(style)), "foreground") } }
+            return wire to wire.document(emptyList(), Sink.Body)
+        }
+        val policy = CellStyle(foreground = CellForeground.Inherit)
+        val (onlyWire, only) = encode(policy)
+        assertArrayEquals(byteArrayOf(68, 80, 82, 97, 0, 0, 1, 0), only.copyOfRange(0, 8))
+        val onlyStart = onlyWire.at.getValue("$name.presence")
+        val onlyEnd = onlyWire.at.getValue("$name.end")
+        assertEquals(3, onlyEnd - onlyStart)
+        assertArrayEquals(byteArrayOf(2, 0, 1), only.copyOfRange(onlyStart, onlyEnd))
+        assertEquals(opacityTable(policy), read(only).sections.single().blocks.single().table)
+        val px = StyleLength(StyleLengthUnit.Px, 2f)
+        val all = CellStyle(border = StyleBorder.Solid(px, "#456789"), padding = StyleEdges(px, px, px, px),
+            textAlign = CellTextAlign.Right, width = StyleWidth(StyleWidthUnit.Percent, 75f), minWidth = px,
+            verticalAlign = CellVerticalAlign.Middle,
+            lineHeight = CellLineHeight(CellLineHeightValue.Length(CellFixedLineHeight(17f, FontScaleBasis.CssPx)),
+                CellTextStrut(.8f, FontScaleBasis.NormalBody)), opacity = .2f, foreground = CellForeground.Inherit)
+        val (wire, bytes) = encode(all)
+        val start = wire.at.getValue("$name.presence")
+        assertArrayEquals(byteArrayOf(2, -1, 1), bytes.copyOfRange(start, start + 3))
+        assertEquals(12, wire.at.getValue("$name.opacity") - wire.at.getValue("$name.lineHeight"))
+        assertEquals(wire.at.getValue("$name.oldEnd"), wire.at.getValue("$name.opacity"))
+        assertEquals(all, read(bytes).sections.single().blocks.single().table!!.rows.single().single().style)
+        // Independently earned Box4 permits the old Y framing after removal of the one new policy.
+        fun boxed(style: CellStyle?, version: Char, flags: Int): Pair<Wire, ByteArray> {
+            val value = opacityTable(style, listOf(percentCircleOwner()))
+            val writer = Wire(version, flags).apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = value), "foreground") } }
+            return writer to writer.document(emptyList(), Sink.Body)
+        }
+        val (wideWire, wide) = boxed(all, 'a', 0x10000 or 4)
+        val (oldWire, legacy) = boxed(all.copy(foreground = null), 'Y', 4)
+        val wideStart = wideWire.at.getValue("$name.presence")
+        val oldStart = oldWire.at.getValue("$name.presence")
+        assertArrayEquals(byteArrayOf(1, -1), legacy.copyOfRange(oldStart, oldStart + 2))
+        val localStripped = replace(wide, wideStart, wideStart + 3, byteArrayOf(1, -1))
+        val recovered = changed(replace(localStripped, 4, 8, byteArrayOf(4)), 3, 'Y'.code)
+        assertArrayEquals(legacy, recovered)
+        assertEquals(all.copy(foreground = null), read(recovered).sections.single().blocks.single().table!!.rows.single().single().style)
+        val (_, absent) = boxed(null, 'Y', 4)
+        assertNull(read(absent).sections.single().blocks.single().table!!.rows.single().single().style)
+        // The old M scalar record is still byte-for-byte independent of the new field.
+        val (_, m) = encode(CellStyle(opacity = .2f), 'M', 0)
+        assertArrayEquals("DPRM".encodeToByteArray(), m.copyOfRange(0, 4))
+        assertEquals(.2f, read(m).sections.single().blocks.single().table!!.rows.single().single().style!!.opacity)
+    }
+
+    @Test fun cellForegroundRejectsDebtUnknownBitsNonminimalTagsAndUnownedNamespaceChanges() {
+        val source = opacityTable(CellStyle(foreground = CellForeground.Inherit))
+        val wire = Wire('a', 0x10000).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = source), "invalidForeground") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val name = "invalidForeground.table.row0.cell0.style"
+        val present = wire.at.getValue("$name.presence")
+        val flags = wire.at.getValue("$name.flags")
+        val end = wire.at.getValue("$name.end")
+        for (mask in listOf(0L, 4L, 256L, 0x10000L or 1024L, 0x10000L or 2048L,
+            0x10000L or 0x20000L, 0x80010000L, 0xffffffffL))
+            reject("DPRa requires its actual feature and only implemented lower bits: $mask", changed32(bytes, 4, mask))
+        for (header in listOf('W', 'X', '[', '`', 'b'))
+            reject("Unallocated header $header remains refused", changed(bytes, 3, header.code))
+        for (count in 0..3) reject("Truncated u32 feature word", bytes.copyOf(4 + count))
+        for (tag in listOf(3, 255)) reject("Unknown CellStyle presence", changed(bytes, present, tag))
+        reject("Extended tag cannot omit its own bit", changed(bytes, flags + 1, 0))
+        reject("Local bits above0x100 stay unknown", changed(bytes, flags + 1, 3))
+        reject("No enum payload follows the widened flags", replace(bytes, end, end, byteArrayOf(0)))
+        for (count in 0..1) reject("Truncated u16 cell flags", bytes.copyOf(flags + count))
+        // Removing the sole owner entirely leaves an otherwise complete record and exact census debt.
+        reject("Unused DPRa capability", replace(bytes, present, end, byteArrayOf(0)))
+        reject("Tag1 cannot carry a high-byte extension", changed(bytes, present, 1))
+        reject("Trailing data remains an error", bytes + byteArrayOf(0))
+        for (oldHeader in listOf('M', 'Y', 'Z')) {
+            val header = when (oldHeader) { 'M' -> byteArrayOf(); 'Y' -> byteArrayOf(4); else -> byteArrayOf(0, 1) }
+            reject("Tag2 cannot appear under $oldHeader", changed(replace(bytes, 4, 8, header), 3, oldHeader.code))
+        }
+        val mixed = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(percentCircleOwner()))
+        val boxWire = Wire('a', 0x10000 or 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = mixed), "boxForeground") } }
+        val boxBytes = boxWire.document(emptyList(), Sink.Body)
+        val spanFields = boxWire.at.getValue("boxForeground.table.row0.cell0.spans.0.fontFields")
+        reject("Widening CellStyle does not enroll held Span0x80", changed(boxBytes, spanFields,
+            boxBytes[spanFields].toInt() or 0x80))
+        reject("Foreground does not forgive existing lower-feature census", changed32(boxBytes, 4, 0x10000L or 4L or 256L))
+        assertEquals(source, read(bytes).sections.single().blocks.single().table)
+    }
+
+    @Test fun cellForegroundRecursesThroughEveryTableHolderAndComposesWithExistingFeatures() {
+        val link = Span("link", "deep action", "Original target", targetFragment = "part", tooltip = "Original title")
+        val leaf = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(link))
+        val outer = Table(listOf(text("caption")), listOf(listOf(
+            Cell(emptyList(), false, 1, 1, blocks = listOf(Block("table", 0, emptyList(), table = leaf)),
+                style = CellStyle(opacity = 0f)),
+            Cell(emptyList(), true, 1, 1, nestedTable = leaf))), captionBlocks = null)
+        val block = Block("container", 0, emptyList(), container = Container(listOf(
+            Block("table", 0, emptyList(), table = outer), Block("paragraph", 0, listOf(text("after"))))))
+        for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption,
+            Sink.ReferenceBlocks, Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val wire = Wire('a', 0x10000).apply { paragraphOverride = { positionedBlock(block, "holder") } }
+            val bytes = wire.document(emptyList(), sink)
+            val decoded = read(bytes)
+            val retained = mutableListOf<Span>()
+            val visitor = PresentationSpanVisitor { spans, _ -> retained.addAll(spans) }
+            decoded.sections.forEach { visitor.blocks(it.blocks) }
+            decoded.references.forEach { reference -> reference.visitSpanRuns { spans, _ -> retained.addAll(spans) } }
+            assertEquals("$sink retains both exact actions", 2, retained.count { it == link })
+            assertTrue("$sink consumes the following sibling", retained.any { it.text == "after" })
+            assertEquals(2, wire.at.keys.count { it.endsWith("style.presence") &&
+                bytes[wire.at.getValue(it)].toInt() == 2 })
+        }
+        val audio = Span("link", "Play", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val values = listOf(percentCircleOwner(), atomicWireOwner(), overlayTextOwner(), audio)
+        val mixedTable = opacityTable(CellStyle(opacity = .2f, foreground = CellForeground.Inherit), values)
+            .copy(style = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Percent, 25f)))
+        val mixedBlock = Block("container", 0, emptyList(), container = Container(
+            listOf(Block("table", 0, emptyList(), table = mixedTable),
+                Block("paragraph", 0, listOf(link), columnBreakInside = ColumnBreakInside.Avoid)),
+            ContainerStyle(textWrap = TextWrap.Normal)))
+        val mixedFlags = 0x10000 or 4 or 256 or 512 or 4096 or 8192
+        val mixedWire = Wire('a', mixedFlags).apply { paragraphOverride = { positionedBlock(mixedBlock, "mixed") } }
+        val mixed = mixedWire.document(emptyList(), Sink.Body, mediaValues = listOf(Media("Tone.ogg", "audio", "")))
+        assertEquals(mixedBlock, read(mixed).sections.single().blocks.single())
+        for (bit in listOf(4, 256, 512, 4096, 8192))
+            reject("Removing actual lower capability $bit cannot shift the DPRa body", changed32(mixed, 4, (mixedFlags and bit.inv()).toLong()))
+        // Reference layouts are read after the old feature byte; their font-family census stays late.
+        val f = ReferenceLayoutFixture
+        val batch = referenceLayoutCodecBatch(ContainerFontFamily.SansSerif)
+        val referenceTable = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(f.markerA, f.markerB))
+        val referenceWire = Wire('a', 0x10000 or 1 or 8 or 16 or 64 or 16384 or 32768).apply {
+            paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = referenceTable), "references") } }
+        val referenceBytes = referenceWire.document(emptyList(), Sink.Body, features = 4,
+            referenceValues = f.references, referenceBatches = listOf(batch))
+        val referenceEntry = read(referenceBytes)
+        assertEquals(f.references, referenceEntry.references)
+        assertEquals(listOf(batch), referenceEntry.referenceBatches)
+        assertEquals(referenceTable, referenceEntry.sections.single().blocks.single().table)
+        reject("Late reference-only family cannot lose the existing feature", changed(referenceBytes,
+            referenceWire.at.getValue("features"), 0))
+    }
+
+    @Test fun cellForegroundAddsNoWorkItemAndCannotHideSerializedChildOrPrefixDebt() {
+        val link = Span("link", "budget action", "Original target", targetFragment = "part")
+        val limit = 1 shl 20
+        fun budget(rows: Int) = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()) +
+            listOf(listOf(Cell(listOf(link), false, 1, 1, style = CellStyle(foreground = CellForeground.Inherit)))))
+        // Empty rows plus one row/cell/span. The symbolic field charges no additional item.
+        val exact = budget(limit - 3)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(exact)
+        assertSame(link, seen.single())
+        invalid("Foreground cannot restart the complete model budget") {
+            PresentationSpanVisitor { _, _ -> }.table(budget(limit - 2))
+        }
+        fun literal(rows: Int) = Wire('a', 0x10000).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = budget(rows)), "foregroundBudget") }
+        }.document(emptyList(), Sink.Body)
+        // The decoder also charges the original Section and Block slots.
+        val decoded = read(literal(limit - 5)).sections.single().blocks.single().table!!
+        assertEquals(limit - 4, decoded.rows.size)
+        assertEquals(listOf(link), decoded.rows.last().single().spans)
+        assertEquals(CellForeground.Inherit, decoded.rows.last().single().style!!.foreground)
+        reject("Foreground cannot restart the complete wire budget", literal(limit - 4))
+        val leaf = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(link))
+        for (depth in listOf(MaxTableDepth, MaxTableDepth + 1)) {
+            var nested = leaf
+            repeat(depth - 1) { nested = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nested)))) }
+            val wire = Wire('a', 0x10000).apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = nested), "foregroundDepth") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            if (depth == MaxTableDepth) assertNotNull(read(bytes)) else reject("DPRa retains table depth32", bytes)
+        }
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('a', 0x10000).apply { paragraphOverride = {
+                positionedBlock(Block("table", 0, emptyList(), table = leaf), "foregroundContent") } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 16) assertNotNull(read(bytes)) else reject("Foreground cannot reset content depth", bytes)
+        }
+        val children = mutableListOf(text("valid"))
+        val padding = Span("link", "", "Owner", inlinePaddingGroup = InlinePaddingGroup(
+            StyleLength(StyleLengthUnit.Px, 1f), StyleLength(StyleLengthUnit.Px, 1f), children))
+        val hidden = opacityTable(CellStyle(opacity = 0f, foreground = CellForeground.Inherit), listOf(padding))
+        children.add(Span("link", "invalid nested action", "Other"))
+        invalid("Invisible marked cells retain original child validation") { PresentationSpanVisitor { _, _ -> }.table(hidden) }
+        val hiddenWire = Wire('a', 0x10000).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = hidden), "hiddenForeground") } }
+        reject("Invisible serialized children retain original action validation", hiddenWire.document(emptyList(), Sink.Body))
+        // Foreground does not widen or narrow the historical direct-model ignored-prefix domain.
+        val oldPrefix = java.util.Collections.nCopies(limit + 1, text("ignored legacy"))
+        PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, oldPrefix, table = leaf))
+        val boundedPrefix = oldPrefix + atomicWireOwner()
+        invalid("An actual atomic raw prefix selects the existing full bounded validator") {
+            PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, boundedPrefix, table = leaf))
+        }
+        fun prefixLiteral(rows: Int) = Wire('a', 0x10000 or 4).apply {
+            paragraphOverride = { audioPrefixTable(budget(rows)) }
+        }.document(listOf(atomicWireOwner()), Sink.Body)
+        // Real ignored owner + child + atomic record add three items to the same five-slot envelope.
+        val prefixEntry = read(prefixLiteral(limit - 8))
+        assertEquals(listOf(atomicWireOwner()), prefixEntry.sections.single().blocks.single().spans)
+        assertEquals(limit - 7, prefixEntry.sections.single().blocks.single().table!!.rows.size)
+        reject("The decoder charges the complete serialized ignored prefix", prefixLiteral(limit - 7))
+    }
+
+    private fun atomicAutoWireLayout(maximum: StyleLength = StyleLength(StyleLengthUnit.Px, 22f),
+        wrap: TextWrap = TextWrap.Normal, intrinsic: InlineBoxIntrinsicWrap = InlineBoxIntrinsicWrap.Normal,
+        height: InlineLineHeight? = null): InlineBoxAtomicAutoLayout {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        return InlineBoxAtomicAutoLayout(maximum, StyleEdges(zero, zero, zero, zero),
+            ContainerBoxSizing.ContentBox, InlineBoxOverlayTextAlign.Start, wrap, intrinsic, height)
+    }
+    private fun atomicAutoWireOwner(layout: InlineBoxAtomicAutoLayout = atomicAutoWireLayout(),
+        value: String = "\u00a0", direction: String = "", explicitPolicies: Boolean = false,
+        family: ContainerFontFamily? = null): Span {
+        val source = atomicWireOwner(value = value, direction = direction, family = family)
+        val group = checkNotNull(source.inlineBoxGroup)
+        val style = InlineTextStyle(fontNormalized = true, lineHeight = layout.lineHeight.takeIf { explicitPolicies },
+            wrap = layout.wrap.takeIf { explicitPolicies })
+        return source.copy(inlineStyle = style, inlineBoxGroup = group.copy(atomicLayout = null,
+            atomicAutoLayout = layout, spans = group.spans.map { it.copy(inlineStyle = style) }))
+    }
+
+    @Test fun atomicAutoModelRetainsBothAutoAxesPositiveTypographyAndExactSourceCustody() {
+        val source = atomicAutoWireOwner()
+        val group = checkNotNull(source.inlineBoxGroup)
+        val layout = checkNotNull(group.atomicAutoLayout)
+        assertNull(group.atomicLayout)
+        assertEquals("\u00a0", group.spans.single().text)
+        assertEquals(source, source.copy())
+        assertFalse(source.hasInternalAction())
+        val font = atomicWireFont(source)
+        val heights = listOf(null, InlineLineHeight.Computed(InlineComputedLength(.972f, FontScaleBasis.NormalBody)),
+            InlineLineHeight.Computed(InlineComputedLength(18f, FontScaleBasis.CssPx)), InlineLineHeight.FontRelative(1.2f, font))
+        for (direction in listOf("", "ltr", "rtl")) for (height in heights) {
+            val selected = layout.copy(maxWidth = StyleLength(StyleLengthUnit.Em, 22f), lineHeight = height,
+                wrap = TextWrap.BreakWord, intrinsicWrap = InlineBoxIntrinsicWrap.Anywhere)
+            for (explicit in listOf(false, true)) {
+                val owner = atomicAutoWireOwner(selected, "original NBSP\u00a0text", direction, explicit)
+                assertSame(selected, owner.inlineBoxGroup!!.atomicAutoLayout)
+                assertEquals(direction, owner.inlineBoxGroup!!.spans.single().direction)
+                assertEquals("original child", owner.inlineBoxGroup!!.spans.single().tooltip)
+            }
+        }
+        invalid("Maximum zero is not auto") { layout.copy(maxWidth = StyleLength(StyleLengthUnit.Px, 0f)) }
+        for (bad in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY))
+            invalid("Maximum must be positive finite px/em") { layout.copy(maxWidth = StyleLength(StyleLengthUnit.Em, bad)) }
+        invalid("Intrinsic anywhere requires break-word") { layout.copy(intrinsicWrap = InlineBoxIntrinsicWrap.Anywhere) }
+        invalid("No-wrap is outside this initial atom domain") { layout.copy(wrap = TextWrap.NoWrap) }
+        for (height in listOf(InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx)),
+            InlineLineHeight.FontRelative(0f, font))) invalid("Explicit zero is not proven normal") { layout.copy(lineHeight = height) }
+        // The established fixed-layout domain still permits its own zero numeric height.
+        val fixed = atomicWireLayout().copy(lineHeight = InlineLineHeight.Computed(InlineComputedLength(0f, FontScaleBasis.CssPx)))
+        assertEquals(fixed, atomicWireOwner(fixed).inlineBoxGroup!!.atomicLayout)
+        invalid("Fixed and auto do not coexist") { group.copy(atomicLayout = atomicWireLayout()) }
+        invalid("Radius is not an auto layout decoration") { group.copy(radius = StyleWidth(StyleWidthUnit.Percent, 50f)) }
+        invalid("Overlay cannot borrow the automatic owner") { group.copy(overlays = overlayTextOwner().inlineBoxGroup!!.overlays) }
+        invalid("Action owner cannot become an atom") { source.copy(kind = "link", target = "Action") }
+        invalid("Unresolved owner direction remains unsupported") { atomicAutoWireOwner(direction = "auto") }
+        invalid("Spaces-only content is not a real atom") { atomicAutoWireOwner(value = "   ") }
+        invalid("Forced line break is outside the flat body") { atomicAutoWireOwner(value = "a\nb") }
+        invalid("An outer Box cannot nest the automatic atom") { group.copy(atomicAutoLayout = null, spans = listOf(source)) }
+        invalid("Ruby cannot nest the automatic atom") { owner(listOf(base(source))) }
+        val child = group.spans.single()
+        invalid("Exact normalized child metrics remain required") {
+            source.copy(inlineBoxGroup = group.copy(spans = listOf(child.copy(fontScale = .9f))))
+        }
+        invalid("Equal zero owner and child still lack positive declaring metrics") {
+            source.copy(fontScale = 0f, inlineBoxGroup = group.copy(spans = listOf(child.copy(fontScale = 0f))))
+        }
+        invalid("Font-relative height cannot substitute another declaring snapshot") {
+            atomicAutoWireOwner(layout.copy(lineHeight = InlineLineHeight.FontRelative(1.2f, font.copy(bold = !font.bold))))
+        }
+        val mutableChildren = mutableListOf(child)
+        val retained = source.copy(inlineBoxGroup = group.copy(spans = mutableChildren))
+        mutableChildren.add(child.copy(kind = "link", target = "Hidden action"))
+        invalid("Deep traversal revalidates mutated original children") { PresentationSpanVisitor { _, _ -> }.spans(listOf(retained)) }
+    }
+
+    @Test fun atomicAutoDPRaRoundtripsEverySinkAndTagsFixedOnlyWhenTheFeatureIsPresent() {
+        val source = atomicAutoWireOwner()
+        for (sink in Sink.entries) {
+            val bytes = Wire('a', 0x20000 or 4).document(listOf(source), sink, headingTitle = "\u00a0")
+            val actual = selected(read(bytes), sink)
+            assertEquals("$sink keeps the complete source owner", source, actual)
+            assertEquals("\u00a0", actual.inlineBoxGroup!!.spans.single().text)
+            assertFalse(actual.hasInternalAction())
+        }
+        val wire = Wire('a', 0x20000 or 4)
+        val bytes = wire.document(listOf(source))
+        assertArrayEquals(byteArrayOf(68, 80, 82, 97, 4, 0, 2, 0), bytes.copyOfRange(0, 8))
+        val start = wire.at.getValue("root.0.box.variant")
+        val body = wire.at.getValue("root.0.box.auto")
+        val end = wire.at.getValue("root.0.box.auto.end")
+        assertEquals(1, body - start); assertEquals(30, end - body)
+        assertArrayEquals(byteArrayOf(1, 0, 0, 0, -80, 65) + ByteArray(25), bytes.copyOfRange(start, end))
+        assertEquals(0x40, bytes[wire.at.getValue("root.0.fontFields")].toInt() and 0x40)
+        val fixed = atomicWireOwner()
+        val oldWire = Wire('Y', 4); val old = oldWire.isolatedSpan(fixed)
+        val taggedWire = Wire('a', 0x20000 or 4); val tagged = taggedWire.isolatedSpan(fixed)
+        val variant = taggedWire.at.getValue("isolated.box.variant")
+        assertEquals(0, tagged[variant].toInt())
+        assertEquals(34, taggedWire.at.getValue("isolated.box.atomic.end") - taggedWire.at.getValue("isolated.box.atomic"))
+        assertArrayEquals(old, replace(tagged, variant, variant + 1, byteArrayOf()))
+        val fixedOnly = Wire('a', 0x20000 or 4).document(listOf(fixed))
+        reject("A tagged fixed atom does not earn the auto feature", fixedOnly)
+        val mixed = Wire('a', 0x20000 or 4).document(listOf(fixed, source, fixed))
+        assertEquals(listOf(fixed, source, fixed), read(mixed).displayTitle)
+        val unmarked = source.copy(inlineBoxGroup = source.inlineBoxGroup!!.copy(atomicAutoLayout = null))
+        val plain = Wire('Y', 4).document(listOf(unmarked))
+        assertNull(read(plain).displayTitle.single().inlineBoxGroup!!.atomicAutoLayout)
+        val mgTable = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(fixed))
+        val mgWire = Wire('a', 0x10000 or 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = mgTable), "mgOnly") } }
+        assertEquals(mgTable, read(mgWire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+        assertFalse(mgWire.at.keys.any { it.endsWith(".variant") })
+    }
+
+    @Test fun atomicAutoRejectsUnadvertisedVariantsInvalidGeometryAndIndependentFeatureDebt() {
+        val source = atomicAutoWireOwner()
+        val wire = Wire('a', 0x20000 or 4); val bytes = wire.document(listOf(source))
+        val variant = wire.at.getValue("root.0.box.variant")
+        val maximum = wire.at.getValue("root.0.box.auto.maximum")
+        for (mask in listOf(4L, 0x20000L, 0x30004L, 0x20404L, 0x20804L, 0x60004L, 0x80020004L))
+            reject("Only actual independently owned capabilities may be advertised", changed32(bytes, 4, mask))
+        for (tag in listOf(2, 255)) reject("Unknown atomic variant", changed(bytes, variant, tag))
+        reject("Missing required variant", replace(bytes, variant, variant + 1, byteArrayOf()))
+        for (unit in listOf(2, 255)) reject("Auto maximum has no percentage or unknown unit", changed(bytes, maximum, unit))
+        for (value in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+            reject("Positive finite auto maximum", changed32(bytes, maximum + 1, value.toRawBits().toLong() and 0xffffffffL))
+        reject("Margins remain nonnegative", changed32(bytes, wire.at.getValue("root.0.box.auto.margin0") + 1, 0xbf800000L))
+        for ((field, tag) in listOf("sizing" to 2, "align" to 4, "wrap" to 2, "intrinsic" to 2, "lineHeight" to 3))
+            reject("Unknown automatic layout $field", changed(bytes, wire.at.getValue("root.0.box.auto.$field"), tag))
+        reject("Anywhere cannot borrow normal wrap", changed(bytes, wire.at.getValue("root.0.box.auto.intrinsic"), 1))
+        val height = wire.at.getValue("root.0.box.auto.lineHeight")
+        reject("Explicit computed zero cannot masquerade as normal", replace(bytes, height, height + 1,
+            byteArrayOf(1, 0, 0, 0, 0, FontScaleBasis.CssPx.ordinal.toByte())))
+        for (end in variant until wire.at.getValue("root.0.box.auto.end"))
+            reject("Truncated atomic-auto suffix $end", bytes.copyOf(end))
+        reject("Strict final EOF", bytes + byteArrayOf(0))
+        val local = wire.at.getValue("root.0.fontFields")
+        reject("Same-owner local bit is required", changed(bytes, local, bytes[local].toInt() and 0xbf))
+        reject("Held float0x80 remains unknown", changed(bytes, local, bytes[local].toInt() or 0x80))
+        reject("Actual same-owner Box is required", changed(bytes, wire.at.getValue("root.0.box"), 0))
+        val child = wire.at.getValue("root.0.box.body.0.fontFields")
+        reject("A child cannot borrow its outer auto suffix", changed(bytes, child, bytes[child].toInt() or 0x40))
+        reject("Old Y is not a u32 envelope", changed(replace(bytes, 4, 8, byteArrayOf(4)), 3, 'Y'.code))
+        reject("Old Z cannot carry the new high feature", changed(replace(bytes, 4, 8, byteArrayOf(0, 1)), 3, 'Z'.code))
+        val marked = opacityTable(CellStyle(foreground = CellForeground.Inherit), listOf(source))
+        val bothWire = Wire('a', 0x30000 or 4).apply { paragraphOverride = {
+            positionedBlock(Block("table", 0, emptyList(), table = marked), "both") } }
+        val both = bothWire.document(emptyList(), Sink.Body)
+        assertEquals(marked, read(both).sections.single().blocks.single().table)
+        reject("HU capability cannot authorize marked CellStyle", changed32(both, 4, 0x20004L))
+        reject("MG capability cannot authorize auto layout", changed32(both, 4, 0x10004L))
+        val style = bothWire.at.getValue("both.table.row0.cell0.style.presence")
+        reject("The combined header must earn each capability", replace(both, style, style + 3, byteArrayOf(0)))
+        assertEquals(source, read(bytes).displayTitle.single())
+    }
+
+    @Test fun atomicAutoKeepsIntrinsicWrapLineHeightAndExistingNamespacesIndependent() {
+        val base = atomicAutoWireOwner()
+        val font = atomicWireFont(base)
+        for (height in listOf(null, InlineLineHeight.Computed(InlineComputedLength(.972f, FontScaleBasis.NormalBody)),
+            InlineLineHeight.FontRelative(1.2f, font))) {
+            for ((wrap, intrinsic) in listOf(TextWrap.Normal to InlineBoxIntrinsicWrap.Normal,
+                TextWrap.BreakWord to InlineBoxIntrinsicWrap.Normal, TextWrap.BreakWord to InlineBoxIntrinsicWrap.Anywhere)) {
+                val layout = atomicAutoWireLayout(StyleLength(StyleLengthUnit.Em, 22f), wrap, intrinsic, height)
+                for (explicit in listOf(false, true)) {
+                    val owner = atomicAutoWireOwner(layout, "real words NBSP\u00a0", explicitPolicies = explicit)
+                    val flags = if (explicit) 16 else 0
+                    val bytes = Wire('a', 0x20000 or 4).document(listOf(owner), features = flags)
+                    assertEquals(owner, read(bytes).displayTitle.single())
+                    if (explicit) reject("Explicit ordinary wrap retains its P16 debt", Wire('a', 0x20000 or 4).document(listOf(owner)))
+                    else reject("Fixed atomic fields do not independently earn P16", Wire('a', 0x20000 or 4).document(listOf(owner), features = 16))
+                }
+            }
+        }
+        val family = atomicAutoWireOwner(family = ContainerFontFamily.SansSerif)
+        val relative = checkNotNull(family.inlineBoxGroup!!.atomicAutoLayout).copy(
+            lineHeight = InlineLineHeight.FontRelative(1.2f, atomicWireFont(family)))
+        val familyOwner = atomicAutoWireOwner(relative, family = ContainerFontFamily.SansSerif)
+        assertEquals(familyOwner, read(Wire('a', 0x20000 or 4).document(listOf(familyOwner), features = 4)).displayTitle.single())
+        reject("Owner/child/relative snapshot family retains existing P4 census", Wire('a', 0x20000 or 4).document(listOf(familyOwner)))
+        val audio = Span("link", "Play", "File:Tone.ogg",
+            classes = "wikidict-media wikidict-media-file-546f6e652e6f6767", audioControl = AudioControl())
+        val values = listOf(atomicWireOwner(), base, percentCircleOwner(), overlayTextOwner(), audio)
+        val table = opacityTable(CellStyle(opacity = .2f, foreground = CellForeground.Inherit), values)
+            .copy(style = TableStyle(minWidth = StyleWidth(StyleWidthUnit.Percent, 25f)))
+        val block = Block("container", 0, emptyList(), container = Container(listOf(
+            Block("table", 0, emptyList(), table = table),
+            Block("paragraph", 0, listOf(text("after")), columnBreakInside = ColumnBreakInside.Avoid)),
+            ContainerStyle(textWrap = TextWrap.Normal)))
+        val flags = 0x30000 or 4 or 256 or 512 or 4096 or 8192
+        val wire = Wire('a', flags).apply { paragraphOverride = { positionedBlock(block, "autoMixed") } }
+        val bytes = wire.document(emptyList(), Sink.Body, mediaValues = listOf(Media("Tone.ogg", "audio", "")))
+        assertEquals(block, read(bytes).sections.single().blocks.single())
+        for (bit in listOf(4, 256, 512, 4096, 8192))
+            reject("No lower feature can borrow automatic-layout authority", changed32(bytes, 4, (flags and bit.inv()).toLong()))
+    }
+
+    @Test fun atomicAutoChargesOneRecordAndRetainsFullIgnoredPrefixAndBothDepthLimits() {
+        val source = atomicAutoWireOwner()
+        val limit = 1 shl 20
+        fun block(rows: Int) = Block("table", 0, emptyList(), table = Table(listOf(source),
+            java.util.Collections.nCopies(rows, emptyList<Cell>())))
+        fun model(rows: Int) = Entry("Budget", emptyList(), "language", "Hungarian", "hu",
+            listOf(Section(2, "Body", listOf(block(rows)))), emptyList())
+        // Original Block, owner, child and one auto record; no variant/intrinsic scalar items.
+        assertEquals(limit - 4, model(limit - 4).sections.single().blocks.single().table!!.rows.size)
+        invalid("Auto cannot restart complete model work") { model(limit - 3) }
+        fun literal(rows: Int) = Wire('a', 0x20000 or 4).apply {
+            paragraphOverride = { positionedBlock(block(rows), "autoBudget") }
+        }.document(emptyList(), Sink.Body)
+        assertEquals(limit - 5, read(literal(limit - 5)).sections.single().blocks.single().table!!.rows.size)
+        reject("Auto cannot restart complete serialized work", literal(limit - 4))
+        for (depth in listOf(15, 16)) {
+            val bytes = Wire('a', 0x20000 or 4).document(listOf(source), Sink.Container, containers = depth)
+            if (depth == 15) assertNotNull(read(bytes)) else reject("Automatic Box consumes the existing content level", bytes)
+        }
+        for (depth in listOf(MaxTableDepth, MaxTableDepth + 1)) {
+            val bytes = Wire('a', 0x20000 or 4).apply { paragraphOverride = { tableChain(depth, mixed = true) } }
+                .document(listOf(source), Sink.Body)
+            if (depth == MaxTableDepth) assertNotNull(read(bytes)) else reject("Table depth is not reset at an automatic atom", bytes)
+        }
+        val link = Span("link", "visible", "Original target")
+        fun prefixTable(rows: Int) = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()) +
+            listOf(listOf(Cell(listOf(link), false, 1, 1))))
+        val oldPrefix = java.util.Collections.nCopies(limit + 1, text("ignored"))
+        PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, oldPrefix, table = prefixTable(0)))
+        invalid("Actual auto presence selects the full validator for raw prefixes") {
+            PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, oldPrefix + source, table = prefixTable(0)))
+        }
+        fun prefixLiteral(rows: Int) = Wire('a', 0x20000 or 4).apply {
+            paragraphOverride = { audioPrefixTable(prefixTable(rows)) }
+        }.document(listOf(source), Sink.Body)
+        // Section/Block/real row/cell/span5 plus raw owner/child/auto3, with lightweight filler rows.
+        val prefixEntry = read(prefixLiteral(limit - 8))
+        assertEquals(listOf(source), prefixEntry.sections.single().blocks.single().spans)
+        assertEquals(listOf(link), prefixEntry.sections.single().blocks.single().table!!.rows.last().single().spans)
+        reject("Ignored auto source shares the wire budget", prefixLiteral(limit - 7))
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { spans, _ -> seen.addAll(spans) }.block(
+            Block("table", 0, listOf(source), table = prefixTable(0)))
+        assertEquals(listOf(link), seen) // Validation does not invent display callbacks for the raw prefix.
     }
 }

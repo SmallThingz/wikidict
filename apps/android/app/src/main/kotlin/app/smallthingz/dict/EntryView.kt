@@ -93,7 +93,8 @@ private data class TextCacheKey(val weight: FontWeight?, val direction: LayoutDi
     val compiledTableDirection: TableContainingDirection? = null, val compiledTableLanguage: String? = null,
     val inheritedFamily: ContainerFontFamily? = null, val authoredPreformatted: Boolean = false,
     val computedContainerTraits: Boolean = false, val bodyDirection: BidiResolvedDirection? = null,
-    val columnDirection: BidiResolvedDirection? = null)
+    val columnDirection: BidiResolvedDirection? = null,
+    val cellForeground: NativeCellForegroundContext? = null)
 private class TextCache(val link: State<(EntryLink) -> Unit>) {
     val values = java.util.IdentityHashMap<List<Span>, MutableMap<TextCacheKey, AnnotatedString>>()
 }
@@ -926,7 +927,8 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
             Row(Modifier.padding(start = blockIndentDp(block).dp)) {
                 val prefix = blockPrefix(block)
                 if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
-                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                    color = nativeMarkedCellForeground()?.let { Color(it) } ?: MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium)
                 val sourceFormat = if (LocalNativeContainerTextContext.current?.containerText != null)
                     inheritedContainerFormat() else null
                 AnonymousBlockView(block, Modifier.weight(1f), onLink,
@@ -943,7 +945,7 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
                 Box(Modifier.padding(start = blockIndentDp(block).dp)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
             } else Row(Modifier.padding(start = blockIndentDp(block).dp)) {
                 Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp),
-                    color = canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary,
+                    color = nativeMarkedCellForeground()?.let { Color(it) } ?: canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelMedium)
                 Box(Modifier.weight(1f)) { RenderCompiledTable(block.table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink) }
             }
@@ -956,20 +958,22 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
         block.kind == "preformatted" && block.textAlign != null -> Box(
             Modifier.preformattedWidthIntrinsics().fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer)
                 .horizontalScroll(rememberScrollState()).padding(12.dp), propagateMinConstraints = true) {
-            CompositionLocalProvider(LocalAuthoredBackground provides null, LocalNativePreformattedText provides true) {
+            CompositionLocalProvider(LocalAuthoredBackground provides null, LocalNativePreformattedText provides true,
+                LocalNativeCellForeground provides null) {
                 StyledText(block.spans, style = (inheritedContainerFormat()?.style ?: MaterialTheme.typography.bodySmall).copy(fontFamily = FontFamily.Monospace),
                     onLink = onLink, preserveWhitespace = true)
             }
         }
         block.kind == "preformatted" -> Box(Modifier.preformattedWidthIntrinsics().fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).horizontalScroll(rememberScrollState()).padding(12.dp)) {
-            CompositionLocalProvider(LocalAuthoredBackground provides null, LocalNativePreformattedText provides true) {
+            CompositionLocalProvider(LocalAuthoredBackground provides null, LocalNativePreformattedText provides true,
+                LocalNativeCellForeground provides null) {
                 StyledText(block.spans, style = (inheritedContainerFormat()?.style ?: MaterialTheme.typography.bodySmall).copy(fontFamily = FontFamily.Monospace), onLink = onLink, preserveWhitespace = true)
             }
         }
         else -> {
             val prefix = blockPrefix(block)
             Row(Modifier.padding(start = blockIndentDp(block).dp)) {
-                if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
+                if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(top = 4.dp, end = 6.dp), color = nativeMarkedCellForeground()?.let { Color(it) } ?: canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) } ?: MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
                 StyledText(if (LocalNativeContainerTextContext.current?.fontFamily is ContainerFontFamily.Stack) block.spans
                     else if (block.style != null) paragraphDisplaySpans(block) else ordinaryInlineDisplaySpans(block),
                     Modifier.weight(1f), weight = if (block.kind == "term") FontWeight.Bold else null,
@@ -992,7 +996,7 @@ private fun tableHasMinimumWidth(table: Table): Boolean {
 }
 
 private fun tableLayoutFeature(table: Table, feature: Feature?): Feature? =
-    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) }
+    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) || nativeHasCellForeground(table) }
 
 @Composable
 private fun TableCaptionContext(table: Table, content: @Composable () -> Unit) {
@@ -1062,7 +1066,7 @@ private fun InlineTableLine(block: Block, onLink: (EntryLink) -> Unit, path: Str
     val prefix = if (block.kind == "list_item") blockPrefix(block) else ""
     Layout(modifier = Modifier.padding(start = blockIndentDp(block).dp), content = {
         if (prefix.isNotEmpty()) Text(prefix, Modifier.widthIn(min = 28.dp).padding(end = 6.dp),
-            color = canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) }
+            color = nativeMarkedCellForeground()?.let { Color(it) } ?: canonicalColorArgb(LocalAuthoredBackground.current)?.let { Color(authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)!!) }
                 ?: MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelMedium)
         Box {
             RenderCompiledTable(table, block.feature, gridPath, inCell, path?.let { "$it/table" }.orEmpty(), onLink)
@@ -1477,6 +1481,15 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val projection = remember(table, rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
     val bodyGeometry = remember(table, projection.rowsHidden) { arrayOfNulls<FloatTextGeometry>(1) }
+    val retainCellPaint = LocalNativeCellForeground.current != null || remember(table) { nativeHasCellForeground(table) }
+    val inheritedBackground = LocalAuthoredBackground.current
+    @Composable fun retainedCell(cell: Cell, content: @Composable () -> Unit) {
+        val background = cell.background ?: table.style?.background ?: inheritedBackground
+        val foreground = nativeCellForegroundContext(cell, background)
+        CompositionLocalProvider(LocalNativeCellForeground provides foreground,
+            LocalAuthoredBackground provides (if (retainCellPaint) background else LocalAuthoredBackground.current),
+            content = content)
+    }
     val failure = LocalTableBlockLayoutFailure.current
     val direction = if (LocalLayoutDirection.current == LayoutDirection.Rtl) BidiResolvedDirection.Rtl else BidiResolvedDirection.Ltr
     Layout(modifier = (failure?.tableExtentModifier ?: Modifier).testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path"), content = {
@@ -1486,20 +1499,20 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
             LocalNativeDelegatedTable provides null, LocalNativeDelegatedCell provides null,
             LocalTableLineHeightPixels provides null, LocalTableBlockLayoutFailure provides null) {
         if (cells != null && sink != null) {
-            val parts: List<@Composable (SelectionGeometrySink) -> Unit> = cells.map { cell ->
-                { cellSink -> cell.content(cellSink) }
+            val parts: List<@Composable (SelectionGeometrySink) -> Unit> = cells.mapIndexed { index, slot ->
+                { cellSink -> retainedCell(projection.grid.cells[index].cell) { slot.content(cellSink) } }
             }
             SelectionColumn(parts, direction, if (showWarning) { value -> bodyGeometry[0] = value } else sink)
         } else TableContentColumn(Modifier, 0.dp) {
             projection.grid.cells.forEachIndexed { index, placed ->
                 val cell = placed.cell
-                when {
+                retainedCell(cell) { when {
                     cell.blocks != null -> FloatBlockSequence(cell.blocks, onLink, "$semanticPath/cell-$index",
                         inCell = true, gridPath = "$path/$index", gapDp = 4f, trailingGap = false)
                     cell.nestedTable != null -> TableView(cell.nestedTable, onLink, "$path/$index", true, "$semanticPath/cell-$index/nested")
                     cell.spans.isNotEmpty() -> StyledText(cell.spans, onLink = onLink)
                     else -> Spacer(Modifier)
-                }
+                } }
             }
         }
         }
@@ -1793,7 +1806,10 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     placed.row, placed.cell.rowspan, placed.column, placed.colspan)
                 if (placed.cell.header) heading()
             }.then(padding)) {
-                CompositionLocalProvider(LocalNativeDelegatedTable provides null,
+                val cellForeground = nativeCellForegroundContext(placed.cell,
+                    placed.cell.background ?: styled?.background ?: inheritedBackground)
+                CompositionLocalProvider(LocalNativeCellForeground provides cellForeground,
+                    LocalNativeDelegatedTable provides null,
                     LocalNativeDelegatedCell provides delegatedCell,
                     LocalFloatTableWidthReference provides null, LocalFloatMarginsConsumed provides false, LocalAuthoredBackground provides (placed.cell.background ?: styled?.background ?: inheritedBackground),
                     LocalCellTextAlign provides textAlign,
@@ -2300,6 +2316,7 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val compiledTableLanguage = LocalCompiledTableSourceLanguage.current
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedForeground = LocalFigureCaptionForeground.current
+    val cellForeground = LocalNativeCellForeground.current
     val cellLetterSpacing = LocalCellLetterSpacingPixels.current
     val cssPixelTextZoom = LocalCssPixelTextZoom.current
     val inheritedStack = LocalNativeContainerTextContext.current?.fontFamily?.takeIf { it is ContainerFontFamily.Stack }
@@ -2309,21 +2326,24 @@ private fun ordinaryStyledTextAnnotation(spans: List<Span>, weight: FontWeight?,
     val computedCellTraits = LocalNativeContainerTextContext.current?.cellText != null || computedContainerTraits
     val bodyFamily = (if (computedContainerTraits) LocalTextStyle.current.merge(style).fontFamily
         else MaterialTheme.typography.bodyLarge.fontFamily) ?: FontFamily.Default
-    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection)
-    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection) {
+    val cacheKey = TextCacheKey(effectiveWeight, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, bodyFamily.takeIf { computedCellTraits }, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, computedContainerTraits, bodyDirection, columnDirection, cellForeground)
+    val annotated = remember(spans, directionControls, effectiveWeight, linkColor, codeColor, cache, layoutDirection, inheritedBackground, normalBodySize, contextSize, textDensity, inheritedForeground, cellLetterSpacing, cssPixelTextZoom, computedCellTraits, computedContainerTraits, bodyFamily, compiledTableDirection, compiledTableLanguage, inheritedFamily, authoredPreformatted, bodyDirection, columnDirection, cellForeground) {
         cache?.values?.get(spans)?.get(cacheKey) ?: buildAnnotatedString {
             val appendedSpans = ArrayList<Pair<Span, IntRange>>(spans.size)
             spans.forEachIndexed { index, span ->
                 val effectiveBackground = span.background ?: inheritedBackground.takeIf { !span.code }
-                val foreground = (canonicalColorArgb(span.linkPaint?.normal?.foreground ?: span.foreground)?.toInt() ?: inheritedForeground ?:
-                    authoredSpanForegroundArgb(null, effectiveBackground)?.toInt())?.let { Color(it) }
+                val explicitForeground = canonicalColorArgb(span.linkPaint?.normal?.foreground ?: span.foreground)?.toInt()
+                val foreground = nativeCellPlainForeground(cellForeground, explicitForeground, inheritedForeground,
+                    span.background, effectiveBackground, span.code)?.let { Color(it) }
+                val normalLinkForeground = nativeCellLinkForeground(cellForeground, explicitForeground, inheritedForeground,
+                    span.background, effectiveBackground, span.code)?.let { Color(it) }
                 val background = canonicalColorArgb(span.background)?.let { Color(it) }
                 val readableLinkFallback = span.linkPaint == null && canonicalColorArgb(span.foreground) == null && canonicalColorArgb(effectiveBackground) != null
                 val linkStyle = span.linkPaint?.let { policy ->
                     // Native draw state owns interaction; an explicit unavailable projection retains normal paint.
                     TextLinkStyles(style = SpanStyle(color = Color(checkNotNull(canonicalColorArgb(policy.normal.foreground))),
                         textDecoration = if (policy.normal.underline) TextDecoration.Underline else TextDecoration.None))
-                } ?: TextLinkStyles(style = SpanStyle(color = foreground ?: linkColor,
+                } ?: TextLinkStyles(style = SpanStyle(color = normalLinkForeground ?: linkColor,
                     textDecoration = if (readableLinkFallback) TextDecoration.Underline else null),
                     pressedStyle = SpanStyle(textDecoration = TextDecoration.Underline))
                 val start = length
@@ -2598,7 +2618,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             listOf(NativeFloatContextSpec.Flow(index, box?.after ?: gap, leaf.path,
                 box, !paragraphHasContent(block, preserveCompiledText = preserveCompiledText) && prefix.isEmpty()) { carried, published ->
                 val content: @Composable () -> Unit = {
-                    CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope) {
+                    CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope,
+                        LocalNativeCellForeground provides leaf.cellForeground,
+                        LocalAuthoredBackground provides (if (leaf.cellForeground != null) leaf.cellForeground.background else LocalAuthoredBackground.current)) {
                         AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
                             inheritedAlign = figureInheritedAlign(style.textAlign, LocalLayoutDirection.current), style = style, interactionOwner = false,
                             carriedExclusions = carried, onFlowGeometry = published,
@@ -2627,7 +2649,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
             }
             val annotated = styledTextAnnotation(spans, if (block.kind == "term") FontWeight.Bold else null, style, onLink)
             val prefixStyle = compiledTableOwnerTextStyle(MaterialTheme.typography.labelMedium).copy(color =
-                authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: MaterialTheme.colorScheme.primary)
+                nativeMarkedCellForeground()?.let { Color(it) } ?: authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)?.let { Color(it) } ?: MaterialTheme.colorScheme.primary)
             val text = NativeFloatContextSpec.Text(if (referenceParagraph != null)
                 prepareCompiledReferenceParagraph(leaf, referenceParagraph, media, settings, edition, onLink, spans)
                 else prepareNativeFloatText(spans, annotated, egyptianTextRuns(spans), style, linkColor,
@@ -2816,6 +2838,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     @Composable fun originalChild(id: Int, originalWidth: NativeLayoutInput<Int>) {
         val leaf = originalChildren.getValue(id)
         CompositionLocalProvider(LocalNativeCellOpacityTable provides opacityTables[id],
+            LocalNativeCellForeground provides leaf.cellForeground,
+            LocalAuthoredBackground provides (if (leaf.cellForeground != null) leaf.cellForeground.background else LocalAuthoredBackground.current),
             LocalFloatTableWidthReference provides originalWidth,
             LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope,
             LocalNativeContainerTextWrap provides leaf.ownerWrap,
@@ -3079,6 +3103,7 @@ private fun ReferenceBacklinkTextContext(style: TextStyle, content: @Composable 
         LocalCellWeight provides null, LocalCellLetterSpacingPixels provides null,
         LocalCellTextAlign provides null, LocalTableLineHeightPixels provides null,
         LocalNativePreformattedText provides false, LocalAuthoredBackground provides null,
+        LocalNativeCellForeground provides null,
         LocalFigureCaptionForeground provides null, LocalFigureCaptionLinkScope provides null,
         LocalCompiledTableSourceLanguage provides null,
         LocalReferenceBodyTypography provides false, content = content)

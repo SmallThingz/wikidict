@@ -175,7 +175,8 @@ internal fun nativeRubyFloatGeometry(source: Spanned, paint: TextPaint, width: I
         insets, null, { _, _ -> }, { null }, includeFontPadding, exactWidth, exactParagraphInsets)
     repeat(64) {
         if (!seen.add(bands.observed)) throw UnsupportedFloatLayout("Exact ruby fragment bands cycle")
-        var compiled = checkNotNull(nativeRubyLayout(source, paint, direction, bands, exactAdvances = true))
+        var compiled = checkNotNull(nativeRubyLayout(source, paint, direction, bands, exactAdvances = true,
+            containingWidth = exactWidth))
         var raw = shape(compiled.native)
         compiled.trimLineEdges(raw)?.let { trimmed -> compiled = trimmed; raw = shape(trimmed.native) }
         val observed = compiled.observedBands(raw)

@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
+import kotlin.math.roundToInt
 
 /** Compiled semantic objects only. No source parsing, network, persistent fixture or clipboard. */
 class NestedTableDeviceTest {
@@ -622,6 +623,213 @@ class NestedTableDeviceTest {
             failure = error
             throw error
         } finally {
+            try { compose.activityRule.scenario.onActivity { it.setContent {} } }
+            catch (cleanup: Throwable) {
+                val primary = failure
+                if (primary == null) throw cleanup
+                if (cleanup !== primary) primary.addSuppressed(cleanup)
+            }
+        }
+    }
+
+    @Test fun inheritedCellInkTracksActualEnclosingPaintWithoutChangingNestedAutoOrLinks() {
+        // Controlled typography/backdrops. This checks the symbolic cell policy, not
+        // a captured page palette. Every phase renders the same original leaf objects.
+        fun text(value: String, foreground: String? = null) = Span("text", value,
+            foreground = foreground, bold = true, fontScale = 18f,
+            fontScaleBasis = FontScaleBasis.CssPx, fontFamily = ContainerFontFamily.SansSerif)
+        val ordinary = text("MARK ")
+        val explicit = text("RGB ", "#ff0000")
+        val ownBackground = text("OWN ").copy(background = "#ffffff")
+        val link = text("LINK").copy(kind = "link", target = "original-cell-link", targetFragment = "source-fragment")
+        val boxText = text("BOX ")
+        val boxLink = text("HELP").copy(kind = "link", target = "original-box-link")
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val none = InlineBoxBorderEdges(InlineBoxBorderEdge.None, InlineBoxBorderEdge.None,
+            InlineBoxBorderEdge.None, InlineBoxBorderEdge.None)
+        val box = text("").copy(inlineBoxGroup = InlineBoxGroup(StyleEdges(zero, zero, zero, zero),
+            none, spans = listOf(boxText, boxLink)))
+        val rubyText = text("BASE")
+        val rubyOwner = RubyOwner(InlineFontSnapshot(fontScale = 18f,
+            fontScaleBasis = FontScaleBasis.CssPx, bold = true,
+            fontFamily = ContainerFontFamily.SansSerif), background = "#ffffff")
+        val ruby = Span("text", "", ruby = Ruby(listOf(RubySegment(emptyList(),
+            listOf(RubyBase(rubyOwner, emptyList(), listOf(rubyText))), emptyList()))))
+        val outerText = text("OUTER")
+        val innerText = text("INHERIT")
+        val autoText = text("AUTO")
+        val rootCaption = text("ROOT CAPTION")
+        val nestedCaption = text("NESTED CAPTION")
+        val inherit = CellStyle(foreground = CellForeground.Inherit)
+        val inner = Table(listOf(nestedCaption), listOf(listOf(
+            Cell(listOf(innerText), false, 1, 1, background = "#a0a0a0", style = inherit),
+            Cell(listOf(autoText), false, 1, 1, background = "#a0a0a0"))),
+            TableGeometry(border = 0, cellSpacing = 2, cellPadding = 4,
+                width = TableWidth(TableWidthUnit.Percent, 100)),
+            style = TableStyle(background = "#ffffff"))
+        fun source(background: String, marked: Boolean) = Table(listOf(rootCaption), listOf(
+            listOf(Cell(listOf(ordinary, explicit, ownBackground, link), false, 1, 1, background = "#000000", style = inherit)),
+            listOf(Cell(listOf(box, text(" "), ruby), false, 1, 1, background = "#000000", style = inherit)),
+            listOf(Cell(emptyList(), false, 1, 1, background = background,
+                blocks = listOf(Block("paragraph", 0, listOf(outerText)),
+                    Block("table", 0, emptyList(), table = inner)),
+                style = if (marked) inherit else null))),
+            TableGeometry(border = 0, cellSpacing = 2, cellPadding = 4,
+                width = TableWidth(TableWidthUnit.Percent, 100)),
+            style = TableStyle(background = "#c0c0c0"))
+        val sources = listOf(source("#000000", false), source("#ffffff", false), source("#000000", true))
+        data class Phase(val source: Int, val ink: Int, val width: Int, val outerInk: Int)
+        val green = android.graphics.Color.rgb(0, 192, 64)
+        val purple = android.graphics.Color.rgb(160, 0, 192)
+        val phases = listOf(
+            Phase(0, green, 340, android.graphics.Color.WHITE),
+            Phase(0, purple, 340, android.graphics.Color.WHITE), // Same source, live enclosing ink only.
+            Phase(1, purple, 280, android.graphics.Color.BLACK),
+            Phase(2, purple, 280, purple), // Marked outer cell changes the actual inherited nested ink.
+            Phase(2, green, 340, green),
+            Phase(0, green, 340, android.graphics.Color.WHITE))
+        val phase = mutableStateOf(phases.first())
+        val calls = mutableListOf<EntryLink>()
+        var activityRoot: android.view.View? = null
+        fun owner(value: String): NativeFloatTextView {
+            val found = mutableListOf<NativeFloatTextView>()
+            fun visit(view: android.view.View) {
+                if (view is NativeFloatTextView && view.isShown &&
+                    view.currentMeasuredGeometry?.text?.toString() == value) found += view
+                if (view is android.view.ViewGroup) repeat(view.childCount) { visit(view.getChildAt(it)) }
+            }
+            visit(checkNotNull(activityRoot))
+            return found.single()
+        }
+        data class Raster(val bitmap: android.graphics.Bitmap, val left: Int, val top: Int)
+        fun capture(): Raster {
+            val interaction = compose.onRoot(useUnmergedTree = true)
+            val node = interaction.fetchSemanticsNode()
+            val bounds = node.boundsInRoot
+            val root = (checkNotNull(node.root) as androidx.compose.ui.platform.ViewRootForTest).view
+            val bitmap = interaction.captureToImage().asAndroidBitmap()
+            try {
+                val location = IntArray(2)
+                compose.runOnIdle { root.getLocationOnScreen(location) }
+                assertEquals(bounds.right.roundToInt() - bounds.left.roundToInt(), bitmap.width)
+                assertEquals(bounds.bottom.roundToInt() - bounds.top.roundToInt(), bitmap.height)
+                return Raster(bitmap, location[0] + bounds.left.roundToInt(), location[1] + bounds.top.roundToInt())
+            } catch (error: Throwable) { bitmap.recycle(); throw error }
+        }
+        fun assertInk(raster: Raster, value: String, start: Int, length: Int, expected: Int) {
+            val bounds = mutableListOf<android.graphics.RectF>()
+            compose.runOnIdle {
+                val view = owner(value)
+                val geometry = checkNotNull(view.currentMeasuredGeometry)
+                val location = IntArray(2); view.getLocationOnScreen(location)
+                bounds += geometry.characterRects(start, length).map { rect ->
+                    android.graphics.RectF(checkNotNull(rect)).apply {
+                        offset((location[0] + view.paddingLeft - raster.left).toFloat(),
+                            (location[1] + view.paddingTop - raster.top).toFloat())
+                    }
+                }
+                assertEquals(value, view.logicalText.toString())
+                assertFalse(bounds.isEmpty())
+            }
+            var exactInk = 0
+            for (rect in bounds) {
+                val left = kotlin.math.floor(rect.left.toDouble()).toInt()
+                val top = kotlin.math.floor(rect.top.toDouble()).toInt()
+                val right = kotlin.math.ceil(rect.right.toDouble()).toInt()
+                val bottom = kotlin.math.ceil(rect.bottom.toDouble()).toInt()
+                assertTrue("Original glyph range must be inside the captured root", left >= 0 && top >= 0 &&
+                    right <= raster.bitmap.width && bottom <= raster.bitmap.height)
+                for (y in top until bottom) for (x in left until right)
+                    if (raster.bitmap.getPixel(x, y) == expected) exactInk++
+            }
+            assertTrue("$value[$start,${start + length}) must actually paint its expected foreground", exactInk >= 4)
+        }
+        var failure: Throwable? = null
+        try {
+            compose.activityRule.scenario.onActivity { activity ->
+                activityRoot = activity.window.decorView
+                activity.setContent {
+                    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr,
+                        androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(1f, 1f)) {
+                        DictTheme("light") {
+                            val ink = androidx.compose.ui.graphics.Color(phase.value.ink)
+                            androidx.compose.material3.Surface(Modifier.fillMaxSize(),
+                                color = androidx.compose.ui.graphics.Color(0xffe0e0e0), contentColor = ink) {
+                                androidx.compose.material3.ProvideTextStyle(
+                                    androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(color = ink)) {
+                                    androidx.compose.foundation.layout.Box(Modifier.requiredWidth(phase.value.width.dp)) {
+                                        CompiledTableView(sources[phase.value.source], null) { calls += it }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for (current in phases) {
+                compose.runOnIdle { phase.value = current }
+                compose.waitForIdle()
+                compose.onAllNodesWithText("unavailable", substring = true, ignoreCase = true).assertCountEquals(0)
+                compose.onAllNodesWithText("Table is too large to display.").assertCountEquals(0)
+                compose.onNodeWithTag("compiled-table-grid", useUnmergedTree = true).assertIsDisplayed()
+                val raster = capture()
+                try {
+                    assertInk(raster, rootCaption.text, 0, rootCaption.text.length, current.ink)
+                    assertInk(raster, "MARK RGB OWN LINK", 0, 4, current.ink)
+                    assertInk(raster, "MARK RGB OWN LINK", 5, 3, android.graphics.Color.RED)
+                    assertInk(raster, "MARK RGB OWN LINK", 9, 3, android.graphics.Color.BLACK)
+                    assertInk(raster, "MARK RGB OWN LINK", 13, 4, android.graphics.Color.WHITE)
+                    assertInk(raster, "BOX HELP BASE", 0, 3, current.ink)
+                    assertInk(raster, "BOX HELP BASE", 4, 4, android.graphics.Color.WHITE)
+                    // A real RubyOwner background owns its own contrast, independently
+                    // of the marked cell's plain ink and of direct Span.background.
+                    assertInk(raster, "BOX HELP BASE", 9, 4, android.graphics.Color.BLACK)
+                    assertInk(raster, outerText.text, 0, outerText.text.length, current.outerInk)
+                    assertInk(raster, nestedCaption.text, 0, nestedCaption.text.length, current.outerInk)
+                    assertInk(raster, innerText.text, 0, innerText.text.length, current.outerInk)
+                    assertInk(raster, autoText.text, 0, autoText.text.length, android.graphics.Color.BLACK)
+                } finally { raster.bitmap.recycle() }
+                compose.runOnIdle {
+                    val source = sources[current.source]
+                    assertSame(rootCaption, source.caption.single())
+                    assertSame(ordinary, source.rows[0].single().spans[0])
+                    assertSame(ownBackground, source.rows[0].single().spans[2])
+                    assertSame(link, source.rows[0].single().spans[3])
+                    assertSame(box, source.rows[1].single().spans[0])
+                    assertSame(ruby, source.rows[1].single().spans[2])
+                    val base = ruby.ruby!!.segments.single().bases.single()
+                    assertSame(rubyOwner, base.owner)
+                    assertSame(rubyText, base.spans.single())
+                    assertSame(inner, source.rows[2].single().blocks!![1].table)
+                    assertSame(innerText, inner.rows.single()[0].spans.single())
+                    assertNull(inner.rows.single()[1].style) // No inherited policy marker on the auto child.
+                    for ((value, original) in listOf("MARK RGB OWN LINK" to link, "BOX HELP BASE" to boxLink)) {
+                        val view = owner(value)
+                        val geometry = checkNotNull(view.currentMeasuredGeometry)
+                        val action = geometry.nodes.single { it.kind == FloatInteractionKind.LINK }
+                        assertEquals(original.text, action.label.toString())
+                        assertEquals(original.text, value.substring(action.start, action.end))
+                        val provider = view.accessibilityNodeProvider
+                        val ax = checkNotNull(provider.createAccessibilityNodeInfo(action.id))
+                        try {
+                            assertEquals(original.text, ax.text.toString())
+                            assertTrue(ax.isClickable && ax.isVisibleToUser)
+                        } finally { ax.recycle() }
+                        view.setSelection(0, value.length)
+                        assertEquals(value, view.selectedTextForCopy())
+                        assertTrue(view.performAccessibilityAction(
+                            android.view.accessibility.AccessibilityNodeInfo.ACTION_SET_SELECTION, null))
+                        val before = calls.size
+                        assertTrue(provider.performAction(action.id,
+                            android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK, null))
+                        assertEquals(before + 1, calls.size)
+                        assertEquals(original.entryLink(), calls.last())
+                    }
+                }
+            }
+            compose.runOnIdle { assertEquals(phases.size * 2, calls.size) }
+        } catch (error: Throwable) { failure = error; throw error }
+        finally {
             try { compose.activityRule.scenario.onActivity { it.setContent {} } }
             catch (cleanup: Throwable) {
                 val primary = failure

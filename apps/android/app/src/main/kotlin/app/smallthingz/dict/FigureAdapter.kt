@@ -166,8 +166,9 @@ internal fun AnonymousBlockView(block: Block, modifier: Modifier, onLink: (Entry
         }
     }
     val marker = prepareAnonymousInline(AnonymousFlowEvent.Inline(emptyList(), content.context),
-        MaterialTheme.typography.labelMedium.copy(color = authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)
-            ?.let { Color(it) } ?: MaterialTheme.colorScheme.primary), reader)
+        MaterialTheme.typography.labelMedium.copy(color = nativeMarkedCellForeground()?.let { Color(it) }
+            ?: authoredSpanForegroundArgb(null, LocalAuthoredBackground.current)
+                ?.let { Color(it) } ?: MaterialTheme.colorScheme.primary), reader)
     val density = LocalDensity.current.density
     val markerWidth = if (prefix.isEmpty()) 0f else 28f * density
     val rtl = content.context.direction == BidiResolvedDirection.Rtl

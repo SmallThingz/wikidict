@@ -102,7 +102,8 @@ internal fun prepareNativeContainerDisclosureToggle(disclosure: ContainerDisclos
     // W's complete declaring font is distinct from the ordinary children’s size/family defaults.
     val declaring = format.ownerFont?.style ?: format.style
     val style = nativeCellLineStyle(declaring, format.lineHeight, density).copy(
-        color = disclosure.foreground?.let(::disclosureColor) ?: format.style.color,
+        color = disclosure.foreground?.let(::disclosureColor)
+            ?: nativeMarkedCellForeground()?.let { Color(it) } ?: format.style.color,
         background = Color.Transparent)
     val annotated = nativeDisclosureLabelAnnotation(label, run, interaction, style.toSpanStyle())
     // This internal text-only adapter supplies the formatter's real label range. It is never
