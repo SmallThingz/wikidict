@@ -169,6 +169,17 @@ def child_identity(root, wiki, date, namespace_sha, row_limit=None):
     return record
 
 
+class DigestingReader:
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+
+    def read(self, count):
+        block = self.stream.read(count)
+        self.digest.update(block)
+        return block
+
+
 def archive_capture(root, destination, record):
     inventory = v2.capture_artifacts(root / TSV, record)
     require(len(inventory) <= MAX_ARCHIVE_FILES, 'Too many child archive files')
@@ -177,15 +188,18 @@ def archive_capture(root, destination, record):
         for name, expected_sha in sorted(inventory.items()):
             v2.safe_name(name)
             path = root / name
-            found = file_record(path, v2.MAX_METADATA)
-            require(found['sha256'] == expected_sha, 'Child changed before archive')
-            total += found['size']
+            before = v2.evidence.stamp(path)
+            size = before[2]
+            require(size <= v2.MAX_METADATA, 'Child archive member exceeds capacity')
+            total += size
             require(total <= MAX_ARCHIVE_PAYLOAD, 'Child archive payload exceeds capacity')
             info = tarfile.TarInfo(name)
-            info.size, info.mode, info.mtime = found['size'], 0o600, 0
+            info.size, info.mode, info.mtime = size, 0o600, 0
             with path.open('rb') as source:
-                archive.addfile(info, source)
-            require(file_record(path, v2.MAX_METADATA) == found, 'Child changed during archive')
+                checked = DigestingReader(source)
+                archive.addfile(info, checked)
+                require(checked.digest.hexdigest() == expected_sha and not source.read(1)
+                        and v2.evidence.stamp(path) == before, 'Child changed during archive')
     return file_record(destination, MAX_ARCHIVE)
 
 
