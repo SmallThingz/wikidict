@@ -479,17 +479,25 @@ class PreparedSourceRequest:
         # a short handshake cutoff while the parent authenticates cold files.
         deadline=time.monotonic()+timeout
         launch_path=self.folder/'launch.json'
+        pending_stamp = None
         while time.monotonic()<deadline:
-            if not launch_path.exists():
-                time.sleep(.1)
-                continue
-            launch_ref=prepared_metadata_ref(launch_path)
-            launch=prepared_metadata(launch_ref)
-            auth=launch.get('prepared_source_authorization')
-            if auth is not None:
-                if auth.get('generation')!=reference:
-                    raise ValueError('Parent authorized another prepared generation')
-                return prepared_authorized_generation(self.configuration,self.start,launch_ref)
+            try:
+                info = launch_path.lstat()
+            except FileNotFoundError:
+                pending_stamp = None
+            else:
+                # The parent publishes authorization by atomic replacement. Only cache a
+                # pending decision. Every changed receipt still takes the authenticated path.
+                stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+                if stamp != pending_stamp:
+                    launch_ref=prepared_metadata_ref(launch_path)
+                    launch=prepared_metadata(launch_ref)
+                    auth=launch.get('prepared_source_authorization')
+                    if auth is not None:
+                        if auth.get('generation')!=reference:
+                            raise ValueError('Parent authorized another prepared generation')
+                        return prepared_authorized_generation(self.configuration,self.start,launch_ref)
+                    pending_stamp = stamp
             time.sleep(.1)
         raise ValueError('Prepared source parent authorization did not complete')
 

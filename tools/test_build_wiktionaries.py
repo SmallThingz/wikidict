@@ -6703,6 +6703,25 @@ class PreparedSourceCallerTests(unittest.TestCase):
                     cfg=cfg,start=start,record=record,identity=identity,generation=generation,
                     generation_ref=generation_ref,launch=launch,observed=observed,cache=cache)
 
+    def test_pending_launch_reads_each_generation_once_and_authenticates_replacement(self):
+        with self.generation_fixture() as f:
+            ready = f.root / 'authorized.json'
+            f.launch.rename(ready)
+            request = SimpleNamespace(configuration=f.cfg, start=f.start, folder=f.root)
+            ticks = []
+            def advance(delay):
+                ticks.append(delay)
+                if len(ticks) == 1:
+                    f.launch.write_text('{}')
+                if len(ticks) == 4:
+                    os.replace(ready, f.launch)
+                self.assertLessEqual(len(ticks), 4)
+            with patch.object(b.time, 'sleep', side_effect=advance), \
+                    patch.object(b, 'prepared_metadata_ref', wraps=b.prepared_metadata_ref) as reads:
+                generation = b.PreparedSourceRequest.await_authorization(request, f.generation_ref)
+            self.assertEqual([call(f.launch), call(f.launch)], reads.call_args_list)
+            self.assertEqual(f.identity, generation.identity)
+
     def test_parent_authorization_binds_original_attempt_configuration_and_generation(self):
         import copy
         with self.generation_fixture() as f:
