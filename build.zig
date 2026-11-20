@@ -188,6 +188,7 @@ pub fn build(b: *std.Build) void {
     blob_build_exe.root_module.linkSystemLibrary("zstd", .{});
     addPublicRunStep(b, "build-blobs", "Encode blobs with an already compiled bundle expander", addRunArtifactCommand(b, blob_build_exe, &.{}), &.{});
     blob_build_exe.root_module.addImport("namespace_registry", namespace_registry_mod);
+    blob_build_exe.root_module.addImport("missing_dependency", missing_dependency_mod);
     const blob_merge_exe = addCliExecutable(b, "dict-blob-merge", b.path("tools/blob_merge.zig"), target, optimize, &.{
         .{ .name = "encoder", .module = blob_encoder_mod },
     });
