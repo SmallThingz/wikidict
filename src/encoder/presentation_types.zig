@@ -371,6 +371,17 @@ pub fn RubySegment(comptime Child: type) type {
 pub fn RubyBase(comptime Child: type) type {
     return struct { owner: RubyOwner, gap_before: []const Child = &.{}, spans: []const Child = &.{} };
 }
+/// Physical margins on one logical RT; em uses that annotation's resolved owner.
+pub const RubyAnnotationMargins = struct {
+    top: StyleLength,
+    bottom: StyleLength,
+};
+pub fn validRubyAnnotationMargins(value: RubyAnnotationMargins) bool {
+    return validStyleLength(value.top) and validStyleLength(value.bottom);
+}
+pub fn rubyAnnotationMargins(annotation: anytype) ?RubyAnnotationMargins {
+    return if (comptime @hasField(@TypeOf(annotation), "margins")) annotation.margins else null;
+}
 pub fn RubyAnnotation(comptime Child: type) type {
     return struct {
         base_start: u32,
@@ -382,6 +393,20 @@ pub fn RubyAnnotation(comptime Child: type) type {
         fallback_before: []const Child = &.{},
         fallback_after: []const Child = &.{},
         explicit_fallback: bool = false,
+        margins: ?RubyAnnotationMargins = null,
+
+        pub fn jsonStringify(self: @This(), jw: anytype) !void {
+            try jw.beginObject();
+            inline for (.{ "base_start", "base_count", "level", "owner", "gap_before", "spans", "fallback_before", "fallback_after", "explicit_fallback" }) |field| {
+                try jw.objectField(field);
+                try jw.write(@field(self, field));
+            }
+            if (self.margins) |value| {
+                try jw.objectField("margins");
+                try jw.write(value);
+            }
+            try jw.endObject();
+        }
     };
 }
 pub const max_ruby_depth: usize = 16;
@@ -456,6 +481,7 @@ pub fn validRuby(value: anytype) bool {
         var level: u32 = 0;
         var end: u64 = 0;
         for (segment.annotations, 0..) |annotation, index| {
+            if (rubyAnnotationMargins(annotation)) |margins| if (!validRubyAnnotationMargins(margins)) return false;
             if (!validRubyOwnerContext(annotation.owner) or annotation.base_count == 0 or @as(u64, annotation.base_start) + annotation.base_count > segment.bases.len) return false;
             if (index == 0) {
                 if (annotation.level != 0 or annotation.gap_before.len != 0) return false;
@@ -3224,6 +3250,8 @@ pub const DeepTableWork = struct {
     discover_table_rows_visibility: bool = false,
     resolved_style_border_found: bool = false,
     discover_resolved_style_border: bool = false,
+    ruby_annotation_margins_found: bool = false,
+    discover_ruby_annotation_margins: bool = false,
     // Saved/restored at each Container. Absolute descendants may not borrow an
     // outer relative anchor across another absolute box; explicit relative resets.
     relative_container_anchor: bool = false,
@@ -3319,6 +3347,11 @@ pub const DeepTableWork = struct {
                     try self.take(segment.annotations.len);
                     for (segment.annotations) |annotation| {
                         try self.take(1);
+                        if (rubyAnnotationMargins(annotation)) |margins| {
+                            self.ruby_annotation_margins_found = true;
+                            if (self.discover_ruby_annotation_margins) return error.InvalidPresentation;
+                            if (!validRubyAnnotationMargins(margins)) return error.InvalidPresentation;
+                        }
                         self.inlineFeatures(annotation.owner.font);
                         self.inlineFeatures(annotation.owner);
                         inline for (.{ "gap_before", "spans", "fallback_before", "fallback_after" }) |field|
@@ -3399,6 +3432,13 @@ pub const DeepTableWork = struct {
         var work: DeepTableWork = .{ .discover_inline_action_group = true };
         work.entry(display, sections, preamble, references) catch {};
         return work.inline_action_group_found;
+    }
+    /// Reuses the padding discovery pass to select the DPRa Ruby extension.
+    /// The historical padding-only predicate below retains its exact meaning.
+    pub fn hasInlinePaddingOrRubyMargins(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_inline_group = true, .discover_ruby_annotation_margins = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.inline_group_found or work.ruby_annotation_margins_found;
     }
     pub fn hasInlinePaddingGroups(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
         var work: DeepTableWork = .{ .discover_inline_group = true };
@@ -10958,4 +10998,118 @@ test "AN resolved StyleBorder requires unit direct spans without changing legacy
         const nested_stored = T.stored(&nested_blocks, &.{}, &nested_sections);
         try validateStored(a, nested_stored, "resolved border", .supplemental, null);
     }
+}
+
+test "Ruby annotation margins preserve old JSON and logical empty multibase readings with declaring font" {
+    const a = std.testing.allocator;
+    const OldAnnotation = struct {
+        base_start: u32, base_count: u32, level: u32, owner: RubyOwner,
+        gap_before: []const Span = &.{}, spans: []const Span = &.{},
+        fallback_before: []const Span = &.{}, fallback_after: []const Span = &.{},
+        explicit_fallback: bool = false,
+    };
+    const font: InlineFontSnapshot = .{ .font_scale = 0.6, .font_scale_basis = .normal_body,
+        .font_normalized = true, .language = "ja" };
+    const old: OldAnnotation = .{ .base_start = 0, .base_count = 2, .level = 0,
+        .owner = .{ .font = font }, .spans = &.{.{ .text = "\xe3\x81\xb9\xe3\x81\xab\xe3\x81\x95", .language = "ja" }},
+        .fallback_before = &.{.{ .text = "[" }}, .fallback_after = &.{.{ .text = "]" }}, .explicit_fallback = true };
+    var reading: RubyAnnotation(Span) = .{ .base_start = old.base_start, .base_count = old.base_count,
+        .level = old.level, .owner = old.owner, .spans = old.spans,
+        .fallback_before = old.fallback_before, .fallback_after = old.fallback_after, .explicit_fallback = old.explicit_fallback };
+    const old_json = try std.json.Stringify.valueAlloc(a, old, .{}); defer a.free(old_json);
+    const null_json = try std.json.Stringify.valueAlloc(a, reading, .{}); defer a.free(null_json);
+    try std.testing.expectEqualStrings(old_json, null_json);
+    try std.testing.expect(rubyAnnotationMargins(old) == null);
+    try std.testing.expect(std.mem.indexOf(u8, null_json, "margins") == null);
+    const bases = [_]RubyBase(Span){ .{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "base-a" }} },
+        .{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "base-b" }} } };
+    var readings = [_]RubyAnnotation(Span){reading};
+    var segments = [_]RubySegment(Span){.{ .bases = &bases, .annotations = &readings }};
+    const ruby: Ruby(Span) = .{ .segments = &segments };
+    try std.testing.expect(validRuby(ruby));
+    reading.margins = .{ .top = .{ .unit = .em, .value = 0.25 }, .bottom = .{ .unit = .em, .value = 0.25 } };
+    readings[0] = reading;
+    try std.testing.expect(validRuby(ruby));
+    try std.testing.expectEqualDeep(font, readings[0].owner.font);
+    try std.testing.expectEqual(@as(u32, 2), readings[0].base_count);
+    try std.testing.expectEqualDeep(old.spans, readings[0].spans);
+    const present_json = try std.json.Stringify.valueAlloc(a, reading, .{}); defer a.free(present_json);
+    try std.testing.expect(std.mem.endsWith(u8, present_json, ",\"margins\":{\"top\":{\"unit\":\"em\",\"value\":0.25},\"bottom\":{\"unit\":\"em\",\"value\":0.25}}}"));
+    const parsed = try std.json.parseFromSlice(RubyAnnotation(Span), a, present_json, .{}); defer parsed.deinit();
+    try std.testing.expectEqualDeep(reading, parsed.value);
+    readings[0].spans = &.{};
+    try std.testing.expect(validRuby(ruby));
+    try std.testing.expectEqual(@as(f32, 0.25), readings[0].margins.?.top.value);
+    var second = readings[0]; second.level = 1;
+    const levels = [_]RubyAnnotation(Span){ readings[0], second };
+    segments[0].annotations = &levels;
+    try std.testing.expect(validRuby(ruby));
+    try std.testing.expectEqual(@as(usize, 2), ruby.segments[0].annotations.len);
+}
+
+test "Ruby annotation margin domain retains explicit zero and rejects malformed nested metric data" {
+    const a = std.testing.allocator;
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    var reading: RubyAnnotation(Span) = .{ .base_start = 0, .base_count = 1, .level = 0,
+        .owner = .{ .font = .{} }, .margins = .{ .top = zero, .bottom = zero } };
+    var readings = [_]RubyAnnotation(Span){reading};
+    const bases = [_]RubyBase(Span){.{ .owner = .{ .font = .{} } }};
+    const segments = [_]RubySegment(Span){.{ .bases = &bases, .annotations = &readings }};
+    const ruby: Ruby(Span) = .{ .segments = &segments };
+    try std.testing.expect(validRuby(ruby));
+    // A default/inherited owner remains valid; adding margins does not invent a
+    // requirement for a body-normalized font snapshot or alter its scale.
+    try std.testing.expectEqualDeep(@as(InlineFontSnapshot, .{}), readings[0].owner.font);
+    for ([_]StyleLengthUnit{ .px, .em }) |unit| {
+        for ([_]f32{ 0, 0.25, 10 }) |number| {
+            reading.margins = .{ .top = .{ .unit = unit, .value = number }, .bottom = zero };
+            readings[0] = reading; try std.testing.expect(validRuby(ruby));
+            try std.testing.expect(validRubyAnnotationMargins(reading.margins.?));
+        }
+        for ([_]f32{ -0.25, std.math.inf(f32), -std.math.inf(f32), std.math.nan(f32) }) |number| {
+            reading.margins = .{ .top = .{ .unit = unit, .value = number }, .bottom = zero };
+            readings[0] = reading; try std.testing.expect(!validRuby(ruby));
+            reading.margins = .{ .top = zero, .bottom = .{ .unit = unit, .value = number } };
+            readings[0] = reading; try std.testing.expect(!validRuby(ruby));
+        }
+    }
+    readings[0].margins = .{ .top = zero, .bottom = zero };
+    var bad_children = [_]Span{.{ .kind = .link, .text = "kept action", .target = "Target" }};
+    readings[0].spans = &bad_children;
+    const owner: Span = .{ .ruby = &ruby };
+    const stored: Stored = .{ .entry = .{ .title = "RT", .kind = .supplemental, .sections = &.{}, .preamble_spans = &.{owner} } };
+    try validateStored(a, stored, "RT", .supplemental, null);
+    bad_children[0].target = "";
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "RT", .supplemental, null));
+    bad_children[0].target = "Target";
+    readings[0].margins.?.bottom.value = std.math.inf(f32);
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "RT", .supplemental, null));
+}
+
+test "Ruby annotation margin discovery reuses padding work and leaves item depth and fallback ownership unchanged" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    var readings = [_]RubyAnnotation(Span){.{ .base_start = 0, .base_count = 1, .level = 0,
+        .owner = .{ .font = .{} } }};
+    const bases = [_]RubyBase(Span){.{ .owner = .{ .font = .{} } }};
+    const segments = [_]RubySegment(Span){.{ .bases = &bases, .annotations = &readings }};
+    const ruby: Ruby(Span) = .{ .segments = &segments };
+    const roots = [_]Span{.{ .ruby = &ruby }};
+    var legacy: DeepTableWork = .{ .remaining = 6 };
+    try legacy.entry(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expectEqual(@as(usize, 0), legacy.remaining);
+    try std.testing.expect(!legacy.ruby_annotation_margins_found);
+    try std.testing.expect(!DeepTableWork.hasInlinePaddingOrRubyMargins(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    readings[0].margins = .{ .top = zero, .bottom = zero };
+    var explicit: DeepTableWork = .{ .remaining = 6 };
+    try explicit.entry(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expectEqual(@as(usize, 0), explicit.remaining);
+    try std.testing.expect(explicit.ruby_annotation_margins_found);
+    try std.testing.expect(!explicit.inline_group_found);
+    try std.testing.expect(!DeepTableWork.hasInlinePaddingGroups(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expect(DeepTableWork.hasInlinePaddingOrRubyMargins(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    var short: DeepTableWork = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, short.entry(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    var bad_margin: DeepTableWork = .{};
+    readings[0].margins.?.top.value = -1;
+    try std.testing.expectError(error.InvalidPresentation, bad_margin.entry(&roots, @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
 }

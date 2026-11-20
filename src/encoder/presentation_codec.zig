@@ -55,7 +55,9 @@ const z_high_features: u16 = positioned_containers_feature | table_min_width_fea
 const positioned_containers_features: u16 = owner_geometry_features | z_high_features;
 pub const resolved_style_borders_magic = "DPRa";
 const resolved_style_borders_feature: u32 = 0x100000;
-const resolved_style_borders_features: u32 = positioned_containers_features | resolved_style_borders_feature;
+const ruby_annotation_margins_feature: u32 = 0x40000;
+const a_high_features: u32 = resolved_style_borders_feature | ruby_annotation_margins_feature;
+const resolved_style_borders_features: u32 = positioned_containers_features | a_high_features;
 // Bit23 remains reserved; DPRZ uses a separate style extension.
 const container_owner_snapshot_flag: u32 = 0x1000000;
 const container_owner_font_flag: u32 = 0x10000;
@@ -121,6 +123,7 @@ const Encoder = struct {
     positioned_containers_enabled: bool = false,
     table_min_width_enabled: bool = false,
     resolved_style_borders_enabled: bool = false,
+    ruby_annotation_margins_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
     clipped_absolute_enabled: bool = false,
@@ -605,7 +608,13 @@ const Encoder = struct {
                 try self.rubySpans(annotation.spans, false);
                 try self.rubySpans(annotation.fallback_before, false);
                 try self.rubySpans(annotation.fallback_after, false);
-                try self.byte(@intFromBool(annotation.explicit_fallback));
+                const margins = types.rubyAnnotationMargins(annotation);
+                if (margins != null and (!self.ruby_annotation_margins_enabled or !self.capability_s or self.version != .container_fonts)) return error.InvalidPresentation;
+                try self.byte(@as(u8, @intFromBool(annotation.explicit_fallback)) | (if (margins != null) @as(u8, 2) else 0));
+                if (margins) |margin_pair| {
+                    try self.styleLength(margin_pair.top);
+                    try self.styleLength(margin_pair.bottom);
+                }
             }
         }
     }
@@ -1871,6 +1880,7 @@ const Reader = struct {
     positioned_containers_enabled: bool = false,
     table_min_width_enabled: bool = false,
     resolved_style_borders_enabled: bool = false,
+    ruby_annotation_margins_enabled: bool = false,
     body_typography_enabled: bool = false,
     inline_box_groups: bool = false,
     clipped_absolute_enabled: bool = false,
@@ -2299,13 +2309,22 @@ const Reader = struct {
             for (bases) |*base| base.* = .{ .gap_before = try self.rubySpans(true), .owner = try self.rubyOwner(), .spans = try self.rubySpans(false) };
             const annotation_count = try self.count(47);
             const annotations = try self.a.alloc(types.RubyAnnotation(types.Span), annotation_count);
-            for (annotations) |*annotation| annotation.* = .{
-                .base_start = try self.readU32(), .base_count = try self.readU32(), .level = try self.readU32(),
-                .owner = try self.rubyOwner(),
-                .gap_before = try self.rubySpans(true), .spans = try self.rubySpans(false),
-                .fallback_before = try self.rubySpans(false), .fallback_after = try self.rubySpans(false),
-                .explicit_fallback = try self.presence(),
-            };
+            for (annotations) |*annotation| {
+                annotation.* = .{
+                    .base_start = try self.readU32(), .base_count = try self.readU32(), .level = try self.readU32(),
+                    .owner = try self.rubyOwner(),
+                    .gap_before = try self.rubySpans(true), .spans = try self.rubySpans(false),
+                    .fallback_before = try self.rubySpans(false), .fallback_after = try self.rubySpans(false),
+                };
+                const flags = try self.byte();
+                if (flags & ~@as(u8, 3) != 0 or (flags & 2 != 0 and
+                    (!self.ruby_annotation_margins_enabled or !self.capability_s or self.version != .container_fonts))) return error.InvalidPresentation;
+                annotation.explicit_fallback = flags & 1 != 0;
+                if (flags & 2 != 0) annotation.margins = .{
+                    .top = try self.styleLength(),
+                    .bottom = try self.styleLength(),
+                };
+            }
             segment.* = .{ .gap_before = gap, .bases = bases, .annotations = annotations };
         }
         const result = try self.a.create(types.Ruby(types.Span));
@@ -4271,11 +4290,13 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
-    const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
     const t_required = !u_required and hasDeepTables(stored.entry.sections, stored.entry.references);
     var work: DeepTableWork = .{};
     if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
+    const a_required = resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4300,10 +4321,12 @@ pub fn encodeAlloc(a: A, stored: types.Stored) ![]u8 {
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(stored.entry.sections, stored.entry.references)) inline_catalog = try types.ImageCatalogIndex.init(a, stored.entry.media);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (resolved_style_borders_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
-    if (resolved_style_borders_required) try encoder.writeU32(@as(u32, y_features) | resolved_style_borders_feature |
+    try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (a_required) try encoder.writeU32(@as(u32, y_features) |
+        (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
+        (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (audio_required) @as(u32, audio_control_feature) else 0))
@@ -4367,11 +4390,13 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     const resolved_style_borders_required = DeepTableWork.hasResolvedStyleBorders(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const z_required = resolved_style_borders_required or positioned_required or table_min_width_required or audio_required;
     const v_required = z_required or y_required or DeepTableWork.hasInlineActionGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
-    const u_required = v_required or DeepTableWork.hasInlinePaddingGroups(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const u_required = v_required or DeepTableWork.hasInlinePaddingOrRubyMargins(display_title, sections, @as([]const types.Span, &.{}), references_value);
     const t_required = !u_required and hasDeepTables(sections, references_value);
     var work: DeepTableWork = .{};
     if (body_typography) |body| try work.bodyTypography(body);
     if (u_required or t_required) try work.entry(display_title, sections, @as([]const types.Span, &.{}), references_value);
+    const ruby_annotation_margins_required = work.ruby_annotation_margins_found;
+    const a_required = resolved_style_borders_required or ruby_annotation_margins_required;
     const y_features: u8 = (if (work.container_owner_font_found) owner_font_feature else @as(u8, 0)) |
         (if (body_required) body_typography_feature else @as(u8, 0)) |
         (if (work.inline_box_group_found) inline_box_feature else @as(u8, 0)) |
@@ -4396,10 +4421,12 @@ pub fn encodeBuildWithBodyTypographyAlloc(
     var inline_catalog: ?types.ImageCatalogIndex = null;
     defer if (inline_catalog) |*catalog| catalog.deinit(a);
     if (audio_required or hasInlineTableMedia(sections, references_value)) inline_catalog = try types.ImageCatalogIndex.init(a, media_value);
-    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
+    var encoder: Encoder = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = s_required or r_required or q_required or pending_features != 0, .capability_q = s_required or r_required or q_required, .capability_r = s_required or r_required, .capability_s = s_required, .capability_t = t_required, .capability_u = u_required, .capability_v = v_required or a_required, .capability_w = w_required, .positioned_containers_enabled = positioned_required, .table_min_width_enabled = table_min_width_required, .resolved_style_borders_enabled = resolved_style_borders_required, .ruby_annotation_margins_enabled = ruby_annotation_margins_required, .body_typography_enabled = body_required, .inline_box_groups = box_required, .clipped_absolute_enabled = clipped_required, .image_occurrences = occurrence_required, .audio_controls = audio_required, .text_flow = pending_features & 16 != 0, .inline_media_catalog = if (inline_catalog) |*catalog| catalog else null };
     defer encoder.deinit();
-    try encoder.out.appendSlice(a, if (resolved_style_borders_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
-    if (resolved_style_borders_required) try encoder.writeU32(@as(u32, y_features) | resolved_style_borders_feature |
+    try encoder.out.appendSlice(a, if (a_required) resolved_style_borders_magic else if (z_required) positioned_containers_magic else if (y_required) owner_geometry_magic else if (v_required) inline_action_groups_magic else if (u_required) inline_padding_groups_magic else if (t_required) deep_tables_magic else if (s_required) ruby_magic else if (r_required) intrinsic_table_magic else if (q_required) table_corners_magic else if (pending_features != 0) body_adjoining_magic else if (inline_styles) inline_styles_magic else if (rule_styles) rule_styles_magic else versionMagic(version));
+    if (a_required) try encoder.writeU32(@as(u32, y_features) |
+        (if (resolved_style_borders_required) resolved_style_borders_feature else @as(u32, 0)) |
+        (if (ruby_annotation_margins_required) ruby_annotation_margins_feature else @as(u32, 0)) |
         (if (positioned_required) @as(u32, positioned_containers_feature) else 0) |
         (if (table_min_width_required) @as(u32, table_min_width_feature) else 0) |
         (if (audio_required) @as(u32, audio_control_feature) else 0))
@@ -4464,7 +4491,7 @@ fn decodeImpl(
     const z_features: u32 = if (a_header) blk: {
         if (payload.len < magic.len + 4) return error.InvalidPresentation;
         const flags = std.mem.readInt(u32, payload[magic.len..][0..4], .little);
-        if (flags & resolved_style_borders_feature == 0 or flags & ~resolved_style_borders_features != 0) return error.InvalidPresentation;
+        if (flags & a_high_features == 0 or flags & ~resolved_style_borders_features != 0) return error.InvalidPresentation;
         break :blk flags;
     } else if (z_header) blk: {
         if (payload.len < magic.len + 2) return error.InvalidPresentation;
@@ -4482,6 +4509,7 @@ fn decodeImpl(
     const table_min_width_header = z_features & table_min_width_feature != 0;
     const audio_control_header = z_features & audio_control_feature != 0;
     const resolved_style_borders_enabled = a_header and z_features & resolved_style_borders_feature != 0;
+    const ruby_annotation_margins_enabled = a_header and z_features & ruby_annotation_margins_feature != 0;
     const owner_fonts_header = y_features & owner_font_feature != 0;
     const body_typography_header = y_features & body_typography_feature != 0;
     const inline_box_header = y_features & inline_box_feature != 0;
@@ -4502,7 +4530,7 @@ fn decodeImpl(
         if (std.mem.eql(u8, payload[0..3], "DPR")) return error.UnsupportedPresentationVersion;
         return error.InvalidPresentation;
     };
-    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
+    var reader: Reader = .{ .a = a, .version = version, .rule_styles = rule_styles, .inline_styles = inline_styles, .capability_p = body_adjoining_header, .capability_q = ruby_header or intrinsic_header or table_corners_header, .capability_r = ruby_header or intrinsic_header, .capability_s = ruby_header, .capability_t = deep_tables_header, .capability_u = inline_groups_header, .capability_v = action_groups_header, .capability_w = owner_fonts_header, .positioned_containers_enabled = positioned_header, .table_min_width_enabled = table_min_width_header, .resolved_style_borders_enabled = resolved_style_borders_enabled, .ruby_annotation_margins_enabled = ruby_annotation_margins_enabled, .body_typography_enabled = body_typography_header, .inline_box_groups = inline_box_header, .clipped_absolute_enabled = clipped_absolute_header, .image_occurrences = image_occurrence_header, .audio_controls = audio_control_header, .bytes = payload, .pos = magic.len + (if (a_header) @as(usize, 4) else if (z_header) @as(usize, 2) else @as(usize, @intFromBool(owner_geometry_header))), .metrics = metrics };
     const display_title = try reader.spans();
     const sections = try reader.sections();
     const preamble = try reader.spans();
@@ -4528,6 +4556,7 @@ fn decodeImpl(
                 image_occurrence_header != inline_work.image_occurrence_found or
                 audio_control_header != inline_work.audio_control_found or
                 resolved_style_borders_enabled != inline_work.resolved_style_border_found or
+                ruby_annotation_margins_enabled != inline_work.ruby_annotation_margins_found or
                 body_typography_header != (body_typography != null)) return error.InvalidPresentation;
         } else if (action_groups_header) {
             if (!inline_work.inline_action_group_found) return error.InvalidPresentation;
@@ -17740,4 +17769,342 @@ test "mixed border and radius payloads keep literal local suffix cursor and lega
     var bad_input = T.reader(a, bad); bad_input.inline_box_groups = true;
     try std.testing.expectEqualDeep(T.mixed, try bad_input.styleBorder());
     try std.testing.expectError(error.InvalidPresentation, bad_input.span());
+}
+
+
+const RubyAnnotationMargins11CodecTest = struct {
+    const zero: types.RubyAnnotationMargins = .{ .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .px, .value = 0 } };
+    const quarter: types.RubyAnnotationMargins = .{ .top = .{ .unit = .em, .value = 0.25 }, .bottom = .{ .unit = .em, .value = 0.25 } };
+    const simple: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} } }},
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0 }} }} };
+    fn changed(a: A, prototype: types.Ruby(types.Span), margins: ?types.RubyAnnotationMargins, explicit: bool) !types.Ruby(types.Span) {
+        const segments = try a.dupe(types.RubySegment(types.Span), prototype.segments);
+        const annotations = try a.dupe(types.RubyAnnotation(types.Span), segments[0].annotations);
+        annotations[0].margins = margins;
+        annotations[0].explicit_fallback = explicit;
+        segments[0].annotations = annotations;
+        return .{ .segments = segments };
+    }
+    fn encoder(a: A) Encoder {
+        var result = RubyCodecTest.encoder(a);
+        result.ruby_annotation_margins_enabled = true;
+        result.text_flow = true;
+        return result;
+    }
+    fn reader(a: A, bytes: []const u8) Reader {
+        var result = RubyCodecTest.reader(a, bytes);
+        result.ruby_annotation_margins_enabled = true;
+        result.text_flow = true;
+        return result;
+    }
+    // Independent legacy simple-Ruby framing, stopping before the annotation's
+    // old terminal bool. The new annotation/pair writer is never called here.
+    fn legacyPrefix(out: *Encoder) !void {
+        try out.count(1); try out.rubySpans(@as([]const types.Span, &.{}), true); try out.count(1);
+        try out.rubySpans(@as([]const types.Span, &.{}), true); try out.rubyOwner(.{ .font = .{} });
+        try out.rubySpans(@as([]const types.Span, &.{}), false); try out.count(1);
+        try out.writeU32(0); try out.writeU32(1); try out.writeU32(0); try out.rubyOwner(.{ .font = .{} });
+        try out.rubySpans(@as([]const types.Span, &.{}), true);
+        for (0..3) |_| try out.rubySpans(@as([]const types.Span, &.{}), false);
+    }
+    const Plain = struct {
+        a: A, out: std.ArrayList(u8) = .empty, actions: usize = 0,
+        fn emit(self: *@This(), value: types.Span) !void {
+            try self.out.appendSlice(self.a, value.text); try self.out.appendSlice(self.a, value.trail);
+            if (value.kind == .link or value.kind == .external_link) self.actions += 1;
+        }
+    };
+};
+
+test "RT margins preserve literal null flags and append only the ten byte annotation pair" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RubyAnnotationMargins11CodecTest;
+    var prefix = RubyCodecTest.encoder(a); defer prefix.deinit(); try T.legacyPrefix(&prefix);
+    try std.testing.expectEqual(@as(usize, 88), prefix.out.items.len);
+    const quarter_tail = [_]u8{ 1, 0, 0, 0x80, 0x3e, 1, 0, 0, 0x80, 0x3e };
+    const zero_tail = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    for ([_]bool{ false, true }) |explicit| {
+        for ([_]?types.RubyAnnotationMargins{ null, T.zero, T.quarter }) |margins| {
+            const value = try T.changed(a, T.simple, margins, explicit);
+            var out = T.encoder(a); defer out.deinit(); out.remaining_items = 5;
+            try out.ruby(value);
+            try std.testing.expectEqual(@as(usize, 0), out.remaining_items);
+            try std.testing.expectEqual(@as(usize, if (margins == null) 89 else 99), out.out.items.len);
+            try std.testing.expectEqualSlices(u8, prefix.out.items, out.out.items[0..88]);
+            try std.testing.expectEqual(@as(u8, @intFromBool(explicit)) | (if (margins != null) @as(u8, 2) else 0), out.out.items[88]);
+            if (margins) |pair| try std.testing.expectEqualSlices(u8,
+                if (pair.top.unit == .em) &quarter_tail else &zero_tail, out.out.items[89..]);
+            var metrics: DecodeMetrics = .{};
+            var cursor = T.reader(a, out.out.items); cursor.remaining_items = 5; cursor.metrics = &metrics;
+            try std.testing.expectEqualDeep(value, (try cursor.ruby()).*);
+            try std.testing.expectEqual(out.out.items.len, cursor.pos);
+            try std.testing.expectEqual(@as(usize, 0), cursor.remaining_items);
+            try std.testing.expectEqual(@as(u64, 5), metrics.total_items);
+            var short_work = T.reader(a, out.out.items); short_work.remaining_items = 4;
+            try std.testing.expectError(error.InvalidPresentation, short_work.ruby());
+            if (margins == null) {
+                var old = RubyCodecTest.encoder(a); defer old.deinit();
+                try T.legacyPrefix(&old); try old.byte(@intFromBool(explicit));
+                try std.testing.expectEqualSlices(u8, old.out.items, out.out.items);
+                var old_reader = RubyCodecTest.reader(a, out.out.items);
+                try std.testing.expectEqualDeep(value, (try old_reader.ruby()).*);
+            }
+        }
+    }
+    const margin_value = try T.changed(a, T.simple, T.quarter, true);
+    var joined = T.encoder(a); defer joined.deinit();
+    try joined.ruby(T.simple); const first_end = joined.out.items.len;
+    try joined.ruby(margin_value); const second_end = joined.out.items.len;
+    try joined.ruby(T.simple);
+    var cursor = T.reader(a, joined.out.items);
+    try std.testing.expectEqualDeep(T.simple, (try cursor.ruby()).*); try std.testing.expectEqual(first_end, cursor.pos);
+    try std.testing.expectEqualDeep(margin_value, (try cursor.ruby()).*); try std.testing.expectEqual(second_end, cursor.pos);
+    try std.testing.expectEqualDeep(T.simple, (try cursor.ruby()).*); try std.testing.expectEqual(joined.out.items.len, cursor.pos);
+}
+
+test "RT margin rich nested Stored build JSON and semantic actions remain complete" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RubyAnnotationMargins11CodecTest;
+    const inner = try T.changed(a, RubyCodecTest.value, T.quarter, false);
+    const nested: types.Ruby(types.Span) = .{ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .ruby = &inner }} }},
+        .annotations = &.{.{ .owner = .{ .font = .{ .font_scale = 9, .font_scale_basis = .css_px, .font_normalized = true } },
+            .base_start = 0, .base_count = 1, .level = 0, .margins = .{ .top = .{ .unit = .px, .value = 2 }, .bottom = .{ .unit = .em, .value = 0.25 } },
+            .spans = &.{.{ .kind = .external_link, .text = "han", .target = "https://example.test/reading", .tooltip = "annotation action" }},
+            .explicit_fallback = true, .fallback_before = &.{.{ .text = "[" }}, .fallback_after = &.{.{ .text = "]" }} }},
+    }} };
+    const values = [_]types.Span{.{ .text = "before " }, .{ .ruby = &nested }, .{ .text = " after" }};
+    const original = RubyCodecTest.stored(&values);
+    const encoded = try encodeAlloc(a, original);
+    try std.testing.expectEqualStrings("DPRa", encoded[0..4]);
+    try std.testing.expectEqual(@as(u32, 0x40000), std.mem.readInt(u32, encoded[4..8], .little));
+    const decoded = try decodeAlloc(a, encoded, "ruby", .supplemental, null);
+    try std.testing.expectEqualDeep(original, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encodeBuildAlloc(a, &values, original.entry.sections,
+        original.entry.organization, original.entry.references, original.entry.media));
+    try std.testing.expectEqualSlices(u8, encoded, try encodeAlloc(a, decoded));
+    const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+    const parsed = try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false });
+    try std.testing.expectEqualDeep(original, parsed);
+    var plain: T.Plain = .{ .a = a }; try types.visitRubyFallback(decoded.entry.display_title, &plain, T.Plain.emit);
+    try std.testing.expectEqualStrings("before 漢（かん）[han] after", plain.out.items);
+    try std.testing.expectEqual(@as(usize, 2), plain.actions);
+    const owner: types.Span = .{ .ruby = &inner };
+    const paragraph: types.Block = .{ .kind = .paragraph, .spans = &.{owner} };
+    for (0..5) |holder| {
+        var stored = RubyCodecTest.stored(&.{});
+        if (holder == 0) stored.entry.sections = &.{.{ .level = 2, .title = "Table", .blocks = &.{.{ .kind = .table,
+            .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &.{paragraph} }} }} } }} }}
+        else if (holder == 1) stored.entry.sections = &.{.{ .level = 2, .title = "Caption", .blocks = &.{.{ .kind = .table,
+            .table = .{ .caption = &.{owner}, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "cell" }} }} }} } }} }}
+        else if (holder == 2) stored.entry.references = &.{.{ .kind = .fragment, .number = 1, .group_number = null, .blocks = &.{paragraph} }}
+        else if (holder == 3) stored.entry.sections = &.{.{ .level = 2, .title = "Flow", .blocks = &.{.{ .kind = .paragraph,
+            .flow = &.{.{ .kind = .scope, .scope = .{ .mode = .isolate, .resolved_direction = .ltr,
+                .parts = &.{.{ .kind = .@"inline", .spans = &.{owner} }} } }} }} }}
+        else stored.entry.preamble_spans = &.{owner};
+        const bytes = try encodeAlloc(a, stored);
+        try std.testing.expectEqual(@as(u32, 0x40000), std.mem.readInt(u32, bytes[4..8], .little));
+        try std.testing.expectEqualDeep(stored, try decodeAlloc(a, bytes, "ruby", .supplemental, null));
+    }
+    var old_work: DeepTableWork = .{}; var new_work: DeepTableWork = .{};
+    try old_work.entry(&[_]types.Span{RubyCodecTest.owner}, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    try new_work.entry(&[_]types.Span{owner}, @as([]const types.Section, &.{}), @as([]const types.Span, &.{}), @as([]const types.Reference, &.{}));
+    try std.testing.expectEqual(old_work.remaining, new_work.remaining);
+    try std.testing.expect(!old_work.ruby_annotation_margins_found and new_work.ruby_annotation_margins_found);
+    // One higher-level RT spans both bases; its pair stays on that annotation.
+    const spanning: types.Ruby(types.Span) = .{ .segments = &.{.{
+        .bases = &.{
+            .{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "A" }} },
+            .{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "B" }} },
+        },
+        .annotations = &.{
+            .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0 },
+            .{ .owner = .{ .font = .{} }, .base_start = 1, .base_count = 1, .level = 0, .margins = T.zero, .spans = &.{.{ .text = "beta" }} },
+            .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 2, .level = 1, .margins = T.quarter, .spans = &.{.{ .text = "AB" }} },
+        },
+    }} };
+    const multi = RubyCodecTest.stored(&.{.{ .ruby = &spanning }});
+    const multi_bytes = try encodeAlloc(a, multi);
+    const multi_decoded = try decodeAlloc(a, multi_bytes, "ruby", .supplemental, null);
+    try std.testing.expectEqualDeep(multi, multi_decoded);
+    try std.testing.expectEqual(@as(u32, 2), multi_decoded.entry.display_title[0].ruby.?.segments[0].annotations[2].base_count);
+}
+
+test "RT margin malformed tails and invalid nested actions cannot borrow zero or hidden annotations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RubyAnnotationMargins11CodecTest;
+    const value = try T.changed(a, T.simple, T.quarter, false);
+    var writer = T.encoder(a); defer writer.deinit(); try writer.ruby(value);
+    try std.testing.expectEqual(@as(usize, 99), writer.out.items.len);
+    for (0..writer.out.items.len) |end| {
+        var truncated = T.reader(a, writer.out.items[0..end]);
+        try std.testing.expectError(error.InvalidPresentation, truncated.ruby());
+    }
+    for ([_]u8{ 4, 5, 0x80, 0xff }) |flag| {
+        const bytes = try a.dupe(u8, writer.out.items); bytes[88] = flag;
+        var cursor = T.reader(a, bytes); try std.testing.expectError(error.InvalidPresentation, cursor.ruby());
+    }
+    inline for (.{ @as(usize, 89), 94 }) |unit_at| {
+        const bytes = try a.dupe(u8, writer.out.items); bytes[unit_at] = 2;
+        var cursor = T.reader(a, bytes); try std.testing.expectError(error.InvalidPresentation, cursor.ruby());
+    }
+    inline for (.{ @as(usize, 90), 95 }) |number_at| {
+        for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+            const bytes = try a.dupe(u8, writer.out.items); std.mem.writeInt(u32, bytes[number_at..][0..4], @bitCast(invalid), .little);
+            var cursor = T.reader(a, bytes); try std.testing.expectError(error.InvalidPresentation, cursor.ruby());
+        }
+    }
+    var unmarked = RubyCodecTest.reader(a, writer.out.items);
+    try std.testing.expectError(error.InvalidPresentation, unmarked.ruby());
+    var old_writer = RubyCodecTest.encoder(a); defer old_writer.deinit();
+    try std.testing.expectError(error.InvalidPresentation, old_writer.ruby(value));
+    var no_s_writer = T.encoder(a); defer no_s_writer.deinit(); no_s_writer.capability_s = false;
+    try std.testing.expectError(error.InvalidPresentation, no_s_writer.ruby(value));
+    var no_s_reader = T.reader(a, writer.out.items); no_s_reader.capability_s = false;
+    try std.testing.expectError(error.InvalidPresentation, no_s_reader.ruby());
+    var old_version_writer = T.encoder(a); defer old_version_writer.deinit(); old_version_writer.version = .block_containers;
+    try std.testing.expectError(error.InvalidPresentation, old_version_writer.ruby(value));
+    var old_version_reader = T.reader(a, writer.out.items); old_version_reader.version = .block_containers;
+    try std.testing.expectError(error.InvalidPresentation, old_version_reader.ruby());
+    var too_deep = T.reader(a, writer.out.items); too_deep.ruby_depth = types.max_ruby_depth;
+    try std.testing.expectError(error.InvalidPresentation, too_deep.ruby());
+    var at_limit = T.reader(a, writer.out.items); at_limit.ruby_depth = types.max_ruby_depth - 1;
+    try std.testing.expectEqualDeep(value, (try at_limit.ruby()).*);
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+        var margins = T.zero; margins.top.value = invalid;
+        const bad = try T.changed(a, T.simple, margins, false);
+        try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(&.{.{ .ruby = &bad }})));
+    }
+    const bad_child: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = T.simple.segments[0].bases,
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+            .margins = T.zero, .spans = &.{.{ .kind = .link, .text = "invalid action", .target = "" }} }} }} };
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, RubyCodecTest.stored(&.{.{ .ruby = &bad_child }})));
+    const packet = try encodeAlloc(a, RubyCodecTest.stored(&.{.{ .ruby = &value }}));
+    const extra = try a.alloc(u8, packet.len + 1); @memcpy(extra[0..packet.len], packet); extra[packet.len] = 0;
+    try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, extra, "ruby", .supplemental, null));
+}
+
+test "RT margins compose independently with resolved Table Cell borders and percent radius under exact current census" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RubyAnnotationMargins11CodecTest;
+    const B = ResolvedStyleBorderCodecTest;
+    const rt = try T.changed(a, RubyCodecTest.value, T.quarter, false);
+    const rounded = PercentInlineBox50CodecTest.group(50);
+    const table_border: types.StyleBorder = .{ .resolved_edges = types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#dddddd" } } }) };
+    const cell_border: types.StyleBorder = .{ .resolved_edges = types.ResolvedStyleBorderEdges.all(.{ .inset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color } }) };
+    const following = [_]types.Span{ .{ .text = "after the complete table " },
+        .{ .kind = .external_link, .text = "outside action", .target = "https://example.test/rt-border-radius", .tooltip = "outside advice" } };
+    const references = [_]types.Reference{.{ .number = 1, .group_number = 1, .name = "after mixed payload", .spans = &following }};
+    var without_rt_items: u64 = 0;
+    for (0..8) |mask| {
+        const rt_on = mask & 1 != 0; const border_on = mask & 2 != 0; const radius_on = mask & 4 != 0;
+        const body = [_]types.Span{
+            .{ .text = "before " }, .{ .ruby = if (rt_on) &rt else &RubyCodecTest.value },
+            if (radius_on) .{ .inline_box_group = &rounded, .tooltip = "rounded help", .inline_style = .{ .cursor = .help } } else .{ .text = "e" },
+            .{ .kind = .link, .text = "entry action", .target = "Entry", .target_fragment = "sense", .tooltip = "local action" },
+        };
+        const cells = [_]types.Cell{.{ .header = true, .background = "#dffffe", .spans = &body,
+            .style = .{ .border = if (border_on) cell_border else null, .text_align = .center } }};
+        const rows = [_]types.Row{.{ .cells = &cells }};
+        const table: types.Table = .{ .caption = &.{.{ .text = "caption retained" }}, .geometry = .{ .border = 1 },
+            .style = .{ .border = if (border_on) table_border else null, .collapse = .collapse }, .rows = &rows };
+        const blocks = [_]types.Block{ .{ .kind = .table, .table = table }, .{ .kind = .paragraph, .spans = &following } };
+        var sections: [1]types.Section = undefined;
+        const original = B.stored(&blocks, &references, &sections);
+        try types.validateStored(a, original, original.entry.title, original.entry.kind, null);
+        const bytes = try encodeAlloc(a, original);
+        const high: u32 = (if (rt_on) ruby_annotation_margins_feature else @as(u32, 0)) |
+            (if (border_on) resolved_style_borders_feature else @as(u32, 0));
+        const expected = high | (if (radius_on) @as(u32, inline_box_feature) else 0);
+        if (high != 0) {
+            try std.testing.expectEqualStrings("DPRa", bytes[0..4]);
+            try std.testing.expectEqual(expected, std.mem.readInt(u32, bytes[4..8], .little));
+            if (mask == 7) try std.testing.expectEqualSlices(u8, "DPRa\x04\x00\x14\x00", bytes[0..8]);
+            // Both missing capabilities and claimed-but-absent capabilities must
+            // fail the actual tree census; the MG radius retains Box bit 4.
+            for ([_]u32{ ruby_annotation_margins_feature, resolved_style_borders_feature, @as(u32, inline_box_feature) }) |bit| {
+                const changed = try a.dupe(u8, bytes); std.mem.writeInt(u32, changed[4..8], expected ^ bit, .little);
+                try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, changed, original.entry.title, original.entry.kind, null));
+            }
+            const unknown = try a.dupe(u8, bytes); std.mem.writeInt(u32, unknown[4..8], expected | 0x80000000, .little);
+            try std.testing.expectError(error.InvalidPresentation, decodeAlloc(a, unknown, original.entry.title, original.entry.kind, null));
+        } else if (radius_on) {
+            try std.testing.expectEqualSlices(u8, "DPRY\x04", bytes[0..5]);
+        } else try std.testing.expectEqualStrings(ruby_magic, bytes[0..4]);
+        var metrics: DecodeMetrics = .{};
+        const decoded = try decodeWithMetricsAlloc(a, bytes, original.entry.title, original.entry.kind, null, &metrics);
+        try std.testing.expectEqualDeep(original, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encodeAlloc(a, decoded));
+        try std.testing.expectEqualSlices(u8, bytes, try encodeBuildAlloc(a, original.entry.display_title, original.entry.sections,
+            original.entry.organization, original.entry.references, original.entry.media));
+        const json = try std.json.Stringify.valueAlloc(a, decoded, .{});
+        try std.testing.expectEqualDeep(original, try std.json.parseFromSliceLeaky(types.Stored, a, json, .{ .ignore_unknown_fields = false }));
+        const decoded_table = decoded.entry.sections[0].blocks[0].table.?;
+        const retained = decoded_table.rows[0].cells[0].spans;
+        try std.testing.expectEqualDeep(if (rt_on) @as(?types.RubyAnnotationMargins, T.quarter) else null,
+            retained[1].ruby.?.segments[0].annotations[0].margins);
+        try std.testing.expectEqualDeep(if (border_on) @as(?types.StyleBorder, table_border) else null, decoded_table.style.?.border);
+        try std.testing.expectEqualDeep(if (border_on) @as(?types.StyleBorder, cell_border) else null, decoded_table.rows[0].cells[0].style.?.border);
+        if (radius_on) {
+            try std.testing.expectEqual(types.StyleWidthUnit.percent, retained[2].inline_box_group.?.radius.?.unit);
+            try std.testing.expectEqual(@as(f32, 50), retained[2].inline_box_group.?.radius.?.value);
+            try std.testing.expectEqualStrings("rounded help", retained[2].tooltip.?);
+            try std.testing.expectEqual(types.InlineCursor.help, retained[2].inline_style.?.cursor.?);
+        }
+        try std.testing.expectEqualStrings("sense", retained[3].target_fragment.?);
+        try std.testing.expectEqualStrings(following[1].target, decoded.entry.sections[0].blocks[1].spans[1].target);
+        try std.testing.expectEqualStrings(references[0].name, decoded.entry.references[0].name);
+        try std.testing.expectEqualDeep(@as([]const types.Span, &following), decoded.entry.references[0].spans);
+        if (mask == 6) without_rt_items = metrics.total_items;
+        if (mask == 7) try std.testing.expectEqual(without_rt_items, metrics.total_items);
+    }
+    // Annotation payloads cannot hide a bad link from either public encoder.
+    const bad_ruby: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = T.simple.segments[0].bases,
+        .annotations = &.{.{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0,
+            .margins = T.zero, .spans = &.{.{ .kind = .link, .text = "invalid nested action", .target = "" }} }} }} };
+    const invalid_spans = [_]types.Span{.{ .ruby = &bad_ruby }};
+    const invalid = RubyCodecTest.stored(&invalid_spans);
+    try std.testing.expectError(error.InvalidPresentation, encodeAlloc(a, invalid));
+    try std.testing.expectError(error.InvalidPresentation, encodeBuildAlloc(a, invalid.entry.display_title, invalid.entry.sections,
+        invalid.entry.organization, invalid.entry.references, invalid.entry.media));
+}
+
+
+test "RT margin generic old annotation shape keeps null binary and JSON exact" {
+    const OldAnnotation = struct {
+        base_start: u32, base_count: u32, level: u32, owner: types.RubyOwner,
+        gap_before: []const types.Span = &.{}, spans: []const types.Span = &.{},
+        fallback_before: []const types.Span = &.{}, fallback_after: []const types.Span = &.{}, explicit_fallback: bool = false,
+    };
+    const OldSegment = struct { gap_before: []const types.Span = &.{}, bases: []const types.RubyBase(types.Span), annotations: []const OldAnnotation };
+    const OldRuby = struct { segments: []const OldSegment };
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = RubyAnnotationMargins11CodecTest;
+    const old_annotation: OldAnnotation = .{ .base_start = 0, .base_count = 1, .level = 0, .owner = .{ .font = .{} } };
+    const old: OldRuby = .{ .segments = &.{.{ .bases = T.simple.segments[0].bases, .annotations = &.{old_annotation} }} };
+    try std.testing.expect(types.rubyAnnotationMargins(old_annotation) == null);
+    var old_writer = T.encoder(a); defer old_writer.deinit(); try old_writer.ruby(old);
+    var new_writer = T.encoder(a); defer new_writer.deinit(); try new_writer.ruby(T.simple);
+    try std.testing.expectEqualSlices(u8, old_writer.out.items, new_writer.out.items);
+    try std.testing.expectEqualStrings(try std.json.Stringify.valueAlloc(a, old_annotation, .{}),
+        try std.json.Stringify.valueAlloc(a, T.simple.segments[0].annotations[0], .{}));
+    const BuildSpan = struct {
+        kind: enum { template, text, external_link, link, line_break } = .text,
+        role: types.Role = .normal, text: []const u8 = "", target: []const u8 = "",
+        language: []const u8 = "", classes: []const u8 = "", direction: []const u8 = "", flags: u8 = 0,
+        ruby: ?*const types.Ruby(@This()) = null,
+    };
+    const build: types.Ruby(BuildSpan) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} },
+        .spans = &.{.{ .kind = .link, .text = "base", .target = "Kept" }} }}, .annotations = &.{.{ .base_start = 0, .base_count = 1, .level = 0,
+        .owner = .{ .font = .{} }, .margins = T.quarter, .spans = &.{.{ .text = "reading" }} }} }} };
+    const stored: types.Ruby(types.Span) = .{ .segments = &.{.{ .bases = &.{.{ .owner = .{ .font = .{} },
+        .spans = &.{.{ .kind = .link, .text = "base", .target = "Kept" }} }}, .annotations = &.{.{ .base_start = 0, .base_count = 1, .level = 0,
+        .owner = .{ .font = .{} }, .margins = T.quarter, .spans = &.{.{ .text = "reading" }} }} }} };
+    var generic_out = T.encoder(a); defer generic_out.deinit(); try generic_out.span(BuildSpan{ .ruby = &build });
+    var typed_out = T.encoder(a); defer typed_out.deinit(); try typed_out.span(types.Span{ .ruby = &stored });
+    try std.testing.expectEqualSlices(u8, typed_out.out.items, generic_out.out.items);
+    var cursor = T.reader(a, generic_out.out.items);
+    try std.testing.expectEqualDeep(types.Span{ .ruby = &stored }, try cursor.span());
 }

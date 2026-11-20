@@ -180,12 +180,14 @@ const RubyOwnerNotices = struct {
     inline_padding: bool = false,
     inline_action: bool = false,
     inline_box: bool = false,
+    ruby_annotation_margins: bool = false,
     fn merge(self: *@This(), other: @This()) void {
         self.inline_style = self.inline_style or other.inline_style;
         self.css_font = self.css_font or other.css_font;
         self.inline_padding = self.inline_padding or other.inline_padding;
         self.inline_action = self.inline_action or other.inline_action;
         self.inline_box = self.inline_box or other.inline_box;
+        self.ruby_annotation_margins = self.ruby_annotation_margins or other.ruby_annotation_margins;
     }
 };
 fn rubyOwnerNotices(values: []const model.Span, depth: usize) error{InvalidPresentation}!RubyOwnerNotices {
@@ -223,28 +225,36 @@ fn rubyOwnerNotices(values: []const model.Span, depth: usize) error{InvalidPrese
         }
         if (span.ruby) |ruby| {
             if (depth >= RubyTypes.max_ruby_depth) return error.InvalidPresentation;
-            // The shared visitor has already validated this tree. Entirely empty
-            // Ruby adds no terminal sentinel merely because metadata is present.
-            if (!try spansPresent(&.{span})) continue;
-            result.inline_style = result.inline_style or span.inline_style != null;
-            result.css_font = result.css_font or span.font_scale_basis == .css_px;
+            // Empty semantic text cannot establish whether authored RT margins
+            // have native geometry. Still suppress the legacy typography notices
+            // for entirely empty Ruby, retaining only this new geometry debt.
+            const present = try spansPresent(&.{span});
+            var subtree: RubyOwnerNotices = .{};
+            subtree.inline_style = subtree.inline_style or span.inline_style != null;
+            subtree.css_font = subtree.css_font or span.font_scale_basis == .css_px;
             for (ruby.segments) |segment| {
-                result.merge(try rubyOwnerNotices(segment.gap_before, depth + 1));
+                subtree.merge(try rubyOwnerNotices(segment.gap_before, depth + 1));
                 for (segment.bases) |base| {
-                    result.inline_style = result.inline_style or base.owner.inline_style != null;
-                    result.css_font = result.css_font or base.owner.font.font_scale_basis == .css_px;
-                    result.merge(try rubyOwnerNotices(base.gap_before, depth + 1));
-                    result.merge(try rubyOwnerNotices(base.spans, depth + 1));
+                    subtree.inline_style = subtree.inline_style or base.owner.inline_style != null;
+                    subtree.css_font = subtree.css_font or base.owner.font.font_scale_basis == .css_px;
+                    subtree.merge(try rubyOwnerNotices(base.gap_before, depth + 1));
+                    subtree.merge(try rubyOwnerNotices(base.spans, depth + 1));
                 }
                 for (segment.annotations) |annotation| {
-                    result.inline_style = result.inline_style or annotation.owner.inline_style != null;
-                    result.css_font = result.css_font or annotation.owner.font.font_scale_basis == .css_px;
-                    result.merge(try rubyOwnerNotices(annotation.gap_before, depth + 1));
-                    result.merge(try rubyOwnerNotices(annotation.fallback_before, depth + 1));
-                    result.merge(try rubyOwnerNotices(annotation.spans, depth + 1));
-                    result.merge(try rubyOwnerNotices(annotation.fallback_after, depth + 1));
+                    if (annotation.margins) |margins| {
+                        subtree.ruby_annotation_margins = subtree.ruby_annotation_margins or
+                            margins.top.value != 0 or margins.bottom.value != 0;
+                    }
+                    subtree.inline_style = subtree.inline_style or annotation.owner.inline_style != null;
+                    subtree.css_font = subtree.css_font or annotation.owner.font.font_scale_basis == .css_px;
+                    subtree.merge(try rubyOwnerNotices(annotation.gap_before, depth + 1));
+                    subtree.merge(try rubyOwnerNotices(annotation.fallback_before, depth + 1));
+                    subtree.merge(try rubyOwnerNotices(annotation.spans, depth + 1));
+                    subtree.merge(try rubyOwnerNotices(annotation.fallback_after, depth + 1));
                 }
             }
+            if (present) result.merge(subtree) else
+                result.ruby_annotation_margins = result.ruby_annotation_margins or subtree.ruby_annotation_margins;
         }
     }
     return result;
@@ -685,10 +695,10 @@ fn spansTextDisplayWithState(w: *std.Io.Writer, spans: []const model.Span, color
             try w.writeAll(terminal_action_group_notice);
             state.inline_action_reported = true;
         }
-        if ((notices.inline_padding or notices.inline_box) and !state.inline_padding_reported) {
+        if ((notices.inline_padding or notices.inline_box or notices.ruby_annotation_margins) and !state.inline_padding_reported) {
             // The TTY has no CSS inline-fragment geometry. Retain semantic
             // children and effective actions; never replace edges with spaces,
-            // underline or ASCII pitch graphics.
+            // underline or ASCII pitch graphics. RT margins likewise add no shim text.
             const projected_report = if (projection) |parent| parent.geometry_report != null or parent.float_flow != null else false;
             if (!projected_report) if (container_paint) |paint| if (paint.geometry_report) |report| try appendProjectionFallback(report);
             try terminalGeometryRefusal(w, projection);
@@ -11159,4 +11169,234 @@ test "float capture owns each nested geometry notice without advancing the sourc
     }
     const overlapping = [_]FlowEvent{ .{ .kind = .text, .start = 0, .end = start + 1 }, owner };
     try std.testing.expectError(error.InvalidTerminalFlow, floatLayoutAlloc(a, frame.written(), 90, &.{}, &overlapping, false));
+}
+
+const RubyAnnotationMarginTerminalTest = struct {
+    fn withMargins(a: std.mem.Allocator, original: model.Span, margins: ?RubyTypes.RubyAnnotationMargins) !model.Span {
+        const ruby = try a.create(RubyTypes.Ruby(model.Span));
+        ruby.* = original.ruby.?.*;
+        const segments = try a.dupe(RubyTypes.RubySegment(model.Span), ruby.segments);
+        const annotations = try a.dupe(RubyTypes.RubyAnnotation(model.Span), segments[0].annotations);
+        annotations[0].margins = margins;
+        segments[0].annotations = annotations;
+        ruby.segments = segments;
+        var result = original;
+        result.ruby = ruby;
+        return result;
+    }
+};
+
+test "Ruby annotation margins preserve terminal base reading rp and action bytes with one geometry notice" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const original = try RubyTerminalTest.owner(a,
+        &.{.{ .kind = .link, .text = "字", .target = "Base", .target_fragment = "part", .bold = true }},
+        &.{.{ .kind = .external_link, .text = "じ", .target = "https://example.test/reading", .italic = true }},
+        &.{.{ .kind = .link, .text = "(", .target = "Opening", .underline = true }}, &.{.{ .text = ")" }});
+    const zero: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0 },
+    };
+    const margins: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .em, .value = 0.25 }, .bottom = .{ .unit = .px, .value = 3 },
+    };
+    var original_ansi: std.Io.Writer.Allocating = .init(a);
+    try spansText(&original_ansi.writer, &.{original}, true);
+    for ([_]?RubyTypes.RubyAnnotationMargins{ null, zero, margins }) |pair| {
+        const owner = try RubyAnnotationMarginTerminalTest.withMargins(a, original, pair);
+        const values = [_]model.Span{ .{ .text = "before " }, owner, owner, .{ .text = " after" } };
+        const warned = if (pair) |value| value.top.value != 0 or value.bottom.value != 0 else false;
+        var rendered: std.Io.Writer.Allocating = .init(a);
+        try spansText(&rendered.writer, &values, false);
+        try std.testing.expectEqualStrings(if (warned)
+            terminal_geometry_notice ++ "before 字(じ)字(じ) after"
+        else "before 字(じ)字(じ) after", rendered.written());
+        var plain: std.Io.Writer.Allocating = .init(a);
+        try spansPlainText(&plain.writer, &values);
+        try std.testing.expectEqualStrings("before 字(じ)字(じ) after", plain.written());
+        var ansi: std.Io.Writer.Allocating = .init(a);
+        try spansText(&ansi.writer, &.{owner}, true);
+        const prefix: usize = if (warned) terminal_geometry_notice.len else 0;
+        if (warned) try std.testing.expect(std.mem.startsWith(u8, ansi.written(), terminal_geometry_notice));
+        try std.testing.expectEqualStrings(original_ansi.written(), ansi.written()[prefix..]);
+        const Actions = struct {
+            base: usize = 0,
+            reading: usize = 0,
+            rp: usize = 0,
+            fn spans(self: *@This(), items: []const model.Span) !bool {
+                for (items) |span| {
+                    if (std.mem.eql(u8, span.target, "Base")) {
+                        try std.testing.expectEqualStrings("part", span.target_fragment.?);
+                        try std.testing.expect(span.bold);
+                        self.base += 1;
+                    } else if (std.mem.eql(u8, span.target, "https://example.test/reading")) {
+                        try std.testing.expect(span.italic);
+                        self.reading += 1;
+                    } else if (std.mem.eql(u8, span.target, "Opening")) {
+                        try std.testing.expect(span.underline);
+                        self.rp += 1;
+                    }
+                }
+                return false;
+            }
+        };
+        var actions: Actions = .{};
+        _ = try visitEntrySpanLists(.{ .title = "Margins", .kind = .supplemental, .preamble_spans = &values }, &actions);
+        try std.testing.expectEqual(@as(usize, 2), actions.base);
+        try std.testing.expectEqual(@as(usize, 2), actions.reading);
+        try std.testing.expectEqual(@as(usize, 2), actions.rp);
+        try std.testing.expectEqualDeep(pair, owner.ruby.?.segments[0].annotations[0].margins);
+        try std.testing.expect(original.ruby.?.segments[0].annotations[0].margins == null);
+    }
+}
+
+test "Ruby annotation margin notice reaches empty nested and later levels without inventing text or hiding geometry" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const margins: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0.5 },
+    };
+    const zero: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0 },
+    };
+    var empty = try RubyTerminalTest.owner(a, &.{}, &.{}, &.{}, &.{});
+    empty.inline_style = .{ .line_height = .{ .font_relative = .{ .factor = 1.2, .font = .{} } } };
+    for ([_]?RubyTypes.RubyAnnotationMargins{ null, zero, margins }) |pair| {
+        const owner = try RubyAnnotationMarginTerminalTest.withMargins(a, empty, pair);
+        const outer = try RubyTerminalTest.owner(a, &.{owner}, &.{}, &.{}, &.{});
+        var rendered: std.Io.Writer.Allocating = .init(a);
+        try spansText(&rendered.writer, &.{outer}, false);
+        try std.testing.expectEqualStrings(if (pair != null and pair.?.bottom.value != 0) terminal_geometry_notice else "", rendered.written());
+        var plain: std.Io.Writer.Allocating = .init(a);
+        try spansPlainText(&plain.writer, &.{outer});
+        try std.testing.expectEqualStrings("", plain.written());
+    }
+    // A zero first level must not conceal margins on a later annotation.
+    const annotations = [_]RubyTypes.RubyAnnotation(model.Span){
+        .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 0, .spans = &.{}, .margins = zero },
+        .{ .owner = .{ .font = .{} }, .base_start = 0, .base_count = 1, .level = 1, .spans = &.{}, .margins = margins },
+    };
+    const ruby: RubyTypes.Ruby(model.Span) = .{ .segments = &.{.{
+        .bases = &.{.{ .owner = .{ .font = .{} }, .spans = &.{.{ .text = "base" }} }}, .annotations = &annotations,
+    }} };
+    var levels: std.Io.Writer.Allocating = .init(a);
+    try spansText(&levels.writer, &.{.{ .text = "", .ruby = &ruby }}, false);
+    try std.testing.expectEqualStrings(terminal_geometry_notice ++ "base", levels.written());
+    // Original equality may affect native auto-hiding; terminal text is no proof
+    // that these authored margins have no geometry.
+    const equal = try RubyAnnotationMarginTerminalTest.withMargins(a,
+        try RubyTerminalTest.owner(a, &.{.{ .text = "same" }}, &.{.{ .text = "same" }}, &.{}, &.{}), margins);
+    var equal_text: std.Io.Writer.Allocating = .init(a);
+    try spansText(&equal_text.writer, &.{equal}, false);
+    try std.testing.expectEqualStrings(terminal_geometry_notice ++ "same（same）", equal_text.written());
+    var nested = try RubyAnnotationMarginTerminalTest.withMargins(a, empty, margins);
+    for (1..RubyTypes.max_ruby_depth) |_| {
+        const children = try a.dupe(model.Span, &.{nested});
+        nested = try RubyTerminalTest.owner(a, children, &.{}, &.{}, &.{});
+    }
+    var limit: std.Io.Writer.Allocating = .init(a);
+    try spansText(&limit.writer, &.{nested}, false);
+    try std.testing.expectEqualStrings(terminal_geometry_notice, limit.written());
+    const over = try RubyTerminalTest.owner(a, &.{nested}, &.{}, &.{}, &.{});
+    var refused: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expectError(error.InvalidPresentation, spansText(&refused.writer, &.{over}, false));
+    try std.testing.expectEqual(@as(usize, 0), refused.written().len);
+}
+
+test "Ruby annotation margins cannot conceal invalid values or empty invalid action children in terminal fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const original = try RubyTerminalTest.owner(a, &.{.{ .text = "base" }}, &.{}, &.{}, &.{});
+    for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |invalid| {
+        const owner = try RubyAnnotationMarginTerminalTest.withMargins(a, original, .{
+            .top = .{ .unit = .em, .value = invalid }, .bottom = .{ .unit = .px, .value = 0 },
+        });
+        var rendered: std.Io.Writer.Allocating = .init(a);
+        try std.testing.expectError(error.InvalidPresentation, spansText(&rendered.writer, &.{owner}, false));
+        try std.testing.expectEqual(@as(usize, 0), rendered.written().len);
+    }
+    const invalid_child = try RubyAnnotationMarginTerminalTest.withMargins(a,
+        try RubyTerminalTest.owner(a, &.{.{ .text = "base" }}, &.{.{ .kind = .link, .text = "", .target = "" }}, &.{}, &.{}), .{
+            .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0 },
+        });
+    var rendered: std.Io.Writer.Allocating = .init(a);
+    try std.testing.expectError(error.InvalidPresentation, spansText(&rendered.writer, &.{invalid_child}, false));
+    try std.testing.expectEqual(@as(usize, 0), rendered.written().len);
+}
+
+
+test "Ruby margin refusal stays in its captured owning flow and preserves decoded text actions and JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const codec = @import("blob_encoder").presentation_codec;
+    const original = try RubyTerminalTest.owner(a,
+        &.{.{ .kind = .link, .text = "RTBASE", .target = "Base", .target_fragment = "kept" }},
+        &.{.{ .kind = .external_link, .text = "RTREAD", .target = "https://example.test/rt" }},
+        &.{.{ .text = "[" }}, &.{.{ .text = "]" }});
+    const zero: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0 },
+    };
+    const nonzero: RubyTypes.RubyAnnotationMargins = .{
+        .top = .{ .unit = .em, .value = 0.25 }, .bottom = .{ .unit = .px, .value = 3 },
+    };
+    for ([_]?RubyTypes.RubyAnnotationMargins{ null, zero, nonzero }) |margins| {
+        const owner = try RubyAnnotationMarginTerminalTest.withMargins(a, original, margins);
+        const values = [_]model.Span{ owner, owner };
+        const entry: model.Entry = .{ .title = "RT captured flow", .kind = .citations, .preamble_spans = &values };
+        const before_json = try std.json.Stringify.valueAlloc(a, entry, .{});
+        const bytes = try codec.encodeAlloc(a, .{ .entry = entry });
+        var doc = try model.fromRecord(a, .{ .citations = .{ .title = entry.title, .payload = bytes } }); defer doc.deinit();
+        try std.testing.expectEqualDeep(entry, doc.entry);
+        const decoded = doc.entry.preamble_spans;
+        const warned = if (margins) |pair| pair.top.value != 0 or pair.bottom.value != 0 else false;
+        const wanted_count: usize = if (warned) 1 else 0;
+        for (0..3) |route| {
+            var frame: std.Io.Writer.Allocating = .init(a);
+            var lines: std.ArrayList(terminal.PoemLine) = .empty;
+            var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 90 };
+            var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines,
+                .float_flow = if (route == 0) &flow else null,
+                .geometry_report = if (route == 1) &flow else null };
+            // The third route is a staged caption/cell carrying only its owning report sink.
+            const paint: ?SpanContainerPaint = if (route == 2) .{ .geometry_report = &flow } else null;
+            try frame.writer.writeAll("BEFORE\n");
+            const start = frame.written().len;
+            flow.capturing = true;
+            var state: SpanDisplayState = .{};
+            try spansTextDisplayWithState(&frame.writer, decoded, false,
+                if (route < 2) &projection else null, false, null, false, null, paint, &state);
+            try frame.writer.writeByte('\n');
+            const end = frame.written().len;
+            try std.testing.expectEqual(@as(usize, 0), flow.events.items.len);
+            try std.testing.expectEqual(wanted_count, flow.captured_fallbacks);
+            try flow.record(.{ .kind = .table, .table = .{ .style = .{ .float_side = .left } } }, start);
+            flow.capturing = false;
+            flow.captured_fallbacks = 0;
+            try frame.writer.writeAll("AFTER\n");
+            try std.testing.expectEqual(@as(usize, 1), flow.events.items.len);
+            const event = flow.events.items[0];
+            try std.testing.expect(event.kind == .float_grid and event.start == start and event.end == end);
+            try std.testing.expectEqual(wanted_count, event.projection_fallbacks);
+            try std.testing.expectEqualStrings(if (warned)
+                "BEFORE\n" ++ terminal_geometry_notice ++ "RTBASE[RTREAD]RTBASE[RTREAD]\nAFTER\n"
+            else "BEFORE\nRTBASE[RTREAD]RTBASE[RTREAD]\nAFTER\n", frame.written());
+            const layout = try floatLayoutAlloc(a, frame.written(), 90, lines.items, flow.events.items, false);
+            try std.testing.expectEqual(wanted_count, layout.unsupported);
+            for ([_][]const u8{ "BEFORE", "AFTER" }) |text|
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, layout.text, text));
+            for ([_][]const u8{ "RTBASE", "RTREAD" }) |text|
+                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, layout.text, text));
+        }
+        var machine: std.Io.Writer.Allocating = .init(a);
+        try json(&machine.writer, .{ .operation = .lookup, .query = entry.title, .kind = .citations,
+            .language = null, .record_count = 1, .total_matches = 1, .entries = &.{doc.entry} });
+        const parsed = try std.json.parseFromSlice(std.json.Value, a, machine.written(), .{}); defer parsed.deinit();
+        const exported_json = try std.json.Stringify.valueAlloc(a, parsed.value.object.get("entries").?.array.items[0], .{});
+        const exported = try std.json.parseFromSlice(model.Entry, a, exported_json, .{}); defer exported.deinit();
+        try std.testing.expectEqualDeep(entry, exported.value);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, .{ .entry = exported.value }));
+        try std.testing.expectEqualStrings(before_json, try std.json.Stringify.valueAlloc(a, entry, .{}));
+    }
 }
