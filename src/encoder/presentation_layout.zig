@@ -567,6 +567,31 @@ fn paoNounGloss(block: wiki.Block) bool {
     return local_text;
 }
 
+// Pa’O mirror and ambulance use the same က…ဒါႏ clause and sentence stop
+// found in authored numbered noun definitions. A bullet before numbered
+// senses can instead be their headword, spelling or form, as on ကဝ်ႏ.
+fn analyzePaoLocalNoun(a: A, kind: []const u8, index: usize, origin: ?usize, blocks: []const wiki.Block, title: []const u8) !Lexeme {
+    if (title.len == 0 or hasTopLevelNumberedGloss(blocks)) return analyze(a, kind, index, origin, blocks, true);
+    var projected: ?[]wiki.Block = null;
+    for (blocks, 0..) |block, i| {
+        if (!paoNounGloss(block)) continue;
+        const text = std.mem.trim(u8, try wiki.plainText(a, block.spans), " \t\r\n");
+        if (!std.mem.endsWith(u8, text, "။")) continue;
+        // The lemma itself cannot supply the clause marker, even when a
+        // classifier, inflection or sentence stop follows it.
+        var parts = std.mem.splitSequence(u8, text[0 .. text.len - "။".len], title);
+        const clause = while (parts.next()) |fragment| {
+            const marker = std.mem.indexOf(u8, fragment, "ဒါႏ") orelse continue;
+            if (std.mem.indexOf(u8, fragment[0..marker], "က") != null) break true;
+        } else false;
+        if (!clause) continue;
+        if (projected == null) projected = try a.dupe(wiki.Block, blocks);
+        projected.?[i].kind = .definition;
+        projected.?[i].list_path = "#";
+    }
+    return analyze(a, kind, index, origin, projected orelse blocks, true);
+}
+
 const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
@@ -2762,6 +2787,9 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
             else if (declared_kind != null and std.mem.eql(u8, wiki_id, "blkwiktionary") and
                 std.mem.eql(u8, section.title, "နာမ်ႏ") and std.mem.eql(u8, owner orelse "", "English"))
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .pao_noun_bullet)
+            else if (declared_kind != null and page_title != null and std.mem.eql(u8, wiki_id, "blkwiktionary") and
+                std.mem.eql(u8, section.title, "နာမ်ႏ") and std.mem.eql(u8, owner orelse "", "Pa'o Karen"))
+                try analyzePaoLocalNoun(a, name, i, origin, section.blocks, page_title.?)
             else if (declared_kind != null and greekNounBulletSection(section, owner))
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .greek_noun_bullet)
             else if (greekSynonymSection(section, owner))
@@ -3062,6 +3090,32 @@ test "Pa'O dictionary noun heading organizes both English grandparents definitio
     try std.testing.expect(!dictionaryNounSection(sections[0], null, "blkwiktionary"));
     sections[0].title = "နာမ်ႏတင်";
     try std.testing.expect(!dictionaryNounSection(sections[0], "English", "blkwiktionary"));
+}
+
+test "Pa'O local noun clauses keep linked glosses and exclude headwords and inflected forms" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const Section = struct { title: []const u8 = "နာမ်ႏ", level: u8 = 3, blocks: []const wiki.Block };
+    const cases = [_]struct { title: []const u8, body: []const u8, senses: usize }{
+        .{ .title = "တမွန်ႏ", .body = "*ထွားချာအီလောင်ႏလွိုး ကလꩻဒါႏတမွန်ႏ။", .senses = 1 },
+        .{ .title = "ကွုံးကဝ်", .body = "*ကွုံးကဝ်", .senses = 0 },
+        .{ .title = "ကလꩻဒါႏ", .body = "*ကလꩻဒါႏ။\n*ကလꩻဒါႏဖုံႏ။", .senses = 0 },
+        .{ .title = "တမွန်ႏ", .body = "*ထွားချာအီလောင်ႏလွိုး ကလꩻဒါႏတမွန်ႏ။\n# [[တမွန်ႏ]]", .senses = 1 },
+    };
+    for (cases) |case| {
+        const section = Section{ .blocks = try renderer.renderBody(case.body) };
+        const layout = try buildForEntry(a, &[_]Section{section}, false, "Pa'o Karen", null, "blkwiktionary", &.{}, case.title);
+        try std.testing.expectEqual(case.senses, layout.lexemes[0].definitions.len);
+        if (section.blocks.len == 2 and case.senses == 1) try std.testing.expectEqual(@as(usize, 1), layout.lexemes[0].definitions[0].block);
+    }
+    const linked = Section{ .blocks = try renderer.renderBody("*ကာꩻရာႏ(ကာꩻပေင်) နီဖဲ့ꩻအခါႏကို ကအဝ်ႏဒွါႏခါꩻဒါႏ အ[[ကြဲင်ႏ]]။") };
+    const layout = try buildForEntry(a, &[_]Section{linked}, false, "Pa'o Karen", null, "blkwiktionary", &.{}, "ကာꩻကြဲင်ႏ");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes[0].definitions.len);
+    const source = linked.blocks[layout.lexemes[0].definitions[0].block];
+    try std.testing.expectEqual(.list_item, source.kind);
+    try std.testing.expectEqualStrings("ကြဲင်ႏ", source.spans[1].target);
 }
 
 test "Pa'O dictionary noun gloss bullets retain their links and headword-only nouns have no sense" {
