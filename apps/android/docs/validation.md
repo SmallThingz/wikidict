@@ -1,6 +1,84 @@
 # Android validation
 
-## Current HU/RT, empty-entry and preview integration — 2026-11-19
+## Current nested-pitch and FlexColumn integration — 2026-11-20
+
+The current Android production source is commit
+`4b9d2dbacf2562e771ad9fc50e5ce634735a4fac`, **Android: render nested pitch and
+flex columns**. Its [canonical application record][current-application-156]
+binds the 19 integrated files to the qualified private inputs: 14 main, four JVM
+test and one instrumentation test files, including five new files. The canonical
+inventory contains 975 files. These changes use the ordinary native text and
+container rendering paths. Nested pitch is limited to the reviewed Japanese
+parent/child shapes; FlexColumn preserves source order, empty bordered children
+and original actions. Wider producer shapes and genuine page interoperability
+are not established by these host checks.
+
+[Host156's successful continuation][host156] passed **24 fresh focused JVM checks,
+with zero failures, skips or carried cases**, and all three Kotlin compilation
+routes: 165 main, 152 unit-test and 98 instrumentation sources. The seven selected
+device controls were compiled only. Earlier worker-launch, disk-admission and
+affinity-guard failures remain in their original records; they ran no Gradle
+tests and contribute no pass credit.
+
+The subsequent [canonical follow-up][canonical156] ran the normal unfiltered
+`testDebugUnitTest` target on the integrated source. **All 1,200 cases passed
+freshly across 154 reports, with zero failures, skips or carried cases.** This
+includes 1,198 correctness cases and two benchmark-named controls, without a
+performance claim. Main and unit Kotlin compilation were up to date; the test
+task executed. Debug lint also executed: **zero errors, 37 warnings and five
+hints**. Its saved changed-line comparison found no finding on a changed line;
+this is not a zero-findings lint result.
+
+The same follow-up built the current local unsigned release. Release Kotlin,
+R8, packaging, assembly and release-vital checks succeeded; unchanged resource
+optimization and the vital-report task were up to date. Native libraries were
+verified unchanged. The original command returned zero, its watchdog recorded
+normal child exit and completed cleanup, and the closure verified all 975 source
+files and free locks. The [retained APK][apk156] has:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, minimum API **31**
+  and target API **37**.
+- **10,931,169 bytes**, 16,384 bytes larger than Package154; SHA-256
+  `bc0847e1659d64be15babc3349dd6e4b9382665e82815a8ed48599ae0b5115cc`.
+- Four ABIs: `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64`.
+- **Unsigned**. The saved signature verifier reports `DOES NOT VERIFY` and
+  `Missing META-INF/MANIFEST.MF`; no signer or installability qualification is
+  claimed. No signing, installation or publication was performed.
+
+The later commit `f4c1866ae9b45ce82208505ed67c68c6ba16bd13` changes only
+`NativeContainerHeightDeviceTest.kt`. Its new
+`flexColumnKeepsItsEmptyBorderAndOriginalActionsAcrossWidthAndDirection` control
+[compiled successfully][column-device156] after correcting a test-only
+`CharSequence?`/`String` mismatch; the [initial compiler failure][column-failure156]
+is retained. Instrumentation Kotlin executed, while main Kotlin and
+instrumentation Java were up to date. It ran no JVM or device test and rebuilt
+no package. Production, JVM-test, resource and build inputs remain identical to
+the full-suite and APK source, so those results remain applicable without replay.
+
+There is **no current physical Android rendering or interaction acceptance**.
+The [saved physical-access attempt][phone-namespace-hold] failed before ADB with
+`PermissionError(13, 'Permission denied')` during host namespace identification,
+with zero events and no device command or input. The denied path and process
+were not recorded; no specific daemon is blamed. No later access recovery is
+established. Device execution still requires permitted namespace access,
+coordinated phone custody and an authorized compatible signed installation.
+Host tests and compilation do not substitute for pixels, touch, selection,
+accessibility or genuine producer-to-reader acceptance. Package154 and older
+artifact histories, installed data and signer holds remain separate and intact.
+
+This update changes documentation only. The following sections preserve their
+results at the earlier source boundaries; their historical uses of “current” do
+not supersede the source and artifact recorded above.
+
+[current-application-156]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/mg-nested-pitch01/canonical-application01.json
+[host156]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host156-dispatch06/saved-result-peer-reader01.json
+[canonical156]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/canonical156-followup01/completion01.json
+[apk156]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/canonical156-followup01/retained/app-release-unsigned.apk
+[column-device156]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/canonical156-column-device02/completion01.json
+[column-failure156]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/canonical156-column-device01-debug/stderr
+[phone-namespace-hold]: ../../../.tmp/android-history-preview71/physical-historical-test65-update313/foreign-daemon01/qualification-live01/observation/passive-result.json
+
+## Historical HU/RT, empty-entry and preview integration — 2026-11-19
 
 The current Android product is commit
 `c733b84d26638bfa9e34eb11ed503bf7b67adb0e`, **Android: render ruby margins and
