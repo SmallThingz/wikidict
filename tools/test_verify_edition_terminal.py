@@ -245,7 +245,12 @@ class EditionTerminalTests(unittest.TestCase):
                 'languages.tsv': {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}}}
             (source / 'complete.json').write_text(json.dumps(manifest))
             dest = parent / 'workspace'
-            copy_publication(source, dest)
+            previous_mask = os.umask(0o022)
+            try:
+                copy_publication(source, dest)
+            finally:
+                os.umask(previous_mask)
+            self.assertEqual(dest.stat().st_mode & 0o777, 0o700)
             self.assertFalse((dest / '.dict-state').exists())
             (dest / 'languages.tsv').write_bytes(b'changed')
             self.assertEqual(catalog.read_bytes(), data)

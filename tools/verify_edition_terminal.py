@@ -146,7 +146,7 @@ def copy_publication(source, destination, expected_digest=None, *, expected_stat
 
 def copy_members(source, destination, members, *, seeds=None):
     require('languages.tsv' in members, 'Missing language catalog')
-    destination.mkdir()
+    destination.mkdir(mode=0o700)
     copied = {}
     for name, expected in members.items():
         rel = Path(name)
