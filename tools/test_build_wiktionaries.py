@@ -9497,6 +9497,24 @@ class ContainedObservationGuardFallbackTests(unittest.TestCase):
             self.assertEqual(cached,self.paths)
         b._FIGURE_TUPLE_REPLAYS.clear();self.addCleanup(b._FIGURE_TUPLE_REPLAYS.clear)
 
+    def test_contained_artifact_directories_are_listed_once_at_each_boundary(self):
+        record = json.loads(self.reference.read_text())
+        root = next(iter(self.paths.values())).parent
+        members = {self.reference.parent / name for name in record['artifacts']}
+        expected_directories = {self.reference.parent, *(member.parent for member in members)}
+        reads = {directory: 0 for directory in expected_directories}
+        original_iterdir = Path.iterdir
+
+        def count_listings(directory):
+            if directory in reads:
+                reads[directory] += 1
+            return original_iterdir(directory)
+
+        with patch.object(Path, 'iterdir', count_listings):
+            guard = b.figure_tuple_guard(self.figure, root)
+        self.assertTrue(all(str(member) in guard[1] for member in members))
+        self.assertEqual(reads, dict.fromkeys(expected_directories, 2))
+
     def test_contained_identity_and_four_parse_triples_replay_once_and_borrow_complete_readset(self):
         record=json.loads(self.reference.read_text())
         root=next(iter(self.paths.values())).parent

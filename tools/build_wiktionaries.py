@@ -1674,6 +1674,8 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                     # The strict reader opens only declared artifacts, each at
                     # most one directory below this record. Semantic replay is
                     # still required before this complete readset can be cached.
+                    record_directories = {path.parent}
+                    record_members = []
                     for name in artifacts:
                         if not isinstance(name, str) or not 1 <= len(name.split('/')) <= 2:
                             return False
@@ -1684,16 +1686,21 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                             except ValueError:
                                 return False
                         member = path.parent.joinpath(*parts)
-                        for directory in {path.parent, member.parent}:
-                            if directory.is_symlink() or not directory.is_dir():
-                                raise ValueError('Unsafe contained Figure authority directory')
-                            if directory.resolve() != directory:
-                                return False
-                            st = directory.stat()
-                            identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())),
-                                        _figure_replay_identity(directory, directory=True))
-                            if directories.setdefault(directory, identity) != identity:
-                                raise ValueError('Contained Figure membership changed while collecting inputs')
+                        record_directories.add(member.parent)
+                        record_members.append(member)
+                    # Snapshot each directory once before reading its members. The
+                    # final pass checks the full membership again after hashing.
+                    for directory in sorted(record_directories):
+                        if directory.is_symlink() or not directory.is_dir():
+                            raise ValueError('Unsafe contained Figure authority directory')
+                        if directory.resolve() != directory:
+                            return False
+                        st = directory.stat()
+                        identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())),
+                                    _figure_replay_identity(directory, directory=True))
+                        if directories.setdefault(directory, identity) != identity:
+                            raise ValueError('Contained Figure membership changed while collecting inputs')
+                    for member in record_members:
                         files.add(member)
                         initial.setdefault(member, _figure_replay_identity(member))
                     continue
