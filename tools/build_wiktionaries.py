@@ -2839,7 +2839,12 @@ def _source_fingerprints(include_production=False):
     for folder in PRODUCER_SOURCE_DIRECTORIES:
         root=PROJECT/folder
         if not root.is_dir(): continue
-        files.extend(path for path in root.rglob('*') if path.is_file() and path.suffix in ('.zig','.py','.c','.h','.zon'))
+        for directory, _, names in os.walk(root):
+            for name in names:
+                if os.path.splitext(name)[1] in ('.zig', '.py', '.c', '.h', '.zon'):
+                    path = Path(directory, name)
+                    if path.is_file():
+                        files.append(path)
     for path in sorted(files,key=lambda x:x.relative_to(PROJECT).as_posix()):
         name=path.relative_to(PROJECT).as_posix()
         prefix=name.encode()+b'\0'
