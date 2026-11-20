@@ -1439,11 +1439,11 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
     var physical_edges = false;
     if (table.style) |style| if (style.border) |border| {
         if (!@import("blob_encoder").presentation_types.validBorder(border)) return error.InvalidPresentation;
-        physical_edges = border == .edges;
+        physical_edges = border == .edges or border == .resolved_edges;
     };
     for (table.rows) |row| for (row.cells) |cell| if (cell.style) |style| if (style.border) |border| {
         if (!@import("blob_encoder").presentation_types.validBorder(border)) return error.InvalidPresentation;
-        physical_edges = physical_edges or border == .edges;
+        physical_edges = physical_edges or border == .edges or border == .resolved_edges;
     };
     var cell_middle_alignment = false;
     for (table.rows) |row| for (row.cells) |cell| if (cell.style) |style| {
@@ -10974,4 +10974,85 @@ test "percentage radius Output refuses malformed circle geometry and charges onl
     }
     group = saved_group;
     try std.testing.expect(RubyTypes.validInlineBoxGroupOwner(owner));
+}
+
+test "resolved Table and Cell borders visibly retain terminal body actions codec and projected refusal" {
+    const a = std.testing.allocator;
+    const T = MTerminalTest.T;
+    const codec = @import("blob_encoder").presentation_codec;
+    const resolved = [_]T.StyleBorder{
+        .{ .resolved_edges = .{
+            .top = .{ .outset = .{ .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#dddddd" } } },
+            .right = .{ .inset = .{ .width = .{ .unit = .em, .value = 0.25 }, .paint = .owner_current_color } },
+            .bottom = .{ .dotted = .{ .width = .{ .unit = .px, .value = 2 }, .paint = .{ .rgb = "#112233" } } },
+            .left = .{ .solid = .{ .width = .{ .unit = .px, .value = 3 }, .paint = .owner_current_color } },
+        } },
+        .{ .resolved_edges = .{ .top = .none, .right = .none, .bottom = .none, .left = .none } },
+        .{ .resolved_edges = .{ .top = .hidden, .right = .none, .bottom = .hidden, .left = .none } },
+    };
+    const old_edges: T.StyleBorder = .{ .edges = .{ .top = .none, .right = .none, .bottom = .none, .left = .none } };
+    for (resolved, 0..) |border, border_index| {
+        // Same-scope storage keeps every Table/Row/Cell slice live through all
+        // render, visitor and codec calls, including mutable owner variants.
+        for ([_]u8{ 0, 1, 2 }) |owner| {
+            errdefer std.debug.print("RESOLVED_BORDER_TERMINAL border={d} owner={d}\n", .{ border_index, owner });
+            const cells = [_]T.Cell{.{ .style = if (owner != 0) .{ .border = border } else null, .spans = MTerminalTest.child.spans }};
+            const rows = [_]T.Row{.{ .cells = &cells }};
+            const table: model.Table = .{ .style = if (owner != 1) .{ .border = border } else null, .rows = &rows };
+            const blocks = [_]model.Block{.{ .kind = .table, .table = table }};
+            const sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &blocks }};
+            const entry: model.Entry = .{ .title = "resolved border terminal", .kind = .supplemental, .sections = &sections };
+            const before = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(before);
+
+            var old_cells = cells;
+            if (owner != 0) old_cells[0].style = .{ .border = old_edges };
+            const old_rows = [_]T.Row{.{ .cells = &old_cells }};
+            const old_table: model.Table = .{ .style = if (owner != 1) .{ .border = old_edges } else null, .rows = &old_rows };
+            const old_blocks = [_]model.Block{.{ .kind = .table, .table = old_table }};
+            const old_sections = [_]model.Section{.{ .level = 2, .title = "Body", .blocks = &old_blocks }};
+            var old_entry = entry; old_entry.sections = &old_sections;
+            for ([_]bool{ false, true }) |color| {
+                var text: std.Io.Writer.Allocating = .init(a); defer text.deinit();
+                var old_text: std.Io.Writer.Allocating = .init(a); defer old_text.deinit();
+                try entryText(&text.writer, entry, color);
+                try entryText(&old_text.writer, old_entry, color);
+                try std.testing.expectEqualStrings(old_text.written(), text.written());
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), terminal_geometry_notice));
+                for ([_][]const u8{ "KEPT", "TAIL" }) |needle|
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), needle));
+                for ([_]usize{ 24, 80 }) |columns| {
+                    var frame: std.Io.Writer.Allocating = .init(a); defer frame.deinit();
+                    var lines: std.ArrayList(terminal.PoemLine) = .empty; defer lines.deinit(a);
+                    var floats: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = columns }; defer floats.events.deinit(a);
+                    var projection: PoemProjection = .{ .frame = &frame, .allocator = a, .lines = &lines, .table_columns = columns, .float_flow = &floats };
+                    try blocksTextProjected(&frame.writer, &blocks, color, &projection);
+                    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), terminal_geometry_notice));
+                    const layout = try floatLayoutAlloc(a, frame.written(), columns, lines.items, floats.events.items, color); defer layout.deinit(a);
+                    try std.testing.expectEqual(@as(usize, 1), layout.unsupported);
+                    for ([_][]const u8{ "KEPT", "TAIL" }) |needle|
+                        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, frame.written(), needle));
+                }
+            }
+            var actions: MTerminalTest.Targets = .{}; _ = try visitEntrySpanLists(entry, &actions);
+            try std.testing.expectEqual(@as(usize, 1), actions.internal);
+            try std.testing.expectEqual(@as(usize, 1), actions.external);
+            const bytes = try codec.encodeAlloc(a, .{ .entry = entry }); defer a.free(bytes);
+            var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit();
+            try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, try codec.decodeAlloc(arena.allocator(), bytes, entry.title, .supplemental, null));
+            const after = try std.json.Stringify.valueAlloc(a, entry, .{}); defer a.free(after);
+            try std.testing.expectEqualStrings(before, after);
+        }
+    }
+    // Existing nonphysical border variants keep their previous text behavior.
+    for ([_]?T.StyleBorder{ null, .none, .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#dddddd" } } }) |border| {
+        const cells = [_]T.Cell{.{ .style = if (border) |value| .{ .border = value } else null, .spans = MTerminalTest.child.spans }};
+        const rows = [_]T.Row{.{ .cells = &cells }};
+        const table: model.Table = .{ .style = if (border) |value| .{ .border = value } else null, .rows = &rows };
+        const blocks = [_]model.Block{.{ .kind = .table, .table = table }};
+        var text: std.Io.Writer.Allocating = .init(a); defer text.deinit();
+        try blocksText(&text.writer, &blocks, false);
+        try std.testing.expect(std.mem.indexOf(u8, text.written(), terminal_geometry_notice) == null);
+        for ([_][]const u8{ "KEPT", "TAIL" }) |needle|
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), needle));
+    }
 }
