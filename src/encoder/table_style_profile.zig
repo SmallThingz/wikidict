@@ -23717,8 +23717,26 @@ pub const TableLinkPaintProof = struct {
             if (rules.items.len == 4096) return null;
             try rules.append(a, index);
         }
+        // The loop only appends proven exclusions. An unchanged census must
+        // retain the immutable rule identity bound by the inline-wrap issuer.
+        if (rules.items.len == self.rules.len) return self;
+        const issued = self.operation.inline_wrap_source orelse return null;
+        const domain = self.operation.focus_domain orelse return null;
+        if (!issued.bindsProof(self) or domain.inline_wrap_operation != null) return null;
+        // The expanded census needs a coherent receipt without changing any
+        // borrower of the original proof or sharing its mutable query cache.
+        const operation = try a.create(TableLinkOperation);
+        errdefer a.destroy(operation);
+        operation.* = .{ .allocator = a, .context = self.operation.context,
+            .focus_domain = domain, .scroll_focus_paint = self.operation.scroll_focus_paint };
+        const owned_rules = try rules.toOwnedSlice(a);
+        var renewed = issued;
+        renewed.operation = operation;
+        renewed.rules = owned_rules;
+        operation.inline_wrap_source = renewed;
         var result = self;
-        result.rules = try rules.toOwnedSlice(a);
+        result.rules = owned_rules;
+        result.operation = operation;
         return result;
     }
     pub fn scrollFocusPaint(self: @This()) ?types.TableScrollFocusPaint {
@@ -34335,4 +34353,202 @@ test "resolved legacy border basis respects partial side priority resets unknown
         const selected_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, "", bad_cell_basis);
         try std.testing.expect(selected_cell.unresolved and selected_cell.style == null);
     }
+}
+
+
+const MaiJoinedCapturedRules17Test = struct {
+    const source = "{|\n! [[Hilfe:Singular|Singular]]\n|}";
+    const css = OrdinaryTableLinkPaintTest.css ++ CapturedTableFocusTest.focus ++ CapturedTableFocusTest.anchor ++
+        "a{word-wrap:break-word}" ++
+        "table{float:right}@media(max-width:639px){table{float:none;display:block;overflow:auto;max-width:100%;width:fit-content}}";
+    const extra = "@media(max-width:639px){.mai-joined-absent-one{color:#ff0000}.mai-joined-absent-two{overflow-wrap:normal}}";
+
+    fn nodes() [8]ObservedStyleNode {
+        const captured = CapturedTableFocusTest.nodes();
+        var result: [8]ObservedStyleNode = undefined;
+        @memcpy(result[0..], captured[0..8]);
+        result[7].has_text = true;
+        result[7].known_complete_child_elements = true;
+        return result;
+    }
+
+    fn issue(a: std.mem.Allocator, context: TableContainingDirectionContext) !TableLinkPaintProof {
+        return (try observedTableLinkPaintProofWithViewportActions(a, context, context, source, &.{7})) orelse error.TestUnexpectedResult;
+    }
+
+    fn addedRules(styles: *const Profile) ![2]usize {
+        var result: [2]usize = undefined;
+        var count: usize = 0;
+        for (styles.observed_figure_rules, 0..) |rule, index| {
+            if (!std.mem.eql(u8, rule.raw_selector, ".mai-joined-absent-one") and
+                !std.mem.eql(u8, rule.raw_selector, ".mai-joined-absent-two")) continue;
+            if (count == result.len) return error.TestUnexpectedResult;
+            result[count] = index;
+            count += 1;
+        }
+        if (count != result.len) return error.TestUnexpectedResult;
+        return result;
+    }
+};
+
+test "captured Table joined rule growth preserves original and joined typed inline wrap and link paint" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = MaiJoinedCapturedRules17Test;
+    var styles = try parseForTargetAlloc(a, T.css ++ T.extra, .screen); defer styles.deinit();
+    const nodes = T.nodes(); const context = OrdinaryTableLinkPaintTest.context(&styles, &nodes);
+    try std.testing.expectEqualStrings("/wiki/Hilfe:Singular", observedFigureAttribute(nodes[7], "href").?);
+    const issued = try T.issue(a, context);
+    const original_wrap = issued.operation.inline_wrap_source orelse return error.TestUnexpectedResult;
+    try std.testing.expect(original_wrap.binds(issued, context, 7));
+    try std.testing.expect(issued.closedSourceFocus() and issued.operation.focus_domain.?.captured_scroll);
+    try std.testing.expect(issued.operation.focus_domain.?.inline_wrap_operation == null);
+    const original_rules = try a.dupe(usize, issued.rules);
+    const added = try T.addedRules(&styles);
+    for (added) |index| {
+        try std.testing.expect(std.mem.indexOfScalar(usize, issued.rules, index) == null);
+        const rule = styles.observed_figure_rules[index];
+        try std.testing.expect(rule.conditions.len != 0 or rule.conditional);
+        try std.testing.expect(!tableLinkRuleHasPossibleSubject(context, rule, rule.selector orelse rule.weak_selector.?, false, false));
+    }
+    // Issuance already queries focus subjects. Retain that complete mutable
+    // cache, including the real link, before requiring a fresh joined cache.
+    _ = try issued.operation.rulesFor(7);
+    try std.testing.expect(issued.operation.candidates.items.len != 0);
+    const original_candidates = issued.operation.candidates.items.ptr;
+    const original_cache = try a.dupe(ObservedFigureRuleCandidates, issued.operation.candidates.items);
+    const candidate_bits = try a.alloc([]bool, original_cache.len);
+    for (original_cache, candidate_bits) |candidate, *bits| {
+        bits.* = try a.alloc(bool, candidate.rules.bit_length);
+        for (bits.*, 0..) |*bit, index| bit.* = candidate.rules.isSet(index);
+    }
+    const original_scroll = issued.scrollFocusPaint() orelse return error.TestUnexpectedResult;
+    const joined = (try issued.withJoinedCapturedSource(a, T.source, context, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(issued.rules.len + added.len, joined.rules.len);
+    try std.testing.expectEqualSlices(usize, original_rules, joined.rules[0..issued.rules.len]);
+    try std.testing.expectEqualSlices(usize, &added, joined.rules[issued.rules.len..]);
+    try std.testing.expect(joined.rules.ptr != issued.rules.ptr and joined.operation != issued.operation);
+    try std.testing.expect(joined.operation.focus_domain == issued.operation.focus_domain);
+    try std.testing.expectEqual(@as(usize, 0), joined.operation.candidates.items.len);
+    try std.testing.expect(joined.closedSourceFocus());
+    try std.testing.expectEqualDeep(original_scroll, joined.scrollFocusPaint().?);
+    const joined_wrap = joined.operation.inline_wrap_source orelse return error.TestUnexpectedResult;
+    try std.testing.expect(joined_wrap.binds(joined, context, 7));
+    try std.testing.expect(original_wrap.binds(issued, context, 7));
+    try std.testing.expect(!original_wrap.bindsProof(joined) and !joined_wrap.bindsProof(issued));
+    try std.testing.expectEqualSlices(u32, &.{7}, joined_wrap.actions.?);
+    try std.testing.expect(joined_wrap.constructed == original_wrap.constructed);
+
+    var clean = try parseForTargetAlloc(a, T.css, .screen); defer clean.deinit();
+    const clean_context = OrdinaryTableLinkPaintTest.context(&clean, &nodes);
+    const reference = try T.issue(a, clean_context);
+    for ([_]f64{ 0, 639, 900 }) |viewport| {
+        errdefer std.debug.print("Mai joined captured rules viewport={d}\n", .{viewport});
+        const text = (try resolveObservedTableInlineTextWithWrapProof(a, context, 7, 7, viewport, joined)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(u32, 7), text.element);
+        try std.testing.expectEqual(@as(?types.TextWrap, .break_word), text.inline_wrap);
+        const paint = (try resolveObservedTableLinkPaintWithWrap(a, joined, 7, 7, viewport, 1)) orelse return error.TestUnexpectedResult;
+        const expected = (try resolveObservedTableLinkPaintWithWrap(a, reference, 7, 7, viewport, 1)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(expected, paint);
+        try std.testing.expectEqual(@as(?types.TextWrap, .break_word), paint.wrap);
+        try std.testing.expect(types.validLinkPaint(paint.paint));
+        try std.testing.expectEqualStrings("#3366cc", paint.paint.normal.foreground);
+        try std.testing.expectEqualStrings("#6a60b0", paint.paint.visited.foreground);
+    }
+    try std.testing.expect(joined.operation.candidates.items.len != 0);
+    try std.testing.expect(joined.operation.candidates.items.ptr != original_candidates);
+    for (joined.operation.candidates.items) |candidate| for (original_cache) |held|
+        try std.testing.expect(candidate.rules.masks != held.rules.masks);
+    try std.testing.expect(issued.operation.candidates.items.ptr == original_candidates);
+    try std.testing.expectEqual(original_cache.len, issued.operation.candidates.items.len);
+    for (original_cache, candidate_bits, issued.operation.candidates.items) |held, bits, current| {
+        try std.testing.expectEqualDeep(held, current);
+        for (bits, 0..) |bit, index| try std.testing.expectEqual(bit, current.rules.isSet(index));
+    }
+    try std.testing.expectEqualSlices(usize, original_rules, issued.rules);
+    try std.testing.expect(original_wrap.binds(issued, context, 7));
+    try std.testing.expect(issued.operation.inline_wrap_source.?.binds(issued, context, 7));
+    const repeated = (try joined.withJoinedCapturedSource(a, T.source, context, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(repeated.operation == joined.operation and repeated.rules.ptr == joined.rules.ptr);
+    try std.testing.expect(joined_wrap.binds(repeated, context, 7));
+}
+
+test "captured Table joined rule receipts retain no growth identity and refuse foreign copied and reordered rules" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = MaiJoinedCapturedRules17Test;
+    var styles = try parseForTargetAlloc(a, T.css ++ T.extra, .screen); defer styles.deinit();
+    const nodes = T.nodes(); const context = OrdinaryTableLinkPaintTest.context(&styles, &nodes);
+    const issued = try T.issue(a, context);
+    const original_wrap = issued.operation.inline_wrap_source orelse return error.TestUnexpectedResult;
+    const original_rules = try a.dupe(usize, issued.rules);
+    const joined = (try issued.withJoinedCapturedSource(a, T.source, context, context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(joined.rules.len > issued.rules.len and issued.rules.len > 1);
+    const foreign = try T.issue(a, context);
+    var foreign_styles = try parseForTargetAlloc(a, T.css ++ T.extra, .screen); defer foreign_styles.deinit();
+    for (0..7) |mode| {
+        errdefer std.debug.print("Mai joined captured rules consumer refusal mode={d}\n", .{mode});
+        var changed = joined;
+        switch (mode) {
+            0 => changed.rules = try a.dupe(usize, joined.rules),
+            1 => {
+                const reordered = try a.dupe(usize, joined.rules);
+                std.mem.swap(usize, &reordered[0], &reordered[1]);
+                changed.rules = reordered;
+            },
+            2 => changed.rules = joined.rules[0 .. joined.rules.len - 1],
+            3 => changed.operation = foreign.operation,
+            4 => changed.source = try a.dupe(u8, T.source),
+            5 => changed.scope.nodes = try a.dupe(ObservedStyleNode, &nodes),
+            6 => changed.context.styles = &foreign_styles,
+            else => unreachable,
+        }
+        try std.testing.expect(!joined.operation.inline_wrap_source.?.bindsProof(changed));
+        try std.testing.expect((try resolveObservedTableInlineTextWithWrapProof(a, context, 7, 7, 0, changed)) == null);
+        try std.testing.expect((try resolveObservedTableLinkPaintWithWrap(a, changed, 7, 7, 0, 1)) == null);
+        try std.testing.expect(original_wrap.binds(issued, context, 7));
+    }
+    // Growth cannot repair a forged or absent old receipt. These are independent
+    // operations with empty caches; they do not alias the original mutable cache.
+    for (0..4) |mode| {
+        errdefer std.debug.print("Mai joined captured rules renewal refusal mode={d}\n", .{mode});
+        const separate = try a.create(TableLinkOperation);
+        separate.* = .{ .allocator = a, .context = issued.operation.context,
+            .focus_domain = issued.operation.focus_domain, .scroll_focus_paint = issued.operation.scroll_focus_paint };
+        var changed = issued;
+        changed.operation = separate;
+        var receipt = original_wrap;
+        receipt.operation = separate;
+        switch (mode) {
+            0 => {},
+            1 => { receipt.rules = try a.dupe(usize, issued.rules); separate.inline_wrap_source = receipt; },
+            2 => { receipt.source = try a.dupe(u8, T.source); separate.inline_wrap_source = receipt; },
+            3 => {
+                const domain = try a.create(TableSourceFocusDomain);
+                domain.* = issued.operation.focus_domain.?.*;
+                domain.inline_wrap_operation = separate;
+                separate.focus_domain = domain;
+                separate.inline_wrap_source = receipt;
+                try std.testing.expect(receipt.bindsProof(changed));
+            },
+            else => unreachable,
+        }
+        try std.testing.expect((try changed.withJoinedCapturedSource(a, T.source, context, context)) == null);
+        try std.testing.expect(original_wrap.binds(issued, context, 7));
+        try std.testing.expectEqualSlices(usize, original_rules, issued.rules);
+    }
+    var copied_rules = issued;
+    copied_rules.rules = try a.dupe(usize, issued.rules);
+    try std.testing.expect((try copied_rules.withJoinedCapturedSource(a, T.source, context, context)) == null);
+    var exhausted_buffer: [0]u8 = .{};
+    var exhausted = std.heap.FixedBufferAllocator.init(&exhausted_buffer);
+    try std.testing.expectError(error.OutOfMemory, issued.withJoinedCapturedSource(exhausted.allocator(), T.source, context, context));
+    try std.testing.expect(original_wrap.binds(issued, context, 7));
+    try std.testing.expectEqualSlices(usize, original_rules, issued.rules);
+
+    var no_growth_styles = try parseForTargetAlloc(a, T.css, .screen); defer no_growth_styles.deinit();
+    const no_growth_context = OrdinaryTableLinkPaintTest.context(&no_growth_styles, &nodes);
+    const no_growth = try T.issue(a, no_growth_context);
+    const unchanged = (try no_growth.withJoinedCapturedSource(a, T.source, no_growth_context, no_growth_context)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(usize, no_growth.rules, unchanged.rules);
+    try std.testing.expect(unchanged.rules.ptr == no_growth.rules.ptr and unchanged.operation == no_growth.operation);
+    try std.testing.expect(no_growth.operation.inline_wrap_source.?.binds(unchanged, no_growth_context, 7));
 }
