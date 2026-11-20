@@ -3013,16 +3013,16 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
             write_member(future.result(),raw_len)
 
         def flush():
+            nonlocal batch
             if not batch: return
             if len(batch)>max_parallel_bytes:
                 while queued: finish_oldest()
-                raw=bytes(batch)
-                write_member(zstd.compress(raw,level=1),len(raw))
+                write_member(zstd.compress(batch,level=1),len(batch))
                 batch.clear()
                 return
             if len(queued)==max_queued_batches: finish_oldest()
-            raw=bytes(batch)
-            batch.clear()
+            # The compressor owns this buffer until its future completes.
+            raw,batch=batch,bytearray()
             queued.append((pool.submit(zstd.compress,raw,level=1),len(raw)))
 
         for source in parts:
@@ -3144,13 +3144,12 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
             pages=xml_bytes=0
             def flush():
                 if not batch: return
-                raw=bytes(batch)
-                frame=zstd.compress(raw,level=1)
+                frame=zstd.compress(batch,level=1)
                 info=zstd.get_frame_info(frame)
-                if info.decompressed_size!=len(raw) or zstd.get_frame_size(frame)!=len(frame):
+                if info.decompressed_size!=len(batch) or zstd.get_frame_size(frame)!=len(frame):
                     raise ValueError('Staged Zstandard member is not one known-size frame')
-                output.put_frame(frame)
                 batch.clear()
+                output.put_frame(frame)
 
             with bz2.open(source,'rb') as inp:
                 while chunk:=inp.read(1024*1024):
