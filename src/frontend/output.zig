@@ -832,6 +832,7 @@ pub const FlowEvent = struct {
     right: usize = 0,
     supported: bool = true,
     table_float: bool = false,
+    projection_fallbacks: usize = 0,
     clear_side: ?@import("blob_encoder").presentation_types.FigureClear = null,
     projected_insets: bool = false,
     keep_trailing_rows: bool = false,
@@ -845,6 +846,7 @@ pub const FloatProjection = struct {
     enabled: bool = true,
     started: bool = false,
     capturing: bool = false,
+    captured_fallbacks: usize = 0,
     capturing_float: bool = false,
     capturing_serial_table: bool = false,
     fn stop(self: *FloatProjection) !void {
@@ -856,7 +858,7 @@ pub const FloatProjection = struct {
         self.enabled = false;
     }
     fn record(self: *FloatProjection, block: model.Block, start: usize) !void {
-        var event: FlowEvent = .{ .kind = .text, .start = start, .end = self.frame.written().len, .alignment = block.text_align };
+        var event: FlowEvent = .{ .kind = .text, .start = start, .end = self.frame.written().len, .alignment = block.text_align, .projection_fallbacks = self.captured_fallbacks };
         if (block.table) |table| {
             event.kind = .grid;
             if (table.style) |style| if (style.float_side) |side| {
@@ -1106,6 +1108,7 @@ fn floatLayoutWithBudgetAlloc(a: std.mem.Allocator, text: []const u8, columns: u
     var style: terminal.TextStyle = .{};
     for (events) |event| {
         if (event.start < at or event.end < event.start or event.end > text.len) return error.InvalidTerminalFlow;
+        builder.unsupported += event.projection_fallbacks;
         try builder.prose(at, event.start, poems, style, null);
         style = terminal.styleAfter(style, text[at..event.start]);
         switch (event.kind) {
@@ -2065,8 +2068,7 @@ fn containerValidBlock(block: model.Block) bool {
 }
 fn containerNarrowFallback(w: *std.Io.Writer, blocks: []const model.Block, color: bool, projection: *PoemProjection, child: BlockDisplayContext) anyerror!void {
     const flow = projection.float_flow orelse return error.UnsupportedTerminalGeometry;
-    const at = flow.frame.written().len;
-    try flow.events.append(flow.allocator, .{ .kind = .projection_fallback, .start = at, .end = at });
+    try appendProjectionFallback(flow);
     return blocksTextInContext(w, blocks, color, projection, child);
 }
 // Typed terminal projection helpers. Geometry is quantized at 8 CSS px/column
@@ -2134,6 +2136,10 @@ fn containerReport(projection: *PoemProjection) !void {
     try appendProjectionFallback(flow);
 }
 fn appendProjectionFallback(flow: *FloatProjection) !void {
+    if (flow.capturing) {
+        flow.captured_fallbacks += 1;
+        return;
+    }
     const at = flow.frame.written().len;
     try flow.events.append(flow.allocator, .{ .kind = .projection_fallback, .start = at, .end = at });
 }
@@ -2425,8 +2431,7 @@ fn containerBoundedWithoutProjection(w: *std.Io.Writer, block: model.Block, colo
     defer layout.deinit(a);
     if (layout.unsupported != 0) {
         const outer = context.container_report orelse return error.UnsupportedTerminalGeometry;
-        const at = outer.frame.written().len;
-        for (0..layout.unsupported) |_| try outer.events.append(outer.allocator, .{ .kind = .projection_fallback, .start = at, .end = at });
+        for (0..layout.unsupported) |_| try appendProjectionFallback(outer);
     }
     if (containerRowsWidth(layout.rows) > columns) return error.UnsupportedTerminalGeometry;
     for (layout.rows) |row| {
@@ -2648,7 +2653,7 @@ fn blocksTextInContext(w: *std.Io.Writer, blocks: []const model.Block, color: bo
                 flow.capturing = true;
                 flow.capturing_float = floating;
                 flow.capturing_serial_table = false;
-                defer { flow.capturing = false; flow.capturing_float = false; flow.capturing_serial_table = false; }
+                defer { flow.capturing = false; flow.captured_fallbacks = 0; flow.capturing_float = false; flow.capturing_serial_table = false; }
                 var captured_context = context;
                 captured_context.ordinal = ordinal;
                 captured_context.alignment_suppressed = true;
@@ -11126,4 +11131,32 @@ test "stacked Old English appendix retains column names only from a simple heade
     body[0].header = false;
     body[0].nested_table = .{};
     try std.testing.expectEqual(@as(usize, 0), (try stackedColumnLabels(a, table, 41)).len);
+}
+
+test "float capture owns each nested geometry notice without advancing the source cursor" {
+    const a = std.testing.allocator;
+    var frame: std.Io.Writer.Allocating = .init(a);
+    defer frame.deinit();
+    var flow: FloatProjection = .{ .allocator = a, .frame = &frame, .columns = 90 };
+    defer flow.events.deinit(a);
+    try frame.writer.writeAll("before\n");
+    try appendProjectionFallback(&flow);
+    const start = frame.written().len;
+    flow.capturing = true;
+    try frame.writer.writeAll("notice\n");
+    for (0..3) |_| try appendProjectionFallback(&flow);
+    try frame.writer.writeAll("[image] 薬指\n");
+    try flow.record(.{ .kind = .table, .table = .{ .style = .{ .float_side = .left } } }, start);
+    try std.testing.expectEqual(@as(usize, 2), flow.events.items.len);
+    const owner = flow.events.items[1];
+    try std.testing.expect(owner.kind == .float_grid and owner.start == start and owner.end == frame.written().len);
+    try std.testing.expectEqual(@as(usize, 3), owner.projection_fallbacks);
+    const layout = try floatLayoutAlloc(a, frame.written(), 90, &.{}, flow.events.items, false);
+    defer layout.deinit(a);
+    try std.testing.expectEqual(@as(usize, 4), layout.unsupported);
+    for ([_][]const u8{ "before", "notice", "[image] 薬指" }) |text| {
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, layout.text, text));
+    }
+    const overlapping = [_]FlowEvent{ .{ .kind = .text, .start = 0, .end = start + 1 }, owner };
+    try std.testing.expectError(error.InvalidTerminalFlow, floatLayoutAlloc(a, frame.written(), 90, &.{}, &overlapping, false));
 }
