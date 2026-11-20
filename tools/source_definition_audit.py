@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 
 HEADING = re.compile(r'==\s*([^=\[\]{}<>|]+?)\s*==')
+LINKED_HEADING = re.compile(r'==[ \t]*\[\[([^\[\]{}<>|#:_&=\'\n]+)\]\][ \t]*==')
 STANDALONE_COMMENT = re.compile(r'^[ \t]*<!--([^<>\r\n]*)-->[ \t]*(?=\r?$)', re.MULTILINE)
 LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
 PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
@@ -271,7 +272,8 @@ def definitions(text, title, headings, trail_rule=None):
     owner = None
     for number, line in enumerate(lines, 1):
         if line.startswith('==') and not line.startswith('==='):
-            heading = HEADING.fullmatch(line.rstrip())
+            source_heading = line.rstrip()
+            heading = HEADING.fullmatch(source_heading) or LINKED_HEADING.fullmatch(source_heading)
             owner = heading[1] if heading and heading[1] in headings else None
         if not owner or not line.startswith('#'):
             continue
@@ -495,7 +497,7 @@ class SourceDefinitions:
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples, matched_example=self.matched_example,
-                    scope='Compare simple numbered lines under literal language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under exact plain or unpiped linked language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def unmatched_locations(self, *, after_examples):
         rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '

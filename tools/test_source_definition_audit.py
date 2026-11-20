@@ -60,6 +60,18 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertEqual(list(definitions(text + '\n# ________________', 'self', {'English'})),
                          list(definitions(text, 'self', {'English'})))
 
+    def test_link_to_exact_language_as_the_entire_heading(self):
+        source = '==[[አማርኛ]]==\n===[[ስም]]===\n#የመጽሐፍ ሉክ አንዱ ጎን'
+        owners = {'አማርኛ', 'እንግሊዝኛ'}
+        self.assertEqual(list(definitions(source, 'ገጽ', owners)), [
+            ('አማርኛ', 3, '#', 'የመጽሐፍ ሉክ አንዱ ጎን', (), None)])
+        for link in ('[[Other]]', '[[Other|እንግሊዝኛ]]', '[[እንግሊዝኛ#Meaning]]',
+                     '[[:እንግሊዝኛ]]', '[[Category:እንግሊዝኛ]]', '[[እንግሊዝኛ]]extra'):
+            with self.subTest(link=link):
+                following = f'\n=={link}==\n#ድምርት'
+                self.assertEqual(list(definitions(source + following, 'ገጽ', owners)),
+                                 list(definitions(source, 'ገጽ', owners)))
+
     def test_standalone_editor_comment_keeps_original_definition_line_and_owner(self):
         source = '==Englisc==\n<!--note: the sense "one year of age" is an adjective-->\n==Polisc==\n#[[híe]] ([[wíflic]])'
         self.assertEqual(list(definitions(source, 'one', {'Englisc', 'Polisc'})), [
