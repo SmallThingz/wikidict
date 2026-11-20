@@ -1514,6 +1514,20 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
             fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
 
+def admission_refusal_paths(directory):
+    """Continue the numbered receipt sequence without rereading it on each poll."""
+    from itertools import count
+
+    prefix = 'admission-refusal'
+    last = 0
+    for path in directory.glob(prefix + '*.json'):
+        digits = path.stem[len(prefix):]
+        if digits.isascii() and digits.isdecimal():
+            last = max(last, int(digits))
+    for number in count(last + 1):
+        yield directory / f'{prefix}{number:04d}.json'
+
+
 def qualification_file_reference(path, *, counters=None):
     """Hash one stable file and count the bytes read without retaining its contents."""
     import hashlib
@@ -1787,9 +1801,9 @@ if __name__ == '__main__':
         counts=reconcile();baseguard=guard
         def guard():
          reconcile();baseguard();sv=os.statvfs(R);assert sv.f_bavail*sv.f_frsize>=cfg['profile']['disk_floor_bytes'];cur=int(Path('/sys/fs/cgroup/pids.current').read_text());mx=Path('/sys/fs/cgroup/pids.max').read_text().strip();assert mx=='max'or int(mx)-cur>=256;return True
+        refusal_paths=admission_refusal_paths(D)
         def record_refusal(reason,sample):
-         number=len(list(D.glob('admission-refusal*.json')))+1
-         print(json.dumps(write(D/f'admission-refusal{number:04d}.json',dict(reason=reason,sample=sample,runtime_started=False))),flush=True)
+         print(json.dumps(write(next(refusal_paths),dict(reason=reason,sample=sample,runtime_started=False))),flush=True)
         fds,sample=limits.wait_for_build_admission(deadline_unix=cfg['admission_deadline_unix'],locks=b['locks'],host_observation=observer,final_guard=guard,record_refusal=record_refusal,poll_seconds=5)
         run=D.parent;assert not(run/'watchdog.json').exists()and not(run/'commands').exists();(run/'tmp').mkdir();os.environ['TMPDIR']=str(run/'tmp');os.environ['ZIG_LOCAL_CACHE_DIR']=str(cache/'local');os.environ['ZIG_GLOBAL_CACHE_DIR']=str(cache/'global');os.sched_setaffinity(0,set(cfg['profile']['cpus']));assert os.getpriority(os.PRIO_PROCESS,0)==0
         write(D/'admitted.json',dict(sample=sample,process_view_counts=counts,locks=cfg['ownership_locks'],admitted_unix=time.time(),profile=cfg['profile'],host_pressure_termination_enabled=False,core_provenance=observed_core_provenance));print('ADMITTED',json.dumps(sample),flush=True)

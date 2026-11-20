@@ -55,6 +55,26 @@ def binding(selected, root):
     return cfg, proof
 
 
+class AdmissionRefusalPathTests(unittest.TestCase):
+    def test_sparse_history_is_scanned_once_only_after_a_refusal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            folder = Path(temp)
+            for name in ('admission-refusal0001.json', 'admission-refusal0004.json',
+                         'admission-refusal-note.json'):
+                (folder / name).write_text('retained')
+            with patch.object(Path, 'glob', autospec=True, side_effect=Path.glob) as scan:
+                paths = qualification.admission_refusal_paths(folder)
+                scan.assert_not_called()
+                for number in range(5, 8):
+                    path = next(paths)
+                    self.assertEqual(path.name, f'admission-refusal{number:04d}.json')
+                    with path.open('x') as receipt:
+                        receipt.write('new')
+                scan.assert_called_once()
+            self.assertEqual((folder / 'admission-refusal0004.json').read_text(), 'retained')
+            self.assertEqual(next(qualification.admission_refusal_paths(folder)).name, 'admission-refusal0008.json')
+
+
 class FailureOutputTests(unittest.TestCase):
     key = 'WIKIDICT_TEST_FAILURE_OUTPUT_DIR'
 
