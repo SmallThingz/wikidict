@@ -391,11 +391,11 @@ fn extractionCacheCommand(
     dump_sha256: []const u8,
     index_sha256: []const u8,
     expander_root: []const u8,
+    dump: ?[]const u8,
 ) !bool {
     const helper = try std.fs.path.join(a, &.{ paths.project_root, "tools", "extraction_cache.py" });
-    var child = try std.process.spawn(io, .{ .argv = &.{
-        "python3", "-I", "-S", "-B", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root,
-    }, .stdin = .ignore });
+    const argv = [_][]const u8{ "python3", "-I", "-S", "-B", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root, dump orelse "" };
+    var child = try std.process.spawn(io, .{ .argv = if (dump != null) &argv else argv[0 .. argv.len - 1], .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
     if (term == .exited and term.exited == 0) return true;
@@ -1351,7 +1351,7 @@ pub fn main(init: std.process.Init) !void {
     const cache_hit = if (options.sealed_frontend_reference != null)
         try probeSealedFrontend(init.io, a, marker, options, expander_root)
     else if (options.extraction_cache_root) |cache|
-        try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root)
+        try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root, dump)
     else
         false;
     if (cache_hit and options.sealed_frontend_reference == null) {
@@ -1364,7 +1364,7 @@ pub fn main(init: std.process.Init) !void {
         // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
         if (options.extraction_cache_root) |cache|
-            _ = try extractionCacheCommand(init.io, a, "publish", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root);
+            _ = try extractionCacheCommand(init.io, a, "publish", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root, null);
     }
 
     // The native worker is a transient bundle compiler. It never belongs in the

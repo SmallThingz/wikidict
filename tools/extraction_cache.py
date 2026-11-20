@@ -122,20 +122,28 @@ def completed_source_binding(root, dump):
     return _completed_source_binding(root, dump)
 
 
-def _completed_source_binding(root, dump, *, restored_source=None, restored_indexes=None):
+def _read_source_receipt(root):
     receipt_path = root / "extraction-source.json"
     regular(receipt_path)
     with receipt_path.open("rb") as stream:
         raw = stream.read(16385)
     if len(raw) > 16384:
         raise ValueError("Oversized extraction source receipt")
-    receipt = json.loads(raw)
+    return raw, json.loads(raw)
+
+
+def _receipt_indexes(root):
+    return [_receipt_identity(root / name, index=True) for name in
+            ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")]
+
+
+def _completed_source_binding(root, dump, *, restored_source=None, restored_indexes=None):
+    raw, receipt = _read_source_receipt(root)
     namespace = stable_file_digest(root / "namespace-registry.tsv", snapshot=True)[1]
     redirects_path = root / "transclusion-redirects.tsv"
     redirects = (stable_file_digest(redirects_path, snapshot=True)[1]
                  if os.path.lexists(redirects_path) else None)
-    indexes = [_receipt_identity(root / name, index=True) for name in
-               ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")]
+    indexes = _receipt_indexes(root)
     if restored_indexes is not None:
         _require_restored_indexes(restored_indexes, root)
         original = json.loads(restored_indexes[2])['receipt']['indexes']
@@ -2129,7 +2137,7 @@ def _owned_extraction_link(source, destination):
     return str(destination)
 
 
-def probe(root, expected, output, *, _after_verified=None):
+def probe(root, expected, output, *, dump=None, _after_verified=None):
     key = hashlib.sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
     source = cache_path(root, key)
     validated_identity = expected
@@ -2151,8 +2159,20 @@ def probe(root, expected, output, *, _after_verified=None):
         marker_stamp = _full_stamp(verified_marker.stat())
         marker_bytes = verified_marker.read_bytes()
         verified_record = json.loads(marker_bytes)
+    dump_identity = _receipt_identity(dump) if dump is not None else None
     try:
-        if source.is_symlink() or not validate(source, validated_identity):
+        if source.is_symlink():
+            return MISS
+        if dump is not None:
+            # The extractor binds offsets to the original dump and index inodes.
+            # An identical restaged dump needs fresh indexes, even on a content-key hit.
+            _, receipt = _read_source_receipt(source)
+            if (not isinstance(receipt, dict) or receipt.get('version') != 2 or
+                    receipt.get('source') != dump_identity or
+                    receipt.get('indexes') != _receipt_indexes(source)):
+                print('Extraction cache miss: receipt does not bind the current dump and indexes.', file=sys.stderr)
+                return MISS
+        if not validate(source, validated_identity):
             return MISS
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return MISS
@@ -3369,9 +3389,10 @@ def main(argv):
             return probe_objects(Path(root), clang, Path(project_root),
                                  Path(llvm_dir), flags, zig)
         return publish_objects(Path(root), Path(llvm_dir), clang, flags)
-    if len(argv) != 7 or argv[1] not in ("probe", "publish"):
-        raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT")
-    _, action, root, executable, dump_sha256, index_sha256, output = argv
+    if not ((len(argv) == 7 and argv[1] in ("probe", "publish")) or
+            (len(argv) == 8 and argv[1] == "probe")):
+        raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT [DUMP for probe]")
+    _, action, root, executable, dump_sha256, index_sha256, output = argv[:7]
     redirects = Path(output) / "transclusion-redirects.tsv"
     page_redirects = Path(output) / "page-redirects.tsv"
     # bundle_build installs input snapshots as links; they are not cached assets.
@@ -3381,7 +3402,7 @@ def main(argv):
         regular(page_redirects)
     expected = identity(Path(executable), dump_sha256, index_sha256, sha256(Path(output) / "namespace-registry.tsv"), sha256(redirects) if redirects.exists() else None, sha256(page_redirects) if page_redirects.exists() else None)
     if action == "probe":
-        return probe(Path(root), expected, Path(output))
+        return probe(Path(root), expected, Path(output), dump=Path(argv[7]) if len(argv) == 8 else None)
     return publish(Path(root), expected, Path(output))
 
 

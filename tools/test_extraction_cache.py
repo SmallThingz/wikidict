@@ -43,11 +43,41 @@ class ExtractionCacheTest(unittest.TestCase):
             destination.symlink_to(backing)
         return destination
 
-    def snapshot_main(self, action, output):
+    def snapshot_main(self, action, output, *extra):
         with mock.patch.object(cache, "tool_identity", return_value=self.expected["tool"]), \
              mock.patch.object(cache, "unicode_case_identity", return_value={"libraries": []}):
             return cache.main(["extraction_cache.py", action, str(self.root),
-                               "extractor", "a" * 64, "d" * 64, str(output)])
+                               "extractor", "a" * 64, "d" * 64, str(output), *map(str, extra)])
+
+    def test_probe_rejects_relocated_dump_or_index_before_staging(self):
+        dump = self.base / 'pages.zst'
+        dump.write_bytes(b'verified dump')
+        backing = self.base / 'redirects.tsv'
+        backing.write_bytes(b'redirect snapshot')
+        self.snapshot_output(self.source, backing)
+        receipt = dict(version=2, source=cache._receipt_identity(dump), indexes=cache._receipt_indexes(self.source))
+        (self.source / 'extraction-source.json').write_text(json.dumps(receipt))
+        self.assertEqual(0, self.snapshot_main('publish', self.source))
+        generation, = [p for p in self.root.iterdir() if not p.name.startswith('.')]
+        marker = (generation / '.complete.json').read_bytes()
+        relocated = self.base / 'other-pages.zst'
+        relocated.write_bytes(dump.read_bytes())
+        output = self.base / 'other-output'
+        self.snapshot_output(output, backing)
+        before = set(output.iterdir())
+        self.assertEqual(cache.MISS, self.snapshot_main('probe', output, relocated))
+        self.assertEqual(before, set(output.iterdir()))
+        supported = self.base / 'matching-output'
+        self.snapshot_output(supported, backing)
+        self.assertEqual(0, self.snapshot_main('probe', supported, dump))
+        self.assertEqual(b'return 1', (supported / 'modules/123.lua').read_bytes())
+        index = generation / 'page-index.tsv'
+        replacement = self.base / 'replacement-index'
+        replacement.write_bytes(index.read_bytes())
+        replacement.replace(index)
+        self.assertEqual(cache.MISS, self.snapshot_main('probe', output, dump))
+        self.assertEqual(before, set(output.iterdir()))
+        self.assertEqual(marker, (generation / '.complete.json').read_bytes())
 
     def test_snapshot_main_cold_publish_warm_link_and_copy(self):
         backing = self.base / "redirects.tsv"
@@ -1087,14 +1117,17 @@ class CompletedExpanderTests(unittest.TestCase):
                     body = ast.parse(textwrap.dedent(inspect.getsource(builder._build_locked))).body[0].body
                     index = next(i for i, node in enumerate(body) if isinstance(node, ast.Assign)
                                  and any(isinstance(target, ast.Name) and target.id == 'target' for target in node.targets))
-                    self.assertIsInstance(body[index+1], ast.If)
+                    # Exercise the production preflight through the sealed recovery guard.
+                    end = next(i for i, node in enumerate(body[index + 1:], index + 1)
+                               if isinstance(node, ast.If) and any(isinstance(part, ast.Attribute)
+                               and part.attr == 'sealed_expander_recovery' for part in ast.walk(node.test)))
                     output = self.base / 'outer-output'
                     staging = output / current['edition'] / (current['date'] + '.building')
                     staging.mkdir(parents=True)
                     payload = staging / 'partial-blob';payload.write_bytes(b'unique partial output')
                     namespace = dict(builder.__dict__, output=output, edition=current['edition'], date=current['date'],
                                      retained_roles=SimpleNamespace(sealed_expander_recovery=selected_ref), build_identity=identity)
-                    block = ast.fix_missing_locations(ast.Module(body=body[index:index+2], type_ignores=[]))
+                    block = ast.fix_missing_locations(ast.Module(body=body[index:end + 1], type_ignores=[]))
                     with self.assertRaisesRegex(ValueError, 'existing partial or published output'):
                         exec(compile(block, '<actual outer recovery guard>', 'exec'), namespace)
                     self.assertEqual(b'unique partial output', payload.read_bytes())
