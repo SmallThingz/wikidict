@@ -17,29 +17,34 @@ _ACTIVE = None
 
 
 def normal_build_catalog(spec):
-    """Omit terminal QA entry points when constructing a normal build catalog.
+    """Exclude verification entry points unused by the normal producer.
 
     Selection remains explicit: consumers still authenticate every retained
     module. Refuse narrowing if any retained source names a removed entry point.
     """
     result = json.loads(json.dumps(spec))
     modules = result['modules']
-    omitted = {'verify_reader_ux', 'verify_reader_navigation',
-               'verify_edition_terminal', 'verify_terminal'} & modules.keys()
+    omitted = {
+        'verify_reader_ux', 'verify_reader_navigation', 'verify_edition_terminal', 'verify_terminal',
+        'verify_wikimedia', 'verify_wikimedia_test', 'validate_corpus_test',
+        'category_stats_snapshot_test', 'category_tree_snapshot_test', 'namespace_registry_snapshot_test',
+    } & modules.keys()
     for name, reference in modules.items():
         if name in omitted:
             continue
         path, data = _regular(reference)
         for node in ast.walk(ast.parse(data, filename=str(path))):
-            names = []
             if isinstance(node, ast.Import):
-                names = [item.name.split('.')[0] for item in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module.split('.')[0]]
+                referenced = any(not omitted.isdisjoint(item.name.split('.')) for item in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                referenced = not omitted.isdisjoint((node.module or '').split('.')) or any(
+                    item.name in omitted for item in node.names)
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-                names = [candidate for candidate in omitted if candidate in node.value]
-            if omitted.intersection(names):
-                raise ValueError('Normal build source references terminal QA: ' + str(path))
+                referenced = any(candidate in node.value for candidate in omitted)
+            else:
+                continue
+            if referenced:
+                raise ValueError('Normal build source references excluded QA: ' + str(path))
     for name in omitted:
         del modules[name]
     return result

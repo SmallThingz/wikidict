@@ -67,7 +67,9 @@ class NormalCatalogTests(unittest.TestCase):
             modules = dict(build_wiktionaries=source('build_wiktionaries', 'import helper\n'),
                            corpus_controller=source('corpus_controller', 'VALUE = 1\n'),
                            helper=source('helper', 'VALUE = 2\n'),
-                           verify_reader_ux=source('verify_reader_ux', 'VALUE = 3\n'))
+                           verify_reader_ux=source('verify_reader_ux', 'VALUE = 3\n'),
+                           verify_wikimedia=source('verify_wikimedia', 'VALUE = 4\n'),
+                           verify_wikimedia_test=source('verify_wikimedia_test', 'import verify_wikimedia\n'))
             selector = Path(build_python_tooling.__file__)
             st = root.stat()
             directory = dict(path=str(root), device=st.st_dev, inode=st.st_ino,
@@ -78,9 +80,10 @@ class NormalCatalogTests(unittest.TestCase):
                             mode=selector.stat().st_mode & 0o777))
             original = copy.deepcopy(spec)
             Path(modules['verify_reader_ux']['path']).write_text('changed QA\n')
+            Path(modules['verify_wikimedia_test']['path']).unlink()
             selected = normal_build_catalog(spec)
             self.assertEqual(spec, original)
-            self.assertEqual(selected['modules'], {k: v for k, v in modules.items() if k != 'verify_reader_ux'})
+            self.assertEqual(selected['modules'], {k: modules[k] for k in ('build_wiktionaries', 'corpus_controller', 'helper')})
             tooling = PythonTooling(selected)
             tooling.require_unchanged()
             Path(modules['helper']['path']).write_text('changed required\n')
@@ -89,15 +92,21 @@ class NormalCatalogTests(unittest.TestCase):
 
     def test_import_and_subprocess_reference_prevent_omission(self):
         for text in ('import verify_reader_ux\n', 'from verify_reader_ux import main\n',
-                     'script = "tools/verify_edition_terminal.py"\n'):
+                     'script = "tools/verify_edition_terminal.py"\n',
+                     'from . import verify_wikimedia\n',
+                     'from .tools import verify_wikimedia\n',
+                     'from tools.verify_wikimedia import API\n',
+                     'import tools.verify_wikimedia\n',
+                     'script = "tools/verify_" "wikimedia_test.py"\n'):
             with self.subTest(text=text), tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / 'builder.py'
                 path.write_text(text)
                 reference = dict(path=str(path), bytes=path.stat().st_size,
                                  sha256=hashlib.sha256(path.read_bytes()).hexdigest(), mode=0o644)
                 spec = dict(modules=dict(build_wiktionaries=reference,
-                    corpus_controller=reference, verify_reader_ux={}, verify_edition_terminal={}))
-                with self.assertRaisesRegex(ValueError, 'references terminal QA'):
+                    corpus_controller=reference, verify_reader_ux={}, verify_edition_terminal={},
+                    verify_wikimedia={}, verify_wikimedia_test={}))
+                with self.assertRaisesRegex(ValueError, 'references excluded QA'):
                     normal_build_catalog(spec)
 
 
