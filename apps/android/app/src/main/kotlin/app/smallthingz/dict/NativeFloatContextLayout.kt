@@ -129,6 +129,7 @@ internal sealed interface NativeFloatContextSpec {
         val absoluteStatic: NativeAbsoluteStaticPosition? = null,
         val columnClearEvent: Boolean = false,
         val columnContentWidths: (() -> ContainerWidths)? = null,
+        val column: NativeFlexColumnPolicy? = null,
         val content: @Composable () -> Unit,
     ) : NativeFloatContextSpec
     /** width is the existing renderer's actual viewport allocation at the ORIGINAL parent width. */
@@ -408,15 +409,35 @@ internal fun NativeFloatContextLayout(
                 }
             }, measurePolicy = object : MeasurePolicy {
                 private fun intrinsicWidthOf(measurables: List<IntrinsicMeasurable>, maximum: Boolean,
-                    items: List<NativeFloatContextSpec> = parts, row: Boolean = false, structural: Boolean = false): Int {
+                    items: List<NativeFloatContextSpec> = parts, row: Boolean = false, structural: Boolean = false,
+                    column: Boolean = false): Int {
+                    if (column) {
+                        check(!row)
+                        var used = 0f
+                        for (item in items) {
+                            val owner = item as? NativeFloatContextSpec.Container
+                                ?: throw UnsupportedFloatLayout("A flex column requires original item owners")
+                            val nested = owner.preparedParts
+                                ?: throw UnsupportedFloatLayout("Flex column items must retain prepared children")
+                            val intrinsic = ContainerWidths(
+                                intrinsicWidthOf(measurables, false, nested, owner.row != null, column = owner.column != null).toFloat(),
+                                intrinsicWidthOf(measurables, true, nested, owner.row != null, column = owner.column != null).toFloat())
+                            val contribution = owner.flex?.intrinsic?.invoke(intrinsic, maximum)
+                                ?: throw UnsupportedFloatLayout("Flex column intrinsic contribution is not prepared")
+                            if (!contribution.isFinite() || contribution < 0f)
+                                throw UnsupportedFloatLayout("Invalid flex column intrinsic contribution")
+                            used = maxOf(used, contribution)
+                        }
+                        return if (used > TablePixelLimit) Constraints.Infinity else ceil(used).toInt()
+                    }
                     if (row) {
                         var sum = 0.0
                         for (item in items) {
                             val owner = item as? NativeFloatContextSpec.Container
                                 ?: throw UnsupportedFloatLayout("A flex row requires complete logical item owners")
                             val nested = owner.preparedParts ?: throw UnsupportedFloatLayout("Flex items must retain their prepared children")
-                            val intrinsic = ContainerWidths(intrinsicWidthOf(measurables, false, nested, owner.row != null).toFloat(),
-                                intrinsicWidthOf(measurables, true, nested, owner.row != null).toFloat())
+                            val intrinsic = ContainerWidths(intrinsicWidthOf(measurables, false, nested, owner.row != null, column = owner.column != null).toFloat(),
+                                intrinsicWidthOf(measurables, true, nested, owner.row != null, column = owner.column != null).toFloat())
                             val contribution = owner.flex?.intrinsic?.invoke(intrinsic, maximum)
                                 ?: throw UnsupportedFloatLayout("Flex item intrinsic contribution is not prepared")
                             if (!contribution.isFinite() || contribution < 0f) throw UnsupportedFloatLayout("Invalid flex intrinsic contribution")
@@ -447,7 +468,7 @@ internal fun NativeFloatContextLayout(
                             is NativeFloatContextSpec.Container -> part.intrinsicWidth(
                                 if (part.columnContentWidths != null) 0 else
                                 (part.preparedParts ?: part.scrollport?.takeIf { it.positioned != null }?.parts)?.let {
-                                    intrinsicWidthOf(measurables, maximum, it, part.row != null, structural || part.scrollport != null)
+                                    intrinsicWidthOf(measurables, maximum, it, part.row != null, structural || part.scrollport != null, part.column != null)
                                 } ?: childWidths[index] ?: throw UnsupportedFloatLayout("Positioned scope intrinsic child is unavailable"), maximum)
                             else -> childWidths[index] ?: throw UnsupportedFloatLayout("Positioned scope requires prepared native intrinsic content")
                         }
@@ -556,15 +577,26 @@ internal fun NativeFloatContextLayout(
                         if (width == null) throw UnsupportedFloatLayout("Floated table layout needs a bounded width")
                         fun specifications(items: List<NativeFloatContextSpec>, containingWidth: Int,
                             owners: List<NativeFlowOwnerBoundary> = emptyList(), contextContains: Boolean = containAtEnd,
-                            row: NativeFlexRowPolicy? = null, available: Float = containingWidth.toFloat()
+                            row: NativeFlexRowPolicy? = null, available: Float = containingWidth.toFloat(),
+                            column: NativeFlexColumnPolicy? = null
                         ): List<NativeFloatContextPart> {
-                            val allocations = if (row == null) null else {
+                            check(row == null || column == null)
+                            val allocations = if (column != null) items.map { item ->
+                                val owner = item as? NativeFloatContextSpec.Container
+                                    ?: throw UnsupportedFloatLayout("A flex column requires original item owners")
+                                val nested = owner.preparedParts
+                                    ?: throw UnsupportedFloatLayout("Flex column items must retain prepared children")
+                                val minimum = intrinsicWidthOf(measurables, false, nested, owner.row != null, column = owner.column != null)
+                                val maximum = intrinsicWidthOf(measurables, true, nested, owner.row != null, column = owner.column != null)
+                                owner.flex?.columnMeasure?.invoke(available, ContainerWidths(minimum.toFloat(), maximum.toFloat()), column)
+                                    ?: throw UnsupportedFloatLayout("Flex column cross sizing is not prepared")
+                            } else if (row == null) null else {
                                 val metrics = items.map { item ->
                                     val owner = item as? NativeFloatContextSpec.Container
                                         ?: throw UnsupportedFloatLayout("A flex row requires complete logical item owners")
                                     val nested = owner.preparedParts ?: throw UnsupportedFloatLayout("Flex items must retain prepared children")
-                                    val minimum = intrinsicWidthOf(measurables, false, nested, owner.row != null)
-                                    val maximum = intrinsicWidthOf(measurables, true, nested, owner.row != null)
+                                    val minimum = intrinsicWidthOf(measurables, false, nested, owner.row != null, column = owner.column != null)
+                                    val maximum = intrinsicWidthOf(measurables, true, nested, owner.row != null, column = owner.column != null)
                                     owner.flex?.measure?.invoke(available, ContainerWidths(minimum.toFloat(), maximum.toFloat()))
                                         ?: throw UnsupportedFloatLayout("Flex item sizing is not prepared")
                                 }
@@ -611,10 +643,10 @@ internal fun NativeFloatContextLayout(
                                 val exactColumnWidths = part.columnContentWidths?.invoke()
                                 val minimum = if (exactColumnWidths != null) 0 else if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, false, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.minIntrinsicWidth(Constraints.Infinity)
-                                    else intrinsicWidthOf(measurables, false, nested, part.row != null)
+                                    else intrinsicWidthOf(measurables, false, nested, part.row != null, column = part.column != null)
                                 val maximum = if (exactColumnWidths != null) 0 else if (part.absoluteStatic != null) 0 else if (scopeParts != null) intrinsicWidthOf(measurables, true, scopeParts, structural = true)
                                     else if (nested == null) measurable!!.maxIntrinsicWidth(Constraints.Infinity)
-                                    else intrinsicWidthOf(measurables, true, nested, part.row != null)
+                                    else intrinsicWidthOf(measurables, true, nested, part.row != null, column = part.column != null)
                                 if (minimum > TablePixelLimit || maximum < minimum || maximum > TablePixelLimit)
                                     throw UnsupportedFloatLayout("Container intrinsic width exceeds the native range")
                                 val intrinsic = exactColumnWidths ?: ContainerWidths(minimum.toFloat(), maximum.toFloat())
@@ -648,14 +680,19 @@ internal fun NativeFloatContextLayout(
                                     }
                                 }
                                 val effectiveFloat = if (forced == null) part.floatSide else null
-                                val isolated = part.isolatesFloats || part.row != null || forced != null
+                                val isolated = part.isolatesFloats || part.row != null || part.column != null || forced != null
                                 val horizontal = if (part.absoluteStatic != null)
                                     NativeContainerHorizontal(available, available, available, 0f, 0f, 0f, available)
                                 else forced?.let {
                                     val border = it.width + padding.left + padding.right
                                     val outer = border + it.left + it.right
-                                    NativeContainerHorizontal(outer, it.width, border, it.left,
+                                    if (column == null) NativeContainerHorizontal(outer, it.width, border, it.left,
                                         it.left + padding.left, 0f, outer)
+                                    else {
+                                        val left = it.left + it.crossOffset
+                                        NativeContainerHorizontal(outer, it.width, border, left, left + padding.left,
+                                            minOf(0f, left), maxOf(outer, left + border))
+                                    }
                                 } ?: part.horizontal?.invoke(containingWidth, intrinsic)
                                 NativeFloatContextPart.Container(part.id, allocated,
                                     { available, carried -> measureContainer(available, carried, null) },
@@ -664,14 +701,14 @@ internal fun NativeFloatContextLayout(
                                     { available, carried, collapse -> measureContainer(available, carried, collapse) },
                                     nested?.let { specifications(it, allocated,
                                         owners + NativeFlowOwnerBoundary(part.id, allocated, effectiveFloat, isolated, part.row,
-                                            part.fixedContentHeight, part.columns, part.minimum, margins, padding),
-                                        effectiveFloat != null || isolated, part.row, horizontal?.content ?: allocated.toFloat()) },
+                                            part.fixedContentHeight, part.columns, part.minimum, margins, padding, part.column),
+                                        effectiveFloat != null || isolated, part.row, horizontal?.content ?: allocated.toFloat(), part.column) },
                                     horizontal, part.row, part.flex?.crossMargins ?: NativeFlexCrossMargins(),
                                     part.fixedContentHeight, part.columns, part.minimum, part.headingAllocation,
                                     part.absolute, part.scrollport?.positioned != null, part.absolutePosition, part.absoluteContainingBlock,
                                     part.absoluteStatic, if (part.absoluteStatic == null) null else
                                         (nested?.singleOrNull() as? NativeFloatContextSpec.Text)?.prepared?.native,
-                                    part.columnClearEvent)
+                                    part.columnClearEvent, part.column)
                             }
                             is NativeFloatContextSpec.Child -> {
                                 val exact = part.exactWidth

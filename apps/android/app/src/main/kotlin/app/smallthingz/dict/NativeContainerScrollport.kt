@@ -88,7 +88,7 @@ internal fun nativeScrollportUnavailable(style: ContainerStyle, flexItem: Boolea
         val numeric = style.margins?.let { listOf(it.top, it.right, it.bottom, it.left) }.orEmpty()
         return when {
             style.height != null || style.minHeight != null -> "Hidden scrollports require automatic block height"
-            flexItem || style.flexItem != null || style.layout == ContainerLayout.FlexRow -> "Hidden scrollports in flex layout are unavailable"
+            flexItem || style.flexItem != null || (style.layout == ContainerLayout.FlexRow || style.layout == ContainerLayout.FlexColumn) -> "Hidden scrollports in flex layout are unavailable"
             style.columns != null || style.floatSide != null || style.positionedScope != null ||
                 style.positioning != null && style.positioning != ContainerPositioning.RelativeAuto ||
                 style.absolutePosition != null || style.absoluteStatic != null || style.textWrap != null ->
@@ -106,7 +106,7 @@ internal fun nativeScrollportUnavailable(style: ContainerStyle, flexItem: Boolea
     val numeric = style.margins?.let { listOf(it.top, it.right, it.bottom, it.left) }.orEmpty()
     return when {
         style.height != null || style.minHeight != null -> "Automatic scrollports require automatic block height"
-        flexItem || style.flexItem != null || style.layout == ContainerLayout.FlexRow -> "Automatic scrollports in flex layout are unavailable"
+        flexItem || style.flexItem != null || (style.layout == ContainerLayout.FlexRow || style.layout == ContainerLayout.FlexColumn) -> "Automatic scrollports in flex layout are unavailable"
         style.columns != null || style.positioning != null || style.floatSide != null -> "This scrollport formatting combination is unavailable"
         style.screenMaxWidth != null -> "Responsive scrollport overrides are unavailable"
         style.width != null && style.width != ContainerWidth.Auto -> "Automatic scrollports require automatic width"

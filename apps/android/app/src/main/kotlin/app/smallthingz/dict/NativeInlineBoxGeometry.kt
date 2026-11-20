@@ -39,7 +39,8 @@ internal class NativeInlineBoxGeometry(
     private val fragments: List<Fragment>
     private val nestingParents: List<Int>
     private val spanIndices = this.spans.withIndex().associate { it.value to it.index }
-    private val nestedChildren: Map<Int, Int>
+    private val nestedChildren: Map<Int, List<Int>>
+    private val pitchOwners: Set<Int>
     private val rounded: Map<Fragment, NativeInlineBoxCurvePaint>
     private val cursors = nativeInlineRanges(raw.nativeRubyShapingSource, NativeAuthoredCursor::class.java)
 
@@ -92,7 +93,11 @@ internal class NativeInlineBoxGeometry(
                 }) throw UnsupportedFloatLayout("Inline box body contains unsupported native controls")
         }
         nestingParents = nativeInlineBoxNesting(this.spans) { range -> ownerRtl(range, firstLine(range)) }
-        nestedChildren = nestingParents.withIndex().filter { it.value >= 0 }.associate { it.value to it.index }
+        nestedChildren = nestingParents.withIndex().filter { it.value >= 0 }
+            .groupBy({ it.value }, { it.index })
+        pitchOwners = this.spans.indices.filter {
+            nativeInlineBoxPitchChildren(this.spans[it].value.box.owner.span) != null
+        }.toSet()
         if (this.spans.map { it.value.box.owner }.distinct().size != this.spans.size)
             throw UnsupportedFloatLayout("Inline box owner lost its original occurrence")
         val source = raw.nativeRubyShapingSource
@@ -131,9 +136,13 @@ internal class NativeInlineBoxGeometry(
                     if (rtl) owner.value.box.leftAdvance else owner.value.box.rightAdvance,
                     if (rtl) parts.first() else parts.last(), owner.end)
             }
-            // At a shared physical boundary, the preceding box's end precedes the
-            // following box's start regardless of the source's bidi traversal order.
-            val orderedEdges = edges.sortedWith(compareBy({ it.increment.boundary.x }, { if (it.leftSide) 1 else 0 }))
+            // Disjoint ends precede starts. Coincident nested starts allocate outer
+            // padding first; nested ends allocate the child border before outer padding.
+            val orderedEdges = edges.sortedWith(compareBy({ it.increment.boundary.x },
+                { if (it.leftSide) 1 else 0 }, {
+                    val depth = if (nestingParents[spanIndices.getValue(it.owner)] < 0) 0 else 1
+                    if (it.leftSide) depth else -depth
+                }))
             val added = orderedEdges.fold(0.0) { sum, item -> sum + item.increment.pixels }
             val advance = coordinate(raw.nativeInlineVisibleAdvance(line).toDouble() + added)
             if (advance > right - left && start !in allowedOverflowStarts)
@@ -161,11 +170,11 @@ internal class NativeInlineBoxGeometry(
                 val bottom = coordinate(baseline.toDouble() + primary.descent)
                 val ownPieces = mapped.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
                 val ownerIndex = spanIndices.getValue(owner)
-                val childIndex = nestedChildren[ownerIndex]
+                val childIndices = nestedChildren[ownerIndex].orEmpty()
                 // Child edges are real in-flow allocation, including at a wrapped row endpoint.
                 // They extend only the ancestor decoration; source glyph/caret pieces stay exact.
-                val childEdges = if (childIndex == null) emptyList() else orderedEdges.filter {
-                    it.owner === this.spans[childIndex]
+                val childEdges = if (childIndices.isEmpty()) emptyList() else orderedEdges.filter { edge ->
+                    childIndices.any { edge.owner === this.spans[it] }
                 }.map { edge ->
                     val placed = mapped.placedEdges.single { it.increment === edge.increment }
                     val at = edge.increment.boundary.offset
@@ -229,7 +238,9 @@ internal class NativeInlineBoxGeometry(
             }
             val first = own.filter { it.line == firstLine(range) }.let { if (ownerRtl(range, firstLine(range))) it.last() else it.first() }
             val last = own.filter { it.line == lastLine(range) }.let { if (ownerRtl(range, lastLine(range))) it.first() else it.last() }
-            val containing = if (range.value.overlaySources.isEmpty())
+            // The newly admitted pitch indicator follows the same measured LTR
+            // first/last padding-box contract as positioned inline content.
+            val containing = if (range.value.overlaySources.isEmpty() && spanIndices.getValue(range) !in pitchOwners)
                 rectangle(minOf(first.padding.left, last.padding.left), minOf(first.padding.top, last.padding.top),
                     maxOf(first.padding.right, last.padding.right), maxOf(first.padding.bottom, last.padding.bottom))
             else {

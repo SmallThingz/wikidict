@@ -2219,13 +2219,20 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                 box.owner.span === range.span && box.owner.path == range.path)
             val descendants = prepared.projection.ranges.filter { it.path.startsWith(range.path + "/") }
             val nested = descendants.filter { it.role == RubyTextRole.BoxGroup }
+            val pitchChildren = nativeInlineBoxPitchChildren(checkNotNull(range.span))
+            val unsupportedNesting = if (pitchChildren == null)
+                nested.size > 1 || nested.any { it.start <= range.start || it.end >= range.end }
+            else nested.size != pitchChildren.size || nested.any { child ->
+                child.start < range.start || child.end > range.end || child.end - child.start != 1 ||
+                    pitchChildren.none { it === child.span }
+            }
             val paired = nested.isNotEmpty() || parent?.format?.box != null
             if (paired && (nested.isNotEmpty() && parent != null && parent.format.box == null ||
                     prepared.projection.ranges.any { ancestor -> range.path.startsWith(ancestor.path + "/") &&
                         ancestor.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) }))
                 throw UnsupportedFloatLayout("Nested inline decoration cannot inherit a structural action or ruby owner")
             if (descendants.any { it.role in setOf(RubyTextRole.Owner, RubyTextRole.PaddingGroup, RubyTextRole.ActionGroup) } ||
-                nested.size > 1 || nested.any { it.start <= range.start || it.end >= range.end } ||
+                unsupportedNesting ||
                 nested.isNotEmpty() && descendants.any { child -> child.span?.let {
                     it.kind != "text" || it.usesInlineDirectionIsolate() || it.image != null || it.citationMarker != null
                 } == true })
@@ -2239,8 +2246,10 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
             throw UnsupportedFloatLayout("Inline action baseline exceeds native coordinates")
         val rtl = resolveDirection(format.sourceDirection, directText(prepared, range), enclosingRtl)
         if (box != null && parent?.format?.box != null &&
-            (parent.rtl || rtl || !nativeInlineBoxNestedPair(
-                NativeInlineBoxSpan(parent.format, parent.shift, null), NativeInlineBoxSpan(format, shift, null))))
+            (parent.rtl || rtl || !(nativeInlineBoxNestedPair(
+                NativeInlineBoxSpan(parent.format, parent.shift, null), NativeInlineBoxSpan(format, shift, null)) ||
+                nativeInlineBoxPitchPair(NativeInlineBoxSpan(parent.format, parent.shift, null),
+                    NativeInlineBoxSpan(format, shift, null)))))
             throw UnsupportedFloatLayout("Nested inline decoration lost its static equal-metric LTR context")
         val nestedDecoration = box != null && (parent?.format?.box != null ||
             prepared.projection.ranges.any { it.role == RubyTextRole.BoxGroup && it.path.startsWith(range.path + "/") })

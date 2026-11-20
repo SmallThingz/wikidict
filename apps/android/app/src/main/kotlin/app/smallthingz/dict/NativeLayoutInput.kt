@@ -84,7 +84,8 @@ internal data class NativeFlowOwnerBoundary(val id: Int, val contentWidth: Int,
     val floatSide: TableFloatSide?, val isolatesFloats: Boolean, val row: NativeFlexRowPolicy? = null,
     val fixedContentHeight: Float? = null, val columns: NativeColumnPolicy? = null,
     val minimum: NativeContainerMinimum = NativeContainerMinimum(0f, false),
-    val margins: NativeContainerMargins? = null, val padding: FloatMargins? = null)
+    val margins: NativeContainerMargins? = null, val padding: FloatMargins? = null,
+    val column: NativeFlexColumnPolicy? = null)
 
 internal data class NativeFlowParentPolicy(val composition: Any, val containAtEnd: Boolean,
     val box: ParagraphBox?, val gapAfter: Float, val marginCollapse: NativeMarginCollapse? = null,

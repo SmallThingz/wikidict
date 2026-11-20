@@ -276,4 +276,50 @@ class ContainerDecoderTest {
         for (length in bytes.indices) assertThrows(Exception::class.java) { read(bytes.copyOf(length)) }
         assertThrows(Exception::class.java) { read(bytes + byteArrayOf(0)) }
     }
+
+
+    @Test fun flexColumnKeepsExistingLayoutPresenceAndEveryOldNullFlowRowByte() {
+        fun oldLayout(bytes: ByteArray, wide: Boolean): ContainerLayout? {
+            val width = if (wide) 4 else 2
+            require(bytes.size == width || bytes.size == width + 1)
+            val flags = bytes.take(width).mapIndexed { index, value -> (value.toInt() and 255) shl (8 * index) }.fold(0) { a, b -> a or b }
+            if (flags == 0) { require(bytes.size == width); return null }
+            require(flags == 0x80 && bytes.size == width + 1)
+            return when (bytes.last().toInt() and 255) {
+                0 -> ContainerLayout.Flow
+                1 -> ContainerLayout.FlexRow
+                else -> throw IllegalArgumentException("Old two-tag layout reader")
+            }
+        }
+        for (layout in listOf(null, ContainerLayout.Flow, ContainerLayout.FlexRow, ContainerLayout.FlexColumn)) {
+            val narrow = if (layout == null) byteArrayOf(0, 0) else byteArrayOf(0x80.toByte(), 0, layout.ordinal.toByte())
+            val wide = if (layout == null) byteArrayOf(0, 0, 0, 0) else byteArrayOf(0x80.toByte(), 0, 0, 0, layout.ordinal.toByte())
+            for ((version, literal) in listOf(76 to narrow, 77 to wide)) {
+                var start = -1
+                val encoded = fixture(version = version, style = { start = output.size(); output.write(literal) })
+                assertArrayEquals(literal, encoded.copyOfRange(start, start + literal.size))
+                val original = read(encoded)
+                val container = original.sections.single().blocks.single().container!!
+                assertEquals(layout, container.style.layout)
+                assertEquals(listOf("introduction", "meaning"), container.blocks.map { it.spans.single().text })
+                val sense = original.organization!!.lexemes.single().definitions.single()
+                assertSame(container.blocks[1], resolveBlockPath(original.sections.single().blocks, sense.block, sense.blockPath))
+                if (layout == ContainerLayout.FlexColumn) {
+                    assertThrows(IllegalArgumentException::class.java) { oldLayout(literal, version == 77) }
+                    for (tag in listOf(3, 255)) assertThrows(Exception::class.java) {
+                        read(encoded.copyOf().also { it[start + literal.lastIndex] = tag.toByte() })
+                    }
+                    for (length in 0 until literal.size) assertThrows(Exception::class.java) { read(encoded.copyOf(start + length)) }
+                    assertThrows(Exception::class.java) { read(encoded + byteArrayOf(0)) }
+                } else assertEquals(layout, oldLayout(literal, version == 77))
+            }
+        }
+        assertEquals(0, ContainerLayout.Flow.ordinal); assertEquals(1, ContainerLayout.FlexRow.ordinal)
+        assertEquals(2, ContainerLayout.FlexColumn.ordinal)
+        for (layout in listOf(ContainerLayout.FlexRow, ContainerLayout.FlexColumn)) for (align in ContainerAlignItems.entries) {
+            val entry = read(fixture(style = { short(128 or 256); byte(layout.ordinal); byte(align.ordinal) }))
+            assertEquals(align, entry.sections.single().blocks.single().container!!.style.alignItems)
+        }
+        assertThrows(Exception::class.java) { read(fixture(style = { short(128 or 256); byte(2); byte(4) })) }
+    }
 }

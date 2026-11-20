@@ -455,12 +455,15 @@ class RubyModelCodecTest {
         }
         /** Literal Z Container subset; existing primitives retain every ordinary span field. */
         fun positionedStyle(value: ContainerStyle, label: String, disclosure: ContainerDisclosure? = null) {
-            require(value == ContainerStyle(width = value.width, lineHeight = value.lineHeight,
+            require(value == ContainerStyle(width = value.width, layout = value.layout, alignItems = value.alignItems,
+                flexItem = value.flexItem, border = value.border, lineHeight = value.lineHeight,
                 textAlign = value.textAlign, overflow = value.overflow, ownerFontScale = value.ownerFontScale,
                 height = value.height, columns = value.columns, positioning = value.positioning, fontFamily = value.fontFamily,
                 ownerFont = value.ownerFont, absolutePosition = value.absolutePosition, textWrap = value.textWrap, absoluteStatic = value.absoluteStatic))
             mark("$label.flags")
-            val flags = (if (value.width != null) 4 else 0) or (if (value.lineHeight != null) 4096 else 0) or
+            val flags = (if (value.width != null) 4 else 0) or (if (value.layout != null) 128 else 0) or
+                (if (value.alignItems != null) 256 else 0) or (if (value.flexItem != null) 512 else 0) or
+                (if (value.border != null) 2048 else 0) or (if (value.lineHeight != null) 4096 else 0) or
                 (if (value.textAlign != null) 8192 else 0) or (if (value.overflow != null) 32768 else 0) or
                 (if (value.ownerFontScale != null) 65536 else 0) or (if (value.height != null) 131072 else 0) or
                 (if (value.positioning != null) 524288 else 0) or (if (value.fontFamily != null) 4194304 else 0) or
@@ -474,6 +477,27 @@ class RubyModelCodecTest {
                     ContainerWidth.FitContent -> byte(2)
                     is ContainerWidth.Length -> { byte(1); mark("$label.width.unit"); byte(width.value.unit.ordinal)
                         mark("$label.width.value"); f32(width.value.value) }
+                }
+            }
+            value.layout?.let { mark("$label.layout"); byte(it.ordinal) }
+            value.alignItems?.let { mark("$label.alignItems"); byte(it.ordinal) }
+            value.flexItem?.let { mark("$label.flexItem"); byte(it.ordinal) }
+            value.border?.let { border ->
+                fun edge(value: ContainerBorderEdge, name: String) {
+                    when (value) {
+                        ContainerBorderEdge.None -> byte(0)
+                        ContainerBorderEdge.Hidden -> byte(1)
+                        is ContainerBorderEdge.Solid -> { byte(2); positionedLength(value.width, name); referenceLayoutColor(value.color) }
+                        is ContainerBorderEdge.Dotted -> { byte(3); positionedLength(value.width, name); referenceLayoutColor(value.color) }
+                    }
+                }
+                when (border) {
+                    ContainerBorder.None -> byte(0)
+                    is ContainerBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); referenceLayoutColor(border.color) }
+                    is ContainerBorder.Edges -> {
+                        byte(2); edge(border.top, "$label.border.top"); edge(border.right, "$label.border.right")
+                        edge(border.bottom, "$label.border.bottom"); edge(border.left, "$label.border.left")
+                    }
                 }
             }
             value.lineHeight?.let { height ->
@@ -7343,5 +7367,180 @@ class RubyModelCodecTest {
         }
         lines[0] = lines[0].copy(breakAfter = true)
         PresentationSpanVisitor { _, _ -> }.block(Block("table", 0, listOf(retained), table = table(0)))
+    }
+
+    private fun flexColumnEmptyChild() = Block("container", 0, emptyList(), container = Container(emptyList(),
+        ContainerStyle(height = StyleLength(StyleLengthUnit.Px, 20f), flexItem = ContainerFlexItem.None,
+            border = ContainerBorder.Edges(ContainerBorderEdge.None,
+                ContainerBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 2f), ContainerColor.Rgb("#123456")),
+                ContainerBorderEdge.None, ContainerBorderEdge.None))))
+    private fun flexColumnBlock(children: List<Block>, style: ContainerStyle = ContainerStyle(layout = ContainerLayout.FlexColumn)) =
+        Block("container", 0, emptyList(), container = Container(children, style))
+
+    @Test fun flexColumnKeepsOriginalChildrenAndCrossAlignmentWithoutWideningSpecialStyles() {
+        val empty = flexColumnEmptyChild()
+        val action = Span("link", "America", "Америка", targetFragment = "sense", tooltip = "original title", explanation = "original detail")
+        val paragraph = Block("paragraph", 0, listOf(action))
+        val children = mutableListOf(empty, flexColumnBlock(listOf(paragraph), ContainerStyle()))
+        for (alignment in listOf(null) + ContainerAlignItems.entries) for (overflow in listOf(null, ContainerOverflow.Visible)) {
+            val style = ContainerStyle(layout = ContainerLayout.FlexColumn, alignItems = alignment, overflow = overflow)
+            val root = flexColumnBlock(children, style)
+            assertSame(children, root.container!!.blocks)
+            assertSame(empty, root.container!!.blocks.first())
+            assertTrue(root.container!!.blocks.first().container!!.blocks.isEmpty())
+            assertEquals(20f, root.container!!.blocks.first().container!!.style.height!!.value)
+            assertSame(action, root.container!!.blocks[1].container!!.blocks.single().spans.single())
+            assertTrue(ContainerViewportStyle(style, null).ownsFormattingContext)
+            // Shared admission of an ordinary relative owner is separate from native/source child refusal.
+            val relative = style.copy(positioning = ContainerPositioning.RelativeAuto)
+            assertSame(children, Container(children, relative).blocks)
+            assertEquals(ContainerPositioning.RelativeAuto, relative.positioning)
+        }
+        val style = ContainerStyle(layout = ContainerLayout.FlexColumn)
+        invalid("Column requires automatic height") { style.copy(height = StyleLength(StyleLengthUnit.Px, 20f)) }
+        invalid("Column refuses even zero minimum height") { style.copy(minHeight = StyleLength(StyleLengthUnit.Px, 0f)) }
+        invalid("Column does not fragment") { style.copy(columns = ContainerColumns(2, StyleLength(StyleLengthUnit.Px, 0f))) }
+        for (overflow in listOf(ContainerOverflow.Auto, ContainerOverflow.Hidden))
+            invalid("Column cannot become a scroll/clip owner") { style.copy(overflow = overflow) }
+        val relativeScope = ContainerStyle(positioning = ContainerPositioning.RelativeAuto,
+            positionedScope = PositionedScope(TextWrap.NoWrap, PositionedOverflowX.Scroll, PositionedOverflowY.Auto))
+        invalid("Android positioned scope remains flow-only") { relativeScope.copy(layout = ContainerLayout.FlexColumn) }
+        invalid("Static absolute owner remains neutral flow") {
+            style.copy(width = ContainerWidth.FitContent, absoluteStatic = ContainerAbsoluteStaticPosition())
+        }
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        invalid("Physical absolute owner cannot borrow column") {
+            style.copy(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 2f)), height = zero,
+                absolutePosition = ContainerAbsolutePosition(zero, zero))
+        }
+        assertFalse(validReferenceLayoutStyle(style))
+        for (layout in listOf(null, ContainerLayout.Flow, ContainerLayout.FlexRow)) {
+            assertEquals(20f, ContainerStyle(layout = layout, height = StyleLength(StyleLengthUnit.Px, 20f)).height!!.value)
+            assertEquals(0f, ContainerStyle(layout = layout, minHeight = zero).minHeight!!.value)
+            assertEquals(ContainerOverflow.Auto, ContainerStyle(layout = layout, overflow = ContainerOverflow.Auto).overflow)
+        }
+        val original = flexColumnBlock(children)
+        val later = Block("paragraph", 0, listOf(Span("external_link", "outside", "https://example.test/original")))
+        children.add(later)
+        val seen = mutableListOf<Span>()
+        original.visitSpanRuns { spans, _ -> seen.addAll(spans) }
+        assertEquals(listOf(action, later.spans.single()), seen)
+        assertSame(action, seen.first()); assertSame(later.spans.single(), seen.last())
+        assertSame(empty, original.container!!.blocks.first())
+    }
+
+    @Test fun flexColumnRoundtripsEmptyDecoratedChildActionsAndEveryExistingContainerSink() {
+        val action = Span("link", "America", "Америка", targetFragment = "sense", tooltip = "title", explanation = "detail")
+        val child = Block("container", 0, emptyList(), container = Container(listOf(Block("definition", 0, listOf(action))),
+            ContainerStyle(width = ContainerWidth.Length(StyleWidth(StyleWidthUnit.Px, 72f)))))
+        val original = flexColumnBlock(listOf(flexColumnEmptyChild(), child),
+            ContainerStyle(layout = ContainerLayout.FlexColumn, alignItems = ContainerAlignItems.Center))
+        for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+            val wire = Wire('M').apply { paragraphOverride = { positionedBlock(original, "flex") } }
+            val bytes = wire.document(emptyList(), sink)
+            assertArrayEquals("DPRM".encodeToByteArray(), bytes.copyOf(4))
+            assertEquals(2, bytes[wire.at.getValue("flex.style.layout")].toInt())
+            val found = disclosureContainers(read(bytes)).filter { it.style.layout == ContainerLayout.FlexColumn }
+            assertEquals(listOf(original.container), found)
+            val root = found.single()
+            val empty = root.blocks.first().container!!
+            assertTrue(empty.blocks.isEmpty()); assertEquals(20f, empty.style.height!!.value)
+            assertEquals(ContainerFlexItem.None, empty.style.flexItem)
+            val edges = empty.style.border as ContainerBorder.Edges
+            assertEquals(ContainerBorderEdge.None, edges.top); assertEquals(ContainerBorderEdge.None, edges.bottom)
+            assertEquals(ContainerBorderEdge.None, edges.left)
+            assertEquals(ContainerBorderEdge.Solid(StyleLength(StyleLengthUnit.Px, 2f), ContainerColor.Rgb("#123456")), edges.right)
+            assertEquals(listOf(action), root.blocks[1].container!!.blocks.single().spans)
+            assertEquals(EntryLink("Америка", "sense"), root.blocks[1].container!!.blocks.single().spans.single().entryLink())
+        }
+        // RelativeAuto is valid generic data; this is not acceptance of the original positioned source connector.
+        val relative = original.copy(container = original.container!!.copy(style = original.container!!.style.copy(positioning = ContainerPositioning.RelativeAuto)))
+        val relativeWire = Wire('M').apply { paragraphOverride = { positionedBlock(relative) } }
+        assertEquals(relative, read(relativeWire.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+        val nested = flexColumnBlock(listOf(original))
+        val nestedWire = Wire('M').apply { paragraphOverride = { positionedBlock(nested) } }
+        assertEquals(nested, read(nestedWire.document(emptyList(), Sink.Body)).sections.single().blocks.single())
+    }
+
+    @Test fun flexColumnRefusesForgedRestrictedStylesAndKeepsIndependentFeatureNamespaces() {
+        val leaf = Block("paragraph", 0, listOf(Span("link", "kept", "Kept")))
+        val styles = listOf(
+            ContainerStyle(layout = ContainerLayout.FlexRow, height = StyleLength(StyleLengthUnit.Px, 0f)),
+            ContainerStyle(layout = ContainerLayout.FlexRow, overflow = ContainerOverflow.Auto),
+            ContainerStyle(layout = ContainerLayout.FlexRow, overflow = ContainerOverflow.Hidden),
+            ContainerStyle(layout = ContainerLayout.Flow, columns = ContainerColumns(2, StyleLength(StyleLengthUnit.Em, 1f))))
+        for (style in styles) {
+            val root = flexColumnBlock(listOf(leaf), style)
+            val wire = Wire('M').apply { paragraphOverride = { positionedBlock(root, "forged") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            assertEquals(root, read(bytes).sections.single().blocks.single())
+            reject("Column cannot inherit a row/flow-only combination", changed(bytes, wire.at.getValue("forged.style.layout"), 2))
+        }
+        val root = flexColumnBlock(listOf(flexColumnEmptyChild(), leaf),
+            ContainerStyle(layout = ContainerLayout.FlexColumn, alignItems = ContainerAlignItems.End))
+        val wire = Wire('M').apply { paragraphOverride = { positionedBlock(root, "column") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        for (tag in listOf(3, 255)) reject("Unknown layout still refused", changed(bytes, wire.at.getValue("column.style.layout"), tag))
+        for (tag in listOf(4, 255)) reject("Unknown cross alignment still refused", changed(bytes, wire.at.getValue("column.style.alignItems"), tag))
+        reject("Unknown flex item still refused", changed(bytes, wire.at.getValue("column.child0.style.flexItem"), 1))
+        for (end in wire.at.getValue("column.style.flags") until wire.at.getValue("column.style.end"))
+            reject("Truncated existing style payload", bytes.copyOf(end))
+        reject("EOF is exact", bytes + byteArrayOf(0))
+        val marked = opacityTable(CellStyle(opacity = .2f, foreground = CellForeground.Inherit),
+            listOf(intrinsicWireOwner(), atomicAutoWireOwner(), atomicWireOwner(), marginRubyOwner()))
+        val mixed = flexColumnBlock(listOf(flexColumnEmptyChild(), Block("table", 0, emptyList(), table = marked)))
+        val mixedWire = Wire('a', 0xf0000 or 4).apply { paragraphOverride = { positionedBlock(mixed, "mixedFlex") } }
+        val mixedBytes = mixedWire.document(emptyList(), Sink.Body)
+        assertEquals(mixed, read(mixedBytes).sections.single().blocks.single())
+        reject("Column does not earn unrelated font-family capability", changed(mixedBytes, mixedWire.at.getValue("features"), 4))
+        for (missing in listOf(0x10000, 0x20000, 0x40000, 0x80000))
+            reject("Column does not supply MG/HU/RT/intrinsic debt", changed32(mixedBytes, 4, ((0xf0000 or 4) and missing.inv()).toLong()))
+        for (extra in listOf(0x10000, 0x20000, 0x40000, 0x80000)) {
+            val unused = Wire('a', extra or 4).apply { paragraphOverride = { positionedBlock(root) } }
+            reject("No new root feature is earned by a column", unused.document(emptyList(), Sink.Body))
+        }
+    }
+
+    @Test fun flexColumnSharesOriginalItemContentAndTableBudgetsWithoutSkippingEmptyChild() {
+        val limit = 1 shl 20
+        val action = Span("link", "budget action", "Original", targetFragment = "part")
+        val empty = flexColumnEmptyChild()
+        fun budget(rows: Int) = flexColumnBlock(listOf(empty, Block("table", 0, emptyList(), table = Table(listOf(action),
+            java.util.Collections.nCopies(rows, emptyList<Cell>())))))
+        // Model: root block, empty child block, table block, real caption Span = four; layout/border add no item.
+        val exact = budget(limit - 4)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.blocks(listOf(exact))
+        assertEquals(listOf(action), seen); assertSame(action, seen.single())
+        assertSame(empty, exact.container!!.blocks.first())
+        invalid("Column shares exact model M plus one") { PresentationSpanVisitor { _, _ -> }.blocks(listOf(budget(limit - 3))) }
+        fun literal(rows: Int): ByteArray = Wire('M').apply { paragraphOverride = { positionedBlock(budget(rows), "budgetFlex") } }
+            .document(emptyList(), Sink.Body)
+        // Decoder also charges the Section slot. Empty rows are lightweight legitimate counted nodes.
+        val decoded = read(literal(limit - 5)).sections.single().blocks.single().container!!
+        assertEquals(empty, decoded.blocks.first())
+        val table = decoded.blocks[1].table!!
+        assertEquals(limit - 5, table.rows.size); assertTrue(table.rows.all { it.isEmpty() })
+        assertEquals(listOf(action), table.caption); assertEquals(TableGrid(emptyList(), limit - 5, 0), tableGrid(table))
+        reject("Column shares exact decoded M plus one", literal(limit - 4))
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('M').apply { containerStyleOverride = { positionedStyle(ContainerStyle(layout = ContainerLayout.FlexColumn), it) } }
+            val bytes = wire.document(listOf(action), Sink.Container, containers = depth)
+            if (depth == 16) {
+                val entry = read(bytes)
+                val owners = disclosureContainers(entry)
+                assertEquals(depth, owners.size); assertTrue(owners.all { it.style.layout == ContainerLayout.FlexColumn })
+                assertEquals(listOf(action), owners.last().blocks.single().spans)
+            } else reject("Column cannot reset content depth17", bytes)
+        }
+        for (depth in listOf(LegacyMaxTableDepth, LegacyMaxTableDepth + 1)) {
+            val wire = Wire('M').apply {
+                containerStyleOverride = { positionedStyle(ContainerStyle(layout = ContainerLayout.FlexColumn), it) }
+                paragraphOverride = { tableChain(depth, mixed = true) }
+            }
+            val bytes = wire.document(listOf(action), Sink.Container)
+            if (depth == LegacyMaxTableDepth) assertNotNull(read(bytes)) else reject("M retains its existing table limit", bytes)
+        }
     }
 }

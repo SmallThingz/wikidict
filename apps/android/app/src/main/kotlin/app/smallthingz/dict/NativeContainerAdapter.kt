@@ -250,6 +250,20 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     absoluteStatic: NativeAbsoluteStaticPosition?, columnBreakWordMinimum: Boolean,
     ordinaryHidden: NativeOrdinaryHiddenScrollportPolicy?): NativeFloatContextSpec.Container {
     val style = resolved.box
+    if (style.layout == ContainerLayout.FlexColumn) {
+        if (style.height != null || style.minHeight != null || style.columns != null ||
+            style.overflow != null && style.overflow != ContainerOverflow.Visible)
+            throw UnsupportedFloatLayout("Flex columns require an auto-height visible owner")
+        fun supported(part: NativeFloatContextSpec): Boolean = when (part) {
+            is NativeFloatContextSpec.Text, is NativeFloatContextSpec.Rule -> true
+            is NativeFloatContextSpec.Container -> !part.relativeAuto && part.absolute == null &&
+                part.absolutePosition == null && part.absoluteStatic == null && part.absoluteContainingBlock == null &&
+                part.scrollport == null && part.columns == null && part.preparedParts?.all(::supported) == true
+            else -> false
+        }
+        if (children.any { it !is NativeFloatContextSpec.Container || !supported(it) })
+            throw UnsupportedFloatLayout("Flex column items require original ordinary Container owners")
+    }
     if ((style.overflow == ContainerOverflow.Hidden) != (ordinaryHidden != null))
         throw UnsupportedFloatLayout("Hidden overflow requires its original ordinary Container owner")
     if ((style.positionedScope != null) != (positioned != null) ||
@@ -285,7 +299,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         throw UnsupportedFloatLayout("Signed external float, BFC or flex margins are not supported")
     if (positioned != null && (margins.left < 0f || margins.right < 0f))
         throw UnsupportedFloatLayout("Signed horizontal positioned-scope margins are unavailable")
-    if (style.minHeight != null && (flexItem || style.layout == ContainerLayout.FlexRow || style.columns != null))
+    if (style.minHeight != null && (flexItem || (style.layout == ContainerLayout.FlexRow || style.layout == ContainerLayout.FlexColumn) || style.columns != null))
         throw UnsupportedFloatLayout("Minimum height in flex or multicolumn layout is not supported")
     val borderSides = style.border.physicalEdges()
     val edgeWidths = listOf(borderSides.top, borderSides.right, borderSides.bottom, borderSides.left)
@@ -314,7 +328,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
             NativeContainerPaintEdge(edgeWidths[index], ink, edge is ContainerBorderEdge.Dotted)
         }).takeIf { it.background != null || it.edges!!.any { edge -> edge.color != null && edge.width > 0f } }
     val relativeAuto = style.positioning == ContainerPositioning.RelativeAuto
-    if (relativeAuto && positioned == null && (flexItem || style.layout == ContainerLayout.FlexRow || style.floatSide != null ||
+    if (relativeAuto && positioned == null && (flexItem || (style.layout == ContainerLayout.FlexRow || style.layout == ContainerLayout.FlexColumn) || style.floatSide != null ||
             style.columns != null || ordinaryHidden == null && absoluteContainingBlock == null && children.any { it !is NativeFloatContextSpec.Text }))
         throw UnsupportedFloatLayout("Positioned groups require one ordinary plaintext owner")
     if (positioned != null && children.any { it !is NativeFloatContextSpec.Text &&
@@ -329,7 +343,7 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
     val columns = style.columns?.let {
         NativeColumnPolicy(it.count, length(it.gap), rtl, it.width?.let(::length), density)
     }
-    if (columns != null && (style.height != null || style.layout == ContainerLayout.FlexRow ||
+    if (columns != null && (style.height != null || (style.layout == ContainerLayout.FlexRow || style.layout == ContainerLayout.FlexColumn) ||
             style.overflow == ContainerOverflow.Auto))
         throw UnsupportedFloatLayout("Columns require an auto-height ordinary formatting context")
     if (columns != null && children.any { it !is NativeFloatContextSpec.Text &&
@@ -351,7 +365,10 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
         measure = { width, intrinsic -> containerFlexMeasure(resolved, width, columnIntrinsic(intrinsic), density, normalBodyFont) },
         intrinsic = { intrinsic, maximum -> containerFlexIntrinsicContribution(resolved, columnIntrinsic(intrinsic), density, normalBodyFont, maximum) },
         crossMargins = NativeFlexCrossMargins(resolved.margins?.top == ContainerMargin.Auto,
-            resolved.margins?.bottom == ContainerMargin.Auto))
+            resolved.margins?.bottom == ContainerMargin.Auto),
+        columnMeasure = { width, intrinsic, policy ->
+            containerFlexColumnMeasure(resolved, width, intrinsic, density, normalBodyFont, policy)
+        })
     // Border/decoration stay on this ordinary owner. Its one real viewport child owns the
     // padding box and the complete original subtree, so padding and border are counted once.
     val renderedChildren = if (!scrolling || positioned != null) children else {
@@ -379,6 +396,8 @@ private fun supportedNativeContainerSpec(id: Int, resolved: ContainerViewportSty
                 contentLeft = value.marginLeft + edgeWidths[3])
         },
         row = if (style.layout == ContainerLayout.FlexRow) NativeFlexRowPolicy(style.alignItems ?: ContainerAlignItems.Stretch, rtl) else null,
+        column = if (style.layout == ContainerLayout.FlexColumn)
+            NativeFlexColumnPolicy(style.alignItems ?: ContainerAlignItems.Stretch, rtl) else null,
         flex = flex, decoration = decoration, columns = columns, relativeAuto = relativeAuto,
         fixedContentHeight = containerUsedHeight(style, padding.top + padding.bottom,
             density, normalBodyFont)?.content,
@@ -506,7 +525,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
         staticInlineParent: NativeStaticInlineParent? = null,
         sourceAlign: androidx.compose.ui.text.style.TextAlign? = null,
         clippedScope: NativeClippedAbsoluteCoordinateScope? = null,
-        hiddenChild: Int? = null): List<NativeFloatContextSpec> {
+        hiddenChild: Int? = null, columnItems: Boolean = false): List<NativeFloatContextSpec> {
         val result = mutableListOf<NativeFloatContextSpec>()
         val groups = nativeDisclosureFlowItems(values, row, hiddenChild)
         for (group in groups) {
@@ -565,7 +584,13 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 val nextAlign = resolved.box.textAlign ?: align
                 // Source paragraph direction controls column progression and list markers.
                 // Directional spans still retain their own native bidi/isolation policies.
-                val columnRtl = if (resolved.box.columns == null) rtl else
+                val columnRtl = if (resolved.box.layout == ContainerLayout.FlexColumn) {
+                    LocalNativeColumnTextDirection.current?.let { it == BidiResolvedDirection.Rtl } ?: when (tableDirection) {
+                        TableContainingDirection.Ltr -> false
+                        TableContainingDirection.Rtl -> true
+                        null -> next.bodyDirection?.let { it == BidiResolvedDirection.Rtl } ?: rtl
+                    }
+                } else if (resolved.box.columns == null) rtl else
                     resolved.box.columns.direction?.let { it == BidiResolvedDirection.Rtl } ?: when (tableDirection) {
                         TableContainingDirection.Ltr -> false
                         TableContainingDirection.Rtl -> true
@@ -650,7 +675,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         inScrollport || resolved.box.overflow == ContainerOverflow.Auto || resolved.box.overflow == ContainerOverflow.Hidden || scope != null,
                         childScope, nextWrap, absoluteFormat?.getOrNull(), nextOrdinaryContainingBlock,
                         nextStaticScope, immediateStatic?.parent, resolved.box.textAlign?.composeAlign() ?: sourceAlign,
-                        nextClippedScope, hiddenChild)
+                        nextClippedScope, hiddenChild, resolved.box.layout == ContainerLayout.FlexColumn)
                 }
                 val cellForeground = LocalNativeCellForeground.current?.let { inherited ->
                     when (resolved.box.background) {
@@ -700,13 +725,15 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                 }
                 val prepared = nativeContainerSpec(id(paths[first]), resolved, children,
                     density.density, if (absolute != null || scope != null) positionedBodyPixels else bodyPixels,
-                    columnRtl, dark, row, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor,
+                    columnRtl, dark, row || columnItems, scopePolicy, placement, ordinaryPlacement, ordinaryAnchor,
                     immediateStatic?.let { NativeAbsoluteStaticPosition(it.containingBlockId) },
                     columnBreakWordMinimum = columnBreakWordMinimum,
                     ordinaryHidden = NativeOrdinaryHiddenScrollportPolicy(container).takeIf { resolved.box.overflow == ContainerOverflow.Hidden })
                 val failure = textFailure ?: (if (scope == null && absolute == null)
-                    nativeScrollportUnavailable(container.style, row) else null)
+                    nativeScrollportUnavailable(container.style, row || columnItems) else null)
                 val domainFailure = clippedDomainFailure ?: failure ?: when {
+                    resolved.box.layout == ContainerLayout.FlexColumn && !nativeFlexColumnSourceSupported(container) ->
+                        "Flex column items require original ordinary nonpositioned Container owners"
                     absolute != null && (positionedParent == null || !nativeAbsoluteParagraphs(container.blocks)) ->
                         "Absolute text requires its direct scope and unreplaced ordinary paragraphs"
                     ordinaryAbsolute != null && (ordinaryContainingBlock == null || !nativeAbsoluteParagraphs(container.blocks)) ->
@@ -714,7 +741,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     ordinaryStatic != null && (immediateStatic == null || !validContainerAbsoluteStaticBody(container)) ->
                         "Static inline content requires its sole immediate relative Container"
                     inScrollport && positionedParent == null && scope == null && (resolved.box.positioning != null || ordinaryAbsolute != null || ordinaryStatic != null || resolved.box.columns != null ||
-                        resolved.box.layout == ContainerLayout.FlexRow) ->
+                        resolved.box.layout == ContainerLayout.FlexRow || resolved.box.layout == ContainerLayout.FlexColumn) ->
                         "This child layout is unavailable inside a local scrollport"
                     resolved.needsDocumentExtent() && !fixedHeightReachable && absolute == null ->
                         "Container overflow needs this owner's document extent export"

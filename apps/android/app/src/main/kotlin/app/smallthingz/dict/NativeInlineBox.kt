@@ -149,11 +149,8 @@ internal fun nativeInlineBoxOverlayRect(overlay: NativeInlineBoxOverlay, contain
     return RectF(x.first, y.first, x.second, y.second)
 }
 
-/** Only the source-proved top stroke and its one interior circle share native allocation.
- * This is not general nested inline-box support. The original owners remain distinct. */
-internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: NativeInlineBoxSpan): Boolean {
-    val a = parent.box
-    val b = child.box
+/** Realized metrics and original path ownership are shared by the two admitted shapes. */
+private fun nativeInlineBoxNestedContext(parent: NativeInlineBoxSpan, child: NativeInlineBoxSpan): Boolean {
     val x = parent.format
     val y = child.format
     fun plain(f: NativeRubyGroupFormat) = f.actionOwner == null && f.actionPaint == null &&
@@ -161,11 +158,18 @@ internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: Nativ
         f.baselineShift == 0f && (f.localBaselineShift == null || f.localBaselineShift == 0f) &&
         f.paint.bgColor == 0 && !f.paint.isUnderlineText && !f.paint.isStrikeThruText &&
         f.box?.owner?.span?.kind == "text"
-    fun zero(e: NativeInlineBoxEdges) = e.top == 0f && e.right == 0f && e.bottom == 0f && e.left == 0f
     return plain(x) && plain(y) && parent.shift == 0f && child.shift == 0f &&
         x.paint.equalsForTextMeasurement(y.paint) && x.lineHeight == y.lineHeight &&
         child.box.owner.path.startsWith(parent.box.owner.path + "/") &&
-        !a.isAtomic && !b.isAtomic && a.overlays.isEmpty() && b.overlays.isEmpty() &&
+        !parent.box.isAtomic && !child.box.isAtomic
+}
+
+/** The earlier top stroke and its one strict-interior circle retain their original domain. */
+internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: NativeInlineBoxSpan): Boolean {
+    val a = parent.box
+    val b = child.box
+    fun zero(e: NativeInlineBoxEdges) = e.top == 0f && e.right == 0f && e.bottom == 0f && e.left == 0f
+    return nativeInlineBoxNestedContext(parent, child) && a.overlays.isEmpty() && b.overlays.isEmpty() &&
         zero(a.padding) && zero(b.padding) && a.radius == null &&
         a.border.top.width > 0f && !a.border.top.dotted &&
         a.border.left.width == 0f && a.border.right.width == 0f && a.border.bottom.width == 0f &&
@@ -173,14 +177,49 @@ internal fun nativeInlineBoxNestedPair(parent: NativeInlineBoxSpan, child: Nativ
         listOf(b.border.right, b.border.bottom, b.border.left).all { it == b.border.top }
 }
 
+internal fun nativeInlineBoxPitchPair(parent: NativeInlineBoxSpan, child: NativeInlineBoxSpan): Boolean {
+    if (!nativeInlineBoxNestedContext(parent, child) ||
+        nativeInlineBoxPitchChildren(parent.box.owner.span)?.any { it === child.box.owner.span } != true)
+        return false
+    val a = parent.box
+    val b = child.box
+    val width = a.border.top.width
+    fun edges(value: NativeInlineBoxEdges, amount: Float) = value.top == amount && value.right == amount &&
+        value.bottom == amount && value.left == amount
+    fun none(value: NativeInlineBoxBorder) = value.width == 0f
+    fun stroke(value: NativeInlineBoxBorder) = value.width == width && value.color == null && !value.dotted
+    val overlay = a.overlays.singleOrNull() ?: return false
+    return width > 0f && edges(a.padding, width) && a.radius == null && stroke(a.border.top) &&
+        none(a.border.right) && none(a.border.bottom) && none(a.border.left) &&
+        edges(b.padding, 0f) && b.radiusPercentage && b.radius == 50f && b.overlays.isEmpty() &&
+        listOf(b.border.top, b.border.right, b.border.bottom, b.border.left).all {
+            it.width == width && it.color == 0xff808080.toInt() && it.dotted
+        } && parent.overlaySources.isEmpty() && child.overlaySources.isEmpty() &&
+        overlay.insets.top == NativeInlineBoxInset(0f, false) &&
+        overlay.insets.right == NativeInlineBoxInset(0f, true) &&
+        overlay.insets.bottom == NativeInlineBoxInset(67f, true) && overlay.insets.left == null &&
+        stroke(overlay.border.right) && none(overlay.border.top) && none(overlay.border.bottom) && none(overlay.border.left)
+}
+
 internal fun nativeInlineBoxNesting(spans: List<NativeInlineRange<NativeInlineBoxSpan>>,
     rtl: (NativeInlineRange<NativeInlineBoxSpan>) -> Boolean): List<Int> {
-    val parents = nativeInlineBoxNestedParents(spans.map { it.start to it.end })
-        ?: throw UnsupportedFloatLayout("Inline box ranges are outside the strict interior pair domain")
+    val pitch = spans.indices.mapNotNull { index ->
+        nativeInlineBoxPitchChildren(spans[index].value.box.owner.span)?.let { index to it }
+    }.toMap()
+    val parents = nativeInlineBoxNestedParents(spans.map { it.start to it.end }, pitch.keys)
+        ?: throw UnsupportedFloatLayout("Inline box ranges are outside the selected nested decoration domains")
     parents.forEachIndexed { index, parent ->
-        if (parent >= 0 && (!nativeInlineBoxNestedPair(spans[parent].value, spans[index].value) ||
+        if (parent >= 0 && (!(if (parent in pitch) nativeInlineBoxPitchPair(spans[parent].value, spans[index].value)
+                    else nativeInlineBoxNestedPair(spans[parent].value, spans[index].value)) ||
                 rtl(spans[parent]) || rtl(spans[index])))
             throw UnsupportedFloatLayout("Nested inline decoration requires its static equal-metric LTR owners")
+    }
+    val childrenByParent = parents.withIndex().filter { it.value >= 0 }
+        .groupBy({ it.value }, { spans[it.index].value.box.owner.span })
+    for ((parent, expected) in pitch) {
+        val actual = childrenByParent[parent].orEmpty()
+        if (actual.size != expected.size || expected.any { source -> actual.count { it === source } != 1 })
+            throw UnsupportedFloatLayout("Pitch decoration lost an original child occurrence")
     }
     return parents
 }

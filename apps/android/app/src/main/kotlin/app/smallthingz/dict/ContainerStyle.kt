@@ -10,7 +10,7 @@ sealed interface ContainerMaxWidth {
     data class Length(val value: StyleWidth) : ContainerMaxWidth
 }
 enum class ContainerBoxSizing { ContentBox, BorderBox }
-enum class ContainerLayout { Flow, FlexRow }
+enum class ContainerLayout { Flow, FlexRow, FlexColumn }
 enum class ContainerAlignItems { Stretch, Start, Center, End }
 enum class ContainerFlexItem { None }
 enum class ContainerOverflow { Visible, Auto, Hidden }
@@ -211,6 +211,12 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
     val absolutePosition: ContainerAbsolutePosition? = null, val textWrap: TextWrap? = null,
     val absoluteStatic: ContainerAbsoluteStaticPosition? = null) {
     init {
+        if (layout == ContainerLayout.FlexColumn) {
+            require(height == null && minHeight == null && columns == null &&
+                (overflow == null || overflow == ContainerOverflow.Visible)) {
+                "Flex column requires automatic height without fragmentation or scrolling"
+            }
+        }
         ownerFont?.let { font ->
             require(font.fontNormalized && font.fontScale != null &&
                 font.fontScaleBasis in listOf(FontScaleBasis.NormalBody, FontScaleBasis.CssPx)) {
@@ -250,14 +256,14 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
         }
         if (positioning is ContainerPositioning.Absolute) {
             require(positionedScope == null && floatSide == null && columns == null && screenMaxWidth == null &&
-                marginValues == null && overflow == null && layout != ContainerLayout.FlexRow && flexItem == null &&
+                marginValues == null && overflow == null && layout != ContainerLayout.FlexRow && layout != ContainerLayout.FlexColumn && flexItem == null &&
                 minHeight == null && maxWidth == null && border == null && padding == null && margins == null &&
                 ownerFontScale == null && fontFamily == null && width == ContainerWidth.Length(StyleWidth(StyleWidthUnit.Percent, 100f)) &&
                 height == StyleLength(StyleLengthUnit.Px, 0f) && lineHeight == null) { "Unsupported absolute text box" }
         }
         if (positionedScope != null) {
             require(positioning == ContainerPositioning.RelativeAuto && overflow == null && columns == null &&
-                floatSide == null && layout != ContainerLayout.FlexRow && flexItem == null && screenMaxWidth == null &&
+                floatSide == null && layout != ContainerLayout.FlexRow && layout != ContainerLayout.FlexColumn && flexItem == null && screenMaxWidth == null &&
                 (padding == null || padding.left.value == 0f && padding.right.value == 0f)) {
                 "Unsupported positioned containing scope"
             }
@@ -266,13 +272,15 @@ data class ContainerStyle(val margins: ContainerMarginEdges? = null, val padding
             "Hidden overflow cannot carry column fragmentation"
         }
         if (columns?.width != null || columns?.direction != null) {
-            require(height == null && minHeight == null && layout != ContainerLayout.FlexRow &&
+            require(height == null && minHeight == null && layout != ContainerLayout.FlexRow && layout != ContainerLayout.FlexColumn &&
                 overflow != ContainerOverflow.Auto && positioning == null && absolutePosition == null) {
                 "Unsupported extended column fragmentation"
             }
         }
         require(margins == null || marginValues == null) { "Conflicting container margin representations" }
-        require(alignItems == null || layout == ContainerLayout.FlexRow) { "Alignment requires a flex row" }
+        require(alignItems == null || layout == ContainerLayout.FlexRow || layout == ContainerLayout.FlexColumn) {
+            "Alignment requires a flex container"
+        }
         require(ownerFontScale == null || ownerFontScale.isFinite() && ownerFontScale >= 0f) {
             "Invalid container owner font scale"
         }
@@ -360,7 +368,7 @@ internal data class ContainerTextContext(val ownerFontScale: Float = 1f,
 internal data class ContainerViewportStyle(val box: ContainerStyle, val margins: ContainerMargins?) {
     init { require(box.screenMaxWidth == null && box.margins == null && box.marginValues == null) }
     val ownsFormattingContext: Boolean get() = box.floatSide != null ||
-        box.layout == ContainerLayout.FlexRow || box.overflow == ContainerOverflow.Auto ||
+        box.layout == ContainerLayout.FlexRow || box.layout == ContainerLayout.FlexColumn || box.overflow == ContainerOverflow.Auto ||
         box.overflow == ContainerOverflow.Hidden || box.columns != null
 }
 internal fun ContainerStyle.requiresPositionedContainers(): Boolean = absolutePosition != null || absoluteStatic != null || textWrap != null ||

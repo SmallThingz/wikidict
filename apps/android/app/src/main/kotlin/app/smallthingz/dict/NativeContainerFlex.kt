@@ -6,8 +6,10 @@ internal data class NativeFlexRowPolicy(val alignment: ContainerAlignItems = Con
 internal data class NativeFlexCrossMargins(val autoTop: Boolean = false, val autoBottom: Boolean = false)
 internal class NativeFlexItemSpec(val measure: (Float, ContainerWidths) -> ContainerFlexWidth,
     val intrinsic: (ContainerWidths, Boolean) -> Float,
-    val crossMargins: NativeFlexCrossMargins = NativeFlexCrossMargins())
-internal data class NativeFlexItemAllocation(val width: Float, val left: Float, val right: Float)
+    val crossMargins: NativeFlexCrossMargins = NativeFlexCrossMargins(),
+    val columnMeasure: ((Float, ContainerWidths, NativeFlexColumnPolicy) -> NativeFlexItemAllocation)? = null)
+internal data class NativeFlexItemAllocation(val width: Float, val left: Float, val right: Float,
+    val crossOffset: Float = 0f)
 
 /** Blink's row intrinsic contribution policy, restricted to this model's grow-zero auto/none
  * profile. A definite width supplies the clamped hypothetical contribution; content-derived

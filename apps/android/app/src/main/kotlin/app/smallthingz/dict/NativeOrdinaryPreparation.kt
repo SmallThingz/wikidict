@@ -76,15 +76,20 @@ internal class NativeOrdinaryPreparation(parts: List<NativeFloatContextPart>) {
         absoluteOrigin: NativeAbsoluteOrigin? = null,
         exactTextWidth: Float? = null): NativeFloatContextGeometry {
         val isolated = part.floatSide != null || part.isolatesFloats
-        if ((isolated || part.columns != null || part.row != null) && part.preparedParts?.hasNativeAbsolutePosition() == true)
+        if ((isolated || part.columns != null || part.row != null || part.column != null) && part.preparedParts?.hasNativeAbsolutePosition() == true)
             throw UnsupportedFloatLayout("Absolute containing-block coordinates across isolated layout are unavailable")
         check(!isolated || carried.isEmpty()) { "An isolated owner cannot inherit outer float exclusions" }
         return measureContainer(part, collapse) {
             if (part.columns != null) {
-                check(isolated && carried.isEmpty() && part.fixedContentHeight == null && part.row == null)
+                check(isolated && carried.isEmpty() && part.fixedContentHeight == null && part.row == null && part.column == null)
                 NativeFloatContextGeometry.buildPreparedColumns(part.contentWidth,
                     part.horizontal?.content ?: part.contentWidth.toFloat(),
                     checkNotNull(part.preparedParts), part.columns, this)
+            } else if (part.column != null) {
+                check(isolated && carried.isEmpty() && part.row == null && part.fixedContentHeight == null &&
+                    part.minimum.content == 0f && !part.minimum.computedPositive)
+                NativeFloatContextGeometry.buildPreparedColumn(part.contentWidth,
+                    part.horizontal?.content ?: part.contentWidth.toFloat(), checkNotNull(part.preparedParts), this)
             } else if (part.row != null) {
                 check(isolated && carried.isEmpty())
                 NativeFloatContextGeometry.buildPreparedRow(part.contentWidth,

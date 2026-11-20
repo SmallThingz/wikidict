@@ -72,6 +72,7 @@ internal sealed interface NativeFloatContextPart {
         val absoluteStatic: NativeAbsoluteStaticPosition? = null,
         val staticInlineText: NativePreparedText? = null,
         val columnClearEvent: Boolean = false,
+        val column: NativeFlexColumnPolicy? = null,
     ) : NativeFloatContextPart {
         init { require(fixedContentHeight == null || fixedContentHeight.isFinite() && fixedContentHeight >= 0f) }
         fun contentHeight(natural: Float): Float = maxOf(0f, fixedContentHeight ?: natural, minimum.content)
@@ -473,7 +474,7 @@ internal class NativeFloatContextGeometry private constructor(
                     if (!part.empty || part.clear == null || part.preparedParts?.isEmpty() != true ||
                         part.floatSide != null || part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
                         listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left).any { it != 0f } ||
-                        part.fixedContentHeight != null || part.minimum.content != 0f || part.columns != null || part.row != null ||
+                        part.fixedContentHeight != null || part.minimum.content != 0f || part.columns != null || part.row != null || part.column != null ||
                         part.absolute != null || part.absolutePosition != null || part.absoluteStatic != null)
                         throw UnsupportedFloatLayout("Column clear event requires its empty zero-edge source box")
                     return@map null
@@ -618,6 +619,62 @@ internal class NativeFloatContextGeometry private constructor(
                 hardSeparators = hardSeparators.toSet())
         }
 
+        /** Each original item keeps its prepared geometry and source slots. No anonymous row wrappers or text are created. */
+        internal fun buildPreparedColumn(width: Int, available: Float, parts: List<NativeFloatContextPart>,
+            preparation: NativeOrdinaryPreparation): NativeFloatContextGeometry {
+            require(width >= 0 && available.isFinite() && available >= 0f && available <= TablePixelLimit)
+            val items = parts.map { it as? NativeFloatContextPart.Container
+                ?: throw UnsupportedFloatLayout("A prepared column requires original Container items") }
+            val geometries = items.map { item ->
+                check(item.floatSide == null && item.clear == null && item.isolatesFloats && item.preparedParts != null)
+                preparation.measurePreparedContainer(item, emptyList(), NativeMarginCollapse(false, false),
+                    exactTextWidth = checkNotNull(item.horizontal).content)
+            }
+            val stack = nativeFlexColumnStack(items.indices.map { index ->
+                val item = items[index]
+                NativeFlexColumnItemHeight(item.padding.top + item.contentHeight(geometries[index].usedHeight) + item.padding.bottom,
+                    item.margins.top, item.margins.bottom)
+            })
+            val text = StringBuilder()
+            val hardSeparators = mutableSetOf<Int>()
+            val paragraphs = mutableListOf<Paragraph>()
+            val children = mutableListOf<PlacedFloatContextChild>()
+            val flows = mutableListOf<PlacedFloatContextChild>()
+            val offsets = mutableListOf<Int>()
+            val bounds = mutableMapOf<Int, RectF>()
+            val clearances = mutableMapOf<Int, Float>()
+            var seenLogical = false
+            for (index in items.indices) {
+                val item = items[index]
+                val geometry = geometries[index]
+                val horizontal = checkNotNull(item.horizontal)
+                val borderLeft = horizontal.borderLeft
+                val borderTop = stack.tops[index]
+                val x = horizontal.contentLeft
+                val top = borderTop + item.padding.top
+                val height = item.padding.top + item.contentHeight(geometry.usedHeight) + item.padding.bottom
+                if (geometry.text.isNotEmpty()) {
+                    if (seenLogical) { hardSeparators += text.length; text.append('\n') }
+                    seenLogical = true
+                }
+                offsets += geometry.partOffsets.map { it + text.length }
+                paragraphs += Paragraph(-1, text.length, x, top, geometry, geometry.textBottom, ordinary = true)
+                children += geometry.children.map { it.copy(offset = it.offset + text.length,
+                    bounds = RectF(it.bounds).apply { offset(x, top) }, logicalObject = false) }
+                flows += geometry.flowChildren.map { it.copy(offset = it.offset + text.length,
+                    bounds = RectF(it.bounds).apply { offset(x, top) }) }
+                bounds.putAll(geometry.ordinaryBounds.mapValues { (_, box) -> RectF(box).apply { offset(x, top) } })
+                bounds[item.id] = RectF(borderLeft, borderTop, borderLeft + horizontal.borderWidth, borderTop + height)
+                clearances.putAll(geometry.clearanceById)
+                text.append(geometry.text)
+            }
+            val structural = NativeAdjoiningMargins(0f, 0f, items.isEmpty())
+            return NativeFloatContextGeometry(width, text.toString(), kotlin.math.ceil(stack.height).toInt(),
+                stack.height, paragraphs, children, offsets, flows, stack.height, emptyList(), structural,
+                ordinaryBounds = bounds, clearanceById = clearances, structuralMargins = structural,
+                hardSeparators = hardSeparators.toSet())
+        }
+
         /** Export one already measured local viewport through the existing Container owner. */
         fun viewport(body: NativeTableViewportGeometry, usedHeight: Float): NativeFloatContextGeometry {
             require(usedHeight.isFinite() && usedHeight >= 0f && kotlin.math.ceil(usedHeight).toInt() <= body.height)
@@ -713,7 +770,7 @@ internal class NativeFloatContextGeometry private constructor(
                         origin.staticInlineChildId != part.id || parts.size != 1 || containingWidth == null || source == null ||
                         part.absolute != null || part.absolutePosition != null || part.absoluteContainingBlock != null || part.positionedScope ||
                         part.preparedParts?.singleOrNull() !is NativeFloatContextPart.Text ||
-                        part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.columns != null ||
+                        part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.column != null || part.columns != null ||
                         part.fixedContentHeight != null || part.minimum.content != 0f || part.minimum.computedPositive ||
                         part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
                         listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left,
@@ -747,7 +804,7 @@ internal class NativeFloatContextGeometry private constructor(
                     if (!adjoining || prepared == null || origin == null || origin.id != at.containingBlockId ||
                         part.absolute != null || part.absoluteStatic != null || part.absoluteContainingBlock != null || part.positionedScope ||
                         part.preparedParts == null || part.preparedParts.any { it !is NativeFloatContextPart.Text } ||
-                        part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.columns != null ||
+                        part.floatSide != null || part.clear != null || part.isolatesFloats || part.row != null || part.column != null || part.columns != null ||
                         boxHeight == null || part.minimum.content != 0f || part.minimum.computedPositive ||
                         part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
                         listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left).any { it != 0f } ||
@@ -775,7 +832,7 @@ internal class NativeFloatContextGeometry private constructor(
                 if (part is NativeFloatContextPart.Container && part.absolute != null) {
                     val at = part.absolute
                     if (!absoluteScope || !adjoining || part.preparedParts == null || part.contentWidth != width ||
-                        part.floatSide != null || part.clear != null || part.row != null || part.columns != null ||
+                        part.floatSide != null || part.clear != null || part.row != null || part.column != null || part.columns != null ||
                         part.fixedContentHeight != 0f || part.minimum.content != 0f || part.minimum.computedPositive ||
                         part.padding != FloatMargins(0f, 0f, 0f, 0f) ||
                         listOf(part.margins.top, part.margins.right, part.margins.bottom, part.margins.left).any { it != 0f } ||
@@ -879,10 +936,13 @@ internal class NativeFloatContextGeometry private constructor(
                     is NativeFloatContextPart.Container -> {
                         require(part.contentWidth >= 0)
                         check(part.row == null || part.isolatesFloats) { "A flex row must isolate its contents" }
+                        check(part.column == null || part.row == null && part.isolatesFloats) {
+                            "A flex column must own its isolated context"
+                        }
                         val margin = part.margins
                         val padding = part.padding
                         if (part.headingAllocation != null && (!part.isolatesFloats || part.floatSide != null ||
-                                part.preparedParts?.singleOrNull() !is NativeFloatContextPart.Text || part.row != null ||
+                                part.preparedParts?.singleOrNull() !is NativeFloatContextPart.Text || part.row != null || part.column != null ||
                                 part.columns != null || part.fixedContentHeight != null || part.minimum.content != 0f ||
                                 part.minimum.computedPositive))
                             throw UnsupportedFloatLayout("Section heading allocation requires its single prepared title owner")
