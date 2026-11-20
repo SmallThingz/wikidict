@@ -783,6 +783,21 @@ class InterruptedResumeTests(unittest.TestCase):
 
 class FigureMetadataLightTransportTests(unittest.TestCase):
 
+    def test_batches_use_exact_encoded_size_at_profile_url_boundary(self):
+        titles = ['File:Space + percent% / slash.ogg', 'File:നാമം.ogg']
+        for axes, light in ((False, False), (True, False), (True, True)):
+            options = dict(figure_axes=axes, figure_metadata_light=light)
+            length = len(v2.query_url(WIKI, titles, **options))
+            with self.subTest(options=options), mock.patch.object(v2, 'MAX_URL', length):
+                self.assertEqual(list(v2.title_batches(WIKI, iter(titles), 50, **options)), [titles])
+            with self.subTest(options=options), mock.patch.object(v2, 'MAX_URL', length - 1):
+                self.assertEqual(list(v2.title_batches(WIKI, iter(titles), 50, **options)), [[t] for t in titles])
+            with self.subTest(options=options), mock.patch.object(v2, 'MAX_URL', length):
+                batches = v2.title_batches(WIKI, [titles[0], titles[1] * 20], 50, **options)
+                self.assertEqual(next(batches), [titles[0]])
+                with self.assertRaisesRegex(ValueError, 'Single file title'):
+                    next(batches)
+
     def test_default_query_url_and_batch_outputs_are_exact(self):
         from urllib.parse import urlencode
         titles = ['File:Example.ogg', 'File:Other.bin']

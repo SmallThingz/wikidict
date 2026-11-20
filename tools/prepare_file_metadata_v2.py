@@ -115,13 +115,29 @@ def title_batches(wiki, titles, limit, *, figure_axes=False, figure_metadata_lig
     if type(figure_axes) is not bool or type(figure_metadata_light) is not bool or (figure_metadata_light and not figure_axes):
         raise ValueError('Invalid file metadata query profile')
     batch = []
+    base_length = None
+    titles_length = 0
+    separator_length = len(urllib.parse.quote_plus('|'))
     for title in titles:
-        if batch and (len(batch) == limit or len(query_url(wiki, [*batch, title], figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)) > MAX_URL):
+        if batch and len(batch) == limit:
             yield batch
             batch = []
-        batch.append(title)
-        if len(query_url(wiki, batch, figure_axes=figure_axes, figure_metadata_light=figure_metadata_light)) > MAX_URL:
+            titles_length = 0
+        if base_length is None:
+            base_length = len(query_url(wiki, [], figure_axes=figure_axes, figure_metadata_light=figure_metadata_light))
+        if not isinstance(title, str):
+            raise TypeError('File title must be text')
+        # urlencode quotes the joined titles with quote_plus. Its length is
+        # additive, including the escaped separator between adjacent titles.
+        length = len(urllib.parse.quote_plus(title))
+        if batch and base_length + titles_length + separator_length + length > MAX_URL:
+            yield batch
+            batch = []
+            titles_length = 0
+        if base_length + length > MAX_URL:
             raise ValueError('Single file title exceeds the bounded API request size')
+        titles_length += length + (separator_length if batch else 0)
+        batch.append(title)
     if batch:
         yield batch
 
