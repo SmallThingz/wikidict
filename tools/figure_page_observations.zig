@@ -7369,9 +7369,21 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
             std.ascii.eqlIgnoreCase(tag.name, "img") or std.ascii.eqlIgnoreCase(tag.name, "input") or std.ascii.eqlIgnoreCase(tag.name, "link") or
             std.ascii.eqlIgnoreCase(tag.name, "meta") or std.ascii.eqlIgnoreCase(tag.name, "param") or std.ascii.eqlIgnoreCase(tag.name, "source") or
             std.ascii.eqlIgnoreCase(tag.name, "track") or std.ascii.eqlIgnoreCase(tag.name, "wbr");
-        // Pronunciation audio may contain only direct void SOURCE children
-        // and whitespace. No fallback body can lend a Figure or anchor proof.
+        // The returned audio player may contain direct void source and timed
+        // subtitle track children. Neither has a body or owns a Figure action.
         const audio_child = depth > 0 and stack[depth - 1].tag.is("audio");
+        if (tag.is("track")) {
+            if (!audio_child or inv.attributes.len != 6 or !equal(inv.get("kind") orelse "", "subtitles") or
+                !equal(inv.get("type") orelse "", "text/vtt") or (inv.get("label") orelse return invalid).len == 0 or
+                !std.mem.startsWith(u8, inv.get("src") orelse "", "https://commons.wikimedia.org/w/api.php?action=timedtext&title=File%3A")) return invalid;
+            const language = inv.get("srclang") orelse return invalid;
+            if (language.len == 0 or language.len > 64) return invalid;
+            for (language) |byte| if (!std.ascii.isAlphanumeric(byte) and byte != '-') return invalid;
+            const direction = inv.get("data-dir") orelse return invalid;
+            if (!equal(direction, "ltr") and !equal(direction, "rtl")) return invalid;
+            at = tag.end;
+            continue;
+        }
         if ((audio_child and !tag.is("source")) or (tag.is("source") and !audio_child)) return invalid;
         // Legacy parser output can place its TOC toggle before the first
         // Figure. Both controls are empty and carry no observable image.
@@ -7675,6 +7687,20 @@ test "Pa'O copper supplied-page Figure survives the parser table of contents tog
     const html = try Testing.html(a, doc);
     const interactive = try std.mem.replaceOwned(u8, a, html, "</label>", "<a href='#extra'>extra</a></label>");
     try std.testing.expectError(error.InvalidFigurePageObservations, observedImages(a, &ns, interactive, doc.pages[0].occurrences));
+}
+
+test "Pa'O sound supplied-page Figure admits its audio subtitles only under the observed player" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/blk-copper/namespace-registry.tsv"));
+    defer ns.deinit();
+    const doc = try Testing.document(a, "blk-sound");
+    const html = try Testing.html(a, doc);
+    const images = try observedImages(a, &ns, html, doc.pages[0].occurrences);
+    try std.testing.expectEqual(@as(u32, 190), images[0].width);
+    const active = try std.mem.replaceOwned(u8, a, html, "kind=\"subtitles\"", "kind=\"foreign\"");
+    try std.testing.expectError(invalid, observedImages(a, &ns, active, doc.pages[0].occurrences));
 }
 
 test "supplied Figure Book selects only the exact original page source defaults and normalized options" {
