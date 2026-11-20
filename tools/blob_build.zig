@@ -1969,11 +1969,11 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
     var numbered_pos_seen = [_]bool{ false, false };
     var naslov_seen = [_]bool{ false, false };
     var naslov_proven = [_]bool{ false, false };
-    var et_literal_seen: std.StringHashMapUnmanaged(void) = .empty;
+    var literal_template_seen: std.StringHashMapUnmanaged(void) = .empty;
     defer {
-        var keys = et_literal_seen.keyIterator();
+        var keys = literal_template_seen.keyIterator();
         while (keys.next()) |key| a.free(key.*);
-        et_literal_seen.deinit(a);
+        literal_template_seen.deinit(a);
     }
     var nom_template_seen = false;
     var parenthetical_template_seen = false;
@@ -2006,13 +2006,16 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
             const key = try a.dupe(u8, parenthetical_title.text);
             support_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
         }
+        const ts_english = std.mem.eql(u8, namespaces.wiki, "tswiktionary") and
+            std.mem.eql(u8, namespaces.content_language, "ts") and parenthetical_title.id == 10 and
+            std.mem.eql(u8, parenthetical_title.text, "en");
         const et_literal = std.mem.eql(u8, namespaces.wiki, "etwiktionary") and
             std.mem.eql(u8, namespaces.content_language, "et") and parenthetical_title.id == 10 and
             registry.codes.contains(parenthetical_title.text);
-        if (et_literal) {
-            if (et_literal_seen.contains(parenthetical_title.text)) return error.DuplicateLanguageTemplateSource;
+        if (et_literal or ts_english) {
+            if (literal_template_seen.contains(parenthetical_title.text)) return error.DuplicateLanguageTemplateSource;
             const key = try a.dupe(u8, parenthetical_title.text);
-            et_literal_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
+            literal_template_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
         }
         const equals_code: ?[]const u8 = if (parenthetical_title.id == 10 and parenthetical_title.text.len >= 3 and
             parenthetical_title.text[0] == '=' and parenthetical_title.text[parenthetical_title.text.len - 1] == '=' and
@@ -2110,6 +2113,8 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         } else if (name_table) {
             _ = try importLiteralLanguageNameSwitch(a, registry, decoded orelse raw);
         } else if (message_link) {
+            if (ts_english and std.mem.eql(u8, row.content_model, "wikitext"))
+                try addTsongaEnglishLink(registry, code, decoded orelse raw);
             if (et_literal and std.mem.eql(u8, row.content_model, "wikitext"))
                 try registry.addSourceLiteralPreferredHeading(namespaces.wiki, code, decoded orelse raw);
             if (source_language_banner.messageLinkTarget(decoded orelse raw, namespaces, code)) |target|
@@ -2331,6 +2336,15 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
             }
         }
     };
+}
+
+fn addTsongaEnglishLink(registry: *language_registry.Registry, code: []const u8, source: []const u8) !void {
+    if (!std.mem.eql(u8, code, "en") or !std.mem.eql(u8, source, "[[Xhingezi|English]]")) return;
+    const preferred = registry.resolveTrusted("Xi Nghezi") orelse return;
+    const label = registry.resolve("English") orelse return;
+    if (std.mem.eql(u8, preferred.code, code) and std.mem.eql(u8, label.code, code) and
+        !registry.names.contains("Xhingezi") and !registry.ambiguous.contains("Xhingezi"))
+        try registry.addLocalAlias("Xhingezi", code);
 }
 
 fn languageCodes(registry: *const language_registry.Registry, namespaces: ?*const namespace_registry.Registry) encoder.blob_builder.LanguageCodes {
@@ -67764,6 +67778,54 @@ test "Aromanian translingual provider authenticates only its original bare categ
     }
     try registry.addLocalAlias("Internatsional", "ro");
     try std.testing.expect(source_language_banner.parse(source, &ns, null, &registry, "mul") == null);
+}
+
+test "Tsonga bilingual examples and original English template retain distinct registered owners" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv("# wikidict-language-registry-v2\n# content-language\tts\n# mediawiki\n" ++
+        "ts\tXitsonga\tts\tTsonga\ttso\nen\tXi Nghezi\tEnglish\ten\teng\n");
+    var ns = try namespace_registry.Registry.init(a, "# wikidict-namespace-registry-v1\n# wiki\ttswiktionary\n# dump-date\t20261001\n# content-language\tts\n" ++
+        "0\t\t\tfirst-letter\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "10\tTemplate\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tCategory\tCategory\tfirst-letter\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const raw = "Tsonga: '''VULAVULA'''. English (verb): speak, talk\n\nTsonga: '''vula'''. English: say, tell, speak, talk\n\nTsonga: '''Ni vulavula xiputukezi'''. English: I speak portuguese.";
+    for ([_][]const u8{ "[[Xhingezi|Other]]", "[[Other|English]]", "[[Xhingezi|English]]tail" }) |bad|
+        try addTsongaEnglishLink(&registry, "en", bad);
+    try addTsongaEnglishLink(&registry, "ts", "[[Xhingezi|English]]");
+    try std.testing.expect(registry.resolveTrusted("Xhingezi") == null);
+    try addTsongaEnglishLink(&registry, "en", "[[Xhingezi|English]]");
+    const english = registry.resolveTrusted("Xhingezi") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("en", english.code);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    const article = "==Xhingezi==\n''Noun''\n\n# [[Wiki-Ntshaho]]\n\n[[Category:Marito a Xi Nghezi]]";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "Wikiquote", article, article, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "vulavula", raw, raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "wrong-title", raw, raw, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed", "Tsonga: '''mixed'''. English (verb): speak\nOther: talk", "Tsonga: '''mixed'''. English (verb): speak\nOther: talk", null);
+    _ = try writer.finish(codes);
+    for ([_][3][]const u8{ .{ "Xi Nghezi", "en", "Wikiquote" }, .{ "Xitsonga", "ts", "vulavula" }, .{ "Unclassified", "", "wrong-title" }, .{ "Unclassified", "", "mixed" } }) |case| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ root, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(case[0], &filename) });
+        var mapped = try mmapPath(std.testing.io, path);
+        defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        var index = try blob.buildTrustedIndexAlloc(a);
+        defer index.deinit(a);
+        const record = (try index.find(case[2])) orelse return error.TestUnexpectedResult;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualStrings(case[1], decoded.entry.language_code);
+    }
 }
 
 test "Aromanian static category proof rejects category sort link code dynamic and registry conflicts without creating an alias" {

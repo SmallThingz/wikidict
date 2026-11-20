@@ -4119,6 +4119,30 @@ fn plainBoldPrefixOwner(codes: LanguageCodes, source: []const u8) ?ResolvedLangu
     return corroborated;
 }
 
+fn tsongaBilingualHeadword(codes: LanguageCodes, title: []const u8, raw: []const u8, expanded: []const u8) ?ResolvedLanguage {
+    if (!std.mem.eql(u8, raw, expanded)) return null;
+    var lines = std.mem.tokenizeScalar(u8, raw, '\n');
+    var count: usize = 0;
+    while (lines.next()) |line| {
+        const prefix = "Tsonga: '''";
+        if (!std.mem.startsWith(u8, line, prefix)) return null;
+        const body = line[prefix.len..];
+        const end = std.mem.indexOf(u8, body, "'''. English") orelse return null;
+        const spelling = body[0..end];
+        if (spelling.len == 0 or std.mem.indexOfAny(u8, spelling, "'{}[]<>=|:") != null) return null;
+        if (count == 0 and !std.ascii.eqlIgnoreCase(spelling, title)) return null;
+        const gloss = body[end + "'''. English".len ..];
+        const start: []const u8 = if (count == 0) " (verb): " else ": ";
+        if (!std.mem.startsWith(u8, gloss, start) or gloss.len == start.len or
+            std.mem.indexOfAny(u8, gloss[start.len..], "'{}[]<>=|:") != null) return null;
+        count += 1;
+    }
+    if (count < 2) return null;
+    const label = codes.resolve("Tsonga") orelse return null;
+    const owner = plainBoldPrefixAuthority(codes, "Xitsonga") orelse return null;
+    return if (std.mem.eql(u8, owner.code, "ts") and std.mem.eql(u8, label.code, owner.code)) owner else null;
+}
+
 // These entries introduce the headword directly and expand a translation
 // heading below it. A translation's language does not own the entry.
 fn tsongaLabelledHeadword(codes: LanguageCodes, title: []const u8, raw_source: ?[]const u8, expanded: MissingText) ?ResolvedLanguage {
@@ -4127,6 +4151,7 @@ fn tsongaLabelledHeadword(codes: LanguageCodes, title: []const u8, raw_source: ?
     const raw = raw_source orelse return null;
     if (title.len == 0 or expanded.unknown or expanded.lost_missing_range or expanded.ranges.len != 0 or
         expanded.literal_curly_ranges.len != 0 or expanded.generated_links.len != 0 or expanded.generated_source != null) return null;
+    if (std.mem.startsWith(u8, raw, "Tsonga: ")) return tsongaBilingualHeadword(codes, title, raw, expanded.bytes);
     const raw_count = tsongaTranslationSections(ns, title, raw, false) orelse return null;
     const expanded_count = tsongaTranslationSections(ns, title, expanded.bytes, true) orelse return null;
     if (raw_count != expanded_count) return null;
