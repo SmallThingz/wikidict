@@ -3086,7 +3086,7 @@ class _PartFrameQueue:
     def put_frame(self, frame):
         with self.condition:
             while self.bytes+len(frame)>self.capacity and not self.cancelled.is_set():
-                self.condition.wait(timeout=0.1)
+                self.condition.wait()
             if self.cancelled.is_set(): raise _CancelledParallelStage()
             self.items.append(frame)
             self.bytes+=len(frame)
@@ -3100,7 +3100,7 @@ class _PartFrameQueue:
     def get(self):
         with self.condition:
             while not self.items and not self.cancelled.is_set():
-                self.condition.wait(timeout=0.1)
+                self.condition.wait()
             if not self.items: raise _CancelledParallelStage()
             item=self.items.popleft()
             if isinstance(item,bytes): self.bytes-=len(item)
