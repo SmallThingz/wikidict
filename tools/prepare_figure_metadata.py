@@ -2292,15 +2292,18 @@ def verify_tuple(paths, wiki=None, date=None, *, retained_cache=None, inventory_
     root = parents.pop()
     def capture_identity():
         members, directories = capture_member_paths(root, include_markers=True)
+        # Every leaf below is regular. Its resolved name consists of its verified
+        # parent and its unchanged basename, including for contained HTTP origins.
+        resolved = {directory: directory.resolve(strict=True) for directory in directories}
         identities = {}
         for name, path in members.items():
             value = path.lstat()
             if not stat.S_ISREG(value.st_mode):
                 raise ValueError('Figure source capture changed during validation')
-            identities[name] = (str(path.resolve(strict=True)), value.st_dev, value.st_ino,
+            identities[name] = (str(resolved[path.parent] / path.name), value.st_dev, value.st_ino,
                 value.st_mode, value.st_nlink, value.st_uid, value.st_gid, value.st_size,
                 value.st_mtime_ns, value.st_ctime_ns)
-        if any(complete_capture_directory_stamp(path) != before
+        if any(complete_capture_directory_stamp(path) != before or path.resolve(strict=True) != resolved[path]
                for path, before in directories.items()):
             raise ValueError('Figure source capture changed during validation')
         return identities, directories
