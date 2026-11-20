@@ -4194,6 +4194,9 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     references = [row[key] for key in keys]
     recipe, emitted, closed, source, compiled = [prepared_metadata(ref) for ref in references]
     matched_triple = 'matched_role_source_join' in source
+    merge_only = target == 'prepare-blob-merge'
+    if merge_only and matched_triple:
+        raise ValueError('Merge install cannot claim a Writer triple')
     if (source.get('actual_normal_command') != row['compilation_recipe']
             or source.get('actual_result') != row['actual_emission_result']
             or source.get('actual_closure') != row['qualification_closure']
@@ -4221,7 +4224,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     start, owner, watchdog = [prepared_metadata(closed[key]) for key in ('start', 'owner_result', 'watchdog')]
     references.extend(closed[key] for key in ('start', 'owner_result', 'watchdog'))
     resolved_refs = start.get('source_refs')
-    if matched_triple:
+    if matched_triple or merge_only:
         config_ref = closed.get('owner_config')
         if not isinstance(config_ref, dict):
             raise ValueError('Matched triple lacks its normal owner configuration')
@@ -4281,7 +4284,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     argv = recipe['argv']
     if matched_triple:
         references.extend(initial_sealed_matched_triple(row, native_roles, recipe, closed, source, compiled, target=target))
-    elif target != 'prepare-captured-writer' or argv[:3] != [row['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']:
+    elif target not in ('prepare-captured-writer', 'prepare-blob-merge') or argv[:3] != [row['dependencies']['zig']['path'], 'build', target]:
         raise ValueError('Direct sealed successor requires one Writer target')
     cwd = Path(recipe['cwd'])
     if not cwd.is_absolute() or '..' in cwd.parts:
@@ -4293,10 +4296,10 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
         raise ValueError('Unsafe direct Writer cache')
     required = {'-Doptimize=safe', '-Dtarget=x86_64-native', '-Dcpu=baseline',
                 '-Dcaptured-source-fingerprint=' + row['producer_source']}
-    seen = set(); prefix = None; index = 5 if matched_triple else 3
+    seen = set(); prefix = None; build_file = None; index = 5 if matched_triple else 3
     while index < len(argv):
         value = argv[index]
-        if value in ('--summary', '--search-prefix', '--cache-dir', '--global-cache-dir', '--prefix'):
+        if value in ('--summary', '--search-prefix', '--cache-dir', '--global-cache-dir', '--prefix') or (merge_only and value == '--build-file'):
             if value in seen or index + 1 >= len(argv):
                 raise ValueError('Duplicate or incomplete direct Writer option')
             argument = argv[index + 1]
@@ -4305,6 +4308,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
             elif not Path(argument).is_absolute() or '..' in Path(argument).parts:
                 raise ValueError('Unsafe direct Writer option path')
             if value == '--prefix': prefix = Path(argument)
+            if value == '--build-file': build_file = Path(argument)
             seen.add(value); index += 2
         elif value in required or value == '-Dtest-optimize=safe' or re.fullmatch(r'-j[1-9][0-9]*', value):
             if value in seen: raise ValueError('Duplicate direct Writer option')
@@ -4314,7 +4318,25 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if not required | {'--prefix', '--summary'} <= seen:
         raise ValueError('Direct Writer required options differ')
     artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
-    if not matched_triple and (closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build')):
+    if merge_only:
+        path = prefix / 'bin' / 'dict-blob-merge'
+        info = path.lstat()
+        stored_stat = closed.get('installed_artifact_stats', {}).get('merge')
+        current_stat = list(info)
+        if (closed.get('normal_merge_emission_passed') is not True or closed.get('errors') != []
+                or closed.get('source_manifest') != row['compiled_source_authority']
+                or recipe.get('source_manifest') != row['compiled_source_authority']
+                or closed.get('installed_artifacts') != {'merge': artifact}
+                or recipe.get('expected_install') != {'merge': str(path)}
+                or artifact['path'] != str(path) or row['artifact'].get('mode') != 0o555
+                or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555 or info.st_nlink != 1
+                or not isinstance(stored_stat, list) or len(stored_stat) != len(current_stat)
+                or stored_stat[:7] + stored_stat[8:] != current_stat[:7] + current_stat[8:]
+                or [value for value in argv if value.startswith('-j')] != ['-j1']):
+            raise ValueError('Direct Merge installed artifact or successful emission differs')
+        if build_file is None or not build_file.is_relative_to(cwd) or build_file.relative_to(cwd).as_posix() not in compiled:
+            raise ValueError('Direct Merge build graph is not in its guarded source manifest')
+    elif not matched_triple and (closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build')):
         raise ValueError('Direct Writer installed artifact differs')
     declared = {item['path']: item for item in resolved_refs}
     if len(declared) != len(resolved_refs):
@@ -4322,7 +4344,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     manifest_ref = row['compiled_source_authority']
     if declared.get(manifest_ref['path']) != manifest_ref:
         raise ValueError('Direct Writer did not guard its source manifest')
-    entry_point = 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
+    entry_point = 'tools/blob_merge.zig' if merge_only else 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
     if entry_point not in compiled or entry_point not in row['source_paths']:
         raise ValueError('Direct role source does not contain its production entry point')
     resolved_files = source.get('resolved_compiled_source_files', compiled)
@@ -4376,7 +4398,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
     recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
     if 'argv' in recipe and 'actual_normal_command' in source:
-        allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if 'matched_role_source_join' in source else ('prepare-captured-writer',)
+        allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if 'matched_role_source_join' in source else ('prepare-captured-writer', 'prepare-blob-merge')
         if target not in allowed_targets or full_graph:
             raise ValueError('Direct guardian successor has an unrelated target')
         return initial_sealed_direct_writer(row, native_roles, target=target)
@@ -4597,8 +4619,10 @@ def initial_sealed_blob_successor(original, native_roles):
         verify_only = (name == 'dict-blob-verify' and (
             (len(commands) == 1 and 'prepare-blob-verify' in commands[0].get('argv', []))
             or recipe.get('argv', [])[2:5] == ['prepare-captured-writer', 'cli', 'prepare-blob-verify']))
-        target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-tools'
-        _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only))
+        merge_only = (name == 'dict-blob-merge' and recipe.get('argv', [])[:3] ==
+                      [after['dependencies']['zig']['path'], 'build', 'prepare-blob-merge'])
+        target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-merge' if merge_only else 'prepare-blob-tools'
+        _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only or merge_only))
         references.extend([after['previous_role_binding'],*target_references])
         source = prepared_metadata(after['source']); inventory = source.get('files',source)
         for relative in after['source_paths']:
