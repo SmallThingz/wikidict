@@ -458,7 +458,11 @@ fn retainFailureOutput(ctx: *WorkerCtx, index: usize, result: ChildResult) !void
     var dir = try std.Io.Dir.cwd().openDir(ctx.io, directory, .{ .follow_symlinks = false });
     defer dir.close(ctx.io);
     var digest: [32]u8 = undefined;
-    std.crypto.hash.sha2.Sha256.hash(ctx.argv0, &digest, .{});
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(ctx.argv0);
+    hasher.update("\x00");
+    hasher.update(ctx.tests[index]);
+    hasher.final(&digest);
     const hex = std.fmt.bytesToHex(digest, .lower);
     var stem_buffer: [96]u8 = undefined;
     const stem = try std.fmt.bufPrint(&stem_buffer, "{s}-{d}", .{ hex, index });
