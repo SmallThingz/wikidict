@@ -18,7 +18,7 @@ from contextlib import ExitStack, closing
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from verify_reader_ux import DOWN, ENTER, ReaderPty, normalized, require
+from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty, normalized, require
 
 
 class NativeCellReaderPty(ReaderPty):
@@ -455,14 +455,17 @@ def reveal_witness(reader, wanted, heading):
     require(source_witness_visible(reader, wanted, heading), f'Source witness missing from body at {reader.width} columns')
 
 
-def exercise(reader, heading_label, entry, witness, redirect_target=None):
+def exercise(reader, heading_label, entry, witness, redirect_target, findings):
     reader.action(b'\x15wikidict-no-match-5400b4b7', lambda: reader.query() == 'wikidict-no-match-5400b4b7'
-                  and reader.page_is('search', count=0) and 'No matching words.' in reader.text(), 'empty search')
-    require(reader.text().count('No matching words.') == 1, 'Empty search repeats the same message')
+                  and reader.page_is('search', count=0), 'empty search')
+    message_count = reader.text().count('No matching words.')
+    if message_count != 1:
+        findings.append(f'Expected one empty-search message, found {message_count}')
     total = reader.header()[1]
     expected_count = f'{total} {"word" if total == 1 else "words"}'
-    require(reader.screen.display[1].split('/')[1].strip() == expected_count,
-            f'Incorrect word count label for {total} records')
+    label = reader.screen.display[1].split('/')[1].strip()
+    if label != expected_count:
+        findings.append(f'Expected word count label {expected_count!r}, found {label!r}')
     reader.snapshot('empty')
     reader.action(b'\x15' + entry.encode(), lambda: reader.query() == normalized(entry) and
                   reader.page_is('search') and reader.header()[3] > 0, 'recovered search')
@@ -484,7 +487,10 @@ def exercise(reader, heading_label, entry, witness, redirect_target=None):
     reveal_witness(reader, wanted, heading)
     confirm_table_boundaries(reader)
     reader.snapshot('entry-narrow')
-    check_compact_reading_margins(reader)
+    try:
+        check_compact_reading_margins(reader)
+    except CheckFailure as exc:
+        findings.append(str(exc))
     reader.action(b'\x1b', lambda: reader.page_is('search') and not reader.entry_focused(), 'back to results')
     reader.finish(b'\x03')
 
@@ -539,6 +545,7 @@ def choose_startup_language(reader, root, language):
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
              indexed_page=False, redirect_target=None, seeds=None, compress_transcript=False, expected_table=None):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
+    findings = []
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
     try:
@@ -570,7 +577,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                 finally:
                     result['opening_wait_seconds'] = time.monotonic() - started
                 reader.timeout = 5
-                exercise(reader, language or kind, entry, witness, redirect_target)
+                exercise(reader, language or kind, entry, witness, redirect_target, findings)
             except Exception:
                 try:
                     reader.snapshot('failure-before-close')
@@ -587,9 +594,12 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                     if engine in ('kitty', 'libvterm'):
                         reader.screen.close()
         require(binary_identity(binary.stat()) == stamp, 'Reader executable changed during review')
-        result['passed'] = True
     except Exception as exc:
-        result['error'] = str(exc)
+        findings.append(str(exc))
+    result['passed'] = not findings
+    if findings:
+        result['errors'] = findings
+        result['error'] = '\n'.join(findings)
     path = out / 'result.json'
     path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
     print(path, flush=True)

@@ -8,11 +8,27 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, confirm_table_boundaries, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, reveal_witness, source_witness_visible, visible_body_witness
+from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, confirm_table_boundaries, copy_indexed_page, copy_publication, exercise, library_selection_keys, main, reading_body, reveal_witness, source_witness_visible, visible_body_witness
 from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_empty_state_defects_allow_entry_navigation_to_be_checked(self):
+        for messages in (0, 2):
+            with self.subTest(messages=messages):
+                reader = Mock()
+                reader.text.return_value = 'No matching words.\n' * messages
+                reader.header.return_value = ('search', 1, 0, 0)
+                reader.screen.display = ['', 'search / 1 words / 0/0']
+                reader.action.side_effect = [None, CheckFailure('entry navigation failed')]
+                findings = []
+                with self.assertRaisesRegex(CheckFailure, 'entry navigation failed'):
+                    exercise(reader, 'japonais', '薬指', 'Annulaire', None, findings)
+                self.assertEqual(findings, [f'Expected one empty-search message, found {messages}',
+                                            "Expected word count label '1 word', found '1 words'"])
+                reader.snapshot.assert_called_once_with('empty')
+                self.assertEqual(reader.action.call_args.args[-1], 'recovered search')
+
     def test_transcript_compression_preserves_control_bytes_and_original_format(self):
         with tempfile.TemporaryDirectory() as tmp:
             reader = ReaderPty.__new__(ReaderPty)
@@ -134,7 +150,7 @@ class EditionTerminalTests(unittest.TestCase):
                     patch('verify_edition_terminal.exercise') as exercise:
                 self.assertEqual(main(['--binary', str(binary), '--cases', str(selections),
                                        '--report', str(parent / 'reports')]), 1)
-            exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second', 'Destination')
+            exercise.assert_called_once_with(factory.return_value, 'Owner', 'B', 'Second', 'Destination', [])
             self.assertEqual(factory.call_args.kwargs['kind'], 'language')
             ledger = next((parent / 'reports').glob('*/results.jsonl'))
             first, second = [json.loads(line) for line in ledger.read_text().splitlines()]
@@ -173,8 +189,9 @@ class EditionTerminalTests(unittest.TestCase):
                 def close(self):
                     events.append('reader closed')
 
-            def fail(reader, language, entry, witness, redirect_target):
+            def fail(reader, language, entry, witness, redirect_target, findings):
                 self.assertIsNone(redirect_target)
+                findings.append('empty-search label repeated')
                 self.assertEqual((reader.width, reader.rows, reader.timeout), (90, 30, 5))
                 self.assertNotEqual(reader.private_root, source)
                 raise CheckFailure('body witness missing')
@@ -188,7 +205,8 @@ class EditionTerminalTests(unittest.TestCase):
             self.assertEqual(events, [(45, 'opened edition'), 'failure-before-close', 'reader closed', 'projection closed'])
             report = json.loads(next((parent / 'reports').glob('*/result.json')).read_text())
             self.assertFalse(report['passed'])
-            self.assertEqual(report['error'], 'body witness missing')
+            self.assertEqual(report['errors'], ['empty-search label repeated', 'body witness missing'])
+            self.assertEqual(report['error'], '\n'.join(report['errors']))
             self.assertEqual(report['checks'], ['original check'])
             self.assertEqual(before, {p.name: (p.read_bytes(), p.stat().st_ino, p.stat().st_mtime_ns) for p in source.iterdir()})
 
@@ -208,7 +226,7 @@ class EditionTerminalTests(unittest.TestCase):
                     patch('verify_edition_terminal.exercise') as exercise:
                 self.assertEqual(main(['--binary', str(binary), '--cases', str(cases), '--report', str(parent / 'out')]), 0)
             self.assertEqual(factory.call_args.kwargs, {'language': None, 'kind': 'supplemental'})
-            exercise.assert_called_once_with(factory.return_value, 'supplemental', 'Appendix', 'Body', None)
+            exercise.assert_called_once_with(factory.return_value, 'supplemental', 'Appendix', 'Body', None, [])
             result = json.loads(next((parent / 'out').glob('*/*/result.json')).read_text())
             self.assertIsNone(result['language'])
             self.assertEqual(result['kind'], 'supplemental')
