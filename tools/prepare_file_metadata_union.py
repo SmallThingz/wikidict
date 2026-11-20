@@ -290,7 +290,9 @@ def verify(root, require_complete=True):
                                         MAX_BASE_ROWS if manifest['schema'] == BASE_SCHEMA and number == 0 else MAX_CHILD_ROWS)
                 require(record['rows'] == row['rows'], 'Archived child row count differs')
                 snapshot = temporary / ('part-%04d.tsv' % number)
-                shutil.copyfile(child / TSV, snapshot)
+                # Both paths belong to this replay. Keep the checked TSV for the
+                # merge while the rest of the extracted capture is discarded.
+                (child / TSV).rename(snapshot)
                 snapshots.append(snapshot)
                 require(file_record(archive, MAX_ARCHIVE) == index['artifacts'][row['path']],
                         'Archive changed during replay')
