@@ -3401,27 +3401,39 @@ def index_identity(stat):
 
 
 def inspect_page_index(path, shard_pages=None):
-    interval=selected_shard_pages(shard_pages)
-    count=offset=0
-    offsets={}
-    digest=hashlib.sha256()
+    interval = selected_shard_pages(shard_pages)
+    count = offset = 0
+    offsets = {}
+    digest = hashlib.sha256()
     with path.open('rb') as source:
-        identity=index_identity(os.fstat(source.fileno()))
-        while True:
-            line=source.readline(MAX_PAGE_INDEX_LINE_BYTES+1)
-            if not line: break
-            if len(line)>MAX_PAGE_INDEX_LINE_BYTES:
-                raise ValueError('Page index line exceeds size limit')
-            digest.update(line)
-            if line.rstrip(b'\n') and not line.startswith(b'#'):
-                if count % interval == 0: offsets[count]=0 if count==0 else offset
-                count+=1
-            offset+=len(line)
-        if index_identity(os.fstat(source.fileno()))!=identity:
+        identity = index_identity(os.fstat(source.fileno()))
+        while block := source.read(MAX_PAGE_INDEX_LINE_BYTES):
+            # Complete the last row, keeping the same byte limit including LF.
+            if not block.endswith(b'\n'):
+                tail_bytes = len(block) - (block.rfind(b'\n') + 1)
+                tail = source.readline(MAX_PAGE_INDEX_LINE_BYTES + 1 - tail_bytes)
+                if tail_bytes + len(tail) > MAX_PAGE_INDEX_LINE_BYTES:
+                    raise ValueError('Page index line exceeds size limit')
+                block += tail
+            digest.update(block)
+            lines = block.split(b'\n')
+            # Most blocks have neither comments nor a shard boundary inside them.
+            if (-count) % interval >= len(lines) and not block.startswith(b'#') and b'\n#' not in block:
+                count += len(lines) - lines.count(b'')
+            else:
+                position = offset
+                for line in lines:
+                    if line and not line.startswith(b'#'):
+                        if count % interval == 0:
+                            offsets[count] = position if count else 0
+                        count += 1
+                    position += len(line) + 1
+            offset += len(block)
+        if index_identity(os.fstat(source.fileno())) != identity:
             raise ValueError('Page index changed during inspection')
-    if index_identity(path.stat())!=identity:
+    if index_identity(path.stat()) != identity:
         raise ValueError('Page index replaced during inspection')
-    return dict(rows=count,sha256=digest.hexdigest(),identity=identity,offsets=offsets)
+    return dict(rows=count, sha256=digest.hexdigest(), identity=identity, offsets=offsets)
 
 
 def validate_page_coverage(root, start=0, limit=None, expected=None, offset=0, source_pages=None, require_total=False):

@@ -2058,6 +2058,31 @@ class BuildTest(PreparedToolsFixture):
             path.write_bytes(data+b'd\n')
             with self.assertRaisesRegex(ValueError,'changed'): b.require_index_identity(path,result)
 
+    def test_page_index_blocks_preserve_shard_offsets_and_line_limit(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b, 'MAX_PAGE_INDEX_LINE_BYTES', 8):
+            path = Path(tmp) / 'page-index.tsv'
+            rows = [b'#hdr\n', b'\n', b'a\n', b'1234567\n', b'\r\n', b'#skip\n', b'\n', b'\xff\n']
+            rows += [b'z\n'] * 30 + [b'end#']
+            data = b''.join(rows)
+            path.write_bytes(data)
+            starts = []
+            offset = 0
+            for row in rows:
+                if row != b'\n' and not row.startswith(b'#'):
+                    starts.append(offset)
+                offset += len(row)
+            for interval in (1, 4, 19, 100000):
+                with self.subTest(interval=interval):
+                    actual = b.inspect_page_index(path, interval)
+                    expected = {n: starts[n] if n else 0 for n in range(0, len(starts), interval)}
+                    self.assertEqual(expected, actual['offsets'])
+                    self.assertEqual(len(starts), actual['rows'])
+                    self.assertEqual(hashlib.sha256(data).hexdigest(), actual['sha256'])
+            for bad in (b'12345678\n', b'123456789'):
+                path.write_bytes(b'ok\n' + bad)
+                with self.assertRaisesRegex(ValueError, 'line exceeds'):
+                    b.inspect_page_index(path)
+
     def test_index_and_coverage_read_sizes_are_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);path=root/'index';path.write_bytes(b'x'*65)
