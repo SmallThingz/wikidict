@@ -15855,4 +15855,110 @@ class ShardPagesCliResumeTests(PreparedToolsFixture):
                 outputs.append((final/'languages.tsv').read_bytes())
         self.assertTrue(all(value==outputs[0]for value in outputs))
 
+class FigureTupleReadsetReuseTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    validate = CompleteParentTupleReplayTests.validate
+
+    def test_cold_discovery_and_semantics_run_once_then_complete_readset_reuses_without_decoding(self):
+        original_guard = b.figure_tuple_guard
+        original_decode = self.figures.decode
+        passes = []
+
+        def guarded(*args, **kwargs):
+            decoded = []
+            def decode(raw):
+                decoded.append(len(raw))
+                return original_decode(raw)
+            with patch.object(self.figures, 'decode', side_effect=decode):
+                result = original_guard(*args, **kwargs)
+            passes.append((decoded, result))
+            return result
+
+        with patch.object(b, 'figure_tuple_guard', side_effect=guarded), \
+                patch.object(self.figures, 'verify_tuple', wraps=self.figures.verify_tuple) as replay:
+            expected = self.validate()
+            self.assertEqual(self.validate(), expected)
+            proof = passes[0][1]
+            self.assertEqual(b.figure_tuple_guard(self.figures, self.args.output, authenticated=proof), proof)
+            self.assertEqual(replay.call_count, 1)
+        self.assertEqual(len(passes), 4)
+        self.assertGreater(len(passes[0][0]), 0)
+        self.assertGreater(sum(passes[0][0]), 0)
+        self.assertEqual([row[0] for row in passes[1:]], [[], [], []])
+        self.assertEqual([row[1] for row in passes[1:]], [proof, proof, proof])
+        self.assertTrue({str(self.args.output), str(self.child), str(self.parent)} <= set(proof[2]))
+        self.assertTrue({str(self.observation), *map(str, self.args.sql)} <= set(proof[1]))
+        self.assertTrue(all(identity is not None for _, identity in proof[1].values()))
+        print('FIGURE_READSET_DECODE_COUNTS ' + json.dumps(dict(
+            cold_decode_calls=len(passes[0][0]), cold_decoded_input_bytes=sum(passes[0][0]),
+            replay_end_decode_calls=0, completed_hit_decode_calls=0, direct_reuse_decode_calls=0), sort_keys=True))
+
+    def test_verified_readset_rejects_journal_inventory_member_and_membership_changes_without_reparse(self):
+        cases = [('journal-replacement', self.parent / self.figures.FILE_REQUESTS),
+                 ('inventory-replacement', self.args.output / self.figures.INVENTORY),
+                 ('member-mutation', self.child / self.figures.ROLES['figure-sizing-raw']),
+                 ('extra-member', self.parent / 'readset-extra.raw')]
+        for mode, path in cases:
+            with self.subTest(mode=mode):
+                b._FIGURE_TUPLE_REPLAYS.clear()
+                self.validate()
+                original = None if mode == 'extra-member' else path.read_bytes()
+                replacement = path.with_name(path.name + '.readset-replacement')
+                try:
+                    if mode.endswith('-replacement'):
+                        replacement.write_bytes(original)
+                        os.replace(replacement, path)
+                    elif mode == 'member-mutation':
+                        stamp = path.stat()
+                        self.assertTrue(original)
+                        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+                        os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                    else:
+                        path.write_bytes(b'new member')
+                    with patch.object(self.figures, 'decode', side_effect=AssertionError('Changed readset reparsed')), \
+                            patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Changed readset replayed')):
+                        with self.assertRaises((ValueError, FileNotFoundError)):
+                            self.validate()
+                finally:
+                    replacement.unlink(missing_ok=True)
+                    if original is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(original)
+
+    def test_only_issued_complete_root_bound_readsets_skip_discovery_and_none_skip_semantics(self):
+        import copy
+        proof = b.figure_tuple_guard(self.figures, self.args.output)
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+        # Historical/copy/transport tuples still discover the entire readset.
+        for candidate in (tuple(proof), copy.copy(proof), copy.deepcopy(proof)):
+            with self.subTest(kind=type(candidate).__name__):
+                self.assertIs(type(candidate), tuple)
+                with patch.object(self.figures, 'decode', wraps=self.figures.decode) as decode:
+                    self.assertEqual(b.figure_tuple_guard(self.figures, self.args.output, authenticated=candidate), proof)
+                self.assertGreater(decode.call_count, 0)
+        truncated = copy.deepcopy(proof)
+        del truncated[1][str(self.observation)]
+        with patch.object(self.figures, 'decode', wraps=self.figures.decode) as decode:
+            self.assertIsNone(b.figure_tuple_guard(self.figures, self.args.output, authenticated=truncated))
+        self.assertGreater(decode.call_count, 0)
+        with patch.object(self.figures, 'decode', side_effect=AssertionError('Invalid issued receipt reparsed')):
+            self.assertIsNone(b.figure_tuple_guard(self.figures, self.parent, authenticated=proof))
+            saved = proof[1].pop(str(self.observation))
+            try:
+                self.assertIsNone(b.figure_tuple_guard(self.figures, self.args.output, authenticated=proof))
+            finally:
+                proof[1][str(self.observation)] = saved
+        deferred = set()
+        unfinished = b.figure_tuple_guard(self.figures, self.args.output, deferred_capture=deferred)
+        self.assertTrue(deferred)
+        self.assertTrue(any(identity is None for _, identity in unfinished[1].values()))
+        self.assertIsNone(b.figure_tuple_guard(self.figures, self.args.output, authenticated=unfinished))
+        with patch.object(self.figures, 'verify_tuple', side_effect=ValueError('Full semantics still required')) as replay:
+            with self.assertRaisesRegex(ValueError, 'Full semantics still required'):
+                self.validate()
+            replay.assert_called_once()
+        self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
+
+
 if __name__=='__main__':unittest.main()

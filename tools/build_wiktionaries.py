@@ -1553,6 +1553,27 @@ def _figure_replay_identity(path, *, directory=False):
     return resolved, fields(lexical), fields(target)
 
 
+class _FigureReadsetGuard(tuple):
+    """In-process discovery receipt, not a semantic-verification or hash grant."""
+    def __new__(cls, root, guard):
+        value = super().__new__(cls, guard)
+        value._root = str(Path(root).absolute())
+        value._readset = value._census()
+        return value
+
+    def _census(self):
+        # Destination hashes may be filled only by the existing complete tuple
+        # validator. Bind discovery independently of those deferred digests.
+        return (json.dumps(self[0], sort_keys=True, separators=(',', ':')),
+                tuple(sorted((name, stamp) for name, (stamp, _) in self[1].items())),
+                tuple(sorted(self[2].items())))
+
+    def __reduce__(self):
+        # Copies/serialization retain the historical tuple API, not authority
+        # to skip discovery in another object or interpreter.
+        return tuple, (tuple(self),)
+
+
 def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=None):
     """Hash the initial readset; reuse its digests only under exact local guards."""
     evidence = helper.evidence
@@ -1734,7 +1755,16 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
         return True
 
     runtime = (helper.producer(), helper.metadata.producer(), helper.site_info.producer())
-    if not capture(root):
+    if type(authenticated) is _FigureReadsetGuard and deferred_capture is None:
+        # Only this guard's complete cold discovery can lend its readset. Plain
+        # tuples still follow capture(), including every journal/inventory row.
+        if (str(Path(root).absolute()) != authenticated._root or
+                authenticated._census() != authenticated._readset or
+                any(identity is None for _, identity in authenticated[1].values())):
+            return None
+        files.update(map(Path, authenticated[1]))
+        directories.update((Path(path), value) for path, value in authenticated[2].items())
+    elif not capture(root):
         return None
     directory_proof = {str(path): value for path, value in directories.items()}
     if authenticated is not None and (runtime != authenticated[0] or
@@ -1767,7 +1797,8 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
             raise ValueError('Figure replay membership changed while hashing')
     if (helper.producer(), helper.metadata.producer(), helper.site_info.producer()) != runtime:
         raise ValueError('Figure replay helper changed while hashing')
-    return runtime, identities, {str(path): value for path, value in directories.items()}
+    return _FigureReadsetGuard(root, (runtime, identities,
+                                     {str(path): value for path, value in directories.items()}))
 
 
 
