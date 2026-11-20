@@ -304,7 +304,7 @@ fn standaloneEmptyDefinition(blocks: []const wiki.Block, index: usize) bool {
 // A plain positive numeric term followed immediately by its definition-list
 // detail is an authored sense label under an explicit POS. Keep both original
 // blocks: the detail is the sense body and the number remains other material.
-fn numberedDefinitionDetail(blocks: []const wiki.Block, index: usize, declared_pos: bool) bool {
+fn numberedDefinitionDetail(blocks: []const wiki.Block, index: usize, declared_pos: bool, spanish_domains: bool) bool {
     if (!declared_pos or index == 0 or index >= blocks.len) return false;
     const detail = blocks[index];
     const marker = blocks[index - 1];
@@ -313,7 +313,16 @@ fn numberedDefinitionDetail(blocks: []const wiki.Block, index: usize, declared_p
     const span = marker.spans[0];
     if (span.kind != .text or span.provenance != .parsed or span.generated_diagnostic or span.self_link or span.flags.code or
         span.role != .normal or span.target.len != 0) return false;
-    const number = std.mem.trim(u8, span.text, " \t\r\n");
+    const text = std.mem.trim(u8, span.text, " \t\r\n");
+    const number = if (spanish_domains) blk: {
+        const space = std.mem.indexOfScalar(u8, text, ' ') orelse break :blk text;
+        const label = text[space + 1 ..];
+        // Domain names emitted by the dated eswiktionary csem provider.
+        for ([_][]const u8{ "Plantas", "Astronomía", "Ciudades", "Poblaciones", "Internet", "Informática" }) |domain| {
+            if (std.mem.eql(u8, label, domain)) break :blk text[0..space];
+        }
+        return false;
+    } else text;
     if (number.len == 0 or number[0] < '1' or number[0] > '9') return false;
     for (number[1..]) |digit| if (!std.ascii.isDigit(digit)) return false;
     return true;
@@ -706,11 +715,11 @@ fn analyzePaoLocalNoun(a: A, kind: []const u8, index: usize, origin: ?usize, blo
     return analyze(a, kind, index, origin, projected orelse blocks, true);
 }
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form, source_decimal };
+const LexicalProjection = enum { ordinary, spanish_domains, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form, source_decimal };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
-        .ordinary => {},
+        .ordinary, .spanish_domains => {},
         .source_decimal => if (block.source_decimal_sense and block.kind == .paragraph) {
             // Sense addresses are analysis-only; preserve the authored digits,
             // paragraph, links, media and formatting in the stored body.
@@ -822,7 +831,7 @@ const LexicalAnalysis = struct {
             // A nested heading requires a real section boundary, not a new
             // language/POS inferred from content inside a layout wrapper.
             if (root != null and block.kind == .heading) return error.UncompiledPresentation;
-            if (numberedDefinitionDetail(blocks, b + 1, declared_pos)) {
+            if (numberedDefinitionDetail(blocks, b + 1, declared_pos, self.projection == .spanish_domains and root == null)) {
                 try self.other.append(a, root_index, path);
                 continue;
             }
@@ -832,7 +841,7 @@ const LexicalAnalysis = struct {
                 depth += 1;
             }
             depth = @min(depth, stack.len - 1);
-            if (lexicalDefinition(block, colon_meanings) or numberedDefinitionDetail(blocks, b, declared_pos)) {
+            if (lexicalDefinition(block, colon_meanings) or numberedDefinitionDetail(blocks, b, declared_pos, self.projection == .spanish_domains and root == null)) {
                 depth = @max(1, depth);
                 if (depth >= stack_len) @memset(stack[stack_len..depth], no_sense);
                 var parent: ?usize = null;
@@ -1783,7 +1792,7 @@ fn hasLexicalDefinitions(blocks: []const wiki.Block, declared_pos: bool, depth: 
         } else {
             if (block.container != null) return error.InvalidPresentation;
             if (!standaloneEmptyDefinition(blocks, index) and
-                (lexicalDefinition(block, declared_pos) or numberedDefinitionDetail(blocks, index, declared_pos))) found = true;
+                (lexicalDefinition(block, declared_pos) or numberedDefinitionDetail(blocks, index, declared_pos, false))) found = true;
         }
     }
     return found;
@@ -2420,6 +2429,25 @@ fn dictionaryNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const 
 
 // The Aragonese POS templates link the localized title to a grammar page.
 // Resolve the lexical kind without assigning a language or moving any body text.
+fn spanishDefinitionPart(section: anytype, owner: ?[]const u8, code: []const u8, wiki_id: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, wiki_id, "eswiktionary") or section.level != 3 or code.len == 0 or
+        owner == null or owner.?.len == 0 or std.mem.eql(u8, owner.?, "Unclassified")) return null;
+    const S = @TypeOf(section);
+    if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return null;
+    if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0) return null;
+    const kind: []const u8 = if (std.mem.eql(u8, section.title, "Símbolo")) "Symbol" else if
+        (std.mem.eql(u8, section.title, "Sustantivo") or std.mem.eql(u8, section.title, "Sustantivo inanimado")) "Noun" else return null;
+    var paired = false;
+    for (section.blocks, 0..) |block, index| {
+        if (block.kind == .term and !numberedDefinitionDetail(section.blocks, index + 1, true, true)) return null;
+        if (block.kind == .list_detail) {
+            if (!numberedDefinitionDetail(section.blocks, index, true, true) or !sourceNumberedText(block)) return null;
+            paired = true;
+        }
+    }
+    return if (paired) kind else null;
+}
+
 fn aragoneseGrammarPart(section: anytype, owner: ?[]const u8, wiki_id: []const u8) ?[]const u8 {
     if (!std.mem.eql(u8, wiki_id, "anwiktionary") or section.level != 2) return null;
     const language = owner orelse return null;
@@ -2973,8 +3001,9 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
         const aromanian_noun = if (aromanian_part) |kind| std.mem.eql(u8, kind, "Noun") else false;
         const declared_aromanian = if (aromanian_part != null and (hasTopLevelNumberedGloss(section.blocks) or
             (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
+        const spanish_part = if (unclassified) null else spanishDefinitionPart(section, owner, owner_code, wiki_id);
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (dictionaryNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
+            partOfSpeech(section.title) orelse spanish_part orelse if (quechua) quechuaDefinitionPart(section) else if (dictionaryNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const decimal_noun = decimal: {
             const kind = if (unclassified) null else aragoneseGrammarPart(section, owner, wiki_id);
@@ -3067,6 +3096,8 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
                 try analyzeMarkedParagraph(a, marker, i, origin, section.blocks)
             else if (meaning_paragraph) |marker|
                 try analyzeSerbianMeaningParagraph(a, marker, i, section.blocks)
+            else if (spanish_part != null)
+                try analyzeProjected(a, name, i, origin, section.blocks, true, .spanish_domains)
             else if (estonian_form)
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .estonian_noun_form)
             else if (decimal_noun)
@@ -15343,4 +15374,86 @@ test "Lithuanian marked adjective and contiguous noun glosses retain original bl
     try std.testing.expectEqual(@as(usize, 0), bounded.definitions[0].block);
     const unmarked = try SerbianMeaningTest.body(a, "* [[sinonimas]]\n* '''lemma''' - apibrėžimas\n");
     try std.testing.expectEqual(@as(usize, 0), (try analyzeLithuanianGlosses(a, "Noun", 0, null, unmarked, "lemma", "lt")).definitions.len);
+}
+
+
+test "Spanish dictionary numbered domains retain all nine original sense bodies and unchanged stored data" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8, level: u8, blocks: []const wiki.Block,
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "",
+    };
+    const cases = .{
+        .{ @embedFile("testdata/es-numbered-senses/symbol-mul.json"), "@", "mul", @as(usize, 1), @as([]const usize, &.{ 1, 3, 5, 7 }) },
+        .{ @embedFile("testdata/es-numbered-senses/atlixco-nhn.json"), "Atlixco", "nhn", @as(usize, 2), @as([]const usize, &.{ 1 }) },
+        .{ @embedFile("testdata/es-numbered-senses/atlixco-nci.json"), "Atlixco", "nci", @as(usize, 2), @as([]const usize, &.{ 1 }) },
+        .{ @embedFile("testdata/es-numbered-senses/acatl-nhn.json"), "acatl", "nhn", @as(usize, 2), @as([]const usize, &.{ 1 }) },
+        .{ @embedFile("testdata/es-numbered-senses/acatl-nci.json"), "acatl", "nci", @as(usize, 2), @as([]const usize, &.{ 2, 4 }) },
+    };
+    inline for (cases) |case| {
+        const source = case[0];
+        const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, source, .{ .ignore_unknown_fields = true });
+        const before = parsed.value.entries[0];
+        try std.testing.expectEqualStrings(case[1], before.title);
+        try std.testing.expectEqualStrings(case[2], before.language_code);
+        const projection = try std.json.parseFromSlice(struct { entries: []const struct { sections: []const Section } }, a, source, .{ .ignore_unknown_fields = true });
+        const sections = projection.value.entries[0].sections;
+        const prior = try buildForEntryWithClassifiedCode(a, sections, false, before.language, before.language_code, null, "otherwiktionary", &.{}, before.title);
+        try std.testing.expectEqual(@as(usize, 0), prior.lexemes.len);
+        const layout = try buildForEntryWithClassifiedCode(a, sections, false, before.language, before.language_code, null, "eswiktionary", &.{}, before.title);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const lexeme = layout.lexemes[0];
+        try std.testing.expectEqualStrings(if (case[3] == 1) "Symbol" else "Noun", lexeme.kind);
+        try std.testing.expectEqualStrings(before.language.?, lexeme.language);
+        try std.testing.expectEqual(case[3], lexeme.section);
+        try std.testing.expectEqual(case[4].len, lexeme.definitions.len);
+        for (case[4], lexeme.definitions) |index, sense| {
+            try std.testing.expectEqual(index, sense.block);
+            try std.testing.expectEqual(wiki.Kind.list_detail, sections[case[3]].blocks[index].kind);
+            try std.testing.expect(sense.parent == null and sense.block_path.len == 0);
+        }
+        const new_layout = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+        var expected: T.Stored = .{ .entry = before };
+        expected.entry.organization = new_layout.value;
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, expected);
+        var decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, before.title, before.kind, .{ .code = before.language_code, .heading = before.language.? });
+        try std.testing.expectEqualDeep(expected, decoded);
+        decoded.entry.organization = before.organization;
+        try std.testing.expectEqualDeep(T.Stored{ .entry = before }, decoded);
+    }
+}
+
+test "Spanish domain sense requires its owned top level grammar and adjacent parsed mark" {
+    const Section = struct {
+        title: []const u8 = "Sustantivo", level: u8 = 3, is_heading: bool = true,
+        title_depth: u8 = 0, title_list_path: []const u8 = "", blocks: []const wiki.Block,
+    };
+    var marker = [_]wiki.Span{.{ .text = "1 Plantas" }};
+    var blocks = [_]wiki.Block{
+        .{ .kind = .term, .depth = 1, .list_path = ";", .spans = &marker },
+        .{ .kind = .list_detail, .depth = 1, .list_path = ":", .spans = &.{.{ .kind = .link, .text = "caña", .target = "caña" }} },
+    };
+    var section: Section = .{ .blocks = &blocks };
+    try std.testing.expectEqualStrings("Noun", spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary").?);
+    try std.testing.expect(spanishDefinitionPart(section, null, "nhn", "eswiktionary") == null);
+    try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "", "eswiktionary") == null);
+    try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "anwiktionary") == null);
+    section.level = 2;
+    try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary") == null);
+    section.level = 3;
+    for ([_][]const u8{ "01 Plantas", "1 Unknown", "Plantas", "1  Plantas", "1. Plantas" }) |text| {
+        marker[0].text = text;
+        try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary") == null);
+    }
+    marker[0].text = "1 Plantas";
+    marker[0].generated_diagnostic = true;
+    try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary") == null);
+    marker[0].generated_diagnostic = false;
+    blocks[1].depth = 2;
+    try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary") == null);
+    try std.testing.expect(partOfSpeech("Sustantivo") == null and partOfSpeech("Símbolo") == null);
 }
