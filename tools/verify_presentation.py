@@ -167,6 +167,9 @@ def attribute_fields(value, path='entry'):
             image = value.get('image')
             if isinstance(image, dict) and isinstance(image.get('alt'), str):
                 yield 'image_alt', path + '.image.alt', image['alt']
+            poster = image.get('static_poster') if isinstance(image, dict) else None
+            if isinstance(poster, dict) and isinstance(poster.get('label'), str):
+                yield 'static_poster_label', path + '.image.static_poster.label', poster['label']
             if isinstance(image, dict) and image.get('tooltip') is not None:
                 tooltip, origin = image['tooltip'], '.image.tooltip'
             else:
@@ -500,7 +503,7 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                             source_title=redirect['source_title'] if redirect else title,
                             redirect=redirect, path=path, text=text[:500], categories=categories))
                 for field, path, text in attribute_fields(content):
-                    if field in ('image_alt', 'clipped_text', 'image_map_label'):
+                    if field in ('image_alt', 'clipped_text', 'image_map_label', 'static_poster_label'):
                         if field == 'image_alt':
                             result['image_alternatives'] += 1
                         categories = diagnostic_categories(text)
@@ -510,7 +513,8 @@ def scan(root, query, export_page=None, *, observe_record=None, audit_references
                                 source_title=redirect['source_title'] if redirect else title,
                                 redirect=redirect, path=path, text=text[:500], categories=categories,
                                 interpretation={'image_alt': 'image-alternative', 'clipped_text': 'clipped-semantic-text',
-                                                'image_map_label': 'image-map-label'}[field]))
+                                                'image_map_label': 'image-map-label',
+                                                'static_poster_label': 'static-poster-label'}[field]))
                     elif field in ('explanation', 'tooltip'):
                         result['annotations'].append(dict(kind=actual_kind, language=owner, title=actual_title,
                             view_kind=view['kind'], view_language=view['language'], query_title=title,

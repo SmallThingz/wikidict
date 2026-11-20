@@ -367,6 +367,28 @@ class PresentationDiagnosticTests(unittest.TestCase):
             self.assertEqual(result['image_alternatives'], 0)
             self.assertEqual(result['annotations'], [])
 
+    def test_scans_static_poster_badge_as_visible_text(self):
+        with Fixture() as f:
+            entry = f.entry('tibia', '', language='Italiano')
+            poster = dict(policy='three_d_stl_v1', label='3D',
+                          file_sha1='832cafd6c58519ddd441e8f7fc7d78eb14165a2e',
+                          file_timestamp='2020-07-25T07:26:20Z')
+            image = dict(file='BodyParts3D Tibia.stl', static_poster=poster)
+            span = dict(kind='link', text='', target='File:BodyParts3D Tibia.stl', image=image)
+            entry['sections'] = [dict(blocks=[dict(spans=[span])])]
+            entry['metadata'] = dict(label='{{private bookkeeping}}')
+            f.language('Italiano', [entry])
+            self.assertEqual([], audit.scan(f.root, f.query)['issues'])
+            poster['label'] = '[missing template]'
+            result = audit.scan(f.root, f.query)
+            self.assertEqual('failed', result['status'])
+            self.assertEqual(0, result['image_alternatives'])
+            self.assertEqual([], result['annotations'])
+            self.assertEqual([('entry.sections[0].blocks[0].spans[0].image.static_poster.label',
+                               'static-poster-label', ['unavailable-template'])],
+                             [(issue['path'], issue['interpretation'], issue['categories'])
+                              for issue in result['issues']])
+
     def test_all_seven_views_and_owner_inventory(self):
         with Fixture() as f:
             f.language('Unverified exact heading', [f.entry('main', '__NOEDITSECTION__', language='Unverified exact heading')])
