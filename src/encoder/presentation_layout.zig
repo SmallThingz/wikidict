@@ -135,7 +135,7 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, title, "Nome proprio")) return "Proper noun";
     // The Chinese edition uses this heading for entries in several languages.
     if (std.mem.eql(u8, title, "專有名詞")) return "Proper noun";
-    if (std.mem.eql(u8, title, "名词")) return "Noun";
+    if (std.mem.eql(u8, title, "名词") or std.mem.eql(u8, title, "名詞")) return "Noun";
     // Retained ουσιαστικό p254472/r3274141 invokes PartOfSpeech; its
     // selected pos table p804996/r7358611 names this exact noun heading.
     if (std.mem.eql(u8, title, "Ουσιαστικό")) return "Noun";
@@ -12758,6 +12758,57 @@ test "Chinese noun heading groups the Japanese headword and linked definition" {
     try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
     try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2 }, layout.other_sections);
     try std.testing.expect(partOfSpeech("名词变格") == null);
+}
+
+test "traditional Chinese noun heading organizes authored senses without supplying an owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    // Preserve the five authored section levels and noun block address of
+    // retained 咱人學堂; this controlled layout fixture grants no style authority.
+    const sections = [_]Section{
+        .{ .title = "漢語", .level = 2, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "咱儂學堂／咱侬学堂" }} }} },
+        .{ .title = "發音", .level = 3, .blocks = &.{.{ .kind = .paragraph, .spans = &.{.{ .text = "lán-nâng o̍h-tn̂g" }} }} },
+        .{ .title = "名詞", .level = 3, .blocks = &.{
+            .{ .kind = .paragraph, .spans = &.{.{ .text = "咱人學堂" }} },
+            .{ .kind = .definition, .list_path = "#", .spans = &.{
+                .{ .kind = .link, .text = "華裔", .target = "華裔" },
+                .{ .kind = .link, .text = "學校", .target = "學校" },
+                .{ .text = "；海外" }, .{ .kind = .link, .text = "華人", .target = "華人" },
+                .{ .text = "社區中以" }, .{ .kind = .link, .text = "漢語", .target = "漢語" },
+                .{ .text = "授課的學校" },
+            } },
+        } },
+        .{ .title = "同義詞", .level = 4, .blocks = &.{.{ .kind = .list_item, .list_path = "*", .spans = &.{.{ .kind = .link, .text = "華校", .target = "華校" }} }} },
+        .{ .title = "參見", .level = 4, .blocks = &.{.{ .kind = .list_item, .list_path = "*", .spans = &.{.{ .kind = .link, .text = "番仔學堂", .target = "番仔學堂" }} }} },
+    };
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("名詞").?);
+    try std.testing.expect(partOfSpeech("名詞短語") == null);
+    try std.testing.expect(partOfSpeech("普通名詞") == null);
+    for ([_][]const u8{ "漢語", "English", "" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const noun = layout.lexemes[0];
+        try std.testing.expectEqualStrings(owner, noun.language);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqual(@as(usize, 2), noun.section);
+        try std.testing.expectEqual(@as(?usize, null), noun.etymology);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+        try std.testing.expectEqual(@as(?usize, null), noun.definitions[0].parent);
+        try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block_path.len);
+        try std.testing.expectEqualSlices(usize, &.{0}, noun.introduction);
+        try std.testing.expectEqualSlices(usize, &.{3, 4}, noun.related_sections);
+        try std.testing.expectEqualSlices(usize, &.{0, 1}, layout.other_sections);
+        const definition = sections[noun.section].blocks[noun.definitions[0].block];
+        try std.testing.expectEqualDeep(sections[2].blocks[1], definition);
+        try std.testing.expectEqualStrings("漢語", definition.spans[5].target);
+        try std.testing.expectEqualStrings("名詞", sections[noun.section].title);
+    }
+    const unknown = try buildUnclassified(a, &[_]Section{.{ .title = "名詞", .level = 2, .blocks = sections[2].blocks }});
+    try std.testing.expectEqual(@as(usize, 0), unknown.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unknown.other_sections);
 }
 
 test "Chinese proper noun heading groups the Hindi definition and its two quotations" {
