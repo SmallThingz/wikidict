@@ -17108,9 +17108,19 @@ test "captured Korean girl preserves piped IPA brackets full body actions owner 
         try std.testing.expectEqualStrings(target, scan.targets.items[i]);
         try std.testing.expectEqualStrings(label, scan.labels.items[i].items);
     }
+    // The captured source uses U+0020 here. Parsoid's DisplaySpace handler
+    // emits U+00A0 before a colon followed by whitespace in an ordinary text node.
+    for ([_][2][]const u8{
+        .{ "gyrle : 사어", "gyrle\u{a0}: 사어" }, .{ "gal : 사어", "gal\u{a0}: 사어" },
+        .{ "guhrl, gurl : 비표준어", "guhrl, gurl\u{a0}: 비표준어" }, .{ "grrrl, grrl : 슬랭", "grrrl, grrl\u{a0}: 슬랭" },
+        .{ "영국 :", "영국\u{a0}:" }, .{ "미국 :", "미국\u{a0}:" }, .{ "뉴질랜드 :", "뉴질랜드\u{a0}:" },
+    }) |witness| {
+        try std.testing.expect(std.mem.indexOf(u8, raw, witness[0]) != null);
+        try std.testing.expect(std.mem.indexOf(u8, expanded, witness[0]) != null);
+        try std.testing.expect(std.mem.indexOf(u8, scan.visible.items, witness[1]) != null);
+    }
     for ([_][]const u8{
-        "gyrle : 사어", "gal : 사어", "guhrl, gurl : 비표준어", "grrrl, grrl : 슬랭",
-        "영국 :", "미국 :", "뉴질랜드 :", "/ɡɜːl/", "/ɡɝl/", "/ɡɵːl/", "[[ɡʏw]]",
+        "/ɡɜːl/", "/ɡɝl/", "/ɡɵːl/", "[[ɡʏw]]",
         "성인의 성인 여성에게 'girl' 이라고 부르는 것은 맥락과 감성에 따라 칭찬이나 모욕으로 여겨질 수 있다.",
     }) |text| {
         errdefer std.debug.print("KO required visible text={s}\n", .{text});
@@ -22985,9 +22995,28 @@ test "actual SR210 ji first mul region retains complete seven section body and c
     const zh = (try LeadingRegionFixture.entry(a, root, "Кинески", "日")) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings("mul", mul.language_code);
     try std.testing.expectEqual(@as(usize, 7), mul.sections.len);
-    // Compare every stored nested value, including headings, actions, styles,
-    // tables and any Ruby; this is not a plain-text count or normalized oracle.
-    try std.testing.expectEqualDeep(before.sections[0..7], mul.sections);
+    // Preserve the historical Reader fixture. The physical DIV class-owner
+    // repair retains this one authored NavHead class on its own label.
+    try std.testing.expectEqualStrings("Further reading", before.sections[6].title);
+    try std.testing.expectEqual(@as(usize, 4), before.sections[6].blocks.len);
+    try std.testing.expectEqual(@as(usize, 1), before.sections[6].blocks[2].spans.len);
+    try std.testing.expectEqualStrings("Језици (2)", before.sections[6].blocks[2].spans[0].text);
+    try std.testing.expectEqualStrings("NavFrame", before.sections[6].blocks[2].spans[0].classes);
+    const navhead_source = "<div class=\"NavFrame\" data-toggle-category=\"table of contents\" style=\"max-width:40em;margin:0.5em 0\" data-minitoc-length=\"2\"><div class=\"NavHead\" style=\"background:#eee;padding: 0.25em 0.5em\">Језици (2)</div><div class=\"NavContent\" style=\"text-align:center;padding:0.5em\">";
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, selected_expanded, navhead_source));
+    const expected_sections = try a.dupe(T.Section, before.sections[0..7]);
+    const expected_further_blocks = try a.dupe(T.Block, expected_sections[6].blocks);
+    const expected_navhead_spans = try a.dupe(T.Span, expected_further_blocks[2].spans);
+    expected_navhead_spans[0].classes = "NavFrame NavHead";
+    expected_further_blocks[2].spans = expected_navhead_spans;
+    expected_sections[6].blocks = expected_further_blocks;
+    // Compare every nested value after the single source-backed class change.
+    try std.testing.expectEqualDeep(expected_sections, mul.sections);
+    try std.testing.expectEqualStrings("NavFrame", before.sections[6].blocks[2].spans[0].classes);
+    try std.testing.expectEqualStrings("NavFrame NavHead", mul.sections[6].blocks[2].spans[0].classes);
+    try std.testing.expectEqual(@as(usize, 7), mul.sections[6].blocks[3].spans.len);
+    for (mul.sections[6].blocks[3].spans) |span|
+        try std.testing.expectEqualStrings("NavFrame NavContent", span.classes);
     const expected_lexemes = try a.dupe(T.Lexeme, before.organization.lexemes);
     expected_lexemes[0].language = "Међународни";
     try std.testing.expectEqualDeep(T.Layout{ .lexemes = expected_lexemes, .other_sections = &.{0} }, mul.organization);

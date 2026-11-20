@@ -5349,6 +5349,14 @@ fn needsConsumedDivSnapshot(input: []const u8) bool {
     return false;
 }
 
+const ConsumedPlannedReference = struct {
+    start: usize,
+    end: usize,
+    plan: *const CitationPlan,
+    event: usize,
+    source_digest: [32]u8,
+};
+
 const InlineSourceDomain = struct {
     source: []const u8,
     parent: ?*const InlineSourceDomain,
@@ -5357,6 +5365,7 @@ const InlineSourceDomain = struct {
     // Offsets consumed by this live ordinary HTML parse. No layout authority.
     consumed_unclosed_centers: ?*std.ArrayList(usize) = null,
     consumed_closed_divs: ?*ConsumedClosedInlineDivs = null,
+    consumed_planned_references: ?*std.ArrayList(ConsumedPlannedReference) = null,
 };
 
 // Selected by the ordinary whole-page producer, never inferred by a fragment.
@@ -26254,7 +26263,100 @@ pub const Renderer = struct {
     fn formattingAngleBodyPositionWithClosedDivSiblings(input: []const u8, at: usize, tracked: MissingText, live: ?*const InlineSourceDomain) bool {
         return formattingAngleBodyPositionWithLiveSiblings(input, at, false, tracked, false, live, true, false);
     }
+    fn recordConsumedPlannedReference(self: *Renderer, input: []const u8, at: usize, tag: syntax.Tag, pair: syntax.Pair) Error!void {
+        if (self.in_reference or self.context.content_conversion != true or !self.sourceRecursiveManualContext() or
+            at >= pair.end or pair.end > input.len or pair.end > 4096 or !tag.is("ref") or tag.closing or tag.self_closing or tag.html_pre) return;
+        const plan = self.context.citations orelse return;
+        const raw_event = tag.attr(plan.attribute) orelse return;
+        const event_id = std.fmt.parseInt(usize, raw_event, 10) catch return;
+        if (event_id >= plan.events.items.len) return;
+        const frame = self.inline_source_domain orelse return;
+        if (frame.source.ptr != input.ptr or frame.source.len != input.len) return;
+        const tracked = frame.tracked orelse return;
+        if (tracked.bytes.ptr != input.ptr or tracked.bytes.len != input.len or
+            !recursivePositionInterval(tracked, at, pair.end)) return;
+        const consumed = frame.consumed_planned_references orelse return;
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(input[at..pair.end], &digest, .{});
+        try consumed.append(self.a, .{ .start = at, .end = pair.end, .plan = plan,
+            .event = event_id, .source_digest = digest });
+    }
+
+    fn plannedReferenceSourceConsumed(self: *const Renderer, input: []const u8, first: usize,
+        last: usize, plan: *const CitationPlan, event_id: usize) bool
+    {
+        if (first >= last or last > input.len or last > 4096) return false;
+        var frame = self.inline_source_domain;
+        var remaining: usize = max_depth + 1;
+        while (frame) |domain| {
+            if (remaining == 0) return false;
+            remaining -= 1;
+            if (domain.source.ptr == input.ptr and domain.source.len == input.len) {
+                const consumed = domain.consumed_planned_references orelse return false;
+                for (consumed.items) |receipt| {
+                    if (receipt.start != first or receipt.end != last or receipt.plan != plan or receipt.event != event_id) continue;
+                    var digest: [32]u8 = undefined;
+                    std.crypto.hash.sha2.Sha256.hash(input[first..last], &digest, .{});
+                    return std.mem.eql(u8, &receipt.source_digest, &digest);
+                }
+                return false;
+            }
+            frame = domain.parent;
+        }
+        return false;
+    }
+
+    fn consumedPlannedReferenceEnd(self: *const Renderer, input: []const u8, at: usize,
+        limit: usize, tracked: MissingText) ?usize
+    {
+        if (self.in_reference or at >= limit or limit > input.len) return null;
+        const plan = self.context.citations orelse return null;
+        const tag = syntax.tagAt(input[0..limit], at) orelse return null;
+        if (!tag.is("ref") or tag.closing or tag.self_closing or tag.html_pre or
+            !htmlNestedAttributes(tag.attrs, &.{ "name", "group", plan.attribute })) return null;
+        const pair = syntax.matchingTag(input[0..limit], tag) orelse return null;
+        const closing = syntax.tagAt(input[0..limit], pair.inner_end) orelse return null;
+        if (!closing.is("ref") or !closing.closing or closing.self_closing or closing.html_pre or
+            trim(closing.attrs).len != 0 or closing.end != pair.end) return null;
+        const base = @intFromPtr(tracked.bytes.ptr);
+        const pointer = @intFromPtr(input.ptr);
+        if (pointer < base or pointer - base > tracked.bytes.len or input.len > tracked.bytes.len - (pointer - base)) return null;
+        const offset = pointer - base;
+        if (pair.end > limit or !recursivePositionInterval(tracked, offset + at, offset + pair.end)) return null;
+        const raw_event = tag.attr(plan.attribute) orelse return null;
+        if (raw_event.len == 0) return null;
+        for (raw_event) |byte| if (!std.ascii.isDigit(byte)) return null;
+        const event_id = std.fmt.parseInt(usize, raw_event, 10) catch return null;
+        if (event_id >= plan.events.items.len) return null;
+        const event = plan.events.items[event_id];
+        if (event.tag != .ref or event.authored_error or !event.marker) return null;
+        const item_id = event.item orelse return null;
+        if (item_id >= plan.items.items.len) return null;
+        const item = plan.items.items[item_id];
+        if (item.kind != .note or item.parts.items.len != 0 or item.recovery != null or
+            !std.mem.eql(u8, tag.attr("name") orelse "", item.name) or
+            !std.mem.eql(u8, tag.attr("group") orelse "", item.group)) return null;
+        const prepared_body = item.body orelse return null;
+        if (!self.plannedReferenceSourceConsumed(input, at, pair.end, plan, event_id)) return null;
+        for (self.citation_locals.items) |local| {
+            if (local.plan != plan or item_id >= local.indices.len) continue;
+            const index = local.indices[item_id] orelse return null;
+            if (index >= self.refs.items.len) return null;
+            const issued = self.refs.items[index];
+            if (issued.citation_plan != plan or issued.citation_item != item_id or issued.kind != .note or
+                issued.body.ptr != prepared_body.bytes.ptr or issued.body.len != prepared_body.bytes.len or
+                !std.mem.eql(u8, issued.name, item.name) or !std.mem.eql(u8, issued.group, item.group)) return null;
+            return pair.end;
+        }
+        return null;
+    }
+
+
     fn formattingAngleBodyPositionWithLiveSiblings(input: []const u8, at: usize, preceding_abbreviation: bool, tracked: ?MissingText, recursive_semantics: bool, live: ?*const InlineSourceDomain, closed_divs_only: bool, ku_rulefree_predecessors: bool) bool {
+        return formattingAngleBodyPositionWithIssuedCitation(input, at, preceding_abbreviation, tracked,
+            recursive_semantics, live, closed_divs_only, ku_rulefree_predecessors, null);
+    }
+    fn formattingAngleBodyPositionWithIssuedCitation(input: []const u8, at: usize, preceding_abbreviation: bool, tracked: ?MissingText, recursive_semantics: bool, live: ?*const InlineSourceDomain, closed_divs_only: bool, ku_rulefree_predecessors: bool, citation_owner: ?*const Renderer) bool {
         if (at > input.len or at > 4096) return false;
         // Only the pinned recursive converter caller selects this mode. It
         // evaluates complete predecessors without changing their Missing state;
@@ -26271,6 +26373,12 @@ pub const Renderer = struct {
         var depth: usize = 0;
         var cursor: usize = 0;
         while (cursor < at) {
+            if (recursive_semantics and !closed_divs_only and !ku_rulefree_predecessors) if (citation_owner) |renderer| {
+                if (renderer.consumedPlannedReferenceEnd(input, cursor, at, tracked.?)) |end| {
+                    cursor = end;
+                    continue;
+                }
+            };
             if (closed_divs_only and input[cursor] == '<') if (consumedClosedDivEnd(input, cursor, at, tracked.?, live)) |end| {
                 cursor = end;
                 continue;
@@ -28573,6 +28681,7 @@ pub const Renderer = struct {
             };
             if (self.context.citations != null and !self.in_reference) {
                 try self.plannedCitation(tag, style);
+                try self.recordConsumedPlannedReference(input, at, tag, pair);
                 return pair.end;
             }
             const name = ((try self.semanticAttribute(tag, "name")) orelse "");
@@ -32286,7 +32395,7 @@ pub const Renderer = struct {
         recursiveManualStage(trace, 6);
         if (at > input.len or input.len - at < 4 or !starts(input[at..], "-{")) return null;
         recursiveManualStage(trace, 7);
-        if (!formattingAngleBodyPositionWithLiveSiblings(input, at, true, parent, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors)) return null;
+        if (!formattingAngleBodyPositionWithIssuedCitation(input, at, true, parent, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors, if (recursive_semantics) self else null)) return null;
         const parent_base = @intFromPtr(parent.bytes.ptr);
         const input_base = @intFromPtr(input.ptr);
         recursiveManualStage(trace, 8);
@@ -32294,7 +32403,7 @@ pub const Renderer = struct {
         const parent_offset = input_base - parent_base;
         recursiveManualStage(trace, 9);
         if (parent_offset > parent.bytes.len or input.len > parent.bytes.len - parent_offset or
-            !formattingAngleBodyPositionWithLiveSiblings(parent.bytes, parent_offset + at, true, parent, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors)) return null;
+            !formattingAngleBodyPositionWithIssuedCitation(parent.bytes, parent_offset + at, true, parent, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors, if (recursive_semantics) self else null)) return null;
         var domain = self.inline_source_domain;
         var remaining: usize = max_depth + 1;
         while (domain) |current| {
@@ -32310,7 +32419,7 @@ pub const Renderer = struct {
             else null;
             recursiveManualStage(trace, 12);
             if (relative > current.source.len or input.len > current.source.len - relative or
-                !formattingAngleBodyPositionWithLiveSiblings(current.source, relative + at, true, tracked, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors)) return null;
+                !formattingAngleBodyPositionWithIssuedCitation(current.source, relative + at, true, tracked, recursive_semantics, self.inline_source_domain, false, ku_rulefree_predecessors, if (recursive_semantics) self else null)) return null;
             domain = current.parent;
         }
         if (recursive_semantics) if (try self.recursiveRuleFreeFrameBody(input, at, parent, trace)) |complete| return complete;
@@ -33248,8 +33357,11 @@ pub const Renderer = struct {
                 try self.a.dupe(u8, input) else null };
         defer consumed_closed_divs.ranges.deinit(self.a);
         defer if (consumed_closed_divs.snapshot) |snapshot| self.a.free(snapshot);
+        var consumed_planned_references: std.ArrayList(ConsumedPlannedReference) = .empty;
+        defer consumed_planned_references.deinit(self.a);
         const source_domain: InlineSourceDomain = .{ .source = input, .parent = self.inline_source_domain, .tracked = prepared_missing,
-            .consumed_unclosed_centers = &consumed_unclosed_centers, .consumed_closed_divs = &consumed_closed_divs };
+            .consumed_unclosed_centers = &consumed_unclosed_centers, .consumed_closed_divs = &consumed_closed_divs,
+            .consumed_planned_references = &consumed_planned_references };
         consumed_closed_divs.owner = &source_domain;
         self.inline_source_domain = &source_domain;
         defer self.inline_source_domain = source_domain.parent;
@@ -122767,4 +122879,85 @@ test "AN ordinary HTML resolved owners preserve child colors actions and reset t
     try std.testing.expectEqualStrings("#654321", saved.entry.sections[0].blocks[0].table.?.rows[0].cells[0].style.?.border.?.resolved_edges.left.inset.paint.rgb);
     try std.testing.expectEqualDeep(presentation_types.StyleBorderPaint{ .rgb = "#123456" },
         saved.entry.sections[0].blocks[0].table.?.rows[0].cells[1].style.?.border.?.resolved_edges.left.inset.paint);
+}
+
+test "planned predecessor position requires live consumed source and current citation ownership" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, NS.english_test_fixture);
+    defer ns.deinit();
+    ns.content_language = "zh";
+    ns.language_conversion = &.{ "zh", "zh-hans", "zh-hant" };
+    ns.manual_conversion_context = SourceRecursiveManualTest.profile();
+    var behavior = try ManualConversionTest.behavior(a, &ns);
+    defer behavior.deinit();
+    const context: Context = .{ .title = "citation position", .namespace_catalog = &ns,
+        .behavior_switches = &behavior, .content_conversion = true };
+    const original = "<ref name=\"n\">note -{2016}- [https://example.test]</ref> tail";
+    const prepared = try preparePageExternalLinksAlloc(a, original, context);
+    var selected = context;
+    selected.citations = prepared.citations;
+    selected.poem_phase = prepared.poem_phase;
+    selected.external_links_prepared = true;
+    var renderer_value: Renderer = .{ .a = a, .context = selected };
+    var consumed: std.ArrayList(ConsumedPlannedReference) = .empty;
+    var domain: InlineSourceDomain = .{ .source = prepared.source, .parent = null,
+        .tracked = prepared.missing, .consumed_planned_references = &consumed };
+    renderer_value.inline_source_domain = &domain;
+    renderer_value.inline_missing = prepared.missing;
+    const tag = syntax.tagAt(prepared.source, 0) orelse return error.TestUnexpectedResult;
+    const pair = syntax.matchingTag(prepared.source, tag) orelse return error.TestUnexpectedResult;
+    const plan = prepared.citations orelse return error.TestUnexpectedResult;
+    const item_id = plan.events.items[0].item orelse return error.TestUnexpectedResult;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    try renderer_value.plannedCitation(tag, .{});
+    // Emitting a marker alone cannot certify an arbitrary equal source REF.
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    try renderer_value.recordConsumedPlannedReference(prepared.source, 0, tag, pair);
+    try std.testing.expectEqual(@as(usize, 1), consumed.items.len);
+    try std.testing.expectEqual(pair.end, renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) orelse return error.TestUnexpectedResult);
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithLiveSiblings(prepared.source, prepared.source.len, false, prepared.missing, true, &domain, false, false));
+    try std.testing.expect(Renderer.formattingAngleBodyPositionWithIssuedCitation(prepared.source, prepared.source.len, false, prepared.missing, true, &domain, false, false, &renderer_value));
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithIssuedCitation(prepared.source, prepared.source.len, false, prepared.missing, true, &domain, true, false, &renderer_value));
+    try std.testing.expect(!Renderer.formattingAngleBodyPositionWithIssuedCitation(prepared.source, prepared.source.len, false, prepared.missing, true, &domain, false, true, &renderer_value));
+    renderer_value.in_reference = true;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    renderer_value.in_reference = false;
+    var foreign_plan = plan.*;
+    renderer_value.context.citations = &foreign_plan;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    renderer_value.context.citations = plan;
+    const saved_body = plan.items.items[item_id].body;
+    @constCast(plan).items.items[item_id].body.?.bytes = try a.dupe(u8, saved_body.?.bytes);
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    @constCast(plan).items.items[item_id].body = saved_body;
+    const saved_marker = plan.events.items[0].marker;
+    @constCast(plan).events.items[0].marker = false;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    @constCast(plan).events.items[0].marker = saved_marker;
+    const copied = try a.dupe(u8, prepared.source);
+    var copied_missing = prepared.missing;
+    copied_missing.bytes = copied;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(copied, 0, copied.len, copied_missing) == null);
+    const mutable = @constCast(prepared.source);
+    const saved_byte = mutable[tag.end];
+    mutable[tag.end] = 'N';
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    mutable[tag.end] = saved_byte;
+    domain.consumed_planned_references = null;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) == null);
+    domain.consumed_planned_references = &consumed;
+    var lost = prepared.missing;
+    lost.lost_missing_range = true;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, lost) == null);
+    const protected = [_]missing_dependency.Range{.{ .start = @intCast(tag.end), .end = @intCast(tag.end + 1), .occurrence = 1 }};
+    var protected_missing = prepared.missing;
+    protected_missing.ranges = &protected;
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, protected_missing) == null);
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, pair.end - 1, prepared.missing) == null);
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len + 1, prepared.missing) == null);
+    try std.testing.expect(renderer_value.consumedPlannedReferenceEnd(prepared.source, prepared.source.len, prepared.source.len, prepared.missing) == null);
+    try std.testing.expectEqual(pair.end, renderer_value.consumedPlannedReferenceEnd(prepared.source, 0, prepared.source.len, prepared.missing) orelse return error.TestUnexpectedResult);
 }
