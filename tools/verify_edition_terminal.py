@@ -268,7 +268,45 @@ def wrapped_table_cell_contains(rows, left, right, wanted):
     return False
 
 
+def table_group_matches(lines, edges, expected):
+    row_number = 0
+    remaining = list(expected[0])
+    for line in lines:
+        if row_number == len(expected):
+            return False
+        fragments = [normalized(' '.join(''.join(cell['text'] for cell in line[left + 1:right]).split()))
+                     for left, right in itertools.pairwise(edges)]
+        if not any(fragments):
+            return False
+        for column, fragment in enumerate(fragments):
+            rest = remaining[column]
+            if fragment:
+                # Wrapping may discard a space between words or split a word without one.
+                rest = rest.removeprefix(' ')
+            if not rest.startswith(fragment):
+                return False
+            remaining[column] = rest[len(fragment):]
+        if not any(remaining):
+            row_number += 1
+            if row_number < len(expected):
+                remaining = list(expected[row_number])
+    return row_number == len(expected)
+
+
+def visible_table_group(reader, edges):
+    start = min(36, reader.width // 3) if reader.width >= 80 else 0
+    rows = reader.screen.cell_rows()[6:-2]
+    for borders, lines in itertools.groupby(rows, key=lambda row: tuple(
+            i for i in range(start, len(row)) if row[i]['text'] == '│')):
+        if len(borders) == edges:
+            yield borders, lines
+
+
 def source_witness_visible(reader, wanted, heading):
+    table = getattr(reader, 'expected_table', None)
+    if table:
+        return any(table_group_matches(lines, edges, table)
+                   for edges, lines in visible_table_group(reader, len(table[0]) + 1))
     if wanted in reading_body(reader, heading):
         return True
     if not hasattr(reader.screen, 'cell_rows'):
@@ -338,7 +376,10 @@ def reveal_witness(reader, wanted, heading):
     reader.action(b'\x1b[H', reader.entry_focused, 'Home begins the full entry scan')
     while not source_witness_visible(reader, wanted, heading):
         previous = reader.text()
-        frame = reader.send(b'\x1b[6~')
+        # A table can fit in the viewport while straddling two Page Down positions.
+        table = getattr(reader, 'expected_table', None)
+        at_table = table and any(visible_table_group(reader, len(table[0]) + 1))
+        frame = reader.send(DOWN if at_table else b'\x1b[6~')
         reader.wait(reader.entry_focused, 'paged through entry', after=frame)
         if reader.text() == previous:
             break
@@ -425,13 +466,15 @@ def choose_startup_language(reader, root, language):
 
 
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
-             indexed_page=False, redirect_target=None, seeds=None, compress_transcript=False):
+             indexed_page=False, redirect_target=None, seeds=None, compress_transcript=False, expected_table=None):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
     try:
         if redirect_target is not None:
             result['redirect_target'] = redirect_target
+        if expected_table is not None:
+            result['expected_table'] = expected_table
         projection, reader_type = screen_projection(engine)
         with tempfile.TemporaryDirectory(dir=out) as temp:
             root = Path(temp) / 'dictionary'
@@ -445,6 +488,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                                  projection, language=None if implicit else language, kind=kind)
             reader.projection_name = engine
             reader.compress_transcript = compress_transcript
+            reader.expected_table = expected_table
             try:
                 # A cold compressed edition may still be indexing after the ordinary key-response deadline.
                 try:
@@ -493,12 +537,24 @@ def main(argv=None):
     parser.add_argument('--entry', help='Exact title in the selected collection')
     parser.add_argument('--redirect-target', help='Expected title after opening the selected redirect')
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
+    parser.add_argument('--table-tsv', type=Path, help='Require the entire original bordered table containing the witness at both widths')
     parser.add_argument('--implicit-language', action='store_true', help='Launch without a language override and use the keyboard chooser when needed')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
     parser.add_argument('--compress-transcript', action='store_true', help='Store the complete raw terminal byte stream as terminal.ansi.gz')
     parser.add_argument('--screen-projection', choices=('pyte', 'libvterm', 'kitty'), default='pyte',
                         help='Screen cell engine (libvterm and kitty require their respective native libraries)')
     args = parser.parse_args(argv)
+    expected_table = None
+    if args.table_tsv:
+        if args.cases or args.screen_projection == 'pyte':
+            parser.error('--table-tsv requires a single entry and a native screen projection')
+        with args.table_tsv.open(encoding='utf-8', newline='') as data:
+            expected_table = [[visible_body_witness(cell) for cell in row] for row in csv.reader(data, delimiter='\t')]
+        if (not expected_table or len(expected_table[0]) < 2 or
+                any(len(row) != len(expected_table[0]) or not any(row) for row in expected_table)):
+            parser.error('Expected a rectangular table of at least two columns with nonempty rows')
+        if not args.witness or not any(visible_body_witness(args.witness) in row for row in expected_table):
+            parser.error('--witness must be a complete cell of the expected table')
     if args.cases:
         if any((args.kind, args.language, args.entry, args.witness, args.redirect_target)):
             parser.error('--cases supplies the language, entry and witness for each row')
@@ -550,7 +606,7 @@ def main(argv=None):
                 path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
                                         digest, parent, args.screen_projection, kind, args.implicit_language,
                                         indexed_page=args.indexed_page is not None, redirect_target=redirect_target, seeds=seeds,
-                                        compress_transcript=args.compress_transcript)
+                                        compress_transcript=args.compress_transcript, expected_table=expected_table)
                 if args.cases:
                     with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
                         ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),

@@ -374,6 +374,23 @@ class EditionTerminalTests(unittest.TestCase):
         lines[8] = 'part one │ part two'
         self.assertEqual(reading_body(reader, 'chosen / owner'), 'first scrolled definition line second line part one │ part two')
 
+    def test_complete_table_verifies_wraps_in_their_original_rows_and_columns(self):
+        lines = ['  │ Gen │ σημ │ σημ │', '  │     │ αία │ αιώ │', '  │     │  ς  │  ν  │',
+                 '  │ Acc │ σημ │ σημ │', '  │     │ αία │ αίε │', '  │     │     │  ς  │']
+        display = [''] * 6 + lines + [''] * 2
+        rows = [[{'text': char} for char in line.ljust(45)] for line in display]
+        reader = SimpleNamespace(width=45, screen=SimpleNamespace(display=display, cell_rows=lambda: rows))
+        expected = [['Gen', 'σημαίας', 'σημαιών'], ['Acc', 'σημαία', 'σημαίες']]
+        reader.expected_table = expected
+        self.assertTrue(source_witness_visible(reader, 'σημαιών', 'σημαία / griego'))
+        for wrong in (expected[::-1], expected[:1], expected + expected, [expected[0], expected[1][::-1]],
+                      [['Gen', 'σημαίας', 'σημαίων'], expected[1]]):
+            reader.expected_table = wrong
+            self.assertFalse(source_witness_visible(reader, 'σημαιών', 'σημαία / griego'))
+        reader.expected_table = expected
+        rows[7][8]['text'] = ' '
+        self.assertFalse(source_witness_visible(reader, 'σημαιών', 'σημαία / griego'))
+
     def test_wrapped_definition_beside_table_uses_only_its_own_physical_column(self):
         lines = [''] * 6 + [
             'sidebar'.ljust(29) + '│ chosen / owner  │a │b│',

@@ -102,6 +102,10 @@ with the keyboard when the reader opens its Library.
 Use `--screen-projection libvterm` to check native terminal cells, including combining marks.
 Use `--screen-projection kitty` to check cell layout with an installed Kitty native parser.
 The report records which terminal produced the cells at each width.
+For a small bordered table, `--table-tsv original.tsv` compares every cell with
+the source, including text split over several screen lines. Supply one TSV row
+per source row, select a native screen projection, and use a complete cell as
+the `--witness`. The table must fit in one viewport at each width.
 For serial reviews, pass `--cases entries.tsv` in place of `--root`, `--language`,
 `--entry`, and `--witness`. Each row needs `output_directory`, `owner_heading`,
 `exact_title`, `visible_definition_witness`, and `selected_complete_sha256` (the hash
