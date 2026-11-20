@@ -68554,3 +68554,147 @@ test "TN courant actual Reader and normal Writer retain complete body after sour
     try std.testing.expectEqualDeep(before, original);
 }
 
+const LtRegisteredBannerFixture = struct {
+    const Row = struct { template: []const u8, code: []const u8, label: []const u8, banner: []const u8, name: []const u8, body: []const u8 };
+    // The heading providers and their paired names are complete original sources.
+    // Bodies below are small synthetic probes of ownership/style/action retention,
+    // not article excerpts or captured expansions. Complete original Reader
+    // records remain separate ordinary-page oracles.
+    const rows = [_]Row{
+        .{ .template = "ltv", .code = "lt", .label = "Lietuvių kalba", .banner = @embedFile("testdata/lt-source-banner01/ltv.wikitext"), .name = @embedFile("testdata/lt-source-banner01/lang-lt.wikitext"), .body = "=== Daiktavardis ===\n# [[ambasada]]\n" },
+        .{ .template = "bsv", .code = "bs", .label = "Bosnių kalba", .banner = @embedFile("testdata/lt-source-banner01/bsv.wikitext"), .name = @embedFile("testdata/lt-source-banner01/lang-bs.wikitext"), .body = "=== Daiktavardis ===\n'''ambasada''' (mot. g.)\n# [[ambasada]]\n" },
+        .{ .template = "hrv", .code = "hr", .label = "Kroatų kalba", .banner = @embedFile("testdata/lt-source-banner01/hrv.wikitext"), .name = @embedFile("testdata/lt-source-banner01/lang-hr.wikitext"), .body = "=== Daiktavardis ===\n'''ambasada''' (mot. g.)\n# [[ambasada]]\n" },
+        .{ .template = "env", .code = "en", .label = "Anglų kalba", .banner = @embedFile("testdata/lt-source-banner01/env.wikitext"), .name = @embedFile("testdata/lt-source-banner01/lang-en.wikitext"), .body = "=== Būdvardis ===\n# [[faktinis]]\n" },
+    };
+    fn reference(raw: ?*const anyopaque, value: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+        const registry: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
+        for (rows) |row| if (std.mem.eql(u8, value, row.template)) {
+            const owner = registry.resolve(row.code) orelse return null;
+            return .{ .code = owner.code, .heading = owner.heading };
+        };
+        const owner = registry.resolve(value) orelse return null;
+        return .{ .code = owner.code, .heading = owner.heading };
+    }
+    fn referenceTrusted(raw: ?*const anyopaque, value: []const u8) ?encoder.blob_builder.ResolvedLanguage {
+        const registry: *const language_registry.Registry = @ptrCast(@alignCast(raw orelse return null));
+        for (rows) |row| if (std.mem.eql(u8, value, row.template)) return reference(raw, value);
+        const owner = registry.resolveSourceTrusted(value) orelse return null;
+        return .{ .code = owner.code, .heading = owner.heading };
+    }
+};
+
+test "normal indexed LT complete banners resolve registered names without treating template titles as canonical owners" {
+    const F = LtRegisteredBannerFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/lt-ispanija/namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/lt-ispanija/language-registry.tsv"));
+    try std.testing.expectEqualStrings("bsv", registry.resolve("bsv").?.code);
+    try std.testing.expectEqualStrings("env", registry.resolve("env").?.code);
+    try std.testing.expect(registry.resolveStrong("bsv") == null and registry.resolveSourceTrusted("bsv") == null);
+    try std.testing.expect(registry.resolveStrong("env") == null and registry.resolveSourceTrusted("env") == null);
+    // No categoryTOC or category source is supplied: the independent authority
+    // here is the already registered name plus the complete two indexed providers.
+    for (0..6) |arm| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var fixture: TeCategoryFixture = .{ .a = a };
+        for (F.rows) |row| {
+            if (arm != 1) try fixture.page(try std.mem.concat(a, u8, &.{ "Šablonas:", row.template }), if (arm == 3) 0 else 10,
+                if (arm == 4) try std.mem.concat(a, u8, &.{ row.banner, "extra" }) else row.banner,
+                if (arm == 5) "Scribunto" else "wikitext");
+            if (arm != 2) try fixture.page(try std.mem.concat(a, u8, &.{ "Šablonas:lang:", row.code }), 10, row.name, "wikitext");
+        }
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        const input = try std.fs.path.join(a, &.{ root, "source.xml" });
+        const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+        const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input, .data = fixture.source.items });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = fixture.index.items });
+        try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+        var index = try mmapPath(io, index_path); defer index.deinit();
+        var titles = try mmapPath(io, title_path); defer titles.deinit();
+        var reader = try dump_source.SourceReader.open(io, a, a, input, .raw_xml, null); defer reader.deinit();
+        var proof: source_category_language.Context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &ns, .source = &reader, .page_index = index.bytes, .title_index = try dump_source.PageTitleIndex.init(titles.bytes) };
+        for (F.rows) |row| {
+            const target = try std.mem.concat(a, u8, &.{ "Kategorija:", row.label });
+            const owner = try proof.resolveHeading(row.template, target);
+            if (arm == 0) {
+                try std.testing.expectEqualStrings(row.code, (owner orelse return error.TestUnexpectedResult).code);
+                try std.testing.expectEqualStrings(registry.headings.get(row.code).?, owner.?.heading);
+                try std.testing.expect(try proof.resolveHeading(row.template, "Kategorija:Unknown") == null);
+            } else try std.testing.expect(owner == null);
+        }
+        if (arm == 0) {
+            const saved_size = proof.title_index.page_index_size;
+            proof.title_index.page_index_size += 1;
+            try std.testing.expectError(error.PageTitleIndexMismatch, proof.resolveHeading("bsv", "Kategorija:Bosnių kalba"));
+            proof.title_index.page_index_size = saved_size;
+            const saved_language = ns.content_language; ns.content_language = "en";
+            try std.testing.expect(try proof.resolveHeading("env", "Kategorija:Anglų kalba") == null);
+            ns.content_language = saved_language;
+            // A local collision must not gain source trust from the template.
+            try registry.addLocalAlias("Bosnių", "en");
+            try std.testing.expect(try proof.resolveHeading("bsv", "Kategorija:Bosnių kalba") == null);
+        }
+    }
+}
+
+test "normal LT source banner declarations preserve distinct owners and complete probe bodies actions styles and codec" {
+    const F = LtRegisteredBannerFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/lt-ispanija/namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/lt-ispanija/language-registry.tsv"));
+    var fixture: TeCategoryFixture = .{ .a = a };
+    var raw: std.ArrayList(u8) = .empty; var expanded: std.ArrayList(u8) = .empty;
+    for (F.rows) |row| {
+        try fixture.page(try std.mem.concat(a, u8, &.{ "Šablonas:", row.template }), 10, row.banner, "wikitext");
+        try fixture.page(try std.mem.concat(a, u8, &.{ "Šablonas:lang:", row.code }), 10, row.name, "wikitext");
+        try raw.appendSlice(a, try std.fmt.allocPrint(a, "== {{{{{s}}}}} ==\n{s}", .{ row.template, row.body }));
+        try expanded.appendSlice(a, try std.fmt.allocPrint(a,
+            "== [[Vaizdas:Flag.svg|45px|border]]&nbsp;[[:Kategorija:{s}|{s}]][[Kategorija:{s}|Ambasada]] ==\n{s}",
+            .{ row.label, row.label, row.label, row.body }));
+    }
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    const input = try std.fs.path.join(a, &.{ root, "source.xml" });
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    const title_path = try std.fs.path.join(a, &.{ root, dump_source.page_title_index_filename });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = input, .data = fixture.source.items });
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = fixture.index.items });
+    try dump_source.buildPageTitleIndex(io, a, index_path, title_path);
+    var index = try mmapPath(io, index_path); defer index.deinit();
+    var titles = try mmapPath(io, title_path); defer titles.deinit();
+    var reader = try dump_source.SourceReader.open(io, a, a, input, .raw_xml, null); defer reader.deinit();
+    var proof: source_category_language.Context = .{ .allocator = a, .registry = &registry, .namespace_catalog = &ns, .source = &reader, .page_index = index.bytes, .title_index = try dump_source.PageTitleIndex.init(titles.bytes) };
+    const base = languageCodes(&registry, &ns);
+    var actual_codes = base; actual_codes.source_category_ctx = &proof; actual_codes.source_category_heading_fn = source_category_language.Context.headingCallback;
+    var reference_codes = base; reference_codes.resolve_fn = F.reference; reference_codes.trusted_fn = F.referenceTrusted; reference_codes.strong_fn = F.referenceTrusted;
+    var roots: [2][]const u8 = undefined;
+    for ([_]encoder.blob_builder.LanguageCodes{ actual_codes, reference_codes }, 0..) |codes, arm| {
+        roots[arm] = try std.fmt.allocPrint(a, "{s}/writer-{d}", .{ root, arm });
+        var writer = try encoder.blob_builder.Writer.init(io, a, roots[arm]); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ambasada", expanded.items, raw.items, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+        try std.testing.expectEqual(@as(usize, 0), stats.supplemental_records);
+    }
+    for (F.rows) |row| {
+        const owner = registry.resolve(row.code).?;
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[0], owner.heading, "ambasada");
+        const expected = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, roots[1], owner.heading, "ambasada");
+        try std.testing.expectEqualStrings(row.code, actual.language_code);
+        try std.testing.expectEqualDeep(expected, actual);
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = actual });
+        try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = expected }), bytes);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "ambasada", .language, .{ .heading = owner.heading, .code = row.code });
+        try std.testing.expectEqualDeep(actual, decoded.entry);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+        try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+        try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes[0].definitions.len);
+        try std.testing.expectEqualStrings(if (std.mem.eql(u8, row.code, "en")) "Adjective" else "Noun", actual.organization.lexemes[0].kind);
+    }
+}

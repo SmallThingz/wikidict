@@ -1,0 +1,1 @@
+{{flag|bs|45}}[[:Kategorija:Bosnių kalba|Bosnių kalba]]{{#ifeq:{{NAMESPACE}}|{{ns:template}}|[[Kategorija:Kalbos kodų šablonai|{{PAGENAME}}]]|[[Kategorija:{{lang:bs}}|{{ucfirst:{{PAGENAME}}}}]]}}

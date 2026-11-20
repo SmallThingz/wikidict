@@ -2752,8 +2752,15 @@ fn sourceCategoryBannerTarget(codes: LanguageCodes, section: language_source.Sec
     const hidden = rest[2..hidden_pair.inner_end];
     if (std.mem.indexOfAny(u8, hidden, "[]{}<>&#\r\n\t") != null) return null;
     const sort = std.mem.indexOfScalar(u8, hidden, '|') orelse return null;
+    const sort_key = hidden[sort + 1 ..];
+    // The complete selected provider is separately certified to use ucfirst.
+    // Accept only its exact ASCII first-letter transformation here; other
+    // casing changes and all changes to the remaining title still refuse.
+    const initial_upper = page_title.len > 0 and sort_key.len == page_title.len and
+        std.ascii.isLower(page_title[0]) and sort_key[0] == std.ascii.toUpper(page_title[0]) and
+        std.mem.eql(u8, sort_key[1..], page_title[1..]);
     if (!std.mem.eql(u8, hidden[0..sort], category_target) or
-        !std.mem.eql(u8, hidden[sort + 1 ..], page_title)) return null;
+        (!std.mem.eql(u8, sort_key, page_title) and !initial_upper)) return null;
     return category_target;
 }
 fn sourceCategoryRawTemplate(codes: LanguageCodes, section: language_source.Section) ?[]const u8 {
@@ -6156,6 +6163,11 @@ fn processMain(
         var headword_scoped_owner = false;
         var sr_mul_scoped_owner = false;
         if (formatted_section) |matched| if (matched.owner == null) { fallbacks.unresolved_language_heading = true; };
+        // A complete selected provider's code/name/category declaration is
+        // stronger than interpreting its incidental template title as an ISO
+        // code. The callback and owner helper retain trusted-name vetoes.
+        if (resolved == null and source_category_candidate and sourceCategoryHeaderRangesClean(source_missing, section))
+            resolved = try sourceCategoryBannerOwner(codes, title, raw_sections.items[index], section);
         if (resolved == null and raw_aligned) {
             resolved = resolveSection(codes, raw_sections.items[index]);
             if (resolved) |raw_owner| {
@@ -6213,8 +6225,6 @@ fn processMain(
             }
         }
         if (resolved == null) resolved = sourceLinkedHeadingOwner(codes, source_missing, section);
-        if (resolved == null and source_category_candidate and sourceCategoryHeaderRangesClean(source_missing, section))
-            resolved = try sourceCategoryBannerOwner(codes, title, raw_sections.items[index], section);
         if (resolved == null and index == 0) {
             if (raw_source) |raw| {
                 resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
@@ -23598,4 +23608,60 @@ test "missing equals declarations partition only exact tracked boundaries and ne
     try std.testing.expectEqualStrings(leading[0..cut], paired[0].source);
     try std.testing.expectEqualStrings("Portuguese", paired[1].heading);
     try std.testing.expectEqualStrings(leading[cut..], paired[1].source);
+}
+test "source certified category owner retains canonical-code conflicts root proof and exact ucfirst sort" {
+    const Namespace = @import("namespace_registry").Registry;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try Namespace.init(a,
+        "# wikidict-namespace-registry-v1\n# wiki\tltwiktionary\n# dump-date\t20261001\n# content-language\tlt\n" ++
+        "0\t\t\tcase-sensitive\t0\t1\t0\twikitext\tmain\tentries\n" ++
+        "6\tVaizdas\tFile\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tfiles\n" ++
+        "10\tŠablonas\tTemplate\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\ttemplates\n" ++
+        "14\tKategorija\tCategory\tcase-sensitive\t1\t0\t0\twikitext\tcompile_only\tcategories\n");
+    defer ns.deinit();
+    const F = struct {
+        conflict: bool = false,
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "bsv")) return .{ .code = "bsv", .heading = "Baga Sobané" };
+            if (std.mem.eql(u8, value, "bs")) return .{ .code = "bs", .heading = "Bosnių" };
+            return null;
+        }
+        fn trusted(raw: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            const self: *const @This() = @ptrCast(@alignCast(raw orelse return null));
+            return if (self.conflict) resolve(null, value) else null;
+        }
+        fn heading(_: ?*anyopaque, template: []const u8, target: []const u8) anyerror!?ResolvedLanguage {
+            if (!std.mem.eql(u8, template, "bsv") or !std.mem.eql(u8, target, "Kategorija:Bosnių kalba")) return null;
+            return resolve(null, "bs");
+        }
+        fn section(source: []const u8) language_source.Section {
+            const end = std.mem.indexOfScalar(u8, source, '\n') orelse source.len;
+            const heading_value = blobs.wikitext_syntax.controlHeading(source[0..end], null) orelse unreachable;
+            return .{ .heading = heading_value.title, .source = source, .root_wiki_heading = true };
+        }
+    };
+    const raw = F.section("== {{bsv}} ==\n# body\n");
+    const prefix = "== [[Vaizdas:Flag.svg|45px|border]]&nbsp;[[:Kategorija:Bosnių kalba|Bosnių kalba]][[Kategorija:Bosnių kalba|";
+    var context: F = .{};
+    var codes: LanguageCodes = .{ .namespace_catalog = &ns, .ctx = &context, .resolve_fn = F.resolve, .trusted_fn = F.trusted, .strong_fn = F.trusted, .source_category_heading_fn = F.heading };
+    // The old weak-alias rule intentionally exempts canonical code spellings;
+    // a separate complete source declaration now establishes the actual owner.
+    try std.testing.expect(!rawTemplateNameIsWeakAlias(codes, raw, F.resolve(null, "bsv").?));
+    inline for (.{ "ambasada", "Ambasada" }) |sort| {
+        const expanded = F.section(prefix ++ sort ++ "]] ==\n# body\n");
+        try std.testing.expectEqualStrings("bs", ((try sourceCategoryBannerOwner(codes, "ambasada", raw, expanded)) orelse return error.TestUnexpectedResult).code);
+        var detached = expanded; detached.root_wiki_heading = false;
+        try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", raw, detached) == null);
+        context.conflict = true;
+        try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", raw, expanded) == null);
+        context.conflict = false;
+    }
+    inline for (.{ "AMBASADA", "AmbasadA", "ambasad", "AmbasadaX", "other" }) |sort| {
+        try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", raw, F.section(prefix ++ sort ++ "]] ==\n# body\n")) == null);
+    }
+    const expanded = F.section(prefix ++ "Ambasada]] ==\n# body\n");
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", F.section("== {{bsv|bs}} ==\n# body\n"), expanded) == null);
+    codes.source_category_heading_fn = null;
+    try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", raw, expanded) == null);
 }

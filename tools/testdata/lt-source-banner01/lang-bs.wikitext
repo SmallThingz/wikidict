@@ -1,0 +1,1 @@
+Bosnių {{plural:{{{1|1}}}|kalba|kalbos}}

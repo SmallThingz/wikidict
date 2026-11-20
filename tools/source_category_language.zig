@@ -293,6 +293,32 @@ pub fn categoryTocBannerSource(a: std.mem.Allocator, source: []const u8, target:
     return std.mem.eql(u8, source, expected);
 }
 
+// A complete indexed heading provider declares its own language code. Its
+// paired indexed name must already be independently trusted by this registry;
+// the provider's title is not a language-name assertion.
+fn registeredBannerOwner(a: std.mem.Allocator, source: []const u8, target: []const u8, ns: *const namespaces.Registry, registry: *const languages.Registry) !?Resolved {
+    if (!std.mem.eql(u8, ns.content_language, "lt") or !std.mem.startsWith(u8, source, "{{flag|")) return null;
+    const end = std.mem.indexOfScalarPos(u8, source, 7, '|') orelse return null;
+    const code = source[7..end];
+    if (code.len == 0 or code.len > 32 or std.mem.indexOfAny(u8, code, "{}[]<>&=:#'\" \t\r\n") != null) return null;
+    const owner: Resolved = .{
+        .code = registry.codes.getKey(code) orelse return null,
+        .heading = registry.headings.get(code) orelse return null,
+    };
+    if (!try categoryTocBannerSource(a, source, target, owner, ns)) return null;
+    return owner;
+}
+
+fn registeredBannerName(a: std.mem.Allocator, source: []const u8, target: []const u8, owner: Resolved, ns: *const namespaces.Registry, registry: *const languages.Registry) !bool {
+    const split = std.mem.indexOf(u8, source, " {{plural:{{{1|1}}}|") orelse return false;
+    const stem = source[0..split];
+    const known = registry.resolveStrong(stem) orelse registry.resolveSourceTrusted(stem) orelse return false;
+    if (!std.mem.eql(u8, known.code, owner.code)) return false;
+    if (!registry.sourceBannerLiteralCodeNameCompatible(owner.code, stem) or
+        !registry.sourceBannerCategoryNameCompatible(owner.code, ns.ofTitle(target).text)) return false;
+    return categoryTocLanguageName(a, source, .{ .label = ns.ofTitle(target).text, .code = owner.code }, registry);
+}
+
 pub const Context = struct {
     allocator: std.mem.Allocator,
     registry: *const languages.Registry,
@@ -359,13 +385,20 @@ pub const Context = struct {
     pub fn resolveHeading(self: *Context, template_name: []const u8, target: []const u8) !?Resolved {
         if (!std.mem.eql(u8, self.namespace_catalog.content_language, "lt") or
             template_name.len == 0 or std.mem.indexOfAny(u8, template_name, "{}[]<>&|=:#'\" \t\r\n") != null) return null;
-        const owner = (try self.resolve(target)) orelse return null;
+        if (self.title_index.page_index_size != self.page_index.len or self.title_index.kind != dump_source.pageIndexKind(self.page_index)) return error.PageTitleIndexMismatch;
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const a = arena.allocator();
         const spec = self.namespace_catalog.byId(10) orelse return null;
         const title = try std.fmt.allocPrint(a, "{s}:{s}", .{ spec.name, template_name });
         const page = (try self.readPage(a, title, 10, 4096)) orelse return null;
+        if (try registeredBannerOwner(a, page.source, target, self.namespace_catalog, self.registry)) |declared| {
+            const name_title = try std.fmt.allocPrint(a, "{s}:lang:{s}", .{ spec.name, declared.code });
+            if (try self.readPage(a, name_title, 10, 4096)) |name| {
+                if (try registeredBannerName(a, name.source, target, declared, self.namespace_catalog, self.registry)) return declared;
+            }
+        }
+        const owner = (try self.resolve(target)) orelse return null;
         if (!try categoryTocBannerSource(a, page.source, target, owner, self.namespace_catalog)) return null;
         return owner;
     }
