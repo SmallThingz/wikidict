@@ -38,7 +38,8 @@ class AttemptIndexTests(unittest.TestCase):
             log = b''.join(b'BUILD_PHASE ' + json.dumps({**phase, **event}).encode() + b'\n'
                           for event in [dict(event='start'), dict(event='end', seconds=2.5, status='success')])
             stdout = record(run / 'tests.stdout', log)
-            stderr = record(run / 'tests.stderr', b'')
+            diagnostics = b'build diagnostic\n' * 32768
+            stderr = record(run / 'tests.stderr', diagnostics)
 
             def freeze(extra=(), watchdog_code=0):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
@@ -78,6 +79,13 @@ class AttemptIndexTests(unittest.TestCase):
                 self.assertIn(message, refused.stderr)
                 self.assertEqual((index.read_bytes(), index.stat().st_ino), before)
             freeze()
+            for changed in (diagnostics[:-1], diagnostics[:-1] + b'!'):
+                (run / 'tests.stderr').write_bytes(changed)
+                refused = subprocess.run(command, cwd=workspace, capture_output=True)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn(b'tests.stderr', refused.stderr)
+                self.assertEqual((index.read_bytes(), index.stat().st_ino), before)
+            (run / 'tests.stderr').write_bytes(diagnostics)
             (root / 'command.json').write_bytes(b'changed authority')
             refused = subprocess.run(command, cwd=workspace, capture_output=True)
             self.assertNotEqual(refused.returncode, 0)

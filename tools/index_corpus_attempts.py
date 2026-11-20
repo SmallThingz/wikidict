@@ -106,7 +106,15 @@ def guardian_whole(path, closure, result):
     if len(dates) != 1:
         raise ValueError(f'Ambiguous input date: {path}')
     output = Path(option('--output')) / edition / dates.pop()
-    checked(result['stderr'])
+    # Diagnostics can span an entire edition. Verify the stream without
+    # retaining it alongside the parsed source and tool records.
+    stderr = result['stderr']
+    with Path(stderr['path']).open('rb') as stream:
+        if os.fstat(stream.fileno()).st_size != stderr['bytes']:
+            raise ValueError(stderr['path'])
+        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if digest != stderr['sha256'] or os.fstat(stream.fileno()).st_size != stderr['bytes']:
+            raise ValueError(stderr['path'])
     return {**closure, 'whole_edition_selected': True, 'page_limit': None,
             'presentation_audit_limit': None, 'edition_output': str(output),
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
