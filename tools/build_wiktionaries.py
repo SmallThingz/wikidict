@@ -15,6 +15,7 @@ import concurrent.futures
 from collections import defaultdict, deque
 from contextlib import contextmanager, ExitStack
 import fcntl
+from functools import lru_cache
 import gzip
 import hashlib
 import inspect
@@ -2702,10 +2703,14 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
         timing_boundary('borrow_binding_seconds')
         if borrower is not None:
             owned=tuple(Path(path).resolve() for path in (destination,*owned_roots) if path is not None)
+            # Both callers resolve the live path first. Only cache the lexical
+            # relationship between those canonical names and the fixed roots.
+            owned_ancestors = {node for root in owned for node in (root, *root.parents)}
+            @lru_cache(maxsize=256)
+            def inside_owned(directory):
+                return any(root == directory or root in directory.parents for root in owned)
             def overlaps_owned(path):
-                # Both callers have just required this exact path to resolve to
-                # itself. Binding and dispatch retain their fresh route guards.
-                return any(path==root or path in root.parents or root in path.parents for root in owned)
+                return path in owned_ancestors or inside_owned(path.parent)
             bound_figures={}
             capture_bindings=0;reused_capture_bindings=0
             for name,source in (snapshots or {}).items():
