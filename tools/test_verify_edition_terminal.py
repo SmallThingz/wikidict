@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible, visible_body_witness
+from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, reveal_witness, source_witness_visible, visible_body_witness
 from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty
 
 
@@ -292,6 +292,39 @@ class EditionTerminalTests(unittest.TestCase):
                 copy_publication(source, work / 'entry-review')
             copy_publication(source, work / 'empty-review', expected_status='empty')
             self.assertEqual((work / 'empty-review/languages.tsv').read_bytes(), catalog)
+
+    def test_long_entries_reach_the_last_page_and_a_middle_page_past_64(self):
+        class Pages:
+            width = 45
+            position = 0
+
+            def text(self):
+                return str(self.position)
+
+            def entry_focused(self):
+                return True
+
+            def action(self, key, predicate, _label):
+                self.position = {b'\x1b[F': 95, b'\x1b[H': 0}[key]
+                assert predicate()
+
+            def send(self, key):
+                assert key == b'\x1b[6~'
+                self.position = min(95, self.position + 1)
+                return self.position
+
+            def wait(self, predicate, _label, *, after):
+                assert self.position == after and predicate()
+
+        pages = Pages()
+        with patch('verify_edition_terminal.reading_body', return_value='text'), \
+             patch('verify_edition_terminal.source_witness_visible', side_effect=lambda r, w, h: r.text() == w):
+            for wanted in ('95', '74'):
+                pages.position = 0
+                reveal_witness(pages, wanted, 'title')
+                self.assertEqual(wanted, pages.text())
+            with self.assertRaisesRegex(CheckFailure, 'Source witness missing'):
+                reveal_witness(pages, 'absent', 'title')
 
     def test_body_witness_excludes_match_sidebar_and_reading_title(self):
         lines = [''] * 11

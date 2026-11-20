@@ -320,9 +320,15 @@ def reveal_witness(reader, wanted, heading):
     if '[+]' in body or '[+ notes]' in body:
         frame = reader.send('d')
         reader.wait(reader.entry_focused, 'expanded entry details', after=frame)
-    for _ in range(64):
-        if source_witness_visible(reader, wanted, heading):
-            return
+    if source_witness_visible(reader, wanted, heading):
+        return
+    # Translations often follow large inflection tables. Try the final viewport
+    # first, then page through the complete entry within the Reader's deadline.
+    reader.action(b'\x1b[F', reader.entry_focused, 'End opens the final entry viewport')
+    if source_witness_visible(reader, wanted, heading):
+        return
+    reader.action(b'\x1b[H', reader.entry_focused, 'Home begins the full entry scan')
+    while not source_witness_visible(reader, wanted, heading):
         previous = reader.text()
         frame = reader.send(b'\x1b[6~')
         reader.wait(reader.entry_focused, 'paged through entry', after=frame)
