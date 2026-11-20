@@ -40,6 +40,7 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
@@ -70,7 +71,7 @@ class NativeContainerHeightDeviceTest {
     }
 
     @Composable private fun Scene(blocks: List<Block>, actions: MutableList<EntryLink>,
-        publish: (NativeFloatContextGeometry?) -> Unit) {
+        availableWidth: Int = 220, publish: (NativeFloatContextGeometry?) -> Unit) {
         val parent = remember { NativeLayoutInput(Unit) }
         val input = remember { NativeContextMeasureInput(invalidateParent = parent::invalidate) }
         val density = LocalDensity.current
@@ -84,13 +85,117 @@ class NativeContainerHeightDeviceTest {
                     fixedHeightReachable = true)
             }
         }) { children, constraints ->
-            val childConstraints = Constraints(maxWidth = 220, maxHeight = 320)
+            val childConstraints = Constraints(maxWidth = availableWidth, maxHeight = 320)
             val request = input.request(constraints, childConstraints, environment,
                 NativeFlowParentPolicy(preparation, true, null, 0f), emptyList())
             val child = children.single().measure(childConstraints)
             publish(input.ready(request))
             layout(constraints.constrainWidth(288), constraints.constrainHeight(240)) { child.place(48, 64) }
         }
+    }
+
+    @Test fun flexColumnKeepsItsEmptyBorderAndOriginalActionsAcrossWidthAndDirection() {
+        val first = Span("link", "alpha", "A", targetFragment = "kept", bold = true)
+        val french = Span("link", "beta", "B", language = "fr", italic = true)
+        val plain = Span("text", " plain", language = "fr", italic = true)
+        val tail = Span("link", "tail", "Tail")
+        fun paragraph(vararg spans: Span) = Block("paragraph", 0, spans.toList())
+        val border = ContainerBorder.Edges(ContainerBorderEdge.None,
+            ContainerBorderEdge.Solid(px(2f), ContainerColor.Rgb("#9e9e9e")),
+            ContainerBorderEdge.None, ContainerBorderEdge.None)
+        val items = listOf(
+            box(listOf(paragraph(first)), ContainerStyle()),
+            box(emptyList(), ContainerStyle(height = px(20f), border = border)),
+            box(listOf(paragraph(french, plain)), ContainerStyle(ownerFontScale = 1.25f)),
+            box(listOf(paragraph(tail)), ContainerStyle()))
+        val em = StyleLength(StyleLengthUnit.Em, .5f)
+        val owner = ContainerStyle(width = ContainerWidth.FitContent,
+            padding = StyleEdges(em, em, em, em),
+            marginValues = ContainerMargins(ContainerMargin.Auto, ContainerMargin.Auto,
+                ContainerMargin.Auto, ContainerMargin.Auto), layout = ContainerLayout.FlexColumn)
+        data class Viewport(val width: Int, val alignment: ContainerAlignItems, val direction: LayoutDirection)
+        val wide = Viewport(220, ContainerAlignItems.Center, LayoutDirection.Ltr)
+        val narrow = wide.copy(width = 88)
+        val start = wide.copy(alignment = ContainerAlignItems.Start)
+        val rtl = start.copy(direction = LayoutDirection.Rtl)
+        val state = mutableStateOf(wide)
+        val actions = mutableListOf<EntryLink>()
+        var geometry: NativeFloatContextGeometry? = null
+        var ownerIds: List<Int>? = null
+        var actionRanges: List<Triple<Int, Int, Int>>? = null
+        var wideThirdHeight = 0f
+        val expectedText = "alpha\nbeta plain\ntail"
+        val expectedActions = listOf(EntryLink("A", "kept"), EntryLink("B"), EntryLink("Tail"))
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent { Theme {
+                val viewport = state.value
+                CompositionLocalProvider(LocalLayoutDirection provides viewport.direction) {
+                    Scene(listOf(box(items, owner.copy(alignItems = viewport.alignment))), actions,
+                        availableWidth = viewport.width) { geometry = it }
+                }
+            } } }
+            for ((index, viewport) in listOf(wide, narrow, start, rtl, wide).withIndex()) {
+                compose.runOnIdle { state.value = viewport }
+                compose.waitForIdle()
+                val current = checkNotNull(geometry)
+                val owners = current.ordinaryBounds.entries.sortedBy { it.value.top }
+                assertEquals(5, owners.size)
+                val outer = owners.first().value
+                val boxes = owners.drop(1).map { it.value }
+                val connector = boxes[1]
+                val image = retain("native-flex-column-$index.png",
+                    "width=${viewport.width}; direction=${viewport.direction}; boxes=$boxes; nodes=${current.nodes}")
+                val ids = owners.map { it.key }
+                if (ownerIds == null) ownerIds = ids else assertEquals(ownerIds, ids)
+                assertEquals(expectedText, current.text.toString())
+                assertEquals(listOf("alpha", "beta", "tail"), current.nodes.map { it.label?.toString() })
+                val ranges = current.nodes.map { node ->
+                    assertEquals(node.label?.toString(), expectedText.substring(node.start, node.end))
+                    Triple(node.id, node.start, node.end)
+                }
+                if (actionRanges == null) actionRanges = ranges else assertEquals(actionRanges, ranges)
+                assertEquals(2f, connector.width(), .01f)
+                assertEquals(20f, connector.height(), .01f)
+                boxes.zipWithNext().forEach { (before, after) -> assertEquals(before.bottom, after.top, .01f) }
+                assertEquals(outer.centerX(), viewport.width / 2f, .51f)
+                assertEquals(when (viewport.alignment) {
+                    ContainerAlignItems.Center -> outer.centerX()
+                    else -> if (viewport.direction == LayoutDirection.Rtl) outer.right - 11f else outer.left + 11f
+                }, connector.centerX(), .51f)
+                if (index == 0) wideThirdHeight = boxes[2].height()
+                if (viewport == narrow) assertTrue(boxes[2].height() > wideThirdHeight)
+                val x = (48 + connector.centerX()).toInt()
+                val y = (64 + connector.centerY()).toInt()
+                val pixel = image.toPixelMap()[x, y]
+                assertEquals(Color(0xff9e9e9e).red, pixel.red, .08f)
+                assertEquals(pixel.red, pixel.green, .02f)
+                assertEquals(pixel.red, pixel.blue, .02f)
+                if (index == 1) {
+                    val view = views().single()
+                    compose.runOnIdle {
+                        current.nodes.forEach { node ->
+                            val label = checkNotNull(node.label).toString()
+                            val info = checkNotNull(view.accessibilityNodeProvider
+                                .findAccessibilityNodeInfosByText(label, View.NO_ID)).single()
+                            assertTrue(info.isVisibleToUser)
+                            val bounds = Rect().also(info::getBoundsInParent)
+                            assertTrue(bounds.width() > 0 && bounds.height() > 0)
+                        }
+                    }
+                    val surface = compose.onNodeWithTag("height-root")
+                    surface.performTouchInput { click(Offset(x.toFloat(), y.toFloat())) }
+                    compose.waitForIdle()
+                    assertTrue(actions.isEmpty())
+                    current.nodes.forEach { node ->
+                        val area = node.bounds.first()
+                        surface.performTouchInput { click(Offset(48 + area.centerX(), 64 + area.centerY())) }
+                        compose.waitForIdle()
+                    }
+                    assertEquals(expectedActions, actions)
+                }
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+        compose.waitForIdle()
     }
 
     private fun views(): List<NativeFloatTextView> {
