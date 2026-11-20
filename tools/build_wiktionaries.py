@@ -4089,12 +4089,111 @@ def validate_composite_source_inventory(plan, base, selected, auth_payload):
             raise ValueError('Composite source payload changed during authorization')
 
 
-def initial_sealed_direct_writer(row, native_roles):
+def initial_sealed_matched_triple(row, native_roles, recipe, closed, source, compiled, *, target):
+    """Authenticate the one normal Writer/CLI/Verify install family as a unit."""
+    roles = {'writer': ('prepare-captured-writer', 'dict-blob-build', 'tools/blob_build.zig'),
+             'cli': ('cli', 'wikidict', 'src/frontend/main.zig'),
+             'verify': ('prepare-blob-verify', 'dict-blob-verify', 'tools/blob_verify.zig')}
+    selected = [key for key, (step, name, _) in roles.items()
+                if step == target and Path(row['artifact']['path']).name == name]
+    if len(selected) != 1 or selected[0] not in ('writer', 'verify'):
+        raise ValueError('Matched triple requested an unrelated sealed role')
+    join_ref = source['matched_role_source_join']
+    if (recipe.get('role_source_join') != join_ref or closed.get('role_source_join') != join_ref
+            or recipe.get('source_manifest') != row['compiled_source_authority']
+            or closed.get('source_manifest') != row['compiled_source_authority']
+            or closed.get('source_projection') != recipe.get('canonical_projection')
+            or closed.get('source_qualification') != recipe.get('source_qualification')
+            or any(closed.get(key) is not True for key in
+                   ('normal_roles_emission_passed', 'writer_emission_passed', 'normal_writer_build_completed'))
+            or closed.get('errors') != []):
+        raise ValueError('Matched triple source or successful emission authority differs')
+    join = prepared_metadata(join_ref)
+    references = [join_ref, recipe['canonical_projection'], recipe['source_qualification']]
+    for reference in references[1:]: prepared_metadata(reference)
+    if (join.get('source_manifest') != row['compiled_source_authority']
+            or join.get('same_graph_roles') is not True or join.get('wire_source_equal') is not True
+            or join.get('new_roles_required') != ['writer', 'cli', 'verify']
+            or join.get('artifacts_emitted') is not False
+            or join.get('role_roots') != {key:value[2] for key,value in roles.items()}
+            or set(join.get('role_members', {})) != set(roles)):
+        raise ValueError('Matched triple reached-source membership differs')
+    for key, members in join['role_members'].items():
+        if (not isinstance(members, dict) or roles[key][2] not in members
+                or any(compiled.get(name) != descriptor for name,descriptor in members.items())):
+            raise ValueError('Matched triple role does not reach its declared production source')
+    # Retained role policies also bind interface-only leaves. Their bytes are
+    # checked against the emitted graph without claiming unused imports.
+    interface = source.get('interface_only_sources', {})
+    if (roles[selected[0]][2] not in row['source_paths']
+            or not set(row['source_paths']) <= set(compiled) | set(interface)):
+        raise ValueError('Sealed role source or interface authority differs')
+    if interface:
+        prior_ref = source.get('interface_only_role_binding')
+        if not isinstance(prior_ref, dict):
+            raise ValueError('Matched triple interface lacks original role authority')
+        prior_roles = prepared_metadata(prior_ref)
+        prior = prior_roles[roles[selected[0]][1]]
+        prior_source_ref = prior['source']
+        prior_source = prepared_metadata(prior_source_ref)
+        prior_files = prior_source.get('files', prior_source)
+        if (prior.get('previous_role_binding') != row.get('previous_role_binding')
+                or prior['source_paths'] != row['source_paths']
+                or not set(interface) <= set(RETAINED_NATIVE_ABI_PATHS)):
+            raise ValueError('Matched triple interface changed original role policy')
+        for name, descriptor in interface.items():
+            if (name in compiled or name not in prior_files
+                    or any(descriptor.get(key) != prior_files[name].get(key)
+                           for key in ('bytes', 'sha256'))
+                    or descriptor.get('mode') != prior_source.get('modes', {}).get(name, prior_files[name].get('mode', 0o644))
+                    or native_roles.bind_input(Path(descriptor['path'])) != descriptor):
+                raise ValueError('Matched triple interface payload differs from original authority')
+            references.append(descriptor)
+        references.extend((prior_ref, prior_source_ref))
+    wire = join.get('wire_members', {})
+    reached = join.get('wire_reached_roles', {})
+    required_wire = ('src/encoder/presentation_types.zig', 'src/encoder/presentation_codec.zig')
+    if not set(required_wire) <= set(wire) or set(wire) != set(reached):
+        raise ValueError('Matched triple has incomplete wire authority')
+    for name, descriptor in wire.items():
+        actual_roles = [key for key in roles if name in join['role_members'][key]]
+        if (compiled.get(name) != descriptor or reached[name] != actual_roles
+                or (name in required_wire and set(actual_roles) != set(roles))):
+            raise ValueError('Matched triple wire differs across reached roles')
+    argv = recipe['argv']
+    if (argv[:5] != [row['dependencies']['zig']['path'], 'build',
+                    'prepare-captured-writer', 'cli', 'prepare-blob-verify']
+            or [value for value in argv if value.startswith('-j')] != ['-j1']
+            or argv.count('--prefix') != 1 or argv.index('--prefix') + 1 >= len(argv)):
+        raise ValueError('Matched triple command has another target graph')
+    prefix = Path(argv[argv.index('--prefix') + 1])
+    artifacts = closed.get('installed_artifacts', {})
+    expected = recipe.get('expected_install', {})
+    if set(artifacts) != set(roles) or set(expected) != set(roles):
+        raise ValueError('Matched triple lacks all three installed artifacts')
+    for key, (_, name, _) in roles.items():
+        descriptor = artifacts[key]
+        path = prefix / 'bin' / name
+        if (not isinstance(descriptor, dict) or set(descriptor) != {'path','bytes','sha256'}
+                or descriptor['path'] != str(path) or expected[key] != str(path)):
+            raise ValueError('Matched triple installed artifact location differs')
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555
+                or info.st_nlink != 1 or native_roles.bind_input(path) != dict(descriptor, mode=0o555)):
+            raise ValueError('Matched triple installed artifact custody differs')
+        references.append(descriptor)
+    if row['artifact'] != dict(artifacts[selected[0]], mode=0o555):
+        raise ValueError('Sealed role is not the selected actual triple artifact')
+    return references
+
+
+def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-writer'):
     """Join one direct normal Writer install to its original guardian receipts."""
     keys = ('compilation_recipe', 'actual_emission_result', 'qualification_closure',
             'source', 'compiled_source_authority')
     references = [row[key] for key in keys]
     recipe, emitted, closed, source, compiled = [prepared_metadata(ref) for ref in references]
+    matched_triple = 'matched_role_source_join' in source
     if (source.get('actual_normal_command') != row['compilation_recipe']
             or source.get('actual_result') != row['actual_emission_result']
             or source.get('actual_closure') != row['qualification_closure']
@@ -4121,8 +4220,30 @@ def initial_sealed_direct_writer(row, native_roles):
         raise ValueError('Direct Writer receipts have different execution origins')
     start, owner, watchdog = [prepared_metadata(closed[key]) for key in ('start', 'owner_result', 'watchdog')]
     references.extend(closed[key] for key in ('start', 'owner_result', 'watchdog'))
+    resolved_refs = start.get('source_refs')
+    if matched_triple:
+        config_ref = closed.get('owner_config')
+        if not isinstance(config_ref, dict):
+            raise ValueError('Matched triple lacks its normal owner configuration')
+        config = prepared_metadata(config_ref); references.append(config_ref)
+        resolved_refs = recipe.get('source_refs')
+        if (config.get('input_ref') != row['compilation_recipe']
+                or config.get('source_refs_ref') != row['compilation_recipe']
+                or start.get('source_refs_ref') != row['compilation_recipe']
+                or not isinstance(resolved_refs, list) or len(resolved_refs) < 2
+                or config.get('source_refs') != resolved_refs[:2]
+                or start.get('source_refs') != resolved_refs[:2]
+                or not isinstance(config.get('required_owner'), dict)
+                or config['required_owner'] != recipe.get('required_owner', config['required_owner'])
+                or closed.get('selected_owner') != config['required_owner']):
+            raise ValueError('Matched triple compact source authority differs')
+        encoded_refs = json.dumps(resolved_refs, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('utf-8')
+        summary = dict(source_ref_count=len(resolved_refs), source_refs_sha256=hashlib.sha256(encoded_refs).hexdigest())
+        if any(start.get(key) != value or closed.get(key) != value for key,value in summary.items()):
+            raise ValueError('Matched triple source count or digest differs')
+        references.append(config['required_owner'])
     if (start.get('input_authority') != row['compilation_recipe']
-            or start.get('source_refs') != recipe.get('source_refs')
+            or resolved_refs != recipe.get('source_refs')
             or owner.get('source_after') is not True
             or type(owner.get('returncode')) is not int or owner['returncode'] != 0
             or watchdog.get('child_exit_status') != 0
@@ -4158,7 +4279,9 @@ def initial_sealed_direct_writer(row, native_roles):
            or identity not in identities for identity in process_identities):
         raise ValueError('Direct Writer process closure does not cover its actual owner and children')
     argv = recipe['argv']
-    if argv[:3] != [row['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']:
+    if matched_triple:
+        references.extend(initial_sealed_matched_triple(row, native_roles, recipe, closed, source, compiled, target=target))
+    elif target != 'prepare-captured-writer' or argv[:3] != [row['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']:
         raise ValueError('Direct sealed successor requires one Writer target')
     cwd = Path(recipe['cwd'])
     if not cwd.is_absolute() or '..' in cwd.parts:
@@ -4170,7 +4293,7 @@ def initial_sealed_direct_writer(row, native_roles):
         raise ValueError('Unsafe direct Writer cache')
     required = {'-Doptimize=safe', '-Dtarget=x86_64-native', '-Dcpu=baseline',
                 '-Dcaptured-source-fingerprint=' + row['producer_source']}
-    seen = set(); prefix = None; index = 3
+    seen = set(); prefix = None; index = 5 if matched_triple else 3
     while index < len(argv):
         value = argv[index]
         if value in ('--summary', '--search-prefix', '--cache-dir', '--global-cache-dir', '--prefix'):
@@ -4191,16 +4314,21 @@ def initial_sealed_direct_writer(row, native_roles):
     if not required | {'--prefix', '--summary'} <= seen:
         raise ValueError('Direct Writer required options differ')
     artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
-    if closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build'):
+    if not matched_triple and (closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build')):
         raise ValueError('Direct Writer installed artifact differs')
-    declared = {item['path']: item for item in start['source_refs']}
-    if len(declared) != len(start['source_refs']):
+    declared = {item['path']: item for item in resolved_refs}
+    if len(declared) != len(resolved_refs):
         raise ValueError('Duplicate direct Writer source authority')
     manifest_ref = row['compiled_source_authority']
     if declared.get(manifest_ref['path']) != manifest_ref:
         raise ValueError('Direct Writer did not guard its source manifest')
-    if 'tools/blob_build.zig' not in compiled or 'tools/blob_build.zig' not in row['source_paths']:
-        raise ValueError('Direct Writer source does not contain its production entry point')
+    entry_point = 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
+    if entry_point not in compiled or entry_point not in row['source_paths']:
+        raise ValueError('Direct role source does not contain its production entry point')
+    resolved_files = source.get('resolved_compiled_source_files', compiled)
+    if (set(resolved_files) != set(compiled)
+            or (resolved_files != compiled and source.get('compiled_aliases_documentary_only') is not True)):
+        raise ValueError('Direct target resolved source membership differs')
     for name, descriptor in compiled.items():
         relative = Path(name)
         guarded = declared.get(descriptor.get('path'))
@@ -4220,12 +4348,16 @@ def initial_sealed_direct_writer(row, native_roles):
             same_source = (cwd / relative).resolve(strict=True) == Path(descriptor['path']).resolve(strict=True)
         except OSError as error:
             raise ValueError('Direct Writer source view is unavailable') from error
-        if not same_source or native_roles.bind_input(Path(descriptor['path'])) != descriptor:
-            raise ValueError('Direct Writer command source view differs from its guarded manifest')
+        resolved = resolved_files[name]
+        if (not isinstance(resolved, dict) or set(resolved) != set(descriptor)
+                or any(resolved[key] != descriptor[key] for key in ('bytes', 'sha256', 'mode'))
+                or Path(resolved['path']) != Path(descriptor['path']).resolve(strict=True)
+                or not same_source or native_roles.bind_input(Path(resolved['path'])) != resolved):
+            raise ValueError('Direct target command source view differs from its guarded regular payload')
     interface = source.get('interface_only_sources', {})
     if (set(interface) & set(compiled)
             or source.get('interface_only_not_claimed_as_compiler_reads') is not True
-            or source.get('files') != dict(compiled, **interface)
+            or source.get('files') != dict(resolved_files, **interface)
             or not set(row['source_paths']) <= set(source['files'])):
         raise ValueError('Direct Writer source/interface membership differs')
     references.extend(emitted[key] for key in ('stdout', 'stderr'))
@@ -4244,9 +4376,10 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
     recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
     if 'argv' in recipe and 'actual_normal_command' in source:
-        if target != 'prepare-captured-writer' or full_graph:
-            raise ValueError('Direct guardian successor is restricted to the Writer target')
-        return initial_sealed_direct_writer(row, native_roles)
+        allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if 'matched_role_source_join' in source else ('prepare-captured-writer',)
+        if target not in allowed_targets or full_graph:
+            raise ValueError('Direct guardian successor has an unrelated target')
+        return initial_sealed_direct_writer(row, native_roles, target=target)
     retained_compilation_source(row, native_roles)
     guard_reference = recipe.get('source_guard_manifest', row['source'])
     composite = 'source_guard_manifest' in recipe
@@ -4461,8 +4594,9 @@ def initial_sealed_blob_successor(original, native_roles):
         writer_only = (name == 'dict-blob-build' and (
             (len(commands) == 1 and 'prepare-captured-writer' in commands[0].get('argv', []))
             or recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']))
-        verify_only = (name == 'dict-blob-verify' and len(commands) == 1
-                       and 'prepare-blob-verify' in commands[0].get('argv', []))
+        verify_only = (name == 'dict-blob-verify' and (
+            (len(commands) == 1 and 'prepare-blob-verify' in commands[0].get('argv', []))
+            or recipe.get('argv', [])[2:5] == ['prepare-captured-writer', 'cli', 'prepare-blob-verify']))
         target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-tools'
         _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only))
         references.extend([after['previous_role_binding'],*target_references])
@@ -4804,6 +4938,14 @@ def initial_page_language_providers(plan, expected, build_identity, snapshots, p
     return result
 
 
+def initial_external_writer_language(hashes, providers):
+    """True only for a selected Writer capture and three sealed absent Providers."""
+    if 'page-language' not in (hashes or {}):
+        return False
+    return all(name in providers and providers[name] is None for name in
+               ('page-language.json', 'page-language.raw.json', 'page-language.html'))
+
+
 def initial_sealed_worker_hashes(hashes, providers):
     """Keep sealed worker Providers distinct from the selected Writer Book."""
     result = dict(hashes or {})
@@ -4812,6 +4954,8 @@ def initial_sealed_worker_hashes(hashes, providers):
         result.pop('figure-page-observations', None)
     elif 'figure-page-observations' in result:
         result['figure-page-observations'] = sealed_book[1]
+    if initial_external_writer_language(result, providers):
+        result.pop('page-language')
     return result
 
 
@@ -4853,6 +4997,59 @@ def initial_sealed_writer_book(expected, build_identity, snapshots, providers, n
         raise ValueError('Initial Writer Book namespace or site authority differs')
     native_roles.require_unchanged()
     return initial_sealed_worker_hashes(hashes, providers)
+
+
+def initial_sealed_writer_inputs(expected, build_identity, snapshots, providers, native_roles):
+    """Authenticate explicit Writer-only inputs without rewriting a sealed worker."""
+    hashes = initial_sealed_writer_book(expected, build_identity, snapshots, providers, native_roles)
+    selected = build_identity.get('auxiliary_snapshot_sha256', {}).get('page-language')
+    if selected is None:
+        return hashes
+    sealed = providers.get('page-language.json')
+    if sealed is not None and sealed[1] == selected:
+        return hashes  # Existing closed preparation/companion checks still apply.
+    if not initial_external_writer_language(build_identity.get('auxiliary_snapshot_sha256'), providers):
+        raise ValueError('External Writer language snapshot cannot replace sealed language Providers')
+    path = Path((snapshots or {}).get('page-language', ''))
+    if not path.is_absolute():
+        raise ValueError('External Writer language snapshot is not explicitly selected')
+    capture = validated_auxiliary_capture('page-language', path, expected['edition'], expected['date'])
+    if capture is None:
+        raise ValueError('External Writer language snapshot lacks validated capture authority')
+    manifest, inventory = capture
+    manifest_name = auxiliary_manifest_filename('page-language', path)
+    if manifest_name not in inventory:
+        raise ValueError('External Writer language snapshot lacks its capture manifest')
+    manifests, artifacts = _project_auxiliary_capture_identities({'page-language': (manifest, inventory, manifest_name)})
+    for identity in (expected, build_identity):
+        if (manifest['output_sha256'] != identity.get('auxiliary_snapshot_sha256', {}).get('page-language')
+                or manifest['namespace_registry_sha256'] != identity.get('auxiliary_snapshot_sha256', {}).get('namespace-registry')
+                or identity.get('auxiliary_capture_sha256', {}).get('page-language') != manifests['page-language']
+                or identity.get('auxiliary_capture_artifact_sha256', {}).get('page-language') != artifacts['page-language']):
+            raise ValueError('External Writer language capture identity differs')
+    for filename, digest in inventory.items():
+        relative = Path(filename)
+        if relative.is_absolute() or any(part in ('.', '..') for part in relative.parts):
+            raise ValueError('External Writer language capture escapes its package')
+        if native_roles.bind_input(path.parent / relative)['sha256'] != digest:
+            raise ValueError('External Writer language capture bytes changed')
+    if native_roles.bind_input(path)['sha256'] != selected:
+        raise ValueError('External Writer language snapshot differs')
+    native_roles.require_unchanged()
+    hashes.pop('page-language', None)
+    return hashes
+
+
+def initial_sealed_writer_snapshot_args(initial_reference, closed_whole, snapshots, providers=None):
+    """Keep the established Book route; external language requires sealed absence."""
+    result = []
+    if (closed_whole is not None or
+            (initial_reference is not None and 'figure-page-observations' in (snapshots or {}))):
+        result += ['--figure-page-observations-snapshot', str(snapshots['figure-page-observations'])]
+    if (initial_reference is not None and
+            initial_external_writer_language(snapshots, providers or {})):
+        result += ['--page-language-snapshot', str(snapshots['page-language'])]
+    return result
 
 
 def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity, dump, reference, native_roles, auxiliary_snapshots=None):
@@ -4923,7 +5120,7 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
             raise ValueError('Initial sealed native graph differs from selected role')
         observation_graph[field] = str(path)
     providers = seal['identity']['providers']
-    worker_hashes = initial_sealed_writer_book(expected, build_identity, auxiliary_snapshots, providers, native_roles)
+    worker_hashes = initial_sealed_writer_inputs(expected, build_identity, auxiliary_snapshots, providers, native_roles)
     snapshots = {auxiliary_snapshot_filename(name): digest for name, digest in worker_hashes.items()}
     # Historical preparations used either registry role. The authenticated
     # original command, not hash membership, determines which one was named.
@@ -7336,13 +7533,13 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         reviewed_path = nonlexical.materialize(reviewed_nonlexical,dump,index_path,workspace/nonlexical.NAME)
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
+    writer_input_args = []
     if writer_transition is not None or closed_whole is not None:
         roots={Path(auxiliary_snapshots[name]).parent for name in WRITER_FIGURE_ROLES}
         if len(roots)!=1:raise ValueError('Writer Figure observations require one complete pinned root')
-        reviewed_args += ['--figure-input-root',str(roots.pop())]
-    if (closed_whole is not None or
-            (initial_reference is not None and 'figure-page-observations' in (auxiliary_snapshots or {}))):
-        reviewed_args += ['--figure-page-observations-snapshot',str(auxiliary_snapshots['figure-page-observations'])]
+        writer_input_args += ['--figure-input-root',str(roots.pop())]
+    writer_input_args += initial_sealed_writer_snapshot_args(initial_reference, closed_whole, auxiliary_snapshots,
+        retained_roles.closed_native_origin['identity']['providers'] if initial_reference is not None else None)
 
     if tools is None:
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity, **({'figure_inputs':figure_inputs} if figure_inputs is not None else {}), **({'retained_roles':retained_roles} if retained_roles is not None else {}))
@@ -7393,7 +7590,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                    '--limit-pages',str(indexed_pages-first),
                    '--index-byte-offset',str(index['offsets'][first]),
                    '--shard-pages',str(interval),
-                   '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args],
+                   '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args,*writer_input_args],
                   edition,date,'continuous_shard_build',start_page=first,pages=indexed_pages-first)
         check_shard_inputs()
         for start in missing_starts:
@@ -7433,7 +7630,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             native_args=[str(dump),str(shard),
                      '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
                      '--index-byte-offset',str(offset),
-                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args]
+                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args,*writer_input_args]
             evidence_root=workspace.with_name(workspace.name+'.failures')
             try:
                 attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
@@ -7450,14 +7647,14 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
                     # worker fails. Start at the shard lower bound, never ordinal+1.
                     failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
                         evidence_root,edition,date,start,indexed_pages,presentation_audit_pages,
-                        expansion_workers,now_unix,timeout_args,reviewed_args,check_audit_inputs,receipt)
+                        expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],check_audit_inputs,receipt)
                     if continue_failed_shards:
                         # Never extend a failed shard's audit into another shard.
                         # Only this typed, source-bound rejection permits continuation.
                         try:
                             summary=audit_failed_shard(blob_builder,dump,expander,evidence_root,
                                 edition,date,start,indexed_pages,min(presentation_audit_pages,limit),
-                                expansion_workers,now_unix,timeout_args,reviewed_args,
+                                expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],
                                 check_audit_inputs,failure.failure_receipt)
                         except Exception as audit_error:
                             failure.presentation_audit=None
