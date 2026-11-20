@@ -7661,6 +7661,27 @@ class CompleteParentTupleReplayTests(unittest.TestCase):
                     else:
                         path.write_bytes(original)
 
+    def test_missing_complete_stream_role_is_reported_before_its_request_replay(self):
+        open_file = Path.open
+        def open_without_parent_journal(path, *args, **kwargs):
+            if path == self.parent / self.figures.FILE_REQUESTS:
+                self.fail('Read the parent request journal before checking its required files')
+            return open_file(path, *args, **kwargs)
+
+        for role in ('figure-sizing', 'figure-sizing-raw'):
+            with self.subTest(role=role):
+                missing = self.parent / self.figures.ROLES[role]
+                saved = self.fixture.root / missing.name
+                missing.rename(saved)
+                try:
+                    with patch.object(Path, 'open', open_without_parent_journal):
+                        with self.assertRaises(FileNotFoundError) as error:
+                            self.validate()
+                    self.assertEqual(Path(error.exception.filename), missing)
+                    self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+                finally:
+                    saved.rename(missing)
+
     def test_parent_cycles_unsafe_locators_and_unrecognized_authorities_do_not_enter_cache(self):
         path = self.parent/self.figures.FILE_REQUESTS
         original = path.read_bytes()

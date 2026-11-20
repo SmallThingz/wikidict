@@ -1708,6 +1708,11 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                 if (not path.is_absolute() or path.resolve() != path or
                         path.name != helper.MANIFEST or path.is_symlink()):
                     raise ValueError('Unsafe complete Figure cache authority')
+                if authenticated is None and path.parent not in visited and path.parent not in active:
+                    # A completed parent needs all projection roles. Check their
+                    # presence before following its potentially large request journal.
+                    for filename in getattr(helper, 'ROLES', {}).values():
+                        (path.parent / filename).stat()
                 # Complete parents share the same replay readset. Collect each
                 # ancestor once; initial semantic replay still validates every
                 # batch reference before any result enters this local cache.
