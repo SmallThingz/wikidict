@@ -43,7 +43,7 @@ pub const ElementContext = struct {
     // Complete original ancestor tag inventory; null retains uncertainty.
     complete_font_ancestor_tags: ?[]const []const u8 = null,
 };
-pub const TableResolution = struct { float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
+pub const TableResolution = struct { resolved_legacy_border: bool = false, float_viewport: ?types.TableFloatViewport = null, block_viewport: ?*const types.TableBlockViewport = null, style: ?types.TableStyle, scope: Scope, unresolved: bool, margin_basis_unresolved: bool = false, background_specified: bool = false, descendant_style_unresolved: bool = false, width_specified: bool = false, line_height_em: ?f32 = null };
 pub const CellSourceScopeHazards = struct { height: bool = false, font_context: bool = false };
 pub const CellResolution = struct { style: ?types.CellStyle, background: ?[]const u8, background_specified: bool, unresolved: bool, padding_basis_unresolved: bool = false, alignment_specified: bool = false, line_height: ?cell_font_metrics.CellLineHeightSpecified = null, line_height_refused: bool = false };
 const max_css_bytes = 1024 * 1024;
@@ -304,6 +304,20 @@ fn emptyProfile(a: std.mem.Allocator) Profile {
 // This direct inline API has no inherited custom-property or current-color
 // context. Reuse the same background components/cascade as the observed path,
 // retaining unknown variables instead of guessing their environment.
+// A single bare identifier can only name a color or a background keyword.
+// Unsupported compound/function/escaped syntax remains a possible declaration.
+fn invalidInlineTableBackgroundIdentifier(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.Error!bool {
+    const value = trim(raw);
+    if (value.len == 0) return false;
+    for (value) |byte| if (!std.ascii.isAlphabetic(byte)) return false;
+    if (try canonicalColorAlloc(a, value) != null or unrepresentedColorValue(value)) return false;
+    inline for (.{ "repeat", "space", "round", "scroll", "fixed", "local", "left", "center", "right", "top", "bottom", "text", "contain", "cover", "normal",
+        // Deprecated system colors remain valid CSS, with contextual paint.
+        "activeborder", "activecaption", "appworkspace", "background", "buttonhighlight", "buttonshadow", "captiontext", "inactiveborder", "inactivecaption", "inactivecaptiontext", "infobackground", "infotext", "menu", "menutext", "scrollbar", "threeddarkshadow", "threedface", "threedhighlight", "threedlightshadow", "threedshadow", "window", "windowframe", "windowtext" }) |keyword|
+        if (std.ascii.eqlIgnoreCase(value, keyword)) return false;
+    return true;
+}
+
 fn inlineTableNoImageBackground(a: std.mem.Allocator, css: []const u8) std.mem.Allocator.Error!ObservedFigureColor {
     var scratch = std.heap.ArenaAllocator.init(a); defer scratch.deinit();
     const temporary = scratch.allocator();
@@ -313,6 +327,16 @@ fn inlineTableNoImageBackground(a: std.mem.Allocator, css: []const u8) std.mem.A
         error.OutOfMemory => return error.OutOfMemory,
         error.StyleProfileLimit => return .{ .unresolved = true },
     };
+    // Invalid declarations do not enter the cascade or erase an earlier
+    // color. Preserve unsupported valid syntax and every non-background field.
+    var retained: usize = 0;
+    for (declarations.items) |declaration| {
+        if (!declaration.syntax_unknown and std.ascii.eqlIgnoreCase(declaration.name, "background") and
+            try invalidInlineTableBackgroundIdentifier(temporary, declaration.raw)) continue;
+        declarations.items[retained] = declaration;
+        retained += 1;
+    }
+    declarations.items.len = retained;
     var resolved = try observedTableNoImageBackground(temporary, declarations.items, .{ .complete = false }, null, null);
     // No scratch color slice may escape into the caller's published style.
     if (resolved.value) |*paint| {
@@ -325,9 +349,30 @@ pub fn resolveInlineTableAlloc(a: std.mem.Allocator, css: []const u8) !TableReso
     return resolveInlineTableWithCollapseAlloc(a, css, null);
 }
 pub fn resolveInlineTableWithCollapseAlloc(a: std.mem.Allocator, css: []const u8, collapse: ?BorderCollapseState) !TableResolution {
+    return resolveInlineTableWithLegacyBorderAlloc(a, css, collapse, null);
+}
+pub fn resolveInlineTableWithLegacyBorderAlloc(a: std.mem.Allocator, css: []const u8, collapse: ?BorderCollapseState, legacy_border: ?u16) !TableResolution {
+    return resolveInlineTableWithLegacyBorderBasisAlloc(a, css, collapse, legacy_border, null);
+}
+// The basis is the complete native legacy border for this TABLE owner only.
+// Null retains the conservative historical path. This does not authorize a
+// profile-backed, floating, inline, viewport, or rounded TABLE conversion.
+pub fn resolveInlineTableWithLegacyBorderBasisAlloc(a: std.mem.Allocator, css: []const u8, collapse: ?BorderCollapseState, legacy_border: ?u16, legacy_basis: ?types.ResolvedStyleBorderEdges) !TableResolution {
     if (css.len > max_css_bytes) return .{ .style = null, .scope = 0, .unresolved = true, .margin_basis_unresolved = true };
     const profile = emptyProfile(a);
     var winners = try profile.cascade(a, .table, 0, 0, "", .{ .ancestor_classes = "", .own_id = "" }, null, null, css);
+    const use_legacy_basis = legacy_basis != null and (legacy_border orelse 0) > 0 and inlineBorderMissingLine(winners.borders);
+    // A positive legacy border has a separate reader geometry contract. A
+    // partial CSS declaration cannot replace its absent line-style components
+    // with CSS initial none. Preserve that unresolved origin without guessing
+    // its style, width, color, or the cell borders it supplies.
+    if (!use_legacy_basis and (legacy_border orelse 0) > 0 and winners.borders.seen) {
+        for (0..4) |side| {
+            const index = side * 3 + 1;
+            if (winners.borders.atoms[index] == null)
+                winners.borders.atoms[index] = .{ .atom = .unknown, .priority = .{} };
+        }
+    }
     computedTableCollapse(&winners, collapse);
     const background = try inlineTableNoImageBackground(a, css);
     if (winners.slots[@intFromEnum(Property.background)]) |*winner| {
@@ -346,12 +391,24 @@ pub fn resolveInlineTableWithCollapseAlloc(a: std.mem.Allocator, css: []const u8
         unresolved = unresolved or value == .unsupported;
     }
     projectTableBox(&style, winners);
+    if (use_legacy_basis) {
+        // This source-only component is confined to ordinary direct TABLEs.
+        // Other geometry and any reset/unknown authority retain refusal.
+        const ordinary = (style.display == null or style.display == .table) and style.float_side == null and
+            winners.value(.corner_radii) == null and winners.value(.layout_reset) == null and winners.value(.other) == null;
+        const border = if (ordinary) inlineBorderWithLegacyBasis(winners.borders, legacy_basis.?)
+            else InlineLegacyBorderResolution{ .unresolved = true };
+        style.border = border.value;
+        unresolved = unresolved or border.unresolved;
+    }
     inline for (.{ Property.background, .border, .width, .min_width, .padding, .clear, .box_sizing, .collapse, .display, .vertical_align, .line_height, .list_style }) |property| if (winners.value(property)) |value| {
-        unresolved = unresolved or value == .unsupported;
+        if (property != .border or !use_legacy_basis) unresolved = unresolved or value == .unsupported;
     };
     const corner_conflict = projectTableCorners(&style, winners);
     const flow_conflict = tableFlowFloatConflict(&style);
-    return .{ .style = if (types.validUnboundTableStyle(style)) style else null, .scope = 0, .unresolved = unresolved or flow_conflict or corner_conflict, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
+    const valid_style = types.validUnboundTableStyle(style);
+    const final_unresolved = unresolved or flow_conflict or corner_conflict or (use_legacy_basis and !valid_style);
+    return .{ .resolved_legacy_border = use_legacy_basis and !final_unresolved, .style = if (valid_style) style else null, .scope = 0, .unresolved = final_unresolved, .margin_basis_unresolved = winners.font_basis_unresolved, .width_specified = winners.value(.width) != null or unresolvedTableWidthBox(winners), .line_height_em = selectedLineHeight(winners) };
 }
 fn addCellWidthHint(winners: *Winners, raw: ?[]const u8) void {
     const value = raw orelse return;
@@ -400,16 +457,22 @@ pub fn resolveInlineCellWithVerticalHintAlloc(a: std.mem.Allocator, legacy_align
     return resolveInlineCellWithLegacyHintsAlloc(a, legacy_align, legacy_vertical_align, null, css);
 }
 pub fn resolveInlineCellWithLegacyHintsAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, legacy_vertical_align: ?[]const u8, legacy_width: ?[]const u8, css: []const u8) !CellResolution {
+    return resolveInlineCellWithLegacyBorderBasisAlloc(a, legacy_align, legacy_vertical_align, legacy_width, css, null);
+}
+// Only the owning Compiler's selected ordinary TABLE scope supplies a CELL
+// basis. It belongs to this cell (including its paint owner), never its TABLE.
+pub fn resolveInlineCellWithLegacyBorderBasisAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, legacy_vertical_align: ?[]const u8, legacy_width: ?[]const u8, css: []const u8, legacy_basis: ?types.ResolvedStyleBorderEdges) !CellResolution {
     const profile = emptyProfile(a);
     const alignment = try profile.resolveAlignment(a, "", "", "", legacy_align, css);
     if (css.len > max_css_bytes) return .{ .style = null, .background = null, .background_specified = false, .unresolved = true, .alignment_specified = alignment.specified };
-    // This path historically owns alignment only, not table/cell paint. Select
-    // the new minimum and its reset/box dependencies without projecting paint.
+    // Null-basis callers retain the historical alignment/width-only path.
+    // In the selected scope, collect border components in this same pass.
     var winners: Winners = .{};
     addCellVerticalHint(&winners, legacy_vertical_align);
     addCellWidthHint(&winners, legacy_width);
     var pos: usize = 0;
     var order: u32 = 0;
+    var border_context_unknown = false;
     while (try nextDeclarationAlloc(a, css, &pos)) |raw| {
         defer a.free(raw);
         order += 1;
@@ -417,7 +480,8 @@ pub fn resolveInlineCellWithLegacyHintsAlloc(a: std.mem.Allocator, legacy_align:
         const name = trim(raw[0..colon]);
         const property = propertyFor(name) orelse continue;
         const escaped = std.mem.indexOfScalar(u8, name, '\\') != null;
-        if (property != .width and property != .min_width and property != .box_sizing and property != .layout_reset and property != .vertical_align and property != .line_height and !escaped) continue;
+        if (legacy_basis != null and (property == .layout_reset or property == .corner_radii or property == .other or property == .display or property == .float_side or property == .clear or escaped)) border_context_unknown = true;
+        if (property != .width and property != .min_width and property != .box_sizing and property != .layout_reset and property != .vertical_align and property != .line_height and !(legacy_basis != null and property == .border) and !escaped) continue;
         if (try declarationAlloc(a, raw, order)) |declaration| if (try cellLineHeightDeclarationAlloc(a, declaration, .cell, null)) |selected| winners.add(selected, 0, !representedDeclaration(.cell, selected), true);
     }
     const minimum = winners.value(.min_width);
@@ -425,7 +489,15 @@ pub fn resolveInlineCellWithLegacyHintsAlloc(a: std.mem.Allocator, legacy_align:
     var style: types.CellStyle = .{ .text_align = alignment.value, .min_width = selectedCellMinimumWidth(winners), .width = selectedCellWidth(winners) };
     if (winners.value(.vertical_align)) |value| if (value == .cell_vertical_align_value) { style.vertical_align = value.cell_vertical_align_value; };
     const vertical_unknown = if (winners.value(.vertical_align)) |value| value != .cell_vertical_align_value else false;
-    return .{ .style = if (types.validCellStyle(style)) style else null, .background = null, .background_specified = false, .unresolved = alignment.unresolved or minimum_unknown or vertical_unknown or cellWidthUnresolved(winners) or (if (winners.value(.line_height)) |height| height != .cell_line_height else false), .alignment_specified = alignment.specified, .line_height = selectedCellLineHeight(winners) };
+    var border_unknown = false;
+    if (legacy_basis) |basis| {
+        const border = if (!border_context_unknown) inlineBorderWithLegacyBasis(winners.borders, basis)
+            else InlineLegacyBorderResolution{ .unresolved = true };
+        style.border = border.value;
+        border_unknown = border.unresolved;
+    }
+    const valid_style = types.validCellStyle(style);
+    return .{ .style = if (valid_style) style else null, .background = null, .background_specified = false, .unresolved = alignment.unresolved or minimum_unknown or vertical_unknown or cellWidthUnresolved(winners) or border_unknown or (legacy_basis != null and !valid_style) or (if (winners.value(.line_height)) |height| height != .cell_line_height else false), .alignment_specified = alignment.specified, .line_height = selectedCellLineHeight(winners) };
 }
 pub fn resolveInlineAlignmentAlloc(a: std.mem.Allocator, legacy_align: ?[]const u8, css: []const u8) !AlignmentResolution {
     const profile = emptyProfile(a);
@@ -7835,6 +7907,80 @@ pub const ContainerResolution = struct {
     specified: bool = false,
     unresolved: bool = false,
 };
+
+// Direct-inline legacy ownership only. The caller supplies all four complete
+// edges for this owner; RGB slices must outlive the published style. Existing
+// CSS candidates, including explicit resets and unknowns, always win over the
+// basis. This helper does not establish ancestry, inherited paint, or a table
+// border for any cell.
+const InlineLegacyBorderResolution = struct {
+    value: ?types.StyleBorder = null,
+    unresolved: bool = false,
+};
+fn inlineBorderMissingLine(cascade_value: BorderCascade) bool {
+    if (!cascade_value.seen) return false;
+    for (0..4) |side| if (cascade_value.atoms[side * 3 + 1] == null) return true;
+    return false;
+}
+fn inlineBorderWithLegacyBasis(cascade_value: BorderCascade, basis: types.ResolvedStyleBorderEdges) InlineLegacyBorderResolution {
+    if (cascade_value.unsafe or !types.validBorder(.{ .resolved_edges = basis })) return .{ .unresolved = true };
+    const basis_sides = [_]types.ResolvedStyleBorderEdge{ basis.top, basis.right, basis.bottom, basis.left };
+    var sides: [4]types.ResolvedStyleBorderEdge = undefined;
+    var basis_used = false;
+    for (&sides, 0..) |*side, index| {
+        const basis_edge = basis_sides[index];
+        const basis_line: ?types.ResolvedStyleBorderLine = switch (basis_edge) {
+            .none, .hidden => null,
+            .solid, .dotted, .inset, .outset => |line| line,
+        };
+        const start = index * 3;
+        const line_tag: std.meta.Tag(types.ResolvedStyleBorderEdge) = if (cascade_value.atoms[start + 1]) |candidate| blk: {
+            if (candidate.atom != .line_style) return .{ .unresolved = true };
+            break :blk switch (candidate.atom.line_style) {
+                .none => .none, .hidden => .hidden, .solid => .solid, .dotted => .dotted,
+            };
+        } else blk: {
+            basis_used = true;
+            break :blk std.meta.activeTag(basis_edge);
+        };
+        if (line_tag == .none or line_tag == .hidden) {
+            side.* = if (line_tag == .none) .none else .hidden;
+            continue;
+        }
+        const width: types.StyleLength = if (cascade_value.atoms[start]) |candidate| blk: {
+            if (candidate.atom != .length) return .{ .unresolved = true };
+            break :blk candidate.atom.length;
+        } else blk: {
+            basis_used = true;
+            break :blk (basis_line orelse return .{ .unresolved = true }).width;
+        };
+        const paint: types.StyleBorderPaint = if (cascade_value.atoms[start + 2]) |candidate| blk: {
+            if (candidate.atom != .color or candidate.atom.color != .rgb) return .{ .unresolved = true };
+            break :blk .{ .rgb = candidate.atom.color.rgb };
+        } else blk: {
+            basis_used = true;
+            break :blk (basis_line orelse return .{ .unresolved = true }).paint;
+        };
+        const line: types.ResolvedStyleBorderLine = .{ .width = width, .paint = paint };
+        side.* = switch (line_tag) {
+            .solid => .{ .solid = line }, .dotted => .{ .dotted = line },
+            .inset => .{ .inset = line }, .outset => .{ .outset = line },
+            .none, .hidden => unreachable,
+        };
+    }
+    // A complete authored reset/stroke retains its existing representation.
+    // Only genuinely supplied components need the resolved-edge variant.
+    if (!basis_used) {
+        const old = cascade_value.result();
+        if (old.unresolved) return .{ .unresolved = true };
+        if (old.value) |border| return .{ .value = styleBorderFromContainer(border) orelse return .{ .unresolved = true } };
+        return .{ .unresolved = true };
+    }
+    const border: types.StyleBorder = .{ .resolved_edges = .{
+        .top = sides[0], .right = sides[1], .bottom = sides[2], .left = sides[3],
+    } };
+    return if (types.validBorder(border)) .{ .value = border } else .{ .unresolved = true };
+}
 
 const BorderLineStyle = enum { none, hidden, solid, dotted };
 const BorderAtom = union(enum) { unknown, length: types.StyleLength, line_style: BorderLineStyle, color: types.ContainerColor };
@@ -33897,4 +34043,296 @@ test "resolved border compatibility refuses corner projection without changing l
     try std.testing.expectEqualDeep(dotted_edge, containerEdgeFromStyle(old_style.edges.top));
     // No raw parser currently issues resolved_edges, so the new exhaustive
     // containerBorderAlloc refusal arm has no honest directly injectable input.
+}
+
+
+test "AN retained Greek table inline background discards invalid bare identifier without changing other CSS" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Exact CSS from Plantilla:-el-fles-semi- p8533/r32171 and
+    // Plantilla:-el-fles-manu- p8535/r32173. This API receives CSS alone;
+    // its border result does not grant a legacy border=1 width/style join.
+    const css = "text-align:center;background:AFAFA;border-collapse:collapse; border-color:#ddd;";
+    const reference = "text-align:center;border-collapse:collapse; border-color:#ddd;";
+    const selected = try resolveInlineTableAlloc(a, css);
+    const expected = try resolveInlineTableAlloc(a, reference);
+    try std.testing.expect(!selected.unresolved and !expected.unresolved);
+    try std.testing.expectEqualDeep(expected, selected);
+    try std.testing.expectEqual(types.BorderCollapse.collapse, selected.style.?.collapse.?);
+    try std.testing.expect(selected.style.?.background == null);
+    // The independent CSS initial border style is none. The ordinary producer's
+    // separate authored HTML border hint must not borrow this CSS-only proof.
+    try std.testing.expect(selected.style.?.border.? == .none);
+    const centered = try resolveInlineAlignmentAlloc(a, null, css);
+    try std.testing.expect(centered.specified and !centered.unresolved);
+    try std.testing.expectEqual(types.CellTextAlign.center, centered.value.?);
+
+    for ([_][]const u8{
+        "background:red;background:AFAFA!important",
+        "background:AFAFA!important;background:red",
+        "background:red;background:notacolor!important",
+        "background:red;background:afafa",
+    }) |candidate| {
+        const actual = try resolveInlineTableAlloc(a, candidate);
+        try std.testing.expect(!actual.unresolved);
+        try std.testing.expectEqualStrings("#ff0000", actual.style.?.background.?);
+    }
+}
+
+test "AN invalid background identifier proof preserves valid keywords variables functions and escaped uncertainty" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "AFAFA", "afafa", "notacolor" }) |value|
+        try std.testing.expect(try invalidInlineTableBackgroundIdentifier(a, value));
+    for ([_][]const u8{
+        "red", "rebeccapurple", "none", "transparent", "currentColor",
+        "inherit", "initial", "unset", "revert", "revert-layer",
+        "repeat", "repeat-x", "repeat-y", "no-repeat", "space", "round",
+        "scroll", "fixed", "local", "left", "center", "right", "top", "bottom",
+        "border-box", "padding-box", "content-box", "text", "contain", "cover", "auto",
+        "Canvas", "CanvasText", "ButtonFace", "ActiveBorder", "ThreeDShadow", "WindowText",
+        "0", "0e0", "#AFAFAF", "#ffff", "rgb(1 2 3 / .5)", "var(--background)",
+        "linear-gradient(red,blue)", "url(image.png)", "none red", "\\41 FAFA", "--future",
+    }) |value| try std.testing.expect(!try invalidInlineTableBackgroundIdentifier(a, value));
+    for ([_][]const u8{
+        "background:var(--unbound)", "background:linear-gradient(red,blue)",
+        "background:red;background-image:url(image.png)", "background:red;background:repeat",
+        "background:red;background:currentColor", "background:red;background:Canvas",
+    }) |css| try std.testing.expect((try resolveInlineTableAlloc(a, css)).unresolved);
+}
+
+test "AN positive legacy table border never becomes CSS none from an incomplete border declaration" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "border-color:#ddd", "border-color:#ddd!important", "border-width:2px",
+        "border-top:none;border-color:#ddd", "border-left:2px solid #123456",
+    }) |css| {
+        const actual = try resolveInlineTableWithLegacyBorderAlloc(a, css, null, 1);
+        try std.testing.expect(actual.unresolved);
+        try std.testing.expect(actual.style == null or actual.style.?.border == null);
+    }
+    const original = "text-align:center;background:AFAFA;border-collapse:collapse; border-color:#ddd;";
+    const actual = try resolveInlineTableWithLegacyBorderAlloc(a, original, null, 1);
+    try std.testing.expect(actual.unresolved);
+    try std.testing.expect(actual.style != null and actual.style.?.border == null);
+    try std.testing.expectEqual(types.BorderCollapse.collapse, actual.style.?.collapse.?);
+    try std.testing.expect(actual.style.?.background == null);
+    const no_invalid_background = try resolveInlineTableWithLegacyBorderAlloc(a,
+        "text-align:center;border-collapse:collapse; border-color:#ddd;", null, 1);
+    try std.testing.expectEqualDeep(no_invalid_background, actual);
+    for ([_][]const u8{
+        "border:none;border-color:#ddd", "border-style:none;border-color:#ddd",
+        "border:2px solid #ddd", "border:0px solid #ddd", "border:2px dotted #ddd",
+    }) |css| {
+        const with_hint = try resolveInlineTableWithLegacyBorderAlloc(a, css, null, 1);
+        const without_hint = try resolveInlineTableWithCollapseAlloc(a, css, null);
+        try std.testing.expect(!with_hint.unresolved);
+        try std.testing.expectEqualDeep(without_hint, with_hint);
+    }
+    for ([_]?u16{ null, 0 }) |hint| {
+        const no_positive_hint = try resolveInlineTableWithLegacyBorderAlloc(a, "border-color:#ddd", null, hint);
+        try std.testing.expect(!no_positive_hint.unresolved);
+        try std.testing.expect(no_positive_hint.style.?.border.? == .none);
+    }
+    const no_border_css = try resolveInlineTableWithLegacyBorderAlloc(a, "border-collapse:collapse", null, 1);
+    try std.testing.expect(!no_border_css.unresolved);
+    try std.testing.expect(no_border_css.style.?.border == null);
+    const reset = try resolveInlineTableWithLegacyBorderAlloc(a, "border-color:#ddd;border:initial", null, 1);
+    try std.testing.expect(!reset.unresolved and reset.style.?.border.? == .none);
+}
+
+const ResolvedLegacyBorderProfileTest = struct {
+    // Exact opening style from both retained AN Greek inflection templates.
+    // This is a source-derived direct-inline query, not an expansion or an
+    // authenticated browser/profile observation.
+    const table_css = "text-align:center;background:AFAFA;border-collapse:collapse; border-color:#ddd;";
+    const table_without_invalid_background = "text-align:center;border-collapse:collapse; border-color:#ddd;";
+    const header_css = "background:#dffffe;width:5%";
+    const table_basis = types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color,
+    } });
+    const cell_basis = types.ResolvedStyleBorderEdges.all(.{ .inset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color,
+    } });
+    const source_table_border: types.StyleBorder = .{ .resolved_edges = types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#dddddd" },
+    } }) };
+};
+
+test "AN direct inline resolved borders preserve genuine Table RGB and independent Cell owner paint with null API parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ResolvedLegacyBorderProfileTest;
+    const table = try resolveInlineTableWithLegacyBorderBasisAlloc(a, T.table_css, null, 1, T.table_basis);
+    const expected: TableResolution = .{
+        .style = .{ .border = T.source_table_border, .collapse = .collapse },
+        .scope = 0, .unresolved = false, .resolved_legacy_border = true,
+    };
+    try std.testing.expectEqualDeep(expected, table);
+    try std.testing.expectEqualDeep(table, try resolveInlineTableWithLegacyBorderBasisAlloc(a,
+        T.table_without_invalid_background, null, 1, T.table_basis));
+    // This argument is the caller's already-computed collapse, not an
+    // inherited default. Preserve that distinct existing API authority.
+    var computed_separate = expected;
+    computed_separate.style.?.collapse = .separate;
+    try std.testing.expectEqualDeep(computed_separate, try resolveInlineTableWithLegacyBorderBasisAlloc(a,
+        T.table_css, .separate, 1, T.table_basis));
+    const unknown_collapse = try resolveInlineTableWithLegacyBorderBasisAlloc(a,
+        T.table_css, .unknown, 1, T.table_basis);
+    try std.testing.expect(unknown_collapse.unresolved and !unknown_collapse.resolved_legacy_border);
+
+    const cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, T.header_css, T.cell_basis);
+    const expected_cell: CellResolution = .{
+        .style = .{ .border = .{ .resolved_edges = T.cell_basis }, .width = .{ .unit = .percent, .value = 5 } },
+        .background = null, .background_specified = false, .unresolved = false,
+    };
+    try std.testing.expectEqualDeep(expected_cell, cell);
+    // Background belongs to the existing independent Compiler paint path.
+    // The new resolver must not copy TABLE #ddd into any CELL border.
+    try std.testing.expect(cell.style.?.border.?.resolved_edges.top == .inset);
+    try std.testing.expect(cell.style.?.border.?.resolved_edges.top.inset.paint == .owner_current_color);
+    const no_own_css = try resolveInlineCellWithLegacyBorderBasisAlloc(a, "center", "top", "17", "", T.cell_basis);
+    try std.testing.expectEqualDeep(types.CellStyle{
+        .border = .{ .resolved_edges = T.cell_basis }, .text_align = .center, .vertical_align = .top,
+        .width = .{ .unit = .px, .value = 17 },
+    }, no_own_css.style.?);
+    try std.testing.expect(!no_own_css.unresolved and no_own_css.alignment_specified);
+    // A separately proved CELL owner ink is distinct from TABLE and descendant
+    // ink. No CSS currentColor evaluation or inheritance is inferred here.
+    const colored_cell_basis = types.ResolvedStyleBorderEdges.all(.{ .inset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#234567" },
+    } });
+    const colored_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, T.header_css, colored_cell_basis);
+    try std.testing.expectEqualDeep(types.StyleBorder{ .resolved_edges = colored_cell_basis }, colored_cell.style.?.border.?);
+    try std.testing.expect(!colored_cell.unresolved);
+    try std.testing.expectEqualDeep(T.source_table_border, table.style.?.border.?);
+
+    const old_table = try resolveInlineTableWithLegacyBorderAlloc(a, T.table_css, null, 1);
+    try std.testing.expect(old_table.unresolved and !old_table.resolved_legacy_border);
+    try std.testing.expect(old_table.style.?.border == null and old_table.style.?.collapse == .collapse);
+    try std.testing.expectEqualDeep(old_table, try resolveInlineTableWithLegacyBorderBasisAlloc(a, T.table_css, null, 1, null));
+    for ([_]?u16{ null, 0 }) |no_positive_hint| {
+        const absent_hint = try resolveInlineTableWithLegacyBorderBasisAlloc(a, T.table_css, null, no_positive_hint, T.table_basis);
+        try std.testing.expect(!absent_hint.unresolved and !absent_hint.resolved_legacy_border);
+        try std.testing.expect(absent_hint.style.?.border.? == .none);
+        try std.testing.expectEqualDeep(try resolveInlineTableWithLegacyBorderAlloc(a, T.table_css, null, no_positive_hint), absent_hint);
+    }
+    const no_border_css = try resolveInlineTableWithLegacyBorderBasisAlloc(a, "border-collapse:collapse", null, 1, T.table_basis);
+    try std.testing.expect(!no_border_css.unresolved and !no_border_css.resolved_legacy_border);
+    try std.testing.expect(no_border_css.style.?.border == null);
+    const no_geometry = try resolveInlineTableWithLegacyBorderBasisAlloc(a, "border-color:#ddd", null, null, null);
+    try std.testing.expect(!no_geometry.resolved_legacy_border and no_geometry.style.?.border.? == .none);
+    // No complete geometry/basis receipt: a positive numeric hint alone still
+    // cannot supply a missing line style, width, or owner paint.
+    const unknown_geometry = try resolveInlineTableWithLegacyBorderBasisAlloc(a, "border-color:#ddd", null, 1, null);
+    try std.testing.expect(unknown_geometry.unresolved and !unknown_geometry.resolved_legacy_border);
+    try std.testing.expect(unknown_geometry.style == null or unknown_geometry.style.?.border == null);
+
+    for ([_][]const u8{ "", T.table_css, "border:2px solid #123456", "border:none;border-color:#ddd",
+        "border-top-color:var(--unknown)!important", "position:absolute;border-color:#ddd" }) |css| {
+        try std.testing.expectEqualDeep(try resolveInlineTableWithLegacyBorderAlloc(a, css, null, 1),
+            try resolveInlineTableWithLegacyBorderBasisAlloc(a, css, null, 1, null));
+        try std.testing.expectEqualDeep(try resolveInlineCellWithLegacyHintsAlloc(a, "right", "top", "19", css),
+            try resolveInlineCellWithLegacyBorderBasisAlloc(a, "right", "top", "19", css, null));
+    }
+}
+
+test "resolved legacy border basis respects partial side priority resets unknown winners and ordinary geometry refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const T = ResolvedLegacyBorderProfileTest;
+    const table_basis = types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+        .width = .{ .unit = .px, .value = 3 }, .paint = .{ .rgb = "#445566" },
+    } });
+    const priority_css = "border-color:#123456!important;border-top-color:#abcdef;" ++
+        "border-left-width:3px;border-left-width:2px!important;border-left-width:9px;";
+    var table_edges = types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+        .width = .{ .unit = .px, .value = 3 }, .paint = .{ .rgb = "#123456" },
+    } });
+    table_edges.left.outset.width.value = 2;
+    const lower = try resolveInlineTableWithLegacyBorderBasisAlloc(a, priority_css, null, 3, table_basis);
+    try std.testing.expect(!lower.unresolved and lower.resolved_legacy_border);
+    try std.testing.expectEqualDeep(types.StyleBorder{ .resolved_edges = table_edges }, lower.style.?.border.?);
+    // Even a lower-priority unknown cannot replace an important known color.
+    try std.testing.expectEqualDeep(lower, try resolveInlineTableWithLegacyBorderBasisAlloc(a,
+        priority_css ++ "border-top-color:var(--unknown)", null, 3, table_basis));
+    const later_css = priority_css ++ "border-top-color:#010203!important;border-right-style:dotted;border-right-width:.25em;";
+    table_edges.top.outset.paint = .{ .rgb = "#010203" };
+    table_edges.right = .{ .dotted = .{ .width = .{ .unit = .em, .value = 0.25 }, .paint = .{ .rgb = "#123456" } } };
+    const higher = try resolveInlineTableWithLegacyBorderBasisAlloc(a, later_css, null, 3, table_basis);
+    try std.testing.expect(!higher.unresolved and higher.resolved_legacy_border);
+    try std.testing.expectEqualDeep(types.StyleBorder{ .resolved_edges = table_edges }, higher.style.?.border.?);
+
+    var cell_edges = types.ResolvedStyleBorderEdges.all(.{ .inset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#123456" },
+    } });
+    cell_edges.left.inset.width.value = 2;
+    cell_edges.top.inset.paint = .{ .rgb = "#010203" };
+    cell_edges.right = table_edges.right;
+    const cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, later_css, T.cell_basis);
+    try std.testing.expect(!cell.unresolved);
+    try std.testing.expectEqualDeep(types.StyleBorder{ .resolved_edges = cell_edges }, cell.style.?.border.?);
+    // A complete authored stroke and payloadless resets keep their old tags.
+    const complete_css = [_][]const u8{ "border:2px solid #123456", "border:none", "border:initial;border-color:#dddddd", "border-style:hidden" };
+    const complete_borders = [_]types.StyleBorder{
+        .{ .solid = .{ .width = .{ .unit = .px, .value = 2 }, .color = "#123456" } },
+        .none, .none, .{ .edges = types.StyleBorderEdges.all(.hidden) },
+    };
+    for (complete_css, complete_borders) |css, expected| {
+        const table = try resolveInlineTableWithLegacyBorderBasisAlloc(a, css, null, 1, T.table_basis);
+        try std.testing.expect(!table.unresolved and !table.resolved_legacy_border);
+        try std.testing.expectEqualDeep(expected, table.style.?.border.?);
+        try std.testing.expectEqualDeep(try resolveInlineTableWithLegacyBorderAlloc(a, css, null, 1), table);
+        const selected_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, css, T.cell_basis);
+        try std.testing.expect(!selected_cell.unresolved);
+        try std.testing.expectEqualDeep(expected, selected_cell.style.?.border.?);
+    }
+    var reset_edges = T.cell_basis;
+    reset_edges.top = .none;
+    const reset = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, "border-top:none", T.cell_basis);
+    try std.testing.expect(!reset.unresolved);
+    try std.testing.expectEqualDeep(types.StyleBorder{ .resolved_edges = reset_edges }, reset.style.?.border.?);
+
+    // Each valid unknown winner below remains present. Missing components may
+    // use the basis; explicitly reset/unknown components may never do so.
+    for ([_][]const u8{
+        "border:solid",
+        "border:initial;border-top-style:solid;border-top-color:#123456",
+        "border-color:#123456;border-top-color:var(--unknown)!important;border-top-color:#abcdef",
+        "border-color:currentColor", "border-color:transparent", "border-left-style:inset", "border-left-style:outset",
+        "border-width:medium", "border-left-width:-1px", "border-color:#12gg00",
+        "border-left:1px solid #123456 extra", "border-inline-start:1px solid #123456",
+    }) |css| {
+        const table = try resolveInlineTableWithLegacyBorderBasisAlloc(a, css, null, 1, T.table_basis);
+        try std.testing.expect(table.unresolved and !table.resolved_legacy_border);
+        const selected_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, css, T.cell_basis);
+        try std.testing.expect(selected_cell.unresolved);
+    }
+    for ([_][]const u8{
+        "border-color:#ddd;display:inline-block", "border-color:#ddd;display:inline-table", "border-color:#ddd;float:left",
+        "border-color:#ddd;position:absolute", "border-color:#ddd;border-spacing:1px", "border-color:#ddd;border-radius:1px",
+        "border-color:#ddd;all:initial", "border-color:#ddd;width:var(--unknown)",
+    }) |css| {
+        const table = try resolveInlineTableWithLegacyBorderBasisAlloc(a, css, null, 1, T.table_basis);
+        try std.testing.expect(table.unresolved and !table.resolved_legacy_border);
+    }
+    for ([_][]const u8{ "position:absolute", "display:block", "float:left", "clear:both", "border-radius:1px", "all:initial", "b\\6frder-color:#123456", "width:var(--unknown)" }) |css| {
+        const selected_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, css, T.cell_basis);
+        try std.testing.expect(selected_cell.unresolved);
+    }
+    for (0..4) |mode| {
+        var bad_table_basis = T.table_basis;
+        var bad_cell_basis = T.cell_basis;
+        switch (mode) {
+            0 => { bad_table_basis.left.outset.width.value = -1; bad_cell_basis.left.inset.width.value = -1; },
+            1 => { bad_table_basis.left.outset.width.value = std.math.inf(f32); bad_cell_basis.left.inset.width.value = std.math.inf(f32); },
+            2 => { bad_table_basis.left.outset.width.value = std.math.nan(f32); bad_cell_basis.left.inset.width.value = std.math.nan(f32); },
+            else => { bad_table_basis.left.outset.paint = .{ .rgb = "gray" }; bad_cell_basis.left.inset.paint = .{ .rgb = "gray" }; },
+        }
+        const table = try resolveInlineTableWithLegacyBorderBasisAlloc(a, "border-color:#ddd", null, 1, bad_table_basis);
+        try std.testing.expect(table.unresolved and !table.resolved_legacy_border);
+        const selected_cell = try resolveInlineCellWithLegacyBorderBasisAlloc(a, null, null, null, "", bad_cell_basis);
+        try std.testing.expect(selected_cell.unresolved and selected_cell.style == null);
+    }
 }

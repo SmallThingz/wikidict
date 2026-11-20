@@ -8022,6 +8022,7 @@ pub const Renderer = struct {
     // inherited style ancestry or generated block owners.
     display_parent_region: ?DisplayParentRegion = null,
     table_style_scope: table_style_profile.Scope = 0,
+    resolved_legacy_table_border: bool = false,
     table_css_ancestor_classes: []const u8 = "",
     table_style_unresolved: bool = false,
     table_style_font_unresolved: bool = false,
@@ -23543,9 +23544,30 @@ pub const Renderer = struct {
         resolved.style = if (presentation_types.validUnboundTableStyle(style)) style else null;
     }
 
+    fn resolvedLegacyBorderBasis(self: *const Renderer, style: Style, border: u16, owner: enum { table, cell }) ?presentation_types.ResolvedStyleBorderEdges {
+        // This direct-inline path has no stylesheet authority to borrow. The
+        // current native content owner is distinct from descendant/link paint.
+        if (border == 0 or self.context.table_styles != null or self.textPaintProfile() != null or
+            style.kind != .text or style.target.len != 0 or style.link_paint != null or style.ordinary_link_paint != null or
+            self.body_link_target.len != 0) return null;
+        const paint: presentation_types.StyleBorderPaint = if (style.foreground) |rgb| known_paint: {
+            if (!presentation_types.isCanonicalRgb(rgb)) return null;
+            break :known_paint .{ .rgb = rgb };
+        } else if (style.foreground_set or self.in_reference or self.figure_caption_depth != 0) return null else .owner_current_color;
+        const line: presentation_types.ResolvedStyleBorderLine = .{
+            .width = .{ .unit = .px, .value = @floatFromInt(if (owner == .table) border else @as(u16, 1)) },
+            .paint = paint,
+        };
+        return presentation_types.ResolvedStyleBorderEdges.all(if (owner == .table) .{ .outset = line } else .{ .inset = line });
+    }
+
     fn resolvedTableStyle(self: *Renderer, tag: syntax.Tag, style: Style, witnessed_root: bool, source_opening: ?[]const u8) Error!table_style_profile.TableResolution {
         const profile = self.context.table_styles orelse {
-            var resolved = try table_style_profile.resolveInlineTableWithCollapseAlloc(self.a, (try self.semanticAttribute(tag, "style")) orelse "", if (style.table_inheritance_scoped) style.table_collapse else null);
+            // Use the same finite attribute parser as legacyTableGeometry;
+            // unrelated geometry attributes do not erase a valid border hint.
+            const legacy_border = if (tag.attr("border")) |raw| htmlNestedUnsigned(u16, raw) else null;
+            const basis = if (legacyTableGeometry(tag) != null) (if (legacy_border) |value| self.resolvedLegacyBorderBasis(style, value, .table) else null) else null;
+            var resolved = try table_style_profile.resolveInlineTableWithLegacyBorderBasisAlloc(self.a, (try self.semanticAttribute(tag, "style")) orelse "", if (style.table_inheritance_scoped) style.table_collapse else null, legacy_border, basis);
             resolved.scope = self.table_style_scope;
             self.computeTableFlowStyle(&resolved, tag, style);
             self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or self.traceUnresolvedTableStyle(resolved.unresolved, "resolvedTableStyle.1", tag.attrs);
@@ -23591,7 +23613,13 @@ pub const Renderer = struct {
 
     fn resolvedCellStyle(self: *Renderer, tag: syntax.Tag, fallback: ?[]const u8, inherited_alignment: ?presentation_types.CellTextAlign, computed_font: Style, native: CellNativeContext, weight_consumed: bool) Error!table_style_profile.CellResolution {
         const profile = self.context.table_styles orelse {
-            var resolved = try table_style_profile.resolveInlineCellWithLegacyHintsAlloc(self.a, try self.semanticAttribute(tag, "align"), try self.semanticAttribute(tag, "valign"), try self.semanticAttribute(tag, "width"), (try self.semanticAttribute(tag, "style")) orelse "");
+            const basis = if (self.resolved_legacy_table_border) self.resolvedLegacyBorderBasis(computed_font, 1, .cell) else null;
+            var resolved = try table_style_profile.resolveInlineCellWithLegacyBorderBasisAlloc(self.a, try self.semanticAttribute(tag, "align"), try self.semanticAttribute(tag, "valign"), try self.semanticAttribute(tag, "width"), (try self.semanticAttribute(tag, "style")) orelse "", basis);
+            if (self.resolved_legacy_table_border and basis == null) {
+                // A child cannot borrow its TABLE's paint or a sibling's owner.
+                if (resolved.style) |*cell| cell.border = null;
+                resolved.unresolved = true;
+            }
             resolved.background = try self.tableCellBackground(tag, fallback);
             inheritCellAlignment(&resolved, inherited_alignment);
             if (computed_font.font_scale_basis == .css_px and resolved.line_height == null and !(native.cell_policy_active and native.inherited_height != null)) resolved.unresolved = true;
@@ -40692,6 +40720,11 @@ pub const Renderer = struct {
         try self.bindTableContainingDirection(&resolved, direction_opening orelse "", parent_cell_context);
         self.guardTableEmStyleAt(&resolved, style, self.block_formatting, if (opening) |tag| tag.attrs else "");
         const native_cell_context = try self.tableCellNativeContext(parent_cell_context, resolved, opening);
+        const previous_legacy_border = self.resolved_legacy_table_border;
+        self.resolved_legacy_table_border = resolved.resolved_legacy_border and !resolved.unresolved and
+            resolved.block_viewport == null and resolved.float_viewport == null and
+            (if (resolved.style) |typed| (if (typed.border) |border| border == .resolved_edges else false) else false);
+        defer self.resolved_legacy_table_border = previous_legacy_border;
         const previous_scope = self.table_style_scope;
         self.table_style_scope = resolved.scope;
         defer self.table_style_scope = previous_scope;
@@ -41465,6 +41498,11 @@ pub const Renderer = struct {
             self.guardTableEmStyleAt(&resolved, table_style, table_formatting, opening.attrs);
         }
         const native_cell_context = try self.tableCellNativeContext(parent_cell_context, resolved, opening);
+        const previous_legacy_border = self.resolved_legacy_table_border;
+        self.resolved_legacy_table_border = resolved.resolved_legacy_border and !resolved.unresolved and
+            resolved.block_viewport == null and resolved.float_viewport == null and
+            (if (resolved.style) |typed| (if (typed.border) |border| border == .resolved_edges else false) else false);
+        defer self.resolved_legacy_table_border = previous_legacy_border;
         const previous_scope = self.table_style_scope;
         self.table_style_scope = resolved.scope;
         defer self.table_style_scope = previous_scope;
@@ -122342,4 +122380,391 @@ test "resolved border compatibility visitors retain raw strokes owner paint side
         try std.testing.expect(!Renderer.hasEmBorder(border));
         try std.testing.expectEqualDeep(border, Renderer.rebasedEmBorder(border, 3) orelse return error.TestUnexpectedResult);
     }
+}
+
+// Source-derived Compiler fixtures, not a retained or executed template expansion.
+// The complete table slices and literal parameters come from selected-original-source01.json
+// (7a437da5276b975e0d1d61b6977250c663501922233032961af424a9ffe4164e):
+// σημαία p8418/r32174; Plantilla:-el-fles-semi- p8533/r32171;
+// χειρουργός p8565/r32228; Plantilla:-el-fles-manu- p8535/r32173.
+// Nav wrappers and template processing are outside these table controls. The
+// surrounding local/external action labels are explicit synthetic controls.
+const AnGreekLegacyBorderCompilerTest = struct {
+    const Case = struct {
+        title: []const u8,
+        meaning_target: []const u8,
+        template_name: []const u8,
+        original_call: []const u8,
+        parameters: []const []const u8,
+        template_body: []const u8,
+        template_sha256: []const u8,
+        cells: [5][3][]const u8,
+        bold_singular: [4]bool,
+    };
+    const semi =
+        \\{| border="1" style="text-align:center;background:AFAFA;border-collapse:collapse; border-color:#ddd;"
+        \\! style="background:#dffffe;width:5%" | Caso
+        \\! style="background:#dffffe;width:5%" | Singular
+        \\! style="background:#dffffe;width:5%" | Plural
+        \\|-
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Nominatibo
+        \\| '''{{{1}}}'''
+        \\| {{{2}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Chenitibo
+        \\| {{{3}}}
+        \\| {{{4}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Acusatibo
+        \\| '''{{{1}}}'''
+        \\| {{{2}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Bocatibo
+        \\| '''{{{1}}}'''
+        \\| {{{2}}}
+        \\|}
+    ;
+    const manu =
+        \\{| border="1" style="text-align:center;background:AFAFA;border-collapse:collapse; border-color:#ddd;"
+        \\! style="background:#dffffe;width:5%" | Caso
+        \\! style="background:#dffffe;width:5%" | Singular
+        \\! style="background:#dffffe;width:5%" | Plural
+        \\|-
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Nominatibo
+        \\| '''{{{1}}}'''
+        \\| {{{2}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Chenitibo
+        \\| {{{3}}}
+        \\| {{{4}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Acusatibo
+        \\| {{{5}}}
+        \\| {{{6}}}
+        \\|-
+        \\! style="background:#EEF9FF;width:5%" rowspan=1 | Bocatibo
+        \\| {{{7}}}
+        \\| {{{8}}}
+        \\|}
+    ;
+    const cases = [_]Case{
+        .{
+            .title = "σημαία", .meaning_target = "bandera", .template_name = "-el-fles-semi-",
+            .original_call = "{{-el-fles-semi-|σημαία|σημαίες|σημαίας|σημαιών}}",
+            .parameters = &.{ "σημαία", "σημαίες", "σημαίας", "σημαιών" },
+            .template_body = semi,
+            .template_sha256 = "2d14ea4d7799cd6f2395a596a204b54f53a06175a1817e6b67c06a716b01bf58",
+            .cells = .{ .{ "Caso", "Singular", "Plural" }, .{ "Nominatibo", "σημαία", "σημαίες" }, .{ "Chenitibo", "σημαίας", "σημαιών" }, .{ "Acusatibo", "σημαία", "σημαίες" }, .{ "Bocatibo", "σημαία", "σημαίες" } },
+            .bold_singular = .{ true, false, true, true },
+        },
+        .{
+            .title = "χειρουργός", .meaning_target = "zirurchico", .template_name = "-el-fles-manu-",
+            .original_call = "{{-el-fles-manu-|χειρουργό|χειρουργοί|χειρουργού|χειρουργών|χειρουργό|χειρουργούς|χειρουργέ|χειρουργοί}}",
+            .parameters = &.{ "χειρουργό", "χειρουργοί", "χειρουργού", "χειρουργών", "χειρουργό", "χειρουργούς", "χειρουργέ", "χειρουργοί" },
+            .template_body = manu,
+            .template_sha256 = "481ed8d5d33cdfa04d0949a4a151b8a4cc0ab1873c7d1d4355cc75003c28c419",
+            .cells = .{ .{ "Caso", "Singular", "Plural" }, .{ "Nominatibo", "χειρουργό", "χειρουργοί" }, .{ "Chenitibo", "χειρουργού", "χειρουργών" }, .{ "Acusatibo", "χειρουργό", "χειρουργούς" }, .{ "Bocatibo", "χειρουργέ", "χειρουργοί" } },
+            .bold_singular = .{ true, false, false, false },
+        },
+    };
+
+    fn tableSource(a: A, case: Case) ![]const u8 {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(case.template_body, &digest, .{});
+        try std.testing.expectEqualStrings(case.template_sha256, &std.fmt.bytesToHex(digest, .lower));
+        // Reconstruct the exact retained call before applying literal numbered
+        // substitution to its complete table slice. No expansion API is used.
+        const arguments = try std.mem.join(a, "|", case.parameters);
+        const call = try std.mem.concat(a, u8, &.{ "{{", case.template_name, "|", arguments, "}}" });
+        try std.testing.expectEqualStrings(case.original_call, call);
+        var selected = case.template_body;
+        for (case.parameters, 1..) |parameter, number| {
+            const digits = try std.fmt.allocPrint(a, "{d}", .{number});
+            const marker = try std.mem.concat(a, u8, &.{ "{{{", digits, "}}}" });
+            try std.testing.expect(std.mem.indexOf(u8, selected, marker) != null);
+            selected = try std.mem.replaceOwned(u8, a, selected, marker, parameter);
+        }
+        try std.testing.expect(std.mem.indexOf(u8, selected, "{{{") == null);
+        try std.testing.expect(std.mem.startsWith(u8, selected, "{| border=\"1\""));
+        try std.testing.expect(std.mem.endsWith(u8, selected, "|}"));
+        return selected;
+    }
+
+    fn completeSource(a: A, case: Case, table_source: []const u8) ![]const u8 {
+        return std.mem.concat(a, u8, &.{ "before [[", case.meaning_target, "|meaning]]\n\n",
+            table_source, "\n\nafter [https://example.invalid/an outside]" });
+    }
+
+    fn grid(a: A, table: anytype, case: Case) !void {
+        try std.testing.expectEqual(@as(usize, 5), table.rows.len);
+        try std.testing.expectEqual(@as(?u16, 1), table.geometry.?.border);
+        const table_style = table.style orelse return error.TestUnexpectedResult;
+        const expected_table: presentation_types.StyleBorder = .{ .resolved_edges = presentation_types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+            .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#dddddd" },
+        } }) };
+        try std.testing.expectEqualDeep(expected_table, table_style.border.?);
+        try std.testing.expect(table_style.background == null);
+        try std.testing.expectEqual(presentation_types.BorderCollapse.collapse, table_style.collapse.?);
+        for (table.rows, 0..) |row, row_index| {
+            try std.testing.expectEqual(@as(usize, 3), row.cells.len);
+            for (row.cells, 0..) |cell, column| {
+                try std.testing.expect(cell.blocks == null and cell.nested_table == null);
+                try std.testing.expectEqualStrings(case.cells[row_index][column], try FormattingScopeTest.text(a, cell.spans));
+                try std.testing.expectEqual(row_index == 0 or column == 0, cell.header);
+                try std.testing.expectEqual(@as(u16, 1), cell.rowspan);
+                try std.testing.expectEqual(@as(u16, 1), cell.colspan);
+                const cell_style = cell.style orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(presentation_types.CellTextAlign.center, cell_style.text_align.?);
+                const expected_cell: presentation_types.StyleBorder = .{ .resolved_edges = presentation_types.ResolvedStyleBorderEdges.all(.{ .inset = .{
+                    .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color,
+                } }) };
+                try std.testing.expectEqualDeep(expected_cell, cell_style.border.?);
+                if (cell.header) {
+                    try std.testing.expectEqualStrings(if (row_index == 0) "#dffffe" else "#eef9ff", cell.background.?);
+                    try std.testing.expectEqualDeep(presentation_types.StyleWidth{ .unit = .percent, .value = 5 }, cell_style.width.?);
+                } else {
+                    try std.testing.expect(cell.background == null);
+                    var text_bytes: usize = 0;
+                    for (cell.spans) |span| {
+                        try std.testing.expect(span.kind == .text and span.target.len == 0);
+                        if (span.text.len != 0) {
+                            const bold = if (@hasField(@TypeOf(span), "flags")) span.flags.bold else span.bold;
+                            try std.testing.expectEqual(column == 1 and case.bold_singular[row_index - 1], bold);
+                            text_bytes += span.text.len;
+                        }
+                    }
+                    try std.testing.expect(text_bytes != 0);
+                }
+            }
+        }
+    }
+
+    fn body(a: A, blocks: anytype, case: Case) !void {
+        try std.testing.expectEqual(@as(usize, 3), blocks.len);
+        try std.testing.expect(blocks[0].kind == .paragraph and blocks[2].kind == .paragraph);
+        try std.testing.expectEqualStrings("before meaning", try FormattingScopeTest.text(a, blocks[0].spans));
+        try std.testing.expectEqualStrings("after outside", try FormattingScopeTest.text(a, blocks[2].spans));
+        try grid(a, blocks[1].table orelse return error.TestUnexpectedResult, case);
+        var local_actions: usize = 0;
+        var external_actions: usize = 0;
+        for (try FigureProducerTest.bodySpans(a, blocks)) |span| {
+            if (span.kind == .link) {
+                local_actions += 1;
+                try std.testing.expectEqualStrings(case.meaning_target, span.target);
+                try std.testing.expectEqualStrings("meaning", span.text);
+            } else if (span.kind == .external_link) {
+                external_actions += 1;
+                try std.testing.expectEqualStrings("https://example.invalid/an", span.target);
+                try std.testing.expectEqualStrings("outside", span.text);
+            } else try std.testing.expect(span.kind == .text);
+        }
+        try std.testing.expectEqual(@as(usize, 1), local_actions);
+        try std.testing.expectEqual(@as(usize, 1), external_actions);
+    }
+
+    fn stored(a: A, renderer: *Renderer, blocks: []const Block, title: []const u8) !presentation_types.Stored {
+        const Section = struct { level: u8 = 2, title: []const u8 = "Greek", blocks: []const Block };
+        const sections = [_]Section{.{ .blocks = blocks }};
+        const codec = @import("blob_encoder").presentation_codec;
+        const bytes = try codec.encodeBuildAlloc(a, &[_]Span{}, &sections, presentation_types.Layout{},
+            try renderer.finishReferences(), renderer.media.items);
+        const result = try codec.decodeAlloc(a, bytes, title, .language, .{ .code = "el", .heading = "Greek" });
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, result));
+        return result;
+    }
+};
+
+test "AN original Greek template rows retain distinct resolved Table and Cell borders complete body actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const T = AnGreekLegacyBorderCompilerTest;
+    const codec = @import("blob_encoder").presentation_codec;
+    for (T.cases) |case| {
+        const table_source = try T.tableSource(a, case);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, table_source, "background:AFAFA;"));
+        const without_invalid = try std.mem.replaceOwned(u8, a, table_source, "background:AFAFA;", "");
+        const source = try T.completeSource(a, case, table_source);
+        const reference = try T.completeSource(a, case, without_invalid);
+        // Both arms take the ordinary direct-inline path: no stylesheet profile.
+        var actual: Renderer = .{ .a = a, .context = .{ .title = case.title } };
+        var expected: Renderer = .{ .a = a, .context = .{ .title = case.title } };
+        const blocks = try actual.renderBody(source);
+        const expected_blocks = try expected.renderBody(reference);
+        try std.testing.expect(actual.context.table_styles == null and expected.context.table_styles == null);
+        try std.testing.expect(!actual.fallbacks.unresolved_table_style);
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        try std.testing.expectEqualDeep(expected_blocks, blocks);
+        try T.body(a, blocks, case);
+        const saved = try T.stored(a, &actual, blocks, case.title);
+        const expected_saved = try T.stored(a, &expected, expected_blocks, case.title);
+        try std.testing.expectEqualDeep(expected_saved, saved);
+        try T.body(a, saved.entry.sections[0].blocks, case);
+        const bytes = try codec.encodeAlloc(a, saved);
+        try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, expected_saved), bytes);
+        const decoded = try codec.decodeAlloc(a, bytes, case.title, .language, .{ .code = "el", .heading = "Greek" });
+        try std.testing.expectEqualDeep(saved, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, decoded));
+    }
+}
+
+test "AN resolved legacy border context distinguishes complete CSS absent zero and unrelated width" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const Case = struct {
+        attrs: []const u8,
+        css: []const u8,
+        border: ?presentation_types.StyleBorder,
+        legacy: ?u16,
+        geometry_present: bool = true,
+        unresolved: bool = false,
+    };
+    for ([_]Case{
+        .{ .attrs = "border=1", .css = "border-color:#ddd", .border = .{ .resolved_edges = presentation_types.ResolvedStyleBorderEdges.all(.{ .outset = .{
+            .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#dddddd" },
+        } }) }, .legacy = 1 },
+        .{ .attrs = "border=1 width=unknown", .css = "border-color:#ddd", .border = null, .legacy = null, .geometry_present = false, .unresolved = true },
+        .{ .attrs = "border=1", .css = "", .border = null, .legacy = 1 },
+        .{ .attrs = "border=1", .css = "border:none;border-color:#ddd", .border = .none, .legacy = 1 },
+        .{ .attrs = "border=1", .css = "border:2px solid #ddd", .border = .{ .solid = .{ .width = .{ .unit = .px, .value = 2 }, .color = "#dddddd" } }, .legacy = 1 },
+        .{ .attrs = "", .css = "border-color:#ddd", .border = .none, .legacy = null, .geometry_present = false },
+        .{ .attrs = "border=0", .css = "border-color:#ddd", .border = .none, .legacy = 0 },
+    }) |case| {
+        errdefer std.log.err("AN resolved border case attrs={s} css={s}", .{ case.attrs, case.css });
+        const source = try std.fmt.allocPrint(a,
+            "{{| {s} style='text-align:center;border-collapse:collapse;{s}'\n| [[Target|cell]]\n|}}", .{ case.attrs, case.css });
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const blocks = try renderer.renderBody(source);
+        try std.testing.expectEqual(@as(usize, 1), blocks.len);
+        const table = blocks[0].table orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(case.geometry_present, table.geometry != null);
+        try std.testing.expectEqual(case.legacy, if (table.geometry) |geometry| geometry.border else null);
+        const style = table.style orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualDeep(case.border, style.border);
+        try std.testing.expectEqual(presentation_types.BorderCollapse.collapse, style.collapse.?);
+        try std.testing.expectEqual(case.unresolved, renderer.fallbacks.unresolved_table_style);
+        try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+        try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+        const cell = table.rows[0].cells[0];
+        try std.testing.expectEqual(presentation_types.CellTextAlign.center, cell.style.?.text_align.?);
+        try std.testing.expectEqualStrings("cell", try FormattingScopeTest.text(a, cell.spans));
+        try std.testing.expectEqual(@as(usize, 1), cell.spans.len);
+        try std.testing.expect(cell.spans[0].kind == .link);
+        try std.testing.expectEqualStrings("Target", cell.spans[0].target);
+        const saved = try AnGreekLegacyBorderCompilerTest.stored(a, &renderer, blocks, "AN controlled border");
+        const stored_table = saved.entry.sections[0].blocks[0].table.?;
+        try std.testing.expectEqualDeep(case.border, stored_table.style.?.border);
+        try std.testing.expectEqual(case.legacy, if (stored_table.geometry) |geometry| geometry.border else null);
+    }
+}
+
+// These controls concern original owners. They never infer owner ink from the
+// first child, a link, the TABLE border, or a native theme's literal RGB value.
+test "AN resolved border basis preserves author ink and refuses unknown or foreign owner contexts" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const table = renderer.resolvedLegacyBorderBasis(.{}, 3, .table).?;
+    const cell = renderer.resolvedLegacyBorderBasis(.{}, 3, .cell).?;
+    try std.testing.expectEqualDeep(presentation_types.ResolvedStyleBorderEdge{ .outset = .{
+        .width = .{ .unit = .px, .value = 3 }, .paint = .owner_current_color,
+    } }, table.top);
+    try std.testing.expectEqualDeep(presentation_types.ResolvedStyleBorderEdge{ .inset = .{
+        .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color,
+    } }, cell.top);
+    const authored = renderer.resolvedLegacyBorderBasis(.{ .foreground = "#123456", .foreground_set = true }, 1, .cell).?;
+    try std.testing.expectEqualDeep(presentation_types.StyleBorderPaint{ .rgb = "#123456" }, authored.left.inset.paint);
+    const inherited = renderer.resolvedLegacyBorderBasis(.{ .foreground = "#123456" }, 1, .cell).?;
+    try std.testing.expectEqualDeep(authored, inherited);
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 0, .table) == null);
+    for ([_]Style{
+        .{ .foreground_set = true }, .{ .foreground = "red" }, .{ .foreground = "#AABBCC" },
+        .{ .kind = .link, .target = "Target" }, .{ .target = "Target" },
+    }) |style| try std.testing.expect(renderer.resolvedLegacyBorderBasis(style, 1, .cell) == null);
+    renderer.body_link_target = "Target";
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 1, .table) == null);
+    renderer.body_link_target = "";
+    renderer.in_reference = true;
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 1, .cell) == null);
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{ .foreground = "#123456" }, 1, .cell) != null);
+    renderer.in_reference = false;
+    renderer.figure_caption_depth = 1;
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 1, .cell) == null);
+    renderer.figure_caption_depth = 0;
+    var profile = try table_style_profile.parseAlloc(a, ""); defer profile.deinit();
+    renderer.context.table_styles = &profile;
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 1, .cell) == null);
+    renderer.context.table_styles = null;
+    renderer.context.text_paint_styles = &profile;
+    try std.testing.expect(renderer.resolvedLegacyBorderBasis(.{}, 1, .table) == null);
+    renderer.context.text_paint_styles = null;
+
+    // New edge widths use the existing once-only em normalization; px and
+    // semantic paint remain unchanged. Hidden/none have no length to normalize.
+    var edges = cell;
+    edges.top.inset.width = .{ .unit = .em, .value = 0.25 };
+    edges.right = .hidden;
+    edges.bottom = .none;
+    const border: presentation_types.StyleBorder = .{ .resolved_edges = edges };
+    try std.testing.expect(Renderer.hasEmBorder(border));
+    const rebased = Renderer.rebasedEmBorder(border, 2) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(presentation_types.StyleLength{ .unit = .em, .value = 0.5 }, rebased.resolved_edges.top.inset.width);
+    try std.testing.expectEqualDeep(cell.left, rebased.resolved_edges.left);
+    try std.testing.expect(rebased.resolved_edges.top.inset.paint == .owner_current_color);
+    try std.testing.expect(rebased.resolved_edges.right == .hidden and rebased.resolved_edges.bottom == .none);
+}
+
+test "AN ordinary HTML resolved owners preserve child colors actions and reset the following legacy table" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = "<table border='1' style='border-color:#ddd;border-collapse:collapse;color:#123456'><tr>" ++
+        "<td style='color:#654321;background:#eef9ff'>plain <span style='color:#ff0000'>red</span> [[Target|link]]</td>" ++
+        "<td>inherited</td></tr></table>\n<table border='1'><tr><td>old</td></tr></table>";
+    const reference = try std.mem.replaceOwned(u8, a, source, "border-color:#ddd;", "");
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    var old: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody(source);
+    const previous = try old.renderBody(reference);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqual(previous.len, blocks.len);
+    try std.testing.expect(!renderer.resolved_legacy_table_border);
+    try std.testing.expect(!renderer.fallbacks.unresolved_table_style);
+    const table = blocks[0].table.?;
+    try std.testing.expectEqualStrings("#dddddd", table.style.?.border.?.resolved_edges.top.outset.paint.rgb);
+    const first = table.rows[0].cells[0];
+    const second = table.rows[0].cells[1];
+    try std.testing.expectEqualStrings("#654321", first.style.?.border.?.resolved_edges.left.inset.paint.rgb);
+    try std.testing.expectEqualStrings("#123456", second.style.?.border.?.resolved_edges.left.inset.paint.rgb);
+    try std.testing.expectEqualStrings("#eef9ff", first.background.?);
+    var red = false;
+    var link = false;
+    for (first.spans) |span| {
+        if (std.mem.eql(u8, span.text, "red")) {
+            red = true;
+            try std.testing.expectEqualStrings("#ff0000", span.foreground.?);
+        }
+        if (span.kind == .link) {
+            link = true;
+            try std.testing.expectEqualStrings("Target", span.target);
+            try std.testing.expectEqualStrings("link", span.text);
+        }
+    }
+    try std.testing.expect(red and link);
+    // The independent old-path arm has identical original content fields.
+    for (table.rows[0].cells, previous[0].table.?.rows[0].cells) |actual, baseline| {
+        try std.testing.expectEqualDeep(baseline.spans, actual.spans);
+        try std.testing.expectEqualDeep(baseline.background, actual.background);
+        try std.testing.expectEqual(baseline.header, actual.header);
+        try std.testing.expectEqual(baseline.rowspan, actual.rowspan);
+        try std.testing.expectEqual(baseline.colspan, actual.colspan);
+    }
+    try std.testing.expectEqualDeep(previous[1], blocks[1]);
+    const following = blocks[1].table.?;
+    if (following.style) |style| try std.testing.expect(style.border == null);
+    if (following.rows[0].cells[0].style) |style| try std.testing.expect(style.border == null);
+    const saved = try AnGreekLegacyBorderCompilerTest.stored(a, &renderer, blocks, "AN owner paint");
+    try std.testing.expectEqualStrings("#654321", saved.entry.sections[0].blocks[0].table.?.rows[0].cells[0].style.?.border.?.resolved_edges.left.inset.paint.rgb);
+    try std.testing.expectEqualDeep(presentation_types.StyleBorderPaint{ .rgb = "#123456" },
+        saved.entry.sections[0].blocks[0].table.?.rows[0].cells[1].style.?.border.?.resolved_edges.left.inset.paint);
 }
