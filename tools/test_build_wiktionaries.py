@@ -4195,6 +4195,26 @@ class ExpansionDeadlineTests(unittest.TestCase):
                     compress.assert_not_called()
                 self.assertFalse((root / 'final').exists())
 
+    def test_missing_expansion_inputs_cannot_be_published_from_saved_reports(self):
+        for source in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing'):
+            for prefix in ('expansion_error:', 'expansion_error:expand:'):
+                with self.subTest(source=source, prefix=prefix), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    staging = root / 'staging'
+                    staging.mkdir()
+                    (staging / b.VERIFIED_MARKER).write_text(b.VERIFIED_CONTENT)
+                    write_coverage(staging)
+                    report = staging / b.FALLBACK_REPORT_NAME
+                    row = {'namespace': 0, 'title': 'ja', 'reasons': ['expansion_error', prefix + source]}
+                    original = (json.dumps(row) + '\n').encode()
+                    report.write_bytes(original)
+                    with patch.object(b, 'compress_many') as compress:
+                        with self.assertRaisesRegex(ValueError, f'Missing expansion input {source} for .*ja'):
+                            b._publish_verified_staging(staging, root / 'final', 'test', '20260901')
+                        compress.assert_not_called()
+                    self.assertFalse((root / 'final').exists())
+                    self.assertEqual(report.read_bytes(), original)
+
     def test_old_timeout_staging_cannot_be_published(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); staging=root/'staging'; staging.mkdir()

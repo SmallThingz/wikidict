@@ -8203,6 +8203,8 @@ def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
                     raise ValueError(f'Operational expansion {kind} at {path}:{line_number}; rebuild this output')
                 if len(parts) == 3 and parts[1] != 'expand':
                     raise ValueError(f'Infrastructure expansion failure at {path}:{line_number}; rebuild this output')
+                if len(parts) in (2, 3) and parts[-1] in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing'):
+                    raise ValueError(f'Missing expansion input {parts[-1]} for {title!r} at {path}:{line_number}; rebuild with the required snapshot')
             titles = titles_by_namespace[namespace]
             if title in titles:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
