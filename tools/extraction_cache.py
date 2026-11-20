@@ -6,6 +6,7 @@ dump marker. This helper does not reread the multigigabyte dump or stream index.
 """
 import hashlib
 import errno
+import io
 import json
 import math
 import os
@@ -1055,42 +1056,49 @@ def _sitelinks_append(before, after, selected_rows):
 
 
 def _file_metadata_audio_append(before, after, selected_titles):
-    header = b'# wikidict-file-metadata-v2\n'
-    def rows(raw):
-        if not raw.startswith(header) or not raw.endswith(b'\n'):
-            raise ValueError('File metadata update requires identical v2 header/schema')
-        result = {}; previous = None
-        for line in raw[len(header):-1].split(b'\n'):
-            cells = line.decode('utf8').split('\t')
-            if len(cells) != 6 or not cells[0] or any(ord(ch) < 32 or ord(ch) == 127 for value in cells for ch in value):
-                raise ValueError('Malformed file metadata row')
-            title = cells[0]
-            if title.strip() != title or ':' not in title or title in result or (previous is not None and previous >= title):
-                raise ValueError('Duplicate or unordered file metadata title')
-            previous = title; result[title] = (line, cells)
-        if not result:
-            raise ValueError('File metadata origin must contain named rows')
-        return result
-    old, current = rows(before), rows(after)
     if (not isinstance(selected_titles, list) or not selected_titles or
             any(not isinstance(value, str) for value in selected_titles) or
             len(set(selected_titles)) != len(selected_titles)):
         raise ValueError('File metadata additions need exact distinct selected titles')
-    if any(title not in current or current[title][0] != row[0] for title, row in old.items()):
+    old, current = io.BytesIO(before), io.BytesIO(after)
+    header = b'# wikidict-file-metadata-v2\n'
+    if old.readline() != header or current.readline() != header:
+        raise ValueError('File metadata update requires identical v2 header/schema')
+    original = old.readline()
+    if not original:
+        raise ValueError('File metadata origin must contain named rows')
+    prefix = original.partition(b'\t')[0].decode('utf8').partition(':')[0] + ':'
+    remaining = set(selected_titles)
+    previous = ''
+    invalid_control = re.compile(rb'[\x00-\x08\x0a-\x1f\x7f]')
+    for line in current:
+        if not line.endswith(b'\n'):
+            raise ValueError('File metadata update requires identical v2 header/schema')
+        row = line[:-1]
+        cells = row.decode('utf8').split('\t')
+        if len(cells) != 6 or not cells[0] or invalid_control.search(row):
+            raise ValueError('Malformed file metadata row')
+        title = cells[0]
+        if title.strip() != title or ':' not in title or title <= previous:
+            raise ValueError('Duplicate or unordered file metadata title')
+        previous = title
+        # Both snapshots are sorted. An exact match validates the old row too.
+        if line == original:
+            if not title.startswith(prefix):
+                raise ValueError('Ambiguous original file namespace')
+            original = old.readline()
+        else:
+            if title not in remaining:
+                raise ValueError('File metadata update differs from selected audio titles')
+            if (cells[1:5] != ['1', '0', '0', 'AUDIO'] or not title.startswith(prefix) or
+                    not cells[5].startswith(prefix) or cells[5] == prefix or cells[5].strip() != cells[5]):
+                raise ValueError('File metadata update permits only zero-axis AUDIO additions')
+            remaining.remove(title)
+    if original:
         raise ValueError('File metadata update changed or deleted an original row')
-    added = set(current) - set(old)
-    if added != set(selected_titles):
+    if remaining:
         raise ValueError('File metadata update differs from selected audio titles')
-    prefixes = {title.split(':', 1)[0] for title in old}
-    if len(prefixes) != 1:
-        raise ValueError('Ambiguous original file namespace')
-    prefix = next(iter(prefixes)) + ':'
-    for title in added:
-        cells = current[title][1]
-        if (cells[1:5] != ['1', '0', '0', 'AUDIO'] or not title.startswith(prefix) or
-                not cells[5].startswith(prefix) or cells[5] == prefix or cells[5].strip() != cells[5]):
-            raise ValueError('File metadata update permits only zero-axis AUDIO additions')
-    return sorted(added)
+    return sorted(selected_titles)
 
 
 def _file_metadata_sources(proof):

@@ -3140,6 +3140,18 @@ class FileMetadataProviderUpdateTests(unittest.TestCase):
                 with self.assertRaises(ValueError): self.prepare_file(root, dump, source)
                 self.assertEqual(before, (root / cache.COMPLETED_EXPANDER).read_bytes()); self.assertFalse((root / '.incomplete').exists())
 
+    def test_audio_additions_before_between_and_after_original_rows(self):
+        header = b'# wikidict-file-metadata-v2\n'
+        def row(title):
+            return f'File:{title}\t1\t0\t0\tAUDIO\tFile:{title}\n'.encode()
+        original = header + row('B') + row('D')
+        current = header + b''.join(map(row, 'ABCDE'))
+        selected = ['File:E', 'File:A', 'File:C']
+        self.assertEqual(sorted(selected), cache._file_metadata_audio_append(original, current, selected))
+        for changed in (original[:-1], header + row('D') + row('B'), original + row('F')):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                cache._file_metadata_audio_append(changed, current, selected)
+
     def test_audio_append_requires_exact_selected_hash_titles_and_external_source(self):
         for change in ('hash', 'bytes', 'titles', 'duplicate-titles', 'symlink', 'original'):
             with self.subTest(change=change):
