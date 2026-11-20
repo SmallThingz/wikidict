@@ -10,6 +10,7 @@ import xml.etree.ElementTree as ET
 
 
 HEADING = re.compile(r'==\s*([^=\[\]{}<>|]+?)\s*==')
+STANDALONE_COMMENT = re.compile(r'^[ \t]*<!--([^<>\r\n]*)-->[ \t]*(?=\r?$)', re.MULTILINE)
 LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
 PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
 BARE_URL = re.compile(r'https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[A-Za-z0-9_./~-]*)?')
@@ -251,7 +252,18 @@ def source_actions_match(expected, actual):
 def definitions(text, title, headings, trail_rule=None):
     # Only inspect unambiguous source. Templates and protected or table text can
     # emit headings or consume later lines. Never assign those lines a language.
-    if '#' not in text or any(marker in text for marker in ('{{', '}}', '<', '>', '{|')):
+    if '#' not in text:
+        return
+    if '<!--' in text:
+        # A complete, standalone editor comment contributes no visible content.
+        # Leave its newline in place so witnesses retain the original line number.
+        def remove_editor_comment(match):
+            if len(match[0].splitlines()) != 1 or any(
+                    marker in match[1] for marker in ('--', '{{', '}}', '[[', ']]', '{|', '|}', '__')):
+                return match[0]
+            return ''
+        text = STANDALONE_COMMENT.sub(remove_editor_comment, text)
+    if any(marker in text for marker in ('{{', '}}', '<', '>', '{|')):
         return
     lines = text.splitlines()
     if '__' in text and any('__' in line and not re.fullmatch(r'#[ \t]*_+[ \t]*', line) for line in lines):
@@ -483,7 +495,7 @@ class SourceDefinitions:
                     language_registry_sha256=self.registry_sha256,
                     has_source_evidence=count > 0,
                     examples=examples, matched_example=self.matched_example,
-                    scope='Compare simple numbered lines under literal language headings on template-free pages to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
+                    scope='Compare simple numbered lines under literal language headings on template-free pages, ignoring standalone plain editor comments, to ordered definition blocks at their authored nesting depth. A single bold or italic run must occupy its exact source range. Require the registered code for a unique primary name or its explicitly listed initial-capital spelling. Unmatched items need source review; numbered examples and related terms can be intentional.')
 
     def unmatched_locations(self, *, after_examples):
         rows = self.db.execute('SELECT title,owner,page,revision,line FROM sense WHERE matched=0 '

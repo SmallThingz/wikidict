@@ -60,6 +60,16 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertEqual(list(definitions(text + '\n# ________________', 'self', {'English'})),
                          list(definitions(text, 'self', {'English'})))
 
+    def test_standalone_editor_comment_keeps_original_definition_line_and_owner(self):
+        source = '==Englisc==\n<!--note: the sense "one year of age" is an adjective-->\n==Polisc==\n#[[híe]] ([[wíflic]])'
+        self.assertEqual(list(definitions(source, 'one', {'Englisc', 'Polisc'})), [
+            ('Polisc', 4, '#', 'híe (wíflic)', ((0, 3, 'híe'), (5, 11, 'wíflic')), None)])
+        for markup in ('<!--open', '<!--two\nlines-->', '<!--outer<!--inner-->end-->',
+                       '<nowiki>\n<!--literal-->\n</nowiki>', 'text<!--inline-->', '<!--a--b-->',
+                       '<!--{{header}}-->', '<!--[[target]]-->', '<!--one\u2028two-->'):
+            with self.subTest(markup=markup):
+                self.assertEqual(list(definitions(markup + '\n' + source, 'one', {'Polisc'})), [])
+
     def test_localized_name_requires_one_owner_across_registry_sections(self):
         header = '# wikidict-language-registry-v2\n# mediawiki\n'
         raw = header + 'aa\tOne\taa\nfr\tfrançais\tFrench\n# iso-639-3\nzz\tTwo\tOne\n'
