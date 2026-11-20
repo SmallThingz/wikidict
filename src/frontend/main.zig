@@ -324,7 +324,7 @@ fn reportOpenError(io: std.Io, opts: args.Options, err: anyerror) !void {
         error.FileNotFound => if (opts.command == .languages)
             "The language catalogue or a listed dictionary file is missing. Reinstall missing dictionaries, or choose a completed dataset with --root PATH.\n"
         else
-            "Choose an installed dataset with --root PATH.\nUse 'dict languages --root PATH' to check its language names.\nFor a new dictionary, run 'dict catalog', then 'dict install URL --root PATH'.\n",
+            "Choose an installed dataset with --root PATH.\nUse 'dict languages --root PATH' to check its language names.\nInstall a local dictionary with 'dict install FILE --root PATH'.\nTo browse a remote catalogue, use 'dict catalog HTTPS_URL'.\n",
         error.DictionaryBuildIncomplete => "This dataset is still being built. Wait for its build to finish or choose a completed dataset with --root PATH.\n",
         error.AccessDenied => "Check that you can read the dataset folder and its files, or choose another folder with --root PATH.\n",
         else => if (opts.command == .languages)
