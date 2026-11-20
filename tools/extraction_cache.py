@@ -1939,15 +1939,19 @@ def walk_assets(root):
     module_root = root / TREE
     if module_root.is_symlink() or not module_root.is_dir():
         raise ValueError("Missing regular modules directory")
-    for path in module_root.rglob("*"):
-        if path.is_symlink():
-            raise ValueError(f"Unsafe extraction asset: {path}")
-        if path.is_file():
-            names.append(path.relative_to(root).as_posix())
-            if len(names) > 1_000_000:
-                raise ValueError("Oversized extraction asset inventory")
-        elif not path.is_dir():
-            raise ValueError(f"Unsupported extraction asset: {path}")
+    # scandir supplies directory entry types. Validate every leaf once below.
+    def raise_walk_error(error):
+        raise error
+
+    for parent, directories, filenames in os.walk(module_root, onerror=raise_walk_error):
+        relative = Path(parent).relative_to(root).as_posix()
+        for directory in directories:
+            path = Path(parent) / directory
+            if path.is_symlink():
+                raise ValueError(f"Unsafe extraction asset: {path}")
+        if len(names) + len(filenames) > 1_000_000:
+            raise ValueError("Oversized extraction asset inventory")
+        names.extend(f"{relative}/{name}" for name in filenames)
     names.sort()
     for name in names:
         regular(root / name)

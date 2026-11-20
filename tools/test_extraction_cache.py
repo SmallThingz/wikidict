@@ -117,6 +117,36 @@ class ExtractionCacheTest(unittest.TestCase):
         for name, _, _ in cache.read_marker(generation / '.complete.json')['assets']:
             self.assertTrue((generation / name).samefile(output / name), name)
 
+    def test_module_inventory_refuses_unreadable_subtree(self):
+        nested = self.source / 'modules' / 'level'
+        nested.mkdir()
+        (nested / 'helper.lua').write_bytes(b'return 2')
+        scandir = cache.os.scandir
+
+        def fail_nested(path):
+            if Path(path) == nested:
+                raise PermissionError('Cannot enumerate fixture subtree')
+            return scandir(path)
+
+        with mock.patch.object(cache.os, 'scandir', side_effect=fail_nested):
+            with self.assertRaises(PermissionError):
+                cache.walk_assets(self.source)
+
+    def test_module_inventory_rejects_links_and_special_files(self):
+        modules = self.source / 'modules'
+        nested = modules / 'level'
+        nested.mkdir()
+        alias = modules / 'alias'
+        for target in (nested, modules / '123.lua', modules / 'missing'):
+            with self.subTest(target=target):
+                alias.symlink_to(target)
+                with self.assertRaises(ValueError):
+                    cache.walk_assets(self.source)
+                alias.unlink()
+        cache.os.mkfifo(alias)
+        with self.assertRaises(ValueError):
+            cache.walk_assets(self.source)
+
     def test_snapshot_backing_mutation_invalidates_main_probe(self):
         backing = self.base / "redirects.tsv"
         backing.write_bytes(b"snapshot before")
