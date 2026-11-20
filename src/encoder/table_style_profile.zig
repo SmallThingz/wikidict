@@ -3854,7 +3854,11 @@ fn observedFigurePropertyCandidates(a: std.mem.Allocator, declarations: []const 
     errdefer result.deinit(a);
     for (declarations) |declaration| {
         if (!observedFigureDeclarationAffects(declaration, property, shorthands)) continue;
-        if (best != null and !declaration.rank_unknown and !declaration.priority.wins(best.?)) continue;
+        if (best) |winner| {
+            // Selector rank cannot elevate a known normal declaration above an important one.
+            if (winner.important and !declaration.syntax_unknown and !declaration.priority.important) continue;
+            if (!declaration.rank_unknown and !declaration.priority.wins(winner)) continue;
+        }
         try result.append(a, declaration);
     }
     return try result.toOwnedSlice(a);
@@ -34551,4 +34555,156 @@ test "captured Table joined rule receipts retain no growth identity and refuse f
     try std.testing.expectEqualSlices(usize, no_growth.rules, unchanged.rules);
     try std.testing.expect(unchanged.rules.ptr == no_growth.rules.ptr and unchanged.operation == no_growth.operation);
     try std.testing.expect(no_growth.operation.inline_wrap_source.?.binds(unchanged, no_growth_context, 7));
+}
+
+
+const CapturedImportantMargins18Test = struct {
+    // Reduced retained skin/Common rules and the actual authored table margin.
+    // The graph is the existing four-node captured floating-table test shape.
+    const skin_selector = ".mw-body p + ul,.mw-body p + ol,.mw-body p + table,.mw-body p + dl,.mw-body p + blockquote";
+    const skin = skin_selector ++ "{margin-top:-0.5em}";
+    const common_selector = "div.float-right,table.float-right,ul.float-right,.float-right";
+    const common = common_selector ++ "{clear:right;float:right;margin:.4em 0 .5em .4em!important}";
+    const base = "table{box-sizing:border-box;border-collapse:collapse;background:#ffffff}";
+    const responsive = "@media(max-width:639px){table.float-right{float:none;display:block;overflow:auto;max-width:100%;width:fit-content;margin-left:0;margin-right:0}}";
+
+    fn nodes(inline_margin: bool) [4]ObservedStyleNode {
+        return .{
+            .{ .tag = "html", .parent = null, .attributes = &.{} },
+            .{ .tag = "body", .parent = 0, .attributes = &.{.{ .name = "class", .value = "mw-body" }} },
+            .{ .tag = "div", .parent = 1, .attributes = &.{.{ .name = "class", .value = "mw-parser-output" }} },
+            .{ .tag = "table", .parent = 2, .attributes = if (inline_margin)
+                &.{ .{ .name = "class", .value = "wikitable float-right inflection-table flexbox" },
+                    .{ .name = "style", .value = "margin:0 0 .5em .4em;" } }
+                else &.{.{ .name = "class", .value = "wikitable float-right inflection-table flexbox" }} },
+        };
+    }
+
+    fn expected(scale: f32) types.StyleEdges {
+        return .{ .top = .{ .unit = .em, .value = 0.4 * scale },
+            .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .em, .value = 0.5 * scale },
+            .left = .{ .unit = .em, .value = 0.4 * scale } };
+    }
+};
+
+test "captured floating Table important margins dominate normal uncertain selector rank" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = CapturedImportantMargins18Test;
+    var styles = try parseForTargetAlloc(a, F.base ++ F.skin ++ F.common ++ F.responsive, .screen); defer styles.deinit();
+    var reference = try parseForTargetAlloc(a, F.base ++ F.common ++ F.responsive, .screen); defer reference.deinit();
+    const nodes = F.nodes(true);
+    const context: TableContainingDirectionContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 3 };
+    const reference_context: TableContainingDirectionContext = .{ .styles = &reference, .nodes = &nodes, .root = 2, .table = 3 };
+    for ([_]f64{ 0, 639, 639.5, 900 }) |viewport| {
+        errdefer std.debug.print("IMPORTANT_MARGIN18 positive viewport={d}\n", .{viewport});
+        const path = (try observedTableDeclarationPath(a, context, 3, viewport, null)) orelse return error.TestUnexpectedResult;
+        var uncertain_normal = false; var known_important = false; var inline_normal = false;
+        for (path.declarations) |declaration| {
+            if (std.mem.eql(u8, declaration.name, "margin-top") and std.mem.eql(u8, declaration.raw, "-0.5em")) {
+                uncertain_normal = true;
+                try std.testing.expect(declaration.uncertain and declaration.rank_unknown and !declaration.syntax_unknown and !declaration.priority.important);
+            }
+            if (std.mem.eql(u8, declaration.name, "margin") and std.mem.eql(u8, declaration.raw, ".4em 0 .5em .4em")) {
+                known_important = true;
+                try std.testing.expect(!declaration.uncertain and !declaration.rank_unknown and !declaration.syntax_unknown and declaration.priority.important);
+            }
+            if (declaration.priority.inline_style and std.mem.eql(u8, declaration.name, "margin")) {
+                inline_normal = true;
+                try std.testing.expect(!declaration.priority.important);
+                try std.testing.expectEqualStrings("0 0 .5em .4em", declaration.raw);
+            }
+        }
+        try std.testing.expect(uncertain_normal and known_important and inline_normal);
+        const candidates = try observedFigurePropertyCandidates(a, path.declarations, "margin-top", &.{"margin"});
+        try std.testing.expect(candidates.len != 0);
+        for (candidates) |candidate| {
+            try std.testing.expect(candidate.priority.important and !candidate.rank_unknown and !candidate.syntax_unknown);
+            try std.testing.expectEqualStrings(".4em 0 .5em .4em", candidate.raw);
+        }
+        for ([_]f32{ 1, 2 }) |scale| {
+            errdefer std.debug.print("IMPORTANT_MARGIN18 positive scale={d}\n", .{scale});
+            const margins = try observedFigureEdges(a, path.declarations, path.environment, false, false, scale, null);
+            try std.testing.expect(!margins.unresolved and margins.value != null);
+            const expected = F.expected(scale);
+            inline for (.{ "top", "right", "bottom", "left" }) |side| {
+                const actual = @field(margins.value.?, side);
+                try std.testing.expect(actual == .length);
+                try std.testing.expectEqualDeep(@field(expected, side), actual.length);
+            }
+            const box = (try resolveObservedTableFloatViewportBox(a, context, viewport, scale, .normal_body, .ltr, .ltr, null)) orelse return error.TestUnexpectedResult;
+            const independent = (try resolveObservedTableFloatViewportBox(a, reference_context, viewport, scale, .normal_body, .ltr, .ltr, null)) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqualDeep(independent, box);
+            try std.testing.expectEqualDeep(expected, box.style.margins.?);
+            try std.testing.expect(box.style.margin_values == null and box.style.clear == .right);
+            try std.testing.expectEqual(viewport <= 639, box.block);
+            if (box.block) {
+                try std.testing.expect(box.style.float_side == null and box.style.width == null);
+                try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 100 }, box.max_width.?);
+            } else {
+                try std.testing.expect(box.style.float_side == .right and box.max_width == null);
+            }
+        }
+    }
+}
+
+test "observed margin importance keeps ambiguous winners and computed invalid refusal" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = CapturedImportantMargins18Test;
+    const Case = struct { name: []const u8, css: []const u8, inline_margin: bool = true,
+        unknown_syntax: bool = false, unknown_rank: bool = false, no_definite: bool = false, invalid_winner: bool = false };
+    for ([_]Case{
+        .{ .name = "equally important uncertain selector", .css = F.base ++ F.common ++ F.skin_selector ++ "{margin-top:.8em!important}", .unknown_rank = true },
+        .{ .name = "unknown importance", .css = F.base ++ F.common ++ "table{margin-top:.8em !questionable}", .unknown_syntax = true },
+        .{ .name = "escaped property", .css = F.base ++ F.common ++ "table{margin\\2d top:.8em}", .unknown_syntax = true },
+        .{ .name = "normal winner cannot defeat unknown rank", .css = F.base ++ F.skin_selector ++ "{margin-top:.8em}" ++ F.common_selector ++ "{clear:right;float:right;margin:.4em 0 .5em .4em}", .unknown_rank = true },
+        .{ .name = "no definite winner", .css = F.base ++ F.skin_selector ++ "{margin-top:.8em}", .inline_margin = false, .unknown_rank = true, .no_definite = true },
+        .{ .name = "invalid winning value cannot expose lower margin", .css = F.base ++ F.common ++ "table.float-right{margin:not-a-length!important}", .invalid_winner = true },
+    }) |case| {
+        errdefer std.debug.print("IMPORTANT_MARGIN18 refusal={s}\n", .{case.name});
+        var styles = try parseForTargetAlloc(a, case.css, .screen); defer styles.deinit();
+        const nodes = F.nodes(case.inline_margin);
+        const context: TableContainingDirectionContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 3 };
+        var declarations = (try observedStyleNodeDeclarationsWithLanguage(a, &styles, &nodes, 3, null, null, .{ .viewport_width = 900 }, true)) orelse return error.TestUnexpectedResult;
+        defer declarations.deinit(a);
+        const candidates = try observedFigurePropertyCandidates(a, declarations.items, "margin-top", &.{"margin"});
+        try std.testing.expect(candidates.len != 0);
+        var retained_unknown_syntax = false; var retained_unknown_rank = false;
+        for (candidates) |candidate| {
+            retained_unknown_syntax = retained_unknown_syntax or candidate.syntax_unknown;
+            retained_unknown_rank = retained_unknown_rank or candidate.rank_unknown;
+            if (case.no_definite) try std.testing.expect(candidate.uncertain);
+            if (case.invalid_winner) {
+                try std.testing.expect(candidate.priority.important and !candidate.uncertain and !candidate.rank_unknown);
+                try std.testing.expectEqualStrings("not-a-length", candidate.raw);
+            }
+        }
+        if (case.unknown_syntax) try std.testing.expect(retained_unknown_syntax);
+        if (case.unknown_rank) try std.testing.expect(retained_unknown_rank);
+        const margins = try observedFigureEdges(a, declarations.items, .{ .complete = true }, false, false, 1, null);
+        try std.testing.expect(margins.unresolved);
+        try std.testing.expect((try resolveObservedTableFloatViewportBox(a, context, 900, 1, .normal_body, .ltr, .ltr, null)) == null);
+    }
+    // A guaranteed-invalid winning var() resets to initial zero; it never revives
+    // the lower important Common shorthand or the normal authored inline margin.
+    var styles = try parseForTargetAlloc(a, F.base ++ F.skin ++ F.common ++ "table.float-right{margin:var(--missing)!important}", .screen); defer styles.deinit();
+    const nodes = F.nodes(true);
+    const context: TableContainingDirectionContext = .{ .styles = &styles, .nodes = &nodes, .root = 2, .table = 3 };
+    const path = (try observedTableDeclarationPath(a, context, 3, 900, null)) orelse return error.TestUnexpectedResult;
+    const candidates = try observedFigurePropertyCandidates(a, path.declarations, "margin-top", &.{"margin"});
+    try std.testing.expect(candidates.len != 0);
+    for (candidates) |candidate| {
+        try std.testing.expect(candidate.priority.important and !candidate.uncertain and !candidate.rank_unknown);
+        try std.testing.expectEqualStrings("var(--missing)", candidate.raw);
+    }
+    const margins = try observedFigureEdges(a, path.declarations, path.environment, false, false, 1, null);
+    try std.testing.expect(!margins.unresolved and margins.value != null);
+    inline for (.{ "top", "right", "bottom", "left" }) |side| {
+        const value = @field(margins.value.?, side);
+        try std.testing.expect(value == .length);
+        try std.testing.expectEqualDeep(types.StyleLength{ .unit = .px, .value = 0 }, value.length);
+    }
+    const box = (try resolveObservedTableFloatViewportBox(a, context, 900, 1, .normal_body, .ltr, .ltr, null)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 0 }), box.style.margins.?);
+    // An unknown environment remains unresolved, even with the same winning bytes.
+    try std.testing.expect((try observedFigureEdges(a, path.declarations, .{ .complete = false }, false, false, 1, null)).unresolved);
 }
