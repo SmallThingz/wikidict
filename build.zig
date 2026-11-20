@@ -414,11 +414,14 @@ pub fn build(b: *std.Build) void {
     blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
     blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
-    validateToolsPartitionSources(b) catch |err| {
-        std.log.err("invalid Tools test partition boundary: {s}", .{@errorName(err)});
-        b.invalid_user_input = true;
-        return;
-    };
+    // Source membership matters only to targets which select tests by partition.
+    // All partition compiles share the same cached inventory check.
+    const tools_inventory = b.addRunArtifact(b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("build.zig"), .target = b.graph.host, .optimize = test_optimize,
+        }),
+        .filters = &.{"Tools partition source inventory"},
+    }));
     const blob_build_normal_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[0].filters));
     const blob_build_core_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[1].filters));
     const blob_build_observations_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[2].filters));
@@ -427,6 +430,7 @@ pub fn build(b: *std.Build) void {
         blob_build_normal_tests, blob_build_core_tests,
         blob_build_observations_tests, blob_build_support_tests,
     };
+    for (tools_test_parts) |part| part.step.dependOn(&tools_inventory.step);
     // Keep heavy compiles sequential at the existing job cap. Execute each
     // independent artifact even if another partition returns test failures.
     for (tools_test_parts[1..], 0..) |part, i| part.step.dependOn(&tools_test_parts[i].step);
@@ -1020,6 +1024,7 @@ pub fn build(b: *std.Build) void {
             if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
         }
         if (isToolsPartition(prepared.group)) {
+            compiled.step.dependOn(&tools_inventory.step);
             if (previous_prepared_tools) |previous| compiled.step.dependOn(previous);
             previous_prepared_tools = &compiled.step;
         }
@@ -1908,16 +1913,20 @@ fn validateToolsTestSource(a: std.mem.Allocator, source: [:0]const u8, namespace
     return count;
 }
 
-fn validateToolsPartitionSources(b: *std.Build) !void {
-    for (tools_test_files) |relative| {
-        const path = b.path(relative);
-        // This read affects graph configuration. Track contents with Zig's
-        // normal configure cache; do not poison it or trust stale boundaries.
-        b.dependOnFileContents(path);
-        const source = try std.Io.Dir.cwd().readFileAllocOptions(b.graph.io,
-            try b.root.joinString(b.allocator, relative), b.allocator, .limited(16 * 1024 * 1024), .of(u8), 0);
-        const count = try validateToolsTestSource(b.allocator, source, std.fs.path.stem(relative));
-        if (count == 0) return error.EmptyToolsTestNamespace;
+test "Tools partition source inventory" {
+    inline for (tools_test_files) |relative| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const source = @embedFile(relative);
+        if (source.len > 16 * 1024 * 1024) return error.ToolsTestSourceTooLarge;
+        const count = validateToolsTestSource(arena.allocator(), source, std.fs.path.stem(relative)) catch |err| {
+            std.debug.print("{s}: invalid Tools test partition boundary: {s}\n", .{ relative, @errorName(err) });
+            return err;
+        };
+        if (count == 0) {
+            std.debug.print("{s}: empty Tools test namespace\n", .{relative});
+            return error.EmptyToolsTestNamespace;
+        }
     }
 }
 
