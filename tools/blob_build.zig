@@ -26972,9 +26972,21 @@ test "Writer retained ML to preserves snapshot owners complete body actions styl
         };
         if (std.mem.eql(u8, actual.language_code, "ja")) {
             try japanese.entry(a, actual);
-            try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+            try std.testing.expectEqual(@as(usize, 2), actual.organization.lexemes.len);
+            try std.testing.expectEqualStrings("Particle", actual.organization.lexemes[0].kind);
             try std.testing.expectEqual(@as(usize, 4), actual.organization.lexemes[0].definitions.len);
             try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes[0].section);
+            const noun = actual.organization.lexemes[1];
+            try std.testing.expectEqualStrings("Noun", noun.kind);
+            try std.testing.expectEqualStrings(actual.language.?, noun.language);
+            try std.testing.expectEqual(@as(usize, 2), noun.section);
+            try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+            for ([_][2][]const u8{ .{ "戸#Japanese", "വാതിൽ" }, .{ "都#Japanese", "മെട്രോപ്പൊളിസ്" } }, noun.definitions, 1..) |targets, sense, block| {
+                try std.testing.expectEqual(block, sense.block);
+                const spans = actual.sections[noun.section].blocks[sense.block].spans;
+                try std.testing.expectEqualStrings(targets[0], spans[0].target);
+                try std.testing.expectEqualStrings(targets[1], spans[2].target);
+            }
         }
     }
     try std.testing.expect(try expected_it.next() == null);

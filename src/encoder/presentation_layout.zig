@@ -2406,6 +2406,28 @@ fn hasTopLevelNumberedGloss(blocks: []const wiki.Block) bool {
     return false;
 }
 
+fn malayalamNounSection(sections: anytype, index: usize, owner: []const u8) bool {
+    const section = sections[index];
+    const S = @TypeOf(section);
+    if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return false;
+    if (section.level != 3 or !std.mem.eql(u8, section.title, "നാമം") or !section.is_heading or
+        section.title_depth != 0 or section.title_list_path.len != 0) return false;
+    if (owner.len == 0 or std.mem.eql(u8, owner, "Unclassified")) return false;
+
+    // A stored language record can include a later, unresolved H2. Only the
+    // classified language's own H2 can supply the owner of this noun heading.
+    var parent = index;
+    while (parent != 0) {
+        parent -= 1;
+        const heading = sections[parent];
+        if (heading.level > 2) continue;
+        return heading.level == 2 and heading.is_heading and heading.title_depth == 0 and
+            heading.title_list_path.len == 0 and std.mem.eql(u8, heading.title, owner) and
+            hasTopLevelNumberedGloss(section.blocks);
+    }
+    return false;
+}
+
 fn dictionaryNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
     // BLK Template:noun p59/r172 emits နာမ်ႏ; Template:en-noun p3565/r8202
     // supplies the same noun class to its headword module.
@@ -2986,6 +3008,7 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
 
 pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, owner_code: []const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme, page_title: ?[]const u8) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
+    const malayalam = !unclassified and owner != null and owner_code.len != 0 and std.mem.eql(u8, wiki_id, "mlwiktionary");
     const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
@@ -3003,7 +3026,8 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
             (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
         const spanish_part = if (unclassified) null else spanishDefinitionPart(section, owner, owner_code, wiki_id);
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse spanish_part orelse if (quechua) quechuaDefinitionPart(section) else if (dictionaryNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
+            partOfSpeech(section.title) orelse spanish_part orelse if (quechua) quechuaDefinitionPart(section) else if
+                (dictionaryNounSection(section, owner, wiki_id) or (malayalam and malayalamNounSection(sections, i, owner.?))) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const decimal_noun = decimal: {
             const kind = if (unclassified) null else aragoneseGrammarPart(section, owner, wiki_id);
@@ -14981,6 +15005,68 @@ test "Aragonese current badina decimal address preserves complete typed Figure f
     sense.source_decimal_sense = false;
     const no_receipt = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
     for (no_receipt.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+}
+
+test "Malayalam Japanese noun in to keeps the two authored senses and complete Reader body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a,
+        @embedFile("testdata/ml-noun/to-ja-reader.json"), .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    const before = saved.value.entries[0];
+    try std.testing.expectEqualStrings("to", before.title);
+    try std.testing.expectEqualStrings("ja", before.language_code);
+    const sections = try AragoneseDecimalTest.projected(a, before);
+    const owner = before.language.?;
+    const layout = try buildForEntryWithClassifiedCode(a, sections, false, owner, "ja", null, "mlwiktionary", &.{}, before.title);
+    try std.testing.expectEqual(before.organization.lexemes.len + 1, layout.lexemes.len);
+    const noun = layout.lexemes[1];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings(owner, noun.language);
+    try std.testing.expectEqual(@as(usize, 2), noun.section);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions[1].block);
+    var entry = before;
+    entry.organization = (try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{})).value;
+    try std.testing.expectEqualDeep(before.organization.lexemes[0], entry.organization.lexemes[0]);
+    try std.testing.expectEqualDeep(before.organization.lexemes[1], entry.organization.lexemes[2]);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2, 3, 6, 7 }, before.organization.other_sections);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 3, 6, 7 }, entry.organization.other_sections);
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = entry });
+    var decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, .language, .{ .heading = owner, .code = "ja" });
+    try std.testing.expectEqualDeep(T.Stored{ .entry = entry }, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    // Page 8599, revision 534593. Each Japanese target and its Malayalam gloss
+    // still points at the original linked text in the unchanged body.
+    const blocks = decoded.entry.sections[noun.section].blocks;
+    for ([_][2][]const u8{ .{ "戸#Japanese", "വാതിൽ" }, .{ "都#Japanese", "മെട്രോപ്പൊളിസ്" } }, noun.definitions) |targets, sense| {
+        const spans = blocks[sense.block].spans;
+        try std.testing.expectEqualStrings(targets[0], spans[0].target);
+        try std.testing.expectEqualStrings(targets[1], spans[2].target);
+    }
+    decoded.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, decoded);
+
+    const Section = AragoneseDecimalTest.Section;
+    var probe = [_]Section{ sections[0], sections[2] };
+    try std.testing.expect(malayalamNounSection(&probe, 1, owner));
+    probe[0] = sections[3]; // The later unresolved Lojban heading cannot borrow Japanese ownership.
+    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    probe[0] = sections[0];
+    probe[1].title_depth = 1;
+    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    probe[1] = sections[2];
+    probe[1].blocks = &.{};
+    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    probe[1] = sections[2];
+    probe[1].title = "നാമവിശേഷണം";
+    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    probe[1] = sections[2];
+    try std.testing.expectEqual(@as(usize, 0), (try buildForEntryWithClassifiedCode(a, &probe, false, owner, "ja", null, "enwiktionary", &.{}, "to")).lexemes.len);
 }
 
 test "Amharic edition keeps the Nng noun sense separate from its numbered citation" {
