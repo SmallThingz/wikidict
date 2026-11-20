@@ -8,7 +8,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, reveal_witness, source_witness_visible, visible_body_witness
+from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, confirm_table_boundaries, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, reveal_witness, source_witness_visible, visible_body_witness
 from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty
 
 
@@ -390,6 +390,71 @@ class EditionTerminalTests(unittest.TestCase):
         reader.expected_table = expected
         rows[7][8]['text'] = ' '
         self.assertFalse(source_witness_visible(reader, 'σημαιών', 'σημαία / griego'))
+
+    def test_complete_table_does_not_join_distinct_short_rows_or_drop_spaces(self):
+        def check(left, right, table):
+            lines = [f'  │ {a:^8} │ {b:^8} │' for a, b in zip(left, right)]
+            display = [''] * 6 + lines + [''] * 2
+            rows = [[{'text': char} for char in line.ljust(45)] for line in display]
+            reader = SimpleNamespace(width=45, expected_table=table,
+                                     screen=SimpleNamespace(display=display, cell_rows=lambda: rows))
+            return source_witness_visible(reader, table[0][0], 'T / L')
+
+        self.assertFalse(check('ABEF', 'CDGH', [['AB', 'CD'], ['EF', 'GH']]))
+        self.assertFalse(check(['New', 'York'], ['U', 'S'], [['New York', 'US']]))
+        self.assertFalse(check(['A  B'], ['C'], [['A B', 'C']]))
+        self.assertTrue(check(['A  B'], ['C'], [['A  B', 'C']]))
+        self.assertTrue(check(['New York', 'City'], ['USA', ''], [['New York City', 'USA']]))
+
+    def test_complete_table_checks_merged_rows_inside_and_outside_the_viewport(self):
+        def row(text):
+            return [{'text': c} for c in text.ljust(45)]
+
+        grid = [row('  │ A │ B │'), row('  │ C │ D │')]
+        merged = row('  │ extra │')
+        reader = SimpleNamespace(width=45, expected_table=[['A', 'B'], ['C', 'D']],
+                                 screen=SimpleNamespace(), entry_focused=lambda: True, snapshot=lambda label: None)
+        for surrounding in ([merged, *grid], [*grid, merged]):
+            reader.screen.cell_rows = lambda: [row('')] * 6 + surrounding + [row('')] * 2
+            self.assertFalse(source_witness_visible(reader, 'A', 'Title / Heading'))
+
+        for outside in (row('  Following text'), merged):
+            body = [row('Previous text'), *grid, outside]
+            reader.position = 1
+            reader.screen.cell_rows = lambda: [row('')] * 6 + body[reader.position:reader.position + 2] + [row('')] * 2
+            reader.action = lambda direction, predicate, label: setattr(
+                reader, 'position', reader.position + (1 if direction == DOWN else -1))
+            if outside == merged:
+                with self.assertRaisesRegex(CheckFailure, 'Additional table row'):
+                    confirm_table_boundaries(reader)
+            else:
+                confirm_table_boundaries(reader)
+                self.assertEqual(reader.position, 1)
+
+    def test_table_scroll_continues_across_identical_frames(self):
+        class Pages:
+            position = 0
+            width = 45
+            expected_table = [['key', 'value']]
+
+            def text(self):
+                return ['heading', 'a', 'target', 'x', 'x', 'x', 'x', 'end'][self.position]
+
+            def action(self, key, predicate, label):
+                if key in (b'\x1b[F', b'\x1b[H'):
+                    self.position = 7 if key == b'\x1b[F' else 0
+                else:
+                    self.position = max(0, self.position - (1 if key == b'\x1b[A' else 2))
+
+            def entry_focused(self):
+                return True
+
+        reader = Pages()
+        with patch('verify_edition_terminal.reading_body', return_value='heading'), \
+             patch('verify_edition_terminal.source_witness_visible', side_effect=lambda r, w, h: r.text() == w), \
+             patch('verify_edition_terminal.visible_table_groups', return_value=[True]):
+            reveal_witness(reader, 'target', 'heading')
+            self.assertEqual(reader.position, 2)
 
     def test_wrapped_definition_beside_table_uses_only_its_own_physical_column(self):
         lines = [''] * 6 + [

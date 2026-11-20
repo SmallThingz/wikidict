@@ -271,42 +271,101 @@ def wrapped_table_cell_contains(rows, left, right, wanted):
 def table_group_matches(lines, edges, expected):
     row_number = 0
     remaining = list(expected[0])
+    spare = [None] * len(remaining)
     for line in lines:
         if row_number == len(expected):
             return False
-        fragments = [normalized(' '.join(''.join(cell['text'] for cell in line[left + 1:right]).split()))
-                     for left, right in itertools.pairwise(edges)]
-        if not any(fragments):
-            return False
-        for column, fragment in enumerate(fragments):
+        visible = False
+        for column, (left, right) in enumerate(itertools.pairwise(edges)):
+            cells = line[left + 1:right]
+            if len(cells) < 3 or cells[0]['text'] != ' ' or cells[-1]['text'] != ' ':
+                return False
+            content = cells[1:-1]
+            fragment = normalized(''.join(cell['text'] for cell in content).strip(' '))
             rest = remaining[column]
-            if fragment:
-                # Wrapping may discard a space between words or split a word without one.
+            if not fragment:
+                if rest:
+                    return False
+                continue
+            visible = True
+            occupied = [i for i, cell in enumerate(content) if cell['text'].strip(' ')]
+            first, last = occupied[0], occupied[-1]
+            if spare[column] is not None:
+                # Independent rows in one column must not be mistaken for a wrap.
+                # Count both alignment margins in the previous line's spare width.
+                if rest.startswith(' '):
+                    word = itertools.takewhile(lambda cell: cell['text'] != ' ', content[first:])
+                    required = 1 + sum(cell.get('width', 1) for cell in word)
+                else:
+                    required = content[first].get('width', 1)
+                if required <= spare[column]:
+                    return False
                 rest = rest.removeprefix(' ')
             if not rest.startswith(fragment):
                 return False
             remaining[column] = rest[len(fragment):]
+            spare[column] = len(content) - (last - first + content[last].get('width', 1))
+        if not visible:
+            return False
         if not any(remaining):
             row_number += 1
             if row_number < len(expected):
                 remaining = list(expected[row_number])
+                spare = [None] * len(remaining)
     return row_number == len(expected)
 
 
-def visible_table_group(reader, edges):
+def reading_cell_rows(reader):
     start = min(36, reader.width // 3) if reader.width >= 80 else 0
-    rows = reader.screen.cell_rows()[6:-2]
-    for borders, lines in itertools.groupby(rows, key=lambda row: tuple(
-            i for i in range(start, len(row)) if row[i]['text'] == '│')):
-        if len(borders) == edges:
-            yield borders, lines
+    return [row[start:] for row in reader.screen.cell_rows()[6:-2]]
+
+
+def table_edges(row):
+    return tuple(i for i, cell in enumerate(row) if cell['text'] == '│')
+
+
+def visible_table_groups(reader, columns):
+    rows = reading_cell_rows(reader)
+    borders = [table_edges(row) for row in rows]
+    for _, indices in itertools.groupby(range(len(rows)), key=lambda i: borders[i][:1] + borders[i][-1:]):
+        group = list(indices)
+        first, stop = group[0], group[-1] + 1
+        edges = borders[first]
+        # A spanning cell changes the interior borders without ending the table.
+        if len(edges) == columns + 1 and all(borders[i] == edges for i in group):
+            yield edges, rows[first:stop], first, stop
+
+
+def confirm_table_boundaries(reader):
+    table = getattr(reader, 'expected_table', None)
+    if not table:
+        return
+    before = reading_cell_rows(reader)
+    edges, _, first, stop = next(group for group in visible_table_groups(reader, len(table[0]))
+                                 if table_group_matches(group[1], group[0], table))
+    for clipped, direction, undo in ((first == 0, b'\x1b[A', DOWN), (stop == len(before), DOWN, b'\x1b[A')):
+        if not clipped:
+            continue
+        reader.action(direction, reader.entry_focused, 'exposed the adjacent line outside the table')
+        after = reading_cell_rows(reader)
+        if direction == DOWN:
+            shifted, adjacent = before[1:] == after[:-1], after[-1]
+        else:
+            shifted, adjacent = before[:-1] == after[1:], after[0]
+        outer = table_edges(adjacent)
+        reader.snapshot('table-boundary')
+        require(before != after and shifted, 'Could not observe the table boundary beyond this viewport')
+        require(len(outer) < 2 or (outer[0], outer[-1]) != (edges[0], edges[-1]),
+                'Additional table row outside the expected grid')
+        reader.action(undo, reader.entry_focused, 'returned to the complete table')
+        require(reading_cell_rows(reader) == before, 'Table viewport was not restored')
 
 
 def source_witness_visible(reader, wanted, heading):
     table = getattr(reader, 'expected_table', None)
     if table:
         return any(table_group_matches(lines, edges, table)
-                   for edges, lines in visible_table_group(reader, len(table[0]) + 1))
+                   for edges, lines, _, _ in visible_table_groups(reader, len(table[0])))
     if wanted in reading_body(reader, heading):
         return True
     if not hasattr(reader.screen, 'cell_rows'):
@@ -364,6 +423,19 @@ def reveal_witness(reader, wanted, heading):
         reader.wait(reader.entry_focused, 'expanded entry details', after=frame)
     if source_witness_visible(reader, wanted, heading):
         return
+    table = getattr(reader, 'expected_table', None)
+    if table:
+        # Identical repeated table rows can scroll without changing any visible
+        # glyph. Travel towards the known Home frame, where the entry title is visible.
+        reader.action(b'\x1b[H', reader.entry_focused, 'Home identifies the start of the entry')
+        home = reader.text()
+        if not source_witness_visible(reader, wanted, heading):
+            reader.action(b'\x1b[F', reader.entry_focused, 'End begins the reverse table scan')
+            while reader.text() != home and not source_witness_visible(reader, wanted, heading):
+                at_grid = any(visible_table_groups(reader, len(table[0])))
+                reader.action(b'\x1b[A' if at_grid else b'\x1b[5~', reader.entry_focused, 'scanned towards the table heading')
+        require(source_witness_visible(reader, wanted, heading), 'Expected table missing from the rendered entry')
+        return
     # Translations often follow large inflection tables. Try the final viewport
     # first, then page through the complete entry within the Reader's deadline.
     reader.action(b'\x1b[F', reader.entry_focused, 'End opens the final entry viewport')
@@ -376,10 +448,7 @@ def reveal_witness(reader, wanted, heading):
     reader.action(b'\x1b[H', reader.entry_focused, 'Home begins the full entry scan')
     while not source_witness_visible(reader, wanted, heading):
         previous = reader.text()
-        # A table can fit in the viewport while straddling two Page Down positions.
-        table = getattr(reader, 'expected_table', None)
-        at_table = table and any(visible_table_group(reader, len(table[0]) + 1))
-        frame = reader.send(DOWN if at_table else b'\x1b[6~')
+        frame = reader.send(b'\x1b[6~')
         reader.wait(reader.entry_focused, 'paged through entry', after=frame)
         if reader.text() == previous:
             break
@@ -403,6 +472,7 @@ def exercise(reader, heading_label, entry, witness, redirect_target=None):
                   (reading_text(reader) + ' ').startswith(heading + ' '), 'opened requested entry')
     wanted = visible_body_witness(witness)
     reveal_witness(reader, wanted, heading)
+    confirm_table_boundaries(reader)
     reader.snapshot('entry-wide')
     frame = reader.resize(45, 24)
     reader.wait(reader.entry_focused, 'entry resized to 45 columns', after=frame)
@@ -412,6 +482,7 @@ def exercise(reader, heading_label, entry, witness, redirect_target=None):
         reader.action(b'\x1b[H', lambda: reader.entry_focused() and
                       (reading_text(reader) + ' ').startswith(heading + ' '), 'Home returns to the entry title')
     reveal_witness(reader, wanted, heading)
+    confirm_table_boundaries(reader)
     reader.snapshot('entry-narrow')
     check_compact_reading_margins(reader)
     reader.action(b'\x1b', lambda: reader.page_is('search') and not reader.entry_focused(), 'back to results')
@@ -549,11 +620,11 @@ def main(argv=None):
         if args.cases or args.screen_projection == 'pyte':
             parser.error('--table-tsv requires a single entry and a native screen projection')
         with args.table_tsv.open(encoding='utf-8', newline='') as data:
-            expected_table = [[visible_body_witness(cell) for cell in row] for row in csv.reader(data, delimiter='\t')]
+            expected_table = [[normalized(cell.strip(' ')) for cell in row] for row in csv.reader(data, delimiter='\t')]
         if (not expected_table or len(expected_table[0]) < 2 or
                 any(len(row) != len(expected_table[0]) or not any(row) for row in expected_table)):
             parser.error('Expected a rectangular table of at least two columns with nonempty rows')
-        if not args.witness or not any(visible_body_witness(args.witness) in row for row in expected_table):
+        if not args.witness or not any(normalized(args.witness.strip(' ')) in row for row in expected_table):
             parser.error('--witness must be a complete cell of the expected table')
     if args.cases:
         if any((args.kind, args.language, args.entry, args.witness, args.redirect_target)):
