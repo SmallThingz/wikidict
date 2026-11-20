@@ -10,7 +10,7 @@ python -B tools/verify_wikimedia.py \
   --report data/wikimedia-check --samples 32 --seed 20260922
 ```
 
-Use a new report directory for each run. `--cache PATH` reuses recorded API responses, including their timestamps. The checker limits request rate, honors retry responses, and writes case artifacts incrementally. Exit zero means every selected case passed; it does not certify the full corpus. Run `python -B tools/verify_wikimedia_test.py` for offline protocol, sampling, normalization and classification tests.
+Use a new report directory for each run. `--cache PATH` reuses recorded API responses, including their timestamps. The checker honors `Retry-After` across all cases in a run, including HTTP 200 responses with a `maxlag` error. When more than 30 seconds remain, it records uncached comparisons as deferred and continues with local and cached evidence. The report preserves the failure for each affected case. Exit zero means every selected case passed. Run `python -B tools/verify_wikimedia_test.py` for offline protocol, sampling, normalization and classification tests.
 
 Exact expanded text is checked first. Differences are compared as rendered DOM tokens, including whitespace, attributes and categories. The presentation oracle parses the original page source: reparsing the output of `expandtemplates` can introduce fragment-context tracking categories. Unresolved local template syntax cannot receive a rendered-equivalence pass because the remote parser might repair it.
 

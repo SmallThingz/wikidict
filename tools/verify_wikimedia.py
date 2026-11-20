@@ -25,6 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
 DEFAULT_TITLES = ['cat', 'water', 'run', 'école', 'كتاب', '日本', '兇', 'აღმოაჩენს']
@@ -268,7 +269,27 @@ class API:
         self.endpoint, self.cache = endpoint, cache
         self.interval, self.timeout, self.user_agent = interval, timeout, user_agent
         self.last = 0.0
+        self.retry_at = 0.0
         cache.mkdir(parents=True, exist_ok=True)
+
+    def defer(self, headers, fallback):
+        value = headers.get('Retry-After')
+        if value is None:
+            delay = fallback
+        else:
+            try:
+                value = value.strip()
+                if value.isascii() and value.isdecimal():
+                    delay = float(value)
+                else:
+                    until = parsedate_to_datetime(value)
+                    if until.tzinfo is None:
+                        until = until.replace(tzinfo=dt.timezone.utc)
+                    delay = max(0.0, until.timestamp() - time.time())
+            except (ValueError, TypeError, OverflowError, OSError) as error:
+                self.retry_at = None
+                raise ValueError(f'Unrecognized Retry-After: {value!r}') from error
+        self.retry_at = time.monotonic() + delay
 
     def call(self, **params):
         params.update(format='json', formatversion=2, maxlag=5)
@@ -278,7 +299,15 @@ class API:
         if path.exists():
             return json.loads(path.read_text())['response']
         for attempt in range(3):
-            time.sleep(max(0, self.interval - (time.monotonic() - self.last)))
+            if self.retry_at is None:
+                raise RuntimeError('Remote verification deferred after unrecognized Retry-After')
+            now = time.monotonic()
+            retry_wait = self.retry_at - now
+            if retry_wait > 30:
+                raise RuntimeError(f'Remote verification deferred by Retry-After ({retry_wait:.1f}s remaining)')
+            wait = max(retry_wait, self.last + self.interval - now)
+            if wait > 0:
+                time.sleep(wait)
             self.last = time.monotonic()
             request = urllib.request.Request(self.endpoint, data=encoded, headers={'User-Agent': self.user_agent})
             try:
@@ -289,18 +318,23 @@ class API:
                     data = json.loads(body)
                     server_date = response.headers.get('Date')
                 if 'error' in data:
-                    if data['error'].get('code') == 'maxlag' and attempt < 2:
-                        time.sleep(5 * (attempt + 1))
-                        continue
+                    if data['error'].get('code') == 'maxlag':
+                        self.defer(response.headers, 5 * (attempt + 1))
+                        if attempt < 2:
+                            continue
                     raise RuntimeError('MediaWiki API error: ' + json.dumps(data['error']))
                 path.write_text(json.dumps(dict(endpoint=self.endpoint, params=params, retrieved_at=utc(),
                                                server_date=server_date, response=data), ensure_ascii=False, indent=2) + '\n')
                 return data
             except urllib.error.HTTPError as error:
-                if error.code not in (429, 502, 503, 504) or attempt == 2:
-                    raise
-                delay = error.headers.get('Retry-After', '')
-                time.sleep(min(float(delay) if delay.isdigit() else 5 * (attempt + 1), 30))
+                try:
+                    if error.code not in (429, 502, 503, 504):
+                        raise
+                    self.defer(error.headers, 5 * (attempt + 1))
+                    if attempt == 2:
+                        raise
+                finally:
+                    error.close()
         raise RuntimeError('API retries exhausted')
 
     def parse(self, title, source):

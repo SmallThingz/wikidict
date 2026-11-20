@@ -1,15 +1,18 @@
+import io
 import json
 from pathlib import Path
 import struct
 import sys
 import tempfile
 import unittest
+import urllib.error
+from email.utils import formatdate
 from unittest import mock
 from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 from verify_wikimedia import (decode_reply, select_pages, source_at, render_signature,
-                              unresolved_syntax, dependency_revisions, compare, request_payload, NativeWorker)
+                              unresolved_syntax, dependency_revisions, compare, request_payload, NativeWorker, API)
 
 
 class VerifyWikimediaTest(unittest.TestCase):
@@ -18,6 +21,66 @@ class VerifyWikimediaTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir='.tmp')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_endpoint_backoff_preserves_cached_checks_and_defers_other_cases(self):
+        api = API('https://example.invalid/api', self.root, 0.5, 2, 'offline-test')
+        ok = lambda: self.api_response({'ok': 1})
+        unavailable = urllib.error.HTTPError(api.endpoint, 429, 'slow down', {'Retry-After': '90'}, io.BytesIO())
+        with mock.patch('verify_wikimedia.time.monotonic', return_value=1000) as clock, \
+                mock.patch('verify_wikimedia.time.sleep') as sleep, \
+                mock.patch('verify_wikimedia.urllib.request.urlopen', side_effect=[ok(), unavailable, ok()]) as fetch:
+            self.assertEqual(api.call(title='cached'), {'ok': 1})
+            clock.return_value += 1
+            with self.assertRaisesRegex(RuntimeError, '90.0s remaining'):
+                api.call(title='first')
+            self.assertEqual(api.call(title='cached'), {'ok': 1})
+            clock.return_value += 45
+            with self.assertRaisesRegex(RuntimeError, '45.0s remaining'):
+                api.call(title='second')
+            sleep.assert_not_called()
+            self.assertEqual(fetch.call_count, 2)
+            clock.return_value += 45
+            self.assertEqual(api.call(title='second'), {'ok': 1})
+            self.assertEqual(fetch.call_count, 3)
+
+    @staticmethod
+    def api_response(data, headers=None):
+        response = io.BytesIO(json.dumps(data).encode())
+        response.headers = headers or {}
+        return response
+
+    def test_maxlag_http_date_paces_the_next_request_from_response_time(self):
+        api = API('https://example.invalid/api', self.root, 0.5, 2, 'offline-test')
+        maxlag = self.api_response({'error': {'code': 'maxlag'}}, {'Retry-After': formatdate(1017, usegmt=True)})
+        with mock.patch('verify_wikimedia.time.time', return_value=1000), \
+                mock.patch('verify_wikimedia.time.monotonic', return_value=2000) as clock, \
+                mock.patch('verify_wikimedia.time.sleep', side_effect=lambda delay: setattr(clock, 'return_value', clock.return_value + delay)) as sleep, \
+                mock.patch('verify_wikimedia.urllib.request.urlopen', side_effect=[maxlag, self.api_response({'ok': 1})]):
+            self.assertEqual(api.call(title='delayed'), {'ok': 1})
+            sleep.assert_called_once_with(17)
+
+    def test_last_error_still_defers_next_case(self):
+        api = API('https://example.invalid/api', self.root, 0.5, 2, 'offline-test')
+        errors = [urllib.error.HTTPError(api.endpoint, 503, 'busy', {'Retry-After': delay}, io.BytesIO())
+                  for delay in ('0', '0', '120')]
+        with mock.patch('verify_wikimedia.time.monotonic', return_value=1000), \
+                mock.patch('verify_wikimedia.time.sleep'), \
+                mock.patch('verify_wikimedia.urllib.request.urlopen', side_effect=errors) as fetch:
+            with self.assertRaises(urllib.error.HTTPError):
+                api.call(title='first')
+            with self.assertRaisesRegex(RuntimeError, '120.0s remaining'):
+                api.call(title='second')
+            self.assertEqual(fetch.call_count, 3)
+
+    def test_unrecognized_retry_after_prevents_another_request(self):
+        api = API('https://example.invalid/api', self.root, 0.5, 2, 'offline-test')
+        maxlag = self.api_response({'error': {'code': 'maxlag'}}, {'Retry-After': 'later'})
+        with mock.patch('verify_wikimedia.urllib.request.urlopen', return_value=maxlag) as fetch:
+            with self.assertRaisesRegex(ValueError, 'Unrecognized Retry-After'):
+                api.call(title='first')
+            with self.assertRaisesRegex(RuntimeError, 'deferred'):
+                api.call(title='second')
+            self.assertEqual(fetch.call_count, 1)
 
     def test_selected_identity_preserves_exact_binary_row_offset(self):
         index = self.root / 'index'
