@@ -69,6 +69,7 @@ def fixture(root, change=None):
     if change == 'unguarded-source': refs = refs[:1]
     command = dict(argv=argv, cwd=str(root / 'view'), env={},
                    qualification_root=str(root / 'runtime01'), source_refs=refs)
+    if change == 'different-source-root': command['cwd'] = str(root / 'other-view')
     command_ref = write('command.json', command)
     stdout = root / 'stdout'; stdout.write_text('fixture success\n')
     stderr = root / 'stderr'; stderr.write_text('fixture build summary\n')
@@ -77,23 +78,32 @@ def fixture(root, change=None):
     if change == 'failed-child': result['returncode'] = 1
     if change == 'different-argv': result['argv'].append('cli')
     result_ref = write('runtime01/result01.json', result)
-    start = dict(input_authority=command_ref, source_refs=copy.deepcopy(refs))
+    start = dict(input_authority=command_ref, source_refs=copy.deepcopy(refs),
+                 owner=dict(pid=101, birth=201))
     if change == 'different-start': start['source_refs'] = []
     start_ref = write('runtime01/direct-runtime01/start.json', start)
     owner = dict(returncode=0, source_after=True)
     if change == 'source-changed': owner['source_after'] = False
     owner_ref = write('runtime01/direct-runtime01/owner-result.json', owner)
     watchdog = dict(child_exit_status=0, guardian_exit_status=0, runtime_started=True,
-                    cleanup_complete=True, admission_refused=False, termination_reason='child_exit')
+                    cleanup_complete=True, admission_refused=False, termination_reason='child_exit',
+                    child_pid=102, child_start_time_ticks=202, guardian_pid=103, guardian_start_time_ticks=203)
     if change == 'cleanup-pending': watchdog['cleanup_complete'] = False
     watchdog_ref = write('runtime01/direct-runtime01/watchdog.json', watchdog)
     closed = dict(outcome='PASSED-PHYSICALLY-SOURCE-CLOSED', source_after=True,
                   source_lease_released=True, allocation_released=True,
                   local_proc_absent=True, ps_absent=True, host_namespace_identity_absent=True,
                   result=result_ref, start=start_ref, owner_result=owner_ref, watchdog=watchdog_ref,
-                  artifact=descriptor(native), reaped=True, terminal=0)
-    if change == 'transport-gap': closed.update(reaped=False, terminal=None)
+                  artifact=descriptor(native), reaped=True, terminal=0,
+                  rd_terminal_receipt=dict(chunk=1, exit_code=0), reaped_chunk=1,
+                  identities=[dict(pid=101, birth=201), dict(pid=102, birth=202), dict(pid=103, birth=203)])
+    if change == 'transport-gap': closed.update(reaped=False, terminal=None, rd_terminal_receipt=None)
     if change == 'invented-reaping': closed.update(reaped=False, terminal=0)
+    if change == 'different-rd-terminal': closed['rd_terminal_receipt']['exit_code'] = 1
+    if change == 'missing-rd-chunk': closed['rd_terminal_receipt']['chunk'] = closed['reaped_chunk'] = None
+    if change == 'boolean-terminal': closed['terminal'] = False
+    if change == 'different-child': closed['identities'][1]['birth'] += 1
+    if change == 'different-owner': closed['identities'][0]['pid'] += 1
     if change == 'process-live': closed['host_namespace_identity_absent'] = False
     if change == 'foreign-result': closed['result'] = write('another/result01.json', result)
     if change == 'different-artifact': closed['artifact']['sha256'] = '0' * 64
@@ -110,6 +120,7 @@ def fixture(root, change=None):
                artifact=descriptor(native, mode=True), source_paths=['tools/blob_build.zig'],
                dependencies=dict(zig=dict(path=str(root / 'zig'))))
     if change == 'binary-mutated': native.write_bytes(b'changed after closure\n')
+    if change == 'source-mutated': source_path.write_text('// changed after closure\n')
     return SimpleNamespace(row=row, roles=BoundInputs(), argv=argv, artifact=native)
 
 
@@ -129,7 +140,9 @@ class DirectWriterSuccessorTests(unittest.TestCase):
         changes = ('another-target', 'extra-target', 'unknown-option', 'duplicate-option',
                    'unguarded-source', 'failed-child', 'different-argv', 'different-start',
                    'source-changed', 'cleanup-pending', 'invented-reaping', 'process-live',
-                   'foreign-result', 'different-artifact', 'invented-source', 'binary-mutated')
+                   'foreign-result', 'different-artifact', 'invented-source', 'binary-mutated',
+                   'different-rd-terminal', 'different-child', 'different-owner',
+                   'missing-rd-chunk', 'boolean-terminal', 'different-source-root', 'source-mutated')
         for change in changes:
             with self.subTest(change=change), tempfile.TemporaryDirectory() as temporary:
                 f = fixture(Path(temporary), change)

@@ -4118,10 +4118,26 @@ def initial_sealed_direct_writer(row, native_roles):
         raise ValueError('Direct Writer command or guarded outcome differs')
     # A transport gap can coexist with known child success and OS absence.
     # It must not become an invented RD reaping receipt.
-    if ((closed.get('reaped') is True and closed.get('terminal') != 0)
+    if ((closed.get('reaped') is True and (type(closed.get('terminal')) is not int or closed['terminal'] != 0))
             or (closed.get('reaped') is False and closed.get('terminal') is not None)
             or type(closed.get('reaped')) is not bool):
         raise ValueError('Direct Writer transport outcome is inconsistent')
+    receipt = closed.get('rd_terminal_receipt')
+    if ((closed['reaped'] and (not isinstance(receipt, dict)
+                              or type(receipt.get('exit_code')) is not int or receipt['exit_code'] != 0
+                              or type(receipt.get('chunk')) is not int or receipt['chunk'] <= 0
+                              or receipt.get('chunk') != closed.get('reaped_chunk')))
+            or (not closed['reaped'] and receipt is not None)):
+        raise ValueError('Direct Writer RD receipt differs from its terminal outcome')
+    identities = closed.get('identities', [])
+    owner_identity = start.get('owner')
+    process_identities = [owner_identity,
+        dict(pid=watchdog.get('child_pid'), birth=watchdog.get('child_start_time_ticks')),
+        dict(pid=watchdog.get('guardian_pid'), birth=watchdog.get('guardian_start_time_ticks'))]
+    if any(not isinstance(identity, dict) or set(identity) != {'pid', 'birth'}
+           or any(type(identity[key]) is not int or identity[key] <= 0 for key in ('pid', 'birth'))
+           or identity not in identities for identity in process_identities):
+        raise ValueError('Direct Writer process closure does not cover its actual owner and children')
     argv = recipe['argv']
     if argv[:3] != [row['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']:
         raise ValueError('Direct sealed successor requires one Writer target')
@@ -4178,6 +4194,15 @@ def initial_sealed_direct_writer(row, native_roles):
                 or any(guarded[key] != descriptor[key] for key in ('path', 'bytes', 'sha256'))
                 or guarded.get('mode', descriptor['mode']) != descriptor['mode']):
             raise ValueError('Direct Writer compiled source is not guarded')
+        # This receipt family keeps the canonical role root while compiling a
+        # sparse view. Bind the actual command root to every declared member,
+        # including aliases, rather than treating the fingerprint flag as proof.
+        try:
+            same_source = (cwd / relative).resolve(strict=True) == Path(descriptor['path']).resolve(strict=True)
+        except OSError as error:
+            raise ValueError('Direct Writer source view is unavailable') from error
+        if not same_source or native_roles.bind_input(Path(descriptor['path'])) != descriptor:
+            raise ValueError('Direct Writer command source view differs from its guarded manifest')
     interface = source.get('interface_only_sources', {})
     if (set(interface) & set(compiled)
             or source.get('interface_only_not_claimed_as_compiler_reads') is not True
