@@ -549,11 +549,34 @@ fn estonianNounFormPlaceholder(block: wiki.Block) bool {
         sourceNumberedPlaceholder(block);
 }
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, source_numbered, estonian_noun_form };
+// Under the BLK noun heading, voice and ghost use direct bullets for local
+// glosses. Other pages put the English headword template or an empty item
+// in a bullet. Neither supplies a gloss.
+fn paoNounGloss(block: wiki.Block) bool {
+    if (block.kind != .list_item or block.depth != 1 or !std.mem.eql(u8, block.list_path, "*") or
+        block.flow != null or block.table != null or block.container != null or block.figure != null or block.feature != null) return false;
+    var local_text = false;
+    for (block.spans) |span| {
+        if ((span.kind != .text and span.kind != .link) or span.generated_diagnostic or span.role != .normal or
+            span.image != null or span.flags.bold or span.flags.code or span.language.len != 0) return false;
+        var characters = (std.unicode.Utf8View.init(span.text) catch return false).iterator();
+        while (characters.nextCodepoint()) |cp| {
+            if (cp >= 0x1000 and cp <= 0x102a) local_text = true;
+        }
+    }
+    return local_text;
+}
+
+const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
         .ordinary => {},
+        .pao_noun_bullet => if (paoNounGloss(block)) {
+            result.kind = .definition;
+            result.list_path = "#";
+            result.depth = 1;
+        },
         .estonian_noun_form => if (estonianNounFormPlaceholder(block)) {
             // Keep the source block intact; only omit its empty sense address.
             result.kind = .paragraph;
@@ -2194,15 +2217,22 @@ fn hasTopLevelNumberedGloss(blocks: []const wiki.Block) bool {
     return false;
 }
 
-fn portugueseNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
-    if (section.level != 2 or !std.mem.eql(u8, section.title, "Substantivo") or
-        !std.mem.eql(u8, wiki_id, "ptwiktionary")) return false;
+fn dictionaryNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const u8) bool {
+    // BLK Template:noun p59/r172 emits နာမ်ႏ; Template:en-noun p3565/r8202
+    // supplies the same noun class to its headword module.
+    const is_noun = if (std.mem.eql(u8, wiki_id, "ptwiktionary"))
+        section.level == 2 and std.mem.eql(u8, section.title, "Substantivo")
+    else if (std.mem.eql(u8, wiki_id, "blkwiktionary"))
+        (section.level == 3 or section.level == 4) and std.mem.eql(u8, section.title, "နာမ်ႏ")
+    else
+        false;
+    if (!is_noun) return false;
     const language = owner orelse return false;
     if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return false;
     if (@hasField(@TypeOf(section), "is_heading")) if (!section.is_heading) return false;
     if (@hasField(@TypeOf(section), "title_depth")) if (section.title_depth != 0) return false;
     if (@hasField(@TypeOf(section), "title_list_path")) if (section.title_list_path.len != 0) return false;
-    return hasTopLevelNumberedGloss(section.blocks);
+    return std.mem.eql(u8, wiki_id, "blkwiktionary") or hasTopLevelNumberedGloss(section.blocks);
 }
 
 fn aromanianHeadingSpan(section: anytype, owner: ?[]const u8, wiki_id: []const u8, level: u8) ?*const wiki.Span {
@@ -2642,7 +2672,7 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
         const declared_aromanian = if (aromanian_part != null and (hasTopLevelNumberedGloss(section.blocks) or
             (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
         const declared_kind = if (unclassified and section.level == 2) null else
-            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (portugueseNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
+            partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (dictionaryNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
@@ -2729,6 +2759,9 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .estonian_noun_form)
             else if (grammar_kind != null)
                 try analyzeBulgarianVerb(a, name, i, origin, section.blocks)
+            else if (declared_kind != null and std.mem.eql(u8, wiki_id, "blkwiktionary") and
+                std.mem.eql(u8, section.title, "နာမ်ႏ") and std.mem.eql(u8, owner orelse "", "English"))
+                try analyzeProjected(a, name, i, origin, section.blocks, true, .pao_noun_bullet)
             else if (declared_kind != null and greekNounBulletSection(section, owner))
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .greek_noun_bullet)
             else if (greekSynonymSection(section, owner))
@@ -2992,22 +3025,62 @@ test "Portuguese dictionary noun section preserves the German Absolution sense a
     var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
     const Section = struct { title: []const u8 = "Substantivo", level: u8 = 2, is_heading: bool = true, blocks: []const wiki.Block };
     var checked: Section = .{ .blocks = try renderer.renderBody("# [[absolvição]] (dos pecados)") };
-    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "glwiktionary"));
-    try std.testing.expect(!portugueseNounSection(checked, null, "ptwiktionary"));
-    try std.testing.expect(!portugueseNounSection(checked, "Unclassified", "ptwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, "Alemão", "glwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, null, "ptwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, "Unclassified", "ptwiktionary"));
     for ([_][]const u8{ "Substantivo feminino", "Substantivo 2", "substantivo" }) |other| {
         checked.title = other;
-        try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+        try std.testing.expect(!dictionaryNounSection(checked, "Alemão", "ptwiktionary"));
     }
     checked.title = "Substantivo";
     checked.is_heading = false;
-    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, "Alemão", "ptwiktionary"));
     checked.is_heading = true;
     checked.level = 3;
-    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, "Alemão", "ptwiktionary"));
     checked.level = 2;
     checked.blocks = try renderer.renderBody("* [[absolvição]]");
-    try std.testing.expect(!portugueseNounSection(checked, "Alemão", "ptwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(checked, "Alemão", "ptwiktionary"));
+}
+
+test "Pa'O dictionary noun heading organizes both English grandparents definitions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block };
+    var sections = [_]Section{.{ .title = "နာမ်ႏ", .level = 4, .blocks = try renderer.renderBody("# grandparents\n# grandparent") }};
+    const layout = try buildForDictionary(a, &sections, false, "English", null, "blkwiktionary");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    const noun = layout.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("English", noun.language);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+    for (noun.definitions, [_][]const u8{ "grandparents", "grandparent" }) |sense, expected|
+        try std.testing.expectEqualStrings(expected, sections[noun.section].blocks[sense.block].spans[0].text);
+    try std.testing.expect(!dictionaryNounSection(sections[0], "English", "enwiktionary"));
+    try std.testing.expect(!dictionaryNounSection(sections[0], null, "blkwiktionary"));
+    sections[0].title = "နာမ်ႏတင်";
+    try std.testing.expect(!dictionaryNounSection(sections[0], "English", "blkwiktionary"));
+}
+
+test "Pa'O dictionary noun gloss bullets retain their links and headword-only nouns have no sense" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const Section = struct { title: []const u8 = "နာမ်ႏ", level: u8 = 3, blocks: []const wiki.Block };
+    var section: Section = .{ .blocks = try renderer.renderBody("*[[အငဝ်း]]\n** [[အငဝ်း]]\n* voice\n* '''voice''' (ဗဟုဝုစ်)") };
+    const owned = try buildForDictionary(a, &[_]Section{section}, false, "English", null, "blkwiktionary");
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes[0].definitions.len);
+    const original = section.blocks[owned.lexemes[0].definitions[0].block];
+    try std.testing.expectEqual(.list_item, original.kind);
+    try std.testing.expectEqualStrings("အငဝ်း", original.spans[0].target);
+    section.blocks = try renderer.renderBody("'''frying pan'''");
+    const headword = try buildForDictionary(a, &[_]Section{section}, false, "English", null, "blkwiktionary");
+    try std.testing.expectEqualStrings("Noun", headword.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), headword.lexemes[0].definitions.len);
 }
 
 test "Quechua dictionary POS headings organize authored definitions and preserve owners and actions" {

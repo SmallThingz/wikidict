@@ -14066,10 +14066,14 @@ pub const Renderer = struct {
     }
 
     fn figureCaptionFiniteNodesWithInventoryIn(list_context: ?*const Renderer, tracked: MissingText, caption: []const u8, inventory: ?*FigureCaptionAuthoredInventory, allow_categories: bool) bool {
+        return figureCaptionFiniteNodesTracked(list_context, tracked, caption, inventory, allow_categories, false);
+    }
+
+    fn figureCaptionFiniteNodesTracked(list_context: ?*const Renderer, tracked: MissingText, caption: []const u8, inventory: ?*FigureCaptionAuthoredInventory, allow_categories: bool, recorded_templates: bool) bool {
         const begin = @intFromPtr(tracked.bytes.ptr);
         const at = @intFromPtr(caption.ptr);
         if (at < begin or at - begin > tracked.bytes.len or caption.len > tracked.bytes.len - (at - begin)) return false;
-        if (tracked.ranges.len != 0 or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return false;
+        if ((!recorded_templates and tracked.ranges.len != 0) or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0) return false;
         if (!std.unicode.utf8ValidateSlice(caption) or std.mem.indexOf(u8, caption, "__") != null) return false;
         // This consumes the exact borrowed caption, not a normalized copy.
         // Unknown missing-phase state is retained: it does not manufacture new
@@ -14078,8 +14082,27 @@ pub const Renderer = struct {
         // simple local links may additionally create the known selflink classes.
         var tags: [16]u8 = undefined;
         var depth: usize = 0;
+        var occurrence_index: usize = 0;
         var pos: usize = 0;
         while (pos < caption.len) {
+            if (recorded_templates and occurrence_index < tracked.ranges.len) {
+                const range = tracked.ranges[occurrence_index];
+                const offset = at - begin + pos;
+                if (range.start < offset) return false;
+                if (range.start == offset) {
+                    if (range.end <= range.start or range.end - offset > caption.len - pos) return false;
+                    var single = tracked;
+                    single.ranges = tracked.ranges[occurrence_index..][0..1];
+                    const renderer = list_context orelse return false;
+                    if (!renderer.figureCaptionMissingTemplateLink(single, tracked.bytes[range.start..range.end])) return false;
+                    var tokens: ir.InlineIterator = .{ .input = caption[pos..], .renderer_boundaries = true, .link_trail = renderer.context.link_trail };
+                    const token = tokens.next() orelse return false;
+                    if (token.kind != .link or tokens.cursor != range.end - range.start or token.trail.len != 0) return false;
+                    pos += range.end - range.start;
+                    occurrence_index += 1;
+                    continue;
+                }
+            }
             const byte = caption[pos];
             if (byte == '<') {
                 // A complete bare NOWIKI around ordinary text creates no
@@ -14125,7 +14148,7 @@ pub const Renderer = struct {
                 pos = end + 1;
                 continue;
             }
-            if (byte == '\r' or byte == '\n') return depth == 0 and trim(caption[pos..]).len == 0;
+            if (byte == '\r' or byte == '\n') return depth == 0 and occurrence_index == tracked.ranges.len and trim(caption[pos..]).len == 0;
             if (byte == '[') {
                 // Numeric bracket prose is not an external-link or reference
                 // token. Consume only the complete literal decimal form.
@@ -14146,7 +14169,8 @@ pub const Renderer = struct {
                 const end = std.mem.indexOfPos(u8, caption, pos + 2, "]]") orelse return false;
                 const inner_link = caption[pos + 2 .. end];
                 const separator = std.mem.indexOfScalar(u8, inner_link, '|');
-                const caption_target = if (separator) |pipe_offset| inner_link[0..pipe_offset] else inner_link;
+                const raw_target = if (separator) |pipe_offset| inner_link[0..pipe_offset] else inner_link;
+                const caption_target = if (recorded_templates and starts(raw_target, ":") and figureCaptionLocalFragment(raw_target[1..])) raw_target[1..] else raw_target;
                 if (trim(caption_target).len == 0 or std.mem.indexOfAny(u8, caption_target, "[]|{}<>&/\\\r\n\x00") != null) return false;
                 if (std.mem.indexOfScalar(u8, caption_target, '#') != null and
                     (inventory == null or !figureCaptionLocalFragment(caption_target))) return false;
@@ -14202,7 +14226,7 @@ pub const Renderer = struct {
             if (std.mem.indexOfScalar(u8, "]>{}&|:\r\n\x00", byte) != null) return false;
             pos += 1;
         }
-        return depth == 0;
+        return depth == 0 and occurrence_index == tracked.ranges.len;
     }
 
     // This class inventory is independent of the inline/block flow predicate.
@@ -14583,7 +14607,7 @@ pub const Renderer = struct {
         }
         return true;
     }
-    // A recorded missing-template placeholder may be the entire caption of an
+    // A recorded missing-template placeholder may be the complete link in an
     // otherwise unchanged File operation. Prove that one complete local link;
     // this supplies only its finite node inventory, never geometry or actions.
     fn figureCaptionMissingTemplateLink(self: *const Renderer, tracked: MissingText, caption: []const u8) bool {
@@ -14617,8 +14641,12 @@ pub const Renderer = struct {
         // state is preserved; known local provenance overlaps cannot grant a
         // new geometry/action association. A crossing or lost known range
         // remains a refusal even when slicing could not retain its coordinates.
-        const missing_caption_link = self.figureCaptionMissingTemplateLink(tracked, choice.caption);
-        if ((tracked.ranges.len != 0 and !missing_caption_link) or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0 or tracked.lost_missing_range) {
+        var recorded_inventory: FigureCaptionAuthoredInventory = .{};
+        const recorded_caption = tracked.ranges.len != 0 and !tracked.lost_missing_range and tracked.generated_source == null and
+            choice.caption.len <= 4096 and figureCaptionInlineNodes(choice.caption) and
+            figureCaptionFiniteNodesTracked(self, tracked, choice.caption, &recorded_inventory, false, true);
+        const missing_caption_link = recorded_caption and recorded_inventory.classes_len == 0;
+        if ((tracked.ranges.len != 0 and !recorded_caption) or tracked.literal_curly_ranges.len != 0 or tracked.generated_links.len != 0 or tracked.lost_missing_range) {
             const bits: u64 = @as(u64, @intFromBool(tracked.ranges.len != 0)) |
                 (@as(u64, @intFromBool(tracked.literal_curly_ranges.len != 0)) << 1) |
                 (@as(u64, @intFromBool(tracked.generated_links.len != 0)) << 2) |
@@ -14692,13 +14720,13 @@ pub const Renderer = struct {
             figureCaptionLiteralPunctuation(tracked, choice.caption) or
             figureCaptionLiteralPrefix(tracked, choice.caption) or
             self.figureCaptionRuleFreeLetters(tracked, choice.caption);
-        const authored_caption = figureCaptionAuthoredSpan(tracked, choice.caption) orelse
+        const authored_caption = if (recorded_caption) @as(?FigureCaptionAuthoredInventory, recorded_inventory) else figureCaptionAuthoredSpan(tracked, choice.caption) orelse
             self.figureCaptionRemoteInventory(tracked, choice.caption);
         const old_class_inventory = inline_classless or figureCaptionClasslessDiv(tracked, choice.caption);
         const caption_classes: ?[]const u8 = if (old_class_inventory) parent.classes else if (authored_caption) |inventory|
             try std.mem.concat(self.a, u8, &.{ parent.classes, " ", inventory.classes[0..inventory.classes_len] }) else null;
         const caption_no_language_override = old_class_inventory or if (authored_caption) |inventory| !inventory.has_language else false;
-        const caption_no_inline_style = missing_caption_link or self.figureCaptionNoLists(tracked, choice.caption);
+        const caption_no_inline_style = recorded_caption or self.figureCaptionNoLists(tracked, choice.caption);
         const no_list_nodes = inline_classless or caption_no_inline_style or authored_caption != null;
         const caption_tags: ?[]const []const u8 = if (no_list_nodes and !self.figure_implicit_list_context and !self.html_list_item_flow and figureCaptionInlineNodes(choice.caption))
             &.{ "span", "b", "i", "strong", "em", "a", "p", "br", "small", "sup" } else null;
@@ -120864,6 +120892,17 @@ test "template caption provenance proof rejects partial foreign protected genera
     for ([_][]const u8{ "[[:Target]]", "[[:File:Image.jpg]]", "[[:Category:Name]]", "[[:Endrika:m-self|label]]", "[[:Endrika:m-self#fragment]]", "[[:Endrika:{{call}}]]", "[[:Endrika:m-self]]trail" }) |candidate| {
         const range = [_]missing_dependency.Range{.{ .start = 0, .end = @intCast(candidate.len), .occurrence = 1 }};
         try std.testing.expect(!renderer.figureCaptionMissingTemplateLink(.{ .bytes = candidate, .ranges = &range }, candidate));
+    }
+    for ([_]struct { text: []const u8, valid: bool }{
+        .{ .text = "'''Hammer''' ([[:Endrika:senseno]]) of a piano", .valid = true },
+        .{ .text = "'''Hammer''' ([[:Endrika:senseno]])", .valid = true },
+        .{ .text = "'''Hammer''' ([[:Endrika:senseno]]) of <script>piano</script>", .valid = false },
+        .{ .text = "'''[[File:Hammer.jpg]]''' ([[:Endrika:senseno]])", .valid = false },
+    }) |sample| {
+        const link_start = std.mem.indexOf(u8, sample.text, "[[:Endrika:senseno]]").?;
+        const range = [_]missing_dependency.Range{.{ .start = @intCast(link_start), .end = @intCast(link_start + "[[:Endrika:senseno]]".len), .occurrence = 1 }};
+        var inventory: Renderer.FigureCaptionAuthoredInventory = .{};
+        try std.testing.expectEqual(sample.valid, Renderer.figureCaptionFiniteNodesTracked(&renderer, .{ .bytes = sample.text, .ranges = &range }, sample.text, &inventory, false, true));
     }
     var no_namespace: Renderer = .{ .a = a, .context = .{} };
     try std.testing.expect(!no_namespace.figureCaptionMissingTemplateLink(tracked, caption));

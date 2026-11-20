@@ -30,7 +30,7 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // The reviewed 992ad source changes only metadata-map storage, description
 // short URLs and unrelated config; V4 geometry stays the same. The response
 // must still prove each exact approved extension registration independently.
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd" };
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9" };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -717,7 +717,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd")) return .{
+    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
     };

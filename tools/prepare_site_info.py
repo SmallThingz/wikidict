@@ -35,7 +35,8 @@ CORE_PROFILES = (CORE, '79b81ba96674efc8a803fc956bc501d347d440d2',
                  'ead780177c5a02aa63ac6fd3a50977df9719fe63',
                  'f45897451256aa3799aecc5d7ee320ade22beaec',
                  '992ad5e3679f848254828e823860ba8b3ad3b39b',
-                 'bfe24921d500b20f2938fb8fe2a09cf5cac80161')
+                 'bfe24921d500b20f2938fb8fe2a09cf5cac80161',
+                 '6e76237de1cf29c08427d191f110a2c38c2b4cf9')
 SCRIBUNTO = 'b109cb6e5866c13871e308859ef78249b1bd3ea2'
 MAX_RESPONSE = 2 * 1024 * 1024
 MAX_MANIFEST = 64 * 1024

@@ -154,7 +154,8 @@ FIGURE_WMF4_CORE = 'd45799ff7a503ab18523e720d5e3686761c84c87'
 FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d',
                     '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c',
                     '992ad5e3679f848254828e823860ba8b3ad3b39b',
-                 'bfe24921d500b20f2938fb8fe2a09cf5cac80161')
+                 'bfe24921d500b20f2938fb8fe2a09cf5cac80161',
+                    '6e76237de1cf29c08427d191f110a2c38c2b4cf9')
 FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
@@ -189,6 +190,8 @@ FIGURE_MEDIA_VARIANTS = {
         **FIGURE_WMF4_PROFILE['media_extensions'],
         'TimedMediaHandler': 'a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663'},
 }
+# Same reviewed handler sources and complete registration set as 992ad.
+FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
 
 def figure_profile(core, kind, media_extensions=None):

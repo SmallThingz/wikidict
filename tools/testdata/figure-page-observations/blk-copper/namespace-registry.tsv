@@ -1,0 +1,30 @@
+# wikidict-namespace-registry-v1
+# wiki	blkwiktionary
+# dump-date	20261001
+# content-language	blk
+-2	မီဒီယာ	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	တဲးဝါး	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	အိုင်ကိုမ်ဒေါ့ꩻရီ	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	ကေားသုင်ꩻသား	User	first-letter	1	0	0		compile_only	standard_build_input
+3	ကေားသုင်ꩻသား အိုင်ကိုမ်ဒေါ့ꩻရီ	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	ဝိစ်သိဉ်နရီ	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	ဝိစ်သိဉ်နရီ အိုင်ကိုမ်ဒေါ့ꩻရီ	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	ဖုဲင်	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	ဖုဲင် အိုင်ကိုမ်ဒေါ့ꩻရီ	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	မီဒီယာဝီခီ	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	မီဒီယာဝီခီ အိုင်ကိုမ်ဒေါ့ꩻရီ	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	တမ်းပလေက်	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	တမ်းပလေက် အိုင်ကိုမ်ဒေါ့ꩻရီ	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	စွဲးကမ်းကို	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	စွဲးကမ်းကို အိုင်ကိုမ်ဒေါ့ꩻရီ	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	ကဏ္ဍ	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	ကဏ္ဍ အိုင်ကိုမ်ဒေါ့ꩻရီ	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	သွုပ်ဆုဲင်ꩻ	သွုပ်ဆုဲင်ꩻ	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	Appendix
+101	သွုပ်ဆုဲင်ꩻ အိုင်ကိုမ်ဒေါ့ꩻရီ	သွုပ်ဆုဲင်ꩻ အိုင်ကိုမ်ဒေါ့ꩻရီ	case-sensitive	1	0	0		compile_only	discussion_namespace	Appendix talk
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	မော်ဂျူး	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	မော်ဂျူး ဆွေးနွေးချက်	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

@@ -7373,6 +7373,28 @@ fn observedImagesWithServedPaintFailureMode(a: A, ns: *const namespaces.Registry
         // and whitespace. No fallback body can lend a Figure or anchor proof.
         const audio_child = depth > 0 and stack[depth - 1].tag.is("audio");
         if ((audio_child and !tag.is("source")) or (tag.is("source") and !audio_child)) return invalid;
+        // Legacy parser output can place its TOC toggle before the first
+        // Figure. Both controls are empty and carry no observable image.
+        if (tag.is("input") or tag.is("label")) {
+            if (depth < 2 or !stack[0].tag.is("div") or !stack[1].tag.is("div") or
+                !equal(stack[1].attributes.get("id") orelse "", "toc") or
+                !equal(stack[1].attributes.get("class") orelse "", "toc") or
+                !equal(stack[1].attributes.get("role") orelse "", "navigation")) return invalid;
+            if (tag.is("input")) {
+                if (depth != 2 or inv.attributes.len != 5 or !equal(inv.get("type") orelse "", "checkbox") or
+                    !equal(inv.get("role") orelse "", "button") or !equal(inv.get("id") orelse "", "toctogglecheckbox") or
+                    !equal(inv.get("class") orelse "", "toctogglecheckbox") or !equal(inv.get("style") orelse "", "display:none")) return invalid;
+                at = tag.end;
+            } else {
+                if (depth != 4 or !stack[2].tag.is("div") or !equal(stack[2].attributes.get("class") orelse "", "toctitle") or
+                    !stack[3].tag.is("span") or !equal(stack[3].attributes.get("class") orelse "", "toctogglespan") or
+                    inv.attributes.len != 2 or !equal(inv.get("class") orelse "", "toctogglelabel") or
+                    !equal(inv.get("for") orelse "", "toctogglecheckbox") or tag.self_closing or
+                    !std.mem.startsWith(u8, html[tag.end..], "</label>")) return invalid;
+                at = tag.end + "</label>".len;
+            }
+            continue;
+        }
         // This is a bounded ordinary-HTML evidence grammar. Unknown insertion
         // modes (SELECT), inert/foreign trees and RCDATA/raw-text containers
         // cannot borrow a literal-looking Figure as a live DOM occurrence.
@@ -7634,6 +7656,26 @@ pub const Testing = if (@import("builtin").is_test) struct {
     pub fn source(a: A, doc: Document) ![]const u8 { return string(try field(try json(a, doc.pages[0].response), "parse"), "wikitext"); }
     pub fn html(a: A, doc: Document) ![]const u8 { return string(try field(try json(a, doc.pages[0].response), "parse"), "text"); }
 } else struct {};
+
+test "Pa'O copper supplied-page Figure survives the parser table of contents toggle" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bytes = @embedFile("testdata/figure-page-observations/blk-copper/figure-page-observations.json");
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/figure-page-observations/blk-copper/namespace-registry.tsv"));
+    defer ns.deinit();
+    const doc = try Testing.document(a, "blk-copper");
+    var files = try Testing.registry(a, &ns, doc);
+    defer files.deinit();
+    var defaults: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&defaults, doc.defaults_sha256);
+    var book = try Book.init(a, bytes, &ns, &files, defaults, 250);
+    defer book.deinit();
+    try std.testing.expectEqual(@as(?u32, 190), book.pages[0].occurrences[0].width);
+    const html = try Testing.html(a, doc);
+    const interactive = try std.mem.replaceOwned(u8, a, html, "</label>", "<a href='#extra'>extra</a></label>");
+    try std.testing.expectError(error.InvalidFigurePageObservations, observedImages(a, &ns, interactive, doc.pages[0].occurrences));
+}
 
 test "supplied Figure Book selects only the exact original page source defaults and normalized options" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();

@@ -3260,7 +3260,7 @@ fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const
     // record only after the namespace profile attachment has succeeded.
     var figure_core_revision: ?[]const u8 = null;
     if (general.object.get("git-hash")) |revision| if (revision == .string) {
-        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd" }) |known_revision| {
+        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9" }) |known_revision| {
             if (std.mem.eql(u8, revision.string, known_revision)) figure_core_revision = known_revision;
         }
     };
