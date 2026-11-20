@@ -1,0 +1,17 @@
+== {{env}} ==
+===''Būdvardis''===
+{{enbdv}}
+{{KDalis|enbdv|actual|fer}}
+{{Kazod|actual||pagrįstas faktais, tikras, nepramanytas|syn=}}
+==== Išraiškos arba posakiai ====
+
+*{{Kazod|actual distribution||syn=}}
+
+<br clear=all />
+
+==== Vertimai ====
+
+{{trans-top}}
+{{ltv1}} [[faktinis]]
+{{trans-bottom}}
+[[Kategorija:Verslas/Anglų kalba]]

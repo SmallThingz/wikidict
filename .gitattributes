@@ -624,3 +624,6 @@ tools/testdata/za-prefix-owner/page-potassium.wikitext whitespace=-blank-at-eol
 tools/testdata/za-prefix-owner/page-train.wikitext whitespace=-blank-at-eol
 src/encoder/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
 tools/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
+
+# Retain the authenticated Lithuanian page's original trailing spaces.
+src/encoder/testdata/lt-direct-senses/ambasada.wikitext whitespace=-blank-at-eol

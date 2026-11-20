@@ -1,0 +1,103 @@
+{{see|ambasadă}}{{vikipedija|Ambasada}}
+== {{ltv}} ==
+=== ''Daiktavardis'' ===
+{{ltdkt|forma=f-mot-6l-a|šakn=ambasad|šakn2=ambasad|žodis=ambasada}}
+
+* '''ambasada''' {{Kategorija|Politika}} - valstybės [[diplomatinė atstovybė]] užsienyje, vadovaujama [[ambasadorius|ambasadoriaus]] [[diplomatinis rangas|rangą]] turinčio [[diplomatas|diplomato]]
+* [[pastatas]], kuriame yra tokia [[atstovybė]]
+
+<br clear=all />
+==== Sinonimai ====
+
+{{sin-top|{{Kategorija|Politika}} }}
+* {{t+|lt|atstovybė|f}}
+{{sin-mid}}
+{{sin-bottom}}
+
+==== Vertimai ====
+
+{{trans-top|{{Kategorija|Politika}} }}
+{{afv1}} {{t+|af|ambassade}}
+{{env1}} {{t+|en|embassy}}
+{{hyv1}} {{t+|hy|դեսպանատուն|tr=despanatun|sc=Armn}}
+{{bsv1}} {{t+|bs|ambasada|f}}
+{{bgv1}} {{t+|bg|посолство|tr=posol'stvo|sc=Cyrl}}
+{{dav1}} {{t+|da|ambassade|c}}
+{{eov1}} {{t+|eo|ambasadorejo}}
+{{etv1}} {{t+|et|suursaatkond}}
+{{glv1}} {{t+|gl|embaixada|f}}, {{t+|gl|embaixada|f}}
+{{elv1}} {{t+|el|πρεσβεία|tr=presveía|sc=Grek}}
+{{kav1}} {{t+|ka|საელჩო|tr=saelčo|sc=Geor}}
+{{hiv1}} {{t+|hi|दूतावास|tr=dūtāvās}}
+{{huv1}} {{t+|hu|nagykövetség}}
+{{esv1}} {{t+|es|embajada|f}}
+{{itv1}} {{t+|it|ambasciata}}
+{{jav1}} {{t+|ja|大使館|tr=taishikan}}
+{{kov1}} {{t+|ko|대사관|tr=daesagwan}}
+{{hrv1}} {{t+|hr|ambasada|f}}, {{t+|hr|veleposlanstvo|n}}
+{{kuv1}} {{t+|ku|sefaret|f}}, {{t+|ku|balyozxane|f}}, {{t+|ku|ambasad|f}}, {{t+|ku|konsolosxane|f}}
+{{lvv1}} {{t+|lv|vēstniecība|f}}
+{{plv1}} {{t+|pl|ambasada|f}}
+{{trans-mid}}
+{{nov1}} {{t+|no|ambassade|m}}
+{{nlv1}} {{t+|nl|ambassade}}
+{{ptv1}} {{t+|pt|embaixada|f}}
+{{frv1}} {{t+|fr|ambassade}}
+{{rov1}} {{t+|ro|ambasadă|f}}
+{{ruv1}} {{t+|ru|посольство|n|tr=posól'stvo|sc=Cyrl}}
+{{srv1}}
+*:Kirilica: {{t+|sr|амбасада|f}}
+*:Lotyniškai: {{t+|sr|ambasada|f}}
+{{slv1}} {{t+|sl|veleposlaništvo}}
+{{fiv1}} {{t+|fi|suurlähetystö}}
+{{svv1}} {{t+|sv|ambassad|c}}
+{{tev1}} {{t+|te|రాయబార కార్యాలయం|tr=raayabaara kaaryaalayaM}}
+{{trv1}} {{t+|tr|sefarethane}}
+{{dev1}} {{t+|de|Botschaft|f}}
+{{trans-bottom}}
+
+== {{bsv}} ==
+=== ''Daiktavardis'' ===
+{{bsdkt}}
+
+'''[[ambasada]]''' {{f}} 
+
+# {{t+|lt|ambasada|f|kt=Politika|from=bs}} 
+
+----
+
+== {{hrv}} ==
+=== ''Daiktavardis'' ===
+{{hrdkt}}
+
+'''[[ambasada]]''' {{f}} 
+
+# {{t+|lt|ambasada|f|kt=Politika|from=hr}} 
+
+----
+
+== {{srv}} ==
+=== ''Daiktavardis'' ===
+{{srdkt}}
+
+'''[[ambasada]]''' {{f}} 
+
+# {{t+|lt|ambasada|f|kt=Politika|from=sr}} 
+
+----
+{{Commons|Category:Embassies|no=T}}
+== {{plv}} ==
+=== ''Daiktavardis'' ===
+{{pldkt}}
+
+'''[[ambasada]]''' {{f}}
+
+# {{t+|lt|ambasada|from=pl}}
+
+==== Etimologija ====
+{{etimologija-stub|pl}}
+
+{{bot-entry|pl|ambasada|2010|10|31|ViskonBot}}
+
+<br clear=all>
+----

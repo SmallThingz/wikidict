@@ -1,0 +1,957 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "actual",
+  "kind": "language",
+  "language": "Enwan (Edo State)",
+  "match_mode": "exact-utf8",
+  "record_count": 18920,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": [
+          0,
+          1,
+          2,
+          3
+        ]
+      },
+      "title": "actual",
+      "display_title": [],
+      "kind": "language",
+      "language": "Enwan (Edo State)",
+      "language_code": "env",
+      "sections": [
+        {
+          "level": 2,
+          "title": "Anglų kalba",
+          "anchor": "_Anglų_kalba",
+          "anchor_fallback": "_Angl.C5.B3_kalba",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "",
+                  "target": "File:Flag of the United Kingdom.svg",
+                  "trail": "",
+                  "language": "",
+                  "classes": "wikidict-media wikidict-media-file-466c6167206f662074686520556e69746564204b696e67646f6d2e737667",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "image": {
+                    "file": "Flag of the United Kingdom.svg",
+                    "width_px": 45,
+                    "border": true
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "Anglų kalba",
+                  "target": "Kategorija:Anglų kalba",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 2,
+              "anchor": "_Anglų_kalba",
+              "anchor_fallback": "_Angl.C5.B3_kalba",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "Būdvardis",
+          "anchor": "Būdvardis",
+          "anchor_fallback": "B.C5.ABdvardis",
+          "blocks": [
+            {
+              "kind": "heading",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Būdvardis",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 3,
+              "anchor": "Būdvardis",
+              "anchor_fallback": "B.C5.ABdvardis",
+              "table": null
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Pagrindinė forma: ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "actual",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 3,
+                        "rowspan": 1,
+                        "background": "#efefef"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Positive degree",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#efefef"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Comparative degree",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#efefef"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "Superlative degree",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#efefef"
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "actual",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "mw-selflink selflink",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f9f9f9"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "actualer",
+                            "target": "actualer",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f9f9f9"
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "actualest",
+                            "target": "actualest",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": "#000000",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#f9f9f9"
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 1,
+                  "cell_spacing": 0,
+                  "cell_padding": 0,
+                  "width": null
+                },
+                "style": {
+                  "background": "#f9f9f9",
+                  "collapse": "collapse",
+                  "float_side": "right"
+                }
+              }
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "actual",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "mw-selflink selflink",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " - pagrįstas faktais, tikras, nepramanytas",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Išraiškos arba posakiai",
+          "anchor": "Išraiškos_arba_posakiai",
+          "anchor_fallback": "I.C5.A1rai.C5.A1kos_arba_posakiai",
+          "blocks": [
+            {
+              "kind": "list_item",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "link",
+                  "text": "actual distribution",
+                  "target": "actual distribution",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "*",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "line_break",
+                  "text": "\n",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        },
+        {
+          "level": 4,
+          "title": "Vertimai",
+          "anchor": "Vertimai",
+          "anchor_fallback": "",
+          "blocks": [
+            {
+              "kind": "indent",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "Tolesni vertimai turi būti patikrinti ir įterpti pagal kategorijas į atitinkamą vertimų lentelę aukščiau. Jei atitinkamos lentelės nėra, ją sukurkite, nurodydami kategoriją, kuri paprastai sutampa su viena iš galimų žodžio reikšmių. Žr. ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "{{",
+                  "target": "Šablonas:top",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "trans-top",
+                  "target": "Šablonas:top",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": ".",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": true,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": ":",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "[malformed template]",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": " ",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "NavFrame NavHead",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.949999988079071,
+                  "font_scale_basis": "normal_body",
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": " Vertimai, kuriuos reikia patikrinti ir sukategorizuoti",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "NavFrame NavHead",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 0.949999988079071,
+                  "font_scale_basis": "normal_body",
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null,
+              "text_align": "left"
+            },
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "• ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "",
+                            "target": "File:Flag of Lithuania.svg",
+                            "trail": "",
+                            "language": "",
+                            "classes": "wikidict-media wikidict-media-file-466c6167206f66204c69746875616e69612e737667 NavFrame NavContent",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "image": {
+                              "file": "Flag of Lithuania.svg",
+                              "width_px": 21,
+                              "border": true
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "NavFrame NavContent",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "Lietuvių kalba",
+                            "target": "Kategorija:Lietuvių kalba",
+                            "trail": "",
+                            "language": "",
+                            "classes": "NavFrame NavContent",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ":  ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "NavFrame NavContent",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "faktinis",
+                            "target": "faktinis",
+                            "trail": "",
+                            "language": "",
+                            "classes": "NavFrame NavContent",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.949999988079071,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": "#ffffe0",
+                        "style": {
+                          "text_align": "left"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "geometry": {
+                  "border": 0,
+                  "cell_spacing": null,
+                  "cell_padding": null,
+                  "width": {
+                    "unit": "percent",
+                    "value": 100
+                  }
+                }
+              },
+              "text_align": "center"
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [
+        {
+          "file": "Flag of the United Kingdom.svg",
+          "kind": "image",
+          "caption": "Flag of the United Kingdom.svg"
+        },
+        {
+          "file": "Flag of Lithuania.svg",
+          "kind": "image",
+          "caption": "Flag of Lithuania.svg"
+        }
+      ],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

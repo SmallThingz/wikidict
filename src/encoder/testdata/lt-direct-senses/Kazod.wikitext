@@ -1,0 +1,35 @@
+<includeonly>{{{{{subst|}}}#if:{{{1|}}}|'''[[{{{1|}}}]]'''{{{{{subst|}}}#if:{{{syn|}}}|&#32;{{{syn|}}}}} {{{{{subst|}}}#if:{{{2|}}}|{{{{{subst|}}}Katext|subst={{{subst|}}}|{{{2|}}}|{{{3|}}}|zodis={{{{{subst|}}}PAGENAME}}}}|{{{{{subst|}}}#if:{{{3|}}}|- {{{3|}}}}}}}|{{{{{subst|}}}Katext|subst={{{subst|}}}|{{{2|}}}|{{{3|}}}|zodis={{{{{subst|}}}PAGENAME}}}}}}</includeonly><noinclude>[[Kategorija:Kategorijų šablonai|{{PAGENAME}}]]
+'''Pavyzdžiai:'''
+ <nowiki>{{Kazod|žodis|mas|tekstas|syn={{subst:Syn|subst=subst:|žo|dis|||||||||||||||||||||||||||||||}}}}</nowiki>, kur "mas" - kategorijos kodas, syn - aprašoma sinonimų aibė.
+ gausime: '''[[žodis]]'''&#32;''([[syn.]]: [[žo]], [[dis]])'' {{Kategorija|mas|zodis=Kazod}}&#32;- tekstas
+
+ <nowiki>{{Kazod|žodis|mas|tekstas|syn={{subst:Syn|subst=subst:|žd|||||||||||||||||||||||||||||||}}}}</nowiki>, kur "mas" - kategorijos kodas, syn - aprašoma sinonimų aibė.
+ gausime: '''[[žodis]]'''&#32;''([[syn.]]: [[žd]])'' {{Kategorija|mas|zodis=Kazod}}&#32;- tekstas
+
+ <nowiki>{{Kazod|žodis|mas|tekstas|syn=}}</nowiki>, kur "mas" - kategorijos kodas.
+ gausime: {{Kazod|žodis|mas|tekstas|syn=}}
+
+ <nowiki>{{Kazod|žodis|mas|tekstas}}</nowiki>, kur "mas" - kategorijos kodas.
+ gausime: {{Kazod|žodis|mas|tekstas}}
+
+ <nowiki>{{Kazod|žodis|mas}}</nowiki>, kur "mas" - kategorijos kodas.
+ gausime: {{Kazod|žodis|mas}}
+
+ <nowiki>{{Kazod|žodis||tekstas}}</nowiki>
+ gausime: {{Kazod|žodis||tekstas}}
+
+ <nowiki>{{Kazod|žodis}}</nowiki>
+ gausime: {{Kazod|žodis}}
+
+ <nowiki>{{Kazod||mas|tekstas}}</nowiki>, kur "mas" - kategorijos kodas.
+ gausime: {{Kazod||mas|tekstas}}
+
+ <nowiki>{{Kazod||mas}}</nowiki>, kur "mas" - kategorijos kodas.
+ gausime: {{Kazod||mas}}
+
+ <nowiki>{{Kazod|||tekstas}}</nowiki>
+ gausime: {{Kazod|||tekstas}}
+
+ <nowiki>{{Kazod}}</nowiki>
+ gausime: {{Kazod}}
+</noinclude>
