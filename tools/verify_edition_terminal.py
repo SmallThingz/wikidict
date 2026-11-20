@@ -331,6 +331,10 @@ def reveal_witness(reader, wanted, heading):
     reader.action(b'\x1b[F', reader.entry_focused, 'End opens the final entry viewport')
     if source_witness_visible(reader, wanted, heading):
         return
+    # A final table row can span more than one screen in the narrow layout.
+    reader.action(b'\x1b[5~', reader.entry_focused, 'checked the viewport before the end')
+    if source_witness_visible(reader, wanted, heading):
+        return
     reader.action(b'\x1b[H', reader.entry_focused, 'Home begins the full entry scan')
     while not source_witness_visible(reader, wanted, heading):
         previous = reader.text()

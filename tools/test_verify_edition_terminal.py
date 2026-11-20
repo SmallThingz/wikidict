@@ -328,6 +328,7 @@ class EditionTerminalTests(unittest.TestCase):
         class Pages:
             width = 45
             position = 0
+            page_downs = 0
 
             def text(self):
                 return str(self.position)
@@ -336,11 +337,15 @@ class EditionTerminalTests(unittest.TestCase):
                 return True
 
             def action(self, key, predicate, _label):
-                self.position = {b'\x1b[F': 95, b'\x1b[H': 0}[key]
+                if key == b'\x1b[5~':
+                    self.position = max(0, self.position - 1)
+                else:
+                    self.position = {b'\x1b[F': 95, b'\x1b[H': 0}[key]
                 assert predicate()
 
             def send(self, key):
                 assert key == b'\x1b[6~'
+                self.page_downs += 1
                 self.position = min(95, self.position + 1)
                 return self.position
 
@@ -350,10 +355,12 @@ class EditionTerminalTests(unittest.TestCase):
         pages = Pages()
         with patch('verify_edition_terminal.reading_body', return_value='text'), \
              patch('verify_edition_terminal.source_witness_visible', side_effect=lambda r, w, h: r.text() == w):
-            for wanted in ('95', '74'):
+            for wanted in ('95', '94', '74'):
                 pages.position = 0
                 reveal_witness(pages, wanted, 'title')
                 self.assertEqual(wanted, pages.text())
+                if wanted == '94':
+                    self.assertEqual(pages.page_downs, 0)
             with self.assertRaisesRegex(CheckFailure, 'Source witness missing'):
                 reveal_witness(pages, 'absent', 'title')
 
