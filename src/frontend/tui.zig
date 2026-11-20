@@ -162,6 +162,7 @@ const State = struct {
     correct: usize = 0,
     random: std.Random.DefaultPrng = .init(31337),
     loaded: ?usize = null,
+    loaded_unreadable: bool = false,
     text: []const u8 = &.{},
     rows: []term.RenderRow = &.{},
     visual_text: []const u8 = &.{},
@@ -302,15 +303,32 @@ const State = struct {
     fn roundComplete(self: State) bool {
         return if (self.reading) |r| self.round >= r.data.quiz_length else false;
     }
+    fn decodeEntry(self: *State, raw: *const store.Store.Raw) !?model.DecodedEntry {
+        return model.fromRecord(self.a, raw.record) catch |err| switch (err) {
+            error.InvalidPresentation => null,
+            else => return err,
+        };
+    }
+    fn entryReadable(self: *State, index: usize) !bool {
+        if (self.loaded == index) return !self.loaded_unreadable;
+        var raw = try self.db.recordAlloc(self.a, index);
+        defer raw.deinit();
+        var doc = (try self.decodeEntry(&raw)) orelse return false;
+        doc.deinit();
+        return true;
+    }
     fn hasStudyMeaning(self: *State) !bool {
         if (self.count() == 0) return false;
         const index = self.recordIndex(self.selected);
         if (self.study_meaning_index != index) {
             var record = try self.db.recordAlloc(self.a, index);
             defer record.deinit();
-            var doc = try model.fromRecord(self.a, record.record);
-            defer doc.deinit();
-            self.study_has_meaning = (try studyMeaning(doc.entry)) != null;
+            self.study_has_meaning = false;
+            if (try self.decodeEntry(&record)) |decoded| {
+                var doc = decoded;
+                defer doc.deinit();
+                self.study_has_meaning = (try studyMeaning(doc.entry)) != null;
+            }
             self.study_meaning_index = index;
         }
         return self.study_has_meaning;
@@ -339,7 +357,10 @@ const State = struct {
         if (self.count() == 0) return;
         var record = try self.db.recordAlloc(self.a, self.recordIndex(self.selected));
         defer record.deinit();
-        var doc = try model.fromRecord(self.a, record.record);
+        var doc = (try self.decodeEntry(&record)) orelse {
+            self.notice = "This entry's presentation could not be read.";
+            return;
+        };
         defer doc.deinit();
         if (speech) {
             try self.media_job.start(self.io, self.a, .{ .speech = .{ .word = doc.entry.title, .language = doc.entry.language_code } });
@@ -443,7 +464,9 @@ const State = struct {
     fn openSelected(self: *State) !void {
         self.focus = .entry;
         if (self.count() != 0) if (self.reading) |r| {
-            try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
+            const index = self.recordIndex(self.selected);
+            if (!try self.entryReadable(index)) return;
+            try r.remember(try self.db.titleAt(index));
             try r.save(self.io);
         };
     }
@@ -777,8 +800,10 @@ const State = struct {
                     },
                     's' => {
                         if (self.count() != 0) if (self.reading) |r| {
-                            const title = try self.db.titleAt(self.recordIndex(self.selected));
+                            const index = self.recordIndex(self.selected);
+                            const title = try self.db.titleAt(index);
                             const was_saved = ReadingState.contains(r.data.saved, title);
+                            if (!was_saved and !try self.entryReadable(index)) return true;
                             try r.bookmark(title);
                             try r.save(self.io);
                             if (self.nav == .saved) {
@@ -796,11 +821,7 @@ const State = struct {
                             self.cursor = 0;
                             try self.changed();
                             self.selected = self.random.random().uintLessThan(usize, self.count());
-                            self.focus = .entry;
-                            if (self.reading) |r| {
-                                try r.remember(try self.db.titleAt(self.recordIndex(self.selected)));
-                                try r.save(self.io);
-                            }
+                            try self.openSelected();
                         }
                     },
                     't' => {
@@ -855,10 +876,22 @@ const State = struct {
             var float_flow: output.FloatProjection = .{ .allocator = self.a, .frame = &formatted, .columns = width };
             defer float_flow.events.deinit(self.a);
             var projection: output.PoemProjection = .{ .frame = &formatted, .allocator = self.a, .lines = &poem_lines, .table_columns = width, .float_flow = &float_flow, .viewport_columns = width, .dark_theme = switch (self.theme) { .dark => true, .light => false, .terminal => null } };
-            if (index) |i| {
+            var unreadable = false;
+            if (index) |i| entry: {
                 var source_record = try self.db.recordAlloc(self.a, i);
                 defer source_record.deinit();
-                var doc = try model.fromRecord(self.a, source_record.record);
+                var doc = (try self.decodeEntry(&source_record)) orelse {
+                    unreadable = true;
+                    self.study_meaning_index = i;
+                    self.study_has_meaning = false;
+                    self.section_indices.clearRetainingCapacity();
+                    self.section_count = 0;
+                    self.section = 0;
+                    self.section_offset = 0;
+                    self.jump_section = false;
+                    try formatted.writer.writeAll("This entry's presentation could not be read.\n\nPress Esc to go back or / to search.");
+                    break :entry;
+                };
                 defer doc.deinit();
                 const meaning = try studyMeaning(doc.entry);
                 self.study_meaning_index = i;
@@ -945,6 +978,7 @@ const State = struct {
             self.flow_events = float_flow.events;
             float_flow.events = .empty;
             self.loaded = index;
+            self.loaded_unreadable = unreadable;
             self.format_width = width;
             self.format_theme = self.theme;
             self.wrap_width = 0;
@@ -1127,7 +1161,7 @@ const State = struct {
                 if (self.count() != 0 and content_width > 12) {
                     const title = try self.db.titleAt(self.recordIndex(self.selected));
                     const saved = if (self.reading) |r| ReadingState.contains(r.data.saved, title) else false;
-                    try self.put(w, 6, content_col + 10, content_width - 10, if (saved) "Saved" else "s to save", if (saved) p.accent else p.muted);
+                    if (saved or !self.loaded_unreadable) try self.put(w, 6, content_col + 10, content_width - 10, if (saved) "Saved" else "s to save", if (saved) p.accent else p.muted);
                 }
                 for (0..self.bodyHeight()) |i| {
                     if (self.scroll + i >= self.rows.len) break;
@@ -1348,6 +1382,66 @@ test "terminal neutral redirect selection has no invented library heading" {
     try std.testing.expect(std.mem.indexOf(u8, state.text, "Missing") != null);
     try std.testing.expect(std.mem.indexOf(u8, state.text, "English") == null);
     try std.testing.expect(db.heading() == null);
+}
+
+test "terminal unreadable presentation keeps results usable and only remembers readable entries" {
+    const a = std.testing.allocator;
+    const good = try enc.presentation_codec.encodeAlloc(a, .{ .entry = .{
+        .title = "beta", .kind = .language, .language = "English", .language_code = "en",
+        .sections = &.{.{ .level = 2, .title = "Entry", .blocks = &.{.{
+            .kind = .definition, .spans = &.{.{ .text = "Readable definition" }},
+        }} }},
+    } });
+    defer a.free(good);
+    const metadata = try enc.blob_format.buildLanguageMetadataAlloc(a, "en", "English");
+    defer a.free(metadata);
+    const bytes = try enc.blob_format.buildAlloc(a, .language, metadata, &.{
+        .{ .title = "alpha", .payload = "DPRP" },
+        .{ .title = "beta", .payload = good },
+    });
+    defer a.free(bytes);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    defer a.free(root);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "sample", .data = bytes });
+    const path = try std.fs.path.join(a, &.{ root, "sample" });
+    defer a.free(path);
+    var db: store.Store = .{ .file = try @import("blob_storage").File.open(std.testing.io, a, path), .allocator = a };
+    defer db.file.deinit();
+    var reading = ReadingState.init(a);
+    defer reading.deinit();
+    try reading.load(std.testing.io, root, "English");
+    var state: State = .{ .io = std.testing.io, .a = a, .db = &db, .reading = &reading, .label = "English", .theme = .terminal, .color = false, .screen = .{ .cols = 90, .rows = 30 } };
+    defer state.deinit();
+    try state.changed();
+    try std.testing.expectEqual(@as(usize, 2), state.count());
+    var raw = try db.recordAlloc(a, state.recordIndex(state.selected));
+    defer raw.deinit();
+    try std.testing.expectError(error.InvalidPresentation, model.fromRecord(a, raw.record));
+
+    // This is the same pane preparation invoked for the startup preview.
+    try state.prepare(60);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "presentation could not be read") != null);
+    try std.testing.expect(state.loaded_unreadable);
+    try std.testing.expect(!try state.hasStudyMeaning());
+    try std.testing.expect(try state.key(.{ .key = .enter }));
+    try std.testing.expectEqual(Focus.entry, state.focus);
+    try std.testing.expect(try state.key(.{ .key = .text, .bytes = .{ 's', 0, 0, 0 }, .len = 1 }));
+    try std.testing.expectEqual(@as(usize, 0), reading.data.saved.len);
+    try std.testing.expectEqual(@as(usize, 0), reading.data.history.len);
+    try std.testing.expectEqualStrings("", reading.data.last_title);
+
+    try std.testing.expect(try state.key(.{ .key = .escape }));
+    try std.testing.expectEqual(Focus.matches, state.focus);
+    try std.testing.expect(try state.key(.{ .key = .down }));
+    try std.testing.expect(try state.key(.{ .key = .enter }));
+    try state.prepare(60);
+    try std.testing.expect(!state.loaded_unreadable);
+    try std.testing.expect(std.mem.indexOf(u8, state.text, "Readable definition") != null);
+    try std.testing.expectEqual(@as(usize, 1), reading.data.history.len);
+    try std.testing.expectEqualStrings("beta", reading.data.history[0]);
+    try std.testing.expectEqualStrings("beta", reading.data.last_title);
 }
 
 test "terminal empty language body distinguishes a title from entry content" {
