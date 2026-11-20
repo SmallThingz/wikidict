@@ -56,6 +56,26 @@ fn trimExcept(io: std.Io, a: A, root: []const u8, mb: usize, protected_basename:
         total -= item.size;
     }
 }
+// The caller keeps the response and scratch arena alive until the download ends.
+fn mediaLocation(scratch: A, response: []const u8, image: bool) !?[]const u8 {
+    const ImageInfo = struct { url: ?std.json.Value = null, thumburl: ?std.json.Value = null };
+    const Page = struct { imageinfo: []const ImageInfo = &.{} };
+    const Response = struct { query: struct { pages: []const Page } };
+    const parsed = std.json.parseFromSliceLeaky(Response, scratch, response, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.InvalidMediaResponse,
+    };
+    for (parsed.query.pages) |page| {
+        if (page.imageinfo.len == 0) continue;
+        const info = page.imageinfo[0];
+        const thumbnail = if (image) info.thumburl else null;
+        const location = thumbnail orelse info.url orelse return error.InvalidMediaResponse;
+        if (location != .string or !std.mem.startsWith(u8, location.string, "https://")) return error.InvalidMediaResponse;
+        return location.string;
+    }
+    return null;
+}
+
 pub fn open(io: std.Io, a: A, root: []const u8, file: []const u8, image: bool, mb: usize) !void {
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
@@ -82,20 +102,10 @@ pub fn open(io: std.Io, a: A, root: []const u8, file: []const u8, image: bool, m
         var url: ?[]const u8 = null;
         for ([_][]const u8{ "https://commons.wikimedia.org/w/api.php", "https://en.wiktionary.org/w/api.php" }) |api| {
             const response = try command(io, scratch, &.{ "curl", "--fail", "--silent", "--max-time", "30", "--get", api, "--data-urlencode", "action=query", "--data-urlencode", "format=json", "--data-urlencode", "formatversion=2", "--data-urlencode", "prop=imageinfo", "--data-urlencode", "iiprop=url", "--data-urlencode", "iiurlwidth=960", "--data-urlencode", try std.fmt.allocPrint(scratch, "titles=File:{s}", .{file}) });
-            const parsed = try std.json.parseFromSlice(std.json.Value, scratch, response, .{});
-            const query = parsed.value.object.get("query") orelse return error.InvalidMediaResponse;
-            const pages = query.object.get("pages") orelse return error.InvalidMediaResponse;
-            for (pages.array.items) |page| if (page.object.get("imageinfo")) |info| {
-                if (info.array.items.len != 0) {
-                    const item = info.array.items[0];
-                    url = (if (image) item.object.get("thumburl") orelse item.object.get("url").? else item.object.get("url").?).string;
-                    break;
-                }
-            };
+            url = try mediaLocation(scratch, response, image);
             if (url != null) break;
         }
         const location = url orelse return error.MediaNotFound;
-        if (!std.mem.startsWith(u8, location, "https://")) return error.InvalidMediaResponse;
         const temporary = try std.mem.concat(scratch, u8, &.{ path, ".part" });
         defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
         _ = try command(io, scratch, &.{ "curl", "--fail", "--silent", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-time", "40", "--max-filesize", "52428800", "--output", temporary, location });
@@ -114,6 +124,40 @@ fn retentionFixtureFile(dir: std.Io.Dir, name: []const u8, size: u64, seconds: i
     defer file.close(io);
     try file.setLength(io, size);
     try file.setTimestamps(io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = seconds * std.time.ns_per_s } } });
+}
+
+test "media response selects a thumbnail or the original without losing shared files" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const shared =
+        \\{"batchcomplete":true,"query":{"pages":[{"missing":true},{"missing":true,"known":true,"imageinfo":[{"thumburl":"https://example.org/preview.png","url":"https://example.org/original.png"}]}]}}
+    ;
+    try std.testing.expectEqualStrings("https://example.org/preview.png", (try mediaLocation(a, shared, true)).?);
+    try std.testing.expectEqualStrings("https://example.org/original.png", (try mediaLocation(a, shared, false)).?);
+    const original_only =
+        \\{"query":{"pages":[{"imageinfo":[{"url":"https://example.org/art.png"}]}]}}
+    ;
+    try std.testing.expectEqualStrings("https://example.org/art.png", (try mediaLocation(a, original_only, true)).?);
+    const missing =
+        \\{"query":{"pages":[{"missing":true},{"imageinfo":[]}]}}
+    ;
+    try std.testing.expect((try mediaLocation(a, missing, true)) == null);
+}
+
+test "media response reports incomplete metadata to the reader" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    for ([_][]const u8{
+        "{",
+        "null",
+        "[]",
+        "{}",
+        "{\"query\":{\"pages\":{}}}",
+        "{\"query\":{\"pages\":[{\"imageinfo\":[{\"timestamp\":\"2026-10-01T00:00:00Z\"}]}]}}",
+        "{\"query\":{\"pages\":[{\"imageinfo\":[{\"url\":12}]}]}}",
+        "{\"query\":{\"pages\":[{\"imageinfo\":[{\"url\":\"http://example.org/art.png\"}]}]}}",
+    }) |response| try std.testing.expectError(error.InvalidMediaResponse, mediaLocation(arena.allocator(), response, true));
 }
 
 fn expectRetentionFile(dir: std.Io.Dir, name: []const u8, expected: bool) !void {
