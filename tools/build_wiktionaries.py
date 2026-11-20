@@ -3028,9 +3028,11 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
             with bz2.open(source,'rb') as inp:
                 while chunk:=inp.read(1024*1024):
                     xml_bytes+=len(chunk)
+                    # Only the final partial closing tag can match across reads.
+                    search_from = max(0, len(pending) - len(close_tag) + 1)
                     pending.extend(chunk)
                     consumed=0
-                    while (end:=pending.find(close_tag,consumed))>=0:
+                    while (end:=pending.find(close_tag,search_from))>=0:
                         start=pending.find(open_tag,consumed)
                         if start<0 or start>end:
                             raise ValueError(f'Unexpected XML page close: {source}')
@@ -3041,6 +3043,7 @@ def _stage_seekable_dump_serial(items, downloads, scratch, metadata=None):
                         if len(batch)+page_bytes>max_member_bytes: flush()
                         batch.extend(memoryview(pending)[consumed:cut])
                         consumed=cut
+                        search_from=cut
                         pages+=1
                         if len(batch)>=target_bytes: flush()
                     # Move the unfinished suffix once per read, rather than once per page.
@@ -3151,9 +3154,11 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
             with bz2.open(source,'rb') as inp:
                 while chunk:=inp.read(1024*1024):
                     xml_bytes+=len(chunk)
+                    # Only the final partial closing tag can match across reads.
+                    search_from = max(0, len(pending) - len(close_tag) + 1)
                     pending.extend(chunk)
                     consumed=0
-                    while (end:=pending.find(close_tag,consumed))>=0:
+                    while (end:=pending.find(close_tag,search_from))>=0:
                         start=pending.find(open_tag,consumed)
                         if start<0 or start>end: raise _SplitPageAcrossParts(source)
                         cut=end+len(close_tag)
@@ -3163,6 +3168,7 @@ def _stage_seekable_dump_parallel(items, downloads, scratch, metadata=None):
                         if len(batch)+page_bytes>STAGE_MAX_MEMBER_BYTES: flush()
                         batch.extend(memoryview(pending)[consumed:cut])
                         consumed=cut
+                        search_from=cut
                         pages+=1
                         if len(batch)>=STAGE_TARGET_BYTES: flush()
                     del pending[:consumed]

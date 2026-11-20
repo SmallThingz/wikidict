@@ -2407,6 +2407,30 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(metadata['index_size'],len(index))
             self.assertEqual(metadata['index_sha256'],hashlib.sha256(index).hexdigest())
 
+    def test_seekable_repack_finds_closing_tag_split_between_reads(self):
+        chunk_size = 1024 * 1024
+        opening = b'<mediawiki><page>'
+        filler = b'x' * (2 * chunk_size - len(opening) - len(b'</pa'))
+        xml = opening + filler + b'</page><page>next</page></mediawiki>'
+        following = b'<mediawiki><page>last</page></mediawiki>'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            folder = root / 'testwiktionary' / '20260901'
+            folder.mkdir(parents=True)
+            items = []
+            for number, payload in enumerate((xml, following)):
+                name = f'part{number}.xml.bz2'
+                (folder / name).write_bytes(bz2.compress(payload))
+                items.append(dict(wiki='testwiktionary', date='20260901', name=name))
+            for count, expected, pages in ((1, xml, 2), (2, xml + following, 3)):
+                with self.subTest(parts=count):
+                    scratch = root / f'stage-{count}'
+                    scratch.mkdir()
+                    metadata = {}
+                    dump = b.stage_seekable_dump(items[:count], root, scratch, metadata)
+                    self.assertEqual(decode_staged_dump(dump), expected)
+                    self.assertEqual(metadata['source_pages'], pages)
+
     def test_parallel_part_boundary_page_uses_serial_framer(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);folder=root/'testwiktionary/20260901';folder.mkdir(parents=True);write_namespace_fixture(folder)
