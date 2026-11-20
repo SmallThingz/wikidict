@@ -13,6 +13,11 @@ class _Pos(C.Structure):
     _fields_ = [('row', C.c_int), ('col', C.c_int)]
 
 
+class _Rect(C.Structure):
+    _fields_ = [('start_row', C.c_int), ('end_row', C.c_int),
+                ('start_col', C.c_int), ('end_col', C.c_int)]
+
+
 class _CellAttrs(C.Structure):
     # Leading native bitfields of VTermScreenCellAttrs in the SONAME 0 ABI.
     _fields_ = [('bold', C.c_uint, 1), ('underline', C.c_uint, 2), ('italic', C.c_uint, 1)]
@@ -55,6 +60,8 @@ def _load_library():
         'vterm_screen_set_callbacks': (None, [C.c_void_p, C.POINTER(_Callbacks), C.c_void_p]),
         'vterm_screen_reset': (None, [C.c_void_p, C.c_int]),
         'vterm_screen_get_cell': (C.c_int, [C.c_void_p, _Pos, C.POINTER(_Cell)]),
+        'vterm_screen_get_text': (C.c_size_t, [C.c_void_p, C.c_void_p, C.c_size_t, _Rect]),
+        'vterm_screen_is_eol': (C.c_int, [C.c_void_p, _Pos]),
     }
     for symbol, (result, arguments) in signatures.items():
         function = getattr(lib, symbol)
@@ -69,6 +76,7 @@ class Screen:
         self.columns, self.lines = columns, lines
         self._hidden = False
         self._cells = None
+        self._display = None
         self._vt = self._lib.vterm_new(lines, columns)
         if not self._vt:
             raise MemoryError('libvterm could not allocate a screen')
@@ -96,46 +104,63 @@ class Screen:
         self._lib.vterm_state_get_cursorpos(self._state, C.byref(pos))
         return SimpleNamespace(x=pos.col, y=pos.row, hidden=self._hidden)
 
+    def _cell_row(self, row):
+        cells = []
+        for column in range(self.columns):
+            cell = _Cell()
+            if not self._lib.vterm_screen_get_cell(self._screen, _Pos(row, column), C.byref(cell)):
+                raise RuntimeError(f'libvterm did not return cell ({row}, {column})')
+            scalars = []
+            for scalar in cell.chars:
+                if scalar == 0:
+                    break
+                scalars.append(scalar)
+            # For a wide glyph's second cell only the leading sentinel
+            # is meaningful. libvterm can retain the old combining tail.
+            continuation = cell.chars[0] == 0xffffffff
+            text = '' if continuation else ''.join(map(chr, scalars)) or ' '
+            projected = dict(text=text, width=int(cell.width), continuation=continuation)
+            if cell.attrs.bold:
+                projected['bold'] = True
+            if cell.attrs.italic:
+                projected['italic'] = True
+            if cell.attrs.underline:
+                projected['underline'] = cell.attrs.underline
+            cells.append(projected)
+        return cells
+
     def cell_rows(self):
         if self._cells is None:
-            rows = []
-            for row in range(self.lines):
-                cells = []
-                for column in range(self.columns):
-                    cell = _Cell()
-                    if not self._lib.vterm_screen_get_cell(self._screen, _Pos(row, column), C.byref(cell)):
-                        raise RuntimeError(f'libvterm did not return cell ({row}, {column})')
-                    scalars = []
-                    for scalar in cell.chars:
-                        if scalar == 0:
-                            break
-                        scalars.append(scalar)
-                    # For a wide glyph's second cell only the leading sentinel
-                    # is meaningful. libvterm can retain the old combining tail.
-                    continuation = cell.chars[0] == 0xffffffff
-                    text = '' if continuation else ''.join(map(chr, scalars)) or ' '
-                    projected = dict(text=text, width=int(cell.width), continuation=continuation)
-                    if cell.attrs.bold:
-                        projected['bold'] = True
-                    if cell.attrs.italic:
-                        projected['italic'] = True
-                    if cell.attrs.underline:
-                        projected['underline'] = cell.attrs.underline
-                    cells.append(projected)
-                rows.append(cells)
-            self._cells = rows
+            self._cells = [self._cell_row(row) for row in range(self.lines)]
         return self._cells
 
     @property
     def display(self):
-        # A wide-cell continuation contributes no second character; native
-        # blank cells contribute spaces. Cell coordinates remain in cell_rows.
-        return [''.join(cell['text'] for cell in row) for row in self.cell_rows()]
+        if self._display is None:
+            if self._cells is not None:
+                self._display = [''.join(cell['text'] for cell in row) for row in self._cells]
+            else:
+                # Six Unicode scalars per native cell, up to four UTF-8 bytes each.
+                buf = C.create_string_buffer(self.columns * 6 * 4)
+                self._display = [self._row_text(row, buf) for row in range(self.lines)]
+        return self._display.copy()
+
+    def _row_text(self, row, buf):
+        rect = _Rect(row, row + 1, 0, self.columns)
+        size = self._lib.vterm_screen_get_text(self._screen, buf, len(buf), rect)
+        text = buf[:size]
+        # ASCII normally occupies one cell per byte. An erased half of a wide
+        # glyph can leave a continuation at the end that get_text omits.
+        if text.isascii() and (size == self.columns or
+                (size < self.columns and self._lib.vterm_screen_is_eol(self._screen, _Pos(row, size)))):
+            return text.decode('ascii').ljust(self.columns)
+        return ''.join(cell['text'] for cell in self._cell_row(row))
 
     def resize(self, *, lines, columns):
         self._lib.vterm_set_size(self._vt, lines, columns)
         self.lines, self.columns = lines, columns
         self._cells = None
+        self._display = None
 
     def feed(self, text):
         data = text.encode('utf-8')
@@ -143,6 +168,7 @@ class Screen:
         if consumed != len(data):
             raise RuntimeError(f'libvterm consumed {consumed} of {len(data)} input bytes')
         self._cells = None
+        self._display = None
 
     def close(self):
         if self._vt:

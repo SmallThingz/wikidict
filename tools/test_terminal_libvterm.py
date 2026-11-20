@@ -79,6 +79,24 @@ class NativeCellTests(unittest.TestCase):
                                  dict(bold=True, italic=None, underline=1),
                                  dict(bold=None, italic=None, underline=None)])
 
+    def test_bulk_text_matches_individual_native_cells_across_frames(self):
+        def compare():
+            display = self.screen.display
+            self.assertIsNone(self.screen._cells)
+            self.assertEqual(display, [''.join(c['text'] for c in row) for row in self.screen.cell_rows()])
+            display[0] = 'caller changed its list'
+            self.assertNotEqual(display, self.screen.display)
+
+        for frame in ('', 'x  ', '\x1b[2;4Ha\u0301', '\x1b[2;3H甲', '\x1b[2;20HZ',
+                      '\x1b[3;10H\u0789\u07a6\u0790\u07b0 ', '\x1b[?1049h\x1b[2J',
+                      '12345678901234567890\r\nxyz', '\x1b[2;2H\x1b[K', '\x1b[?1049l',
+                      '\x1b[2J\x1b[1;1HA甲', '\x1b[1;2H\x1b[X', '\x1b[1;1H\x1b[2P'):
+            with self.subTest(frame=frame):
+                self.stream.feed(frame)
+                compare()
+        self.screen.resize(lines=2, columns=9)
+        compare()
+
     def test_capture_records_actual_cells_and_text(self):
         self.stream.feed('  \u0789\u07a6\u0790\u07b0')
         with tempfile.TemporaryDirectory() as temp:
