@@ -217,6 +217,14 @@ def reading_body(reader, heading):
     return text.removeprefix(heading + ' ')
 
 
+def visible_body_witness(source):
+    # Match terminalText in src/frontend/output.zig. Escape before folding
+    # whitespace so a source line separator still requires its visible spelling.
+    controls = r'[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u206f]'
+    rendered = re.sub(controls, lambda m: rf'\u{{{ord(m[0]):x}}}', source)
+    return normalized(' '.join(rendered.split()))
+
+
 def check_compact_reading_margins(reader):
     # Both projections represent the second cell of a wide character as ''.
     # Only an actual space is a free cell, including at the right pane edge.
@@ -338,7 +346,7 @@ def exercise(reader, heading_label, entry, witness, redirect_target=None):
     heading = normalized(' '.join(f'{redirect_target or entry} / {heading_label}'.split()))
     reader.action(ENTER, lambda: reader.entry_focused() and
                   (reading_text(reader) + ' ').startswith(heading + ' '), 'opened requested entry')
-    wanted = normalized(' '.join(witness.split()))
+    wanted = visible_body_witness(witness)
     reveal_witness(reader, wanted, heading)
     reader.snapshot('entry-wide')
     frame = reader.resize(45, 24)

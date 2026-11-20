@@ -7,11 +7,15 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
+from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible, visible_body_witness
 from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_source_witness_requires_the_rendered_directional_mark(self):
+        self.assertEqual(visible_body_witness('ᓄᖅᑲᖓᔪᑦ\u200e'), r'ᓄᖅᑲᖓᔪᑦ\u{200e}')
+        self.assertEqual(visible_body_witness(' A\tB\nC\u2028D\u200dE '), 'A B C\\u{2028}D\u200dE')
+
     def test_indexed_page_uses_the_successful_writer_selection_and_only_reader_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
