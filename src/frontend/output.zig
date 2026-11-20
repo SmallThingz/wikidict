@@ -1287,6 +1287,32 @@ fn tableCellLabel(w: *std.Io.Writer, depth: usize, row: usize, column: usize, co
     try w.print("table depth {d}, Row {d}, column {d}", .{ depth, row + 1, column + 1 });
     if (colspan != 1 or rowspan != 1) try w.print(" (span {d} x {d})", .{ colspan, rowspan });
 }
+// A rectangular table with one header row can name a stacked column. A
+// leading TD is a corner, not a heading for the first column.
+fn stackedColumnLabels(a: std.mem.Allocator, table: model.Table, columns: usize) ![]const []const u8 {
+    if (table.rows.len < 2) return &.{};
+    const first = table.rows[0].cells;
+    if (first.len == 0 or !first[first.len - 1].header) return &.{};
+    for (table.rows, 0..) |row, r| {
+        if (row.cells.len != first.len) return &.{};
+        for (row.cells, 0..) |cell, c| {
+            if (cell.colspan != 1 or cell.rowspan != 1 or cell.blocks != null or cell.nested_table != null) return &.{};
+            if (r == 0 and c != 0 and !cell.header or r != 0 and cell.header) return &.{};
+        }
+    }
+    const labels = try a.alloc([]const u8, first.len);
+    @memset(labels, "");
+    for (first, labels) |cell, *label| {
+        if (!cell.header or cell.spans.len != 1) continue;
+        const span = cell.spans[0];
+        if ((span.kind != .text and span.kind != .link) or std.mem.trim(u8, span.text, " ").len == 0 or span.trail.len != 0 or
+            std.mem.indexOfAny(u8, span.text, "\n\t") != null or hasRecursiveSpans(cell.spans)) continue;
+        var escaped: std.Io.Writer.Allocating = .init(a);
+        try terminalText(&escaped.writer, span.text);
+        if (terminal.cellWidth(escaped.written()) <= columns) label.* = escaped.written();
+    }
+    return labels;
+}
 fn boundedTableLabel(w: *std.Io.Writer, a: std.mem.Allocator, label: []const u8, columns: usize, indentation: usize) !void {
     for (try tableCellRows(a, label, @max(columns -| indentation, 1))) |line| {
         try w.splatByteAll(' ', indentation);
@@ -1601,8 +1627,19 @@ fn tableTextWidthInContextIndented(w: *std.Io.Writer, table: model.Table, color:
                 const shared_stack = has_nested and tableRenderContextIndependent(surface) and tableWidthIndependent(table, parent_depth, true);
                 var child_render = render_context;
                 child_render.stacked_tables = shared_stack;
+                const labels = if (!has_nested and parent_depth == 0) try stackedColumnLabels(a, table, stacked_columns -| indentation) else &.{};
+                var named: std.Io.Writer.Allocating = .init(a);
+                defer named.deinit();
                 for (cells.items) |cell| {
-                    if (shared_stack) {
+                    if (cell.row != 0 and cell.column < labels.len and labels[cell.column].len != 0) {
+                        named.clearRetainingCapacity();
+                        try named.writer.print("Row {d}, column {d} ({s})", .{ cell.row + 1, cell.column + 1, labels[cell.column] });
+                        if (terminal.cellWidth(named.written()) <= stacked_columns -| indentation) {
+                            try w.splatByteAll(' ', indentation);
+                            try w.writeAll(named.written());
+                            try w.writeByte('\n');
+                        } else try boundedTableLabel(w, a, named.written(), stacked_columns, indentation);
+                    } else if (shared_stack) {
                         var label: std.Io.Writer.Allocating = .init(a);
                         defer label.deinit();
                         try tableCellLabel(&label.writer, table_depth, cell.row, cell.column, cell.colspan, cell.rowspan);
@@ -11055,4 +11092,38 @@ test "resolved Table and Cell borders visibly retain terminal body actions codec
         for ([_][]const u8{ "KEPT", "TAIL" }) |needle|
             try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, text.written(), needle));
     }
+}
+
+test "stacked Old English appendix retains column names only from a simple header row" {
+    const T = @import("blob_encoder").presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const names = [_][]const u8{ "№", "Englisc", "Þéodisc", "Niðerlendisc", "Lang3", "Lang4", "Lang5", "Lang6", "Lang7", "Eald Noren" };
+    var head: [names.len]T.Cell = undefined;
+    var spans: [names.len]T.Span = undefined;
+    for (names, 0..) |name, i| {
+        spans[i] = .{ .text = name };
+        if (i == 1 or i == 2 or i == 3 or i == 9) spans[i] = .{ .kind = .link, .text = name, .target = name };
+        head[i] = .{ .header = i != 0, .spans = spans[i..][0..1] };
+    }
+    var body: [names.len]T.Cell = @splat(.{});
+    body[0].spans = &.{.{ .text = "207" }};
+    body[1].spans = &.{.{ .kind = .link, .text = "nama", .target = "nama" }};
+    const table: T.Table = .{ .rows = &.{ .{ .cells = &head }, .{ .cells = &body } } };
+    var out: std.Io.Writer.Allocating = .init(a);
+    try tableTextWidth(&out.writer, table, false, null, 41);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Row 2, column 2 (Englisc)\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.written(), "Row 2, column 1\n") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out.written(), "nama"));
+    spans[1].text = "E\x1bn";
+    try std.testing.expectEqualStrings("E\\u{1b}n", (try stackedColumnLabels(a, table, 41))[1]);
+    body[0].rowspan = 2;
+    try std.testing.expectEqual(@as(usize, 0), (try stackedColumnLabels(a, table, 41)).len);
+    body[0].rowspan = 1;
+    body[0].header = true;
+    try std.testing.expectEqual(@as(usize, 0), (try stackedColumnLabels(a, table, 41)).len);
+    body[0].header = false;
+    body[0].nested_table = .{};
+    try std.testing.expectEqual(@as(usize, 0), (try stackedColumnLabels(a, table, 41)).len);
 }
