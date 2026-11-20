@@ -126,14 +126,19 @@ def read_json(path):
     return value
 
 
-def read_ref(ref):
-    path = Path(ref['path']).absolute()
-    before = _receipt_stat(path)
+def _read_receipt_bytes(path, before):
     require(before.st_size <= 8 * 1024**2, f'Metadata exceeds bound: {path}')
     with path.open('rb') as stream:
         data = stream.read(before.st_size + 1)
     actual = _checked_descriptor(path, before, hashlib.sha256(data).hexdigest())
-    require(len(data) == before.st_size and actual == ref, 'Receipt bytes changed')
+    require(len(data) == before.st_size, 'Receipt bytes changed')
+    return data, actual
+
+
+def read_ref(ref):
+    path = Path(ref['path']).absolute()
+    data, actual = _read_receipt_bytes(path, _receipt_stat(path))
+    require(actual == ref, 'Receipt bytes changed')
     value = json.loads(data)
     if (isinstance(value, dict) and isinstance(value.get('build_inputs'), dict)
             and 'native_tool_roles_details' in value['build_inputs']):
@@ -2327,22 +2332,26 @@ def history(state, context, cfg=None):
 def accept(cfg, edition, folder, phase, log_ref):
     require(phase and phase['status'] == 'success', 'Actual edition completion event missing')
     root = Path(cfg['output']) / edition / cfg['date']
-    complete = read_json(root / 'complete.json')
-    require((complete['edition'], complete['date'], complete['now_unix']) == (edition, cfg['date'], cfg['now_unix']), 'Publication context mismatch')
     import build_wiktionaries as builder
+    path = (root / 'complete.json').absolute()
+    before = _receipt_stat(path)
+    raw, live = _read_receipt_bytes(path, before)
+    metadata = json.loads(raw)
+    raw_identity = metadata.get('build_inputs')
+    complete = builder.restore_publication_metadata(root, metadata)
+    require((complete['edition'], complete['date'], complete['now_unix']) == (edition, cfg['date'], cfg['now_unix']), 'Publication context mismatch')
     items = builder.select_manifest_files(read_ref(cfg['manifest']), [edition])
     expected_files = sorted([[x['wiki'], x['date'], x['name'], x['size'], x['sha1']] for x in items])
     require(complete['build_inputs']['files'] == expected_files, 'Publication dump identity mismatch')
     require(complete['build_inputs']['expansion_timeout_ms'] == cfg['expansion_timeout_ms'], 'Publication deadline mismatch')
     require(complete['build_inputs']['source'] == cfg['source']['fingerprint']
             and complete['build_inputs']['zig_sha256'] == cfg['compiler']['sha256'], 'Publication source/compiler mismatch')
-    live = descriptor(root / 'complete.json')
+    _checked_descriptor(path, before, live['sha256'])
     snapshot = folder / 'complete.json'
     with snapshot.open('xb') as f:
-        f.write(Path(live['path']).read_bytes())
+        f.write(raw)
     snap = descriptor(snapshot)
     require((snap['bytes'], snap['sha256']) == (live['bytes'], live['sha256']), 'Completion changed during snapshot')
-    raw_identity = json.loads(snapshot.read_bytes()).get('build_inputs')
     if isinstance(raw_identity, dict) and 'native_tool_roles_details' in raw_identity:
         builder.copy_publication_role_details(root, folder, raw_identity)
     require(type(complete['input_pages']) is int and complete['input_pages'] >= 0, 'Invalid accepted page count')
@@ -2352,6 +2361,7 @@ def accept(cfg, edition, folder, phase, log_ref):
                for name, value in complete['publication_files'].items()
                if name in report_names}
     require(len(reports) == 3, 'Required publication reports absent')
+    _checked_descriptor(path, before, live['sha256'])
     accepted = dict(root=str(root), input_pages=complete['input_pages'], complete=live, complete_snapshot=snap,
                     source=cfg['source'], build_inputs=complete['build_inputs'], reports=reports, build_log=log_ref)
     write_json(folder / 'residual-review.json', dict(schema='wikidict.corpus-residual-review-item.v1',

@@ -1721,6 +1721,22 @@ class ContentReviewTests(unittest.TestCase):
         with mock.patch('build_wiktionaries.select_manifest_files', return_value=items):
             accepted = controller.accept(cfg, wiki, folder, {'status': 'success'}, None)
         self.assertEqual(accepted['reports'], row['accepted']['reports'])
+        self.assertEqual((folder / 'complete.json').read_bytes(), (root / 'complete.json').read_bytes())
+
+        # An overlapping rebuild can replace a manifest between validation and snapshotting.
+        changed = self.top / 'changed-acceptance'
+        changed.mkdir()
+        def finish_other_build(*_):
+            replacement = root / 'next-complete.json'
+            write_json(replacement, dict(complete, input_pages=complete['input_pages'] + 1))
+            replacement.replace(root / 'complete.json')
+            return items
+
+        with mock.patch('build_wiktionaries.select_manifest_files', side_effect=finish_other_build):
+            with self.assertRaisesRegex(ValueError, 'Changed while reading'):
+                controller.accept(cfg, wiki, changed, {'status': 'success'}, None)
+        self.assertFalse((changed / 'complete.json').exists())
+        self.assertFalse((changed / 'residual-review.json').exists())
 
     def test_same_validator_accepts_exact_final198(self):
         data=content_review_fixture(self.top,all_editions()); self.check(data,'final')
