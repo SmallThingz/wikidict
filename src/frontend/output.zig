@@ -3069,13 +3069,38 @@ fn entryFontFamilyProjection(w: *std.Io.Writer, entry: model.Entry) !void {
         try w.writeAll(terminal_font_family_notice);
 }
 
+pub fn emptyLanguageBody(entry: model.Entry) bool {
+    return entry.kind == .language and entry.alias == null and entry.sections.len == 0 and
+        entry.preamble_spans.len == 0 and entry.references.len == 0 and entry.media.len == 0 and
+        entry.organization.lexemes.len == 0 and entry.organization.other_sections.len == 0;
+}
+
+pub fn writeEmptyLanguageNotice(w: *std.Io.Writer, entry: model.Entry) !void {
+    if (emptyLanguageBody(entry)) try w.writeAll("\nNo entry content in this dictionary.\n");
+}
+
 pub fn entryText(w: *std.Io.Writer, entry: model.Entry, color: bool) !void {
     return entryTextWithDetails(w, entry, color, true);
 }
 
 pub fn entryTextWithDetails(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool) !void {
-    return entryTextWithDetailsProjected(w, entry, color, details, null);
+    try entryTextWithDetailsProjected(w, entry, color, details, null);
+    try writeEmptyLanguageNotice(w, entry);
 }
+
+test "plain lookup explains empty language entries in brief and detailed output" {
+    const entry: model.Entry = .{ .kind = .language, .title = "czytać", .language = "polski", .language_code = "pl" };
+    for ([_]bool{ false, true }) |details| {
+        var text: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer text.deinit();
+        try entryTextWithDetails(&text.writer, entry, false, details);
+        try std.testing.expectEqualStrings("czytać  / polski\n\nNo entry content in this dictionary.\n", text.written());
+    }
+    var alias = entry;
+    alias.alias = .{ .xml_target = "czyta", .target_title = "czyta", .fragment = "" };
+    try std.testing.expect(!emptyLanguageBody(alias));
+}
+
 pub fn entryTextWithDetailsProjected(w: *std.Io.Writer, entry: model.Entry, color: bool, details: bool, projection: ?*PoemProjection) !void {
     if (entry.body_adjoining != null) return error.UnsupportedBodyAdjoining;
     for (entry.sections) |section| if (section.heading_style != null) return error.UnsupportedSectionHeadingStyle;
