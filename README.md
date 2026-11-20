@@ -62,6 +62,15 @@ zig build
 
 The default build installs the reader and C ABI under `zig-out/`.
 
+For repeated builds on a small checkout volume, put Zig's cache and install
+prefix on a volume with enough space. Reuse the same cache across builds. For
+example, when your home directory is on that volume, build the reader with:
+
+```sh
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/wikidict-native"
+ZIG_GLOBAL_CACHE_DIR="$cache/global" zig build cli --cache-dir "$cache/local" --prefix "$cache/install"
+```
+
 Useful validation targets:
 
 ```sh
@@ -72,7 +81,9 @@ zig build test-storage
 ```
 
 The Reader/PTY and storage checks require Python 3 with `pyte` installed in the
-selected test environment.
+selected test environment. The Reader harness uses `python3` from `PATH` by
+default. To use an existing test environment, run
+`WIKIDICT_READER_UX_PYTHON=/path/to/venv/bin/python zig build test-reader`.
 
 To check an entry in a generated dictionary, choose its exact language heading,
 title, and a visible phrase from the original definition. For example, this
