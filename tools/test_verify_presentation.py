@@ -1407,5 +1407,157 @@ assert r.read() == b''
                 audit.scan(f.root, f.query, exports('conflict'), audit_references=True)
 
 
+class DisposableIndexTests(unittest.TestCase):
+    index_body = b'DIXIDX04' + b'\0' * 120
+
+    def test_report_cannot_replace_reader_or_definition_inputs_without_checkpoint(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            stage = base / 'dictionary'
+            stage.mkdir(mode=0o700)
+            binary, dump, registry = [base / name for name in ('reader', 'dump', 'registry')]
+            for path in (binary, dump, registry):
+                path.write_bytes(b'original input')
+            for report in (binary, dump, registry, stage / 'report.json'):
+                argv = ['verify_presentation.py', '--root', str(stage), '--binary', str(binary),
+                        '--definition-dump', str(dump), '--definition-registry', str(registry),
+                        '--report', str(report), '--discard-new-indexes']
+                with self.subTest(report=report), mock.patch('sys.argv', argv), mock.patch('sys.stderr'):
+                    with self.assertRaises(SystemExit) as error:
+                        audit.main()
+                    self.assertEqual(error.exception.code, 2)
+                for path in (binary, dump, registry):
+                    self.assertEqual(path.read_bytes(), b'original input')
+                self.assertFalse((stage / '.dict-cache').exists())
+
+    def run_stage(self, base, *, complete=True, status='passed', checkpoint=False,
+                  preexisting=False, unexpected=None, report_error=False):
+        stage = base / 'dictionary'
+        stage.mkdir(mode=0o700, exist_ok=True)
+        source = stage / 'a.wikblb'
+        if not source.exists():
+            source.write_bytes(b'published source')
+            (stage / 'complete.json').write_text(json.dumps(dict(publication_files={
+                source.name: dict(size=source.stat().st_size, sha256=hashlib.sha256(source.read_bytes()).hexdigest())})))
+        binary = base / 'reader'
+        if not binary.exists():
+            binary.write_bytes(b'frozen reader')
+        cache = stage / '.dict-cache'
+        if preexisting:
+            cache.mkdir(exist_ok=True)
+            (cache / 'kept.idx').write_bytes(b'preexisting cache evidence')
+        report = base / 'report.json'
+        argv = ['verify_presentation.py', '--root', str(stage), '--binary', str(binary),
+                '--report', str(report), '--discard-new-indexes', '--summary-json']
+        if checkpoint:
+            argv += ['--checkpoint', str(base / 'checkpoint.sqlite')]
+        snapshots = []
+
+        def scan(*_args, **_kwargs):
+            snapshots.append(audit.dictionary_snapshot(stage))
+            (cache / 'a.wikblb.idx').write_bytes(self.index_body)
+            if unexpected:
+                unexpected(cache)
+            if status == 'error':
+                raise audit.ScanError('reader failed')
+            return dict(status=status, scan_complete=complete, semantic_acceptance=False,
+                        records=1, issues=[], view_count=1, commands=1)
+
+        with (mock.patch('sys.argv', argv), mock.patch.object(audit, 'scan', side_effect=scan),
+              mock.patch('builtins.print') as printed, ExitStack() as resources):
+            if report_error:
+                resources.enter_context(mock.patch.object(audit, 'write_checkpoint_report', side_effect=OSError('report failed')))
+            code = audit.main()
+        self.assertEqual(snapshots[-1], audit.dictionary_snapshot(stage))
+        return code, json.loads(report.read_text()), cache, printed
+
+    def test_complete_audit_discards_new_indexes_after_durable_report(self):
+        for checkpoint in (False, True):
+            for status, expected in [('passed', 0), ('failed', 1)]:
+                with self.subTest(checkpoint=checkpoint, status=status), tempfile.TemporaryDirectory() as d:
+                    code, report, cache, printed = self.run_stage(Path(d), checkpoint=checkpoint, status=status)
+                    self.assertEqual(code, expected)
+                    self.assertEqual(report['status'], status)
+                    self.assertTrue(report['scan_complete'])
+                    self.assertEqual(list(cache.iterdir()), [])
+                    self.assertTrue(cache.is_dir())
+                    cleanup = [call.args[0] for call in printed.call_args_list if call.kwargs.get('file') is sys.stderr]
+                    self.assertEqual(len(cleanup), 1)
+                    self.assertEqual(json.loads(cleanup[0].split(' ', 1)[1])['files'], 1)
+                    if checkpoint:
+                        self.assertTrue(Path(d, 'checkpoint.sqlite').is_file())
+
+    def test_existing_cache_and_resume_keep_every_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            code, _, cache, _ = self.run_stage(Path(d), preexisting=True)
+            self.assertEqual(code, 0)
+            self.assertEqual((cache / 'kept.idx').read_bytes(), b'preexisting cache evidence')
+            self.assertEqual((cache / 'a.wikblb.idx').read_bytes(), self.index_body)
+        with tempfile.TemporaryDirectory() as d:
+            self.run_stage(Path(d), checkpoint=True, complete=False)
+            code, report, cache, _ = self.run_stage(Path(d), checkpoint=True)
+            self.assertEqual(code, 0)
+            self.assertTrue(report['scan_complete'])
+            self.assertEqual((cache / 'a.wikblb.idx').read_bytes(), self.index_body)
+
+    def test_incomplete_and_error_audits_preserve_generated_indexes(self):
+        for kwargs in ({'complete': False}, {'status': 'error'}):
+            with self.subTest(kwargs=kwargs), tempfile.TemporaryDirectory() as d:
+                code, report, cache, _ = self.run_stage(Path(d), **kwargs)
+                self.assertFalse(report['scan_complete'])
+                self.assertEqual(code, 2 if kwargs.get('status') == 'error' else 0)
+                self.assertEqual((cache / 'a.wikblb.idx').read_bytes(), self.index_body)
+
+    def test_report_failure_preserves_indexes(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaisesRegex(OSError, 'report failed'):
+                self.run_stage(Path(d), report_error=True)
+            self.assertEqual(Path(d, 'dictionary/.dict-cache/a.wikblb.idx').read_bytes(), self.index_body)
+
+    def test_unknown_partial_hardlinked_or_symlinked_files_refuse_cleanup(self):
+        def hardlink(cache):
+            os.link(cache / 'a.wikblb.idx', cache.parent.parent / 'borrowed.idx')
+        def symlink(cache):
+            (cache / 'a.wikblb.idx').unlink()
+            (cache / 'a.wikblb.idx').symlink_to(cache.parent / 'a.wikblb')
+        mutations = [lambda cache: (cache / 'unknown.idx').write_bytes(self.index_body),
+                     lambda cache: (cache / 'a.wikblb.idx').write_bytes(b'partial'), hardlink, symlink]
+        for change in mutations:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as d:
+                code, report, cache, _ = self.run_stage(Path(d), unexpected=change)
+                self.assertEqual(code, 2)
+                self.assertTrue(report['scan_complete'])
+                self.assertTrue((cache / 'a.wikblb.idx').exists())
+
+    def test_replaced_cache_is_not_removed(self):
+        with tempfile.TemporaryDirectory() as d, ExitStack() as resources:
+            root = Path(d)
+            (root / 'a.wikblb').write_bytes(b'source')
+            indexes = audit.DisposableIndexes(root, resources)
+            before = audit.dictionary_snapshot(root)
+            cache = root / '.dict-cache'
+            cache.rename(root / 'saved-cache')
+            cache.mkdir()
+            (cache / 'a.wikblb.idx').write_bytes(self.index_body)
+            with self.assertRaisesRegex(audit.ScanError, 'cache directory replaced'):
+                indexes.discard(before)
+            self.assertEqual((cache / 'a.wikblb.idx').read_bytes(), self.index_body)
+
+    def test_public_or_redirected_stage_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d, ExitStack() as resources:
+            root = Path(d) / 'stage'
+            root.mkdir(mode=0o755)
+            with self.assertRaisesRegex(audit.ScanError, 'private real stage'):
+                audit.DisposableIndexes(root, resources)
+            root.chmod(0o700)
+            link = Path(d) / 'link'
+            link.symlink_to(root, target_is_directory=True)
+            with self.assertRaisesRegex(audit.ScanError, 'private real stage'):
+                audit.DisposableIndexes(link, resources)
+            (root / 'languages').symlink_to(Path(d), target_is_directory=True)
+            with self.assertRaisesRegex(audit.ScanError, 'redirected source directory'):
+                audit.DisposableIndexes(root, resources)
+
+
 if __name__ == '__main__':
     unittest.main()
