@@ -4070,10 +4070,139 @@ def validate_composite_source_inventory(plan, base, selected, auth_payload):
             raise ValueError('Composite source payload changed during authorization')
 
 
+def initial_sealed_direct_writer(row, native_roles):
+    """Join one direct normal Writer install to its original guardian receipts."""
+    keys = ('compilation_recipe', 'actual_emission_result', 'qualification_closure',
+            'source', 'compiled_source_authority')
+    references = [row[key] for key in keys]
+    recipe, emitted, closed, source, compiled = [prepared_metadata(ref) for ref in references]
+    if (source.get('actual_normal_command') != row['compilation_recipe']
+            or source.get('actual_result') != row['actual_emission_result']
+            or source.get('actual_closure') != row['qualification_closure']
+            or source.get('compiled_source_manifest') != row['compiled_source_authority']
+            or source.get('fingerprint') != row['producer_source']
+            or row['compiled_source_authority']['sha256'] != row['producer_source']
+            or closed.get('result') != row['actual_emission_result']
+            or closed.get('outcome') != 'PASSED-PHYSICALLY-SOURCE-CLOSED'
+            or not all(closed.get(key) is True for key in (
+                'source_after', 'source_lease_released', 'allocation_released',
+                'local_proc_absent', 'ps_absent', 'host_namespace_identity_absent'))
+            or type(emitted.get('returncode')) is not int or emitted['returncode'] != 0):
+        raise ValueError('Direct Writer is not a source-closed successful emission')
+    rt = Path(recipe.get('qualification_root', ''))
+    if not rt.is_absolute() or rt.as_posix() != str(rt) or '..' in rt.parts:
+        raise ValueError('Unsafe direct Writer output root')
+    expected_paths = {
+        'start': rt / 'direct-runtime01' / 'start.json',
+        'owner_result': rt / 'direct-runtime01' / 'owner-result.json',
+        'watchdog': rt / 'direct-runtime01' / 'watchdog.json',
+        'result': rt / 'result01.json',
+    }
+    if any(closed.get(key, {}).get('path') != str(path) for key, path in expected_paths.items()):
+        raise ValueError('Direct Writer receipts have different execution origins')
+    start, owner, watchdog = [prepared_metadata(closed[key]) for key in ('start', 'owner_result', 'watchdog')]
+    references.extend(closed[key] for key in ('start', 'owner_result', 'watchdog'))
+    if (start.get('input_authority') != row['compilation_recipe']
+            or start.get('source_refs') != recipe.get('source_refs')
+            or owner.get('source_after') is not True
+            or type(owner.get('returncode')) is not int or owner['returncode'] != 0
+            or watchdog.get('child_exit_status') != 0
+            or watchdog.get('guardian_exit_status') != 0
+            or watchdog.get('runtime_started') is not True
+            or watchdog.get('cleanup_complete') is not True
+            or watchdog.get('admission_refused') is not False
+            or watchdog.get('termination_reason') != 'child_exit'
+            or emitted.get('argv') != recipe.get('argv')
+            or emitted.get('cwd') != recipe.get('cwd')
+            or emitted.get('environment') != recipe.get('env')):
+        raise ValueError('Direct Writer command or guarded outcome differs')
+    # A transport gap can coexist with known child success and OS absence.
+    # It must not become an invented RD reaping receipt.
+    if ((closed.get('reaped') is True and closed.get('terminal') != 0)
+            or (closed.get('reaped') is False and closed.get('terminal') is not None)
+            or type(closed.get('reaped')) is not bool):
+        raise ValueError('Direct Writer transport outcome is inconsistent')
+    argv = recipe['argv']
+    if argv[:3] != [row['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']:
+        raise ValueError('Direct sealed successor requires one Writer target')
+    cwd = Path(recipe['cwd'])
+    if not cwd.is_absolute() or '..' in cwd.parts:
+        raise ValueError('Unsafe direct Writer source root')
+    environment = recipe['env']
+    if set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}:
+        raise ValueError('Unreviewed direct Writer environment')
+    if 'ZIG_GLOBAL_CACHE_DIR' in environment and not Path(environment['ZIG_GLOBAL_CACHE_DIR']).is_absolute():
+        raise ValueError('Unsafe direct Writer cache')
+    required = {'-Doptimize=safe', '-Dtarget=x86_64-native', '-Dcpu=baseline',
+                '-Dcaptured-source-fingerprint=' + row['producer_source']}
+    seen = set(); prefix = None; index = 3
+    while index < len(argv):
+        value = argv[index]
+        if value in ('--summary', '--search-prefix', '--cache-dir', '--global-cache-dir', '--prefix'):
+            if value in seen or index + 1 >= len(argv):
+                raise ValueError('Duplicate or incomplete direct Writer option')
+            argument = argv[index + 1]
+            if value == '--summary':
+                if argument != 'all': raise ValueError('Direct Writer summary differs')
+            elif not Path(argument).is_absolute() or '..' in Path(argument).parts:
+                raise ValueError('Unsafe direct Writer option path')
+            if value == '--prefix': prefix = Path(argument)
+            seen.add(value); index += 2
+        elif value in required or value == '-Dtest-optimize=safe' or re.fullmatch(r'-j[1-9][0-9]*', value):
+            if value in seen: raise ValueError('Duplicate direct Writer option')
+            seen.add(value); index += 1
+        else:
+            raise ValueError('Unreviewed direct Writer option or target')
+    if not required | {'--prefix', '--summary'} <= seen:
+        raise ValueError('Direct Writer required options differ')
+    artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
+    if closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build'):
+        raise ValueError('Direct Writer installed artifact differs')
+    declared = {item['path']: item for item in start['source_refs']}
+    if len(declared) != len(start['source_refs']):
+        raise ValueError('Duplicate direct Writer source authority')
+    manifest_ref = row['compiled_source_authority']
+    if declared.get(manifest_ref['path']) != manifest_ref:
+        raise ValueError('Direct Writer did not guard its source manifest')
+    if 'tools/blob_build.zig' not in compiled or 'tools/blob_build.zig' not in row['source_paths']:
+        raise ValueError('Direct Writer source does not contain its production entry point')
+    for name, descriptor in compiled.items():
+        relative = Path(name)
+        guarded = declared.get(descriptor.get('path'))
+        if (relative.is_absolute() or '..' in relative.parts or relative.as_posix() != name
+                or set(descriptor) != {'path', 'bytes', 'sha256', 'mode'}
+                or type(descriptor['mode']) is not int
+                or not 0 <= descriptor['mode'] <= 0o777
+                or not isinstance(guarded, dict)
+                or set(guarded) not in ({'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'})
+                or any(guarded[key] != descriptor[key] for key in ('path', 'bytes', 'sha256'))
+                or guarded.get('mode', descriptor['mode']) != descriptor['mode']):
+            raise ValueError('Direct Writer compiled source is not guarded')
+    interface = source.get('interface_only_sources', {})
+    if (set(interface) & set(compiled)
+            or source.get('interface_only_not_claimed_as_compiler_reads') is not True
+            or source.get('files') != dict(compiled, **interface)
+            or not set(row['source_paths']) <= set(source['files'])):
+        raise ValueError('Direct Writer source/interface membership differs')
+    references.extend(emitted[key] for key in ('stdout', 'stderr'))
+    for reference in references:
+        observed = native_roles.bind_input(Path(reference['path']))
+        if any(observed[key] != reference[key] for key in ('path', 'bytes', 'sha256')):
+            raise ValueError('Direct Writer authority changed')
+    if native_roles.bind_input(Path(row['artifact']['path'])) != row['artifact']:
+        raise ValueError('Direct Writer binary changed')
+    native_roles.require_unchanged()
+    return argv, references
+
+
 def initial_sealed_target_emission(row, native_roles, *, target, full_graph=False):
     """Authenticate one actual successful install target; never promote the graph verdict."""
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
     recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
+    if 'argv' in recipe and 'actual_normal_command' in source:
+        if target != 'prepare-captured-writer' or full_graph:
+            raise ValueError('Direct guardian successor is restricted to the Writer target')
+        return initial_sealed_direct_writer(row, native_roles)
     retained_compilation_source(row, native_roles)
     guard_reference = recipe.get('source_guard_manifest', row['source'])
     composite = 'source_guard_manifest' in recipe
@@ -4285,8 +4414,9 @@ def initial_sealed_blob_successor(original, native_roles):
         # through the exact interface identities below.
         recipe = prepared_metadata(after['compilation_recipe'])
         commands = recipe.get('commands', [])
-        writer_only = (name == 'dict-blob-build' and len(commands) == 1
-                       and 'prepare-captured-writer' in commands[0].get('argv', []))
+        writer_only = (name == 'dict-blob-build' and (
+            (len(commands) == 1 and 'prepare-captured-writer' in commands[0].get('argv', []))
+            or recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']))
         verify_only = (name == 'dict-blob-verify' and len(commands) == 1
                        and 'prepare-blob-verify' in commands[0].get('argv', []))
         target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-tools'
