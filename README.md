@@ -531,6 +531,11 @@ The [full-edition attempt log](data/corpus-campaign-current01/local-full-build-a
 lists the retained native driver's completed invocations, including failures. It
 reports production time only when the builder recorded its end. Command time
 includes setup and shutdown. A successful build can appear in both tables.
+To update the attempt log, run `python3 tools/index_corpus_attempts.py
+--receipts DRIVER_DIR --output ATTEMPTS.tsv --add ATTEMPT_DIR` from the checkout
+root. Supply the attempt directory name relative to the retained driver. The
+command checks every numbered execution in that directory against its original
+result and stdout. Omit `--add` to check all retained attempts.
 The [per-edition retry times](data/corpus-campaign-current01/local-edition-retry-times.tsv)
 combine the historical timings and later attempts, counting each recorded build
 once. The table identifies unknown durations and leaves the rate blank when
