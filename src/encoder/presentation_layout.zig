@@ -2255,6 +2255,9 @@ fn dictionaryNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const 
     // supplies the same noun class to its headword module.
     const is_noun = if (std.mem.eql(u8, wiki_id, "ptwiktionary"))
         section.level == 2 and std.mem.eql(u8, section.title, "Substantivo")
+    // Amharic car p1966/r19544 explicitly labels this H3 as a noun.
+    else if (std.mem.eql(u8, wiki_id, "amwiktionary"))
+        section.level == 3 and std.mem.eql(u8, section.title, "ስም")
     else if (std.mem.eql(u8, wiki_id, "blkwiktionary"))
         (section.level == 3 or section.level == 4) and std.mem.eql(u8, section.title, "နာမ်ႏ")
     else
@@ -14705,4 +14708,52 @@ test "Aragonese current badina decimal address preserves complete typed Figure f
     sense.source_decimal_sense = false;
     const no_receipt = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
     for (no_receipt.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+}
+
+test "Amharic edition keeps the Nng noun sense separate from its numbered citation" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct { title: []const u8, level: u8, is_heading: bool = true, blocks: []const wiki.Block };
+    const title = "ǀeeki";
+    const url = "https://open.uct.ac.za/server/api/core/bitstreams/eff77f15-54d4-4053-a2b2-f65e91cb9256/content";
+    const label = "Ouma Geelmeind ke kxʼu ǁxaǁxa Nǀuu";
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = title } };
+    // Amharic Wiktionary page 5032, revision 21605. Both sections use '#'.
+    const sections = [_]Section{
+        .{ .title = "Nǁng", .level = 2, .blocks = &.{} },
+        .{ .title = "ስም", .level = 3, .blocks = try renderer.renderBody("#[[woman]]") },
+        .{ .title = "references", .level = 3, .blocks = try renderer.renderBody("#Ouma Geelmeid “[" ++ url ++ " " ++ label ++ "]” Centre for African Language Diversity (2016)") },
+    };
+    const layout = try buildForDictionary(a, &sections, false, "Nǁng", null, "amwiktionary");
+    const encoded = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections,
+        layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+    const doc = try encoder.presentation_codec.decodeAlloc(a, encoded, title, .language, .{ .heading = "Nǁng", .code = "ngh" });
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, doc));
+    try std.testing.expectEqual(@as(usize, 1), doc.entry.organization.lexemes.len);
+    const noun = doc.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Nǁng", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    const gloss = doc.entry.sections[noun.section].blocks[noun.definitions[0].block];
+    try std.testing.expectEqual(.link, gloss.spans[0].kind);
+    try std.testing.expectEqualStrings("woman", gloss.spans[0].target);
+    try std.testing.expectEqualStrings("woman", gloss.spans[0].text);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 2 }, doc.entry.organization.other_sections);
+    const citation = doc.entry.sections[2].blocks[0].spans;
+    try std.testing.expectEqual(@as(usize, 3), citation.len);
+    try std.testing.expectEqual(.external_link, citation[1].kind);
+    try std.testing.expectEqualStrings(url, citation[1].target);
+    try std.testing.expectEqualStrings(label, citation[1].text);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, false, "Nǁng", null, "enwiktionary")).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, true, null, null, "amwiktionary")).lexemes.len);
+    var other = sections[1];
+    other.level = 2;
+    try std.testing.expect(!dictionaryNounSection(other, "Nǁng", "amwiktionary"));
+    other.level = 3;
+    other.is_heading = false;
+    try std.testing.expect(!dictionaryNounSection(other, "Nǁng", "amwiktionary"));
 }
