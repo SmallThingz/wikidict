@@ -11,6 +11,7 @@ import argparse
 import codecs
 import errno
 import fcntl
+import gzip
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,18 @@ class OwnedReaderProcess:
 
 
 class ReaderPty:
+    compress_transcript = False
+
+    def write_transcript(self) -> Path:
+        if self.compress_transcript:
+            path = self.output / "terminal.ansi.gz"
+            with gzip.GzipFile(filename=str(path), mode="wb", compresslevel=1, mtime=0) as stream:
+                stream.write(self.raw)
+        else:
+            path = self.output / "terminal.ansi"
+            path.write_bytes(self.raw)
+        return path
+
     def __init__(self, binary: Path, root: Path, width: int, rows: int,
                  output: Path, timeout: float, budget_end: float, pyte_module, *,
                  force_color: bool = False, language: str | None = "English", kind: str = "language",
@@ -349,7 +362,7 @@ class ReaderPty:
                 self.owned_process.close()
                 os.close(self.master)
                 os.close(self.slave)
-                (self.output / "terminal.ansi").write_bytes(self.raw)
+                self.write_transcript()
                 (self.output / "last-screen.txt").write_text(self.text() + "\n", encoding="utf-8")
                 (self.output / "cli.json").write_text(json.dumps(self.cli_calls, ensure_ascii=False, indent=2) + "\n",
                                                      encoding="utf-8")

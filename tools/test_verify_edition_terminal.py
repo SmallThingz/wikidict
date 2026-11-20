@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import json
 import os
@@ -8,10 +9,23 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible, visible_body_witness
-from verify_reader_ux import CheckFailure, DOWN, ENTER
+from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_transcript_compression_preserves_control_bytes_and_original_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            reader = ReaderPty.__new__(ReaderPty)
+            reader.output = Path(tmp)
+            reader.raw = bytearray(b'\x1b[?1049h\x1b[2J\xff\x00' + 'ᑐᖁᓂᖅ'.encode() + b'\x1b[?1049l')
+            plain = reader.write_transcript()
+            self.assertEqual(plain.name, 'terminal.ansi')
+            reader.compress_transcript = True
+            compressed = reader.write_transcript()
+            self.assertEqual(compressed.name, 'terminal.ansi.gz')
+            self.assertEqual(gzip.decompress(compressed.read_bytes()), plain.read_bytes())
+            self.assertEqual(plain.read_bytes(), reader.raw)
+
     def test_source_witness_requires_the_rendered_directional_mark(self):
         self.assertEqual(visible_body_witness('ᓄᖅᑲᖓᔪᑦ\u200e'), r'ᓄᖅᑲᖓᔪᑦ\u{200e}')
         self.assertEqual(visible_body_witness(' A\tB\nC\u2028D\u200dE '), 'A B C\\u{2028}D\u200dE')

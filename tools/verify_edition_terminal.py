@@ -411,7 +411,7 @@ def choose_startup_language(reader, root, language):
 
 
 def run_case(binary, stamp, binary_digest, source, language, entry, witness, expected_digest, parent, engine, kind, implicit=False,
-             indexed_page=False, redirect_target=None, seeds=None):
+             indexed_page=False, redirect_target=None, seeds=None, compress_transcript=False):
     out = Path(tempfile.mkdtemp(prefix='edition-pty-', dir=parent))
     result = dict(edition_root=str(source), language=language, kind=kind, entry=entry, witness=witness,
                   passed=False, screens=[], screen_projection=engine, binary_sha256=binary_digest, implicit_language=implicit)
@@ -430,6 +430,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,
                                  projection, language=None if implicit else language, kind=kind)
             reader.projection_name = engine
+            reader.compress_transcript = compress_transcript
             try:
                 # A cold compressed edition may still be indexing after the ordinary key-response deadline.
                 try:
@@ -451,6 +452,8 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
                 try:
                     reader.close()
                     result.update(checks=reader.checks, screens=reader.snapshots)
+                    if compress_transcript:
+                        result['transcript'] = 'screens/terminal.ansi.gz'
                 finally:
                     if engine in ('kitty', 'libvterm'):
                         reader.screen.close()
@@ -478,6 +481,7 @@ def main(argv=None):
     parser.add_argument('--witness', help='Visible text expected from the original entry body')
     parser.add_argument('--implicit-language', action='store_true', help='Launch without a language override and use the keyboard chooser when needed')
     parser.add_argument('--report', type=Path, required=True, help='Parent directory for captured terminal screens')
+    parser.add_argument('--compress-transcript', action='store_true', help='Store the complete raw terminal byte stream as terminal.ansi.gz')
     parser.add_argument('--screen-projection', choices=('pyte', 'libvterm', 'kitty'), default='pyte',
                         help='Screen cell engine (libvterm and kitty require their respective native libraries)')
     args = parser.parse_args(argv)
@@ -531,7 +535,8 @@ def main(argv=None):
             for root, language, entry, witness, digest, kind, redirect_target in group:
                 path, passed = run_case(binary, stamp, binary_digest, Path(root).resolve(), language, entry, witness,
                                         digest, parent, args.screen_projection, kind, args.implicit_language,
-                                        indexed_page=args.indexed_page is not None, redirect_target=redirect_target, seeds=seeds)
+                                        indexed_page=args.indexed_page is not None, redirect_target=redirect_target, seeds=seeds,
+                                        compress_transcript=args.compress_transcript)
                 if args.cases:
                     with (parent / 'results.jsonl').open('a', encoding='utf-8') as ledger:
                         ledger.write(json.dumps(dict(root=root, language=language, kind=kind, entry=entry, passed=passed, report=str(path)),
