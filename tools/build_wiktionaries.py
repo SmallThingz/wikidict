@@ -6766,6 +6766,8 @@ class RetainedNativeToolRoles:
         snapshots={name:Path(value['path'] if isinstance(value,dict) else value)
                    for name,value in option.get('auxiliary_snapshots',{}).items()}
         figures=validated_figure_tuple(snapshots,edition,cfg['date'])
+        figure_key=tuple(sorted((role,str(snapshots[role].absolute())) for role in figures))
+        checked_figure_guard=None
         owned=tuple(Path(value['path'] if isinstance(value,dict) else value).resolve() for value in
             (cfg['output'],cfg['raw_shard_root'],option['extraction_cache_root']))
         def overlaps(path):
@@ -6789,11 +6791,11 @@ class RetainedNativeToolRoles:
                 continue
             _,inventory=capture
             if name in figures:
-                key=tuple(sorted((role,str(snapshots[role].absolute())) for role in figures))
                 with _FIGURE_TUPLE_REPLAY_LOCK:
-                    prior=_FIGURE_TUPLE_REPLAYS.get(key)
-                    guard=None if prior is None else copy.deepcopy(prior[0])
-                if guard is None:continue
+                    prior=_FIGURE_TUPLE_REPLAYS.get(figure_key)
+                    if prior is None or prior[0] is checked_figure_guard:continue
+                    source_guard=prior[0]
+                    guard=copy.deepcopy(source_guard)
                 if any(Path(member).resolve()!=Path(member) or overlaps(Path(member))
                        for member in (*guard[1],*guard[2])):continue
                 required={Path(member):identity['sha256'] for member,(_,identity) in guard[1].items()}
@@ -6809,6 +6811,9 @@ class RetainedNativeToolRoles:
                     raise ValueError('Prepared retained binding omitted a borrowed capture input')
             if not directories<=set(observed.borrowed_capture_directories):
                 raise ValueError('Prepared retained binding omitted a borrowed directory guard')
+            if name in figures:
+                # All roles share the complete readset. A replacement needs its own check.
+                checked_figure_guard=source_guard
 
     def authenticate_prepared_dispatch(self, binding, cfg=None):
         """Parent-only pre-adoption check, while original full source is leased."""
