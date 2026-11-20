@@ -7,7 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from verify_edition_terminal import PublicationSeeds, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
+from verify_edition_terminal import PublicationSeeds, check_compact_reading_margins, choose_startup_language, copy_indexed_page, copy_publication, library_selection_keys, main, reading_body, source_witness_visible
 from verify_reader_ux import CheckFailure, DOWN, ENTER
 
 
@@ -329,3 +329,26 @@ class EditionTerminalTests(unittest.TestCase):
         self.assertTrue(source_witness_visible(reader, '甲甲乙丙', 'Adam / 英文'))
         for hidden in ('乙丙丁戊', '甲甲丙乙', 'Adam / 英文'):
             self.assertFalse(source_witness_visible(reader, hidden, 'Adam / 英文'))
+
+    def test_narrow_definition_and_wide_glyphs_stay_inside_the_reading_pane(self):
+        rows = [[' '] * 45 for _ in range(24)]
+        rows[5][0], rows[22][-1] = 'H', 'F'  # Header and footer span the full terminal.
+        rows[15][41:43] = ['語', '']
+
+        def check(error=None):
+            native = SimpleNamespace(cell_rows=lambda: [[{'text': c} for c in row] for row in rows])
+            pyte = SimpleNamespace(buffer=[[SimpleNamespace(data=c) for c in row] for row in rows])
+            for screen in (native, pyte):
+                reader = SimpleNamespace(screen=screen, rows=24, width=45)
+                if error is None:
+                    check_compact_reading_margins(reader)
+                else:
+                    with self.assertRaisesRegex(CheckFailure, error):
+                        check_compact_reading_margins(reader)
+
+        check()
+        rows[16][0] = '။'
+        check('row 17, column 1')
+        rows[16][0] = ' '
+        rows[15][41:44] = [' ', '語', '']
+        check('row 16, column 44')

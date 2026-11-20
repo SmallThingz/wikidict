@@ -217,6 +217,17 @@ def reading_body(reader, heading):
     return text.removeprefix(heading + ' ')
 
 
+def check_compact_reading_margins(reader):
+    # Both projections represent the second cell of a wide character as ''.
+    # Only an actual space is a free cell, including at the right pane edge.
+    screen = reader.screen
+    grid = screen.cell_rows() if hasattr(screen, 'cell_rows') else None
+    for row in range(6, reader.rows - 2):
+        for column in (0, 1, reader.width - 2, reader.width - 1):
+            text = grid[row][column]['text'] if grid is not None else screen.buffer[row][column].data
+            require(text == ' ', f'Reading text spills into margin at row {row + 1}, column {column + 1}')
+
+
 def wrapped_table_cell_contains(rows, left, right, wanted):
     """Match adjacent lines inside one bordered column when the next word had to wrap."""
     previous = ''
@@ -339,6 +350,7 @@ def exercise(reader, heading_label, entry, witness, redirect_target=None):
                       (reading_text(reader) + ' ').startswith(heading + ' '), 'Home returns to the entry title')
     reveal_witness(reader, wanted, heading)
     reader.snapshot('entry-narrow')
+    check_compact_reading_margins(reader)
     reader.action(b'\x1b', lambda: reader.page_is('search') and not reader.entry_focused(), 'back to results')
     reader.finish(b'\x03')
 
