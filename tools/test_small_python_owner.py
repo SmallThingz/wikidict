@@ -180,6 +180,14 @@ class SourceValidationTests(unittest.TestCase):
         plan = dict(qualification_root=str(output), cwd=str(self.root), argv=['/usr/bin/python3', '-B', '-c', 'pass'], env={}, scope='unit', source_refs=[self.bound])
         command.write_text(json.dumps(plan))
         config = dict(input_ref=ref(command), output_root=str(output), source_refs=[self.bound, self.bound], profile=dict(memory_bytes=1, reserve_bytes=1, cpu_seconds=120, wall_seconds=300, max_tasks=64, disk_floor_bytes=1, cpus=[0]))
+        # Invalid launch settings must fail before reading large bound inputs.
+        with mock.patch.object(owner, 'authenticate_sources') as bulk_read, \
+                mock.patch.object(owner.os, 'getpriority', return_value=0):
+            with self.assertRaisesRegex(ValueError, 'inherited nice'):
+                owner.prepare(dict(config, child_nice=10))
+            with self.assertRaisesRegex(ValueError, 'Invalid resource profile'):
+                owner.prepare(dict(config, profile=dict(config['profile'], wall_seconds=0)))
+            bulk_read.assert_not_called()
         child = owner.prepare(config)[3]
         self.assertEqual([config['input_ref'], str(output)], json.loads(child[3]))
         config['direct_cli'] = True

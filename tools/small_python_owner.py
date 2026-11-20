@@ -20,6 +20,14 @@ exec(compile(SOURCE_IO, __file__ + ":source_io", "exec"), globals())
 WORKER = SOURCE_IO + "import json, os, subprocess, time, hashlib, sys\nfrom pathlib import Path\nrequest = json.loads(sys.argv[1])\nassert len(request) in (2, 3)\ncommand, output = request[:2]\ndirect_cli = len(request) == 3\nif direct_cli:\n    assert request[2] is True\nplan = json.loads(authenticate(command))\nout = Path(output)\nenv = os.environ.copy()\nenv.update(plan['env'])\nenv['TMPDIR'] = str(out / 'tmp')\n(out / 'tmp').mkdir()\nt = time.monotonic()\nwith (out / 'tests.stdout').open('xb') as so, (out / 'tests.stderr').open('xb') as se:\n    if direct_cli:\n        os.chdir(plan['cwd'])\n        os.dup2(so.fileno(), 1)\n        os.dup2(se.fileno(), 2)\n        # Keep the watchdog child PID/session and its unconsumed inheritable\n        # one-use proof descriptor. No intermediate subprocess may consume it.\n        os.execve(plan['argv'][0], plan['argv'], env)\n    r = subprocess.run(plan['argv'], cwd=plan['cwd'], env=env, stdout=so, stderr=se)\nref = file_reference\nwith (out / 'result01.json').open('x') as f:\n    json.dump(dict(returncode=r.returncode, argv=plan['argv'], cwd=plan['cwd'], environment=plan['env'], measurement_scope=plan['scope'], elapsed_seconds=time.monotonic() - t, stdout=ref(out / 'tests.stdout'), stderr=ref(out / 'tests.stderr')), f, indent=2)\n    f.write('\\n')\nsys.exit(r.returncode)\n"
 
 
+def inherited_child_nice(config):
+    value = config.get('child_nice')
+    if value is not None and (type(value) is not int or not 0 <= value <= 19 or
+                              value != max(0, os.getpriority(os.PRIO_PROCESS, 0))):
+        raise ValueError('Normal child priority must preserve inherited niceness')
+    return value
+
+
 def prepare(config, *, source_checks=None):
     """Resolve data once and reject setup mistakes before host admission."""
     command = absolute_path(config['input_ref']['path'])
@@ -42,9 +50,6 @@ def prepare(config, *, source_checks=None):
     refs = config['source_refs']
     if len(refs) < 2:
         raise ValueError('Resource helper and guardian bindings are required')
-    before = authenticate_sources(refs)
-    if source_checks is not None:
-        source_checks.append(before)
     known = {(r['path'], r['bytes'], r['sha256']) for r in refs}
     for ref in plan.get('source_refs', []):
         if (ref['path'], ref['bytes'], ref['sha256']) not in known:
@@ -59,6 +64,10 @@ def prepare(config, *, source_checks=None):
     direct_cli = config.get('direct_cli', False)
     if type(direct_cli) is not bool:
         raise ValueError('direct_cli must be a boolean')
+    inherited_child_nice(config)
+    before = authenticate_sources(refs)
+    if source_checks is not None:
+        source_checks.append(before)
     request = [config['input_ref'], str(output)]
     if direct_cli:
         request.append(True)
@@ -84,12 +93,10 @@ def run(config):
         stream.write('\n')
     resource.setrlimit(resource.RLIMIT_CPU, (profile['cpu_seconds'], profile['cpu_seconds']))
     os.sched_setaffinity(0, set(profile['cpus']))
-    child_nice = config.get('child_nice')
+    child_nice = inherited_child_nice(config)
     if child_nice is None:
         os.nice(19)
         subprocess.run(['ionice', '-c2', '-n7', '-p', str(os.getpid())], check=True)
-    elif type(child_nice) is not int or not 0 <= child_nice <= 19 or child_nice != max(0, os.getpriority(os.PRIO_PROCESS, 0)):
-        raise ValueError('Normal child priority must preserve inherited niceness')
     policy = dict(admission_mem_available_bytes=profile['memory_bytes'] + profile['reserve_bytes'], admission_pressure_advisory=True, poll_seconds=0.2, runtime_termination_enabled=False, swap_counted_as_ram_headroom=True)
     host = limits.HostMemoryObservation(policy)
     sample = host.sample()
