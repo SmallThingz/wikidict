@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -121,14 +122,15 @@ def archive_base(root, output, helper, records):
 @contextmanager
 def replay_base(root, profile):
     archive_limit, child_limit = base_bounds(profile)
-    archive_raw = evidence.small(root / ARCHIVE, archive_limit)
     scratch = evidence.REPO / '.tmp'
     scratch.mkdir(exist_ok=True)
     require(scratch.is_dir() and not scratch.is_symlink(), 'Unsafe replay scratch parent')
     with tempfile.TemporaryDirectory(prefix='language-message-replay-', dir=scratch) as tmp:
         target = Path(tmp)
         names, total = set(), 0
-        with tarfile.open(fileobj=io.BytesIO(archive_raw), mode='r:') as archive:
+        # Release the authenticated archive buffer before verifying or yielding the extracted base.
+        with io.BytesIO(evidence.small(root / ARCHIVE, archive_limit)) as archive_bytes, \
+                tarfile.open(fileobj=archive_bytes, mode='r:') as archive:
             for member in archive:
                 name = member.name
                 require(member.isfile() and Path(name).name == name and name not in ('.', '..')
@@ -139,14 +141,10 @@ def replay_base(root, profile):
                 require(total <= archive_limit, 'Base payload exceeds byte limit')
                 stream = archive.extractfile(member)
                 require(stream is not None, 'Missing base archive data')
-                with stream:
-                    raw = stream.read(child_limit + 1)
-                require(len(raw) == member.size, 'Truncated base archive member')
-                # Disposable replay scratch, authenticated below and removed by
-                # TemporaryDirectory. Match the existing union extractor: only
-                # published capture artifacts require evidence.put durability.
-                with (target / name).open('xb') as output:
-                    output.write(raw)
+                destination = target / name
+                with stream, destination.open('xb') as output:
+                    shutil.copyfileobj(stream, output, 256 * 1024)
+                require(destination.stat().st_size == member.size, 'Truncated base archive member')
                 names.add(name)
         helper = base_helper(target)
         require(helper is not sys.modules[__name__], 'Base archive must contain original capture evidence')
