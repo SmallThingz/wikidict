@@ -102,6 +102,20 @@ class SelectedPageFigureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'absent'):
             figure.selected_page_inventory(catalogue, missing, self.namespace.read_bytes(), self.wiki, self.date)
 
+    def test_registered_file_prefix_keeps_literal_occurrences_and_one_query_key(self):
+        args = self.args(links=('Example.svg',))
+        namespace = self.namespace.read_bytes()
+        catalogue = figure.selected_inventory(args, namespace)
+        page, _ = self.selection(['File:Example.svg', 'ملف:Example.svg'])
+        result = figure.selected_page_inventory(catalogue, page, namespace, self.wiki, self.date)
+        self.assertEqual(result['titles'], ['ملف:Example.svg'])
+        self.assertEqual(result['selected_page'], page)
+        for title in (':File:Example.svg', 'Media:Example.svg', 'Template:Example.svg',
+                      'File: Example.svg', 'File:Absent.svg'):
+            with self.subTest(title=title), self.assertRaises(ValueError):
+                other, _ = self.selection([title])
+                figure.selected_page_inventory(catalogue, other, namespace, self.wiki, self.date)
+
     def test_duplicate_occurrences_share_one_file_and_keep_source_order(self):
         args = self.args()
         catalogue = figure.selected_inventory(args, self.namespace.read_bytes())

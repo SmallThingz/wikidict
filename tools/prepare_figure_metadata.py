@@ -1772,10 +1772,13 @@ def selected_page_inventory(catalogue, page, namespace_raw, wiki, date):
                 not isinstance(occurrence['file'], str)):
             raise ValueError('Invalid selected Figure occurrence range')
         start, end, name = occurrence['start'], occurrence['end'], occurrence['file']
-        if (registry.file_title(name) != name or raw[start:end] != ('[[' + name).encode('utf-8') or
+        prefix, _, body = name.partition(':')
+        canonical = registry.file_title(name)
+        if (registry.aliases.get(registry.alias_key(prefix)) != 6 or
+                canonical.partition(':')[2] != body or raw[start:end] != ('[[' + name).encode('utf-8') or
                 not (raw[end:end+1] == b'|' or raw[end:end+2] == b']]')):
             raise ValueError('Selected Figure occurrence differs from original source')
-        names.add(name)
+        names.add(canonical)
         previous_end = end
     if not names <= set(catalogue['titles']):
         raise ValueError('Selected Figure file is absent from the complete dated catalogue')
