@@ -1706,6 +1706,7 @@ fn loadNamedSectionFormatterModules(io: std.Io, a: std.mem.Allocator, root: []co
 // Invocation-local parsed template candidates. Strings borrow the held index;
 // a partial scan never supplies a later loader with a completed view.
 const LanguageTemplateRows = struct {
+    const max_name_bytes = 32 * 1024 * 1024;
     const Entry = struct { row: dump_source.IndexedPage, ordinal: u64 };
     io: std.Io,
     a: std.mem.Allocator,
@@ -1716,6 +1717,10 @@ const LanguageTemplateRows = struct {
     identity: ?CapturedWriterSourceFileIdentity = null,
     index: ?Mapped = null,
     entries: std.ArrayList(Entry) = .empty,
+    // Only hot string fields count against this optional locality cache. A large
+    // edition can always use the authenticated mapping for the remaining rows.
+    name_storage: ?std.heap.ArenaAllocator = null,
+    name_bytes_left: usize = max_name_bytes,
     complete: bool = false,
     scans: u64 = 0,
     completed_scans: u64 = 0,
@@ -1733,6 +1738,7 @@ const LanguageTemplateRows = struct {
     fn deinit(self: *LanguageTemplateRows) void {
         self.clearTemplates();
         self.entries.deinit(self.a);
+        if (self.name_storage) |arena| arena.deinit();
         if (self.index) |*index| index.deinit();
         if (self.file) |file| file.close(self.io);
         if (self.path) |path| self.a.free(path);
@@ -1885,10 +1891,33 @@ const LanguageTemplateRows = struct {
             self.reuses += 1;
         } else {
             self.entries.clearRetainingCapacity();
+            if (self.name_storage) |*arena| _ = arena.reset(.free_all);
+            self.name_bytes_left = max_name_bytes;
             self.scans += 1;
         }
         return .{ .view = self, .lines = std.mem.splitScalar(u8, self.index.?.bytes, '\n'),
             .kind = dump_source.pageIndexKind(self.index.?.bytes), .cached = self.complete };
+    }
+
+    fn retainTemplateRow(self: *LanguageTemplateRows, input: dump_source.IndexedPage) dump_source.IndexedPage {
+        var row = input;
+        if (std.mem.eql(u8, row.content_model, "wikitext")) row.content_model = "wikitext";
+        const size = row.title.len + if (row.redirect) |redirect| redirect.len else 0;
+        if (size > self.name_bytes_left) return row;
+        if (self.name_storage == null) self.name_storage = std.heap.ArenaAllocator.init(self.a);
+        const text = self.name_storage.?.allocator().alloc(u8, size) catch {
+            self.name_bytes_left = 0;
+            return row;
+        };
+        self.name_bytes_left -= size;
+        @memcpy(text[0..row.title.len], row.title);
+        row.title = text[0..row.title.len];
+        if (row.redirect) |redirect| {
+            const destination = text[row.title.len..];
+            @memcpy(destination, redirect);
+            row.redirect = destination;
+        }
+        return row;
     }
 
     fn phaseEnd(self: *LanguageTemplateRows, phase: usize, wall: i128, cpu: i128) void {
@@ -1935,7 +1964,7 @@ const LanguageTemplateRows = struct {
                 const current = self.ordinal;
                 self.ordinal += 1;
                 if (self.view.namespaces.ofTitle(row.title).id != 10) continue;
-                const entry: Entry = .{ .row = row, .ordinal = current };
+                const entry: Entry = .{ .row = self.view.retainTemplateRow(row), .ordinal = current };
                 try self.view.entries.append(self.view.a, entry);
                 return entry;
             }
@@ -2313,12 +2342,14 @@ fn loadSourceEquivalentLanguageTemplatesWithRows(io: std.Io, a: std.mem.Allocato
         if (!sourceEquivalentLiteral(leaf_decoded orelse leaf_raw)) continue;
         try proven.put(a, terminal, {});
     }
-    for (rows.items, 0..) |entry, i| {
-        const terminal = sourceEquivalentTerminal(rows.items, &names, namespaces, i) orelse continue;
-        if (!proven.contains(terminal)) continue;
-        const code = (owners.get(terminal) orelse continue) orelse continue;
-        const title = namespaces.ofTitle(entry.row.title);
-        try registry.addLocalAlias(title.text, code);
+    if (proven.count() != 0) {
+        for (rows.items, 0..) |entry, i| {
+            const terminal = sourceEquivalentTerminal(rows.items, &names, namespaces, i) orelse continue;
+            if (!proven.contains(terminal)) continue;
+            const code = (owners.get(terminal) orelse continue) orelse continue;
+            const title = namespaces.ofTitle(entry.row.title);
+            try registry.addLocalAlias(title.text, code);
+        }
     }
     // Reuse the same authenticated namespace/index and bounded redirect graph.
     // The name selects a candidate only; complete source, not its spelling,
@@ -60686,6 +60717,41 @@ test "shared language template rows preserve lazy malformed tail and sidecar fir
     const early = try std.fs.path.join(a, &.{ root, "early" }); try std.Io.Dir.cwd().createDirPath(io, early);
     _ = try SharedTemplateRowsTest.write(io, a, early, "0\n" ++ SharedTemplateRowsTest.template);
     try std.testing.expectError(error.InvalidPageIndex, loadSourceLanguageBanners(io, a, early, &ns, &registry));
+}
+
+test "retained template rows keep exact names and source guards under cache allocation failure" {
+    for ([_]bool{ false, true }) |fail_copy| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+        const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        const source = "0\t0\tPlantilla:Alias\tPlantilla:-qu-\t53\t104\t2021-08-03T10:16:49Z\tA\twikitext\t10\t1\t0";
+        const path = try SharedTemplateRowsTest.write(io, a, root, SharedTemplateRowsTest.ordinary ++ source ++ "\n");
+        var ns = try namespace_registry.Registry.init(a, QuSourceBannerTest.namespaces); defer ns.deinit();
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        var view: LanguageTemplateRows = .{ .io = io, .a = std.testing.allocator, .root = root, .namespaces = &ns };
+        defer view.deinit();
+        if (fail_copy) view.name_storage = std.heap.ArenaAllocator.init(failing.allocator());
+        var cursor = (try view.begin()).?;
+        const result = (try cursor.next()).?;
+        const expected = try dump_source.parsePageIndexLine(cursor.kind, source);
+        try std.testing.expectEqualDeep(expected, result.row);
+        const mapped = view.index.?.bytes;
+        const start = @intFromPtr(mapped.ptr);
+        for ([_][]const u8{ result.row.title, result.row.redirect.? }) |name| {
+            const address = @intFromPtr(name.ptr);
+            try std.testing.expectEqual(fail_copy, address >= start and address < start + mapped.len);
+        }
+        try std.testing.expect((try cursor.next()) == null);
+        var cached = (try view.begin()).?;
+        const reused = (try cached.next()).?;
+        try std.testing.expectEqual(@as(u64, 1), reused.ordinal);
+        try std.testing.expect(reused.row.title.ptr == result.row.title.ptr);
+        try std.testing.expectEqualDeep(expected, reused.row);
+        try std.testing.expect((try cached.next()) == null);
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = SharedTemplateRowsTest.ordinary });
+        try std.testing.expectError(error.LanguageTemplateIndexChanged, view.begin());
+    }
 }
 
 test "shared language template rows preserve namespace title duplicate guards and ordinals" {
