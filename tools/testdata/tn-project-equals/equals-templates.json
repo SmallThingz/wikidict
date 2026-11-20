@@ -1,0 +1,132 @@
+[
+  {
+    "title": "Tempolete:=nl=",
+    "namespace": 10,
+    "page_id": 1982,
+    "revision_id": 6660,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Dutch|Sedache]]==\n<noinclude>[[Category:Language templates|nl]]</noinclude>",
+    "bytes": 105,
+    "sha256": "8d33dcc91d6f45ff008daedc6d6dd18afe80e9f988e84c9acf6deada88fe3baa"
+  },
+  {
+    "title": "Tempolete:=en=",
+    "namespace": 10,
+    "page_id": 1983,
+    "revision_id": 6508,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:English|Seisimane]]==\n<noinclude>[[Category:Language templates|en]]</noinclude>",
+    "bytes": 109,
+    "sha256": "be67ecdc9f908bfe754221344e3a051fea897d018156eaa9e8ad5be714dcd1f8"
+  },
+  {
+    "title": "Tempolete:=de=",
+    "namespace": 10,
+    "page_id": 1984,
+    "revision_id": 6662,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:German|Sejeremane]]==\n<noinclude>[[Category:Language templates|de]]</noinclude>",
+    "bytes": 109,
+    "sha256": "9f44d8650000a0460981c3ce9b5992406dc7396d49b720f45e16bb5d9fc814d1"
+  },
+  {
+    "title": "Tempolete:=tn=",
+    "namespace": 10,
+    "page_id": 1985,
+    "revision_id": 8560,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==Setswana==",
+    "bytes": 27,
+    "sha256": "f8cfc8bcc6e73083846f5c56e910bcdd79ba48ba803eeff08d8c4772af91663b"
+  },
+  {
+    "title": "Tempolete:=fr=",
+    "namespace": 10,
+    "page_id": 1986,
+    "revision_id": 6510,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:French|Sefora]]==\n<noinclude>[[Category:Language templates|fr]]</noinclude>",
+    "bytes": 105,
+    "sha256": "52d97a11c5c29bc4ddf6b1c80805d6d88a0a398cd0a8fd50fa7d0aaac6030c76"
+  },
+  {
+    "title": "Tempolete:=af=",
+    "namespace": 10,
+    "page_id": 1989,
+    "revision_id": 6661,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Afrikaans|Seburu]]==\n<noinclude>[[Category:Language templates|af]]</noinclude>",
+    "bytes": 108,
+    "sha256": "2f96c6722ea771d38673d5e21c47f959633d93fa76084f82e30e502f0e8be884"
+  },
+  {
+    "title": "Tempolete:=ta=",
+    "namespace": 10,
+    "page_id": 2216,
+    "revision_id": 5231,
+    "redirect": null,
+    "source": "Tamil",
+    "bytes": 5,
+    "sha256": "135d78ac8f56a1a5b21841bd367e090f8107eea1946103a259c55601513bfca9"
+  },
+  {
+    "title": "Tempolete:=pt=",
+    "namespace": 10,
+    "page_id": 2668,
+    "revision_id": 6514,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Portuguese|Sepotokisi]]==\n<noinclude>[[Category:Language templates|pt]]</noinclude>",
+    "bytes": 113,
+    "sha256": "c2e133b01b200e3d0e72e9d423c3fa4856cdc2ab2628a8ccb5c9ced3a661c62d"
+  },
+  {
+    "title": "Tempolete:=xh=",
+    "namespace": 10,
+    "page_id": 2669,
+    "revision_id": 6513,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Xhosa|Sethosa]]==\n<noinclude>[[Category:Language templates|xh]]</noinclude>",
+    "bytes": 105,
+    "sha256": "1d5c651cba4b30e5357e0b678844ea1604a47933896c2adc7b5385fb698868d1"
+  },
+  {
+    "title": "Tempolete:=st=",
+    "namespace": 10,
+    "page_id": 2670,
+    "revision_id": 6512,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Sotho|Sesotho]]==\n<noinclude>[[Category:Language templates|st]]</noinclude>",
+    "bytes": 105,
+    "sha256": "10ddad4091d90a9d31c4fd110c0805fa94195ffdc57f7d5cf5c992a1c74b5244"
+  },
+  {
+    "title": "Tempolete:=it=",
+    "namespace": 10,
+    "page_id": 2698,
+    "revision_id": 6663,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Italian|Setaliana]]==\n<noinclude>[[Category:Language templates|it]]</noinclude>",
+    "bytes": 109,
+    "sha256": "2923c09975b3b35c0f068cfae9aba9ab2b43d6252667c3e23705ddbe386735bc"
+  },
+  {
+    "title": "Tempolete:=mul=",
+    "namespace": 10,
+    "page_id": 2857,
+    "revision_id": 8054,
+    "redirect": null,
+    "source": "{{#if:1|==Ditšhabatšhaba==}}\n<noinclude>[[Category:Language templates|mul]]</noinclude>",
+    "bytes": 89,
+    "sha256": "cc418c7d52d7c682368d509a54c05e7f96337ee0d9d3c596e87a9317d3ffdc84"
+  },
+  {
+    "title": "Tempolete:=eo=",
+    "namespace": 10,
+    "page_id": 3132,
+    "revision_id": 8683,
+    "redirect": null,
+    "source": "{{{1|\n----\n}}}\n==[[Wiktionary:Esperanto|Esperanto]]==\n<noinclude>[[Category:Language templates|eo]]</noinclude>",
+    "bytes": 111,
+    "sha256": "9602dc3cc5810f9210587b00146ba7c738892778f7772d389dabf172855d9cb8"
+  }
+]

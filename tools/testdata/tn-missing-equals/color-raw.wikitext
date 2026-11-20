@@ -1,0 +1,15 @@
+{{=en=|}}
+'''color''' {{f}}
+# [[mebale]]
+
+{{=ca=|}}
+'''color'''
+# [[mebale]]
+
+{{=la=|}}
+'''color''' {{f}}
+# [[mebale]]
+
+{{=es=|}}
+'''color''' {{f}}
+# [[mebale]]

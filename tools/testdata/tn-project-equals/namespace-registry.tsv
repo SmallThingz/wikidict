@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	tnwiktionary
+# dump-date	20261001
+# content-language	tn
+-2	Pego	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Faphegileng	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Puisano	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Modirisi	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Puisano ya modirisi	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Puisano ya Wiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Setshwantsho	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Puisano ya setshwantsho	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Puisano ya MediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	Tempolete	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Puisano ya tempolete	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Thuso	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Puisano ya thuso	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Karolo	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Puisano ya karolo	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

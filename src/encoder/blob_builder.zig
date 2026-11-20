@@ -5284,6 +5284,123 @@ fn coalesceCorroboratedAnRawRegions(codes: LanguageCodes, raw: []const u8, secti
     sections.items.len = written;
 }
 
+// Missing template output proves a boundary, never the language of its body.
+// Keep the original visible link and all subsequent source in that region.
+fn missingEqualsCode(codes: LanguageCodes, source: []const u8) ?[]const u8 {
+    const ns = codes.namespace_catalog orelse return null;
+    if (!std.mem.startsWith(u8, source, "[[") or !std.mem.endsWith(u8, source, "]]")) return null;
+    const pair = blobs.wikitext_syntax.balanced(source, 0) orelse return null;
+    if (pair.end != source.len) return null;
+    var it: blobs.document_ir.InlineIterator = .{ .input = source, .link_trail = codes.link_trail };
+    const link = it.next() orelse return null;
+    if (link.kind != .link or link.link_has_pipe or link.trail.len != 0 or it.cursor != source.len) return null;
+    const target = if (std.mem.startsWith(u8, link.target, ":")) link.target[1..] else link.target;
+    const title = ns.ofTitle(target);
+    if (title.id != 10 or title.text.len < 3 or title.text[0] != '=' or title.text[title.text.len - 1] != '=') return null;
+    const code = title.text[1 .. title.text.len - 1];
+    const owner = codes.resolve(code) orelse return null;
+    if (!std.mem.eql(u8, code, owner.code)) return null;
+    return code;
+}
+
+fn exactRawEqualsCode(section: language_source.Section) ?[]const u8 {
+    if (section.hyphen_marker) return null;
+    const line = section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len];
+    const code = language_source.equalsLanguageDeclaration(line) orelse return null;
+    if (!std.mem.eql(u8, section.heading, code) or !std.mem.startsWith(u8, line, "{{=") or
+        (!std.mem.endsWith(u8, line, "=}}") and !std.mem.endsWith(u8, line, "=|}}"))) return null;
+    const suffix: usize = if (std.mem.endsWith(u8, line, "=|}}")) 4 else 3;
+    if (line.len != code.len + 3 + suffix or !std.mem.eql(u8, line[3 .. line.len - suffix], code)) return null;
+    return code;
+}
+
+// A missing-range mismatch must not turn the known first heading into authority
+// for every later raw declaration. This predicate only fences ownership.
+fn missingEqualsPartitionCandidate(codes: LanguageCodes, raw: []const language_source.Section, source: []const u8) bool {
+    if (raw.len < 2 or raw.len > 64 or source.len > 1024 * 1024) return false;
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |line| {
+        const code = missingEqualsCode(codes, line) orelse continue;
+        const at = @intFromPtr(line.ptr) - @intFromPtr(source.ptr);
+        if (!prefixEvidenceOutside(source, at)) continue;
+        for (raw) |section| if (exactRawEqualsCode(section)) |authored| {
+            if (std.mem.eql(u8, code, authored)) return true;
+        };
+    }
+    return false;
+}
+
+// Return a replacement partition only after every original declaration pairs
+// with either a clean real H2 or a complete, tracked missing-template link.
+// Empty heading is a private grouping sentinel for the latter; no heading is
+// inserted into the compiled body, and no missing code becomes an owner.
+fn missingEqualsPartitionAlloc(a: std.mem.Allocator, codes: LanguageCodes, original: []const u8,
+    source: MissingText, phase: ?*const missing_dependency.Phase, raw: []const language_source.Section,
+    rendered: []const language_source.Section) std.mem.Allocator.Error!?[]language_source.Section
+{
+    if (raw.len < 2 or raw.len > 64 or rendered.len == 0 or rendered.len >= raw.len or
+        source.bytes.len > 1024 * 1024 or source.unknown or source.lost_missing_range or source.generated_links.len != 0 or source.literal_curly_ranges.len != 0) return null;
+    const provenance = phase orelse return null;
+    const ns = codes.namespace_catalog orelse return null;
+    const occurrences = provenance.occurrences();
+    if (source.ranges.len == 0 or source.ranges.len > 64) return null;
+    var starts: [64]usize = undefined;
+    var values: [64]language_source.Section = undefined;
+    var count: usize = 0;
+    var previous: usize = 0;
+    for (rendered, 0..) |section, i| {
+        const at = SourceHeadword.offset(source.bytes, section.source) orelse return null;
+        if ((i != 0 and at <= previous) or section.heading.len == 0 or section.hyphen_marker) return null;
+        const line = section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len];
+        const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return null;
+        if (heading.level != 2 or !std.mem.eql(u8, heading.title, section.heading) or
+            !sourceCategoryHeaderRangesClean(source, section) or !prefixEvidenceOutside(source.bytes, at)) return null;
+        starts[count] = at; values[count] = section; count += 1; previous = at;
+    }
+    var missing_count: usize = 0;
+    previous = 0;
+    for (source.ranges) |range| {
+        if (range.start < previous or range.start >= range.end or range.end > source.bytes.len or
+            range.occurrence == 0 or range.occurrence > occurrences.len) return null;
+        previous = range.end;
+        const slice = source.bytes[range.start..range.end];
+        const code = missingEqualsCode(codes, slice) orelse continue;
+        const title = ns.ofTitle(occurrences[range.occurrence - 1].title);
+        if (title.id != 10 or title.text.len != code.len + 2 or title.text[0] != '=' or
+            title.text[title.text.len - 1] != '=' or !std.mem.eql(u8, title.text[1 .. title.text.len - 1], code) or
+            (range.start != 0 and source.bytes[range.start - 1] != '\n') or
+            (range.end != source.bytes.len and source.bytes[range.end] != '\n') or
+            !prefixEvidenceOutside(source.bytes, range.start) or count == starts.len) return null;
+        var at: usize = 0;
+        while (at < count and starts[at] < range.start) : (at += 1) {}
+        if (at < count and starts[at] == range.start) return null;
+        var shift = count;
+        while (shift > at) : (shift -= 1) { starts[shift] = starts[shift - 1]; values[shift] = values[shift - 1]; }
+        starts[at] = range.start; values[at] = .{ .heading = "", .source = slice }; count += 1; missing_count += 1;
+    }
+    if (missing_count == 0 or count != raw.len or
+        std.mem.trim(u8, source.bytes[0..starts[0]], " \t\r\n").len != 0) return null;
+    var raw_cursor: usize = 0;
+    for (raw, 0..) |authored, i| {
+        if (authored.source.len == 0 or authored.source.len > original.len - raw_cursor or
+            @intFromPtr(authored.source.ptr) != @intFromPtr(original.ptr) + raw_cursor or !prefixEvidenceOutside(original, raw_cursor)) return null;
+        raw_cursor += authored.source.len;
+        const code = exactRawEqualsCode(authored) orelse return null;
+        const end = if (i + 1 < count) starts[i + 1] else source.bytes.len;
+        if (end <= starts[i]) return null;
+        if (values[i].heading.len == 0) {
+            const missing_code = missingEqualsCode(codes, values[i].source) orelse return null;
+            if (!std.mem.eql(u8, code, missing_code)) return null;
+        } else {
+            const owner = boundaryLanguage(codes, values[i]) orelse return null;
+            if (!std.mem.eql(u8, owner.code, code) or codes.isLanguageBoundary(code)) return null;
+        }
+        values[i].source = source.bytes[starts[i]..end];
+    }
+    if (raw_cursor != original.len) return null;
+    return try a.dupe(language_source.Section, values[0..count]);
+}
+
 fn prefixEvidenceOutside(source: []const u8, offset: usize) bool {
     if (offset > source.len or !language_source.outsideNestedOrOpaque(source, offset)) return false;
     var context = language_source.Iterator.init(source[0..offset]);
@@ -5748,6 +5865,16 @@ fn processMain(
         while (raw_it.next()) |section| try appendClassifiedSection(page_allocator, codes, &raw_sections, &owned_headings, section);
         raw_conflicts = rawTemplateCodeConflicts(codes, conflict_iterator, raw_sections.items);
     }
+    const missing_equals_candidate = raw_source != null and page_sections.items.len != 0 and
+        raw_sections.items.len > page_sections.items.len and
+        missingEqualsPartitionCandidate(codes, raw_sections.items, source);
+    const missing_equals_partition = if (missing_equals_candidate and !raw_conflicts.present and !sections.mixed_levels)
+        try missingEqualsPartitionAlloc(page_allocator, codes, raw_source.?, source_missing, missing_phase, raw_sections.items, page_sections.items)
+    else null;
+    if (missing_equals_partition) |replacement| {
+        page_sections.deinit(page_allocator);
+        page_sections = std.ArrayList(language_source.Section).fromOwnedSlice(replacement);
+    }
     const raw_count_before_coalescing = raw_sections.items.len;
     if (raw_source) |raw| coalesceCorroboratedAnRawRegions(codes, raw, &raw_sections, page_sections.items);
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
@@ -5797,8 +5924,9 @@ fn processMain(
         break :blk sourceEqualsPrefix(codes, raw_source.?, source_missing, raw_sections.items[0],
             page_sections.items[0], observed.page_wiki_openings) == null;
     };
-    if (!raw_aligned or unpaired_collision) for (raw_sections.items, 0..) |section, raw_index| {
-        if (!unpaired_collision and !(raw_index == 0 and unproved_equals_prefix) and
+    const unproved_missing_equals = missing_equals_candidate and missing_equals_partition == null;
+    if (!raw_aligned or unpaired_collision or unproved_missing_equals) for (raw_sections.items, 0..) |section, raw_index| {
+        if (!unpaired_collision and !unproved_missing_equals and !(raw_index == 0 and unproved_equals_prefix) and
             (!hasExplicitLanguageDeclaration(codes, section) or resolveSection(codes, section) != null)) continue;
         // An unresolved declaration cannot inherit an adjacent language. If
         // expansion changed the boundaries, retain the whole page without
@@ -6021,7 +6149,8 @@ fn processMain(
             null;
         const nom_owner = if (raw_aligned and !raw_conflicts.present and !sections.mixed_levels)
             sourceNomHeadingOwner(codes, source_missing, raw_sections.items[index], section) else null;
-        const source_unowned_banner = complete_source_banners and sourceBannerBoundaryOnly(codes, raw_sections.items[index], section);
+        const source_unowned_banner = (missing_equals_partition != null and section.heading.len == 0) or
+            (complete_source_banners and sourceBannerBoundaryOnly(codes, raw_sections.items[index], section));
         var resolved: ?ResolvedLanguage = if (source_unowned_banner) .{ .code = "", .heading = "Unclassified" } else if (formatted_section) |matched| matched.owner orelse ResolvedLanguage{ .code = "", .heading = "Unclassified" } else nom_owner orelse ang_continuation;
         if (source_unowned_banner) fallbacks.unresolved_language_heading = true;
         var headword_scoped_owner = false;
@@ -23399,4 +23528,74 @@ test "Pa'O Kayan head declarations agree with their emitted POS owners" {
     for ([_][]const u8{raw ++ "\n{{head|en|noun}}", "===Other===\n{{head|pdu|noun}}", "===နာမဝိသေသန===\n<nowiki>\n{{head|pdu|noun}}\n</nowiki>"}) |invalid|
         try std.testing.expect(!kayanHeadingsMatch(invalid, expanded, .{ .bytes = expanded }));
     try std.testing.expect(!kayanHeadingsMatch(raw, raw, .{ .bytes = raw }));
+}
+
+test "missing equals declarations partition only exact tracked boundaries and never issue missing owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry"); var ns = try NS.Registry.init(a, NS.english_test_fixture); defer ns.deinit();
+    const Resolver = struct {
+        fn resolve(_: ?*const anyopaque, name: []const u8) ?ResolvedLanguage {
+            for ([_][2][]const u8{ .{"en", "English"}, .{"pt", "Portuguese"}, .{"ca", "Catalan"}, .{"es", "Spanish"} }) |row|
+                if (std.mem.eql(u8, name, row[0]) or std.mem.eql(u8, name, row[1])) return .{ .code = row[0], .heading = row[1] };
+            return null;
+        }
+    };
+    const codes: LanguageCodes = .{ .resolve_fn = Resolver.resolve, .namespace_catalog = &ns };
+    const raw = "{{=en=|}}\n# first\n{{=ca=|}}\n# second\n{{=es=|}}\n# third";
+    const source = "\n==English==\n# first\n[[:Template:=ca=]]\n# second\n[[:Template:=es=]]\n# third";
+    const ca_raw = std.mem.indexOf(u8, raw, "{{=ca=|}}").?; const es_raw = std.mem.indexOf(u8, raw, "{{=es=|}}").?;
+    const ca = std.mem.indexOf(u8, source, "[[:Template:=ca=]]").?; const es = std.mem.indexOf(u8, source, "[[:Template:=es=]]").?;
+    var authored = [_]language_source.Section{
+        .{ .heading = "en", .source = raw[0..ca_raw] }, .{ .heading = "ca", .source = raw[ca_raw..es_raw] }, .{ .heading = "es", .source = raw[es_raw..] },
+    };
+    var rendered = [_]language_source.Section{.{ .heading = "English", .source = source[1..] }};
+    const occurrences = [_]missing_dependency.Occurrence{ .{ .id = 1, .title = "Template:=ca=" }, .{ .id = 2, .title = "Template:=es=" } };
+    const ranges = [_]missing_dependency.Range{
+        .{ .start = @intCast(ca), .end = @intCast(ca + "[[:Template:=ca=]]".len), .occurrence = 1 },
+        .{ .start = @intCast(es), .end = @intCast(es + "[[:Template:=es=]]".len), .occurrence = 2 },
+    };
+    const metadata = try missing_dependency.encode(a, .{ .bytes = source, .ranges = &ranges }, MissingText.untracked(""), &occurrences);
+    var phase = try missing_dependency.decode(a, metadata, source, ""); defer phase.deinit();
+    try std.testing.expect(missingEqualsPartitionCandidate(codes, &authored, source));
+    const partition = (try missingEqualsPartitionAlloc(a, codes, raw, phase.output(), &phase, &authored, &rendered)).?;
+    try std.testing.expectEqual(@as(usize, 3), partition.len);
+    try std.testing.expectEqualStrings("English", partition[0].heading);
+    try std.testing.expectEqualStrings(source[1..ca], partition[0].source);
+    try std.testing.expectEqualStrings("", partition[1].heading);
+    try std.testing.expectEqualStrings("", partition[2].heading);
+    try std.testing.expectEqualStrings(source[ca..es], partition[1].source);
+    try std.testing.expectEqualStrings(source[es..], partition[2].source);
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, phase.output(), null, &authored, &rendered) == null);
+    var tracked = phase.output(); tracked.unknown = true;
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    tracked = phase.output(); tracked.lost_missing_range = true;
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    tracked = phase.output(); tracked.ranges = &.{};
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    var bad_ranges = ranges; bad_ranges[0].occurrence = 2; tracked = phase.output(); tracked.ranges = &bad_ranges;
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    bad_ranges = ranges; bad_ranges[0].end -= 1;
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    const held = authored[1]; authored[1] = authored[2];
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, phase.output(), &phase, &authored, &rendered) == null); authored[1] = held;
+    const old_heading = rendered[0].heading; rendered[0].heading = "Portuguese";
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, phase.output(), &phase, &authored, &rendered) == null); rendered[0].heading = old_heading;
+    const copy = try a.dupe(u8, source); tracked = phase.output(); tracked.bytes = copy;
+    try std.testing.expect(try missingEqualsPartitionAlloc(a, codes, raw, tracked, &phase, &authored, &rendered) == null);
+    for ([_][]const u8{ "inline [[:Template:=ca=]]", "<nowiki>\n[[:Template:=ca=]]\n</nowiki>", "{|\n[[:Template:=ca=]]\n|}", "[[:Template:=ca=|label]]", "[[:Category:=ca=]]" }) |bad|
+        try std.testing.expect(!missingEqualsPartitionCandidate(codes, &authored, bad));
+    // The same certificate preserves a missing leading region before a real H2.
+    const leading_raw = "{{=es=|}}\n# first\n{{=pt=|}}\n# second";
+    const leading = "[[:Template:=es=]]\n# first\n==Portuguese==\n# second";
+    const raw_cut = std.mem.indexOf(u8, leading_raw, "{{=pt=|}}").?;
+    const cut = std.mem.indexOf(u8, leading, "==Portuguese==").?;
+    const raw_parts = [_]language_source.Section{ .{ .heading = "es", .source = leading_raw[0..raw_cut] }, .{ .heading = "pt", .source = leading_raw[raw_cut..] } };
+    const heading_parts = [_]language_source.Section{.{ .heading = "Portuguese", .source = leading[cut..] }};
+    const leading_meta = try missing_dependency.encode(a, .{ .bytes = leading, .ranges = &.{.{ .start = 0, .end = "[[:Template:=es=]]".len, .occurrence = 1 }} }, MissingText.untracked(""), &.{.{ .id = 1, .title = "Template:=es=" }});
+    var leading_phase = try missing_dependency.decode(a, leading_meta, leading, ""); defer leading_phase.deinit();
+    const paired = (try missingEqualsPartitionAlloc(a, codes, leading_raw, leading_phase.output(), &leading_phase, &raw_parts, &heading_parts)).?;
+    try std.testing.expectEqualStrings("", paired[0].heading);
+    try std.testing.expectEqualStrings(leading[0..cut], paired[0].source);
+    try std.testing.expectEqualStrings("Portuguese", paired[1].heading);
+    try std.testing.expectEqualStrings(leading[cut..], paired[1].source);
 }

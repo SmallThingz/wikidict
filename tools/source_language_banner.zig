@@ -749,3 +749,33 @@ pub fn roaRupStaticSupportDeclaration(source: []const u8, ns: *const namespaces.
     if (!documentation or category != (role.category != null)) return null;
     return .{ .heading = heading.title, .level = heading.level };
 }
+
+// A complete equals-code provider can declare a local heading label through
+// an independently registered project-page language name. The optional leading
+// separator is not an output/geometry proof and never selects the language.
+pub fn equalsProjectLabel(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?[]const u8 {
+    const prefix = "{{{1|\n----\n}}}\n";
+    if (source.len > 4096 or !registry.codes.contains(code) or !std.mem.startsWith(u8, source, prefix)) return null;
+    const rest = source[prefix.len..];
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse return null;
+    const line = rest[0..end];
+    if (!std.mem.startsWith(u8, line, "==[[") or !std.mem.endsWith(u8, line, "]]==")) return null;
+    const body = line[4 .. line.len - 4];
+    const pipe = std.mem.indexOfScalar(u8, body, '|') orelse return null;
+    const target = body[0..pipe];
+    const label = body[pipe + 1 ..];
+    if (!plain(target) or !plain(label) or label.len > 256 or
+        !std.unicode.utf8ValidateSlice(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        std.mem.indexOf(u8, body, "__") != null or containsControl(behavior, body) or
+        target[0] == ':' or std.mem.indexOfScalar(u8, target, '#') != null) return null;
+    const project = ns.ofTitle(target);
+    if (project.id != 4 or !plain(project.text) or std.mem.indexOfScalar(u8, project.text, ':') != null or
+        !registry.sourceBannerNameMatches(code, project.text)) return null;
+    const tail = rest[end + 1 ..];
+    if (!std.mem.startsWith(u8, tail, "<noinclude>") or !std.mem.endsWith(u8, tail, "</noinclude>")) return null;
+    const category = tail["<noinclude>".len .. tail.len - "</noinclude>".len];
+    if (!hiddenCategory(category, ns, behavior)) return null;
+    const sort = std.mem.lastIndexOfScalar(u8, category, '|') orelse return null;
+    if (!std.mem.endsWith(u8, category, "]]") or !std.mem.eql(u8, category[sort + 1 .. category.len - 2], code)) return null;
+    return label;
+}

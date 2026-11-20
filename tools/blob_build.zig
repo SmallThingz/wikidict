@@ -2095,6 +2095,8 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         if (equals_label) {
             if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
             try registry.addSourceEqualsLabel(code, decoded orelse raw);
+            if (source_language_banner.equalsProjectLabel(decoded orelse raw, namespaces, if (behavior) |*value| value else null, registry, code)) |label|
+                try registry.addSourceTemplateLabel(label, code);
         } else if (nom_section) {
             if (!std.mem.eql(u8, row.content_model, "wikitext")) continue;
             registry.source_nom_role = std.mem.eql(u8, decoded orelse raw, if (registry.source_nom_name_format)
@@ -68155,3 +68157,334 @@ test "normal Aragonese Writer separates authored decimal nouns and retains compl
         try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, expected));
     }
 }
+
+const TnMissingEqualsTest = struct {
+    const T = encoder.presentation_types;
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, providers: bool) !void {
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", @embedFile("testdata/tn-project-equals/language-registry.tsv"));
+        const rows = [_]struct { code: []const u8, page: u64, revision: u64, xml: []const u8 }{
+            .{ .code = "en", .page = 1983, .revision = 6508, .xml = @embedFile("testdata/tn-missing-equals/en-provider.xmltext") },
+            .{ .code = "pt", .page = 2668, .revision = 6514, .xml = @embedFile("testdata/tn-missing-equals/pt-provider.xmltext") },
+        };
+        var index: std.ArrayList(u8) = .empty;
+        for (rows) |row| try index.appendSlice(a, try std.fmt.allocPrint(a,
+            "0\t0\tTempolete:{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t1\n",
+            .{ if (providers) try std.fmt.allocPrint(a, "={s}=", .{row.code}) else row.code, row.page, row.revision }));
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", index.items);
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        for (rows, 0..) |row, i| try templates.append(i, row.page, row.revision, row.xml);
+        try templates.finish(try std.fs.path.join(a, &.{root, "page-index.tsv"}));
+    }
+    fn roundtrip(a: std.mem.Allocator, entry: T.Entry) !void {
+        const stored: T.Stored = .{ .entry = entry }; const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, entry.title, .language, .{ .heading = entry.language.?, .code = entry.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+    fn currentBaseline(a: std.mem.Allocator, before: T.Entry, count: usize) !T.Entry {
+        // Same narrowly observed numeric-basis transition as the earned TN
+        // courant control. Assert every marker before changing just this field.
+        var current = before; const sections = try a.dupe(T.Section, before.sections); current.sections = sections;
+        var changed: usize = 0;
+        for (sections) |*section| {
+            const blocks = try a.dupe(T.Block, section.blocks); section.blocks = blocks;
+            for (blocks) |*block| {
+                const spans = try a.dupe(T.Span, block.spans); block.spans = spans;
+                for (spans) |*span| if (std.mem.eql(u8, span.text, "f")) {
+                    try std.testing.expect(block.kind == .paragraph and span.kind == .text and span.target.len == 0);
+                    try std.testing.expect(span.bold and span.italic and !span.small);
+                    try std.testing.expectEqualStrings("#008000", span.foreground.?);
+                    try std.testing.expectEqual(T.FontScaleBasis.context, span.font_scale_basis);
+                    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), span.font_scale.?, 0.000001);
+                    span.font_scale_basis = .normal_body; changed += 1;
+                };
+            }
+        }
+        try std.testing.expectEqual(count, changed);
+        return current;
+    }
+};
+
+test "TN genuine lua and color retain missing template regions separately from Portuguese and English" {
+    const F = TnMissingEqualsTest; const T = F.T;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    for ([_]struct { title: []const u8, raw: []const u8, source: []const u8, phase: []const u8, reader: []const u8, code: []const u8, markers: usize }{
+        .{ .title = "lua", .raw = @embedFile("testdata/tn-missing-equals/lua-raw.wikitext"), .source = @embedFile("testdata/tn-missing-equals/lua-static.wikitext"), .phase = @embedFile("testdata/tn-missing-equals/lua-phase.json"), .reader = @embedFile("testdata/tn-missing-equals/lua-reader.json"), .code = "pt", .markers = 2 },
+        .{ .title = "color", .raw = @embedFile("testdata/tn-missing-equals/color-raw.wikitext"), .source = @embedFile("testdata/tn-missing-equals/color-static.wikitext"), .phase = @embedFile("testdata/tn-missing-equals/color-phase.json"), .reader = @embedFile("testdata/tn-missing-equals/color-reader.json"), .code = "en", .markers = 3 },
+    }) |f| {
+        const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, f.reader, .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len); const before = saved.value.entries[0];
+        try std.testing.expectEqualStrings(f.title, before.title);
+        try std.testing.expectEqualStrings("", before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.references.len);
+        try std.testing.expectEqual(@as(usize, 0), before.media.len);
+        try F.roundtrip(a, before);
+        const expected_whole = try F.currentBaseline(a, before, f.markers);
+        const lua = std.mem.eql(u8, f.title, "lua");
+        try std.testing.expectEqual(@as(usize, if (lua) 2 else 1), before.sections.len);
+        if (lua) {
+            try std.testing.expectEqual(@as(usize, 2), before.sections[0].blocks.len);
+            try std.testing.expectEqual(@as(usize, 3), before.sections[1].blocks.len);
+        } else try std.testing.expectEqual(@as(usize, 9), before.sections[0].blocks.len);
+        for ([_]enum { complete, no_phase, no_provider }{ .complete, .no_phase, .no_provider }) |mode| {
+            var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+            try F.install(io, a, root, mode != .no_provider);
+            var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/tn-project-equals/namespace-registry.tsv")); defer ns.deinit();
+            var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+            var report: encoder.presentation_document.Fallbacks = .{};
+            // Explicit static provider instantiation, independently checked
+            // against the complete real Reader. The phase fixture exercises
+            // normal API custody; it is not a claimed historical phase capture.
+            const baseline_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, f.title, .language, "Unclassified", "", f.source, null, .{}, &ns, &report);
+            const baseline = (try encoder.presentation_codec.decodeAlloc(a, baseline_bytes, f.title, .language, .{ .heading = "Unclassified", .code = "" })).entry;
+            try std.testing.expectEqualDeep(expected_whole, baseline);
+            const output = try std.fs.path.join(a, &.{root, "blobs"});
+            var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+            try writer.addExpandedPageWithReasonsAndPhases(a, .{ .id = 0, .kind = .language }, f.title, f.source, f.raw, null, &.{}, null, if (mode == .no_phase) null else f.phase);
+            const stats = try writer.finish(codes);
+            if (mode != .complete) {
+                try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+                const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", f.title);
+                try std.testing.expectEqualDeep(expected_whole, actual);
+                try F.roundtrip(a, actual);
+                continue;
+            }
+            try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+            const owner = registry.resolve(f.code).?;
+            const owned = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, f.title);
+            const unknown = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, "Unclassified", f.title);
+            var expected_owned = expected_whole; expected_owned.language = owner.heading; expected_owned.language_code = f.code;
+            var expected_unknown = expected_whole;
+            if (lua) {
+                expected_owned.sections = expected_whole.sections[1..2];
+                expected_unknown.sections = expected_whole.sections[0..1];
+            } else {
+                const owned_section = try a.dupe(T.Section, expected_whole.sections);
+                owned_section[0].blocks = expected_whole.sections[0].blocks[0..3]; expected_owned.sections = owned_section;
+                expected_unknown.sections = try a.dupe(T.Section, &.{.{ .level = 2, .title = "Unclassified", .blocks = expected_whole.sections[0].blocks[3..] }});
+            }
+            expected_owned.organization = .{ .lexemes = &.{}, .other_sections = &.{0} };
+            expected_unknown.organization = .{ .lexemes = &.{}, .other_sections = &.{0} };
+            try std.testing.expectEqualDeep(expected_owned, owned);
+            try std.testing.expectEqualDeep(expected_unknown, unknown);
+            try F.roundtrip(a, owned); try F.roundtrip(a, unknown);
+            // Rejoin the actual typed blocks to prove complete source coverage.
+            if (lua) {
+                try std.testing.expectEqualDeep(expected_whole.sections[0], unknown.sections[0]);
+                try std.testing.expectEqualDeep(expected_whole.sections[1], owned.sections[0]);
+            } else {
+                var blocks: std.ArrayList(T.Block) = .empty;
+                try blocks.appendSlice(a, owned.sections[0].blocks); try blocks.appendSlice(a, unknown.sections[0].blocks);
+                try std.testing.expectEqualDeep(expected_whole.sections[0].blocks, blocks.items);
+            }
+        }
+        // Restore only the asserted basis fields and recover the entire old
+        // reader value, including every link, style, body and organization.
+        for (@constCast(expected_whole.sections)) |*section| for (@constCast(section.blocks)) |*block| for (@constCast(block.spans)) |*span| {
+            if (std.mem.eql(u8, span.text, "f")) span.font_scale_basis = .context;
+        };
+        try std.testing.expectEqualDeep(before, expected_whole);
+    }
+}
+
+test "TN authored equals template link cannot revoke an already complete known heading partition" {
+    const F = TnMissingEqualsTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try F.install(io, a, root, true);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/tn-project-equals/namespace-registry.tsv")); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+    const title = "authored template link contrast";
+    const raw = "{{=en=|}}\n[[:Tempolete:=en=]]\n# first [[mebale]]\n{{=pt=|}}\n# second [[molomo]]";
+    const source = "\n==[[Wiktionary:English|Seisimane]]==\n\n[[:Tempolete:=en=]]\n# first [[mebale]]\n\n==[[Wiktionary:Portuguese|Sepotokisi]]==\n\n# second [[molomo]]";
+    var report: encoder.presentation_document.Fallbacks = .{};
+    const bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, title, .language, "Unclassified", "", source, null, .{}, &ns, &report);
+    const complete = (try encoder.presentation_codec.decodeAlloc(a, bytes, title, .language, .{ .heading = "Unclassified", .code = "" })).entry;
+    try std.testing.expectEqual(@as(usize, 2), complete.sections.len);
+    const output = try std.fs.path.join(a, &.{root, "blobs"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, source, raw, null);
+    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    for ([_][]const u8{ "en", "pt" }, 0..) |code, i| {
+        const owner = registry.resolve(code).?;
+        const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, title);
+        var expected = complete; expected.language = owner.heading; expected.language_code = code;
+        expected.sections = complete.sections[i..i + 1]; expected.organization = .{ .lexemes = &.{}, .other_sections = &.{0} };
+        try std.testing.expectEqualDeep(expected, actual); try F.roundtrip(a, actual);
+    }
+}
+
+const TnProjectEqualsOwnerTest = struct {
+    const provider = @embedFile("testdata/tn-project-equals/fr-template.wikitext");
+    const raw = @embedFile("testdata/tn-project-equals/page.raw.wikitext");
+    const reader = @embedFile("testdata/tn-project-equals/courant-reader.json");
+    const registry_source = @embedFile("testdata/tn-project-equals/language-registry.tsv");
+    const ns_source = @embedFile("testdata/tn-project-equals/namespace-registry.tsv");
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, title: []const u8, model: []const u8, ns_id: i32, redirect: []const u8, body: []const u8) !void {
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", registry_source);
+        const row = try std.fmt.allocPrint(a, "0\t0\t{s}\t{s}\t1986\t6510\t2026-10-01T00:00:00Z\tA\t{s}\t{d}\t1\t0\n", .{title, redirect, model, ns_id});
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", row);
+        const path = try std.fs.path.join(a, &.{root, "page-index.tsv"});
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        try templates.append(0, 1986, 6510, body); try templates.finish(path);
+    }
+};
+
+test "project linked equals provider requires independent registered target and complete static declaration" {
+    const F = TnProjectEqualsOwnerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    try TpiStaticCategoryOwnerTest.hash(F.provider, "52d97a11c5c29bc4ddf6b1c80805d6d88a0a398cd0a8fd50fa7d0aaac6030c76");
+    try TpiStaticCategoryOwnerTest.hash(F.registry_source, "9ebabbfb83fc0c8665671105119a41f4f1fe249ca04782d3efe4b3377b2df3b7");
+    try TpiStaticCategoryOwnerTest.hash(F.ns_source, "4e2a809d7d4e448524b6e526c8f37d24201efc2e5813155be781ba421c4ee2ec");
+    var ns = try namespace_registry.Registry.init(a, F.ns_source); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    try std.testing.expect(registry.resolve("Sefora") == null);
+    try std.testing.expectEqualStrings("Sefora", source_language_banner.equalsProjectLabel(F.provider, &ns, null, &registry, "fr").?);
+    const alias = try std.mem.replaceOwned(u8, a, F.provider, "Wiktionary:", "WT:");
+    try std.testing.expectEqualStrings("Sefora", source_language_banner.equalsProjectLabel(alias, &ns, null, &registry, "fr").?);
+    for ([_][2][]const u8{
+        .{ "Wiktionary:French", "Wiktionary:fr" }, .{ "Wiktionary:French", "Wiktionary:English" },
+        .{ "Wiktionary:French", "Wiktionary:Unknown" }, .{ "Wiktionary:French", "French" },
+        .{ "Wiktionary:French", "Category:French" }, .{ "Wiktionary:French", ":Wiktionary:French" },
+        .{ "Wiktionary:French", "Wiktionary:French#part" }, .{ "Wiktionary:French", "Wiktionary:French:part" },
+        .{ "|Sefora", "|{{{name}}}" }, .{ "|Sefora", "|__TOC__" }, .{ "|Sefora", "| Sefora" },
+        .{ "|Sefora", "|Sefora|extra" }, .{ "==[[", "===[[" },
+        .{ "{{{1|", "{{{2|" }, .{ "----", "{{dynamic}}" },
+        .{ "</noinclude>", "</noinclude>\nextra" }, .{ "|fr]]", "|en]]" },
+        .{ "<noinclude>", "<onlyinclude>" }, .{ "Category:Language templates", ":Category:Language templates" },
+    }) |mutation| {
+        const changed = try std.mem.replaceOwned(u8, a, F.provider, mutation[0], mutation[1]);
+        try std.testing.expect(source_language_banner.equalsProjectLabel(changed, &ns, null, &registry, "fr") == null);
+    }
+    // All other retained equals providers are checked against their own exact
+    // target evidence. Plain/dynamic shapes and unregistered target names refuse.
+    const rows = try std.json.parseFromSlice([]const struct { title: []const u8, source: []const u8 }, a,
+        @embedFile("testdata/tn-project-equals/equals-templates.json"), .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 13), rows.value.len);
+    var accepted: usize = 0;
+    for (rows.value) |row| {
+        const name = ns.ofTitle(row.title).text; const code = name[1 .. name.len - 1];
+        const expected = !std.mem.eql(u8, code, "tn") and !std.mem.eql(u8, code, "ta") and
+            !std.mem.eql(u8, code, "mul") and !std.mem.eql(u8, code, "st");
+        const result = source_language_banner.equalsProjectLabel(row.source, &ns, null, &registry, code);
+        try std.testing.expectEqual(expected, result != null);
+        if (result != null) accepted += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 9), accepted);
+    try registry.addTsv("zz\tConflict\tFRENCH\n");
+    try std.testing.expect(source_language_banner.equalsProjectLabel(F.provider, &ns, null, &registry, "fr") == null);
+}
+
+test "normal equals project loader retains local namespace model owner and collision guards" {
+    const F = TnProjectEqualsOwnerTest;
+    for ([_]struct { title: []const u8, model: []const u8 = "wikitext", ns_id: i32 = 10, redirect: []const u8 = "", accepted: bool = false }{
+        .{ .title = "Tempolete:=fr=", .accepted = true }, .{ .title = "Template:=fr=", .accepted = true },
+        .{ .title = "Tempolete:=en=" }, .{ .title = "Tempolete:=unknown=" }, .{ .title = "Tempolete:=fr=/doc" },
+        .{ .title = "=fr=", .ns_id = 0 }, .{ .title = "Tempolete:=fr=", .model = "Scribunto" },
+        .{ .title = "Tempolete:=fr=", .redirect = "Tempolete:other" },
+    }) |case| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(io, a, root, case.title, case.model, case.ns_id, case.redirect, F.provider);
+        var ns = try namespace_registry.Registry.init(a, F.ns_source); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+        const actual = languageCodes(&registry, &ns).resolveTrusted("Sefora");
+        try std.testing.expectEqual(case.accepted, actual != null);
+        if (actual) |value| { try std.testing.expectEqualStrings("fr", value.code); try std.testing.expectEqualStrings("Se Fora", value.heading); }
+        try std.testing.expectEqualStrings("Se Fora", registry.resolve("fr").?.heading);
+        try std.testing.expect(registry.source_equals_labels.get("fr") == null);
+        try std.testing.expect(registry.resolve("Unattested name") == null);
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit(); try registry.addTsv(F.registry_source);
+    try registry.addSourceTemplateLabel("Sefora", "fr");
+    try registry.addSourceTemplateLabel("sefora", "en");
+    try registry.addSourceTemplateLabel("Sefora", "fr");
+    try std.testing.expect(registry.resolve("Sefora") == null);
+    try std.testing.expect(registry.resolve("sefora") == null);
+    try registry.addSourceEqualsLabel("fr", "Plain source label");
+    try std.testing.expectEqualStrings("Plain source label", registry.source_equals_labels.get("fr").?.?);
+    try std.testing.expect(registry.resolve("Plain source label") == null);
+}
+
+test "TN courant actual Reader and normal Writer retain complete body after source proved French ownership" {
+    const F = TnProjectEqualsOwnerTest; const T = encoder.presentation_types;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    try TpiStaticCategoryOwnerTest.hash(F.reader, "218046dc3b1e3c9b0a54d1da4e4ba0a76ab657458b9a6317f9865b07229b93e2");
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, F.reader, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len);
+    const before = saved.value.entries[0];
+    try std.testing.expectEqualStrings("Unclassified", before.language.?);
+    try std.testing.expectEqualStrings("", before.language_code);
+    try std.testing.expectEqual(@as(usize, 1), before.sections.len);
+    try std.testing.expectEqualStrings("Sefora", before.sections[0].title);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqualStrings("...", before.sections[0].blocks[1].spans[0].text);
+    // This is an explicitly source-instantiated test input, NOT a retained
+    // expanded-page capture: the only invocation is the exact static m body.
+    const m = @embedFile("testdata/tn-project-equals/m-template.wikitext");
+    try TpiStaticCategoryOwnerTest.hash(m, "7e781bb2be0347d99f1c600e707ca21bd5ba1750c51344f6b969eef9841871e4");
+    const close = std.mem.indexOf(u8, m, "<!--") orelse return error.TestUnexpectedResult;
+    const expanded = try std.mem.replaceOwned(u8, a, F.raw, "{{m}}", m[0..close]);
+    var results: [2]T.Entry = undefined;
+    for ([_]bool{ false, true }, 0..) |attested, arm| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+        try F.install(io, a, root, if (attested) "Tempolete:=fr=" else "Tempolete:unrelated", "wikitext", 10, "", F.provider);
+        var ns = try namespace_registry.Registry.init(a, F.ns_source); defer ns.deinit();
+        var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+        const output = try std.fs.path.join(a, &.{root, "blobs"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "courant électrique", expanded, F.raw, null);
+        const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        const heading = if (attested) "Se Fora" else "Unclassified";
+        results[arm] = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, heading, "courant électrique");
+        try std.testing.expectEqualStrings(if (attested) "fr" else "", results[arm].language_code);
+        try std.testing.expectEqualStrings(heading, results[arm].language.?);
+        const stored: T.Stored = .{ .entry = results[arm] };
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, "courant électrique", .language, .{ .heading = heading, .code = results[arm].language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+    var restored = results[1]; restored.language = results[0].language; restored.language_code = results[0].language_code;
+    try std.testing.expectEqualDeep(results[0], restored);
+    // The old DPRA record used a contextual basis. The current ordinary-body
+    // small resolver proves NormalBody for this one unchanged 1/1.2 scale.
+    // Keep the historical record intact and bridge only that explicit field.
+    try std.testing.expectEqual(@as(usize, 2), before.sections[0].blocks.len);
+    try std.testing.expectEqual(@as(usize, 4), before.sections[0].blocks[0].spans.len);
+    const old_marker = before.sections[0].blocks[0].spans[2];
+    try std.testing.expectEqualStrings("m", old_marker.text);
+    try std.testing.expectEqualStrings("#008000", old_marker.foreground.?);
+    try std.testing.expect(old_marker.bold and old_marker.italic);
+    try std.testing.expectEqual(T.FontScaleBasis.context, old_marker.font_scale_basis);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 1.2), old_marker.font_scale.?, 0.000001);
+    var current_expected = before;
+    const current_sections = try a.dupe(T.Section, before.sections);
+    const current_blocks = try a.dupe(T.Block, before.sections[0].blocks);
+    const current_spans = try a.dupe(T.Span, before.sections[0].blocks[0].spans);
+    current_spans[2].font_scale_basis = .normal_body;
+    current_blocks[0].spans = current_spans; current_sections[0].blocks = current_blocks;
+    current_expected.sections = current_sections;
+    current_expected.language = "Se Fora"; current_expected.language_code = "fr";
+    try std.testing.expectEqualDeep(current_expected, results[1]);
+    current_spans[2].font_scale_basis = .context;
+    current_expected.language = before.language; current_expected.language_code = before.language_code;
+    try std.testing.expectEqualDeep(before, current_expected);
+    try std.testing.expectEqualDeep(before.organization, results[1].organization);
+    try std.testing.expectEqualDeep(before.references, results[1].references);
+    try std.testing.expectEqualDeep(before.media, results[1].media);
+    // Independently preserve the entire genuine old Reader value and all
+    // nonsemantic fields through the same codec with only its owner corrected.
+    var expected: T.Stored = .{ .entry = before }; expected.entry.language = "Se Fora"; expected.entry.language_code = "fr";
+    const bytes = try encoder.presentation_codec.encodeAlloc(a, expected);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, before.title, .language, .{ .heading = "Se Fora", .code = "fr" });
+    try std.testing.expectEqualDeep(expected, decoded);
+    var original = decoded.entry; original.language = before.language; original.language_code = before.language_code;
+    try std.testing.expectEqualDeep(before, original);
+}
+
