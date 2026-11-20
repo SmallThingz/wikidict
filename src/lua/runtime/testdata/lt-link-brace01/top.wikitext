@@ -1,0 +1,30 @@
+{{#ifeq:{{{1|}}}||<div style="background-color: #f0fff0;">
+:''Tolesni vertimai turi būti patikrinti ir įterpti pagal kategorijas į atitinkamą vertimų lentelę aukščiau. Jei atitinkamos lentelės nėra, ją sukurkite, nurodydami kategoriją, kuri paprastai sutampa su viena iš galimų žodžio reikšmių. Žr. [[Šablonas:top|<nowiki>{{</nowiki>top}}]].
+<includeonly>[[Kategorija:Nesutvarkyti - nekategorizuoti vertimai]]</includeonly></div>''}}<noinclude>Šio šablono naudojimas:
+
+<pre>
+{{top|kategorija1}}
+{{mid}}
+{{bottom}}
+
+{{top|kategorija2}}
+{{mid}}
+{{bottom}}
+
+{{top|kategorija3}}
+{{mid}}
+{{bottom}}
+
+{{top|}} <!-- Vertimai, kuriuos reikia sukategorizuoti -->
+{{mid}}
+{{bottom}}
+</pre>
+
+Jei nebėra, vertimų kuriuos sukategorizuoti, tai užkomentuokite lentelę be kategorijos.
+
+Jei nežinote kuriai kategorijai priskirti jūsų žinomą vertimą jį įrašykite į lentelę be kategorijos, o jei tokios lentelės nėra ją sukurkite ir į ją įrašykite savo žinomus vertimus.
+</noinclude><div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; &nbsp; {{#ifeq:{{{1|}}}||Vertimai, kuriuos reikia sukategorizuoti|{{{1}}}}}</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |<noinclude>[[Kategorija:Formatavimo šablonai|{{PAGENAME}}]]</noinclude>

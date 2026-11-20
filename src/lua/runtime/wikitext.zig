@@ -10964,3 +10964,117 @@ test "caller bullet label separator survives a newline contributed by the transc
     try LiteralCurlyBoundaryFixture.check(";term\n: {{uc:k}}", ";term\n: K");
     try LiteralCurlyBoundaryFixture.check("*{{LabelWithNewline}}:: {{uc:k}}", "*" ++ label ++ ":: K");
 }
+
+// MediaWiki Preprocessor has an unconditional [[...]] stack entry; only -{...}-
+// depends on language conversion. The LT provider exercises a literal }} label.
+test "ordinary brace scanning keeps link scope independent of language conversion" {
+    const cases = [_]struct { source: []const u8, parameter: bool = false }{
+        .{ .source = "{{#if:yes|[[Target|<nowiki>{{</nowiki>name}}]]|no}}" },
+        .{ .source = "{{{value|[[Target|<nowiki>{{</nowiki>name}}]]}}}", .parameter = true },
+        .{ .source = "{{#if:yes|[[Target|{{#if:yes|label}}}}]]|no}}" },
+        .{ .source = "{{#if:yes|[[Target|label}}]][[Other|tail}}]]|no}}" },
+        .{ .source = "{{#if:yes|[[Target|{{{name|label}}}}}]]|no}}" },
+        .{ .source = "{{#if:yes|<nowiki>[[</nowiki>literal}}" },
+        .{ .source = "{{#if:yes|<!-- [[ }} -->literal}}" },
+    };
+    for (cases) |case| {
+        const width: usize = if (case.parameter) 3 else 2;
+        const expected = case.source.len - width;
+        const actual = if (case.parameter) preprocess.findParamEnd(case.source, 0) else preprocess.findTemplateEnd(case.source, 0);
+        try std.testing.expectEqual(expected, actual orelse return error.TestUnexpectedResult);
+        for ([_]bool{ false, true }) |enabled| {
+            var scan: preprocess.ExpansionScan = .{ .conversion_enabled = enabled };
+            const node = scan.next(case.source, 0, false) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(@as(usize, 0), node.construct.open);
+            try std.testing.expectEqual(expected, node.construct.close);
+            try std.testing.expectEqual(if (case.parameter) preprocess.ConstructKind.parameter else .template, node.construct.kind);
+        }
+    }
+    // Upstream leaves the enclosing construct unclosed when a real [[ never
+    // closes. A lone [ and entity text are not that stack entry.
+    for ([_][]const u8{
+        "{{#if:yes|[[Target|label}}",
+        "{{#if:yes|[[Target|label]}}",
+        "{{{value|[[Target|label}}}",
+        "{{#if:yes|[[Target|{{#if:yes|label}}}}",
+    }) |source| {
+        try std.testing.expect(preprocess.findTemplateEnd(source, 0) == null);
+        try std.testing.expect(preprocess.findParamEnd(source, 0) == null);
+    }
+    const lone = "{{#if:yes|[Target|label}}";
+    try std.testing.expectEqual(lone.len - 2, preprocess.findTemplateEnd(lone, 0).?);
+    const entity = "{{#if:yes|&#91;&#91;Target|label}}";
+    try std.testing.expectEqual(entity.len - 2, preprocess.findTemplateEnd(entity, 0).?);
+    const adjacent = "{{#if:yes|[[Target|label}}]]}}}}";
+    try std.testing.expectEqual(adjacent.len - 4, preprocess.findTemplateEnd(adjacent, 0).?);
+    const conversion = "{{#if:yes|-{a}}b}-|no}}";
+    try std.testing.expectEqual(std.mem.indexOf(u8, conversion, "}}b").?, preprocess.findTemplateEnd(conversion, 0).?);
+    var enabled: preprocess.ExpansionScan = .{ .conversion_enabled = true };
+    try std.testing.expectEqual(conversion.len - 2, enabled.next(conversion, 0, false).?.construct.close);
+}
+
+const LithuanianTranslationBraceSource = struct {
+    words: *const rt.namespace_registry.magic_words.Registry,
+    calls: usize = 0,
+    fn fixture(title: []const u8) ?[]const u8 {
+        if (std.mem.eql(u8, title, "Šablonas:trans-top")) return @embedFile("testdata/lt-link-brace01/trans-top.wikitext");
+        if (std.mem.eql(u8, title, "Šablonas:top")) return @embedFile("testdata/lt-link-brace01/top.wikitext");
+        return null;
+    }
+    fn exists(_: ?*anyopaque, title: []const u8) !bool {
+        return fixture(title) != null;
+    }
+    fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.words.resolve(name, .parser_function);
+    }
+    fn get(raw: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        self.calls += 1;
+        return fixture(title);
+    }
+};
+
+test "original Lithuanian translation header keeps literal closing braces inside its help link" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var runtime = try rt.Context.initProgram(a, 24, 1);
+    defer runtime.deinit();
+    var ns = try rt.namespace_registry.Registry.init(a, @embedFile("testdata/lt-link-brace01/namespace-registry.tsv"));
+    defer ns.deinit();
+    runtime.namespace_catalog = &ns;
+    var words = try rt.namespace_registry.magic_words.Registry.init(a, @embedFile("testdata/lt-link-brace01/magic-words.tsv"), "ltwiktionary", "20261001", "lt");
+    defer words.deinit();
+    try rt.bindGlobalTable(&runtime, null, 0);
+    try stdlib.install(&runtime);
+    try installTestHost(&runtime, 18, 23);
+    var source: LithuanianTranslationBraceSource = .{ .words = &words };
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23,
+        .provider = .{ .ctx = &source, .get = LithuanianTranslationBraceSource.get, .exists = LithuanianTranslationBraceSource.exists,
+            .resolve_parser_function = LithuanianTranslationBraceSource.parser, .language_conversion_enabled = false } };
+    const warning = "<div style=\"background-color: #f0fff0;\">\n:''Tolesni vertimai turi būti patikrinti ir įterpti pagal kategorijas į atitinkamą vertimų lentelę aukščiau. Jei atitinkamos lentelės nėra, ją sukurkite, nurodydami kategoriją, kuri paprastai sutampa su viena iš galimų žodžio reikšmių. Žr. [[Šablonas:top|<nowiki>{{</nowiki>trans-top}}]].\n''</div>";
+    const head = "<div class=\"NavFrame\" style=\"clear:both;\"><div class=\"NavHead\" align=\"left\">&nbsp; ";
+    const tail = "</div>\n<div class=\"NavContent\">\n{| border=\"0\" width=\"100%\" class=\"translations\"\n|-\n| bgcolor=\"#FFFFE0\" valign=\"top\" width=\"48%\" align=\"left\" |";
+    // Exact original actual p5024/r1756862 transclusion. This is the complete
+    // original provider, not a replacement template or a full article capture.
+    const expected_empty = warning ++ head ++ "Vertimai, kuriuos reikia patikrinti ir sukategorizuoti" ++ tail;
+    const actual = try expander.expandFragment("actual", "{{trans-top}}", 1_791_731_560);
+    try std.testing.expectEqualStrings(expected_empty, actual);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    // Nonempty source parameter selects the other branch and must not leave
+    // warning suffixes. It is a deliberate branch contrast, not the full
+    // ambasada Kategorija dependency expansion.
+    const named = try expander.expandFragment("ambasada", "{{trans-top|named}}", 1_791_731_560);
+    try std.testing.expectEqualStrings(head ++ "[[ambasada]]:&nbsp;named" ++ tail, named);
+    try std.testing.expect(!expander.unsupported_parser_function);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    const old_top = try expander.expandFragment("actual", "{{top|named}}", 1_791_731_560);
+    try std.testing.expectEqualStrings("<div class=\"NavFrame\" style=\"clear:both;\"><div class=\"NavHead\" align=\"left\">&nbsp; &nbsp; named" ++ tail, old_top);
+    // Direct ordinary expansion retains one complete help link, nested values,
+    // adjacent closers and conversion-disabled syntax without a second engine.
+    try std.testing.expectEqualStrings("[[Target|<nowiki>{{</nowiki>name}}]]", try expander.expandFragment("actual", "{{#if:yes|[[Target|<nowiki>{{</nowiki>name}}]]|no}}", 1_791_731_560));
+    try std.testing.expectEqualStrings("[[Target|actual}}]]", try expander.expandFragment("actual", "{{#if:yes|[[Target|{{PAGENAME}}}}]]|no}}", 1_791_731_560));
+    try std.testing.expectEqualStrings("-{T", try expander.expandFragment("actual", "{{#if:yes|-{T|ku-latn:{{PAGENAME}};ku-arab:مال}-|no}}", 1_791_731_560));
+}

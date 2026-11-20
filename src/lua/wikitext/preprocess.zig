@@ -866,14 +866,15 @@ fn findBraceConstructCached(s: []const u8, start: usize, forward_cache: *OpaqueP
             i += 2;
             continue;
         }
-        if (conversion_enabled and std.mem.startsWith(u8, s[i..], "[[")) {
+        // Link delimiters scope literal braces even without language conversion.
+        if (std.mem.startsWith(u8, s[i..], "[[")) {
             if (square == square_braces.len) return null;
             square_braces[square] = depth;
             square += 1;
             i += 2;
             continue;
         }
-        if (conversion_enabled and square != 0 and depth == square_braces[square - 1] and !conversion_here and std.mem.startsWith(u8, s[i..], "]]")) {
+        if (square != 0 and depth == square_braces[square - 1] and !conversion_here and std.mem.startsWith(u8, s[i..], "]]")) {
             square -= 1;
             i += 2;
             continue;

@@ -1,0 +1,50 @@
+<noinclude>
+
+Šio šablono naudojimas:
+
+<pre>
+{{trans-top|tipas1}}
+{{trans-mid}}
+{{trans-bottom}}
+
+{{trans-top|tipas2}}
+{{trans-mid}}
+{{trans-bottom}}
+
+{{trans-top|tipas3}}
+{{trans-mid}}
+{{trans-bottom}}
+
+{{trans-top|}} <!-- Vertimai, kuriuos reikia sukategorizuoti -->
+{{trans-mid}}
+{{trans-bottom}}
+
+Visi galimi parametrai (parametras tipas= pakeičia pirmą parametrą):
+
+{{trans-top|var=variantas|kt=kategorija|tipas=tipas}}
+{{trans-mid}}
+{{trans-bottom}}
+</pre>
+
+Jei nebėra, vertimų kuriuos sukategorizuoti, tai užkomentuokite lentelę be kategorijos.
+
+Jei nežinote kuriai kategorijai priskirti jūsų žinomą vertimą jį įrašykite į lentelę be kategorijos, o jei tokios lentelės nėra po visų vertimo lentelių sukurkite šią lentelę ir į ją įrašykite savo žinomus vertimus.
+</noinclude><!--
+
+-->{{#ifeq:{{{tipas|{{{1|{{{var|{{{kt|}}}}}}}}}}}}||<div style="background-color: #f0fff0;">
+:''Tolesni vertimai turi būti patikrinti ir įterpti pagal kategorijas į atitinkamą vertimų lentelę aukščiau. Jei atitinkamos lentelės nėra, ją sukurkite, nurodydami kategoriją, kuri paprastai sutampa su viena iš galimų žodžio reikšmių. Žr. [[Šablonas:top|<nowiki>{{</nowiki>trans-top}}]].
+{{#ifeq:{{NAMESPACE}}|{{ns:0}}|<!--[[Kategorija:Nesutvarkyti - nekategorizuoti vertimai]]-->}}''</div>}}<!--
+
+--><div class="NavFrame" style="clear:both;"><div class="NavHead" align="left">&nbsp; {{#ifeq:{{{tipas|{{{1|{{{var|{{{kt|}}}}}}}}}}}}||Vertimai, kuriuos reikia patikrinti ir sukategorizuoti|<!--
+
+-->[[{{{vardas|{{PAGENAME}}}}}]]:&nbsp;<!--
+
+-->{{#if:{{{var|}}}|{{{var}}}.&nbsp;}}<!--
+
+-->{{#if:{{{kt|}}}|{{Kategorija|{{{kt}}}{{#ifeq:{{{kalba|lt}}}|lt||/{{lang:{{{kalba}}}}}}}}}{{#if:{{{tipas|{{{1|}}}}}}|&nbsp;-&nbsp;}}}}{{{tipas|{{{1|}}}}}}}}<!--
+
+-->{{#switch:{{{1}}}|kalba=[[Kategorija:Kalbos/Lietuvių kalba|{{ucfirst:{{PAGENAME}}}}]]|Kalba=[[Kategorija:Kategorija:Kalbos/Lietuvių kalba|{{ucfirst:{{PAGENAME}}}}]]|šalis=[[Šalys/Lietuvių kalba|{{ucfirst:{{PAGENAME}}}}]]|Šalis=[[Šalys/Lietuvių kalba|{{ucfirst:{{PAGENAME}}}}]]}}</div>
+<div class="NavContent">
+{| border="0" width="100%" class="translations"
+|-
+| bgcolor="#FFFFE0" valign="top" width="48%" align="left" |<noinclude>[[Kategorija:Formatavimo šablonai|{{PAGENAME}}]]</noinclude>
