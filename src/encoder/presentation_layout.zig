@@ -2007,8 +2007,36 @@ fn ownedPersianNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
 // independently resolved Turkish record and its parsed Turkish headword.
 fn ownedTurkishNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
     const language = owner orelse return null;
-    if (!std.mem.eql(u8, language, "Türkçe") or section.level != 3 or
-        !std.mem.eql(u8, section.title, "Ad")) return null;
+    if (!std.mem.eql(u8, language, "Türkçe")) return null;
+    return turkishNounHeadwordPart(section, "tr");
+}
+
+// The original TR лӏэныгъ p582570/r4245541 authors Ad + ady-ad.
+// Its independently owned record retains an ady headword and ölüm sense.
+// Match the caller's classified code; the heading never assigns a language.
+fn ownedTurkishForeignNounPart(section: anytype, owner: ?[]const u8, owner_code: []const u8, wiki_id: []const u8) ?[]const u8 {
+    const language = owner orelse return null;
+    if (!std.mem.eql(u8, wiki_id, "trwiktionary") or
+        language.len == 0 or std.mem.eql(u8, language, "Unclassified") or
+        owner_code.len == 0) return null;
+    return turkishNounHeadwordPart(section, owner_code);
+}
+
+// A standalone source thumbnail between the headword and numbered senses is
+// illustration, as in Turkish etimoloji p599/r5692338. Its caption and image
+// action stay in the original block and cannot establish a sense or owner.
+fn turkishNounIllustration(block: wiki.Block) bool {
+    if (block.kind != .paragraph or block.depth != 0 or block.list_path.len != 0 or
+        block.spans.len != 0 or block.flow != null or block.container != null or
+        block.feature != null or block.table != null) return false;
+    const figure = block.figure orelse return false;
+    if (figure.format != .thumbnail or figure.map_fallback != null or figure.content != .image) return false;
+    const span = figure.content.image.span;
+    return span.provenance == .parsed and !span.generated_diagnostic and span.image != null;
+}
+
+fn turkishNounHeadwordPart(section: anytype, headword_language: []const u8) ?[]const u8 {
+    if (section.level != 3 or !std.mem.eql(u8, section.title, "Ad")) return null;
     const S = @TypeOf(section);
     if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or
         !@hasField(S, "title_list_path") or !@hasField(S, "title_spans")) return null;
@@ -2019,6 +2047,7 @@ fn ownedTurkishNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
         heading.kind != .text or heading.target.len != 0 or heading.image != null or
         heading.flags.code or !std.mem.eql(u8, heading.text, "Ad")) return null;
     var headword = false;
+    var seen_illustration = false;
     for (section.blocks) |block| {
         if (block.kind == .blank) continue;
         if (!headword) {
@@ -2027,13 +2056,17 @@ fn ownedTurkishNounPart(section: anytype, owner: ?[]const u8) ?[]const u8 {
             for (block.spans) |span| {
                 if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or span.image != null) return null;
                 if (span.role == .headword) {
-                    if (!span.flags.bold or !std.mem.eql(u8, span.language, "tr") or
+                    if (!span.flags.bold or !std.mem.eql(u8, span.language, headword_language) or
                         (span.kind != .text and span.kind != .link)) return null;
                     visible = visible or std.mem.trim(u8, span.text, " \t\r\n").len != 0;
                 }
             }
             if (!visible) return null;
             headword = true;
+            continue;
+        }
+        if (!seen_illustration and turkishNounIllustration(block)) {
+            seen_illustration = true;
             continue;
         }
         if (block.kind != .definition or block.depth != 1 or
@@ -2806,6 +2839,10 @@ pub fn buildForDictionaryWithSourceNumberedLexemes(a: A, sections: anytype, uncl
 }
 
 pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme, page_title: ?[]const u8) !Layout {
+    return buildForEntryWithClassifiedCode(a, sections, unclassified, owner, "", source_lexeme, wiki_id, numbered_proofs, page_title);
+}
+
+pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, owner_code: []const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme, page_title: ?[]const u8) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
     const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
@@ -2837,7 +2874,7 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
         };
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
-            aragoneseGrammarPart(section, owner, wiki_id) orelse ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
+            aragoneseGrammarPart(section, owner, wiki_id) orelse ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedTurkishForeignNounPart(section, owner, owner_code, wiki_id) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse (if (aromanian_noun) aromanianIndentedSenses(section.blocks) else null) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
         const meaning_paragraph = if (named_kind == null and paragraph_part == null and !unclassified)
@@ -14756,4 +14793,158 @@ test "Amharic edition keeps the Nng noun sense separate from its numbered citati
     other.level = 3;
     other.is_heading = false;
     try std.testing.expect(!dictionaryNounSection(other, "Nǁng", "amwiktionary"));
+}
+
+test "TR foreign Ad noun requires classified code and matching parsed headword in its own dictionary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const body = try renderer.renderBody("<strong class=\"Cyrl headword\" lang=\"ady\">лӏэныгъ</strong>\n# [[ölüm]]\n");
+    const Section = struct {
+        title: []const u8, level: u8, blocks: []const wiki.Block = &.{},
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "",
+        title_spans: []const wiki.Span = &.{},
+    };
+    const noun: Section = .{ .title = "Ad", .level = 3, .blocks = body, .title_spans = &.{.{ .text = "Ad" }} };
+    const sections = [_]Section{ .{ .title = "Adigece", .level = 2 }, noun };
+    try std.testing.expectEqualStrings("Noun", ownedTurkishForeignNounPart(noun, "Adigece", "ady", "trwiktionary") orelse return error.TestUnexpectedResult);
+    try std.testing.expectEqual(@as(usize, 1), (try buildForEntryWithClassifiedCode(a, &sections, false, "Adigece", "ady", null, "trwiktionary", &.{}, null)).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForDictionary(a, &sections, false, "Adigece", null, "trwiktionary")).lexemes.len);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForEntryWithClassifiedCode(a, &sections, true, "Adigece", "ady", null, "trwiktionary", &.{}, null)).lexemes.len);
+    for ([_][]const u8{ "", "en", "tr", "ady-Latn", "ady2" }) |code|
+        try std.testing.expect(ownedTurkishForeignNounPart(noun, "Adigece", code, "trwiktionary") == null);
+    for ([_]?[]const u8{ null, "", "Unclassified" }) |owner|
+        try std.testing.expect(ownedTurkishForeignNounPart(noun, owner, "ady", "trwiktionary") == null);
+    for ([_][]const u8{ "", "enwiktionary", "adywiktionary", "trwiktionary2" }) |wiki_id|
+        try std.testing.expect(ownedTurkishForeignNounPart(noun, "Adigece", "ady", wiki_id) == null);
+    for (0..10) |case| {
+        var changed = noun;
+        const blocks = try a.dupe(wiki.Block, body); changed.blocks = blocks;
+        const head = try a.dupe(wiki.Span, blocks[0].spans); blocks[0].spans = head;
+        var heading = [_]wiki.Span{.{ .text = "Ad" }}; changed.title_spans = &heading;
+        switch (case) {
+            0 => head[0].language = "tr",
+            1 => head[0].role = .normal,
+            2 => head[0].flags.bold = false,
+            3 => head[0].provenance = .protected_literal,
+            4 => head[0].generated_diagnostic = true,
+            5 => blocks[1].kind = .paragraph,
+            6 => changed.level = 4,
+            7 => changed.title = "ad",
+            8 => heading[0].provenance = .protected_literal,
+            9 => changed.title_list_path = "*",
+            else => unreachable,
+        }
+        try std.testing.expect(ownedTurkishForeignNounPart(changed, "Adigece", "ady", "trwiktionary") == null);
+    }
+    // The classified code, not a translated UI label, is compared to the headword.
+    try std.testing.expectEqualStrings("Noun", ownedTurkishForeignNounPart(noun, "Independent registered heading", "ady", "trwiktionary") orelse return error.TestUnexpectedResult);
+    try std.testing.expect(partOfSpeech("Ad") == null);
+}
+
+test "TR complete foreign noun and German missing translation records retain all bodies actions notices and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const encoder = @import("blob_encoder"); const types = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8, level: u8, blocks: []const wiki.Block,
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "",
+        title_spans: []const wiki.Span = &.{},
+    };
+    const cases = .{
+        .{ @embedFile("testdata/tr-foreign-noun01/ady-reader.json"), "fe7d5fc0f54a3e4a27b14ff5259be81cf5182aea302fe985800dba05b0ac373b", "лӏэныгъ", "Adigece", "ady" },
+        .{ @embedFile("testdata/tr-foreign-noun01/de-notice-reader.json"), "6433c9580db7ad4c1ca90bf8d21925a6608b365c6a90abb4930b56a99e6ce88d", "-jährig", "Almanca", "de" },
+    };
+    inline for (cases, 0..) |case, case_index| {
+        const fixture = case[0]; var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture, &digest, .{});
+        try std.testing.expectEqualStrings(case[1], &std.fmt.bytesToHex(digest, .lower));
+        const parsed = try std.json.parseFromSlice(struct { entries: []const types.Entry }, a, fixture, .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+        const before = parsed.value.entries[0];
+        try std.testing.expectEqualStrings(case[2], before.title);
+        try std.testing.expectEqualStrings(case[3], before.language orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualStrings(case[4], before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        const projected = try std.json.parseFromSlice(struct { entries: []const struct { sections: []const Section } }, a, fixture, .{ .ignore_unknown_fields = true });
+        const sections = try a.dupe(Section, projected.value.entries[0].sections);
+        // Only a build-time regression projection. The retained Reader is not
+        // an expansion capture and does not itself carry parser provenance.
+        for (sections, before.sections) |*section, typed_section| {
+            section.title_spans = try a.dupe(wiki.Span, &.{.{ .text = section.title }});
+            const blocks = try a.dupe(wiki.Block, section.blocks); section.blocks = blocks;
+            for (blocks, typed_section.blocks) |*block, typed_block| {
+                const spans = try a.dupe(wiki.Span, block.spans); block.spans = spans;
+                for (spans, typed_block.spans) |*span, typed_span| span.flags = .{
+                    .bold = typed_span.bold, .italic = typed_span.italic, .code = typed_span.code,
+                    .small = typed_span.small, .superscript = typed_span.superscript, .subscript = typed_span.subscript,
+                    .strike = typed_span.strike, .underline = typed_span.underline,
+                };
+            }
+        }
+        const layout = try buildForEntryWithClassifiedCode(a, sections, false, before.language, before.language_code, null, "trwiktionary", &.{}, before.title);
+        const expected_layout: types.Layout = if (case_index == 0) .{
+            .lexemes = &.{.{ .language = "Adigece", .kind = "Noun", .section = 3,
+                .definitions = &.{.{ .block = 1 }}, .introduction = &.{0}, .related_sections = &.{4} }},
+            .other_sections = &.{ 0, 1, 2 },
+        } else before.organization;
+        const typed = try std.json.parseFromSlice(types.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+        try std.testing.expectEqualDeep(expected_layout, typed.value);
+        if (case_index == 0) {
+            const sense = before.sections[3].blocks[1];
+            try std.testing.expect(sense.kind == .definition and sense.spans.len == 1);
+            try std.testing.expect(sense.spans[0].kind == .link);
+            try std.testing.expectEqualStrings("ölüm", sense.spans[0].text);
+            try std.testing.expectEqualStrings("ölüm", sense.spans[0].target);
+            try std.testing.expectEqualStrings("ady", before.sections[3].blocks[0].spans[0].language);
+        } else {
+            try std.testing.expect(std.mem.indexOf(u8, fixture, "Bu tanımın Türkçe çevirisi") != null);
+        }
+        var expected: types.Stored = .{ .entry = before }; expected.entry.organization = expected_layout;
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, expected);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, before.title, .language, .{ .heading = before.language.?, .code = before.language_code });
+        try std.testing.expectEqualDeep(expected, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        var restored = decoded; restored.entry.organization = before.organization;
+        try std.testing.expectEqualDeep(types.Stored{ .entry = before }, restored);
+    }
+}
+
+test "Turkish noun keeps a standalone thumbnail between its headword and numbered senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try @import("namespace_registry").Registry.init(a, ControlledFigureFixture.namespace_bytes);
+    defer namespaces.deinit();
+    var styles = try @import("table_style_profile.zig").parseAlloc(a, "");
+    defer styles.deinit();
+    const input: ControlledFigureFixture = .{ .file = "Example.jpg", .width = 275 };
+    var renderer: wiki.Renderer = .{ .a = a, .content_root = .parser_output, .context = .{
+        .namespace_catalog = &namespaces, .table_styles = &styles, .figure_sizing = input.source(&namespaces),
+    } };
+    const Section = struct {
+        title: []const u8 = "Ad", level: u8 = 3, blocks: []const wiki.Block,
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "",
+        title_spans: []const wiki.Span = &.{.{ .text = "Ad" }},
+    };
+    const headword = (try renderer.renderBody("<strong class=\"Latn headword\" lang=\"tr\">etimoloji</strong>"))[0];
+    const illustration = (try renderer.renderBody("[[File:Example.jpg|thumb|275px|''caption'']]"))[0];
+    try std.testing.expect(turkishNounIllustration(illustration));
+    const definitions = try renderer.renderBody("# Sözcüklerin kökenini araştıran bilim dalı.\n# Bir sözcüğün kökeni.");
+    const blocks = [_]wiki.Block{headword, illustration, definitions[0], definitions[1]};
+    const section: Section = .{ .blocks = &blocks };
+    const layout = try buildOwned(a, &[_]Section{section}, "Türkçe");
+    try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", layout.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 2), layout.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 2), layout.lexemes[0].definitions[0].block);
+    try std.testing.expectEqual(@as(usize, 3), layout.lexemes[0].definitions[1].block);
+    var altered = blocks;
+    const changed: Section = .{ .blocks = &altered };
+    altered[1] = (try renderer.renderBody("[[:File:Example.jpg|caption]]"))[0];
+    try std.testing.expect(ownedTurkishNounPart(changed, "Türkçe") == null);
+    altered[1] = illustration;
+    altered[1].spans = &.{.{ .text = "prose" }};
+    try std.testing.expect(ownedTurkishNounPart(changed, "Türkçe") == null);
+    altered[1] = illustration;
+    altered[2] = illustration;
+    try std.testing.expect(ownedTurkishNounPart(changed, "Türkçe") == null);
 }

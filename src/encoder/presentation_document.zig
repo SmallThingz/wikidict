@@ -2121,8 +2121,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         }
         break :lexical .{ .section = selected orelse break :lexical null, .kind = proof.kind, .definition_text = proof.definition_text };
     };
-    const layout = try semantic.buildForEntry(a, work.sections, synthetic_unclassified,
-        if (classified_owner) |owner| owner.heading else null, source_lexeme,
+    const layout = try semantic.buildForEntryWithClassifiedCode(a, work.sections, synthetic_unclassified,
+        if (classified_owner) |owner| owner.heading else null,
+        if (classified_owner) |owner| owner.code else "", source_lexeme,
         if (namespace_catalog) |catalog| catalog.wiki else "", numbered_lexemes.items, title);
     const codec_phase = consume_diagnostics.beginConsumePhase(.codec);
     defer consume_diagnostics.endConsumePhase(codec_phase);
@@ -16242,4 +16243,47 @@ test "Tulu noun section retains the five authored links in their original senses
     }
     try std.testing.expectEqualStrings("________________", blocks[noun.definitions[5].block].spans[0].text);
     try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+}
+
+test "normal TR Document forwards only the validated owner code to foreign Ad noun organization" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var namespaces = try NamespaceRegistry.init(a, @embedFile("testdata/tr-foreign-noun01/namespace-registry.tsv"));
+    defer namespaces.deinit();
+    try std.testing.expectEqualStrings("trwiktionary", namespaces.wiki);
+    // Source-instantiated excerpt: the original article's Ad heading and ölüm
+    // line, with the retained parsed headword's exact language/role. This is
+    // not a claim that the complete article expansion was captured.
+    const source = "==Adigece==\n===Ad===\n<strong class=\"Cyrl headword\" lang=\"ady\">лӏэныгъ</strong>\n# [[ölüm]]\n";
+    const title = "лӏэныгъ";
+    const owner: ClassifiedLanguage = .{ .heading = "Adigece", .code = "ady" };
+    const bytes = try compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner.heading, owner.code,
+        MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, owner);
+    const actual = try codec.decodeAlloc(a, bytes, title, .language, .{ .heading = owner.heading, .code = owner.code });
+    try std.testing.expectEqual(@as(usize, 1), actual.entry.organization.lexemes.len);
+    const noun = actual.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Adigece", noun.language);
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions[0].block);
+    const spans = actual.entry.sections[noun.section].blocks[noun.definitions[0].block].spans;
+    try std.testing.expectEqual(@as(usize, 1), spans.len);
+    try std.testing.expect(spans[0].kind == .link);
+    try std.testing.expectEqualStrings("ölüm", spans[0].text);
+    try std.testing.expectEqualStrings("ölüm", spans[0].target);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, actual));
+    for (0..3) |case| {
+        const code: []const u8 = if (case == 2) "en" else "ady";
+        const selected: ?ClassifiedLanguage = if (case == 0) null else .{ .heading = "Adigece", .code = code };
+        const encoded = try compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, "Adigece", code,
+            MissingText.untracked(source), null, .{}, if (case == 1) null else &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, selected);
+        const refused = try codec.decodeAlloc(a, encoded, title, .language, .{ .heading = "Adigece", .code = code });
+        try std.testing.expectEqual(@as(usize, 0), refused.entry.organization.lexemes.len);
+        var restored = actual;
+        restored.entry.organization = refused.entry.organization;
+        restored.entry.language_code = refused.entry.language_code;
+        try std.testing.expectEqualDeep(refused, restored);
+    }
+    try std.testing.expectError(error.InvalidClassifiedLanguage, compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, "Adigece", "ady",
+        MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "English", .code = "en" }));
 }

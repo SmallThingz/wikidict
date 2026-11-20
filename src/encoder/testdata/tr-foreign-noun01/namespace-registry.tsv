@@ -1,0 +1,36 @@
+# wikidict-namespace-registry-v1
+# wiki	trwiktionary
+# dump-date	20261001
+# content-language	tr
+-2	Ortam	Media	case-sensitive	0	0	0		compile_only	virtual_namespace	Medya
+-1	Özel	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Tartışma	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	T
+2	Kullanıcı	User	first-letter	1	0	0		compile_only	standard_build_input	K
+3	Kullanıcı mesaj	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Vikisözlük	Project	case-sensitive	1	0	0		compile_only	standard_build_input	VS	WT	Wiktionary
+5	Vikisözlük tartışma	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Dosya	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Resim
+7	Dosya tartışma	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk	Resim tartışma
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MedyaViki
+9	MediaWiki tartışma	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MedyaViki tartışma
+10	Şablon	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Ş
+11	Şablon tartışma	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Yardım	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Y
+13	Yardım tartışma	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Kategori	Category	case-sensitive	0	0	0		compile_only	standard_build_input	KAT
+15	Kategori tartışma	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+100	Portal	Portal	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	P
+101	Portal tartışma	Portal tartışma	case-sensitive	1	0	0		compile_only	discussion_namespace
+102	YeniKurum	YeniKurum	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+103	YeniKurum tartışma	YeniKurum tartışma	case-sensitive	1	0	0		compile_only	discussion_namespace
+104	Ek	Ek	case-sensitive	1	0	0		supplemental	unclassified_subject_retained
+105	Ek tartışma	Ek tartışma	case-sensitive	1	0	0		compile_only	discussion_namespace
+106	Alıntılar	Alıntılar	case-sensitive	1	0	0		supplemental	unclassified_subject_retained	A
+107	Alıntılar tartışma	Alıntılar tartışma	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modül	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modül tartışma	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
