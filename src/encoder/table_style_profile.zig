@@ -8448,6 +8448,7 @@ fn containerColorAlloc(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.
 fn containerBorderAlloc(a: std.mem.Allocator, raw: []const u8) std.mem.Allocator.Error!?types.ContainerBorder {
     const value = trim(raw);
     if (try borderAlloc(a, value)) |border| return switch (border) {
+        .resolved_edges => return null,
         .none => @as(types.ContainerBorder, .none),
         .solid => |solid| .{ .solid = .{ .width = solid.width, .color = .{ .rgb = solid.color } } },
         .edges => |sides| .{ .edges = .{ .top = containerEdgeFromStyle(sides.top), .right = containerEdgeFromStyle(sides.right),
@@ -13537,7 +13538,7 @@ fn projectTableCorners(style: *types.TableStyle, winners: Winners) bool {
     const selected = winners.value(.corner_radii) orelse return false;
     if (selected != .corner_radii or style.collapse != .separate or types.tableStyleIsInline(style.*)) return true;
     const border = style.border orelse return true;
-    switch (border) { .none, .solid => {}, .edges => return true }
+    switch (border) { .none, .solid => {}, .edges, .resolved_edges => return true }
     style.corner_radii = selected.corner_radii;
     return false;
 }
@@ -33835,4 +33836,65 @@ test "conditional source applicability binds inventory snapshots and observed fo
     try std.testing.expect(!conditional_snapshot.current());
     @constCast(conditional.retained_sources)[0].unknown_applicability = true;
     try std.testing.expect(conditional_snapshot.current());
+}
+
+
+test "resolved border compatibility refuses corner projection without changing legacy raw container borders" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const radius: types.StyleLength = .{ .unit = .px, .value = 4 };
+    const corners: types.TableCornerRadii = .{
+        .top_left = radius, .top_right = radius, .bottom_right = radius, .bottom_left = radius,
+    };
+    var winners: Winners = .{};
+    winners.add(.{ .property = .corner_radii, .value = .{ .corner_radii = corners }, .important = false, .order = 0 }, 0, false, true);
+    const width: types.StyleLength = .{ .unit = .px, .value = 1 };
+    for ([_]types.StyleBorderPaint{ .{ .rgb = "#abcdef" }, .owner_current_color }) |paint| {
+        const stroke: types.ResolvedStyleBorderLine = .{ .width = width, .paint = paint };
+        for ([_]types.ResolvedStyleBorderEdge{
+            .none, .hidden, .{ .solid = stroke }, .{ .dotted = stroke }, .{ .inset = stroke }, .{ .outset = stroke },
+        }) |edge| {
+            const border: types.StyleBorder = .{ .resolved_edges = types.ResolvedStyleBorderEdges.all(edge) };
+            try std.testing.expect(types.validBorder(border));
+            var style: types.TableStyle = .{ .collapse = .separate, .border = border };
+            const before = style;
+            try std.testing.expect(projectTableCorners(&style, winners));
+            try std.testing.expect(style.corner_radii == null);
+            try std.testing.expectEqualDeep(before, style);
+        }
+    }
+    for ([_]types.StyleBorder{
+        .none, .{ .solid = .{ .width = width, .color = "#abcdef" } },
+    }) |border| {
+        var style: types.TableStyle = .{ .collapse = .separate, .border = border };
+        try std.testing.expect(!projectTableCorners(&style, winners));
+        try std.testing.expectEqualDeep(corners, style.corner_radii orelse return error.TestUnexpectedResult);
+        try std.testing.expectEqualDeep(border, style.border orelse return error.TestUnexpectedResult);
+    }
+    var old_edges: types.TableStyle = .{ .collapse = .separate, .border = .{ .edges = types.StyleBorderEdges.all(.hidden) } };
+    const before_edges = old_edges;
+    try std.testing.expect(projectTableCorners(&old_edges, winners));
+    try std.testing.expectEqualDeep(before_edges, old_edges);
+
+    for ([_][]const u8{ "none", "0" }) |raw| {
+        const border = (try containerBorderAlloc(a, raw)) orelse return error.TestUnexpectedResult;
+        try std.testing.expect(border == .none);
+    }
+    const solid = (try containerBorderAlloc(a, "1px solid #abcdef")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.ContainerBorder{ .solid = .{ .width = width, .color = .{ .rgb = "#abcdef" } } }, solid);
+    // Raw borderAlloc currently emits only None/Solid. Existing raw physical
+    // edges come through the component cascade, not an injected return variant.
+    var cascade: BorderCascade = .{};
+    cascade.add(try borderUpdateAlloc(a, "border", "1px dotted #abcdef", null), .{}, false);
+    const resolved = cascade.result();
+    try std.testing.expect(!resolved.unresolved);
+    const dotted = resolved.value orelse return error.TestUnexpectedResult;
+    const dotted_edge: types.ContainerBorderEdge = .{ .dotted = .{ .width = width, .color = .{ .rgb = "#abcdef" } } };
+    try std.testing.expectEqualDeep(types.ContainerBorder{ .edges = types.ContainerBorderEdges.all(dotted_edge) }, dotted);
+    const old_style = styleBorderFromContainer(dotted) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualDeep(types.StyleBorder{ .edges = types.StyleBorderEdges.all(.{ .dotted = .{ .width = width, .color = "#abcdef" } }) }, old_style);
+    try std.testing.expectEqualDeep(dotted_edge, containerEdgeFromStyle(old_style.edges.top));
+    // No raw parser currently issues resolved_edges, so the new exhaustive
+    // containerBorderAlloc refusal arm has no honest directly injectable input.
 }

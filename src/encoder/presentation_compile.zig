@@ -1457,6 +1457,8 @@ const NativeRubyUnitlessLineHeight = struct {
 };
 
 pub const Style = struct {
+    // End of the borrowed child text for a matched inline formatting element.
+    display_space_end: ?[*]const u8 = null,
     ordinary_action_script: ?*OrdinaryActionScriptBinding = null,
     ordinary_action_entity: ?[]const u8 = null,
     ordinary_action_origin: ?*OrdinaryActionGroupBinding = null,
@@ -10706,18 +10708,21 @@ pub const Renderer = struct {
         }
         return out.toOwnedSlice() catch return error.OutOfMemory;
     }
-    fn colonDisplaySpaces(a: A, value: []const u8) A.Error![]const u8 {
-        var at = std.mem.indexOf(u8, value, " : ") orelse return value;
+    fn colonDisplaySpaces(a: A, value: []const u8, at_node_end: bool) A.Error![]const u8 {
         var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(a);
         var start: usize = 0;
-        while (true) {
+        var search: usize = 0;
+        while (std.mem.indexOfPos(u8, value, search, " :")) |at| {
+            search = at + 2;
+            if (search == value.len) {
+                if (!at_node_end) break;
+            } else if (value[search] != ' ') continue;
             try out.appendSlice(a, value[start..at]);
             try out.appendSlice(a, "\u{a0}");
             start = at + 1;
-            // The trailing space may also precede another colon.
-            at = std.mem.indexOfPos(u8, value, start + 1, " : ") orelse break;
         }
+        if (start == 0) return value;
         try out.appendSlice(a, value[start..]);
         return out.toOwnedSlice(a);
     }
@@ -10733,12 +10738,11 @@ pub const Renderer = struct {
             }
             return self.plain(raw[cursor..], style);
         }
-        // Parsoid inserts an mw:DisplaySpace before the colon in prose such as
-        // "label : term". Both surrounding spaces must belong to this text run;
-        // a token boundary alone does not establish the next DOM character.
+        // A token boundary alone does not establish the next DOM character.
+        // Matched markup can prove that a terminal colon ends its text node.
         const value = if (style.provenance == .parsed and !style.preserve_whitespace and
             !style.code and !self.pre_block and !self.parsed_pre and !self.inline_image_attribute)
-            try colonDisplaySpaces(self.a, raw)
+            try colonDisplaySpaces(self.a, raw, style.display_space_end == raw.ptr + raw.len)
         else raw;
         if (style.preserve_whitespace or std.mem.indexOfAny(u8, value, "\r\n") == null) return self.text(value, style);
         var out: std.ArrayList(u8) = .empty;
@@ -18379,15 +18383,22 @@ pub const Renderer = struct {
     fn hasEmBorderEdge(edge: presentation_types.StyleBorderEdge) bool {
         return switch (edge) { .none, .hidden => false, .solid, .dotted => |line| line.width.unit == .em };
     }
+    fn hasEmResolvedBorderEdge(edge: presentation_types.ResolvedStyleBorderEdge) bool {
+        return switch (edge) { .none, .hidden => false, .solid, .dotted, .inset, .outset => |line| line.width.unit == .em };
+    }
     fn hasEmBorder(border: presentation_types.StyleBorder) bool {
         return switch (border) {
             .none => false,
             .solid => |solid| solid.width.unit == .em,
             .edges => |edges| hasEmBorderEdge(edges.top) or hasEmBorderEdge(edges.right) or hasEmBorderEdge(edges.bottom) or hasEmBorderEdge(edges.left),
+            .resolved_edges => |edges| hasEmResolvedBorderEdge(edges.top) or hasEmResolvedBorderEdge(edges.right) or hasEmResolvedBorderEdge(edges.bottom) or hasEmResolvedBorderEdge(edges.left),
         };
     }
     fn rebaseEmBorderEdge(edge: *presentation_types.StyleBorderEdge, scale: f32) bool {
         return switch (edge.*) { .none, .hidden => true, .solid, .dotted => |*line| rebaseEmLength(&line.width, scale) };
+    }
+    fn rebaseEmResolvedBorderEdge(edge: *presentation_types.ResolvedStyleBorderEdge, scale: f32) bool {
+        return switch (edge.*) { .none, .hidden => true, .solid, .dotted, .inset, .outset => |*line| rebaseEmLength(&line.width, scale) };
     }
     fn rebasedEmBorder(value: presentation_types.StyleBorder, scale: f32) ?presentation_types.StyleBorder {
         var result = value;
@@ -18399,6 +18410,10 @@ pub const Renderer = struct {
             .edges => |*edges| {
                 if (!rebaseEmBorderEdge(&edges.top, scale) or !rebaseEmBorderEdge(&edges.right, scale) or
                     !rebaseEmBorderEdge(&edges.bottom, scale) or !rebaseEmBorderEdge(&edges.left, scale)) return null;
+            },
+            .resolved_edges => |*edges| {
+                if (!rebaseEmResolvedBorderEdge(&edges.top, scale) or !rebaseEmResolvedBorderEdge(&edges.right, scale) or
+                    !rebaseEmResolvedBorderEdge(&edges.bottom, scale) or !rebaseEmResolvedBorderEdge(&edges.left, scale)) return null;
             },
         }
         return result;
@@ -24002,6 +24017,24 @@ pub const Renderer = struct {
         return projection;
     }
 
+    fn safeHtmlClassNames(self: *Renderer, tag: syntax.Tag) Error![]const u8 {
+        const classes = (try self.semanticAttribute(tag, "class")) orelse return "";
+        var safe_classes: std.ArrayList(u8) = .empty;
+        defer safe_classes.deinit(self.a);
+        var tokens = std.mem.tokenizeAny(u8, classes, " \t\r\n");
+        while (tokens.next()) |class| {
+            var safe = class.len != 0;
+            for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
+                safe = false;
+                break;
+            };
+            // Media ownership is compiler-generated metadata, never an authored CSS capability.
+            if (!safe or std.mem.startsWith(u8, class, "wikidict-media-file-")) continue;
+            if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
+            try safe_classes.appendSlice(self.a, class);
+        }
+        return safe_classes.toOwnedSlice(self.a);
+    }
     fn htmlInlineStyle(self: *Renderer, tag: syntax.Tag, style: Style) Error!Style {
         var s = style;
         if ((tag.is("sup") or tag.is("sub")) and
@@ -24017,21 +24050,10 @@ pub const Renderer = struct {
         if (oneOf(tag.name, &.{ "code", "tt", "kbd", "samp" })) s.code = true;
         if (try self.htmlFontWeightIn(tag, style.text_element, style.bold, style.language)) |bold| s.bold = bold;
         if (try self.htmlFontStyleIn(tag, style.text_element, style.italic, style.language)) |italic| s.italic = italic;
-        if ((try self.semanticAttribute(tag, "class"))) |classes| {
-            const decoded_classes = classes;
-            var safe_classes: std.ArrayList(u8) = .empty;
-            defer safe_classes.deinit(self.a);
-            var tokens = std.mem.tokenizeAny(u8, decoded_classes, " \t\r\n");
+        const safe_classes = try self.safeHtmlClassNames(tag);
+        if (safe_classes.len != 0) {
+            var tokens = std.mem.tokenizeAny(u8, safe_classes, " \t\r\n");
             while (tokens.next()) |class| {
-                var safe = class.len != 0;
-                for (class) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
-                    safe = false;
-                    break;
-                };
-                // Media ownership is compiler-generated metadata, never an authored CSS capability.
-                if (!safe or std.mem.startsWith(u8, class, "wikidict-media-file-")) continue;
-                if (safe_classes.items.len != 0) try safe_classes.append(self.a, ' ');
-                try safe_classes.appendSlice(self.a, class);
                 if (std.mem.eql(u8, class, "scribunto-error")) self.fallbacks.rendered_lua_error = true;
                 if (std.mem.eql(u8, class, "ext-phonos-error")) self.fallbacks.rendered_extension_error = true;
                 if (std.mem.eql(u8, class, "headword-line") or std.mem.eql(u8, class, "headword")) s.role = .headword;
@@ -24042,12 +24064,8 @@ pub const Renderer = struct {
                     if (self.semantic_capture) |hints| hints.relation_note = true;
                 }
             }
-            if (safe_classes.items.len != 0) {
-                s.classes = if (s.classes.len == 0)
-                    try self.a.dupe(u8, safe_classes.items)
-                else
-                    try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes.items });
-            }
+            s.classes = if (s.classes.len == 0) safe_classes else
+                try std.fmt.allocPrint(self.a, "{s} {s}", .{ s.classes, safe_classes });
         }
         // Only authored abbreviation titles are semantic explanations. An
         // explicit empty title clears inherited meaning; missing titles inherit.
@@ -28680,6 +28698,9 @@ pub const Renderer = struct {
         }
         defer self.block_formatting = inherited_formatting;
         const content = input[tag.end..pair.inner_end];
+        if (matched != null and !self.in_template_literal_scope and std.mem.endsWith(u8, content, " :") and
+            oneOf(tag.name, &.{ "b", "strong", "i", "em" }))
+            s.display_space_end = content.ptr + content.len;
         const previous_action_script = self.ordinary_action_script_active;
         var active_action_script: ?*OrdinaryActionScriptBinding = null;
         if (tag.is("sup") and style.ordinary_action_origin != null) {
@@ -37263,6 +37284,20 @@ pub const Renderer = struct {
         return !(try self.htmlTableInlineDisplay(tag) orelse return false);
     }
 
+    // An active empty behavior switch precedes the later HTML block pass.
+    // Keep this separate from wiki-table recognition, whose earlier physical
+    // delimiter cannot be created by removing a control. Return only a borrowed
+    // complete TABLE suffix; TOC, unknown, protected and visible prefixes stay.
+    fn leadingControlledHtmlTableSource(input: []const u8, matcher: ?syntax.ControlMatcher) []const u8 {
+        const offset = syntax.leadingBehaviorControlOffset(input, matcher);
+        if (offset == 0 or offset >= input.len) return input;
+        const candidate = input[offset..];
+        const tag = syntax.tagAt(candidate, 0) orelse return input;
+        if (!tag.is("table") or tag.closing or tag.self_closing or tag.html_pre or
+            syntax.matchingTag(candidate, tag) == null) return input;
+        return candidate;
+    }
+
     fn inlineBodyContainer(self: *Renderer, input: []const u8, start: usize, line_end: usize) Error!?InlineBodyContainer {
         const interrupted_target_domain = self.interruptedBodyTargetDomain();
         var rejected_opening: ?usize = null;
@@ -37830,9 +37865,12 @@ pub const Renderer = struct {
             // opening-only logical line or its independently scanned children.
             const hidden_include_root = !self.pre_block and !self.parsed_pre and
                 !link_label_scope and !self.in_reference and self.body_link_target.len == 0;
-            const html_tag = if (noinclude_table_line != null) null else if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
+            const html_source = if (!anchored_inline and clean.ptr == line.ptr and hidden_include_root)
+                leadingControlledHtmlTableSource(clean, control_matcher)
+            else clean;
+            const html_tag = if (noinclude_table_line != null) null else if (try self.semanticTagAt(html_source, 0)) |tag| (if (!tag.closing and
                 (bodyWrapperTag(tag, hidden_include_root) or self.tableConstructedFloatingSpan(tag)) and
-                blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
+                blockWrapperPair(if (tag.is("p") or tag.is("includeonly")) input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..] else html_source, tag, self.behaviorControlMatcher()) != null) tag else null) else null;
             const protected_tag = if (try self.semanticTagAt(clean, 0)) |tag| (if (!tag.closing and
                 (tag.is("pre") or tag.is("source") or tag.is("syntaxhighlight"))) tag else null) else null;
             // Horizontal rules precede behavior-control removal and require an
@@ -38048,7 +38086,7 @@ pub const Renderer = struct {
                 previous_list_path = previous_list_path[0..retained];
             }
             if (html_tag) |tag| {
-                const wrapper_source = if (tag.is("div") or tag.is("p") or tag.is("includeonly")) input[@intFromPtr(clean.ptr) - @intFromPtr(input.ptr) ..] else clean;
+                const wrapper_source = if (tag.is("div") or tag.is("p") or tag.is("includeonly")) input[@intFromPtr(html_source.ptr) - @intFromPtr(input.ptr) ..] else html_source;
                 const pair = blockWrapperPair(wrapper_source, tag, self.behaviorControlMatcher()).?;
                 const previous_parent_operation = self.table_parent_container_operation;
                 const previous_parent_table_styles = self.context.table_styles;
@@ -38192,6 +38230,14 @@ pub const Renderer = struct {
                     const parent_text_align = alignment_parent_attributes.text_align;
                     self.body_formatting_attributes.text_align = try self.htmlTextAlignment(tag, parent_text_align);
                     defer self.body_formatting_attributes = alignment_parent_attributes;
+                    if (tag.is("div") and self.body_formatting_attributes.text_align == null) {
+                        // A physical DIV owns authored class metadata only inside its body.
+                        // Reopened formatting/actions after its close retain their own owners.
+                        const own_classes = try self.safeHtmlClassNames(tag);
+                        if (own_classes.len != 0) self.body_formatting_attributes.classes =
+                            if (alignment_parent_attributes.classes.len == 0) own_classes else
+                                try std.fmt.allocPrint(self.a, "{s} {s}", .{ alignment_parent_attributes.classes, own_classes });
+                    }
                     if (self.body_formatting_attributes.text_align != null) {
                         // Aligned cells now retain this wrapper's blocks. Carry
                         // the same metadata as their former inline projection.
@@ -48387,13 +48433,23 @@ test "block opener boundary fixture retains definition-list punctuation and prot
     const blocks = try r.renderBody("<blockquote>; term : lexical detail</blockquote>\n<blockquote>\n; real term : real detail\n</blockquote>\n<div><nowiki># protected literal</nowiki></div>");
     try std.testing.expectEqual(@as(usize, 4), blocks.len);
     try std.testing.expectEqual(Kind.paragraph, blocks[0].kind);
-    try std.testing.expectEqualStrings("; term : lexical detail", try flattened(a, blocks[0].spans));
+    // A same-line semicolon is lexical. Parsoid applies its display-space
+    // rule to this paragraph's text node after parsing the block boundary.
+    try std.testing.expectEqualStrings("; term\u{a0}: lexical detail", try flattened(a, blocks[0].spans));
     try std.testing.expectEqual(Kind.term, blocks[1].kind);
     try std.testing.expectEqualStrings("real term", try flattened(a, blocks[1].spans));
     try std.testing.expectEqual(Kind.list_detail, blocks[2].kind);
     try std.testing.expectEqualStrings("real detail", try flattened(a, blocks[2].spans));
     try std.testing.expectEqual(Kind.paragraph, blocks[3].kind);
     try std.testing.expectEqualStrings("# protected literal", try flattened(a, blocks[3].spans));
+
+    var lexical: Renderer = .{ .a = a, .context = .{} };
+    const controls = try lexical.renderBody("<blockquote><nowiki>; term : lexical detail</nowiki></blockquote>\n<blockquote>; term :word</blockquote>");
+    try std.testing.expectEqual(@as(usize, 2), controls.len);
+    try std.testing.expectEqual(Kind.paragraph, controls[0].kind);
+    try std.testing.expectEqualStrings("; term : lexical detail", try flattened(a, controls[0].spans));
+    try std.testing.expectEqual(Kind.paragraph, controls[1].kind);
+    try std.testing.expectEqualStrings("; term :word", try flattened(a, controls[1].spans));
 }
 
 test "block opener boundary fixture retains later physical headings tables and closing tails" {
@@ -59514,10 +59570,30 @@ test "Azerbaijani translation labels preserve the same-node display space and or
     try std.testing.expectEqualStrings("qaraqalpaqca\u{a0}: Til", try flattened(a, blocks[1].spans));
     try std.testing.expectEqualStrings("söz", blocks[0].spans[blocks[0].spans.len - 1].target);
     try std.testing.expectEqualStrings("Til", blocks[1].spans[blocks[1].spans.len - 1].target);
-    try std.testing.expectEqualStrings("a\u{a0}:\u{a0}: b :word", try Renderer.colonDisplaySpaces(a, "a : : b :word"));
+    try std.testing.expectEqualStrings("a\u{a0}:\u{a0}: b :word", try Renderer.colonDisplaySpaces(a, "a : : b :word", false));
     var pre: Renderer = .{ .a = a, .context = .{} };
     const literal = try pre.renderBody("<pre>literal : value</pre>");
     try std.testing.expectEqualStrings("literal : value", try flattened(a, literal[0].spans));
+}
+
+test "paired emphasis preserves terminal colon display space and lexical continuations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const body = try r.renderBody("'''Mənalar :''' [[next]] and <em>one : two :</em>");
+    try std.testing.expectEqual(@as(usize, 1), body.len);
+    try std.testing.expectEqualStrings("Mənalar\u{a0}: next and one\u{a0}: two\u{a0}:", try flattened(a, body[0].spans));
+    try std.testing.expect(body[0].spans[0].flags.bold);
+    try std.testing.expect(body[0].spans[body[0].spans.len - 1].flags.italic);
+    var action = false;
+    for (body[0].spans) |span| if (span.kind == .link and std.mem.eql(u8, span.target, "next")) {
+        action = true;
+    };
+    try std.testing.expect(action);
+    var limits: Renderer = .{ .a = a, .context = .{} };
+    const controls = try limits.renderBody("<b>left :word</b> <code>raw :</code> <b><nowiki>protected :</nowiki></b>");
+    try std.testing.expectEqualStrings("left :word raw : protected :", try flattened(a, controls[0].spans));
 }
 
 test "leading category line cleanup preserves visible trails NBSP literal and interior spaces" {
@@ -77130,7 +77206,7 @@ test "horizontal rule keeps following ordinary table and nested grid as complete
                         try std.testing.expectEqual(blob.presentation_types.StyleLengthUnit.px, solid.width.unit);
                         try std.testing.expectEqual(@as(f32, 1), solid.width.value);
                     },
-                    .none, .edges => return error.TestUnexpectedResult,
+                    .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
                 }
                 self.floated += 1;
             }
@@ -122138,4 +122214,132 @@ test "Azerbaijani translation labels preserve a caller colon as paragraph text a
     const indented = try ordinary.renderBody("* label\n" ++ tail);
     try std.testing.expectEqualStrings(":", indented[1].list_path);
     try std.testing.expectEqualStrings("[[|]] (ky)", try flattened(a, indented[1].spans));
+}
+
+test "active empty controls expose only a complete HTML table to the ordinary block constructor" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const table = "<table><tr><td>[[Keep|kept]]</td></tr></table>";
+    const suffix = "tail [[After|after]]";
+    const reference_source = table ++ suffix;
+    var styles = try table_style_profile.parseAlloc(a, "");
+    defer styles.deinit();
+    const context: Context = .{ .title = "Entry", .language = "English", .table_styles = &styles, .text_paint_styles = &styles };
+    for ([_][]const u8{ "__NOTITLECONVERT__", "__NOTOC____NOEDITSECTION__" }) |prefix| {
+        const source = try std.mem.concat(a, u8, &.{ prefix, reference_source });
+        const selected = Renderer.leadingControlledHtmlTableSource(source, null);
+        try std.testing.expect(selected.ptr == source.ptr + prefix.len);
+        try std.testing.expectEqualStrings(reference_source, selected);
+        var actual: Renderer = .{ .a = a, .context = context };
+        var expected: Renderer = .{ .a = a, .context = context };
+        const tracked: MissingText = .{ .bytes = source, .unknown = true };
+        const actual_blocks = try actual.renderBodyWithMissing(tracked);
+        const expected_blocks = try expected.renderBodyWithMissing(.{ .bytes = reference_source, .unknown = true });
+        try std.testing.expect(actual_blocks.len >= 1 and actual_blocks[0].table != null);
+        try std.testing.expectEqualDeep(try FormattingScopeTest.encode(a, &expected, expected_blocks),
+            try FormattingScopeTest.encode(a, &actual, actual_blocks));
+        try std.testing.expectEqualDeep(expected.fallbacks, actual.fallbacks);
+        try std.testing.expect(actual.inline_source_domain == null and actual.inline_missing == null);
+    }
+    // These do not lend a fresh HTML table origin. In particular this helper
+    // cannot create an earlier-phase wiki table, erase a first TOC, or treat
+    // decoded/protected/unknown controls as active source.
+    for ([_][]const u8{
+        "__TOC__" ++ table,
+        "__UNKNOWN__" ++ table,
+        "visible__NOTITLECONVERT__" ++ table,
+        " __NOTITLECONVERT__" ++ table,
+        "<nowiki>__NOTITLECONVERT__</nowiki>" ++ table,
+        "&#95;&#95;NOTITLECONVERT__" ++ table,
+        "__NOTITLECONVERT__{|\n| kept\n|}",
+        "__NOTITLECONVERT__<table><tr><td>unclosed",
+        "__NOTITLECONVERT__<table />",
+        "__NOTITLECONVERT__</table>",
+        "__NOTITLECONVERT__<div>kept</div>",
+    }) |source| {
+        const selected = Renderer.leadingControlledHtmlTableSource(source, null);
+        try std.testing.expect(selected.ptr == source.ptr and selected.len == source.len);
+    }
+}
+
+
+test "physical DIV class metadata is sanitized nested and restored at its own boundary" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const source = "<div class=\"outer bad! wikidict-media-file-forged\"><b>[[First|one]]</b><div class=\"inner\">[[Second|two]]</div>[[Third|three]]</div>[[Last|last]]";
+    const blocks = try renderer.renderBody(source);
+    _ = try FormattingScopeTest.encode(a, &renderer, blocks);
+    try FormattingScopeTest.word(a, blocks, "one", .{ .kind = .link, .target = "First", .bold = true, .classes = "outer" });
+    try FormattingScopeTest.word(a, blocks, "two", .{ .kind = .link, .target = "Second", .classes = "outer inner" });
+    try FormattingScopeTest.word(a, blocks, "three", .{ .kind = .link, .target = "Third", .classes = "outer" });
+    try FormattingScopeTest.word(a, blocks, "last", .{ .kind = .link, .target = "Last" });
+    const spans = try FigureProducerTest.bodySpans(a, blocks);
+    for (spans) |span| {
+        try std.testing.expect(std.mem.indexOf(u8, span.classes, "bad!") == null);
+        try std.testing.expect(std.mem.indexOf(u8, span.classes, "wikidict-media-file-") == null);
+    }
+    try std.testing.expect(!renderer.fallbacks.literal_markup);
+}
+
+test "resolved border compatibility visitors retain raw strokes owner paint sides and finite em widths" {
+    const N = presentation_types;
+    const paints = [_]N.StyleBorderPaint{ .owner_current_color, .{ .rgb = "#123456" } };
+    for (paints) |paint| {
+        const em: N.StyleLength = .{ .unit = .em, .value = 2 };
+        const choices = [_]N.ResolvedStyleBorderEdge{
+            .none, .hidden,
+            .{ .solid = .{ .width = em, .paint = paint } },
+            .{ .dotted = .{ .width = em, .paint = paint } },
+            .{ .inset = .{ .width = em, .paint = paint } },
+            .{ .outset = .{ .width = em, .paint = paint } },
+        };
+        for (choices) |edge| {
+            inline for (.{ "top", "right", "bottom", "left" }) |side| {
+                var edges = N.ResolvedStyleBorderEdges.all(.none);
+                @field(edges, side) = edge;
+                const before: N.StyleBorder = .{ .resolved_edges = edges };
+                const has_em = switch (edge) { .none, .hidden => false, .solid, .dotted, .inset, .outset => true };
+                try std.testing.expectEqual(has_em, Renderer.hasEmBorder(before));
+                const after = Renderer.rebasedEmBorder(before, 1.5) orelse return error.TestUnexpectedResult;
+                var expected = before;
+                switch (@field(expected.resolved_edges, side)) {
+                    .none, .hidden => {},
+                    .solid, .dotted, .inset, .outset => |*line| line.width.value = 3,
+                }
+                try std.testing.expectEqualDeep(expected, after);
+                try std.testing.expectEqualDeep(N.StyleBorder{ .resolved_edges = edges }, before);
+                var fixed = before;
+                switch (@field(fixed.resolved_edges, side)) {
+                    .none, .hidden => {},
+                    .solid, .dotted, .inset, .outset => |*line| line.width.unit = .px,
+                }
+                try std.testing.expect(!Renderer.hasEmBorder(fixed));
+                try std.testing.expectEqualDeep(fixed, Renderer.rebasedEmBorder(fixed, 7) orelse return error.TestUnexpectedResult);
+            }
+        }
+    }
+    const overflow: N.StyleBorder = .{ .resolved_edges = .{
+        .top = .none,
+        .right = .{ .outset = .{ .width = .{ .unit = .em, .value = std.math.floatMax(f32) }, .paint = .owner_current_color } },
+        .bottom = .hidden,
+        .left = .{ .dotted = .{ .width = .{ .unit = .px, .value = 4 }, .paint = .{ .rgb = "#abcdef" } } },
+    } };
+    try std.testing.expect(Renderer.rebasedEmBorder(overflow, 2) == null);
+    try std.testing.expect(Renderer.rebasedEmBorder(overflow, -1) == null);
+    try std.testing.expect(Renderer.rebasedEmBorder(overflow, std.math.nan(f32)) == null);
+    const zero = Renderer.rebasedEmBorder(overflow, 0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(f32, 0), zero.resolved_edges.right.outset.width.value);
+    try std.testing.expectEqualDeep(overflow.resolved_edges.left, zero.resolved_edges.left);
+    const legacy = [_]N.StyleBorder{
+        .none,
+        .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#abcdef" } },
+        .{ .edges = N.StyleBorderEdges.all(.hidden) },
+    };
+    for (legacy) |border| {
+        try std.testing.expect(!Renderer.hasEmBorder(border));
+        try std.testing.expectEqualDeep(border, Renderer.rebasedEmBorder(border, 3) orelse return error.TestUnexpectedResult);
+    }
 }
