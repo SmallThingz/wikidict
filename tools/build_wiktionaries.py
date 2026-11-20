@@ -593,10 +593,15 @@ class PreparedSourceRequest:
             verdict=prepared_figure_verdict(cfg)
             if verdict is not None:
                 record['figure_validation']=verdict
-                # Do not grow beyond the existing generation metadata bound.
-                # Oversized optional proof simply takes normal parent replay.
+                # Keep fitting legacy proofs unchanged; factor only overflow.
                 if len(json.dumps(record,sort_keys=True).encode())+1>64*1024*1024:
-                    del record['figure_validation']
+                    compact=_prepared_figure_verdict_wire(verdict)
+                    if compact is verdict:
+                        del record['figure_validation']
+                    else:
+                        record['figure_validation']=compact
+                        if len(json.dumps(record,sort_keys=True).encode())+1>64*1024*1024:
+                            del record['figure_validation']
         # This is a request, not authority. The parent validates these bindings
         # and original source before authorizing, then the child reopens them.
         reference=write_prepared_metadata(self.folder/'prepared-generation.json',record)
@@ -1932,6 +1937,87 @@ def _prepared_figure_guard_digest(guard, version=2):
     return digest.hexdigest()
 
 
+def _prepared_figure_json_equal(left, right, depth=0):
+    # Python equality merges True/1, integer/float and signed zero. The wire
+    # factors only the same JSON value types; unusual/deep values stay legacy.
+    if depth > 64 or type(left) is not type(right):
+        return False
+    if left is None or type(left) in (str, bool, int):
+        return left == right
+    if type(left) is float:
+        value = left.hex()
+        return value not in ('nan', 'inf', '-inf') and value == right.hex()
+    if type(left) is list:
+        return len(left) == len(right) and all(_prepared_figure_json_equal(a, b, depth + 1)
+                                               for a, b in zip(left, right))
+    if type(left) is dict:
+        return (all(type(key) is str for key in left) and all(type(key) is str for key in right) and
+                set(left) == set(right) and all(_prepared_figure_json_equal(left[key], right[key], depth + 1)
+                                               for key in left))
+    return False
+
+
+def _prepared_figure_shared_result_valid(result, paths):
+    if (not isinstance(result, dict) or set(result) != {'manifest', 'inventory', 'output_sha256'} or
+            not isinstance(result['manifest'], dict) or not isinstance(result['inventory'], dict) or
+            not isinstance(result['output_sha256'], dict) or set(result['output_sha256']) != set(paths)):
+        return False
+    manifest, inventory, outputs = result['manifest'], result['inventory'], result['output_sha256']
+    if ('output_sha256' in manifest or not isinstance(manifest.get('outputs'), dict) or
+            not _prepared_figure_json_equal(manifest, manifest)):
+        return False
+    if any(not isinstance(role, str) or not isinstance(digest, str) or
+           re.fullmatch('[0-9a-f]{64}', digest) is None or manifest['outputs'].get(role) != digest
+           for role, digest in outputs.items()):
+        return False
+    return all(isinstance(name, str) and name and isinstance(digest, str) and
+               re.fullmatch('[0-9a-f]{64}', digest) is not None for name, digest in inventory.items())
+
+
+def _prepared_figure_verdict_wire(verdict):
+    """Factor only equal completed result rows; unusual legacy shapes stay exact."""
+    if (not isinstance(verdict, dict) or
+            set(verdict) != {'version', 'source', 'python_tooling', 'edition', 'date', 'paths', 'guard_sha256', 'result'} or
+            type(verdict['version']) is not int or verdict['version'] not in (2, 3) or
+            not isinstance(verdict['paths'], dict) or not isinstance(verdict['result'], dict) or
+            not verdict['result'] or set(verdict['result']) != set(verdict['paths'])):
+        return verdict
+    manifest, inventory, outputs = None, None, {}
+    for role, row in verdict['result'].items():
+        if (not isinstance(row, list) or len(row) != 2 or not isinstance(row[0], dict) or
+                not isinstance(row[1], dict) or 'output_sha256' not in row[0]):
+            return verdict
+        common = dict(row[0])
+        outputs[role] = common.pop('output_sha256')
+        if manifest is None:
+            manifest, inventory = common, row[1]
+        elif (not _prepared_figure_json_equal(common, manifest) or
+              not _prepared_figure_json_equal(row[1], inventory)):
+            return verdict
+    result = dict(manifest=manifest, inventory=inventory, output_sha256=outputs)
+    if not _prepared_figure_shared_result_valid(result, verdict['paths']):
+        return verdict
+    return dict(verdict, result_encoding='shared-manifest-inventory-v1', result=result)
+
+
+def _prepared_figure_verdict_result(verdict, paths):
+    """Decode only after the caller authenticates the selected verdict envelope."""
+    if 'result_encoding' not in verdict:
+        return verdict['result']
+    if verdict['result_encoding'] != 'shared-manifest-inventory-v1':
+        return None
+    result = verdict['result']
+    if not _prepared_figure_shared_result_valid(result, paths):
+        return None
+    import copy
+    expanded = {}
+    for role in paths:
+        manifest = copy.deepcopy(result['manifest'])
+        manifest['output_sha256'] = result['output_sha256'][role]
+        expanded[role] = [manifest, copy.deepcopy(result['inventory'])]
+    return expanded
+
+
 def prepared_figure_verdict(cfg):
     """Export only an actual successful replay from this child interpreter."""
     selected=_prepared_figure_selection(cfg)
@@ -1962,7 +2048,9 @@ def reuse_prepared_figure_verdict(cfg, verdict):
     selected=_prepared_figure_selection(cfg)
     if selected is None or not isinstance(verdict,dict):return False
     edition,paths,key=selected
-    if (set(verdict)!={'version','source','python_tooling','edition','date','paths','guard_sha256','result'}
+    fields={'version','source','python_tooling','edition','date','paths','guard_sha256','result'}
+    if 'result_encoding' in verdict:fields.add('result_encoding')
+    if (set(verdict)!=fields
             or type(verdict['version']) is not int or verdict['version'] not in (2,3) or verdict['source']!=cfg['source']
             or verdict['python_tooling']!=cfg.get('python_tooling')
             or verdict['edition']!=edition or verdict['date']!=cfg['date']
@@ -1970,7 +2058,7 @@ def reuse_prepared_figure_verdict(cfg, verdict):
         return False
     if (type(verdict['guard_sha256']) is not str or
             re.fullmatch('[0-9a-f]{64}',verdict['guard_sha256']) is None):return False
-    result=verdict['result']
+    result=_prepared_figure_verdict_result(verdict,paths)
     if (not isinstance(result,dict) or set(result)!=set(paths)
             or any(not isinstance(row,list) or len(row)!=2 or not isinstance(row[0],dict)
                    or not isinstance(row[1],dict) or row[0].get('wiki')!=edition

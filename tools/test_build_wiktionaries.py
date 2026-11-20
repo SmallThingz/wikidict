@@ -15961,4 +15961,200 @@ class FigureTupleReadsetReuseTests(unittest.TestCase):
         self.assertEqual(b._FIGURE_TUPLE_REPLAYS, {})
 
 
+class SharedPreparedFigureVerdictWireTests(unittest.TestCase):
+    setUp = PreparedFigureVerdictTests.setUp
+    validate = PreparedFigureVerdictTests.validate
+    selected = PreparedFigureVerdictTests.selected
+
+    def test_shared_wire_roundtrips_v2_v3_with_full_parent_guards_and_independent_results(self):
+        import copy
+        with tempfile.TemporaryDirectory() as transport, self.selected() as (cfg, _):
+            expected = self.validate()
+            direct = b.prepared_figure_verdict(cfg)
+            self.assertNotIn('result_encoding', direct)
+            complete_guard = b.figure_tuple_guard(self.figures, self.args.output)
+            for version in (2, 3):
+                with self.subTest(version=version):
+                    verdict = copy.deepcopy(direct)
+                    if version == 2:
+                        verdict.update(version=2, guard_sha256=b._prepared_figure_guard_digest(complete_guard, 2))
+                    else:
+                        self.assertEqual(verdict['version'], 3)
+                    wire = b._prepared_figure_verdict_wire(verdict)
+                    self.assertEqual(wire['result_encoding'], 'shared-manifest-inventory-v1')
+                    self.assertEqual(wire['version'], version)
+                    self.assertEqual(wire['guard_sha256'], verdict['guard_sha256'])
+                    # Old readers' unchanged exact-key check selects ordinary
+                    # fallback. The guard digest version is not a wire version.
+                    legacy_fields = {'version', 'source', 'python_tooling', 'edition', 'date', 'paths', 'guard_sha256', 'result'}
+                    self.assertEqual(set(verdict), legacy_fields)
+                    self.assertEqual(set(wire) - legacy_fields, {'result_encoding'})
+                    reference = b.write_prepared_metadata(Path(transport) / ('shared-wire-v%d.json' % version), wire)
+                    received = b.prepared_metadata(reference)
+                    decoded = b._prepared_figure_verdict_result(received, verdict['paths'])
+                    self.assertEqual(decoded, verdict['result'])
+                    roles = list(decoded)
+                    self.assertGreater(len(roles), 1)
+                    decoded[roles[0]][0]['artifacts']['wire-control-only'] = {'nested': ['changed']}
+                    decoded[roles[0]][1]['wire-control-only'] = '0' * 64
+                    self.assertNotIn('wire-control-only', decoded[roles[1]][0]['artifacts'])
+                    self.assertNotIn('wire-control-only', decoded[roles[1]][1])
+                    self.assertEqual(received, wire)
+                    b._FIGURE_TUPLE_REPLAYS.clear()
+                    with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Compact wire replayed semantics')), \
+                            patch.object(self.figures.evidence, 'fingerprint', wraps=self.figures.evidence.fingerprint) as hashed:
+                        self.assertTrue(b.reuse_prepared_figure_verdict(cfg, received))
+                        self.assertEqual({str(call.args[0]) for call in hashed.call_args_list}, set(complete_guard[1]))
+                        actual = self.validate()
+                        self.assertEqual(actual, expected)
+                        actual[roles[0]][0]['artifacts']['wire-control-only'] = {'nested': ['changed']}
+                        actual[roles[0]][1]['wire-control-only'] = '0' * 64
+                        self.assertNotIn('wire-control-only', actual[roles[1]][0]['artifacts'])
+                        self.assertNotIn('wire-control-only', actual[roles[1]][1])
+                        self.assertEqual(self.validate(), expected)
+                    self.assertEqual(received, wire)
+
+    def test_shared_wire_rejects_malformed_schema_before_hashing_and_stale_members_before_publication(self):
+        import copy
+        with self.selected() as (cfg, _):
+            self.validate()
+            wire = b._prepared_figure_verdict_wire(b.prepared_figure_verdict(cfg))
+            role = next(iter(wire['paths']))
+            malformed = []
+            for mode in ('encoding', 'top-key', 'missing-field', 'extra-field', 'role-missing', 'role-extra',
+                         'output-mismatch', 'output-invalid', 'manifest-output-missing', 'own-output',
+                         'inventory-shape', 'inventory-value', 'manifest-shape', 'wiki', 'version', 'guard', 'source', 'paths'):
+                changed = copy.deepcopy(wire)
+                result = changed['result']
+                if mode == 'encoding': changed['result_encoding'] = 'unknown-future-wire'
+                elif mode == 'top-key': changed['unknown'] = True
+                elif mode == 'missing-field': del result['inventory']
+                elif mode == 'extra-field': result['unknown'] = True
+                elif mode == 'role-missing': del result['output_sha256'][role]
+                elif mode == 'role-extra': result['output_sha256']['foreign-role'] = '0' * 64
+                elif mode == 'output-mismatch': result['output_sha256'][role] = '0' * 64
+                elif mode == 'output-invalid': result['output_sha256'][role] = 'G' * 64
+                elif mode == 'manifest-output-missing': del result['manifest']['outputs'][role]
+                elif mode == 'own-output': result['manifest']['output_sha256'] = '0' * 64
+                elif mode == 'inventory-shape': result['inventory'] = []
+                elif mode == 'inventory-value': result['inventory']['invalid'] = {'nested': 'unusual legacy value'}
+                elif mode == 'manifest-shape': result['manifest'] = []
+                elif mode == 'wiki': result['manifest']['wiki'] = 'foreignwiktionary'
+                elif mode == 'version': changed['version'] = True
+                elif mode == 'guard': changed['guard_sha256'] = ''
+                elif mode == 'source': changed['source']['fingerprint'] = 'b' * 64
+                else: changed['paths'][role] += '.foreign'
+                malformed.append((mode, changed))
+            b._FIGURE_TUPLE_REPLAYS.clear()
+            with patch.object(b, 'figure_tuple_guard', side_effect=AssertionError('Malformed compact wire reached hashing')):
+                for mode, changed in malformed:
+                    with self.subTest(mode=mode):
+                        self.assertFalse(b.reuse_prepared_figure_verdict(cfg, changed))
+                        self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+            source = self.args.sql[0]
+            original = source.read_bytes()
+            try:
+                source.write_bytes(original + b'changed after child validation')
+                with patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Stale compact wire replayed')):
+                    self.assertFalse(b.reuse_prepared_figure_verdict(cfg, wire))
+                self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+            finally:
+                source.write_bytes(original)
+
+    def test_shared_wire_preserves_unknown_manifest_fields_extra_outputs_and_unusual_legacy_rows(self):
+        import copy
+        with self.selected() as (cfg, _):
+            self.validate()
+            verdict = b.prepared_figure_verdict(cfg)
+            # Metadata-only scale fixture: no synthetic row is submitted as a
+            # semantic verdict or used to open any source/payload path.
+            for row in verdict['result'].values():
+                row[0]['future-field'] = {'nested': [{'exact': ['preserved', 7, None]}]}
+                row[0]['outputs']['unselected-role'] = 'a' * 64
+                for index in range(256):
+                    name = 'metadata-only-%04d-' % index + 'x' * 120 + '.raw'
+                    row[0]['artifacts'][name] = {'bytes': 0, 'sha256': 'b' * 64}
+                    row[1][name] = 'b' * 64
+            wire = b._prepared_figure_verdict_wire(verdict)
+            self.assertEqual(wire['result_encoding'], 'shared-manifest-inventory-v1')
+            self.assertEqual(set(wire['result']['output_sha256']), set(verdict['paths']))
+            self.assertEqual(wire['result']['manifest']['outputs']['unselected-role'], 'a' * 64)
+            encoded = json.dumps(wire, sort_keys=True).encode() + b'\n'
+            expanded = json.dumps(verdict, sort_keys=True).encode() + b'\n'
+            self.assertLess(len(encoded), len(expanded) // 2)
+            self.assertEqual(b._prepared_figure_verdict_result(json.loads(encoded), verdict['paths']), verdict['result'])
+            print('FIGURE_VERDICT_WIRE_BYTES ' + json.dumps(dict(
+                metadata_only=True, expanded=len(expanded), shared=len(encoded),
+                selected_roles=len(verdict['paths']), synthetic_inventory_additions=256), sort_keys=True))
+            role = next(iter(verdict['result']))
+            for mode in ('manifest-difference', 'inventory-difference', 'unusual-inventory', 'missing-output', 'output-mismatch', 'tuple-row'):
+                changed = copy.deepcopy(verdict)
+                row = changed['result'][role]
+                if mode == 'manifest-difference': row[0]['future-field']['nested'][0]['exact'].append('different')
+                elif mode == 'inventory-difference': row[1]['only-one-role'] = 'c' * 64
+                elif mode == 'unusual-inventory': row[1]['only-one-role'] = {'nested': 'unusual legacy value'}
+                elif mode == 'missing-output': del row[0]['output_sha256']
+                elif mode == 'output-mismatch': row[0]['output_sha256'] = '0' * 64
+                else: changed['result'][role] = tuple(row)
+                before = copy.deepcopy(changed)
+                self.assertIs(b._prepared_figure_verdict_wire(changed), changed)
+                self.assertEqual(changed, before)
+            for left, right in ((True, 1), (1, 1.0), (0.0, -0.0)):
+                with self.subTest(json_types=(type(left).__name__, type(right).__name__), values=(left, right)):
+                    changed = copy.deepcopy(verdict)
+                    for row in changed['result'].values():
+                        row[0]['future-field'] = {'nested': [left]}
+                    changed['result'][role][0]['future-field']['nested'][0] = right
+                    before = json.dumps(changed, sort_keys=True)
+                    self.assertIs(b._prepared_figure_verdict_wire(changed), changed)
+                    self.assertEqual(json.dumps(changed, sort_keys=True), before)
+            for unusual in ((1, 2), float('nan'), float('inf')):
+                changed = copy.deepcopy(verdict)
+                for row in changed['result'].values():
+                    row[0]['future-field'] = unusual
+                self.assertIs(b._prepared_figure_verdict_wire(changed), changed)
+            # The direct API and legacy v2/v3 decoder remain unchanged.
+            self.assertNotIn('result_encoding', b.prepared_figure_verdict(cfg))
+            self.assertIs(b._prepared_figure_verdict_result(verdict, verdict['paths']), verdict['result'])
+
+
+class FittingPreparedFigureVerdictWireTests(unittest.TestCase):
+    setUp = CompleteParentTupleReplayTests.setUp
+    validate = CompleteParentTupleReplayTests.validate
+
+    def test_real_fitting_offer_preserves_legacy_verdict_without_wire_adapter(self):
+        direct = b.prepared_figure_verdict
+        publish = b.write_prepared_metadata
+        offered, published = [], []
+
+        def verdict(cfg):
+            value = direct(cfg)
+            self.assertIsNotNone(value)
+            offered.append(value)
+            return value
+
+        def write(path, value):
+            if isinstance(value, dict) and value.get('schema') == 'wikidict.prepared-source-generation.v1' and 'figure_validation' in value:
+                proof = value['figure_validation']
+                self.assertIs(proof, offered[-1])
+                self.assertEqual(set(proof), {'version', 'source', 'python_tooling', 'edition',
+                    'date', 'paths', 'guard_sha256', 'result'})
+                self.assertIs(type(proof['version']), int)
+                self.assertIn(proof['version'], (2, 3))
+                self.assertNotIn('result_encoding', proof)
+                self.assertEqual(set(proof['result']), set(proof['paths']))
+                self.assertLessEqual(len(json.dumps(value, sort_keys=True).encode()) + 1, 64 * 1024 * 1024)
+                published.append(copy.deepcopy(proof))
+            return publish(path, value)
+
+        with patch.object(b, '_prepared_figure_verdict_wire',
+                          side_effect=AssertionError('A fitting offer invoked the compact-wire adapter')) as adapter, \
+                patch.object(b, 'prepared_figure_verdict', side_effect=verdict), \
+                patch.object(b, 'write_prepared_metadata', side_effect=write):
+            PreparedFigureVerdictTests.test_real_offer_parent_and_child_keep_default_untrusted_and_wrong_process_paths_cold(self)
+        adapter.assert_not_called()
+        self.assertEqual(len(offered), 9)
+        self.assertEqual(published, offered)
+
+
 if __name__=='__main__':unittest.main()
