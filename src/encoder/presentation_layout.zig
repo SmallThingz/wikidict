@@ -2260,6 +2260,98 @@ fn dictionaryNounSection(section: anytype, owner: ?[]const u8, wiki_id: []const 
     return std.mem.eql(u8, wiki_id, "blkwiktionary") or hasTopLevelNumberedGloss(section.blocks);
 }
 
+// The Aragonese POS templates link the localized title to a grammar page.
+// Resolve the lexical kind without assigning a language or moving any body text.
+fn aragoneseGrammarPart(section: anytype, owner: ?[]const u8, wiki_id: []const u8) ?[]const u8 {
+    if (!std.mem.eql(u8, wiki_id, "anwiktionary") or section.level != 2) return null;
+    const language = owner orelse return null;
+    if (language.len == 0 or std.mem.eql(u8, language, "Unclassified")) return null;
+    const S = @TypeOf(section);
+    if (!@hasField(S, "title_spans") or !@hasField(S, "is_heading") or
+        !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return null;
+    if (!section.is_heading or section.title_depth != 0 or section.title_list_path.len != 0) return null;
+    const targets = [_]struct { title: []const u8, page: []const u8, kind: []const u8 }{
+        .{ .title = "Sustantivo", .page = "Wiktionary:Sustantibo", .kind = "Noun" },
+        .{ .title = "Sustantivo masculín", .page = "Wiktionary:Sustantibo", .kind = "Noun" },
+        .{ .title = "Sustantivo femenín", .page = "Wiktionary:Sustantibo", .kind = "Noun" },
+        .{ .title = "Sustantivo neutro", .page = "Wiktionary:Sustantibo", .kind = "Noun" },
+        .{ .title = "Verbo transitivo", .page = "Wiktionary:Berbo", .kind = "Verb" },
+        .{ .title = "Verbo intransitivo", .page = "Wiktionary:Berbo", .kind = "Verb" },
+        .{ .title = "Adchectivo", .page = "Wiktionary:Adchectivo", .kind = "Adjective" },
+    };
+    for (targets) |grammar| {
+        if (!std.mem.eql(u8, section.title, grammar.title)) continue;
+        var linked = false;
+        for (section.title_spans) |span| {
+            if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or
+                span.role != .normal or span.image != null or span.ruby != null) return null;
+            if (span.kind == .line_break or (span.kind == .text and std.mem.trim(u8, span.text, " \t\r\n").len == 0)) continue;
+            if (linked or span.kind != .link or span.self_link or span.target_fragment != null or
+                !std.mem.eql(u8, span.text, grammar.title) or !std.mem.eql(u8, span.target, grammar.page)) return null;
+            linked = true;
+        }
+        return if (linked) grammar.kind else null;
+    }
+    return null;
+}
+
+test "Aragonese grammar links classify owned H2s without changing links or inventing senses" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct {
+        title: []const u8,
+        level: u8 = 2,
+        is_heading: bool = true,
+        title_list_path: []const u8 = "",
+        title_depth: u8 = 0,
+        title_spans: []const wiki.Span,
+        blocks: []const wiki.Block,
+    };
+    const cases = [_]struct { heading: []const u8, page: []const u8, kind: []const u8, owner: []const u8, numbered: bool }{
+        .{ .heading = "Sustantivo", .page = "Wiktionary:Sustantibo", .kind = "Noun", .owner = "anglés", .numbered = true },
+        .{ .heading = "Sustantivo femenín", .page = "Wiktionary:Sustantibo", .kind = "Noun", .owner = "aragonés", .numbered = false },
+        .{ .heading = "Verbo transitivo", .page = "Wiktionary:Berbo", .kind = "Verb", .owner = "aragonés", .numbered = false },
+        .{ .heading = "Sustantivo masculín", .page = "Wiktionary:Sustantibo", .kind = "Noun", .owner = "aragonés", .numbered = true },
+        .{ .heading = "Sustantivo neutro", .page = "Wiktionary:Sustantibo", .kind = "Noun", .owner = "aragonés", .numbered = true },
+        .{ .heading = "Verbo intransitivo", .page = "Wiktionary:Berbo", .kind = "Verb", .owner = "aragonés", .numbered = true },
+        .{ .heading = "Adchectivo", .page = "Wiktionary:Adchectivo", .kind = "Adjective", .owner = "aragonés", .numbered = true },
+    };
+    for (cases) |case| {
+        var spans = [_]wiki.Span{ .{ .text = " " }, .{ .kind = .link, .flags = .{ .italic = true }, .text = case.heading, .target = case.page }, .{ .kind = .line_break, .text = "\n" } };
+        const headword = [_]wiki.Span{.{ .text = "headword", .flags = .{ .bold = true } }};
+        const gloss = [_]wiki.Span{.{ .kind = .link, .text = "meaning", .target = "original" }};
+        const blocks = [_]wiki.Block{
+            .{ .kind = .heading, .level = 2, .spans = &spans },
+            .{ .kind = .paragraph, .spans = &headword },
+            .{ .kind = .definition, .list_path = "#", .spans = &gloss },
+        };
+        var section: Section = .{ .title = case.heading, .title_spans = &spans, .blocks = if (case.numbered) &blocks else blocks[0..2] };
+        const layout = try buildForDictionary(a, &[_]Section{section}, false, case.owner, null, "anwiktionary");
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        const lexeme = layout.lexemes[0];
+        try std.testing.expectEqualStrings(case.kind, lexeme.kind);
+        try std.testing.expectEqualStrings(case.owner, lexeme.language);
+        try std.testing.expectEqualSlices(usize, &.{ 0, 1 }, lexeme.introduction);
+        try std.testing.expectEqual(@intFromBool(case.numbered), lexeme.definitions.len);
+        if (case.numbered) {
+            const address = lexeme.definitions[0].block;
+            try std.testing.expectEqual(@as(usize, 2), address);
+            try std.testing.expectEqualStrings("original", section.blocks[address].spans[0].target);
+        }
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "eswiktionary") == null);
+        try std.testing.expect(aragoneseGrammarPart(section, null, "anwiktionary") == null);
+        section.title_depth = 1;
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+        section.title_depth = 0;
+        spans[1].target = "Wiktionary:Unrelated";
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+        spans[1].target = case.page;
+        spans[1].flags.code = true;
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+    }
+}
+
 fn aromanianHeadingSpan(section: anytype, owner: ?[]const u8, wiki_id: []const u8, level: u8) ?*const wiki.Span {
     if (!std.mem.eql(u8, wiki_id, "roa_rupwiktionary") or section.level != level) return null;
     const language = owner orelse return null;
@@ -2701,7 +2793,7 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
-            ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
+            aragoneseGrammarPart(section, owner, wiki_id) orelse ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
             (if (active == null) ukrainianMorphologyMeaningPart(sections, i, owner) else null);
         const paragraph_part = if (named_kind == null and !unclassified) sourceLexemeParagraph(section, i, owner, source_lexeme) orelse germanNounMeanings(section, owner) orelse (if (aromanian_noun) aromanianIndentedSenses(section.blocks) else null) orelse markedParagraphPart(section.blocks, owner, section.level) else null;
         const meaning_paragraph = if (named_kind == null and paragraph_part == null and !unclassified)
