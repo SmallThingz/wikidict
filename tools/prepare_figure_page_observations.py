@@ -1864,6 +1864,183 @@ def validate_table_roots(roots, doc, defaults):
             raise ValueError('Table stylesheet resources differ from ordered head')
 
 
+def validate_current_expanded_operations(operations, doc, defaults):
+    """Package current GET witnesses without granting native source equivalence.
+
+    The native Book additionally validates the full observed ancestor graph,
+    Missing phase, unique intrinsic syntax and live prepared-source projection.
+    This boundary authenticates transport, source identities and resource custody;
+    it never changes an Unknown phase or borrows a sibling page's observation.
+    """
+    if (doc['schema'] != 'wikidict.figure-page-observations.v8' or
+            not isinstance(operations, list) or not 1 <= len(operations) <= 256 or
+            len(operations) + len(doc['pages']) + len(doc.get('table_roots', [])) > 256):
+        raise ValueError('Invalid current expanded operation inventory')
+    fields = {'transport', 'temporal_scope', 'historical_equality_proven', 'javascript_outcome_proven',
+              'raw_source', 'expanded_source', 'display_title', 'missing_dependency_metadata',
+              'start', 'end', 'captured_styles', 'indexed_sources'}
+    transport_fields = {'profile', 'page', 'mode', 'response_kind', 'response', 'prefix', 'receipt', 'styles'}
+    page_fields = {'id', 'revision', 'namespace', 'title', 'model', 'raw_sha256', 'expanded_sha256'}
+    seen = set()
+    for operation in operations:
+        if (not isinstance(operation, dict) or set(operation) != fields or
+                operation['temporal_scope'] != 'current_anonymous_associated_retained_source' or
+                operation['historical_equality_proven'] is not False or operation['javascript_outcome_proven'] is not False):
+            raise ValueError('Invalid current expanded operation scope')
+        for key in ('raw_source', 'expanded_source', 'display_title', 'missing_dependency_metadata'):
+            value = operation[key]
+            if (not isinstance(value, str) or len(value.encode()) > MAX_RESPONSE or '\0' in value or
+                    (key != 'display_title' and not value)):
+                raise ValueError('Invalid expanded operation source')
+        transport = operation['transport']
+        if (not isinstance(transport, dict) or not transport_fields <= set(transport) or
+                set(transport) - transport_fields - {'original_received_prefix', 'encoded_gzip_base64'} or
+                transport.get('original_received_prefix') is not None or transport.get('encoded_gzip_base64') is not None or
+                transport['profile'] != 'source-parent-direct-get-v1' or transport['mode'] != 'current-canonical' or
+                transport['response_kind'] != 'complete-response' or transport['styles'] is not None):
+            raise ValueError('Unsupported expanded operation transport')
+        page = transport['page']
+        if (not isinstance(page, dict) or set(page) != page_fields or
+                any(type(page[k]) is not int or not 0 < page[k] < 1 << 64 for k in ('id', 'revision')) or
+                type(page['namespace']) is not int or page['namespace'] != 0 or page['model'] != 'wikitext' or
+                not isinstance(page['title'], str) or not 0 < len(page['title'].encode()) <= 4096 or
+                any(c in page['title'] for c in '\0\r\n\t') or page['id'] in seen):
+            raise ValueError('Invalid or duplicate expanded operation page')
+        seen.add(page['id'])
+        raw = operation['raw_source'].encode(); expanded = operation['expanded_source'].encode()
+        if page['raw_sha256'] != digest(raw) or page['expanded_sha256'] != digest(expanded):
+            raise ValueError('Expanded operation source digest differs')
+        start, end = operation['start'], operation['end']
+        if type(start) is not int or type(end) is not int or not 0 <= start < end <= len(expanded):
+            raise ValueError('Invalid expanded operation byte range')
+        # Preserve byte offsets; native syntax and uniqueness checks remain final.
+        selected = expanded[start:end].decode()
+        if not selected.startswith('<span ') or not selected.endswith('</span>'):
+            raise ValueError('Expanded operation is not a complete span')
+        phase = decode(operation['missing_dependency_metadata'])
+        if (not isinstance(phase, dict) or phase.get('schema') != 'wikidict.missing-dependency-phase.v1' or
+                phase.get('output_sha256') != digest(expanded) or
+                phase.get('display_title_sha256') != digest(operation['display_title'].encode())):
+            raise ValueError('Expanded operation phase differs')
+        for key, size in (('output', len(expanded)), ('display_title', len(operation['display_title'].encode()))):
+            section = phase.get(key)
+            if (not isinstance(section, dict) or type(section.get('unknown')) is not bool or
+                    not isinstance(section.get('ranges'), list)):
+                raise ValueError('Invalid expanded operation Missing phase')
+            for interval in section['ranges']:
+                if (not isinstance(interval, dict) or type(interval.get('start')) is not int or
+                        type(interval.get('end')) is not int or not 0 <= interval['start'] < interval['end'] <= size or
+                        (key == 'output' and interval['start'] < end and interval['end'] > start)):
+                    raise ValueError('Expanded operation overlaps a missing range')
+        response, prefix = transport['response'], transport['prefix']
+        if (not isinstance(response, str) or not 0 < len(response.encode()) <= MAX_RESPONSE or '\0' in response or
+                not isinstance(prefix, str) or not 0 < len(prefix.encode()) <= 512 * 1024 or not response.startswith(prefix)):
+            raise ValueError('Invalid expanded operation response prefix')
+        receipt = table_root_transport_receipt(transport['receipt'], [response], 'text/html')
+        source = receipt['sources'][0]
+        origin = 'https://' + doc['wiki'][:-len('wiktionary')].replace('_', '-') + '.wiktionary.org'
+        expected_url = origin + '/wiki/' + urllib.parse.quote(page['title'].replace(' ', '_'), safe='-._~/:')
+        if source['url'] != expected_url:
+            raise ValueError('Expanded operation uses a different canonical page')
+        if (source.get('accept_encoding') != 'gzip' or source.get('content_encoding') != 'gzip' or
+                source['headers'].get('content-encoding') != 'gzip' or not isinstance(source.get('encoded'), dict) or
+                set(source['encoded']) != {'bytes', 'path', 'sha256'} or
+                type(source['encoded']['bytes']) is not int or not 0 < source['encoded']['bytes'] <= 64 * 1024 * 1024 or
+                not isinstance(source['encoded']['sha256'], str) or re.fullmatch('[0-9a-f]{64}', source['encoded']['sha256']) is None or
+                not isinstance(source['encoded']['path'], str) or not source['encoded']['path']):
+            raise ValueError('Incomplete expanded operation encoded custody')
+        body_end = expanded_operation_prefix(prefix, page)
+        styles = operation['captured_styles']
+        if not isinstance(styles, dict) or set(styles) != {'responses', 'receipt'} or not isinstance(styles['receipt'], str):
+            raise ValueError('Invalid expanded operation styles')
+        style_receipt = decode(styles['receipt'])
+        if (not isinstance(style_receipt, dict) or set(style_receipt) != {'core', 'sources', 'unrequested', 'historical_equality_proven'} or
+                style_receipt['core'] is not None or style_receipt['unrequested'] != [] or
+                style_receipt['historical_equality_proven'] is not False or not isinstance(style_receipt['sources'], list) or
+                any(not isinstance(s, dict) or not isinstance(s.get('retrieved_utc'), str) or not s['retrieved_utc'] for s in style_receipt['sources'])):
+            raise ValueError('Incomplete expanded operation style receipt')
+        neutral = dict(core=None, sources=style_receipt['sources'])
+        sources = validate_observed_missing_style_set(dict(profile=MISSING_OBSERVED_SET_PROFILE, defaults=defaults.decode(),
+            served_set=dict(responses=styles['responses'], receipt=json.dumps(neutral))), defaults, doc['wiki'])
+        if validate_observed_style_head({'headhtml': prefix[:body_end]}, sources, doc['wiki']) != list(sources):
+            raise ValueError('Expanded operation advertised styles differ')
+        indexed = operation['indexed_sources']
+        if not isinstance(indexed, list) or not 1 <= len(indexed) <= 128:
+            raise ValueError('Invalid indexed expanded operation styles')
+        for item in indexed:
+            if (not isinstance(item, dict) or set(item) != {'base_url', 'byte_start', 'css_sha256', 'unknown_applicability'} or
+                    not isinstance(item['base_url'], str) or '\0' in item['base_url'] or
+                    type(item['byte_start']) is not int or not 0 <= item['byte_start'] < 1 << 64 or
+                    type(item['unknown_applicability']) is not bool or not isinstance(item['css_sha256'], str) or
+                    re.fullmatch('[0-9a-f]{64}', item['css_sha256']) is None):
+                raise ValueError('Invalid indexed expanded operation style identity')
+
+
+def expanded_operation_prefix(prefix, page):
+    """Check the literal current identity; native prefix policy is also required."""
+    class Prefix(HTMLParser):
+        void = {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.path = []; self.html_classes = None; self.head_closed = False
+            self.script = None; self.configs = []; self.body_end = None
+            self.offsets = [0] + [i + 1 for i, c in enumerate(prefix) if c == '\n']
+        def position(self):
+            line, column = self.getpos(); return self.offsets[line - 1] + column
+        def handle_starttag(self, tag, attrs):
+            # Navigation and the complete outer chain remain original bytes.
+            # The native prefix parser proves that chain up to ParserOutput.
+            if self.body_end is not None: return
+            values = dict(attrs)
+            if len(values) != len(attrs):
+                raise ValueError('Ambiguous expanded operation prefix')
+            if tag == 'html':
+                if self.path or self.html_classes is not None: raise ValueError('Repeated expanded operation HTML')
+                self.html_classes = values.get('class', '')
+            elif tag == 'head':
+                if self.path != ['html'] or attrs or self.head_closed: raise ValueError('Misplaced expanded operation HEAD')
+            elif tag == 'body':
+                if self.path != ['html'] or not self.head_closed: raise ValueError('Misplaced expanded operation BODY')
+                self.body_end = self.position() + len(self.get_starttag_text())
+                return
+            elif not self.path: raise ValueError('Expanded operation element outside HTML')
+            if tag == 'script': self.script = (self.position() + len(self.get_starttag_text()), attrs, self.path == ['html', 'head'])
+            if tag not in self.void:
+                self.path.append(tag)
+                if len(self.path) > 128: raise ValueError('Expanded operation prefix exceeds bounds')
+        def handle_startendtag(self, tag, attrs):
+            if self.body_end is not None: return
+            if tag not in self.void: raise ValueError('Self-closing expanded operation container')
+            self.handle_starttag(tag, attrs)
+        def handle_endtag(self, tag):
+            if self.body_end is not None: return
+            if not self.path or self.path[-1] != tag:
+                raise ValueError('Unbalanced expanded operation prefix')
+            if tag == 'script' and self.script is not None:
+                start, attrs, direct = self.script; self.script = None; text = prefix[start:self.position()]
+                if 'RLCONF=' in text:
+                    if attrs or not direct: raise ValueError('Indirect expanded operation configuration')
+                    self.configs.append(table_root_configuration(text, self.html_classes))
+            if tag == 'head': self.head_closed = True
+            self.path.pop()
+    parsed = Prefix(); parsed.feed(prefix); parsed.close()
+    if parsed.body_end is None or len(parsed.configs) != 1:
+        raise ValueError('Incomplete expanded operation prefix')
+    root = re.search(r'<div\b[^<>]*>\Z', prefix, re.I)
+    if root is None or root.start() < parsed.body_end:
+        raise ValueError('Expanded operation prefix lacks its parser root')
+    attributes = table_root_opening_attributes(root[0], 'div')
+    if 'mw-parser-output' not in attributes.get('class', '').split():
+        raise ValueError('Expanded operation prefix ends at a different root')
+    config = parsed.configs[0]
+    if (any(type(config.get(k)) is not int or config[k] != v for k, v in (
+            ('wgArticleId', page['id']), ('wgRevisionId', page['revision']), ('wgCurRevisionId', page['revision']), ('wgNamespaceNumber', 0))) or
+            config.get('wgTitle') != page['title'] or config.get('wgPageName') != page['title'].replace(' ', '_') or
+            config.get('wgAction') != 'view' or config.get('wgIsArticle') is not True):
+        raise ValueError('Expanded operation current identity differs')
+    return parsed.body_end
+
+
 def validate_document(raw, namespace, defaults):
     if not 0 < len(raw) <= MAX_INPUT:
         raise ValueError('Invalid observation document size')
@@ -1880,6 +2057,8 @@ def validate_document(raw, namespace, defaults):
     class_contract = combined_contract or poster_contract or doc.get('schema') == 'wikidict.figure-page-observations.v4'
     class_scope_contract = class_contract or svg_language_contract
     expected_fields = {'schema', 'wiki', 'date', 'namespace_sha256', 'defaults_sha256', 'pages'}
+    if image_map_contract and 'current_get_expanded_operations' in doc:
+        expected_fields.add('current_get_expanded_operations')
     if (image_map_contract or relation_style_contract) and 'table_roots' in doc:
         expected_fields.add('table_roots')
     if poster_contract:
@@ -1893,8 +2072,10 @@ def validate_document(raw, namespace, defaults):
             doc.get('namespace_sha256') != digest(namespace) or
             doc.get('defaults_sha256') != digest(defaults) or
             not isinstance(doc.get('pages'), list) or len(doc['pages']) > 256 or
-            (not doc['pages'] and not doc.get('table_roots'))):
+            (not doc['pages'] and not doc.get('table_roots') and not doc.get('current_get_expanded_operations'))):
         raise ValueError('Invalid observation document identity')
+    if 'current_get_expanded_operations' in doc:
+        validate_current_expanded_operations(doc['current_get_expanded_operations'], doc, defaults)
     if 'table_roots' in doc:
         validate_table_roots(doc['table_roots'], doc, defaults)
     observed_styles = None
@@ -2161,6 +2342,8 @@ def capture_artifacts(path, record):
 
 def observation_source_contract(doc):
     contracts = []
+    if doc.get('current_get_expanded_operations'):
+        contracts.append('Independent current-anonymous expanded-operation witnesses; retained Unknown and source hashes; native Book must validate live source, ancestor and style custody; no historical or JavaScript equivalence')
     if any('current_get_literal' not in page for page in doc['pages']):
         contracts.append('Exact supplied full expansion/current parse; requested revision context; no parse-core or historical-transclusion inference')
     if any('current_get_literal' in page for page in doc['pages']):
