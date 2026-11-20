@@ -67732,6 +67732,40 @@ test "Aromanian complete static category declarations retain all 32 exact linked
     try std.testing.expect(source_language_banner.parse(pos.selected_rows.map.get("Format:-num-").?.text, &ns, null, &registry, "num") == null);
 }
 
+test "Aromanian translingual provider authenticates only its original bare category heading" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try RoaRupStaticBannerTest.namespace(a);
+    defer ns.deinit();
+    var registry = language_registry.Registry.empty(a);
+    defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/roa-rup-static-banner/language-registry.tsv"));
+    // Format:-mul-, page 5705 revision 15775 in the 20261001 dump.
+    const source = "__NOEDITSECTION__<noinclude>[[Category:Template|mul]]</noinclude>" ++
+        "<includeonly>[[Category:Internatsional]]</includeonly>\n=Internatsional=";
+    const proof = source_language_banner.parse(source, &ns, null, &registry, "mul") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("Internatsional", proof.heading);
+    try std.testing.expectEqual(@as(u8, 1), proof.level);
+    try registry.addSourceLanguageBanner("mul", proof);
+    try std.testing.expect(registry.matchesSourceLanguageBanner("mul", proof.heading, 1));
+    try std.testing.expect(!registry.matchesSourceLanguageBanner("mul", proof.heading, 2));
+    try std.testing.expect(registry.resolveStrong(proof.heading) == null);
+    try std.testing.expect(source_language_banner.parse("=Internatsional=", &ns, null, &registry, "mul") == null);
+    try std.testing.expect(source_language_banner.parse(source, &ns, null, &registry, "ro") == null);
+    try std.testing.expect(source_language_banner.parse(source, &ns, null, &registry, "not-a-code") == null);
+    for ([_][2][]const u8{
+        .{ "Template|mul", "Template|ro" }, .{ "Category:Internatsional", "Category:Other" },
+        .{ "=Internatsional=", "==Internatsional==" }, .{ "=Internatsional=", "=Other=" },
+        .{ "</includeonly>\n", "</includeonly>visible\n" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, source, change[0], change[1]);
+        try std.testing.expect(source_language_banner.parse(altered, &ns, null, &registry, "mul") == null);
+    }
+    try registry.addLocalAlias("Internatsional", "ro");
+    try std.testing.expect(source_language_banner.parse(source, &ns, null, &registry, "mul") == null);
+}
+
 test "Aromanian static category proof rejects category sort link code dynamic and registry conflicts without creating an alias" {
     const F = RoaRupStaticBannerTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();

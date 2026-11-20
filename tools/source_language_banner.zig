@@ -670,8 +670,14 @@ fn parseStaticCategoryHeading(source: []const u8, ns: *const namespaces.Registry
                 body = std.mem.trimStart(u8, body[close + 2 ..], " ");
             }
         }
-        if (!std.mem.startsWith(u8, body, "[[") or !std.mem.endsWith(u8, body, "]]")) return null;
-        const inner = body[2 .. body.len - 2];
+        // This site's translingual provider emits a plain H1. Bind it to the
+        // catalogued provider, matching included category and original prefix.
+        const bare_translingual = parsed.level == 1 and std.mem.eql(u8, ns.wiki, "roa_rupwiktionary") and
+            std.mem.eql(u8, ns.content_language, "rup") and std.mem.eql(u8, code, "mul") and
+            std.mem.eql(u8, parsed.title, body) and std.mem.eql(u8, body, category_name.?) and
+            std.mem.eql(u8, source[control.len..category_after], "<noinclude>[[Category:Template|mul]]</noinclude><includeonly>[[Category:Internatsional]]</includeonly>");
+        if (!bare_translingual and (!std.mem.startsWith(u8, body, "[[") or !std.mem.endsWith(u8, body, "]]"))) return null;
+        const inner = if (bare_translingual) body else body[2 .. body.len - 2];
         const pipe = std.mem.indexOfScalar(u8, inner, '|') orelse inner.len;
         const target = inner[0..pipe];
         const label = if (pipe < inner.len) inner[pipe + 1 ..] else target;
