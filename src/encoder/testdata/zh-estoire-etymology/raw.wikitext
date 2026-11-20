@@ -1,0 +1,32 @@
+==古法语==
+
+===词源1===
+* {{der|fro|la|historia}}
+
+====其他写法====
+* {{alter|fro|historie}}
+
+====名词====
+{{fro-noun|f}}
+
+# [[历史]]
+# [[故事]]
+
+=====派生语汇=====
+* {{desctree|xno|estorie}}
+* {{desctree|fr|histoire}}
+* {{desc|roa-gal|istoèrr}}
+* {{desc|nrf|histouaire|alts=1}}, {{l|nrf|histouère}}, {{l|nrf|istwer}}
+* {{desctree|enm|historie|bor=1|noalts=1}}
+
+===词源2===
+源自{{bor|fro|grc|στόλιον}}，<ref>{{cite-book
+|last=Euren |first=S. F. |chapter=2 |title=Étude sur l'r français |url=https://www.google.ca/books/edition/%C3%89tude_sur_l_r_fran%C3%A7ais/0wkTAAAAYAAJ?hl=en |location=Upsala |publisher=Imprimerie Almquist & Wiksell |year=1896 |page=22 |pageurl=https://www.google.ca/books/edition/%C3%89tude_sur_l_r_fran%C3%A7ais/0wkTAAAAYAAJ?hl=en&gbpv=1&pg=PA22}}</ref>{{l|grc|στολή}}的指小词。
+
+====名词====
+{{head|fro|名词}}
+
+# {{alt form|fro|estoile}}
+
+===参考资料===
+{{reflist}}

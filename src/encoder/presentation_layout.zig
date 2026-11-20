@@ -2161,9 +2161,14 @@ fn analyzeBulgarianVerb(a: A, kind: []const u8, index: usize, etymology: ?usize,
 // Exact localized semantic heading plus an optional canonical positive number.
 // This is an organization label, never a language or part-of-speech declaration.
 fn exactNumberedHeading(title: []const u8, label: []const u8) bool {
+    return exactNumberedHeadingSeparated(title, label, " ");
+}
+
+fn exactNumberedHeadingSeparated(title: []const u8, label: []const u8, separator: []const u8) bool {
     if (std.mem.eql(u8, title, label)) return true;
-    if (title.len <= label.len + 1 or !std.mem.startsWith(u8, title, label) or title[label.len] != ' ') return false;
-    const number = title[label.len + 1 ..];
+    if (title.len <= label.len + separator.len or !std.mem.startsWith(u8, title, label) or
+        !std.mem.startsWith(u8, title[label.len..], separator)) return false;
+    const number = title[label.len + separator.len ..];
     if (number[0] < '1' or number[0] > '9') return false;
     for (number[1..]) |digit| if (!std.ascii.isDigit(digit)) return false;
     return true;
@@ -2674,7 +2679,8 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
         // Exact FR S|étymologie heading in retained borracho.
         // MG Endrika:-etim- p10215/r57360 redirects to -étym- p2730/r37568650;
         // its exact H3 precedes the first noun of کاربرد p9514187/r37669456.
-        const etymology = std.mem.eql(u8, section.title, "Etimôlôjia") or std.mem.eql(u8, section.title, "Etimologie") or std.mem.eql(u8, section.title, "Étymologie") or exactNumberedHeading(section.title, "Etimolohiya") or part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "Etimología") or std.mem.eql(u8, section.title, "ရင်းမြစ်") or std.mem.eql(u8, section.title, "Gerdarzh");
+        // estoire p1500392/r9912847 directly authors 词源1 and 词源2.
+        const etymology = exactNumberedHeadingSeparated(section.title, "词源", "") or std.mem.eql(u8, section.title, "Etimôlôjia") or std.mem.eql(u8, section.title, "Etimologie") or std.mem.eql(u8, section.title, "Étymologie") or exactNumberedHeading(section.title, "Etimolohiya") or part.named(section.title, "Etymology") or std.mem.eql(u8, section.title, "Etimologia") or std.mem.eql(u8, section.title, "Etimología") or std.mem.eql(u8, section.title, "ရင်းမြစ်") or std.mem.eql(u8, section.title, "Gerdarzh");
         // Owned records can contain several H1 source regions. A recognized H2
         // POS belongs to the preceding etymology, but a new region cannot inherit it.
         if (owner != null and section.level == 1) origin = null;
@@ -14145,4 +14151,129 @@ test "Estonian noun form needs an exact independent heading and does not erase l
     try std.testing.expect(!estonianNounFormSection(S{ .blocks = &.{ dots, nested } }, "Mandinka", "etwiktionary"));
     var feature = dots; feature.flow = &.{};
     try std.testing.expect(!estonianNounFormPlaceholder(feature));
+}
+
+test "actual Chinese estoire keeps the complete Reader while linking both authored etymologies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const bytes = @embedFile("testdata/zh-estoire-etymology/reader.json");
+    const raw = @embedFile("testdata/zh-estoire-etymology/raw.wikitext");
+    const expanded = @embedFile("testdata/zh-estoire-etymology/expanded.wikitext");
+    for ([_]struct { bytes: []const u8, hash: []const u8 }{
+        .{ .bytes = bytes, .hash = "ccc129ac9f8412da13267fb1378640397d0bc66c60496cca85c46685acf867af" },
+        .{ .bytes = raw, .hash = "19a98aad649fe37d6a7ac33042cc20499c2396765366f2025872170bbab736e3" },
+        .{ .bytes = expanded, .hash = "48bbadcde64d36556b4ccdb08fba228b77ba474e93368f610fdd69934875893c" },
+    }) |fixture| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture.bytes, &digest, .{});
+        try std.testing.expectEqualStrings(fixture.hash, &std.fmt.bytesToHex(digest, .lower));
+    }
+    // Both headings are authored directly, not inferred from the word's language.
+    // The original fro-noun/head templates independently explain the two nouns.
+    for ([_][]const u8{ "===词源1===", "===词源2===", "{{fro-noun|f}}", "{{head|fro|名词}}", "# [[历史]]", "# [[故事]]", "# {{alt form|fro|estoile}}" }) |piece|
+        try std.testing.expect(std.mem.indexOf(u8, raw, piece) != null);
+    for ([_][]const u8{ "===词源1===", "===词源2===", "entity=Q397 site=zhwiki", "entity=Q35497 site=zhwiki", "-{[[:στολή#古希臘語|-{στολή}-]]}-" }) |piece|
+        try std.testing.expect(std.mem.indexOf(u8, expanded, piece) != null);
+    const typed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, bytes, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), typed.value.entries.len);
+    const before = typed.value.entries[0];
+    try std.testing.expectEqualStrings("estoire", before.title);
+    try std.testing.expectEqualStrings("古法語", before.language.?);
+    try std.testing.expectEqualStrings("fro", before.language_code);
+    try std.testing.expectEqual(@as(usize, 8), before.sections.len);
+    try std.testing.expectEqualStrings("词源1", before.sections[1].title);
+    try std.testing.expectEqualStrings("词源2", before.sections[5].title);
+    const sections = try SerbianMeaningTest.projected(a, before);
+    const computed = try buildOwned(a, sections, before.language.?);
+    const organization = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, computed, .{}), .{});
+    var expected: T.Stored = .{ .entry = before };
+    const lexemes = try a.dupe(T.Lexeme, before.organization.lexemes);
+    expected.entry.organization.lexemes = lexemes;
+    try std.testing.expectEqual(@as(usize, 2), lexemes.len);
+    for (lexemes, [_]usize{ 1, 5 }, [_]usize{ 3, 6 }, [_]usize{ 2, 1 }) |*noun, origin, section, count| {
+        try std.testing.expect(noun.etymology == null);
+        try std.testing.expectEqualStrings("Noun", noun.kind);
+        try std.testing.expectEqualStrings("古法語", noun.language);
+        try std.testing.expectEqual(section, noun.section);
+        try std.testing.expectEqual(count, noun.definitions.len);
+        for (noun.definitions, 1..) |sense, index| try std.testing.expectEqual(index, sense.block);
+        noun.etymology = origin;
+    }
+    try std.testing.expectEqualDeep(expected.entry.organization, organization.value);
+    var actual: T.Stored = .{ .entry = before };
+    actual.entry.organization = organization.value;
+    try std.testing.expectEqualDeep(expected, actual);
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, actual);
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(expected, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
+    var span_count: usize = 0;
+    var action_count: usize = 0;
+    var greek_count: usize = 0;
+    var source_errors: usize = 0;
+    for (decoded.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        span_count += 1;
+        if (span.target.len != 0) action_count += 1;
+        if (std.mem.startsWith(u8, span.text, "Lua error in Module:Etymology/templates:")) source_errors += 1;
+        if (std.mem.eql(u8, span.target, "στολή#古希臘語")) {
+            try std.testing.expectEqualStrings("στολή", span.text);
+            try std.testing.expectEqualStrings("grc", span.language);
+            greek_count += 1;
+        }
+    };
+    for (decoded.entry.references) |reference| for (reference.spans) |span| {
+        span_count += 1;
+        if (span.target.len != 0) action_count += 1;
+    };
+    try std.testing.expectEqual(@as(usize, 72), span_count);
+    try std.testing.expectEqual(@as(usize, 21), action_count);
+    try std.testing.expectEqual(@as(usize, 1), greek_count);
+    try std.testing.expectEqual(@as(usize, 2), source_errors);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.references.len);
+    try std.testing.expectEqualDeep(before.references, decoded.entry.references);
+}
+
+test "Chinese compact etymology numbers require exact headings and preserve ordinary text and owner boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "词源", "词源1", "词源2", "词源12" }) |title|
+        try std.testing.expect(exactNumberedHeadingSeparated(title, "词源", ""));
+    for ([_][]const u8{ "词源0", "词源01", "词源-1", "词源1a", "词源 1", "词源1 ", "词源说明", "关于词源1", "<nowiki>词源1</nowiki>" }) |title|
+        try std.testing.expect(!exactNumberedHeadingSeparated(title, "词源", ""));
+    try std.testing.expect(partOfSpeech("词源1") == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const ordinary = try renderer.renderBody("词源1\n<nowiki>===词源2===</nowiki>\n<pre>===词源1===</pre>\n");
+    const body = try renderer.renderBody("'''word'''\n# [[meaning|meaning]]\n");
+    const text_sections = [_]Section{ .{ .title = "Notes", .level = 3, .blocks = ordinary }, .{ .title = "名词", .level = 4, .blocks = body } };
+    const text_layout = try buildOwned(a, &text_sections, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 1), text_layout.lexemes.len);
+    try std.testing.expect(text_layout.lexemes[0].etymology == null);
+    for ([_][]const u8{ "词源说明", "词源0", "词源01", "词源1a", "关于词源1" }) |title| {
+        const unproved = [_]Section{ .{ .title = title, .level = 3 }, .{ .title = "名词", .level = 4, .blocks = body } };
+        const layout = try buildOwned(a, &unproved, "Independent owner");
+        try std.testing.expectEqual(@as(usize, 1), layout.lexemes.len);
+        try std.testing.expect(layout.lexemes[0].etymology == null);
+    }
+    const regions = [_]Section{
+        .{ .title = "First owner", .level = 2 }, .{ .title = "词源1", .level = 3 }, .{ .title = "名词", .level = 4, .blocks = body },
+        .{ .title = "词源2", .level = 3 }, .{ .title = "名词", .level = 4, .blocks = body },
+        .{ .title = "Second owner", .level = 2 }, .{ .title = "名词", .level = 3, .blocks = body },
+    };
+    const layout = try buildOwned(a, &regions, "Independent owner");
+    try std.testing.expectEqual(@as(usize, 3), layout.lexemes.len);
+    for (layout.lexemes, [_]?usize{ 1, 3, null }) |noun, origin| {
+        try std.testing.expectEqual(origin, noun.etymology);
+        try std.testing.expectEqualStrings("Independent owner", noun.language);
+    }
+    const support = [_]Section{ .{ .title = "词源1", .level = 3 }, .{ .title = "Support", .level = 4, .blocks = body } };
+    try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &support, "Independent owner")).lexemes.len);
 }
