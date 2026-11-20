@@ -279,6 +279,37 @@ class EditionTerminalTests(unittest.TestCase):
                 digest.assert_called_once()
                 self.assertEqual((work / 'ordinary/languages.tsv').read_bytes(), data)
 
+    def test_first_copy_across_devices_seeds_later_independent_reader_cases(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            source = work / 'edition'
+            source.mkdir()
+            original = source / 'languages.tsv'
+            payload = b'a' * (1024 * 1024)
+            original.write_bytes(payload)
+            member = {'size': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
+            (source / 'complete.json').write_text(json.dumps({
+                'status': 'built', 'publication_files': {'languages.tsv': member}}))
+
+            def local_clone(src, dst):
+                if os.path.samestat(os.fstat(src.fileno()), original.stat()):
+                    return False  # The publication is on a different device from the reports.
+                dst.write(os.pread(src.fileno(), len(payload), 0))
+                dst.flush()
+                dst.seek(0)
+                return True
+
+            seeds = PublicationSeeds()
+            self.addCleanup(seeds.close)
+            with patch('verify_edition_terminal.clone_file', side_effect=local_clone), \
+                 patch('verify_edition_terminal.hashlib.file_digest', wraps=hashlib.file_digest) as digest:
+                copy_publication(source, work / 'first', seeds=seeds)
+                (work / 'first/languages.tsv').write_bytes(b'first reader state')
+                copy_publication(source, work / 'second', seeds=seeds)
+                self.assertEqual((work / 'second/languages.tsv').read_bytes(), payload)
+                self.assertEqual(original.read_bytes(), payload)
+                digest.assert_called_once()
+
     def test_copying_a_verified_empty_catalog_requires_explicit_empty_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)

@@ -92,7 +92,11 @@ class PublicationSeeds:
                 self.members.pop(original).close()
                 seed = None
             if not clone_file(seed.snapshot if seed else source, out):
-                return False
+                if seed:
+                    return False
+                # A cross-volume first copy can still seed later cases on the report volume.
+                shutil.copyfileobj(source, out, length=1024 * 1024)
+                out.seek(0)
             require(os.fstat(out.fileno()).st_size == expected['size'], f'Publication member differs: {original}')
             if not seed:
                 require(hashlib.file_digest(out, 'sha256').hexdigest() == expected['sha256'],
