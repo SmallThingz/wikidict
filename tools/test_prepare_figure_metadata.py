@@ -195,5 +195,66 @@ class FigureInputTests(unittest.TestCase):
             self.assertFalse((args.output/figure.COMPLETE).exists())
 
 
+ML_FIGURE_TITLE_FIXTURES = Path(__file__).parent / 'testdata/ml-figure-title-seeds01'
+D191_CORE = 'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2'
+D191_F03 = 'f03f1fdaa2d112807b6ce63170eb50e86de615bd'
+
+
+class ExplicitFigureTitleInputs(unittest.TestCase):
+ def setUp(self):
+  import tempfile
+  self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.root=Path(self.tmp.name)
+ def row(self,kind,raw,number=0):
+  source=self.root/('source-'+str(number));source.write_bytes(raw)
+  return dict(figure.evidence.snapshot_input(source,self.root,f'figure-file-query-{number:04d}.{kind}'),kind=kind)
+ def names(self,rows):return figure.provider_query_titles(self.root,rows,(ML_FIGURE_TITLE_FIXTURES/'namespace-registry.tsv').read_bytes(),'mlwiktionary','20261001')
+ def test_explicit_original_titles_match_all_sixteen_recorded_api_names(self):
+  # Independent expected names come from the actually accepted official v2
+  # observation, not from a second call to the normalizer being tested.
+  expected={line.split('\t',1)[0] for line in (ML_FIGURE_TITLE_FIXTURES/'observed.tsv').read_text().splitlines()[1:]}
+  row=self.row('titles',(ML_FIGURE_TITLE_FIXTURES/'titles.txt').read_bytes());self.assertEqual(16,len(expected));self.assertEqual(expected,self.names([row]))
+ def test_legacy_warning_source_and_explicit_titles_union_without_owner_claim(self):
+  # Synthetic unit warning only; never used as a capture input or presented
+  # as a real native failure. The existing warning grammar stays unchanged.
+  warning=b'file metadata snapshot unavailable: title=File:Example.ogg\nignored text\n'
+  log=self.row('log',warning);titles=self.row('titles',b'File:Example.ogg\nMedia:Second.wav\n',1)
+  self.assertEqual({'പ്രമാണം:Example.ogg'},self.names([log]))
+  self.assertEqual({'പ്രമാണം:Example.ogg','പ്രമാണം:Second.wav'},self.names([log,titles]))
+ def test_invalid_kind_extension_and_non_file_namespace_refuse(self):
+  row=self.row('titles',b'File:Example.ogg\n')
+  for change in ({'kind':'unknown'},{'kind':'log'},{'path':'../figure-file-query-0000.titles'}):
+   with self.subTest(change=change),self.assertRaises(ValueError):self.names([{**row,**change}])
+  other=self.row('titles',b'Category:Example\n',1)
+  with self.assertRaises(ValueError):self.names([other])
+ def test_seed_mutation_and_duplicate_evidence_refuse(self):
+  row=self.row('titles',b'File:Example.ogg\n')
+  with self.assertRaises(ValueError):self.names([row,row])
+  (self.root/row['path']).write_bytes(b'File:Other.ogg\n')
+  with self.assertRaises(ValueError):self.names([row])
+
+
+class D191ProfileTests(unittest.TestCase):
+    def test_exact_registration_retains_reviewed_v4_model(self):
+        registration = dict(figure.FIGURE_MEDIA_VARIANTS[D191_F03])
+        actual = figure.figure_profile(D191_CORE, figure.FIGURE_PROFILE_V4, registration)
+        expected = dict(figure.FIGURE_WMF4_PROFILE, media_extensions=registration)
+        self.assertEqual(actual, expected)
+        # Retain the reviewed geometry model anchors, distinct from raw epoch bodies.
+        self.assertEqual(actual['svg_handler_sha256'], 'f3e8b5c497c8ed3871e89edb23ca19c8279caf93a6697f2b9431a562204637a9')
+        self.assertEqual(actual['bitmap_handler_sha256'], 'd479a959113ddeb55d07ba5607d4a06c52010cba60b616544fcc0800aaab2ce4')
+        registration.clear()
+        self.assertTrue(actual['media_extensions'])
+
+    def test_legacy_and_foreign_registration_refused(self):
+        registration = dict(figure.FIGURE_MEDIA_VARIANTS[D191_F03])
+        for kind in (figure.FIGURE_PROFILE_V3, figure.FIGURE_PROFILE_V5):
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                figure.figure_profile(D191_CORE, kind, registration)
+        for changed in ({}, dict(registration, Unknown='0' * 40),
+                        dict(registration, TimedMediaHandler='0' * 40)):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                figure.figure_profile(D191_CORE, figure.FIGURE_PROFILE_V4, changed)
+
+
 if __name__ == '__main__':
     unittest.main()

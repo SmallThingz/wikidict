@@ -155,7 +155,9 @@ FIGURE_WMF4_CORES = (FIGURE_WMF4_CORE, 'bb3b6755d485f60478c87c907f0557c53117142d
                     '93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c',
                     '992ad5e3679f848254828e823860ba8b3ad3b39b',
                  'bfe24921d500b20f2938fb8fe2a09cf5cac80161',
-                    '6e76237de1cf29c08427d191f110a2c38c2b4cf9')
+                    '6e76237de1cf29c08427d191f110a2c38c2b4cf9',
+                    'f03f1fdaa2d112807b6ce63170eb50e86de615bd',
+                    'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2')
 FIGURE_RESPONSE_EPOCHS = (FIGURE_CURRENT_CORE, FIGURE_RESPONSE_CORE, *FIGURE_REGISTRATION_EPOCHS, *FIGURE_WMF4_CORES)
 for _reviewed_core in (FIGURE_COMPATIBLE_CORE, FIGURE_CURRENT_CORE):
     FIGURE_SOURCE_PROFILES[_reviewed_core] = dict(FIGURE_SOURCE_PROFILES['0470f6c99a6456a366635bf25a517a1f951de6f5'])
@@ -192,9 +194,16 @@ FIGURE_MEDIA_VARIANTS = {
 }
 # Same reviewed handler sources and complete registration set as 992ad.
 FIGURE_MEDIA_VARIANTS['6e76237de1cf29c08427d191f110a2c38c2b4cf9'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
+FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd'] = FIGURE_MEDIA_VARIANTS['992ad5e3679f848254828e823860ba8b3ad3b39b']
 
 
 def figure_profile(core, kind, media_extensions=None):
+    if core == 'd1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2':
+        # Only the V4 handler model and this complete registration set were observed.
+        registered = FIGURE_MEDIA_VARIANTS['f03f1fdaa2d112807b6ce63170eb50e86de615bd']
+        if kind != FIGURE_PROFILE_V4 or (media_extensions is not None and media_extensions != registered):
+            raise ValueError('Unreviewed Figure handler profile or media registration')
+        return dict(FIGURE_WMF4_PROFILE, media_extensions=dict(registered))
     # GIF inherits bitmap geometry. This profile does not certify animated
     # thumbnail pixels, frame selection, or deployed animation limits.
     if kind == FIGURE_PROFILE_V3:
@@ -1497,16 +1506,16 @@ QUERY_INPUTS = 'figure-file-query-inputs.json'
 
 
 def provider_query_titles(root, inputs, namespace, wiki, date):
-    """Observed probes supplement SQL names; neither implies Lua query closure."""
+    """Explicit file titles and observed probes supplement SQL; neither grants Lua query closure."""
     if not isinstance(inputs, list) or len(inputs) > 1024:
         raise ValueError('Invalid observed file query inputs')
     registry = evidence.Registry(namespace, wiki, date)
     titles, seen = set(), set()
     total = 0
     for row in inputs:
-        if (not isinstance(row, dict) or row.get('kind') != 'log' or
+        if (not isinstance(row, dict) or row.get('kind') not in ('log', 'titles') or
                 not isinstance(row.get('path'), str) or
-                re.fullmatch(r'figure-file-query-\d{4}\.log', row['path']) is None or
+                re.fullmatch(r'figure-file-query-\d{4}\.' + row['kind'], row['path']) is None or
                 row['path'] in seen):
             raise ValueError('Invalid or duplicate observed file query source')
         seen.add(row['path'])
@@ -1517,6 +1526,11 @@ def provider_query_titles(root, inputs, namespace, wiki, date):
         total += actual['size']
         if total > MAX_METADATA or any(row.get(key) != value for key, value in actual.items()):
             raise ValueError('Observed file query source changed or exceeds bounds')
+        if row['kind'] == 'titles':
+            # Use the same explicit-title parser as the standalone v2 Provider.
+            # This is source input, never a claim that a native query failed.
+            evidence.seed_file(path, 'titles', titles, registry, False)
+            continue
         with path.open('rb') as source:
             while raw := source.readline(evidence.MAX_LINE + 1):
                 if len(raw) > evidence.MAX_LINE:
@@ -4312,23 +4326,27 @@ def _capture_files(args, transport=None, sleep=time.sleep, *, target_contract=RE
     namespace = saved[site_info.PREFIX + 'namespace-registry.tsv']
     inventory_cache = {} if _verification_caches is None else _verification_caches['inventory']
     inventory = selected_inventory(args, namespace, inventory_cache=inventory_cache)
-    log_paths = [Path(path) for path in getattr(args, 'log', [])]
-    if len(log_paths) > 1024 or len(set(log_paths)) != len(log_paths):
-        raise ValueError('Invalid or duplicate observed file query source')
-    if sum(evidence.stamp(path)[2] for path in log_paths) > MAX_METADATA:
-        raise ValueError('Observed file query sources exceed bounded capacity')
+    query_paths = [('log', Path(path)) for path in getattr(args, 'log', [])]
+    query_paths += [('titles', Path(path)) for path in getattr(args, 'titles', [])]
+    source_paths = [path for _, path in query_paths]
+    if len(query_paths) > 1024 or len(set(source_paths)) != len(source_paths):
+        raise ValueError('Invalid or duplicate explicit file query source')
+    if sum(evidence.stamp(path)[2] for path in source_paths) > MAX_METADATA:
+        raise ValueError('Explicit file query sources exceed bounded capacity')
     if resume_path is None:
         root.mkdir(parents=True, exist_ok=False)
-        query_inputs = [dict(evidence.snapshot_input(path, root, f'figure-file-query-{number:04d}.log'), kind='log')
-                        for number, path in enumerate(log_paths)]
+        query_inputs = [dict(evidence.snapshot_input(path, root, f'figure-file-query-{number:04d}.{kind}'), kind=kind)
+                        for number, (kind, path) in enumerate(query_paths)]
         evidence.document(root / QUERY_INPUTS, query_inputs)
     else:
         if Path(resume_path).parent.resolve() != root.resolve() or (root / COMPLETE).exists():
             raise ValueError('Resume must bind this unfinished Figure generation')
         query_inputs = decode(small(root / QUERY_INPUTS))
-        if len(query_inputs) != len(log_paths):
+        if len(query_inputs) != len(query_paths):
             raise ValueError('Figure resume query inputs differ')
-        for row, path in zip(query_inputs, log_paths, strict=True):
+        for row, (kind, path) in zip(query_inputs, query_paths, strict=True):
+            if row.get('kind') != kind:
+                raise ValueError('Figure resume query source kind differs')
             actual = evidence.fingerprint(path)
             if any(row.get(key) != actual[key] for key in ('size', 'sha1', 'sha256')):
                 raise ValueError('Figure resume query bytes differ')
@@ -6416,6 +6434,8 @@ def main():
                          help='existing normal request/receipt evidence record, replayed without refetching')
     collect.add_argument('--log', type=Path, action='append', default=[],
                          help='retained provider-query warnings, distinct from the dated SQL file inventory')
+    collect.add_argument('--titles', type=Path, action='append', default=[],
+                         help='explicit UTF-8 File/Media title seeds; no native probe or whole-corpus closure claim')
     collect.add_argument('--page-selection', type=Path,
                          help='explicit original page identity and literal file spans; never whole-edition coverage')
     collect.add_argument('--batch-size', type=int, default=50)
