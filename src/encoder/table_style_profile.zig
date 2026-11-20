@@ -9905,6 +9905,12 @@ pub const Profile = struct {
                 while (cursor) |node| : (cursor = node.parent) absent = absent and languageRefutes(range, node, root_language);
                 if (absent) continue;
             };
+            // The exact bare :lang() parser retains its matching uncertainty,
+            // but changing only the content wrapper's LTR/RTL class cannot
+            // change language inheritance. This proves direction independence,
+            // not that the rule is absent or that its declarations are safe.
+            // Keep the ordinary Figure/font cascade responsible for those effects.
+            if (rule.selector.language_range != null) continue;
             // A fully inventoried caption cannot acquire a subject tag absent
             // from both its native nodes and the actual inherited ancestry.
             // This refutes an effect; it never matches a language predicate.
@@ -16909,7 +16915,11 @@ test "Figure caption class inventory refutes only complete positive language-cla
         ".outer :lang(vi).Hani", ".Hani\\:escaped:lang(vi)", ".Hani:lang(vi)extra",
     }) |selector| {
         var profile = try parseAlloc(a, try std.fmt.allocPrint(a, "{s}{{font-family:unrepresented}}", .{selector})); defer profile.deinit();
-        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUseWithCaptionClasses(null, ""));
+        if (bareLanguageRange(selector) != null) {
+            try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUseWithCaptionClasses(null, ""));
+            const unknown: TextElement = .{ .tag = "figure" };
+            try std.testing.expect((try profile.resolveFigure(a, &unknown, 1, false)).unresolved);
+        } else try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUseWithCaptionClasses(null, ""));
     }
 }
 
@@ -16980,7 +16990,6 @@ test "Figure finite caption nodes refute absent subjects without language or roo
     const authored: TextElement = .{ .tag = "ol", .source_key = 7 };
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, inherited.figureRootDirectionUseWithCaptionDomain(&authored, "", tags));
     for ([_][]const u8{
-        ":lang(chu),:lang(cu),:lang(orv){font-size:110%;line-height:1}",
         "span:lang(vi){font-size:110%}", "a:lang(vi){font-size:110%}",
         "html:lang(vi){font-size:110%}", "body:lang(vi){font-size:110%}",
         ":is(ol,span):lang(vi){font-size:110%}", "div:has(ol):lang(vi){font-size:110%}",
@@ -16992,6 +17001,15 @@ test "Figure finite caption nodes refute absent subjects without language or roo
             std.debug.print("caption domain strict case: {s}\n", .{css}); return failure;
         };
     }
+    // Bare language applicability remains unknown; only its dependence on
+    // the wrapper's direction alternatives is absent.
+    var language_only = try parseAlloc(a, ":lang(chu),:lang(cu),:lang(orv){font-size:110%;line-height:1}");
+    defer language_only.deinit();
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent,
+        language_only.figureRootDirectionUseWithCaptionDomain(null, "", tags));
+    const unknown_language: TextElement = .{ .tag = "figure" };
+    try std.testing.expect((try language_only.resolveFigure(a, &unknown_language, 1, false)).unresolved);
+    try std.testing.expect((try language_only.resolveFontSizeIn(a, &unknown_language, "", null)).? == .unknown);
     var builder: Builder = .{ .a = a };
     try std.testing.expect(try builder.figureNecessaryCompound("a[href=\"broken].external") == null);
     try std.testing.expect(try builder.figureSubjectTag("[data-x=\"unterminated] ol:lang(vi)") == null);
@@ -17000,6 +17018,7 @@ test "Figure finite caption nodes refute absent subjects without language or roo
 
 test "page language refutation preserves nearest overrides unknown barriers and actual font effects" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var global = try parseForTargetAlloc(a, "", .screen); defer global.deinit();
     var profile = try parseAlloc(a, ":lang(chu),:lang(cu),:lang(orv){font-size:110%;line-height:1}"); defer profile.deinit();
     const root: TextElement = .{ .tag = "div", .language = "ru", .ancestry_complete = true };
     const child: TextElement = .{ .tag = "span", .parent = &root };
@@ -17020,8 +17039,8 @@ test "page language refutation preserves nearest overrides unknown barriers and 
     }
     try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, null));
     for ([_]?*const TextElement{ &matching, &inner, &empty }) |node|
-        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUseWithLanguage(node, "", null, "ru", true, null));
-    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, profile.figureRootDirectionUseWithLanguage(&child, "", null, "ru", false, null));
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUseWithLanguage(node, "", null, "ru", true, null));
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, profile.figureRootDirectionUseWithLanguage(&child, "", null, "ru", false, null));
     for ([_][]const u8{ ":lang('cu')", ":lang(cu,ru)", ":not(:lang(cu))", "span:lang(cu)", ":lang(cu) span", ":lang(cu--Cyrl)" }) |selector|
         try std.testing.expect(bareLanguageRange(selector) == null);
     const cu_rule = profile.figure_rules[1];
@@ -17031,10 +17050,35 @@ test "page language refutation preserves nearest overrides unknown barriers and 
     for ([_][]const u8{ "color:red", "font-family:serif", "font-style:italic", "font-size:110%;color:red", "font-size:var(--scale)", "line-height:inherit" }) |css| {
         const source = try std.fmt.allocPrint(a, ":lang(cu){{{s}}}", .{css});
         var outer = try parseAlloc(a, source); defer outer.deinit();
-        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, null));
+        var joined = try joinPageSourcesAlloc(a, &global, &.{.{ .css = source, .base_url = "" }}, &.{}); defer joined.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, null));
         try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, &.{ "ru", "ru" }));
-        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, &.{ "cu", "ru" }));
-        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, &.{ "", "ru" }));
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, &.{ "cu", "ru" }));
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, outer.figureRootDirectionUseWithLanguage(&child, "", null, "ru", true, &.{ "", "ru" }));
+        // The old direction refusals above represented applicability doubt.
+        // Keep that doubt in the selected ordinary CSS consumers instead.
+        const uncertain = outer.figure_rules[0].selector;
+        try std.testing.expect(uncertain.uncertain and uncertain.root_predicate_unresolved);
+        // Legacy false mode reports a conservative possible match as known.
+        // The selector remains uncertain; this is not cascade acceptance.
+        try std.testing.expectEqual(ContainerSelectorMatch.known, uncertain.matchIn(&matching, false));
+        try std.testing.expectEqual(ContainerSelectorMatch.no, uncertain.matchIn(&child, false));
+        const page_root: TextElement = .{ .tag = "div", .classes = "mw-content-ltr mw-parser-output", .language = "ru", .ancestry_complete = true, .physical_ancestry_complete = true };
+        var scoped_matching = matching; scoped_matching.parent = &page_root; scoped_matching.page_style_root = &page_root; scoped_matching.physical_ancestry_complete = true;
+        var scoped_child = child; scoped_child.parent = &page_root; scoped_child.page_style_root = &page_root; scoped_child.physical_ancestry_complete = true;
+        const scoped_selector = joined.figure_rules[0].selector;
+        try std.testing.expectEqual(ContainerSelectorMatch.unknown, scoped_selector.matchIn(&scoped_matching, true));
+        try std.testing.expectEqual(ContainerSelectorMatch.no, scoped_selector.matchIn(&scoped_child, true));
+        for ([_]*const Profile{ &outer, &joined }, [_]*const TextElement{ &matching, &scoped_matching }) |selected_profile, selected_node| {
+            if (std.mem.indexOf(u8, css, "color:") != null)
+                try std.testing.expect((try selected_profile.resolveTextPaint(a, selected_node, "")).color.? == .unknown);
+            if (std.mem.indexOf(u8, css, "font-style:") != null)
+                try std.testing.expect((try selected_profile.resolveTextPaint(a, selected_node, "")).font_style.? == .unknown);
+            if (std.mem.indexOf(u8, css, "font-size:") != null)
+                try std.testing.expect((try selected_profile.resolveFontSizeIn(a, selected_node, "", null)).? == .unknown);
+            if (std.mem.indexOf(u8, css, "font-family:") != null or std.mem.indexOf(u8, css, "line-height:") != null)
+                try std.testing.expect((try selected_profile.resolveFigure(a, selected_node, 1, false)).unresolved);
+        }
     }
 }
 
@@ -20426,6 +20470,106 @@ test "table background none respects important order and leaves unsupported pain
     var uncertain = try parseAlloc(a, ".paint:hover{background:none}"); defer uncertain.deinit();
     const unknown = try uncertain.resolveTableWithContext(a, 0, "paint", context, null, "");
     try std.testing.expect(unknown.unresolved);
+}
+
+
+test "Figure bare language direction independence preserves retained French font applicability" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    // Exact rule from indexed Gadget-StyleScripts.css p2869311/r39407669,
+    // decoded SHA-256 73585b1a1c2c21eb5595fff6f36c42ce22215dd4f0c84c818c1898109bc25045.
+    const css =
+        \\:lang(vi-Hani) {
+        \\  font-family: 'Nom Na Tong', 'HAN NOM A', 'HAN NOM B', Sun-ExtA, Sun-ExtB, Ming-Lt-HKSCS-UNI-H, Ming-Lt-HKSCS-ExtB,
+        \\  HanaMinA, HanaMinB, HanaMin, 'PingFang TC', MingLiU, MingLiU-ExtB, 'MingLiU_HKSCS', 'MingLiU_HKSCS-ExtB', SimSun,
+        \\  SimSun-ExtB, serif;
+        \\}
+    ;
+    var profile = try parseAlloc(a, css); defer profile.deinit();
+    var empty_profile = try parseForTargetAlloc(a, "", .screen); defer empty_profile.deinit();
+    var joined = try joinPageSourcesAlloc(a, &empty_profile, &.{.{ .css = css, .base_url = "" }}, &.{}); defer joined.deinit();
+    try std.testing.expectEqual(@as(usize, 1), profile.figure_rules.len);
+    try std.testing.expectEqual(@as(usize, 1), joined.figure_rules.len);
+    const selector = profile.figure_rules[0].selector;
+    try std.testing.expectEqualStrings("vi-Hani", selector.language_range.?);
+    try std.testing.expect(selector.uncertain and selector.root_predicate_unresolved);
+    // No full page classes, language absence, or source-parent certificate is
+    // supplied. The predicate can match; its truth is invariant under direction.
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent,
+        profile.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
+    for ([_]?[]const u8{ null, "vi-Hani", "fr", "" }) |language| {
+        var previous: ?FigureStyle = null;
+        for ([_][]const u8{ "mw-content-ltr mw-parser-output", "mw-content-rtl mw-parser-output" }, [_]bool{ false, true }) |classes, rtl| {
+            const root: TextElement = .{ .tag = "div", .classes = classes, .language = language, .ancestry_complete = true };
+            const figure: TextElement = .{ .tag = "figure", .parent = &root };
+            var witness: Profile.FigureRootDirectionWitness = .{};
+            try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent,
+                profile.figureRootDirectionUseWithCompleteClasses(&figure, "", &.{}, null, false, null, null, &witness));
+            const nonmatching = if (language) |value| std.mem.eql(u8, value, "fr") else false;
+            // Legacy possible-match and joined uncertainty are distinct APIs.
+            try std.testing.expectEqual(if (nonmatching) ContainerSelectorMatch.no else ContainerSelectorMatch.known,
+                selector.matchIn(&figure, false));
+            var page_root = root; page_root.physical_ancestry_complete = true;
+            var scoped = figure; scoped.parent = &page_root; scoped.page_style_root = &page_root; scoped.physical_ancestry_complete = true;
+            try std.testing.expectEqual(if (nonmatching) ContainerSelectorMatch.no else ContainerSelectorMatch.unknown,
+                joined.figure_rules[0].selector.matchIn(&scoped, true));
+            const scoped_result = try joined.resolveFigure(a, &scoped, 1, rtl);
+            const resolved = try profile.resolveFigure(a, &figure, 1, rtl);
+            try std.testing.expectEqualDeep(resolved, scoped_result);
+            if (nonmatching) {
+                try std.testing.expectEqualDeep(try empty_profile.resolveFigure(a, &figure, 1, rtl), resolved);
+                try std.testing.expect(!resolved.unresolved);
+            } else {
+                // The actual ordinary Figure resolver still sees the uncertain
+                // font rule. Direction independence never drops its declaration.
+                try std.testing.expect(resolved.unresolved);
+            }
+            if (previous) |prior| try std.testing.expectEqualDeep(prior, resolved);
+            previous = resolved;
+            const override: TextElement = .{ .tag = "figure", .language = "vi-Hani", .parent = &root };
+            try std.testing.expect((try profile.resolveFigure(a, &override, 1, rtl)).unresolved);
+            var scoped_override = override; scoped_override.parent = &page_root; scoped_override.page_style_root = &page_root; scoped_override.physical_ancestry_complete = true;
+            try std.testing.expect((try joined.resolveFigure(a, &scoped_override, 1, rtl)).unresolved);
+        }
+    }
+}
+
+test "Figure bare language proof retains direction predicates chains and selected text effects" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        ".mw-content-rtl figcaption a{font-family:serif}",
+        ":dir(rtl){font-family:serif}", ":lang(vi-Hani):dir(rtl){font-family:serif}",
+        ":lang(vi-Hani) > figcaption{font-family:serif}",
+        ".mw-content-rtl :lang(vi-Hani){font-family:serif}",
+        ":not(:lang(vi-Hani)){font-family:serif}", ":lang(vi-Hani,fr){font-family:serif}",
+        ":lang('vi-Hani'){font-family:serif}", ":lang(vi-Hani) + a{font-family:serif}",
+    }) |css| {
+        var strict = try parseAlloc(a, css); defer strict.deinit();
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved,
+            strict.figureRootDirectionUseWithCompleteClasses(null, null, null, null, false, null, null, null));
+    }
+    var text = try parseAlloc(a, ":lang(vi-Hani){font-size:110%;color:red}"); defer text.deinit();
+    const root: TextElement = .{ .tag = "div", .language = "fr", .ancestry_complete = true };
+    const matching: TextElement = .{ .tag = "figcaption", .language = "vi-Hani", .parent = &root };
+    const opposite: TextElement = .{ .tag = "figcaption", .parent = &root };
+    const unknown: TextElement = .{ .tag = "figcaption" };
+    for ([_]*const TextElement{ &matching, &opposite, &unknown }) |node|
+        try std.testing.expectEqual(Profile.FigureRootDirectionUse.independent, text.figureRootDirectionUse(node));
+    for ([_]*const TextElement{ &matching, &unknown }) |node| {
+        try std.testing.expect((try text.resolveFontSizeIn(a, node, "", null)).? == .unknown);
+        try std.testing.expect((try text.resolveTextPaint(a, node, "")).color.? == .unknown);
+    }
+    try std.testing.expect((try text.resolveFontSizeIn(a, &opposite, "", null)) == null);
+    try std.testing.expect((try text.resolveTextPaint(a, &opposite, "")).color == null);
+    // Custom-property root predicates have a separate dependency path. This
+    // change does not grant their matching or environment authority.
+    const custom_css = ":lang(vi-Hani){--ink:red}";
+    var custom = try parseAlloc(a, custom_css); defer custom.deinit();
+    try attachCustomProperties(&custom, &.{.{ .css = custom_css, .base_url = "" }}, .{
+        .dark = false, .ancestors = &.{ .{ .tag = "html", .root = true }, .{ .tag = "body" } },
+    });
+    try std.testing.expectEqual(Profile.FigureRootDirectionUse.unresolved, custom.figureRootDirectionUse(null));
 }
 
 
