@@ -1,6 +1,7 @@
 import bz2
 import concurrent.futures
 import contextlib
+import errno
 from compression import zstd
 import gzip
 import hashlib
@@ -895,10 +896,29 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
             self.assertEqual(shared.stat().st_ctime_ns,before.st_ctime_ns); self.assertEqual(alias.read_bytes(),b'generated language output')
             self.assertEqual(unknown.read_bytes(),b'unique trace')
 
+    def test_diagnostic_archive_uses_independent_copy_when_reflink_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, _, _, shard, payload, folder, _, _ = self.fixture(Path(tmp))
+            original = shard / 'fallback-pages.jsonl'
+            before = original.read_bytes()
+            with patch.object(b.fcntl, 'ioctl', side_effect=OSError(errno.EXDEV, 'cross-device')) as clone:
+                result = b.cleanup_incomplete_shard_payload(shard, folder / 'diagnostics', retire_payload=False)
+            self.assertEqual(clone.call_count, len(result['diagnostics']))
+            self.assertTrue(all(path.is_file() for path in payload))
+            row = next(item for item in result['diagnostics'] if item['original'] == str(original))
+            archived = Path(row['retained'])
+            self.assertNotEqual(original.stat().st_ino, archived.stat().st_ino)
+            self.assertEqual(archived.read_bytes(), before)
+            original.write_bytes(b'new original')
+            self.assertEqual(archived.read_bytes(), before)
+            archived.write_bytes(b'new archive')
+            self.assertEqual(original.read_bytes(), b'new original')
+
     def test_diagnostic_copy_failure_prevents_any_payload_retirement(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg,edition,workspace,raw,shard,payload,folder,external,closed=self.fixture(Path(tmp))
-            with patch.object(b.shutil,'copyfileobj',side_effect=OSError('archive unavailable')):
+            with (patch.object(b.fcntl, 'ioctl', side_effect=OSError(errno.EOPNOTSUPP, 'no reflink')),
+                  patch.object(b.shutil, 'copyfileobj', side_effect=OSError('archive unavailable'))):
                 with self.assertRaisesRegex(OSError,'archive unavailable'):
                     b.cleanup_incomplete_shard_payload(shard,folder/'diagnostics')
             self.assertTrue(all(path.is_file() for path in payload))

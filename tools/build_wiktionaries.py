@@ -5,6 +5,7 @@ if _prepared_bootstrap_sys._xoptions.get('wikidict_prepared_source')=='1':
     _prepared_bootstrap_sys.path=[_prepared_bootstrap_sys._stdlib_dir,
                                   _prepared_bootstrap_sys._stdlib_dir+'/lib-dynload']
 import argparse
+import errno
 import bz2
 try:
     from compression import zstd
@@ -6741,7 +6742,16 @@ def cleanup_incomplete_shard_payload(shard, diagnostics, *, retire_payload=True)
             target.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             with source.open('rb') as src,target.open('xb') as dst:
                 if identity(source)!=before: raise ValueError('Failure diagnostic changed')
-                shutil.copyfileobj(src,dst,1024*1024)
+                # Keep a private inode for evidence without allocating the same data twice.
+                try:
+                    fcntl.ioctl(dst.fileno(), 0x40049409, src.fileno())  # Linux FICLONE
+                except OSError as error:
+                    if error.errno not in (errno.EXDEV, errno.EOPNOTSUPP, errno.ENOTTY, errno.EINVAL, errno.ENOSYS):
+                        raise
+                    dst.seek(0)
+                    dst.truncate()
+                    src.seek(0)
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
                 dst.flush(); os.fsync(dst.fileno())
             original_sha=sha256_file(source); retained_sha=sha256_file(target)
             if identity(source)!=before or original_sha!=retained_sha:
