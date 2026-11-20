@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "3838ee70ae41a8a4bb34f2551e92be6ee2ab057d32e348dbba2a98809e4bcd7a",
-      "bytes": 1110760,
+      "sha256": "f9707e8b27db3a864acb8acdffb65a4a5d560b57cf454e9208f8451bf71903e3",
+      "bytes": 1110993,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "ffbb7cbc36a936957c76f12d1293d7ffa1493f879c6af868d4979a210a9ddd87",
-          "bytes": 842618
+          "qualified_sha256": "c1d215455367fbc39a6ade3fde67a3dfedd2635a4909826f5da35471531b7ed1",
+          "bytes": 842849
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -208,8 +208,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "a32515088412730549281d755fb4dd2b2aa6c065f6e3172988454c4d9b38a6b0",
-      "bytes": 1387265,
+      "sha256": "8513152f367a68bdd400f422b4bb3546b61fbcbd37c019ef26ddae520327b7fd",
+      "bytes": 1393570,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +222,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "cc2c99cc5c382eddcde4bd51f6e8562dec1f4d2e2bbf3ce85114e10544a8430d",
-          "bytes": 1389940
+          "qualified_sha256": "6e083f942be2dff70d2ec208c5571d84a054e4d71cb5f9a59ecc086df3563ff8",
+          "bytes": 1396164
         }
       ]
     },
@@ -4692,6 +4692,240 @@
         "readingCompositionRejectsReplacementBeforeRegistration",
         "failedReadingPreservesSourceHistoryAndKeyboardRecovery",
         "readingInitialImportRejectsSameDocumentReplacement"
+      ]
+    },
+    "inherited_table_line_origin": {
+      "scope": "Use the allocated first-line origin for inherited typed Table line heights without clamping signed glyph ink or relaxing native page/ownership/value checks.",
+      "current_method": "nativeInlineTableKeepsBaselineAndComputedCellHeight",
+      "native_closure": {
+        "path": "/home/a/wikidict-pt-native-external04/runtime/independent-closure01.json",
+        "bytes": 365158,
+        "sha256": "8700030dda58de7f82aff88606f57bd1c3d01e8d7020cf1df933440d3b2fc1fe"
+      },
+      "native_release": {
+        "path": "/home/a/wikidict-pt-native-external04/runtime/release01.json",
+        "bytes": 468,
+        "sha256": "d0c731ff2d63327b464c08e8644bb7c16da9eef47ef2d47dbdb3e117fce6f887"
+      },
+      "current_method_count": 1,
+      "retained_method_count": 14,
+      "retained_methods_reexecuted": false,
+      "historical_glyph_survey_reexecuted": false,
+      "native_gui": {
+        "path": "/home/a/wikidict-pt-native-external04/lib/libQt6Gui.so.6.12.0",
+        "bytes": 252531072,
+        "sha256": "293161d50ad37d7510dca59a86e37353ab549ef0e5959fa90dbfc4b7c7872e3e"
+      },
+      "app_gui_unchanged": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/desktop-monorepo-build01/lib/libwikidict-gui.so",
+        "bytes": 42365848,
+        "sha256": "256170615fa51ba7dac76d9ce7dcf39c011971539cafb70aa87358d733b0266b"
+      },
+      "native_control_scope": [
+        "ordinary and inline table modes",
+        "96 and 144 DPI",
+        "negative leading with exact 16px allocated line advance",
+        "400/240/400 width restoration",
+        "source and link preservation",
+        "malformed-height rejection and recovery"
+      ],
+      "original_failure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-whole07-ui01/UI_RESULT01.json",
+        "bytes": 11961,
+        "sha256": "b18abff0fdef01fdd39a72505ee4940e7edc9a932a0b4fe74580cade4cc309f6"
+      },
+      "original_failure_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-whole07-ui01/independent-closure01.json",
+        "bytes": 1833,
+        "sha256": "2b8ce48ec2e29c7d7e17c3e9bdb8487697e51a59ee9557a69eedb8238d02d362"
+      },
+      "throw_state_diagnostic": {
+        "path": "/home/a/wikidict-pao-burmese-diagnostic02/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 14168,
+        "sha256": "771d9982042b2de14af18a04b6feae65fb79522e10bcb0889e3a8fbac917e153"
+      },
+      "original_native_error": 4,
+      "original_error_position": 39,
+      "repaired_original_record_diagnostic": {
+        "path": "/home/a/wikidict-pao-burmese-repaired01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 14305,
+        "sha256": "a0cd7ec1004f86444ffcaf186011ea3297f00f61c7fb8128c8a8f9f72819f423"
+      },
+      "genuine_gui": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/UI_RESULT01.json",
+        "bytes": 8988,
+        "sha256": "e22244bf3475abb139c0f3698fdd2058f3bdd803c63819e17cd4cfd3a6236cae"
+      },
+      "genuine_gui_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/independent-closure01.json",
+        "bytes": 12600,
+        "sha256": "39387434e5f7782413fd60009fd3e58b5d9338ebc81b5818d919309e967e42cd"
+      },
+      "genuine_gui_widths": [
+        1000,
+        640
+      ],
+      "genuine_source_and_target": {
+        "complete": {
+          "path": "/mnt/downloads/dev/wikidict/data/corpus-campaign-current01/artifacts/dictionaries-blk-kayan01/blkwiktionary/20261001/complete.json",
+          "bytes": 51901,
+          "sha256": "fefd0c0528902e3abd1bf4959559d9bb1e20700fd16bee792a3ba8a3cc55eb6b"
+        },
+        "source_title": "တမွန်ႏ",
+        "source_owner": "Pa'o Karen/blk",
+        "source_page": "7195/r15998",
+        "target_title": "မှန်",
+        "target_owner": "Burmese/my",
+        "target_page": "7196/r15999",
+        "selection": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/blk-kayan-adoption01/selected.json",
+          "bytes": 734,
+          "sha256": "39d0b21bb61e552b0bf887df63f02becf9e00ccf3cae06f7130f5c55da19fece"
+        },
+        "reader_summary": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/blk-kayan-adoption01/verified-summary.json",
+          "bytes": 1308,
+          "sha256": "e1bf44a5efce87df609b524e13e009c667b6730229348b50e3fd7a41f78983f3"
+        }
+      },
+      "source_text_characters": 356,
+      "target_text_characters": 349,
+      "keyboard_link_and_back_passed": true,
+      "frames": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/wide-source-frame.png",
+          "bytes": 67487,
+          "sha256": "9ea257fc891e727d3e73c242ac539fe578818d8b042b4909d1896fa2226fd452",
+          "dimensions": [
+            1000,
+            700
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/wide-source-link-frame.png",
+          "bytes": 77569,
+          "sha256": "dd50e11255b266eb3d1650aff549fa99ee88c358feab6ae035c9110d646e4431",
+          "dimensions": [
+            1000,
+            700
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/wide-burmese-settled-frame.png",
+          "bytes": 63874,
+          "sha256": "6cf07bd8e5449593cb0fe06df43ac997b2f2d8d660fdf8cf858b4671f3de97e3",
+          "dimensions": [
+            1000,
+            700
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/wide-burmese-lower-frame.png",
+          "bytes": 66070,
+          "sha256": "d46f8b1652b8bb2c138be8942ea7d91ad1a6110c1ed81e749fb06eda9e2f7388",
+          "dimensions": [
+            1000,
+            700
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/wide-back-settled-source-frame.png",
+          "bytes": 77058,
+          "sha256": "12833d945168258e650d96726035fc80d07bfe9d9f5540c3d4829523f36a8174",
+          "dimensions": [
+            1000,
+            700
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/compact-source-link-frame.png",
+          "bytes": 44642,
+          "sha256": "d7c2c3922783b6fa14fc466716c1fc3b6a9642e266e1f771bcd4a4590cf078dc",
+          "dimensions": [
+            640,
+            600
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/compact-burmese-frame.png",
+          "bytes": 37453,
+          "sha256": "54daee200fa4b88384234269c10bcd5bf54b365194c4a7d88ffd519b65b3ef53",
+          "dimensions": [
+            640,
+            600
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/compact-burmese-lower-frame.png",
+          "bytes": 40323,
+          "sha256": "6ea0637137a9e80249dfcae1a16ae7c0ab2b9ac4bf7f6d628746b2c48919a789",
+          "dimensions": [
+            640,
+            600
+          ],
+          "viewed_raw": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pao-app267-native209-ui01/compact-back-source-frame.png",
+          "bytes": 47239,
+          "sha256": "f32443c87c05f1d77659693a05dd7ba5f284134e2a99373f1ff236c8c30fd90f",
+          "dimensions": [
+            640,
+            600
+          ],
+          "viewed_raw": true
+        }
+      ],
+      "source_composition": {
+        "files": [
+          {
+            "path": "src/gui/text/qtextdocumentlayout.cpp",
+            "before_sha256": "ffbb7cbc36a936957c76f12d1293d7ffa1493f879c6af868d4979a210a9ddd87",
+            "after_sha256": "c1d215455367fbc39a6ade3fde67a3dfedd2635a4909826f5da35471531b7ed1",
+            "bytes": 842849,
+            "patch": "0001-logical-flow-renderer.patch",
+            "patch_sha256": "f9707e8b27db3a864acb8acdffb65a4a5d560b57cf454e9208f8451bf71903e3",
+            "patch_bytes": 1110993
+          },
+          {
+            "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+            "before_sha256": "cc2c99cc5c382eddcde4bd51f6e8562dec1f4d2e2bbf3ce85114e10544a8430d",
+            "after_sha256": "6e083f942be2dff70d2ec208c5571d84a054e4d71cb5f9a59ecc086df3563ff8",
+            "bytes": 1396164,
+            "patch": "0002-layout-regressions.patch",
+            "patch_sha256": "8513152f367a68bdd400f422b4bb3546b61fbcbd37c019ef26ddae520327b7fd",
+            "patch_bytes": 1393570
+          }
+        ],
+        "exact_native209_patch": true,
+        "zero_fuzz": true,
+        "forward_reverse_exact": true,
+        "selected_control_body_matches_qualified_native209": true,
+        "other_patch_sections_unchanged": true,
+        "canonical_binary_rebuilt": false
+      },
+      "qualified_private_delta": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/pao-burmese-qt-refusal01/native-line-origin01/source01.patch",
+        "bytes": 8183,
+        "sha256": "c7c0f1122ebec2fa1370391033c87f172d672bb748d053569151f889f791603c"
+      },
+      "canonical_binary_rebuilt": false,
+      "full_native_suite": false,
+      "full_app_suite": false,
+      "global_install": false,
+      "actual_artwork_pixels": false,
+      "audio_playback": false,
+      "limitations": [
+        "Only the exact two-leaf repair is projected into the maintained series; unrelated private renderer features remain excluded.",
+        "The existing native control body matches qualified Native209; the complete canonical binary was not rebuilt.",
+        "The genuine source caption retains its unresolved source template link; no source-content correction is claimed."
       ]
     }
   },

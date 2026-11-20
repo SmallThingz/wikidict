@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14912 @@
+@@ -3,24 +3,14993 @@
 
 
  #include <QTest>
@@ -11081,6 +11081,87 @@
 +            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
 +            QCOMPARE(doc.toRawText(), raw);
 +        }
++        // An inherited TABLE height can be shorter than the real glyph ink.
++        // Page accounting must use the allocated line origin, while text keeps
++        // its signed position and authored line advance. The genuine Burmese
++        // audio table exposed this with fallback metrics at line-height: 1.
++        for (int dpi : {96, 144}) for (int kind : {0, 1, 2}) {
++            QImage paintDevice(760, 440, QImage::Format_ARGB32_Premultiplied);
++            paintDevice.setDotsPerMeterX(qRound(dpi / 0.0254));
++            paintDevice.setDotsPerMeterY(qRound(dpi / 0.0254));
++            const qreal density = paintDevice.logicalDpiY() / qreal(QFontMetricsF(QFont()).fontDpi());
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(32);
++            auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
++            layout->setPaintDevice(&paintDevice);
++            QFont font; font.setPointSizeF(12); doc.setDefaultFont(font);
++            doc.setHtml(QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'>"
++                "<tr><td><p>M</p><p>M</p></td><td><a href='inherited-height'>link</a></td></tr></table>"));
++            auto *table = qobject_cast<QTextTable *>(doc.rootFrame()->childFrames().value(0));
++            QVERIFY(table); QCOMPARE(table->rows(), 1); QCOMPARE(table->columns(), 2);
++            auto format = table->format();
++            format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++            if (kind) { format.setProperty(display, kind); format.setProperty(alignment, 1); }
++            format.setProperty(lineHeight, 16.0); format.setTopMargin(0); format.setBottomMargin(0);
++            table->setFormat(format);
++            const int firstPosition = table->cellAt(0, 0).firstPosition();
++            const int lastPosition = table->cellAt(0, 0).lastPosition();
++            for (auto block = doc.findBlock(table->firstPosition()); block.isValid() && block.position() < table->lastPosition(); block = block.next()) {
++                QTextCursor cursor(block); auto bf = block.blockFormat(); bf.setTopMargin(0); bf.setBottomMargin(0);
++                bf.setProperty(lineHeight, 16.0); cursor.setBlockFormat(bf);
++                if (block.position() >= firstPosition && block.position() <= lastPosition) {
++                    cursor.select(QTextCursor::BlockUnderCursor); QTextCharFormat large;
++                    large.setFontPointSize(48); cursor.mergeCharFormat(large);
++                }
++            }
++            const QString raw = doc.toRawText();
++            QVariantList flows;
++            if (kind) flows.append(QVariantMap{{QStringLiteral("first"), table->firstPosition() - 1},
++                {QStringLiteral("last"), table->lastPosition() + 1}, {QStringLiteral("direction"), int(Qt::LeftToRight)},
++                {QStringLiteral("joins"), QVariantList{}}, {QStringLiteral("parts"), QVariantList{
++                    QVariantMap{{QStringLiteral("kind"), QStringLiteral("frame")}, {QStringLiteral("object"), table->objectIndex()}}}}});
++            QVERIFY(layout->wikidictSetLogicalFlows(flows)); doc.setLayoutEnabled(true);
++            QRectF originalBox;
++            int resize = 0;
++            for (int width : {400, 240, 400}) {
++                doc.setTextWidth(width * density); doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
++                const auto first = doc.findBlock(firstPosition), second = first.next();
++                QVERIFY(first.isValid() && second.isValid()); QCOMPARE(first.layout()->lineCount(), 1);
++                const auto firstLine = first.layout()->lineAt(0);
++                // This is an independent negative-leading trigger, not merely
++                // a successful page whose glyphs happened to fit the height.
++                QVERIFY(firstLine.height() > 16 * density + 1);
++                QVERIFY(firstLine.y() < -1);
++                QVERIFY(qAbs(second.layout()->position().y() - first.layout()->position().y() - 16 * density) < 0.08);
++                QCOMPARE(first.blockFormat().doubleProperty(lineHeight), 16.0);
++                QCOMPARE(second.blockFormat().doubleProperty(lineHeight), 16.0);
++                const auto link = doc.find(QStringLiteral("link")); QVERIFY(!link.isNull());
++                QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("inherited-height"));
++                QCOMPARE(link.currentTable(), table); QCOMPARE(doc.toRawText(), raw);
++                const QRectF box = layout->tableBoundingRect(table); QVERIFY(box.isValid());
++                if (resize == 0) originalBox = box;
++                else if (resize == 2) QCOMPARE(box, originalBox);
++                if (kind == 1 && resize < 2) {
++                    paintDevice.fill(Qt::white); QPainter painter(&paintDevice);
++                    layout->draw(&painter, QAbstractTextDocumentLayout::PaintContext()); painter.end();
++                    QDir().mkpath(QStringLiteral(".tmp/ui-screenshots"));
++                    QVERIFY(paintDevice.save(QStringLiteral(".tmp/ui-screenshots/inherited-table-height-%1-%2-%3.png")
++                        .arg(QCoreApplication::applicationPid()).arg(dpi).arg(width)));
++                }
++                ++resize;
++            }
++            for (const QVariant &invalid : {QVariant(16), QVariant(0.0), QVariant(-1.0),
++                    QVariant(std::numeric_limits<double>::infinity())}) {
++                doc.setLayoutEnabled(false); auto bad = format; bad.setProperty(lineHeight, invalid); table->setFormat(bad);
++                QVERIFY(layout->wikidictSetLogicalFlows(flows)); doc.setLayoutEnabled(true);
++                doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++                QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 1);
++            }
++            doc.setLayoutEnabled(false); table->setFormat(format);
++            QVERIFY(layout->wikidictSetLogicalFlows(flows)); doc.setLayoutEnabled(true);
++            doc.markContentsDirty(0, doc.characterCount()); layout->documentSize();
++            QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), raw);
++        }
 +    }
 +
 +    void nativeTableBoxKeepsCellsAndContainingFlow()
@@ -14935,7 +15016,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15536,2672 @@
+@@ -648,5 +15617,2672 @@
      }
  }
 

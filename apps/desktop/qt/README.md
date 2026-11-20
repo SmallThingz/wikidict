@@ -1,5 +1,28 @@
 # Patched Qt for the native reader
 
+Inherited typed Table line heights now use the first line's allocated origin for
+page accounting, as explicit Cell heights already do. Tall glyphs retain their
+signed ink position and authored line advance. The existing ownership, height
+validation and page-extent checks remain in force. This fixes the genuine Burmese
+audio table that previously refused to render with native error 4.
+
+The existing table-height regression passed on Native209 at 96 and 144 DPI,
+covering ordinary and inline tables, negative leading, resize restoration, source
+and links, malformed heights and recovery. Fourteen prior controls are retained,
+not rerun. The unchanged App267 then opened the genuine Pa'O source link to the
+Burmese entry at 1000x700 and 640x600; keyboard Back restored the complete source
+and focused link at both sizes. Normal Quit, process cleanup and input identity
+checks passed. The original failure remains recorded. Images and audio playback
+were not qualified.
+
+Only the exact two-file repair is composed into the maintained patches below.
+The affected canonical sources reconstruct forward and backward against the
+pinned upstream bytes, and the complete selected control matches the qualified
+private control. Unrelated private renderer features remain excluded. This source
+delivery does not claim a rebuilt canonical binary, full suite or global install;
+the scoped evidence is under `qualification.inherited_table_line_origin` in
+`manifest.json`.
+
 The logical-flow reader requires these Qt changes. A stock system Qt does not
 provide the registration, source-position and figure-layout methods it uses.
 The patches preserve original document offsets while laying out authored
