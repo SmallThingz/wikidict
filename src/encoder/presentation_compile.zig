@@ -10706,18 +10706,40 @@ pub const Renderer = struct {
         }
         return out.toOwnedSlice() catch return error.OutOfMemory;
     }
-    fn plain(self: *Renderer, value: []const u8, style: Style) Error!void {
-        if (std.mem.indexOf(u8, value, generated_link.prefix) != null) {
-            const known = try self.generatedSource(MissingText.untracked(value));
-            try generated_link.validateCoverage(value, known.generated_links);
+    fn colonDisplaySpaces(a: A, value: []const u8) A.Error![]const u8 {
+        var at = std.mem.indexOf(u8, value, " : ") orelse return value;
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(a);
+        var start: usize = 0;
+        while (true) {
+            try out.appendSlice(a, value[start..at]);
+            try out.appendSlice(a, "\u{a0}");
+            start = at + 1;
+            // The trailing space may also precede another colon.
+            at = std.mem.indexOfPos(u8, value, start + 1, " : ") orelse break;
+        }
+        try out.appendSlice(a, value[start..]);
+        return out.toOwnedSlice(a);
+    }
+    fn plain(self: *Renderer, raw: []const u8, style: Style) Error!void {
+        if (std.mem.indexOf(u8, raw, generated_link.prefix) != null) {
+            const known = try self.generatedSource(MissingText.untracked(raw));
+            try generated_link.validateCoverage(raw, known.generated_links);
             var cursor: usize = 0;
             for (known.generated_links) |proven_link| {
-                try self.plain(value[cursor..proven_link.start], style);
+                try self.plain(raw[cursor..proven_link.start], style);
                 try self.renderGeneratedLink(proven_link.bound, style);
                 cursor = proven_link.end;
             }
-            return self.plain(value[cursor..], style);
+            return self.plain(raw[cursor..], style);
         }
+        // Parsoid inserts an mw:DisplaySpace before the colon in prose such as
+        // "label : term". Both surrounding spaces must belong to this text run;
+        // a token boundary alone does not establish the next DOM character.
+        const value = if (style.provenance == .parsed and !style.preserve_whitespace and
+            !style.code and !self.pre_block and !self.parsed_pre and !self.inline_image_attribute)
+            try colonDisplaySpaces(self.a, raw)
+        else raw;
         if (style.preserve_whitespace or std.mem.indexOfAny(u8, value, "\r\n") == null) return self.text(value, style);
         var out: std.ArrayList(u8) = .empty;
         var whitespace = false;
@@ -59479,6 +59501,23 @@ test "category-only paragraph lines do not emit ja heading gaps or a Gothic arro
         linked = true;
     };
     try std.testing.expect(linked);
+}
+
+test "Azerbaijani translation labels preserve the same-node display space and ordinary link action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var r: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try r.renderBody("* qaraçay-balkarca : <span lang=\"krc\">[[söz]]</span>\n* qaraqalpaqca : [[Til]]");
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("qaraçay-balkarca\u{a0}: söz", try flattened(a, blocks[0].spans));
+    try std.testing.expectEqualStrings("qaraqalpaqca\u{a0}: Til", try flattened(a, blocks[1].spans));
+    try std.testing.expectEqualStrings("söz", blocks[0].spans[blocks[0].spans.len - 1].target);
+    try std.testing.expectEqualStrings("Til", blocks[1].spans[blocks[1].spans.len - 1].target);
+    try std.testing.expectEqualStrings("a\u{a0}:\u{a0}: b :word", try Renderer.colonDisplaySpaces(a, "a : : b :word"));
+    var pre: Renderer = .{ .a = a, .context = .{} };
+    const literal = try pre.renderBody("<pre>literal : value</pre>");
+    try std.testing.expectEqualStrings("literal : value", try flattened(a, literal[0].spans));
 }
 
 test "leading category line cleanup preserves visible trails NBSP literal and interior spaces" {
@@ -122082,4 +122121,21 @@ test "Aragonese physical decimal boundary needs the exact noun declaration indep
         "1. [[broken", "1. [[File:caption|picture]]", "1. [[label\n1. inner]]", "1. [[target|{{argument}}]]", "1. <span>text</span>" }) |line|
         try std.testing.expect(!Renderer.aragoneseDecimalLine(line));
     try std.testing.expect(Renderer.aragoneseDecimalLine("1. [[presona|Presona]] ''literal''.<br />"));
+}
+
+test "Azerbaijani translation labels preserve a caller colon as paragraph text after a transcluded newline" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const tail = ": <span lang=\"ky\" xml:lang=\"ky\">[[|]]</span> [[:ky:|<sup>(ky)</sup>]]";
+    var renderer: Renderer = .{ .a = a, .context = .{} };
+    const blocks = try renderer.renderBody("* label\n&#58;" ++ tail[1..]);
+    try std.testing.expectEqual(@as(usize, 2), blocks.len);
+    try std.testing.expectEqualStrings("*", blocks[0].list_path);
+    try std.testing.expect(blocks[1].kind == .paragraph and blocks[1].list_path.len == 0);
+    try std.testing.expectEqualStrings(": [[|]] (ky)", try flattened(a, blocks[1].spans));
+    var ordinary: Renderer = .{ .a = a, .context = .{} };
+    const indented = try ordinary.renderBody("* label\n" ++ tail);
+    try std.testing.expectEqualStrings(":", indented[1].list_path);
+    try std.testing.expectEqualStrings("[[|]] (ky)", try flattened(a, indented[1].spans));
 }

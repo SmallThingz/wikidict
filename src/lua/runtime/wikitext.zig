@@ -1430,6 +1430,18 @@ pub const Expander = struct {
         self.dependency_argument_bytes += cost;
     }
 
+    // A source-list label can transclude a trailing newline. Its caller's inline
+    // separator then starts a new paragraph, but it was never an authored list
+    // prefix. Preserve that provenance before flattening the two source nodes.
+    fn callerBulletLabelColon(text: []const u8, open: usize, close: usize, value: []const u8) bool {
+        if (open == 0 or text[open - 1] != '*' or (open > 1 and text[open - 2] != '\n') or
+            !std.mem.startsWith(u8, text[close..], ": {{") or
+            !std.mem.endsWith(u8, value, "\n") or value.len < 2 or
+            std.mem.indexOfAny(u8, value[0 .. value.len - 1], "\r\n") != null) return false;
+        const name = text[open + 2 .. close - 2];
+        return name.len != 0 and std.mem.indexOfAny(u8, name, "|:#{}<>[]\r\n") == null;
+    }
+
     fn expandPageWikitextTracked(self: *Expander, text: []const u8, params: *rt.Table, host_title: []const u8) anyerror!dependency.Text {
         if (work_stats.current()) |work| {
             work.scan_calls +|= 1;
@@ -1479,6 +1491,11 @@ pub const Expander = struct {
             }
             try self.observePageOutput(expanded.bytes);
             try out.append(self.runtime.allocator, expanded);
+            if (template and !expanded.unknown and callerBulletLabelColon(text, open, pos, expanded.bytes)) {
+                try self.observePageOutput(":");
+                try out.append(self.runtime.allocator, dependency.Text.untracked("&#58;"));
+                pos += 1;
+            }
             if (node == .construct and node.construct.kind == .parameter) {
                 var remaining = try preprocess.parameterLiteralCloseCount(self.runtime.allocator, text[node.construct.open + 3 .. node.construct.close]);
                 const trailing = pos;
@@ -8542,6 +8559,9 @@ test "native missing dependency title overrides and Lua argument exposure do not
 
 const LiteralCurlyBoundaryFixture = struct {
     fn get(_: ?*anyopaque, _: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        if (std.mem.eql(u8, title, "Template:LabelWithNewline")) return "[[şəkil:Flag of Kyrgyzstan.svg|22px]] qırğızca\n<noinclude>[[Kateqoriya:Dil kodları]]</noinclude>";
+        if (std.mem.eql(u8, title, "Template:LabelTranslation")) return "<span lang=\"{{{1}}}\" xml:lang=\"{{{1}}}\">[[{{{2}}}|{{{3|{{{2}}}}}}]]</span> [[:{{{1}}}:{{{3|{{{2}}}}}}|<sup>({{{1}}})</sup>]]<noinclude>\n\n== Yazılması ==\n\n<nowiki>{{çevir | dil kodu | dil kodu yazılan dildəki söz }}</nowiki>\n\n\n== Nümunə ==\n\n*<nowiki>{{ çevir | en | black }}</nowiki>  şəklinde yazdığımız zaman  {{çevir|en|black}}  şəklinde görürsünüz\n\n\n\n\n</noinclude><noinclude>[[Kateqoriya:Şablonlar]]</noinclude>";
+        if (std.mem.eql(u8, title, "Template:LabelWithoutNewline")) return "label";
         if (std.mem.eql(u8, title, "Template:LiteralPaired")) return "{{{missing|{<noinclude>x</noinclude>{uc:cat}}}}}";
         if (std.mem.eql(u8, title, "Template:EmitOpen")) return "{";
         if (std.mem.eql(u8, title, "Template:LiteralGeneratedLeft")) return "{{EmitOpen}}<noinclude/>{uc:cat}}";
@@ -10932,4 +10952,15 @@ test "native selected retained ku ar template keeps complete title conversion th
     const output = try expander.expandFragment("mal", "{{ku-ar|مال}}", 1_670_803_200);
     try std.testing.expect(std.mem.indexOf(u8, output, "-{ku-latn:kurdî-erebî: مال;ku-arab:[[کوردی-لاتینی]]: mal}-") != null);
     try std.testing.expect(std.mem.endsWith(u8, output, "-{T|ku-latn:mal;ku-arab:مال}-"));
+}
+
+
+test "caller bullet label separator survives a newline contributed by the transclusion" {
+    const label = "[[şəkil:Flag of Kyrgyzstan.svg|22px]] qırğızca\n";
+    try LiteralCurlyBoundaryFixture.check("*{{LabelWithNewline}}: {{LabelTranslation|ky|}}", "*" ++ label ++ "&#58; <span lang=\"ky\" xml:lang=\"ky\">[[|]]</span> [[:ky:|<sup>(ky)</sup>]]");
+    try LiteralCurlyBoundaryFixture.check("*{{LabelWithNewline}}: {{uc:k}}", "*" ++ label ++ "&#58; K");
+    try LiteralCurlyBoundaryFixture.check("*{{LabelWithoutNewline}}: {{uc:k}}", "*label: K");
+    try LiteralCurlyBoundaryFixture.check("*{{LabelWithNewline}}\n: {{uc:k}}", "*" ++ label ++ "\n: K");
+    try LiteralCurlyBoundaryFixture.check(";term\n: {{uc:k}}", ";term\n: K");
+    try LiteralCurlyBoundaryFixture.check("*{{LabelWithNewline}}:: {{uc:k}}", "*" ++ label ++ ":: K");
 }
