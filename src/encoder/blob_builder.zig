@@ -2304,6 +2304,37 @@ fn sourceSectionHeadingPair(codes: LanguageCodes, source: []const u8, openings: 
 }
 
 
+const kayan_heading = "ကယန်း(ပတောင်ႏ)";
+
+// A local qualifier alone is ambiguous. Require each head declaration and its
+// emitted language-bearing headword to agree within the same physical POS.
+fn kayanHeadingsMatch(raw: []const u8, expanded: []const u8, source: MissingText) bool {
+    var raw_lines = std.mem.splitScalar(u8, raw, '\n');
+    var output_lines = std.mem.splitScalar(u8, expanded, '\n');
+    var output_heading: []const u8 = "";
+    var raw_heading: []const u8 = "";
+    var count: usize = 0;
+    const marker = "<span class=\"headword-line\">";
+    const prefix = marker ++ "<strong class=\"Latn headword\" lang=\"pdu\">";
+    while (raw_lines.next()) |line| {
+        if (blobs.wikitext_syntax.controlHeading(line, null)) |heading| raw_heading = if (heading.level > 2) heading.title else "";
+        if (!std.mem.startsWith(u8, line, "{{head|")) continue;
+        const declaration = SourceHeadword.call(line) orelse return false;
+        const offset = SourceHeadword.offset(raw, line) orelse return false;
+        if (raw_heading.len == 0 or !std.mem.eql(u8, declaration.code, "pdu") or !language_source.outsideNestedOrOpaque(raw, offset)) return false;
+        while (output_lines.next()) |rendered| {
+            if (blobs.wikitext_syntax.controlHeading(rendered, null)) |heading| output_heading = if (heading.level > 2) heading.title else "";
+            if (!std.mem.startsWith(u8, rendered, marker)) continue;
+            if (!std.mem.eql(u8, output_heading, raw_heading) or !std.mem.startsWith(u8, rendered, prefix) or
+                std.mem.indexOfPos(u8, rendered, prefix.len, "</strong></span>[[Category:ကယန်း") == null or !SourceHeadword.clean(source, rendered)) return false;
+            break;
+        } else return false;
+        count += 1;
+    }
+    while (output_lines.next()) |line| if (std.mem.startsWith(u8, line, marker)) return false;
+    return count != 0;
+}
+
 // This selected source formatter is admitted only at an observed physical H2.
 // Its complete heading remains ordinary body/action data; no target alias is
 // installed and copied, generated or unresolved header bytes cannot own a page.
@@ -5931,6 +5962,7 @@ fn processMain(
     // A head declaration certifies its proved H2 only. It cannot supply the
     // ordinary continuation owner for a later unresolved sibling H2.
     var headword_scope_active = false;
+    var unowned_kayan_prefix = false;
     var sr_mul_scope_active = false;
     // Mixed-depth language boundaries can reveal an uncertain region even
     // when raw and expanded section counts agree. Keep it separate; pages
@@ -6002,6 +6034,28 @@ fn processMain(
             if (try raw_heading_proof.get()) |proof| {
                 resolved = pairedLiteralAliasOwner(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items, section,
                     proof.page_wiki_openings, heading_observation.page_wiki_openings, false);
+            }
+        }
+        if (resolved == null and raw_aligned and !raw_conflicts.present and !sections.mixed_levels and
+            codes.namespace_catalog != null and std.mem.eql(u8, codes.namespace_catalog.?.wiki, "blkwiktionary") and
+            std.mem.eql(u8, section.heading, kayan_heading) and std.mem.eql(u8, raw_sections.items[index].heading, kayan_heading) and
+            heading_observation.page_wiki_scope_complete and sourceCategoryHeaderRangesClean(source_missing, section))
+        {
+            const original = raw_sections.items[index];
+            if (try raw_heading_proof.get()) |proof| {
+                const raw_start = SourceHeadword.offset(raw_source.?, original.source);
+                const output_start = SourceHeadword.offset(source, section.source);
+                if (proof.page_wiki_scope_complete and raw_start != null and output_start != null and
+                    SourceHeadword.root(proof.page_wiki_openings, raw_start.?) and SourceHeadword.root(heading_observation.page_wiki_openings, output_start.?) and
+                    sourceSectionPhysicalHeading(original) != null and sourceSectionPhysicalHeading(section) != null and
+                    kayanHeadingsMatch(original.source, section.source, source_missing))
+                {
+                    if (codes.resolve("pdu")) |owner| if (std.mem.eql(u8, owner.code, "pdu")) {
+                        resolved = owner;
+                        headword_scoped_owner = true;
+                        if (index == 0 and page_prefix.len != 0) unowned_kayan_prefix = true;
+                    };
+                }
             }
         }
         if (resolved == null) resolved = sourceLinkedHeadingOwner(codes, source_missing, section);
@@ -6294,7 +6348,7 @@ fn processMain(
     // Preserve ordinary page context only for one unambiguous language.
     // Repeated resolved sections may share that group; inherited unknown
     // sections and pending unresolved regions must not gain attribution.
-    const unresolved_prefix_owner = fallbacks.unresolved_language_heading or support_continuation_seen;
+    const unresolved_prefix_owner = fallbacks.unresolved_language_heading or support_continuation_seen or unowned_kayan_prefix;
     const missing_foreign_marker_prefix = missing: {
         if (shared_prefix != null or page_prefix.len == 0 or unresolved_prefix_owner or
             groups.items.len != 1 or groups.items[0].language.code.len == 0 or raw_sections.items.len == 0) break :missing false;
@@ -23311,4 +23365,13 @@ test "source static support veto affects only proved hyphen markers and leaves e
     const declared = equals.next().?;
     try std.testing.expectEqualStrings("num", declared.heading);
     try std.testing.expect(!declared.hyphen_marker and equals.next() == null);
+}
+
+test "Pa'O Kayan head declarations agree with their emitted POS owners" {
+    const raw = "==ကယန်း(ပတောင်ႏ)==\n===နာမဝိသေသန===\n{{head|pdu|နာမဝိသေသန}}\n# မင်ႏဂလာႏကအဝ်ႏဒါႏ။";
+    const expanded = "==ကယန်း(ပတောင်ႏ)==\n===နာမဝိသေသန===\n<span class=\"headword-line\"><strong class=\"Latn headword\" lang=\"pdu\">abataraò̌rî</strong></span>[[Category:ကယန်းငဝ်းတဲႏဖုံႏ|ABATARAÒ̌RÎ]]\n# မင်ႏဂလာႏကအဝ်ႏဒါႏ။";
+    try std.testing.expect(kayanHeadingsMatch(raw, expanded, .{ .bytes = expanded }));
+    for ([_][]const u8{raw ++ "\n{{head|en|noun}}", "===Other===\n{{head|pdu|noun}}", "===နာမဝိသေသန===\n<nowiki>\n{{head|pdu|noun}}\n</nowiki>"}) |invalid|
+        try std.testing.expect(!kayanHeadingsMatch(invalid, expanded, .{ .bytes = expanded }));
+    try std.testing.expect(!kayanHeadingsMatch(raw, raw, .{ .bytes = raw }));
 }
