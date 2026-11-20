@@ -20881,7 +20881,7 @@ test "normal Writer keeps complete table geometry and codec before annotated cit
                     try std.testing.expect(line.width.unit == .px and line.width.value == 1);
                     try std.testing.expectEqualStrings("#aaaaaa", line.color);
                 },
-                .none, .edges => return error.TestUnexpectedResult,
+                .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
             }
             const edges = style.margins orelse return error.TestUnexpectedResult;
             try std.testing.expect(edges.left.unit == .em and edges.left.value == 0.5 and edges.bottom.unit == .em and edges.bottom.value == 0.5);

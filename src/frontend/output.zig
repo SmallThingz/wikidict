@@ -10798,3 +10798,180 @@ test "terminal hidden wrapper and conditional rows visibly retain complete capti
     const malformed: T.Table = .{ .rows_hidden_max_width_px = 0, .rows = &.{.{ .cells = &.{.{ .spans = &.{.{ .text = "malformed" }} }} }} };
     try std.testing.expectError(error.InvalidPresentation, tableText(&sink.writer, malformed, false, null));
 }
+
+const InlineBoxRadiusPercent50OutputTest = struct {
+    const title = "Vowel sign appearing in front of the initial consonant.";
+    const thin = "\u{2009}";
+
+    fn owner(children: []const model.Span, group: *RubyTypes.InlineBoxGroup(model.Span)) model.Span {
+        group.* = .{ .padding = RubyTypes.StyleEdges.all(.{ .unit = .px, .value = 0 }),
+            .border = RubyTypes.InlineBoxBorderEdges.all(.{ .dotted = .{
+                .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#808080" } } }),
+            .spans = children, .radius = .{ .unit = .percent, .value = 50 } };
+        // SMALL is a controlled semantic flag, not an inferred numeric font size.
+        return .{ .small = true, .tooltip = title, .inline_style = .{ .cursor = .help },
+            .inline_box_group = group };
+    }
+
+    const Observe = struct {
+        allocator: std.mem.Allocator,
+        actions: std.ArrayList(model.Span) = .empty,
+        circles: std.ArrayList(model.Span) = .empty,
+        fn spans(self: *@This(), values: []const model.Span) !bool {
+            // The structural visitor calls each stored array before its children;
+            // it is an ownership observer, not an ordered text projection.
+            for (values) |span| {
+                if (span.kind == .link or span.kind == .external_link)
+                    try self.actions.append(self.allocator, span);
+                if (span.inline_box_group != null) try self.circles.append(self.allocator, span);
+            }
+            return false;
+        }
+    };
+};
+
+test "percentage radius Output retains two authored e advisories thin spaces small flags and all actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = InlineBoxRadiusPercent50OutputTest;
+    const codec = @import("blob_encoder").presentation_codec;
+    const child: model.Span = .{ .text = "e", .small = true };
+    var first_group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    var second_group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    const first = F.owner(&.{child}, &first_group);
+    const second = F.owner(&.{child}, &second_group);
+    try std.testing.expect(RubyTypes.validInlineBoxGroupOwner(first));
+    try std.testing.expect(RubyTypes.validInlineBoxGroupOwner(second));
+    const internal: model.Span = .{ .kind = .link, .text = "entry", .target = "Vowel",
+        .target_fragment = "Description", .trail = "s", .language = "en" };
+    const external: model.Span = .{ .kind = .external_link, .text = "source",
+        .target = "https://example.test/vowels", .trail = ".", .language = "en" };
+    const values = [_]model.Span{ .{ .text = "Before" ++ F.thin }, first,
+        .{ .text = F.thin ++ "between" ++ F.thin }, second,
+        .{ .text = F.thin ++ "after " }, internal, .{ .text = " " }, external };
+    const expected_text = "Before" ++ F.thin ++ "e" ++ F.thin ++ "between" ++ F.thin ++
+        "e" ++ F.thin ++ "after entrys source.";
+    const stored: RubyTypes.Stored = .{ .entry = .{ .title = "percentage tooltip circles", .kind = .supplemental,
+        .sections = &.{.{ .title = "Tooltip circles", .level = 2,
+            .blocks = &.{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &values }} }} } }} }} } };
+    const before_json = try std.json.Stringify.valueAlloc(a, stored, .{});
+
+    var plain: std.Io.Writer.Allocating = .init(a);
+    try spansPlainText(&plain.writer, &values);
+    try std.testing.expectEqualStrings(expected_text, plain.written());
+    for ([_]bool{ false, true }) |color| {
+        var tty: std.Io.Writer.Allocating = .init(a);
+        try spansText(&tty.writer, &values, color);
+        const unpainted = try NarrowTableTest.plain(a, tty.written());
+        try std.testing.expectEqualStrings(terminal_geometry_notice ++
+            "[authored inline typography unavailable; preserving semantic text]\n" ++ expected_text, unpainted);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, unpainted, terminal_geometry_notice));
+        try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, unpainted, F.thin));
+    }
+    var fallback = try RubyFallbackView.init(a, &values);
+    defer fallback.deinit();
+    try std.testing.expectEqual(@as(usize, values.len), fallback.values.len);
+    for ([_]usize{ 1, 3 }) |at| {
+        try std.testing.expectEqualStrings("e", fallback.values[at].text);
+        try std.testing.expect(fallback.values[at].small);
+        try std.testing.expect(fallback.values[at].inline_box_group == null);
+    }
+    try std.testing.expectEqualDeep(internal, fallback.values[5]);
+    try std.testing.expectEqualDeep(external, fallback.values[7]);
+
+    const encoded = try codec.encodeAlloc(a, stored);
+    const decoded = try codec.decodeAlloc(a, encoded, stored.entry.title, stored.entry.kind, null);
+    try std.testing.expectEqualDeep(stored, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var observed: F.Observe = .{ .allocator = a };
+    try std.testing.expect(!try visitEntrySpanLists(decoded.entry, &observed));
+    try std.testing.expectEqual(@as(usize, 2), observed.actions.items.len);
+    try std.testing.expectEqualDeep(internal, observed.actions.items[0]);
+    try std.testing.expectEqualDeep(external, observed.actions.items[1]);
+    try std.testing.expectEqual(@as(usize, 2), observed.circles.items.len);
+    for (observed.circles.items) |circle| {
+        try std.testing.expect(circle.kind == .text and circle.text.len == 0 and circle.target.len == 0);
+        try std.testing.expectEqualStrings(F.title, circle.tooltip.?);
+        try std.testing.expect(circle.inline_style.?.cursor.? == .help and circle.small);
+        try std.testing.expect(circle.font_scale == null and circle.inline_style.?.line_height == null);
+        const group = circle.inline_box_group.?;
+        try std.testing.expectEqual(RubyTypes.StyleWidth{ .unit = .percent, .value = 50 }, group.radius.?);
+        try std.testing.expectEqualDeep(first_group.border, group.border);
+        try std.testing.expect(group.overlays.len == 0 and !@hasField(@TypeOf(group.*), "atomic_layout"));
+        try std.testing.expectEqual(@as(usize, 1), group.spans.len);
+        try std.testing.expectEqualDeep(child, group.spans[0]);
+    }
+    try std.testing.expect(entryHasAdvisories(decoded.entry));
+    var advice = try Advisories.init(a, decoded.entry);
+    defer advice.deinit();
+    // Identical label/title pairs are deduplicated only in Text details;
+    // both original inline occurrences remain in the model and body above.
+    try std.testing.expectEqual(@as(usize, 1), advice.items.items.len);
+    try std.testing.expectEqualStrings("e", advice.items.items[0].label);
+    try std.testing.expectEqualStrings(F.title, advice.items.items[0].tooltip);
+    var details: std.Io.Writer.Allocating = .init(a);
+    try advice.write(&details.writer);
+    try std.testing.expectEqualStrings("\nText details\ne: " ++ F.title ++ "\n", details.written());
+
+    var machine: std.Io.Writer.Allocating = .init(a);
+    try json(&machine.writer, .{ .operation = .lookup, .query = stored.entry.title, .kind = .citations,
+        .language = null, .record_count = 1, .total_matches = 1, .entries = &.{decoded.entry} });
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, machine.written(), .{});
+    defer parsed.deinit();
+    const emitted = parsed.value.object.get("entries").?.array.items[0];
+    const entry_json = try std.json.Stringify.valueAlloc(a, emitted, .{});
+    const exported = try std.json.parseFromSlice(model.Entry, a, entry_json, .{});
+    defer exported.deinit();
+    const exported_stored: RubyTypes.Stored = .{ .schema = stored.schema, .entry = exported.value };
+    try std.testing.expectEqualDeep(stored, exported_stored);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, exported_stored));
+    const exported_values = exported.value.sections[0].blocks[0].table.?.rows[0].cells[0].spans;
+    var exported_text: std.Io.Writer.Allocating = .init(a);
+    try spansPlainText(&exported_text.writer, exported_values);
+    try std.testing.expectEqualStrings(expected_text, exported_text.written());
+    try std.testing.expectEqualStrings(before_json, try std.json.Stringify.valueAlloc(a, stored, .{}));
+    try std.testing.expect(first.inline_box_group == &first_group and second.inline_box_group == &second_group);
+}
+
+test "percentage radius Output refuses malformed circle geometry and charges only its stored owner and child" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = InlineBoxRadiusPercent50OutputTest;
+    const codec = @import("blob_encoder").presentation_codec;
+    var group: RubyTypes.InlineBoxGroup(model.Span) = undefined;
+    const owner = F.owner(&.{.{ .text = "e", .small = true }}, &group);
+    var short: F.Observe = .{ .allocator = a };
+    var remaining: usize = 1;
+    try std.testing.expectError(error.InvalidPresentation,
+        visitRubySpanLists(&.{owner}, &short, 0, 0, &remaining, .ordinary));
+    var exact: F.Observe = .{ .allocator = a };
+    remaining = 2;
+    try std.testing.expect(!try visitRubySpanLists(&.{owner}, &exact, 0, 0, &remaining, .ordinary));
+    try std.testing.expectEqual(@as(usize, 0), remaining);
+    try std.testing.expectEqual(@as(usize, 1), exact.circles.items.len);
+    try std.testing.expectEqual(@as(usize, 0), exact.actions.items.len);
+
+    const saved_group = group;
+    for (0..4) |mode| {
+        group = saved_group;
+        switch (mode) {
+            0 => group.radius = .{ .unit = .em, .value = 0.5 },
+            1 => group.radius = .{ .unit = .percent, .value = -1 },
+            2 => group.border.right = .{ .solid = group.border.top.dotted },
+            3 => group.border.bottom = .{ .dotted = .{ .width = .{ .unit = .px, .value = 2 },
+                .color = .{ .rgb = "#808080" } } },
+            else => unreachable,
+        }
+        try std.testing.expect(!RubyTypes.validInlineBoxGroupOwner(owner));
+        var sink: std.Io.Writer.Allocating = .init(a);
+        try std.testing.expectError(error.InvalidPresentation, spansText(&sink.writer, &.{owner}, false));
+        try std.testing.expectEqual(@as(usize, 0), sink.written().len);
+        try std.testing.expectError(error.InvalidPresentation,
+            codec.encodeAlloc(a, .{ .entry = .{ .title = "invalid circle", .kind = .supplemental,
+                .preamble_spans = &.{owner} } }));
+    }
+    group = saved_group;
+    try std.testing.expect(RubyTypes.validInlineBoxGroupOwner(owner));
+}

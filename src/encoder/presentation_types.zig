@@ -863,11 +863,13 @@ pub fn InlineBoxGroup(comptime Child: type) type {
         border: InlineBoxBorderEdges,
         overlays: []const InlineBoxOverlayFor(Child) = &.{},
         spans: []const Child,
-        // Uniform circular CSS-pixel corners on this box's existing slice
-        // decoration. null preserves square geometry; explicit zero is retained.
-        // Em and percentage radii are outside the initial shared unit contract.
-        // The initial rounded domain has equal solid RGB borders and no overlays.
-        radius: ?StyleLength = null,
+        // One uniform authored radius on this box's existing slice decoration.
+        // Px uses circular corners; percent resolves horizontal/vertical radii
+        // against used border-box width/height, then CSS overlap reduction.
+        // Preserve the authored scalar, including zero or percentages above 50.
+        // Null keeps square geometry. Em remains unsupported; all four borders
+        // must be equal solid or equal dotted RGB, with no overlays.
+        radius: ?StyleWidth = null,
         pub fn jsonStringify(self: @This(), jw: anytype) !void {
             try jw.beginObject();
             try jw.objectField("padding"); try jw.write(self.padding);
@@ -907,21 +909,32 @@ pub fn validInlineBoxOverlay(value: anytype) bool {
     if (value.content) |content| if (!validInlineBoxOverlayContent(content.*)) return false;
     return true;
 }
-pub fn inlineBoxRadius(value: anytype) ?StyleLength {
-    return if (comptime @hasField(@TypeOf(value), "radius")) value.radius else null;
+pub fn inlineBoxRadius(value: anytype) ?StyleWidth {
+    if (comptime @hasField(@TypeOf(value), "radius")) {
+        const radius = value.radius orelse return null;
+        // Existing generic build shapes may retain the old length-only field.
+        // Map semantic tags explicitly; no global StyleLength domain is widened.
+        if (comptime @TypeOf(radius) == StyleLength) return .{
+            .unit = switch (radius.unit) { .px => .px, .em => .em }, .value = radius.value,
+        };
+        return radius;
+    }
+    return null;
 }
-pub fn validInlineBoxRadius(value: StyleLength) bool {
-    return value.unit == .px and validStyleLength(value);
+pub fn validInlineBoxRadius(value: StyleWidth) bool {
+    return (value.unit == .px or value.unit == .percent) and validStyleWidth(value);
 }
 pub fn validInlineBoxGroup(value: anytype) bool {
     if (inlineBoxRadius(value)) |radius| {
-        if (!validInlineBoxRadius(radius) or value.overlays.len != 0 or value.border.top != .solid) return false;
-        const line = value.border.top.solid;
+        if (!validInlineBoxRadius(radius) or value.overlays.len != 0) return false;
+        const line = switch (value.border.top) { .solid, .dotted => |border_line| border_line, else => return false };
         if (!validStyleLength(line.width) or line.color != .rgb or !isCanonicalRgb(line.color.rgb)) return false;
         inline for (.{ "right", "bottom", "left" }) |side| {
             const edge = @field(value.border, side);
-            if (edge != .solid or edge.solid.width.unit != line.width.unit or edge.solid.width.value != line.width.value or
-                edge.solid.color != .rgb or !std.mem.eql(u8, edge.solid.color.rgb, line.color.rgb)) return false;
+            if (std.meta.activeTag(edge) != std.meta.activeTag(value.border.top)) return false;
+            const other_line = switch (edge) { .solid, .dotted => |border_line| border_line, else => return false };
+            if (other_line.width.unit != line.width.unit or other_line.width.value != line.width.value or
+                other_line.color != .rgb or !std.mem.eql(u8, other_line.color.rgb, line.color.rgb)) return false;
         }
     }
     if (!validStyleEdges(value.padding) or !validInlineBoxBorderEdges(value.border) or
@@ -1310,10 +1323,29 @@ pub fn BorderEdgesFor(comptime Edge: type) type {
 }
 pub const StyleBorderEdge = BorderEdgeFor([]const u8);
 pub const StyleBorderEdges = BorderEdgesFor(StyleBorderEdge);
+pub const StyleBorderPaint = union(enum) {
+    rgb: []const u8,
+    owner_current_color,
+};
+pub const ResolvedStyleBorderLine = struct {
+    width: StyleLength,
+    paint: StyleBorderPaint,
+};
+pub const ResolvedStyleBorderEdge = union(enum) {
+    none,
+    hidden,
+    solid: ResolvedStyleBorderLine,
+    dotted: ResolvedStyleBorderLine,
+    inset: ResolvedStyleBorderLine,
+    outset: ResolvedStyleBorderLine,
+};
+pub const ResolvedStyleBorderEdges = BorderEdgesFor(ResolvedStyleBorderEdge);
+
 pub const StyleBorder = union(enum) {
     none,
     solid: struct { width: StyleLength, color: []const u8 },
     edges: StyleBorderEdges,
+    resolved_edges: ResolvedStyleBorderEdges,
 };
 pub const BorderCollapse = enum { separate, collapse };
 pub const CellTextAlign = enum { left, center, right };
@@ -3011,6 +3043,7 @@ pub fn inlineTableSpanSupportedM(span: anytype) bool {
 pub fn inlineTableShapeSupported(table: anytype) bool { return inlineTableShapeSupportedFor(table, false); }
 pub fn inlineTableShapeSupportedM(table: anytype) bool { return inlineTableShapeSupportedFor(table, true); }
 fn inlineTableShapeSupportedFor(table: anytype, comptime m_images: bool) bool {
+    if (!validResolvedStyleBorderTableDomain(table)) return false;
     if (table.caption.len != 0) return false;
     if (comptime @hasField(@TypeOf(table), "caption_blocks")) if (table.caption_blocks != null) return false;
     var has_cells = false;
@@ -3189,6 +3222,8 @@ pub const DeepTableWork = struct {
     discover_table_min_width: bool = false,
     table_rows_visibility_found: bool = false,
     discover_table_rows_visibility: bool = false,
+    resolved_style_border_found: bool = false,
+    discover_resolved_style_border: bool = false,
     // Saved/restored at each Container. Absolute descendants may not borrow an
     // outer relative anchor across another absolute box; explicit relative resets.
     relative_container_anchor: bool = false,
@@ -3293,6 +3328,21 @@ pub const DeepTableWork = struct {
             };
         }
     }
+    pub fn hasResolvedStyleBorders(display: anytype, sections: anytype, preamble: anytype, references: anytype) bool {
+        var work: DeepTableWork = .{ .discover_resolved_style_border = true };
+        work.entry(display, sections, preamble, references) catch {};
+        return work.resolved_style_border_found;
+    }
+    fn resolvedStyleBorder(self: *DeepTableWork, value: ?StyleBorder) Error!void {
+        const border = value orelse return;
+        if (border != .resolved_edges) return;
+        self.resolved_style_border_found = true;
+        if (self.discover_resolved_style_border) return error.InvalidPresentation;
+        if (!validBorder(border)) return error.InvalidPresentation;
+        // Four edge choices are a fixed style value, not an additional sequence.
+        // Preserve all existing item/depth accounting and ordinary traversal.
+    }
+
     /// Discovery never changes historical group-free validation/count semantics.
     /// A group beyond this budget cannot form a valid U entry; the legacy encoder
     /// still refuses that unsupported field if it reaches it later.
@@ -3442,6 +3492,12 @@ pub const DeepTableWork = struct {
         defer self.relative_container_anchor = old_anchor;
         if (table_depth > max_table_depth or content_depth > max_content_depth) return error.InvalidPresentation;
         if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style|
+            try self.resolvedStyleBorder(style.border);
+        if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport) |policy| {
+            try self.resolvedStyleBorder(policy.box_style.border);
+            try self.resolvedStyleBorder(policy.grid_style.border);
+        };
+        if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style|
             try self.tableStyleMinimum(style);
         // Census includes unsupported responsive locations, so neither a hidden
         // field nor an exhausted discovery walk can escape capability validation.
@@ -3466,6 +3522,8 @@ pub const DeepTableWork = struct {
         for (value.rows) |row| {
             try self.take(row.cells.len);
             for (row.cells) |cell| {
+                if (comptime @hasField(@TypeOf(cell), "style")) if (cell.style) |style|
+                    try self.resolvedStyleBorder(style.border);
                 try self.spans(cell.spans, content_depth, 0);
                 if (comptime @hasField(@TypeOf(cell), "blocks")) if (cell.blocks) |children|
                     try self.blocks(children, table_depth, content_depth);
@@ -3473,6 +3531,7 @@ pub const DeepTableWork = struct {
                     try self.table(child, table_depth + 1, content_depth);
             }
         }
+        if (!validResolvedStyleBorderTableDomain(value)) return error.InvalidPresentation;
     }
     pub fn entry(self: *DeepTableWork, display: anytype, sections: anytype, preamble: anytype, references: anytype) Error!void {
         self.clipped_nonstatic_ancestor = false;
@@ -3511,6 +3570,7 @@ const ImageValidation = struct {
     positioned_container_work_checked: bool = false,
     table_min_width_work_checked: bool = false,
     table_rows_visibility_work_checked: bool = false,
+    resolved_style_border_work_checked: bool = false,
     clipped_absolute_work_checked: bool = false,
     a: std.mem.Allocator,
     media: []const Media,
@@ -3688,13 +3748,65 @@ pub fn validBorderEdge(value: StyleBorderEdge) bool {
 pub fn validBorderEdges(value: StyleBorderEdges) bool {
     return validBorderEdge(value.top) and validBorderEdge(value.right) and validBorderEdge(value.bottom) and validBorderEdge(value.left);
 }
+pub fn validStyleBorderPaint(value: StyleBorderPaint) bool {
+    return switch (value) {
+        .rgb => |rgb| isCanonicalRgb(rgb),
+        .owner_current_color => true,
+    };
+}
+pub fn validResolvedStyleBorderEdge(value: ResolvedStyleBorderEdge) bool {
+    return switch (value) {
+        .none, .hidden => true,
+        .solid, .dotted, .inset, .outset => |line|
+            validStyleLength(line.width) and validStyleBorderPaint(line.paint),
+    };
+}
+pub fn validResolvedStyleBorderEdges(value: ResolvedStyleBorderEdges) bool {
+    return validResolvedStyleBorderEdge(value.top) and validResolvedStyleBorderEdge(value.right) and
+        validResolvedStyleBorderEdge(value.bottom) and validResolvedStyleBorderEdge(value.left);
+}
+
 pub fn validBorder(value: StyleBorder) bool {
     return switch (value) {
         .none => true,
         .solid => |solid| validStyleLength(solid.width) and isCanonicalRgb(solid.color),
         .edges => |edges| validBorderEdges(edges),
+        .resolved_edges => |edges| validResolvedStyleBorderEdges(edges),
     };
 }
+pub fn styleBorderHasResolvedEdges(value: ?StyleBorder) bool {
+    return if (value) |border| border == .resolved_edges else false;
+}
+pub fn tableStyleHasResolvedEdges(value: ?TableStyle) bool {
+    return if (value) |style| styleBorderHasResolvedEdges(style.border) else false;
+}
+pub fn validResolvedStyleBorderTableDomain(value: anytype) bool {
+    var restricted = false;
+    var resolved = false;
+    if (comptime @hasField(@TypeOf(value), "style")) if (value.style) |style| {
+        restricted = tableStyleIsInline(style) or style.float_side != null or style.corner_radii != null;
+        resolved = styleBorderHasResolvedEdges(style.border);
+    };
+    if (comptime @hasField(@TypeOf(value), "block_viewport")) if (value.block_viewport) |policy| {
+        if (tableStyleHasResolvedEdges(policy.box_style) or tableStyleHasResolvedEdges(policy.grid_style)) return false;
+        restricted = true;
+    };
+    if (comptime @hasField(@TypeOf(value), "float_viewport")) if (value.float_viewport != null) {
+        restricted = true;
+    };
+    var unit_spans = true;
+    for (value.rows) |row| for (row.cells) |cell| {
+        if (comptime @hasField(@TypeOf(cell), "style")) if (cell.style) |style| {
+            if (styleBorderHasResolvedEdges(style.border)) resolved = true;
+        };
+        if (cell.rowspan != 1 or cell.colspan != 1) unit_spans = false;
+    };
+    // Decide only after the full direct-cell census: a later cell may carry
+    // the new variant while an earlier, otherwise legacy cell spans tracks.
+    // Nested table owners are checked by the existing recursive traversal.
+    return !resolved or (!restricted and unit_spans);
+}
+
 pub fn tableStyleIsInline(style: ?TableStyle) bool {
     return if (style) |value| if (value.display) |display| display != .table else false else false;
 }
@@ -3754,6 +3866,8 @@ pub fn validTableStyle(value: TableStyle) bool {
 /// Build-only parsed declaration components, before actual parent direction is
 /// bound. This predicate never grants Stored/codec/native table admission.
 pub fn validUnboundTableStyle(value: TableStyle) bool {
+    if (tableStyleHasResolvedEdges(value) and
+        (tableStyleIsInline(value) or value.float_side != null)) return false;
     if (value.vertical_align) |alignment| if (alignment == .top and !tableStyleIsInline(value)) return false;
     if (value.background == null and value.border == null and value.collapse == null and value.margins == null and value.margin_values == null and value.float_side == null and value.width == null and value.padding == null and value.clear == null and value.display == null and value.vertical_align == null and value.line_height == null and value.corner_radii == null and value.min_width == null) return false;
     if (value.background) |color| if (!isCanonicalRgb(color)) return false;
@@ -3768,7 +3882,7 @@ pub fn validUnboundTableStyle(value: TableStyle) bool {
     if (value.corner_radii) |corners| {
         if (!validTableCornerRadii(corners) or tableStyleIsInline(value) or value.collapse == .collapse) return false;
         const border = value.border orelse return false;
-        switch (border) { .none, .solid => {}, .edges => return false }
+        switch (border) { .none, .solid => {}, .edges, .resolved_edges => return false }
     }
     return true;
 }
@@ -3781,6 +3895,8 @@ pub fn validTableScrollViewport(value: TableBlockViewport) bool {
     return validTableBlockViewportIn(value, true);
 }
 fn validTableBlockViewportIn(value: TableBlockViewport, paired: bool) bool {
+    if (tableStyleHasResolvedEdges(value.box_style) or
+        tableStyleHasResolvedEdges(value.grid_style)) return false;
     if (value.box_style.min_width != null or value.grid_style.min_width != null) return false;
     if (value.intrinsic_containing_direction != null) return false;
     if (value.grid_style.corner_radii != null) return false;
@@ -3809,6 +3925,8 @@ pub fn validTableCornerBlockViewport(value: TableBlockViewport) bool {
 /// Build-only local wire-shape discriminator, before required Q focus is read.
 /// The complete policy and enclosing Table geometry still require validation.
 pub fn tableCornerBlockViewportShape(value: TableBlockViewport) bool {
+    if (tableStyleHasResolvedEdges(value.box_style) or
+        tableStyleHasResolvedEdges(value.grid_style)) return false;
     if (value.box_style.min_width != null or value.grid_style.min_width != null) return false;
     if (value.intrinsic_containing_direction != null) return false;
     if (value.language.len == 0 or value.language.len > 32 * 1024 * 1024 or
@@ -3861,6 +3979,7 @@ fn validTableIntrinsicViewportHeader(geometry: ?TableGeometry, style: ?TableStyl
 
 pub fn validTableBlockViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, viewport: ?*const TableBlockViewport) bool {
     const value = viewport orelse return true;
+    if (tableStyleHasResolvedEdges(style)) return false;
     if (style) |wide| if (wide.min_width != null) return false;
     if (value.intrinsic_containing_direction != null)
         return validTableIntrinsicViewportHeader(geometry, style, value.*);
@@ -4236,6 +4355,7 @@ pub fn validTableGeometry(value: TableGeometry) bool {
 
 pub fn validTableFloatViewportHeader(geometry: ?TableGeometry, style: ?TableStyle, optional: ?TableFloatViewport) bool {
     const policy = optional orelse return true;
+    if (tableStyleHasResolvedEdges(style)) return false;
     if (geometry != null or policy.max_viewport_width_px == 0 or policy.language.len == 0 or
         policy.language.len > 32 * 1024 * 1024 or !std.unicode.utf8ValidateSlice(policy.language)) return false;
     const base = style orelse return false;
@@ -4263,6 +4383,8 @@ pub fn resolveTableFloatStyle(table: Table, viewport_css_px: f32) error{InvalidP
 }
 
 fn validateTable(table: Table, depth: usize, media: *ImageValidation) ValidationError!void {
+    if (tableStyleHasResolvedEdges(table.style) and !media.resolved_style_border_work_checked) return error.InvalidPresentation;
+    if (!validResolvedStyleBorderTableDomain(table)) return error.InvalidPresentation;
     if (!validTableRowsVisibility(table) or (table.rows_hidden_max_width_px != null and !media.table_rows_visibility_work_checked)) return error.InvalidPresentation;
     if (table.style) |style| if (style.min_width != null and !media.table_min_width_work_checked) return error.InvalidPresentation;
     if (!validTableViewportHeaders(table.geometry, table.style, table.block_viewport, table.float_viewport)) return error.InvalidPresentation;
@@ -4293,6 +4415,8 @@ fn validateTable(table: Table, depth: usize, media: *ImageValidation) Validation
     for (table.rows) |row| for (row.cells) |cell| {
         try validateSpanColors(cell.spans, media);
         if (cell.background) |background| if (!isCanonicalRgb(background)) return error.InvalidPresentation;
+        if (cell.style) |style| if (styleBorderHasResolvedEdges(style.border) and
+            !media.resolved_style_border_work_checked) return error.InvalidPresentation;
         if (cell.style) |style| if (!validCellStyle(style)) return error.InvalidPresentation;
         if (cell.blocks) |blocks| {
             if (cell.spans.len != 0 or cell.nested_table != null) return error.InvalidPresentation;
@@ -4743,7 +4867,7 @@ pub fn validateStored(
     if (!std.mem.eql(u8, stored.schema, schema)) return error.InvalidPresentation;
     const entry = stored.entry;
     var owner_work_checked = false;
-    if (DeepTableWork.hasImageOccurrences(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or entry.body_typography != null or DeepTableWork.hasClippedAbsolutes(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasInlineBoxGroups(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasContainerOwnerFonts(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasPositionedContainers(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasTablePolicyWork(entry.display_title, entry.sections, entry.preamble_spans, entry.references)) {
+    if (DeepTableWork.hasImageOccurrences(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or entry.body_typography != null or DeepTableWork.hasClippedAbsolutes(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasInlineBoxGroups(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasContainerOwnerFonts(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasPositionedContainers(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasTablePolicyWork(entry.display_title, entry.sections, entry.preamble_spans, entry.references) or DeepTableWork.hasResolvedStyleBorders(entry.display_title, entry.sections, entry.preamble_spans, entry.references)) {
         var work: DeepTableWork = .{};
         if (entry.body_typography) |body| work.bodyTypography(body) catch return error.InvalidPresentation;
         work.entry(entry.display_title, entry.sections, entry.preamble_spans, entry.references) catch return error.InvalidPresentation;
@@ -4780,7 +4904,7 @@ pub fn validateStored(
         }
     }
 
-    var media: ImageValidation = .{ .a = a, .media = entry.media, .container_owner_work_checked = owner_work_checked, .positioned_container_work_checked = owner_work_checked, .table_min_width_work_checked = owner_work_checked, .table_rows_visibility_work_checked = owner_work_checked, .clipped_absolute_work_checked = owner_work_checked };
+    var media: ImageValidation = .{ .a = a, .media = entry.media, .container_owner_work_checked = owner_work_checked, .positioned_container_work_checked = owner_work_checked, .table_min_width_work_checked = owner_work_checked, .table_rows_visibility_work_checked = owner_work_checked, .resolved_style_border_work_checked = owner_work_checked, .clipped_absolute_work_checked = owner_work_checked };
     defer media.deinit();
     try validateSpanColors(entry.display_title, &media);
     try validateSpanColors(entry.preamble_spans, &media);
@@ -9874,7 +9998,7 @@ test "uniform inline box radius preserves square JSON and distinguishes explicit
         const parsed = try std.json.parseFromSliceLeaky(InlineBoxGroup(Span), a, json, .{ .ignore_unknown_fields = false });
         try std.testing.expectEqualDeep(group, parsed);
     }
-    for ([_]StyleLength{
+    for ([_]StyleWidth{
         .{ .unit = .px, .value = -1 }, .{ .unit = .px, .value = std.math.inf(f32) },
         .{ .unit = .px, .value = std.math.nan(f32) }, .{ .unit = .em, .value = 0 }, .{ .unit = .em, .value = 2 },
     }) |invalid| {
@@ -10282,4 +10406,556 @@ test "ordinary action destination distinguishes absent and explicit fragment wit
     span.kind = .external_link; try std.testing.expect(!validSpanActionDestination(span));
     span.target_fragment = null; span.target = "https://example.test/";
     try std.testing.expect(validSpanActionDestination(span));
+}
+
+
+test "percent inline radius retains authored axes values dotted borders and square JSON" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const children = [_]Span{.{ .text = "e", .small = true }};
+    const dotted = InlineBoxBorderEdges.all(.{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#808080" } } });
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }), .border = dotted, .spans = &children };
+    const Legacy = struct { padding: StyleEdges, border: InlineBoxBorderEdges, overlays: []const InlineBoxOverlay, spans: []const Span };
+    const legacy: Legacy = .{ .padding = group.padding, .border = group.border, .overlays = group.overlays, .spans = group.spans };
+    const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+    try std.testing.expectEqualStrings(old_json, try std.json.Stringify.valueAlloc(a, group, .{}));
+    for ([_]f32{ 0, 50, 75, 150 }) |authored_percent| {
+        group.radius = .{ .unit = .percent, .value = authored_percent };
+        try std.testing.expect(validInlineBoxGroup(group));
+        const json = try std.json.Stringify.valueAlloc(a, group, .{});
+        const parsed = try std.json.parseFromSliceLeaky(InlineBoxGroup(Span), a, json, .{ .ignore_unknown_fields = false });
+        try std.testing.expectEqualDeep(group, parsed);
+        try std.testing.expectEqual(authored_percent, parsed.radius.?.value);
+        try std.testing.expectEqual(StyleWidthUnit.percent, parsed.radius.?.unit);
+        // A native used-box calculation performs overlap reduction. The data
+        // layer does not clamp away the authored percentage or replace its axes.
+        try std.testing.expectEqual(authored_percent, inlineBoxRadius(group).?.value);
+        group.border = InlineBoxBorderEdges.all(.{ .solid = dotted.top.dotted });
+        try std.testing.expect(validInlineBoxGroup(group));
+        group.border = dotted;
+    }
+    for ([_]StyleWidth{
+        .{ .unit = .percent, .value = -1 }, .{ .unit = .percent, .value = std.math.inf(f32) },
+        .{ .unit = .percent, .value = std.math.nan(f32) }, .{ .unit = .em, .value = 0 }, .{ .unit = .em, .value = 50 },
+    }) |invalid_radius| {
+        group.radius = invalid_radius;
+        try std.testing.expect(!validInlineBoxRadius(invalid_radius) and !validInlineBoxGroup(group));
+    }
+    group.radius = .{ .unit = .percent, .value = 50 };
+    for (0..7) |mode| {
+        group.border = dotted;
+        switch (mode) {
+            0 => group.border.left = .{ .solid = dotted.left.dotted },
+            1 => group.border.right.dotted.width.value = 2,
+            2 => group.border.bottom.dotted.width.unit = .em,
+            3 => group.border.left.dotted.color = .{ .rgb = "#000000" },
+            4 => group.border = InlineBoxBorderEdges.all(.{ .dotted = .{ .width = dotted.top.dotted.width, .color = .current_color } }),
+            5 => group.border = InlineBoxBorderEdges.all(.{ .dotted = .{ .width = dotted.top.dotted.width, .color = .{ .light_dark = .{ .light = "#808080", .dark = "#808080" } } } }),
+            6 => group.border.top = .hidden,
+            else => unreachable,
+        }
+        try std.testing.expect(!validInlineBoxGroup(group));
+        group.radius = null; try std.testing.expect(validInlineBoxGroup(group));
+        group.radius = .{ .unit = .percent, .value = 0 }; try std.testing.expect(!validInlineBoxGroup(group));
+        group.radius = .{ .unit = .percent, .value = 50 };
+    }
+    group.border = dotted;
+    group.overlays = &.{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 }, .left = .{ .unit = .px, .value = 0 } }, .border = dotted }};
+    try std.testing.expect(!validInlineBoxGroup(group));
+    group.radius = null; try std.testing.expect(validInlineBoxGroup(group));
+}
+
+test "percent radius preserves legacy length shapes advisory owners and exact nested work" {
+    const OldRadius = struct { radius: ?StyleLength = null };
+    try std.testing.expect(inlineBoxRadius(OldRadius{}) == null);
+    for ([_]f32{ 0, 2 }) |old_px| {
+        const legacy: OldRadius = .{ .radius = .{ .unit = .px, .value = old_px } };
+        const mapped = inlineBoxRadius(legacy).?;
+        try std.testing.expectEqual(StyleWidth{ .unit = .px, .value = old_px }, mapped);
+        try std.testing.expect(validInlineBoxRadius(mapped));
+        try std.testing.expectEqual(old_px, legacy.radius.?.value);
+    }
+    const old_em: OldRadius = .{ .radius = .{ .unit = .em, .value = 2 } };
+    try std.testing.expectEqual(StyleWidthUnit.em, inlineBoxRadius(old_em).?.unit);
+    try std.testing.expect(!validInlineBoxRadius(inlineBoxRadius(old_em).?));
+    var group: InlineBoxGroup(Span) = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }),
+        .border = InlineBoxBorderEdges.all(.{ .dotted = .{ .width = .{ .unit = .px, .value = 1 }, .color = .{ .rgb = "#808080" } } }),
+        .spans = &.{.{ .text = "e", .small = true }}, .radius = .{ .unit = .percent, .value = 50 } };
+    const title = "Vowel sign appearing in front of the initial consonant.";
+    const owner: Span = .{ .inline_box_group = &group, .small = true, .tooltip = title, .inline_style = .{ .cursor = .help } };
+    try std.testing.expect(validSpanInlineStyle(owner) and validInlineBoxGroupOwner(owner));
+    try validateInlineBoxGroupTree(owner, 0, 0);
+    const outer_group: InlineBoxGroup(Span) = .{ .padding = group.padding, .border = InlineBoxBorderEdges.all(.none), .spans = &.{owner} };
+    const outer: Span = .{ .inline_box_group = &outer_group };
+    var work: DeepTableWork = .{ .remaining = 3 };
+    try work.entry(@as([]const Span, &.{outer}), @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{}));
+    try std.testing.expect(work.inline_box_group_found and work.remaining == 0);
+    var exhausted: DeepTableWork = .{ .remaining = 2 };
+    try std.testing.expectError(error.PresentationTooLarge, exhausted.entry(@as([]const Span, &.{outer}), @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+    try std.testing.expectEqualStrings(title, owner.tooltip.?);
+    try std.testing.expectEqual(InlineCursor.help, owner.inline_style.?.cursor.?);
+    try std.testing.expectEqualStrings("e", group.spans[0].text);
+    try std.testing.expect(owner.kind == .text and owner.target.len == 0);
+    // Deep validation still visits nested child structure; radius does not
+    // hide payload, create an action, or change the ordinary owner work charge.
+    var invalid_nested = group;
+    invalid_nested.radius = .{ .unit = .em, .value = 1 };
+    group.spans = &.{.{ .inline_box_group = &invalid_nested }};
+    var invalid_work: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, invalid_work.entry(@as([]const Span, &.{outer}), @as([]const Section, &.{}), @as([]const Span, &.{}), @as([]const Reference, &.{})));
+}
+
+
+
+// These controls establish stored shape/validation, not native paint behavior.
+test "AN resolved StyleBorder keeps raw strokes owner paint and complete physical edge choices" {
+    const a = std.testing.allocator;
+    const shapes = [_]ResolvedStyleBorderEdges{
+        .{
+            .top = .{ .inset = .{ .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color } },
+            .right = .{ .outset = .{ .width = .{ .unit = .em, .value = 0.25 }, .paint = .{ .rgb = "#aabbcc" } } },
+            .bottom = .{ .solid = .{ .width = .{ .unit = .px, .value = 0 }, .paint = .{ .rgb = "#000000" } } },
+            .left = .{ .dotted = .{ .width = .{ .unit = .em, .value = 1.5 }, .paint = .owner_current_color } },
+        },
+        .{
+            .top = .none,
+            .right = .hidden,
+            .bottom = .{ .outset = .{ .width = .{ .unit = .em, .value = 0 }, .paint = .owner_current_color } },
+            .left = .{ .inset = .{ .width = .{ .unit = .px, .value = 0 }, .paint = .{ .rgb = "#ffffff" } } },
+        },
+    };
+    for (shapes) |edges| {
+        const border: StyleBorder = .{ .resolved_edges = edges };
+        try std.testing.expect(validBorder(border));
+        const cell: CellStyle = .{ .border = border };
+        try std.testing.expect(validCellStyle(cell));
+        const cell_json = try std.json.Stringify.valueAlloc(a, cell, .{});
+        defer a.free(cell_json);
+        const parsed_cell = try std.json.parseFromSlice(CellStyle, a, cell_json, .{});
+        defer parsed_cell.deinit();
+        try std.testing.expectEqualDeep(cell, parsed_cell.value);
+        for ([_]BorderCollapse{ .separate, .collapse }) |collapse| {
+            const table: TableStyle = .{ .border = border, .collapse = collapse };
+            try std.testing.expect(validTableStyle(table));
+            const table_json = try std.json.Stringify.valueAlloc(a, table, .{});
+            defer a.free(table_json);
+            const parsed_table = try std.json.parseFromSlice(TableStyle, a, table_json, .{});
+            defer parsed_table.deinit();
+            try std.testing.expectEqualDeep(table, parsed_table.value);
+        }
+    }
+    const owner_json = try std.json.Stringify.valueAlloc(a, @as(StyleBorderPaint, .owner_current_color), .{});
+    defer a.free(owner_json);
+    try std.testing.expectEqualStrings("{\"owner_current_color\":{}}", owner_json);
+    try std.testing.expect(!@hasField(StyleBorderPaint, "transparent"));
+    try std.testing.expect(!@hasField(StyleBorderPaint, "light_dark"));
+    try std.testing.expect(!@hasField(StyleBorderEdge, "inset"));
+    try std.testing.expect(!@hasField(ContainerBorderEdge, "outset"));
+}
+
+test "AN resolved StyleBorder rejects bad drawn widths and paint at every physical edge" {
+    const valid_line: ResolvedStyleBorderLine = .{
+        .width = .{ .unit = .em, .value = 0.5 }, .paint = .owner_current_color,
+    };
+    inline for (.{ "solid", "dotted", "inset", "outset" }) |stroke| {
+        inline for (.{ "top", "right", "bottom", "left" }) |side| {
+            for ([_]f32{ -1, std.math.inf(f32), std.math.nan(f32) }) |bad| {
+                var line = valid_line;
+                line.width.value = bad;
+                var edges = ResolvedStyleBorderEdges.all(.none);
+                @field(edges, side) = @unionInit(ResolvedStyleBorderEdge, stroke, line);
+                const border: StyleBorder = .{ .resolved_edges = edges };
+                try std.testing.expect(!validResolvedStyleBorderEdge(@field(edges, side)));
+                try std.testing.expect(!validBorder(border));
+                try std.testing.expect(!validTableStyle(.{ .border = border }));
+                try std.testing.expect(!validCellStyle(.{ .border = border }));
+            }
+            for ([_][]const u8{ "", "red", "#abc", "#AABBCC", "#aabbcg" }) |bad| {
+                var line = valid_line;
+                line.paint = .{ .rgb = bad };
+                var edges = ResolvedStyleBorderEdges.all(.hidden);
+                @field(edges, side) = @unionInit(ResolvedStyleBorderEdge, stroke, line);
+                const border: StyleBorder = .{ .resolved_edges = edges };
+                try std.testing.expect(!validBorder(border));
+                try std.testing.expect(!validTableStyle(.{ .border = border }));
+                try std.testing.expect(!validCellStyle(.{ .border = border }));
+            }
+        }
+    }
+    try std.testing.expect(validBorder(.{ .resolved_edges = ResolvedStyleBorderEdges.all(.none) }));
+    try std.testing.expect(validBorder(.{ .resolved_edges = ResolvedStyleBorderEdges.all(.hidden) }));
+}
+
+test "AN resolved StyleBorder preserves legacy tagged JSON and uniform corner restrictions" {
+    const a = std.testing.allocator;
+    const LegacyBorder = union(enum) {
+        none,
+        solid: struct { width: StyleLength, color: []const u8 },
+        edges: StyleBorderEdges,
+    };
+    const old_values = [_]LegacyBorder{
+        .none,
+        .{ .solid = .{ .width = .{ .unit = .px, .value = 2 }, .color = "#abcdef" } },
+        .{ .edges = .{
+            .top = .none, .right = .hidden,
+            .bottom = .{ .dotted = .{ .width = .{ .unit = .em, .value = 0 }, .color = "#012345" } },
+            .left = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#abcdef" } },
+        } },
+    };
+    for (old_values) |legacy| {
+        const current: StyleBorder = switch (legacy) {
+            .none => .none,
+            .solid => |line| .{ .solid = .{ .width = line.width, .color = line.color } },
+            .edges => |edges| .{ .edges = edges },
+        };
+        const old_json = try std.json.Stringify.valueAlloc(a, legacy, .{});
+        defer a.free(old_json);
+        const new_json = try std.json.Stringify.valueAlloc(a, current, .{});
+        defer a.free(new_json);
+        try std.testing.expectEqualStrings(old_json, new_json);
+        const parsed = try std.json.parseFromSlice(StyleBorder, a, old_json, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqualDeep(current, parsed.value);
+    }
+    const absent_json = try std.json.Stringify.valueAlloc(a, CellStyle{ .text_align = .left }, .{});
+    defer a.free(absent_json);
+    try std.testing.expectEqualStrings("{\"text_align\":\"left\"}", absent_json);
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const corners: TableCornerRadii = .{ .top_left = zero, .top_right = zero, .bottom_right = zero, .bottom_left = zero };
+    var style: TableStyle = .{ .border = .none, .collapse = .separate, .corner_radii = corners };
+    try std.testing.expect(validTableStyle(style));
+    style.border = .{ .solid = .{ .width = zero, .color = "#abcdef" } };
+    try std.testing.expect(validTableStyle(style));
+    style.border = .{ .edges = StyleBorderEdges.all(.none) };
+    try std.testing.expect(!validTableStyle(style));
+    style.border = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.none) };
+    try std.testing.expect(!validTableStyle(style));
+    style.border = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.{
+        .solid = .{ .width = zero, .paint = .{ .rgb = "#abcdef" } },
+    }) };
+    try std.testing.expect(!validTableStyle(style));
+    style.corner_radii = null;
+    try std.testing.expect(validTableStyle(style));
+}
+test "AN resolved StyleBorder belongs to an ordinary table or its direct cell owner" {
+    const border: StyleBorder = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.{
+        .inset = .{ .width = .{ .unit = .px, .value = 1 }, .paint = .owner_current_color },
+    }) };
+    const rows = [_]Row{.{ .cells = &.{.{ .style = .{ .border = border }, .spans = &.{.{ .text = "body" }} }} }};
+    const ordinary: Table = .{ .style = .{ .border = border }, .rows = &rows };
+    try std.testing.expect(validResolvedStyleBorderTableDomain(ordinary));
+    const LegacyShape = struct { style: ?TableStyle = null, rows: []const Row };
+    try std.testing.expect(validResolvedStyleBorderTableDomain(LegacyShape{ .rows = &rows }));
+    for ([_]TableStyle{
+        .{ .display = .inline_table, .border = .none },
+        .{ .display = .inline_block, .border = .none },
+        .{ .float_side = .right, .border = .none },
+    }) |special_style| {
+        var changed = ordinary;
+        changed.style = special_style;
+        // The new direct-cell border alone is enough to refuse the special owner.
+        try std.testing.expect(!validResolvedStyleBorderTableDomain(changed));
+        const legacy_rows = [_]Row{.{ .cells = &.{.{ .style = .{ .border = .none }, .spans = &.{.{ .text = "body" }} }} }};
+        changed.rows = &legacy_rows;
+        try std.testing.expect(validResolvedStyleBorderTableDomain(changed));
+        var new_owner = special_style;
+        new_owner.border = border;
+        try std.testing.expect(!validUnboundTableStyle(new_owner));
+        try std.testing.expect(validUnboundTableStyle(special_style));
+    }
+    // Corner clipping belongs to the whole owner; a new direct-cell border
+    // cannot coexist with even legacy None/Solid owner corner geometry.
+    for ([_]f32{ 0, 4 }) |radius_value| for ([_]StyleBorder{
+        .none,
+        .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#abcdef" } },
+    }) |old_border| {
+        const radius: StyleLength = .{ .unit = .px, .value = radius_value };
+        const rounded_style: TableStyle = .{ .collapse = .separate, .border = old_border, .corner_radii = .{
+            .top_left = radius, .top_right = radius, .bottom_right = radius, .bottom_left = radius,
+        } };
+        try std.testing.expect(validTableStyle(rounded_style));
+        var missing_collapse = rounded_style;
+        missing_collapse.collapse = null;
+        try std.testing.expect(!validTableViewportHeaders(null, missing_collapse, null, null));
+        const rounded: Table = .{ .style = rounded_style, .rows = &rows };
+        // Only the direct Cell carries resolved_edges; the owner border is old.
+        try std.testing.expect(!validResolvedStyleBorderTableDomain(rounded));
+        const rounded_blocks = [_]Block{.{ .kind = .table, .table = rounded }};
+        var rounded_sections: [1]Section = undefined;
+        const rounded_stored = ResolvedStyleBorderCensusTest.stored(&rounded_blocks, &.{}, &rounded_sections);
+        try std.testing.expectError(error.InvalidPresentation, validateStored(std.testing.allocator, rounded_stored, "resolved border", .supplemental, null));
+
+        const plain_rows = [_]Row{.{ .cells = &.{.{ .style = .{ .border = .none }, .spans = &.{.{ .text = "body" }} }} }};
+        var legacy_rounded = rounded;
+        legacy_rounded.rows = &plain_rows;
+        try std.testing.expect(validResolvedStyleBorderTableDomain(legacy_rounded));
+        const legacy_blocks = [_]Block{.{ .kind = .table, .table = legacy_rounded }};
+        var legacy_sections: [1]Section = undefined;
+        const legacy_stored = ResolvedStyleBorderCensusTest.stored(&legacy_blocks, &.{}, &legacy_sections);
+        try validateStored(std.testing.allocator, legacy_stored, "resolved border", .supplemental, null);
+
+        var unrounded = rounded;
+        unrounded.style.?.corner_radii = null;
+        try std.testing.expect(validResolvedStyleBorderTableDomain(unrounded));
+        const unrounded_blocks = [_]Block{.{ .kind = .table, .table = unrounded }};
+        var unrounded_sections: [1]Section = undefined;
+        const unrounded_stored = ResolvedStyleBorderCensusTest.stored(&unrounded_blocks, &.{}, &unrounded_sections);
+        try validateStored(std.testing.allocator, unrounded_stored, "resolved border", .supplemental, null);
+    };
+    const nested_rows = [_]Row{.{ .cells = &.{.{ .nested_table = ordinary }} }};
+    const outer: Table = .{ .rows = &nested_rows };
+    try std.testing.expect(validResolvedStyleBorderTableDomain(outer));
+    try std.testing.expect(validResolvedStyleBorderTableDomain(outer.rows[0].cells[0].nested_table.?));
+    var bad_child = ordinary;
+    bad_child.style = .{ .display = .inline_table, .border = .none };
+    try std.testing.expect(!validResolvedStyleBorderTableDomain(bad_child));
+}
+
+test "AN resolved StyleBorder refuses responsive wide box grid and direct cell locations" {
+    const zero: StyleLength = .{ .unit = .px, .value = 0 };
+    const border: StyleBorder = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.{
+        .outset = .{ .width = .{ .unit = .px, .value = 1 }, .paint = .{ .rgb = "#abcdef" } },
+    }) };
+    const plain: TableBlockViewport = .{
+        .max_viewport_width_px = 639,
+        .box_style = .{
+            .width = .{ .unit = .px, .value = 100 },
+            .margin_values = .{ .top = .{ .length = zero }, .right = .auto, .bottom = .{ .length = zero }, .left = .auto },
+            .containing_direction = .ltr,
+        },
+        .box_sizing = .border_box, .max_width = .{ .unit = .percent, .value = 100 },
+        .grid_style = .{ .collapse = .collapse }, .grid_direction = .ltr, .language = "an",
+    };
+    const paired = PairedTableScrollTest.block();
+    const intrinsic = IntrinsicTableViewportTest.policy();
+    try std.testing.expect(validTableBlockViewport(plain));
+    try std.testing.expect(validTableScrollViewport(paired));
+    try std.testing.expect(validTableIntrinsicViewport(intrinsic));
+    for ([_]TableBlockViewport{ plain, paired, intrinsic }) |policy| {
+        var changed = policy;
+        changed.box_style.border = border;
+        try std.testing.expect(!validTableBlockViewport(changed));
+        try std.testing.expect(!validTableScrollViewport(changed));
+        try std.testing.expect(!validTableIntrinsicViewport(changed));
+        const box_table: Table = .{ .block_viewport = &changed };
+        try std.testing.expect(!validResolvedStyleBorderTableDomain(box_table));
+        changed = policy;
+        changed.grid_style.border = border;
+        const grid_table: Table = .{ .block_viewport = &changed };
+        try std.testing.expect(!validResolvedStyleBorderTableDomain(grid_table));
+        const rows = [_]Row{.{ .cells = &.{.{ .style = .{ .border = border }, .spans = &.{.{ .text = "body" }} }} }};
+        const cell_table: Table = .{ .block_viewport = &policy, .rows = &rows };
+        try std.testing.expect(!validResolvedStyleBorderTableDomain(cell_table));
+    }
+    var wide = IntrinsicTableViewportTest.table(&intrinsic);
+    try std.testing.expect(validTableViewportHeaders(wide.geometry, wide.style, wide.block_viewport, wide.float_viewport));
+    wide.style.?.border = border;
+    try std.testing.expect(!validTableViewportHeaders(wide.geometry, wide.style, wide.block_viewport, wide.float_viewport));
+    var floating = PairedTableScrollTest.table(&paired);
+    floating.block_viewport = null;
+    try std.testing.expect(validTableViewportHeaders(floating.geometry, floating.style, null, floating.float_viewport));
+    floating.style.?.border = border;
+    try std.testing.expect(!validTableViewportHeaders(floating.geometry, floating.style, null, floating.float_viewport));
+    const cells = [_]Row{.{ .cells = &.{.{ .style = .{ .border = border }, .spans = &.{.{ .text = "body" }} }} }};
+    floating.style.?.border = .none;
+    floating.rows = &cells;
+    try std.testing.expect(!validResolvedStyleBorderTableDomain(floating));
+}
+const ResolvedStyleBorderCensusTest = struct {
+    const body = [_]Span{
+        .{ .text = "before", .bold = true },
+        .{ .kind = .link, .text = "kept", .target = "Target", .target_fragment = "part" },
+    };
+    const cells = [_]Cell{.{
+        .style = .{ .border = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.none) } },
+        .spans = &body,
+    }};
+    const rows = [_]Row{.{ .cells = &cells }};
+    fn table() Table {
+        return .{ .rows = &rows };
+    }
+    fn stored(blocks: []const Block, references: []const Reference, sections: *[1]Section) Stored {
+        sections.* = .{.{ .level = 2, .title = "resolved border", .blocks = blocks }};
+        return .{ .entry = .{ .title = "resolved border", .kind = .supplemental, .sections = sections, .references = references } };
+    }
+};
+
+test "AN resolved StyleBorder census reaches cell only empty strokes and inherited table holders" {
+    const T = ResolvedStyleBorderCensusTest;
+    const a = std.testing.allocator;
+    for ([_]ResolvedStyleBorderEdge{ .none, .hidden }) |edge| {
+        const border: StyleBorder = .{ .resolved_edges = ResolvedStyleBorderEdges.all(edge) };
+        for ([_]bool{ false, true }) |owner_border| {
+            const cells = [_]Cell{.{ .style = if (owner_border) null else .{ .border = border }, .spans = &T.body }};
+            const rows = [_]Row{.{ .cells = &cells }};
+            const table: Table = .{ .style = if (owner_border) .{ .border = border } else null, .rows = &rows };
+            const direct = [_]Block{.{ .kind = .table, .table = table }};
+            const nested = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .nested_table = table }} }} } }};
+            const caption = [_]Block{.{ .kind = .table, .table = .{ .caption_blocks = &direct } }};
+            const cell_blocks = [_]Block{.{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .blocks = &direct }} }} } }};
+            const container: Container = .{ .style = .{ .padding = StyleEdges.all(.{ .unit = .px, .value = 0 }) }, .blocks = &direct };
+            const wrapped = [_]Block{.{ .kind = .container, .container = container }};
+            for ([_][]const Block{ &direct, &nested, &caption, &cell_blocks, &wrapped }) |blocks| {
+                var sections: [1]Section = undefined;
+                const stored = T.stored(blocks, &.{}, &sections);
+                try std.testing.expect(DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+                var work: DeepTableWork = .{};
+                try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+                try std.testing.expect(work.resolved_style_border_found);
+                try validateStored(a, stored, "resolved border", .supplemental, null);
+            }
+            const references = [_]Reference{.{ .number = 1, .group_number = 1, .blocks = &direct }};
+            var sections: [1]Section = undefined;
+            const stored = T.stored(&.{}, &references, &sections);
+            try std.testing.expect(DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+            try validateStored(a, stored, "resolved border", .supplemental, null);
+        }
+    }
+    const legacy = [_]Block{.{ .kind = .table, .table = .{
+        .style = .{ .border = .{ .edges = StyleBorderEdges.all(.hidden) } },
+        .rows = &.{.{ .cells = &.{.{ .style = .{ .border = .none }, .spans = &T.body }} }},
+    } }};
+    var sections: [1]Section = undefined;
+    const unchanged = T.stored(&legacy, &.{}, &sections);
+    try std.testing.expect(!DeepTableWork.hasResolvedStyleBorders(unchanged.entry.display_title, unchanged.entry.sections, unchanged.entry.preamble_spans, unchanged.entry.references));
+}
+
+test "AN resolved StyleBorder discovery cannot waive budgets action validation or late work fences" {
+    const T = ResolvedStyleBorderCensusTest;
+    const a = std.testing.allocator;
+    const table = T.table();
+    const direct = [_]Block{.{ .kind = .table, .table = table }};
+    var sections: [1]Section = undefined;
+    const stored = T.stored(&direct, &.{}, &sections);
+    try std.testing.expectEqual(@as(usize, 1), table.rows.len);
+    try std.testing.expectEqual(@as(usize, 1), table.rows[0].cells.len);
+    try std.testing.expectEqual(@as(usize, 2), table.rows[0].cells[0].spans.len);
+    // Section + block + row + cell + two original spans; no extra style item.
+    var work: DeepTableWork = .{ .remaining = 6 };
+    try work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references);
+    try std.testing.expectEqual(@as(usize, 0), work.remaining);
+    try std.testing.expect(work.resolved_style_border_found);
+    work = .{ .remaining = 5 };
+    try std.testing.expectError(error.PresentationTooLarge, work.entry(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+    try std.testing.expect(work.resolved_style_border_found);
+    try std.testing.expectEqualDeep(@as([]const Span, &T.body), table.rows[0].cells[0].spans);
+    try std.testing.expectEqualStrings("Target", table.rows[0].cells[0].spans[1].target);
+    try std.testing.expectEqualStrings("part", table.rows[0].cells[0].spans[1].target_fragment.?);
+
+    var bad_body = T.body;
+    // This existing action invariant is invalid independently of border paint:
+    // target_fragment belongs only to internal links, not external_link.
+    bad_body[1].kind = .external_link;
+    var cells = [_]Cell{table.rows[0].cells[0]};
+    cells[0].spans = &bad_body;
+    const bad_rows = [_]Row{.{ .cells = &cells }};
+    var bad_table = table;
+    bad_table.rows = &bad_rows;
+    const bad_blocks = [_]Block{.{ .kind = .table, .table = bad_table }};
+    var bad_sections: [1]Section = undefined;
+    const invalid = T.stored(&bad_blocks, &.{}, &bad_sections);
+    try std.testing.expect(DeepTableWork.hasResolvedStyleBorders(invalid.entry.display_title, invalid.entry.sections, invalid.entry.preamble_spans, invalid.entry.references));
+    try std.testing.expectError(error.InvalidPresentation, validateStored(a, invalid, "resolved border", .supplemental, null));
+
+    var validation: ImageValidation = .{ .a = a, .media = &.{} };
+    defer validation.deinit();
+    try std.testing.expectError(error.InvalidPresentation, validateTable(table, 1, &validation));
+    validation.resolved_style_border_work_checked = true;
+    try validateTable(table, 1, &validation);
+
+    var forbidden = table;
+    forbidden.style = .{ .display = .inline_table, .border = .none };
+    var rejected: DeepTableWork = .{};
+    try std.testing.expectError(error.InvalidPresentation, rejected.table(forbidden, 1, 0));
+    try std.testing.expect(rejected.resolved_style_border_found);
+    var policy = PairedTableScrollTest.block();
+    policy.box_style.border = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.hidden) };
+    const policy_table: Table = .{ .block_viewport = &policy };
+    rejected = .{};
+    try std.testing.expectError(error.InvalidPresentation, rejected.table(policy_table, 1, 0));
+    try std.testing.expect(rejected.resolved_style_border_found);
+}
+
+test "AN resolved StyleBorder requires unit direct spans without changing legacy or nested owners" {
+    const T = ResolvedStyleBorderCensusTest;
+    const a = std.testing.allocator;
+    const old_borders = [_]?StyleBorder{
+        null,
+        .none,
+        .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = "#abcdef" } },
+        .{ .edges = StyleBorderEdges.all(.hidden) },
+    };
+    for (0..2) |span_kind| {
+        var top = [_]Cell{ .{ .spans = &T.body }, .{ .spans = &T.body } };
+        const bottom = [_]Cell{ .{ .spans = &T.body }, .{ .spans = &T.body } };
+        if (span_kind == 0) top[0].colspan = 2 else top[0].rowspan = 2;
+        // Both fixtures are rectangular: one colspan covers the top row, or
+        // the first top cell spans into the second row beside its one cell.
+        var rows = [_]Row{
+            .{ .cells = if (span_kind == 0) top[0..1] else &top },
+            .{ .cells = if (span_kind == 0) &bottom else bottom[0..1] },
+        };
+        for (old_borders) |old_border| {
+            const legacy: Table = .{
+                .style = if (old_border) |border| .{ .border = border } else null,
+                .rows = &rows,
+            };
+            try std.testing.expect(!validTableStyle(.{}));
+            try std.testing.expect(validResolvedStyleBorderTableDomain(legacy));
+            const blocks = [_]Block{.{ .kind = .table, .table = legacy }};
+            var sections: [1]Section = undefined;
+            const stored = T.stored(&blocks, &.{}, &sections);
+            try validateStored(a, stored, "resolved border", .supplemental, null);
+            try std.testing.expect(!DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+        }
+        for ([_]ResolvedStyleBorderEdge{ .none, .hidden }) |edge| for (0..2) |owner_kind| {
+            const border: StyleBorder = .{ .resolved_edges = ResolvedStyleBorderEdges.all(edge) };
+            var last = bottom;
+            if (owner_kind == 1) last[if (span_kind == 0) 1 else 0].style = .{ .border = border };
+            rows[1].cells = if (span_kind == 0) &last else last[0..1];
+            const changed: Table = .{
+                .style = if (owner_kind == 0) .{ .border = border } else null,
+                .rows = &rows,
+            };
+            // The spanning first cell is deliberately not the new border's
+            // owner: table-wide restriction must include other direct cells.
+            try std.testing.expect(!validResolvedStyleBorderTableDomain(changed));
+            var work: DeepTableWork = .{};
+            try std.testing.expectError(error.InvalidPresentation, work.table(changed, 1, 0));
+            try std.testing.expect(work.resolved_style_border_found);
+            const blocks = [_]Block{.{ .kind = .table, .table = changed }};
+            var sections: [1]Section = undefined;
+            const stored = T.stored(&blocks, &.{}, &sections);
+            try std.testing.expect(DeepTableWork.hasResolvedStyleBorders(stored.entry.display_title, stored.entry.sections, stored.entry.preamble_spans, stored.entry.references));
+            try std.testing.expectError(error.InvalidPresentation, validateStored(a, stored, "resolved border", .supplemental, null));
+        };
+        // A legacy spanning outer owner may contain a distinct ordinary
+        // resolved-border table whose own direct cells all have unit spans.
+        top[0].spans = &.{};
+        top[0].nested_table = T.table();
+        rows[1].cells = if (span_kind == 0) &bottom else bottom[0..1];
+        const outer: Table = .{ .rows = &rows };
+        try std.testing.expect(validResolvedStyleBorderTableDomain(outer));
+        const outer_blocks = [_]Block{.{ .kind = .table, .table = outer }};
+        var outer_sections: [1]Section = undefined;
+        const outer_stored = T.stored(&outer_blocks, &.{}, &outer_sections);
+        try validateStored(a, outer_stored, "resolved border", .supplemental, null);
+        try std.testing.expect(DeepTableWork.hasResolvedStyleBorders(outer_stored.entry.display_title, outer_stored.entry.sections, outer_stored.entry.preamble_spans, outer_stored.entry.references));
+
+        // Conversely, a resolved unit-span owner may contain a legacy child
+        // with spanning cells; the child does not inherit the outer restriction.
+        top[0].nested_table = null;
+        top[0].spans = &T.body;
+        const nested_legacy: Table = .{ .rows = &rows };
+        const outer_cells = [_]Cell{.{ .nested_table = nested_legacy }};
+        const outer_rows = [_]Row{.{ .cells = &outer_cells }};
+        const resolved_outer: Table = .{
+            .style = .{ .border = .{ .resolved_edges = ResolvedStyleBorderEdges.all(.hidden) } },
+            .rows = &outer_rows,
+        };
+        try std.testing.expect(validResolvedStyleBorderTableDomain(resolved_outer));
+        const nested_blocks = [_]Block{.{ .kind = .table, .table = resolved_outer }};
+        var nested_sections: [1]Section = undefined;
+        const nested_stored = T.stored(&nested_blocks, &.{}, &nested_sections);
+        try validateStored(a, nested_stored, "resolved border", .supplemental, null);
+    }
 }

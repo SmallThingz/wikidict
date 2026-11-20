@@ -28671,7 +28671,7 @@ test "normal Writer retained VI dau preserves interrupted citation literal compl
                             try std.testing.expectEqual(T.StyleLengthUnit.px, solid.width.unit);
                             try std.testing.expectEqual(@as(f32, 1), solid.width.value);
                         },
-                        .none, .edges => return error.TestUnexpectedResult,
+                        .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
                     }
                     self.floated_grids += 1;
                 }
@@ -35514,7 +35514,7 @@ test "normal Writer retained FA hesabdari preserves literal translation tail unf
                             try std.testing.expectEqual(@as(f32, 1), solid.width.value);
                             try std.testing.expectEqualStrings("#aaaaaa", solid.color);
                         },
-                        .none, .edges => return error.TestUnexpectedResult,
+                        .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
                     }
                     for (value.rows[0].cells) |cell|
                         try std.testing.expectEqualStrings("#f9f9f9", cell.background orelse return error.TestUnexpectedResult);
@@ -52874,7 +52874,7 @@ const SrLiteralCaptionSaved = struct {
                 const border = style.border orelse return error.TestUnexpectedResult;
                 switch (border) {
                     .solid => |line| { try check(line.width.unit == .px and line.width.value == 1, "inflection 1px border"); try textEqual("#aaaaaa", line.color, "inflection border color"); },
-                    .none, .edges => return error.TestUnexpectedResult,
+                    .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
                 }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 try check(margins.left.unit == .em and margins.left.value == 0.5 and margins.bottom.unit == .em and margins.bottom.value == 0.5, "inflection authored half-em margins");
@@ -53612,7 +53612,7 @@ const SrRowlessManualSaved = struct {
                 switch (border) { .solid => |line| {
                     try check(line.width.unit == .px and line.width.value == 1, "verb aspect table border width");
                     try textEqual("#aaaaaa", line.color, "verb aspect table border color");
-                }, .none, .edges => return error.TestUnexpectedResult }
+                }, .none, .edges, .resolved_edges => return error.TestUnexpectedResult }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 try check(margins.left.unit == .em and margins.left.value == 0.5 and margins.bottom.unit == .em and margins.bottom.value == 0.5, "verb aspect authored half-em margins");
                 const rows = [_][2][]const u8{ .{ "несвршени", "свршени" }, .{ "pracovať", "vypracovať" } };
@@ -54587,7 +54587,7 @@ const SrRuleFreeCircleSaved = struct {
                 const border = style.border orelse return error.TestUnexpectedResult;
                 switch (border) {
                     .solid => |line| { try check(line.width.unit == .px and line.width.value == 1, "inflection border width"); try equal("#aaaaaa", line.color, "inflection border color"); },
-                    .none, .edges => return error.TestUnexpectedResult,
+                    .none, .edges, .resolved_edges => return error.TestUnexpectedResult,
                 }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 // Indexed .infobox font-size is 88%; the codec stores em lengths
@@ -54912,7 +54912,7 @@ const SrSkaredyRowlessSaved = struct {
                 switch (border) { .solid => |line| {
                     try check(line.width.unit == .px and line.width.value == 1, "adjective comparison table border width");
                     try textEqual("#aaaaaa", line.color, "adjective comparison table border color");
-                }, .none, .edges => return error.TestUnexpectedResult }
+                }, .none, .edges, .resolved_edges => return error.TestUnexpectedResult }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 try check(margins.left.unit == .em and margins.left.value == 0.5 and margins.bottom.unit == .em and margins.bottom.value == 0.5, "adjective comparison authored half-em margins");
                 const rows = [_][4][]const u8{
@@ -55640,7 +55640,7 @@ const SrVedietRowlessSaved = struct {
                 switch (border) { .solid => |line| {
                     try check(line.width.unit == .px and line.width.value == 1, "verb-aspect border width");
                     try textEqual("#aaaaaa", line.color, "verb-aspect border color");
-                }, .none, .edges => return error.TestUnexpectedResult }
+                }, .none, .edges, .resolved_edges => return error.TestUnexpectedResult }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 try check(margins.left.unit == .em and margins.left.value == 0.5 and margins.bottom.unit == .em and margins.bottom.value == 0.5, "authored verb-aspect half-em margins");
                 const matrix = [_][2][]const u8{ .{ "несвршени", "свршени" }, .{ "vedieť", "..." } };
@@ -56042,7 +56042,7 @@ const SrZabudnutRowlessSaved = struct {
                 switch (border) { .solid => |line| {
                     try check(line.width.unit == .px and line.width.value == 1, "verb-aspect border width");
                     try textEqual("#aaaaaa", line.color, "verb-aspect border color");
-                }, .none, .edges => return error.TestUnexpectedResult }
+                }, .none, .edges, .resolved_edges => return error.TestUnexpectedResult }
                 const margins = style.margins orelse return error.TestUnexpectedResult;
                 try check(margins.left.unit == .em and margins.left.value == 0.5 and margins.bottom.unit == .em and margins.bottom.value == 0.5, "authored verb-aspect half-em margins");
                 const matrix = [_][2][]const u8{ .{ "несвршени", "свршени" }, .{ "zabúdať", "zabudnúť" } };
