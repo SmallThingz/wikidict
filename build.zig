@@ -414,7 +414,28 @@ pub fn build(b: *std.Build) void {
     blob_build_tests.root_module.linkSystemLibrary("bz2", .{});
     blob_build_tests.root_module.linkSystemLibrary("zstd", .{});
     blob_build_tests.root_module.addImport("namespace_registry", namespace_registry_test_mod);
-    const run_blob_build_tests = b.addRunArtifact(blob_build_tests);
+    validateToolsPartitionSources(b) catch |err| {
+        std.log.err("invalid Tools test partition boundary: {s}", .{@errorName(err)});
+        b.invalid_user_input = true;
+        return;
+    };
+    const blob_build_normal_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[0].filters));
+    const blob_build_core_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[1].filters));
+    const blob_build_observations_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[2].filters));
+    const blob_build_support_tests = b.addTest(preparedTestOptions(blob_build_tests, tools_partitions[3].filters));
+    const tools_test_parts = [_]*std.Build.Step.Compile{
+        blob_build_normal_tests, blob_build_core_tests,
+        blob_build_observations_tests, blob_build_support_tests,
+    };
+    // Keep heavy compiles sequential at the existing job cap. Execute each
+    // independent artifact even if another partition returns test failures.
+    for (tools_test_parts[1..], 0..) |part, i| part.step.dependOn(&tools_test_parts[i].step);
+    const test_tools = b.step("test-tools", "Run the complete Tools inventory in bounded normal partitions");
+    for (tools_test_parts) |part| {
+        const run = b.addRunArtifact(part);
+        test_tools.dependOn(&run.step);
+    }
+
 
     const blob_file_tools_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -801,9 +822,12 @@ pub fn build(b: *std.Build) void {
     b.step("test-lua-abi", "Run Lua LLVM ABI tests serially").dependOn(&run_lua_abi_tests_only.step);
     addTestOrder(test_step, &blob_wasm_smoke.step, &run_bundle_protocol_tests.step, test_step_memory != 0);
     addTestOrder(test_step, &run_bundle_pipeline_tests.step, &blob_wasm_smoke.step, test_step_memory != 0);
-    addTestOrder(test_step, &run_blob_build_tests.step, &run_bundle_pipeline_tests.step, test_step_memory != 0);
-    test_step.dependOn(&run_blob_build_tests.step);
-    addTestOrder(test_step, &run_blob_file_tools_tests.step, &run_blob_build_tests.step, test_step_memory != 0);
+    // Separate run steps keep the standalone Tools entry free of pipeline
+    // obligations. All four use the same compiled artifacts and runner.
+    for (tools_test_parts) |part| {
+        const run = b.addRunArtifact(part);
+        addToolsRunObligation(test_step, &run.step, &run_bundle_pipeline_tests.step, &run_blob_file_tools_tests.step, test_step_memory != 0);
+    }
     test_step.dependOn(&run_blob_file_tools_tests.step);
     test_step.dependOn(&run_closure_tests.step);
     test_step.dependOn(&run_provider_tests.step);
@@ -879,6 +903,10 @@ pub fn build(b: *std.Build) void {
         .{ .group = .lua_stdlib, .artifact = lua_stdlib_tests },
         .{ .group = .lua_wikitext, .artifact = lua_wikitext_tests },
         .{ .group = .tools, .artifact = blob_build_tests },
+        .{ .group = .tools_normal, .artifact = blob_build_normal_tests },
+        .{ .group = .tools_core, .artifact = blob_build_core_tests },
+        .{ .group = .tools_observations, .artifact = blob_build_observations_tests },
+        .{ .group = .tools_support, .artifact = blob_build_support_tests },
         .{ .group = .closure, .artifact = closure_tests },
         .{ .group = .provider, .artifact = provider_tests },
         .{ .group = .storage_unit, .artifact = storage_unit },
@@ -927,6 +955,7 @@ pub fn build(b: *std.Build) void {
             // Full Run/tail dependencies are not enrolled by the test clones.
             if (cache_report_dependencies) report.addArgs(&.{ "dependency_graph_unknown", "full-run-dependencies" });
             for (prepared_tests) |prepared| {
+                if (prepared.group == .tools) continue; // Focused legacy root is not part of the full graph.
                 report.addArg(@tagName(prepared.group));
                 const same_options = b.addTest(preparedTestOptions(prepared.artifact, &.{}));
                 report.addArtifactArg2(same_options, .{ .make_absolute = true });
@@ -975,9 +1004,11 @@ pub fn build(b: *std.Build) void {
         return;
     }
     var previous_prepared_encoder: ?*std.Build.Step = null;
+    var previous_prepared_tools: ?*std.Build.Step = null;
     for (prepared_tests) |prepared| {
         if (!preparedTestGroupIncluded(prepare_group, prepared.group)) continue;
-        var options = preparedTestOptions(prepared.artifact, prepare_filters);
+        const selected_filters = if (isToolsPartition(prepared.group)) toolsPartitionFilters(prepared.group) else prepare_filters;
+        var options = preparedTestOptions(prepared.artifact, selected_filters);
         options.root_module = preparedRoot(b, options.root_module, prepare_error_tracing);
         const compiled = b.addTest(options);
         if (cache_report) |report| {
@@ -987,6 +1018,10 @@ pub fn build(b: *std.Build) void {
         }
         if (isEncoderPartition(prepared.group)) {
             if (previous_prepared_encoder) |previous| compiled.step.dependOn(previous);
+        }
+        if (isToolsPartition(prepared.group)) {
+            if (previous_prepared_tools) |previous| compiled.step.dependOn(previous);
+            previous_prepared_tools = &compiled.step;
         }
         if (prepare_no_emit) {
             if (isEncoderPartition(prepared.group)) previous_prepared_encoder = &compiled.step;
@@ -1187,7 +1222,7 @@ fn namespaceRegistryModule(b: *std.Build, target: std.Build.ResolvedTarget, opti
 }
 
 const PreparedTestGroup = enum {
-    encoder, encoder_compile, encoder_document, encoder_writer, encoder_support, lua, lua_core, lua_abi, lua_stdlib, lua_wikitext, tools, closure, provider, storage_unit, namespace_registry, blob_encoder, blob_decoder, blob_query, wikimedia_dump, global_index, program_shapes, lua_ustring, lua_scribunto, bundle_protocol, bundle_pipeline, blob_file_tools, missing_dependency
+    encoder, encoder_compile, encoder_document, encoder_writer, encoder_support, lua, lua_core, lua_abi, lua_stdlib, lua_wikitext, tools, tools_partitioned, tools_normal, tools_core, tools_observations, tools_support, closure, provider, storage_unit, namespace_registry, blob_encoder, blob_decoder, blob_query, wikimedia_dump, global_index, program_shapes, lua_ustring, lua_scribunto, bundle_protocol, bundle_pipeline, blob_file_tools, missing_dependency
 };
 
 const encoder_discovery_filter = "encoder root imports bundle-time presentation modules";
@@ -1235,13 +1270,15 @@ fn preparedRoot(b: *std.Build, original: *std.Build.Module, tracing: bool) *std.
 fn preparedTestGroupIncluded(selected: ?PreparedTestGroup, group: PreparedTestGroup) bool {
     if (selected) |wanted| {
         if (wanted == .encoder) return isEncoderPartition(group);
+        if (wanted == .tools_partitioned) return isToolsPartition(group);
         return wanted == group;
     }
-    // Seven logical suites, with encoder represented by four physical artifacts.
+    // Seven logical suites, with Encoder and Tools each using four artifacts.
     // Other normal roots remain opt-in, never implicit suite completion.
     return switch (group) {
         .encoder_compile, .encoder_document, .encoder_writer, .encoder_support,
-        .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools => true,
+        .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext,
+        .tools_normal, .tools_core, .tools_observations, .tools_support => true,
         else => false,
     };
 }
@@ -1275,6 +1312,7 @@ fn preparedTestFilters(a: std.mem.Allocator, group: ?PreparedTestGroup, requeste
     // Zig's filters are ORed substrings, not an intersection with a partition.
     // Explicit focused filters continue to use -Dprepare-test-group=encoder.
     if (isEncoderPartition(selected)) return error.EncoderPartitionFilterNotSupported;
+    if (isToolsPartition(selected) or selected == .tools_partitioned) return error.ToolsPartitionFilterNotSupported;
     var filters: std.ArrayList([]const u8) = .empty;
     errdefer filters.deinit(a);
     try filters.appendSlice(a, requested);
@@ -1356,13 +1394,13 @@ test "prepared test no emission retains partition filters and normal test option
     try std.testing.expect(module.cached_graph.modules[0] == &module);
 }
 
-test "prepared test default retains seven logical suites with four encoder artifacts" {
+test "prepared test default retains seven logical suites with partitioned Encoder and Tools" {
     var count: usize = 0;
     for (std.meta.tags(PreparedTestGroup)) |group| {
         if (preparedTestGroupIncluded(null, group)) count += 1;
     }
-    try std.testing.expectEqual(@as(usize, 10), count);
-    for ([_]PreparedTestGroup{ .encoder_compile, .encoder_document, .encoder_writer, .encoder_support, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools }) |group| {
+    try std.testing.expectEqual(@as(usize, 13), count);
+    for ([_]PreparedTestGroup{ .encoder_compile, .encoder_document, .encoder_writer, .encoder_support, .lua, .lua_core, .lua_abi, .lua_stdlib, .lua_wikitext, .tools_normal, .tools_core, .tools_observations, .tools_support }) |group| {
         try std.testing.expect(preparedTestGroupIncluded(null, group));
     }
     try std.testing.expect(!preparedTestGroupIncluded(null, .blob_encoder));
@@ -1680,4 +1718,300 @@ test "memory scheduled test roots preserve reachable obligations and real artifa
     try std.testing.expectEqualSlices(*std.Build.Step, &.{prerequisite_artifact}, prerequisite.dependencies.items);
     try std.testing.expectEqualSlices(*std.Build.Step, &.{shared_input}, dependent_artifact.dependencies.items);
     try std.testing.expectEqualSlices(*std.Build.Step, &.{shared_input}, prerequisite_artifact.dependencies.items);
+}
+
+const ToolsPartition = struct {
+    group: PreparedTestGroup,
+    filters: []const []const u8,
+};
+// Keep the original root, module graph, names and backend. A new top-level
+// naming family must update these disjoint boundaries rather than disappear.
+const tools_partitions = [_]ToolsPartition{
+    .{ .group = .tools_normal, .filters = &.{
+        "blob_build.test.normal ",
+    } },
+    .{ .group = .tools_core, .filters = &.{
+        "blob_build.test.AF ",
+        "blob_build.test.AN ",
+        "blob_build.test.AY ",
+        "blob_build.test.Aal ",
+        "blob_build.test.Arabic ",
+        "blob_build.test.Aromanian ",
+        "blob_build.test.DV ",
+        "blob_build.test.Estonian ",
+        "blob_build.test.Figure ",
+        "blob_build.test.Finnish ",
+        "blob_build.test.GN ",
+        "blob_build.test.GOR ",
+        "blob_build.test.HU ",
+        "blob_build.test.IU ",
+        "blob_build.test.InvalidPreContext ",
+        "blob_build.test.KBD ",
+        "blob_build.test.KU ",
+        "blob_build.test.KY ",
+        "blob_build.test.LT ",
+        "blob_build.test.Latin ",
+        "blob_build.test.MG ",
+        "blob_build.test.RU ",
+        "blob_build.test.Ready ",
+        "blob_build.test.RenderLimit ",
+        "blob_build.test.SIMPLE ",
+        "blob_build.test.SL ",
+        "blob_build.test.Samoan ",
+        "blob_build.test.TE ",
+        "blob_build.test.TN ",
+        "blob_build.test.TPI ",
+        "blob_build.test.TT ",
+        "blob_build.test.Tsonga ",
+        "blob_build.test.UncompiledTemplate ",
+        "blob_build.test.Writer ",
+        "blob_build.test.ZA ",
+        "blob_build.test.Zulu ",
+        "blob_build.test.absent ",
+        "blob_build.test.acknowledged ",
+        "blob_build.test.actual ",
+        "blob_build.test.audit ",
+        "blob_build.test.blob ",
+        "blob_build.test.captured ",
+        "blob_build.test.complete ",
+        "blob_build.test.continuous ",
+        "blob_build.test.conversion ",
+        "blob_build.test.diagnostic ",
+        "blob_build.test.existing ",
+        "blob_build.test.explicit ",
+        "blob_build.test.failed ",
+        "blob_build.test.fatal ",
+        "blob_build.test.first ",
+        "blob_build.test.heading ",
+        "blob_build.test.headword ",
+        "blob_build.test.indexed ",
+        "blob_build.test.language ",
+        "blob_build.test.literal ",
+        "blob_build.test.localized ",
+        "blob_build.test.missing ",
+        "blob_build.test.named ",
+        "blob_build.test.official ",
+        "blob_build.test.operational ",
+        "blob_build.test.ordinary ",
+        "blob_build.test.page ",
+        "blob_build.test.parent ",
+        "blob_build.test.prepared ",
+        "blob_build.test.presentation ",
+        "blob_build.test.project ",
+        "blob_build.test.retained ",
+        "blob_build.test.reviewed ",
+        "blob_build.test.root ",
+        "blob_build.test.selected ",
+        "blob_build.test.sharded ",
+        "blob_build.test.shared ",
+        "blob_build.test.site ",
+        "blob_build.test.source ",
+        "blob_build.test.source-equivalent ",
+        "blob_build.test.static ",
+        "blob_build.test.test ",
+        "blob_build.test.valid ",
+        "blob_build.test.worker ",
+    } },
+    .{ .group = .tools_observations, .filters = &.{
+        "figure_page_observations.test",
+    } },
+    .{ .group = .tools_support, .filters = &.{
+        "expansion_deadline.test",
+        "bundle_expander.test",
+        "page_source_context.test",
+        "source_internal_link.test",
+        "page_language.test",
+        "page_language_prefix.test",
+        "source_title_variant.test",
+        "source_table_styles.test",
+        "source_stylesheet_imports.test",
+        "source_default_gadgets.test",
+        "language_registry.test",
+        "reviewed_nonlexical.test",
+        "figure_sizing.test",
+        "blob_build.test_",
+    } },
+};
+
+const tools_test_files = [_][]const u8{
+    "tools/blob_build.zig",
+    "tools/figure_page_observations.zig",
+    "tools/expansion_deadline.zig",
+    "tools/bundle_expander.zig",
+    "tools/page_source_context.zig",
+    "tools/source_internal_link.zig",
+    "tools/page_language.zig",
+    "tools/page_language_prefix.zig",
+    "tools/source_title_variant.zig",
+    "tools/source_table_styles.zig",
+    "tools/source_stylesheet_imports.zig",
+    "tools/source_default_gadgets.zig",
+    "tools/language_registry.zig",
+    "tools/reviewed_nonlexical.zig",
+    "tools/figure_sizing.zig",
+};
+
+fn isToolsPartition(group: PreparedTestGroup) bool {
+    return switch (group) {
+        .tools_normal, .tools_core, .tools_observations, .tools_support => true,
+        else => false,
+    };
+}
+
+fn toolsPartitionForName(name: []const u8) !usize {
+    var selected: ?usize = null;
+    for (tools_partitions, 0..) |partition, i| {
+        var found = false;
+        for (partition.filters) |filter| found = found or std.mem.indexOf(u8, name, filter) != null;
+        if (!found) continue;
+        if (selected != null) return error.OverlappingToolsTestPartitions;
+        selected = i;
+    }
+    return selected orelse error.UnmappedToolsTestName;
+}
+
+fn validateToolsTestSource(a: std.mem.Allocator, source: [:0]const u8, namespace: []const u8) !usize {
+    var tokenizer: std.zig.Tokenizer = .init(source);
+    var depth: usize = 0;
+    var count: usize = 0;
+    var anonymous: usize = 0;
+    var names: std.StringHashMapUnmanaged(void) = .empty;
+    defer names.deinit(a);
+    while (true) {
+        const token = tokenizer.next();
+        switch (token.tag) {
+            .eof => break,
+            .invalid => return error.InvalidToolsTestSource,
+            .l_brace => depth += 1,
+            .r_brace => depth = std.math.sub(usize, depth, 1) catch return error.InvalidToolsTestSource,
+            .keyword_test => {
+                if (depth != 0) return error.NestedToolsTestRequiresPartition;
+                const name_token = tokenizer.next();
+                const name = if (name_token.tag == .l_brace) name: {
+                    depth += 1;
+                    const generated = try std.fmt.allocPrint(a, "{s}.test_{d}", .{ namespace, anonymous });
+                    anonymous += 1;
+                    break :name generated;
+                } else name: {
+                    if (name_token.tag != .string_literal) return error.InvalidToolsTestSource;
+                    const decoded = try std.zig.string_literal.parseAlloc(a, source[name_token.loc.start..name_token.loc.end]);
+                    break :name try std.fmt.allocPrint(a, "{s}.test.{s}", .{ namespace, decoded });
+                };
+                if ((try names.getOrPut(a, name)).found_existing) return error.DuplicateToolsTestName;
+                _ = try toolsPartitionForName(name);
+                count += 1;
+            },
+            else => {},
+        }
+    }
+    if (depth != 0) return error.InvalidToolsTestSource;
+    return count;
+}
+
+fn validateToolsPartitionSources(b: *std.Build) !void {
+    for (tools_test_files) |relative| {
+        const path = b.path(relative);
+        // This read affects graph configuration. Track contents with Zig's
+        // normal configure cache; do not poison it or trust stale boundaries.
+        b.dependOnFileContents(path);
+        const source = try std.Io.Dir.cwd().readFileAllocOptions(b.graph.io,
+            try b.root.joinString(b.allocator, relative), b.allocator, .limited(16 * 1024 * 1024), .of(u8), 0);
+        const count = try validateToolsTestSource(b.allocator, source, std.fs.path.stem(relative));
+        if (count == 0) return error.EmptyToolsTestNamespace;
+    }
+}
+
+test "Tools partitions cover exact decoded names and retain unnamed controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const source = "// test \"ignored\" {}\nconst text = \"test\";\ntest \"normal Writer check\" {}\ntest \"normal Writer check extra\" {}\ntest \"presentation quote \\\" and \\u{e9}\" {}\ntest {}\n";
+    try std.testing.expectEqual(@as(usize, 4), try validateToolsTestSource(arena.allocator(), source, "blob_build"));
+    try std.testing.expectEqual(@as(usize, 0), try toolsPartitionForName("blob_build.test.normal Writer check"));
+    try std.testing.expectEqual(@as(usize, 0), try toolsPartitionForName("blob_build.test.normal Writer check extra"));
+    try std.testing.expectEqual(@as(usize, 3), try toolsPartitionForName("blob_build.test_0"));
+    try std.testing.expectError(error.UnmappedToolsTestName, toolsPartitionForName("blob_build.test.new-family check"));
+}
+
+test "Tools partitions refuse malformed duplicate or nested declarations without dropping them" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try std.testing.expectError(error.NestedToolsTestRequiresPartition, validateToolsTestSource(arena.allocator(), "const S = struct { test \"nested\" {} };", "blob_build"));
+    try std.testing.expectError(error.DuplicateToolsTestName, validateToolsTestSource(arena.allocator(), "test \"presentation same\" {} test \"presentation same\" {}", "blob_build"));
+    try std.testing.expectError(error.InvalidToolsTestSource, validateToolsTestSource(arena.allocator(), "test 1 {}", "blob_build"));
+}
+
+
+test "Tools partitions preserve legacy focused selection and reject OR overrides" {
+    for (std.meta.tags(PreparedTestGroup)) |group| {
+        try std.testing.expectEqual(isToolsPartition(group), preparedTestGroupIncluded(.tools_partitioned, group));
+        try std.testing.expectEqual(group == .tools, preparedTestGroupIncluded(.tools, group));
+    }
+    for (tools_partitions) |partition| {
+        try std.testing.expect(preparedTestGroupIncluded(partition.group, partition.group));
+        try std.testing.expectError(error.ToolsPartitionFilterNotSupported, preparedTestFilters(std.testing.allocator, partition.group, &.{"one"}));
+    }
+    try std.testing.expectError(error.ToolsPartitionFilterNotSupported, preparedTestFilters(std.testing.allocator, .tools_partitioned, &.{"one"}));
+}
+
+fn toolsPartitionFilters(group: PreparedTestGroup) []const []const u8 {
+    for (tools_partitions) |partition| if (partition.group == group) return partition.filters;
+    unreachable;
+}
+
+test "Tools normal full and focused selection retain their distinct contracts" {
+    for (std.meta.tags(PreparedTestGroup)) |group| {
+        try std.testing.expectEqual(isToolsPartition(group), preparedTestGroupIncluded(.tools_partitioned, group));
+        try std.testing.expectEqual(group == .tools, preparedTestGroupIncluded(.tools, group));
+    }
+    try std.testing.expect(!preparedTestGroupIncluded(null, .tools));
+    try std.testing.expect(preparedTestGroupIncluded(null, .tools_support));
+    try std.testing.expectEqualStrings("blob_build.test_", tools_partitions[3].filters[tools_partitions[3].filters.len - 1]);
+    const filters = try preparedTestFilters(std.testing.allocator, .tools, &.{"one"});
+    defer std.testing.allocator.free(filters);
+    try std.testing.expectEqualStrings("one", filters[0]);
+}
+
+fn addToolsRunObligation(aggregate: *std.Build.Step, run: *std.Build.Step,
+    preceding: *std.Build.Step, following: *std.Build.Step, memory_claims: bool) void
+{
+    addTestOrder(aggregate, run, preceding, memory_claims);
+    aggregate.dependOn(run);
+    addTestOrder(aggregate, following, run, memory_claims);
+}
+
+test "Tools full graph keeps failed partitions independent and preserves normal memory ordering" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var b: std.Build = undefined;
+    b.allocator = arena.allocator();
+    for ([_]bool{ false, true }) |memory_claims| {
+        var root: std.Build.Step = undefined;
+        var preceding: std.Build.Step = undefined;
+        var following: std.Build.Step = undefined;
+        for ([_]*std.Build.Step{ &root, &preceding, &following }) |step| {
+            step.owner = &b;
+            step.dependencies = .empty;
+        }
+        var runs: [4]std.Build.Step = undefined;
+        var compiles: [4]std.Build.Step = undefined;
+        root.dependOn(&following);
+        for (&runs, &compiles) |*run, *compiled| {
+            run.owner = &b;
+            run.dependencies = .empty;
+            compiled.owner = &b;
+            compiled.dependencies = .empty;
+            run.dependOn(compiled);
+            addToolsRunObligation(&root, run, &preceding, &following, memory_claims);
+        }
+        for (&runs, &compiles) |*run, *compiled| {
+            try std.testing.expect(std.mem.indexOfScalar(*std.Build.Step, root.dependencies.items, run) != null);
+            try std.testing.expect(std.mem.indexOfScalar(*std.Build.Step, run.dependencies.items, compiled) != null);
+            for (&runs) |*sibling| {
+                if (sibling == run) continue;
+                try std.testing.expect(std.mem.indexOfScalar(*std.Build.Step, run.dependencies.items, sibling) == null);
+            }
+            try std.testing.expectEqual(!memory_claims, std.mem.indexOfScalar(*std.Build.Step, run.dependencies.items, &preceding) != null);
+            try std.testing.expectEqual(!memory_claims, std.mem.indexOfScalar(*std.Build.Step, following.dependencies.items, run) != null);
+        }
+    }
 }

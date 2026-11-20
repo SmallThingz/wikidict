@@ -22,6 +22,12 @@ comptime {
         _ = figure_sizing;
         _ = figure_page_observations;
         _ = @import("source_stylesheet_imports.zig");
+        _ = expansion_deadline;
+        _ = bundle_expander;
+        _ = reviewed_nonlexical;
+        _ = @import("page_language_prefix.zig");
+        _ = @import("source_title_variant.zig");
+        _ = @import("source_default_gadgets.zig");
     }
 }
 const source_language_banner = @import("source_language_banner.zig");

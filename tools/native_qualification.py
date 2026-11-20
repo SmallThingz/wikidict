@@ -2,7 +2,7 @@
 """Existing native qualification owner/worker, with authenticated per-run data."""
 
 
-FULL_DIAGNOSTIC_ROOTS = (
+LEGACY_FULL_DIAGNOSTIC_ROOTS = (
     ('closure_tests', 'closure', None), ('provider_tests', 'provider', None),
     ('storage_unit', 'storage_unit', None), ('namespace_registry_tests', 'namespace_registry', None),
     ('encoder_compile', 'encoder_compile', 'presentation_compile.test.'),
@@ -19,6 +19,52 @@ FULL_DIAGNOSTIC_ROOTS = (
     ('bundle_pipeline_tests', 'bundle_pipeline', None), ('blob_build_tests', 'tools', None),
     ('blob_file_tools_tests', 'blob_file_tools', None), ('missing_dependency_tests', 'missing_dependency', None),
 )
+TOOLS_DIAGNOSTIC_ROOTS = (
+    ('blob_build_normal_tests', 'tools_normal', None),
+    ('blob_build_core_tests', 'tools_core', None),
+    ('blob_build_observations_tests', 'tools_observations', None),
+    ('blob_build_support_tests', 'tools_support', None),
+)
+FULL_DIAGNOSTIC_ROOTS = tuple(part for row in LEGACY_FULL_DIAGNOSTIC_ROOTS
+                            for part in (TOOLS_DIAGNOSTIC_ROOTS if row[0] == 'blob_build_tests' else (row,)))
+
+
+def full_diagnostic_root_layout(expected):
+    """Select the exact current or sealed legacy physical-root inventory."""
+    roots = {group['root'] for group in expected['groups']}
+    for layout in (FULL_DIAGNOSTIC_ROOTS, LEGACY_FULL_DIAGNOSTIC_ROOTS):
+        if roots == {row[0] for row in layout}:
+            assert expected['expected_groups'] == len(expected['groups']) == len(layout)
+            return layout
+    raise AssertionError('Unknown or mixed full native root inventory')
+
+
+
+def tools_logical_occurrences(roots):
+    """Join current Tools physical roots without dropping multiplicities."""
+    from collections import Counter
+    counts = Counter()
+    for root, _, _ in TOOLS_DIAGNOSTIC_ROOTS:
+        counts.update(roots[root])
+    assert counts and all(count == 1 for count in counts.values()), 'Overlapping Tools partition names'
+    return counts
+
+
+def prepared_cache_groups(selected, filters, *, full=False):
+    """Normal physical cache selection; explicit focused Tools keeps one root."""
+    groups = sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
+    if full:
+        return groups
+    if selected is None:
+        return [g for g in groups if g.startswith('encoder_') or g.startswith('tools_') or
+                g in ('lua', 'lua_core', 'lua_abi', 'lua_stdlib', 'lua_wikitext')]
+    if selected == 'encoder':
+        return ['encoder'] if filters else [g for g in groups if g.startswith('encoder_')]
+    if selected == 'tools_partitioned':
+        return sorted(row[1] for row in TOOLS_DIAGNOSTIC_ROOTS)
+    return [selected]
+
+
 FUNCTIONAL_TEST_ERRORS = ('TestExpectedEqual', 'TestUnexpectedResult')
 # These clean test-local failures do not prevent independent focused cases from
 # running. They remain failures; full-suite and preparation policies are unchanged.
@@ -60,9 +106,9 @@ def execute_with_failure_output(executor, out, label, argv, cwd):
 def full_diagnostic_groups(expected):
     from collections import Counter
     groups = expected['groups']
-    assert expected['expected_groups'] == len(groups) == len(FULL_DIAGNOSTIC_ROOTS)
+    layout = full_diagnostic_root_layout(expected)
     assert len({g['root'] for g in groups}) == len(groups)
-    assert {g['root'] for g in groups} == {r for r, _, _ in FULL_DIAGNOSTIC_ROOTS}
+    assert {g['root'] for g in groups} == {r for r, _, _ in layout}
     by_root = {g['root']: g for g in groups}
     signatures = set()
     for group in groups:
@@ -72,10 +118,12 @@ def full_diagnostic_groups(expected):
         signature = tuple(sorted(counts.items()))
         assert signature not in signatures, 'Ambiguous normal root inventory'
         signatures.add(signature)
+    if layout == FULL_DIAGNOSTIC_ROOTS:
+        tools_logical_occurrences({root: by_root[root]['expected_occurrences'] for root, _, _ in TOOLS_DIAGNOSTIC_ROOTS})
     assert sum(sum(g['expected_occurrences'].values()) for g in groups) == expected['expected_total']
     return [dict(root=root, prepared_group=alias, runtime_filter=runtime_filter,
                  expected_occurrences=Counter(by_root[root]['expected_occurrences']))
-            for root, alias, runtime_filter in FULL_DIAGNOSTIC_ROOTS]
+            for root, alias, runtime_filter in layout]
 
 
 def completed_diagnostic_roots(groups, helper, stdout, stderr):
@@ -623,8 +671,19 @@ def validate_preparation_plan(cfg, group_binding, expect, ordered_groups, focus_
     assert prepared_names==tuple(name for name in normal_modes if name in selected_ids) and selected_ids==list(prepared_names) and cfg['focused_expected']==len(focus_cases)
     assert group_binding['compile_time_filtered_preparation'] is any(group['compile_time_filtered'] for group in cfg['groups']) and group_binding['prepare_target']=='prepare-tests' and group_binding['prepared_relative_directory']=='bin/wikidict-tests'
     assert type(group_binding['prepare_test_error_tracing']) is bool and group_binding['full_normal_partitioned_graph_required'] is True
-    assert expect['expected']['logical_expected_groups']==23 and expect['expected']['expected_groups']==26 and expect['expected']['logical_global_occurrences_equal_physical'] is True
+    assert expect['expected']['logical_expected_groups']==23 and expect['expected']['logical_global_occurrences_equal_physical'] is True
+    physical_groups=expect['expected']['expected_groups']
+    assert type(physical_groups)is int and physical_groups in (26,29)
+    # Focused binding describes selected roots, not a full runtime inventory.
+    # Full-outcome parsing separately requires an exact26 or29 root layout.
     all_roots={root['root']:root['expected_occurrences'] for root in expect['expected']['groups']}
+    partition_roots={root for root,_,_ in TOOLS_DIAGNOSTIC_ROOTS}
+    present=partition_roots.intersection(all_roots)
+    if physical_groups==26:
+     assert not present
+    else:
+     assert 'blob_build_tests' not in all_roots
+     if present:all_roots['blob_build_tests']=tools_logical_occurrences(all_roots)
     from collections import Counter
     prepare_filters={};prepare_discovery={}
     for group in ordered_groups:
@@ -1479,7 +1538,7 @@ def cleanup_closed_test_cache(request, *, reconcile_protected=None):
         reports = retention['reports']; cache_local = Path(cfg['retained_cache']['path'])/'local'
         expected_groups = sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
         if not failed:
-            assert any(r['context']['family'] == 'full' and r['context']['groups'] == expected_groups for r in reports)
+            assert any(r['context']['family'] == 'full' and r['context']['groups'] in (expected_groups, sorted(row[1] for row in LEGACY_FULL_DIAGNOSTIC_ROOTS)) for r in reports)
         else:
             # A source-reviewed caller opts in only for selected runtime paths
             # that cannot dynamically compile generic tests. Nested production
@@ -1953,11 +2012,8 @@ if __name__ == '__main__':
             family='prepare' if argv[2]=='prepare-tests' else 'full'
             selected=[a.split('=',1)[1] for a in argv if a.startswith('-Dprepare-test-group=')]
             filters=[a for a in argv if a.startswith('-Dprepare-test-filter=')]
-            groups=sorted(row[1] for row in FULL_DIAGNOSTIC_ROOTS)
-            if family=='prepare' and not selected:groups=[g for g in groups if g.startswith('encoder_') or g in ('lua','lua_core','lua_abi','lua_stdlib','lua_wikitext','tools')]
-            if family=='prepare' and selected:
-             assert len(selected)==1
-             groups=([selected[0]] if selected[0]!='encoder' else (['encoder'] if filters else [g for g in groups if g.startswith('encoder_')]))
+            assert len(selected)<=1
+            groups=(sorted(row[1] for row in full_diagnostic_root_layout(expect['expected'])) if family=='full' else prepared_cache_groups(selected[0] if selected else None,filters))
             report=out/('test-cache-'+label+'.json')
             context=dict(configuration=start['configuration'],source_manifest=cfg['private_manifest'],family=family,groups=groups,cache_local=str(cache/'local'),argv=argv)
             export_argv=test_cache_report_command(argv,report=report,recorder=__file__,context=context)

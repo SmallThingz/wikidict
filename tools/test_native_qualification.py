@@ -2518,7 +2518,7 @@ class FailedFullCollectionTests(unittest.TestCase):
 
     def fixture(self):
         groups = [dict(root=root, expected_occurrences={root+'.test.fixture': 1})
-                  for root, _, _ in qualification.FULL_DIAGNOSTIC_ROOTS]
+                  for root, _, _ in qualification.LEGACY_FULL_DIAGNOSTIC_ROOTS]
         return dict(groups=groups, expected_groups=26, expected_total=26)
 
     def output(self, groups, failed=()):
@@ -4715,6 +4715,85 @@ class DirectControlProgressTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     helpers.normalize_direct_control_result(raw, cases)
                 self.assertEqual(raw, before)
+
+
+class ToolsPartitionAdoptionTests(unittest.TestCase):
+    def test_current_and_legacy_full_roots_are_both_exact(self):
+        for layout in (qualification.FULL_DIAGNOSTIC_ROOTS, qualification.LEGACY_FULL_DIAGNOSTIC_ROOTS):
+            expected=dict(groups=[dict(root=root,expected_occurrences={root+'.test.fixture':1}) for root,_,_ in layout],expected_groups=len(layout),expected_total=len(layout))
+            groups=qualification.full_diagnostic_groups(expected)
+            self.assertEqual([g['root'] for g in groups],[r[0] for r in layout])
+        self.assertEqual(len(qualification.FULL_DIAGNOSTIC_ROOTS),29)
+        self.assertEqual(len(qualification.LEGACY_FULL_DIAGNOSTIC_ROOTS),26)
+
+    def test_mixed_missing_or_duplicate_partition_is_refused(self):
+        layout=qualification.FULL_DIAGNOSTIC_ROOTS
+        base=dict(groups=[dict(root=root,expected_occurrences={root+'.test.fixture':1}) for root,_,_ in layout],expected_groups=len(layout),expected_total=len(layout))
+        for changed in (base['groups'][:-1],base['groups']+[dict(root='blob_build_tests',expected_occurrences={'unexpected':1})],base['groups']+[base['groups'][0]]):
+            with self.assertRaises(AssertionError):
+                qualification.full_diagnostic_groups(dict(base,groups=changed,expected_groups=len(changed)))
+
+    def test_default_full_and_unfiltered_tools_cache_selection_use_four_parts(self):
+        parts=sorted(row[1] for row in qualification.TOOLS_DIAGNOSTIC_ROOTS)
+        for selected in ('tools_partitioned',):
+            self.assertEqual(qualification.prepared_cache_groups(selected,[]),parts)
+        self.assertEqual(qualification.prepared_cache_groups('tools',['specific']),['tools'])
+        self.assertEqual(qualification.prepared_cache_groups('tools',[]),['tools'])
+        default=qualification.prepared_cache_groups(None,[])
+        self.assertEqual(sorted(g for g in default if g.startswith('tools_')),parts)
+        self.assertNotIn('tools',default)
+        self.assertEqual(qualification.prepared_cache_groups(None,[],full=True),sorted(r[1] for r in qualification.FULL_DIAGNOSTIC_ROOTS))
+
+    def test_tools_partitions_refuse_overlapping_names_and_retain_failure_statuses(self):
+        layout=qualification.FULL_DIAGNOSTIC_ROOTS
+        expected=dict(groups=[dict(root=root,expected_occurrences={root+'.test.fixture':1}) for root,_,_ in layout],expected_groups=len(layout),expected_total=len(layout))
+        parts=[row for row in expected['groups'] if row['root'].startswith('blob_build_')]
+        parts[1]['expected_occurrences']=dict(parts[0]['expected_occurrences'])
+        with self.assertRaises(AssertionError): qualification.full_diagnostic_groups(expected)
+        fixture=FailedFullCollectionTests()
+        original=dict(groups=[dict(root=root,expected_occurrences={root+'.test.fixture':1}) for root,_,_ in layout],expected_groups=len(layout),expected_total=len(layout))
+        groups=qualification.full_diagnostic_groups(original)
+        output=fixture.output(groups,{'blob_build_normal_tests','blob_build_observations_tests'})
+        observed=qualification.completed_diagnostic_roots(groups,fixture.helper,output,'')
+        self.assertTrue(observed['blob_build_normal_tests']['failed'])
+        self.assertTrue(observed['blob_build_observations_tests']['failed'])
+        self.assertFalse(observed['blob_build_support_tests']['failed'])
+        self.assertEqual(set(observed),{group['root'] for group in groups})
+
+
+    def test_logical_tools_union_preserves_list_and_counted_record_multiplicities(self):
+        roots={root:[root+'.test.one'] for root,_,_ in qualification.TOOLS_DIAGNOSTIC_ROOTS}
+        expected={values[0]:1 for values in roots.values()}
+        self.assertEqual(qualification.tools_logical_occurrences(roots),expected)
+        counted={root:{values[0]:1} for root,values in roots.items()}
+        self.assertEqual(qualification.tools_logical_occurrences(counted),expected)
+        one=next(iter(counted));name=next(iter(counted[one]));counted[one][name]=2
+        with self.assertRaises(AssertionError):qualification.tools_logical_occurrences(counted)
+        counted[one][name]=0
+        with self.assertRaises(AssertionError):qualification.tools_logical_occurrences(counted)
+        del counted[one]
+        with self.assertRaises(KeyError):qualification.tools_logical_occurrences(counted)
+
+    def test_focused_subset_binding_keeps_legacy_contract_and_composes_current_tools(self):
+        fixture=DocumentPartitionPreparationTests()
+        legacy=fixture.fixture()
+        self.assertEqual(legacy['expect']['expected']['expected_groups'],26)
+        self.assertLess(len(legacy['expect']['expected']['groups']),26)
+        fixture.preparation_checks()(legacy)
+        current=fixture.fixture()
+        expected=current['expect']['expected'];expected['expected_groups']=29
+        old=next(row for row in expected['groups'] if row['root']=='blob_build_tests')
+        names=[old['expected_occurrences'][0],'tools.test.core','tools.test.observations','tools.test_0']
+        expected['groups'].remove(old)
+        expected['groups'].extend(dict(root=root,expected_occurrences=[name]) for (root,_,_),name in zip(qualification.TOOLS_DIAGNOSTIC_ROOTS,names))
+        group=next(group for group in current['cfg']['groups'] if group['id']=='tools')
+        group['compiled_expected_occurrences']=names;group['compiled_expected_count']=len(names)
+        current['group_binding']['prepared_expected_occurrences']['tools']=names
+        fixture.preparation_checks()(current)
+        mixed=copy.deepcopy(current);mixed['expect']['expected']['groups'].append(old)
+        with self.assertRaises(AssertionError):fixture.preparation_checks()(mixed)
+        missing=copy.deepcopy(current);missing['expect']['expected']['groups'].pop()
+        with self.assertRaises(KeyError):fixture.preparation_checks()(missing)
 
 
 if __name__ == '__main__':
