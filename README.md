@@ -235,11 +235,13 @@ conditions so contention is not mistaken for a performance regression.
   four workers, and XZ publication is capped at four threads;
 - controller-generated `zig build` commands use `-j1`, serializing compilation
   of the build tools before those runtime worker limits take effect;
-- LLVM bitcode/object scratch is removed before page expansion, snapshot inputs
-  use independent copy-on-write clones where supported, and verified shard trees are
-  removed immediately after merge;
-- release compression uses 1 MiB XZ blocks at preset `-6`; higher presets did
-  not improve block utilization enough to justify their CPU cost.
+- LLVM bitcode/object scratch is removed before page expansion. Snapshot inputs
+  use independent copy-on-write clones where supported. After merging, the
+  builder checks the inputs and build identity and seals the verified inventory
+  before removing the shard workspace. A failure at that check leaves the
+  verified shards available for a matching resume.
+- The builder compresses dictionary blobs with XZ preset `-0` and 1 MiB blocks.
+  It decodes each compressed file and compares it with the original bytes.
 
 Language blobs merge with two workers, each streaming an independent heading
 into a private file before renaming it. With four compression threads available,
@@ -593,7 +595,7 @@ python3 tools/compress_blobs.py path/language.wikblb
 Or create compatible XZ manually:
 
 ```sh
-xz -6 -T1 --block-size=1MiB -k path/language.wikblb
+xz -0 -T1 --block-size=1MiB -k path/language.wikblb
 zig build index-blobs -- path/language.wikblb.xz
 ```
 
