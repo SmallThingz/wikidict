@@ -4192,6 +4192,121 @@ def initial_sealed_matched_triple(row, native_roles, recipe, closed, source, com
     return references
 
 
+def initial_sealed_phase_reference(reference):
+    """Retain an explicit source mode while projecting the metadata API fields."""
+    if not isinstance(reference, dict) or set(reference) not in (
+            {'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'}):
+        raise ValueError('Invalid phased metadata descriptor')
+    if 'mode' in reference:
+        if (type(reference['mode']) is not int or not 0 <= reference['mode'] <= 0o777
+                or stat.S_IMODE(Path(reference['path']).stat().st_mode) != reference['mode']):
+            raise ValueError('Phased metadata mode changed')
+    return {key: reference[key] for key in ('path', 'bytes', 'sha256')}
+
+
+def initial_sealed_phased_environment(recipe, phases, data_reference):
+    environment = recipe['env']
+    extra = set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}
+    if not extra:
+        return
+    if extra - {'ZIG_LOCAL_CACHE_DIR', 'WIKIDICT_TEST_FAILURE_OUTPUT_DIR'}:
+        raise ValueError('Unreviewed phased Writer environment')
+    data = prepared_metadata(initial_sealed_phase_reference(data_reference))
+    if data.get('environment') != environment:
+        raise ValueError('Phased Writer environment differs from the guarded test data')
+    if 'ZIG_LOCAL_CACHE_DIR' in extra:
+        cache_path = Path(environment['ZIG_LOCAL_CACHE_DIR'])
+        if not cache_path.is_absolute() or '..' in cache_path.parts:
+            raise ValueError('Unsafe phased Writer local cache')
+        for phase in (phases[0], phases[-1]):
+            argv = phase['argv']
+            if argv.count('--cache-dir') != 1:
+                raise ValueError('Phased Writer requires one explicit local cache per build')
+            pos = argv.index('--cache-dir') + 1
+            if argv[pos:pos + 1] != [str(cache_path)]:
+                raise ValueError('Phased Writer local cache differs from the build command')
+    if 'WIKIDICT_TEST_FAILURE_OUTPUT_DIR' in extra:
+        controls = Path(recipe['qualification_root']).parent / 'controls'
+        if (data.get('output') != str(controls)
+                or environment['WIKIDICT_TEST_FAILURE_OUTPUT_DIR'] != str(controls / 'tmp')):
+            raise ValueError('Phased Writer failure output differs from the control directory')
+
+
+def initial_sealed_writer_phases(row, recipe, closed, source, *, target):
+    """Select the final Writer in its actual guarded test-then-install command."""
+    import shlex
+    reference = source['normal_writer_phases']
+    phases = prepared_metadata(initial_sealed_phase_reference(reference))
+    references = [reference]
+    if (target != 'prepare-captured-writer' or recipe.get('phases') != reference
+            or phases.get('tests_before_writer') is not True
+            or phases.get('baseline_replayed') is not False
+            or type(phases.get('expected_executions')) is not int or phases['expected_executions'] <= 0
+            or any(closed.get(key) is not True for key in
+                   ('normal_roles_emission_passed', 'writer_emission_passed', 'normal_writer_build_completed', 'focused_native_tests_passed'))
+            or closed.get('actual_named_audits') != phases['expected_executions']
+            or closed.get('required_named_audits') != phases['expected_executions']
+            or closed.get('errors') != []
+            or initial_sealed_phase_reference(closed.get('source_manifest')) != row['compiled_source_authority']
+            or initial_sealed_phase_reference(recipe.get('source_manifest')) != row['compiled_source_authority']
+            or closed.get('source_projection') != recipe.get('canonical_projection')
+            or closed.get('source_qualification') != recipe.get('source_qualification')):
+        raise ValueError('Phased Writer lacks its exact successful qualification')
+    selected = phases.get('phases')
+    names = ('prepare-tools', 'execute-tools', 'prepare-writer')
+    if (not isinstance(selected, list) or len(selected) != 3
+            or [phase.get('name') for phase in selected] != list(names)):
+        raise ValueError('Phased Writer changed its selected phase order')
+    zig = row['dependencies']['zig']['path']
+    if (selected[0].get('argv', [])[:3] != [zig, 'build', 'qualification-cache-artifacts']
+            or selected[1].get('argv', [])[:4] != ['/usr/bin/python3.14', '-I', '-S', '-B']
+            or selected[1]['argv'][-1:] != ['blob_build_tests']
+            or selected[2].get('argv', [])[:3] != [zig, 'build', target]):
+        raise ValueError('Phased Writer has another executable or target')
+    declared = {value['path']: value for value in recipe['source_refs']}
+    consume = selected[1]['argv']
+    if len(consume) != 8 or consume[4] not in declared:
+        raise ValueError('Phased Writer consumer was not guarded')
+    references.append(declared[consume[4]])
+    try:
+        helper, data = [json.loads(value) for value in consume[5:7]]
+    except (TypeError, ValueError) as error:
+        raise ValueError('Invalid phased Writer consumer inputs') from error
+    if data != recipe.get('data'):
+        raise ValueError('Phased Writer selected another control input')
+    for value in (helper, data):
+        if (not isinstance(value, dict) or set(value) not in
+                ({'path', 'bytes', 'sha256'}, {'path', 'bytes', 'sha256', 'mode'})
+                or any(declared.get(value.get('path'), {}).get(key) != value.get(key)
+                       for key in ('path', 'bytes', 'sha256'))):
+            raise ValueError('Phased Writer consumer input was not guarded')
+        references.append(value)
+    if declared.get(reference['path']) != reference:
+        # Source guards may omit a documentary mode while preserving bytes.
+        actual = declared.get(reference['path'], {})
+        if any(actual.get(key) != reference.get(key) for key in ('path', 'bytes', 'sha256')):
+            raise ValueError('Writer phases were not guarded by the actual command')
+    initial_sealed_phased_environment(recipe, selected, data)
+    root = Path(recipe['qualification_root']).parent
+    statements = []
+    for phase in selected:
+        if set(phase) != {'name', 'argv', 'stdout', 'stderr'} or not all(isinstance(arg, str) for arg in phase['argv']):
+            raise ValueError('Invalid phased Writer command')
+        logs = closed.get('partial_phase_logs', {}).get(phase['name'], {})
+        for kind in ('stdout', 'stderr'):
+            path = root / (phase['name'] + '.' + kind)
+            if phase[kind] != str(path) or logs.get(kind, {}).get('path') != str(path):
+                raise ValueError('Phased Writer log has another origin')
+            references.append(logs[kind])
+        out, err = shlex.quote(phase['stdout']), shlex.quote(phase['stderr'])
+        statements.append(f'if {shlex.join(phase["argv"])} > {out} 2> {err}; then cat {out}; cat {err} >&2; else rc=$?; cat {out}; cat {err} >&2; exit "$rc"; fi')
+    if recipe.get('argv') != ['/bin/sh', '-ec', '\n'.join(statements)]:
+        raise ValueError('Phased Writer actual shell command differs from its selected argv')
+    for key in ('canonical_projection', 'source_qualification'):
+        prepared_metadata(initial_sealed_phase_reference(recipe[key])); references.append(recipe[key])
+    return selected[-1]['argv'], references
+
+
 def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-writer'):
     """Join one direct normal Writer install to its original guardian receipts."""
     keys = ('compilation_recipe', 'actual_emission_result', 'qualification_closure',
@@ -4200,6 +4315,10 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     recipe, emitted, closed, source, compiled = [prepared_metadata(ref) for ref in references]
     matched_triple = 'matched_role_source_join' in source
     merge_only = target == 'prepare-blob-merge'
+    phased_writer = 'normal_writer_phases' in source
+    reference_identity = initial_sealed_phase_reference if phased_writer else lambda value: value
+    if phased_writer and (merge_only or matched_triple):
+        raise ValueError('Phased Writer cannot claim another emission family')
     if merge_only and matched_triple:
         raise ValueError('Merge install cannot claim a Writer triple')
     if (source.get('actual_normal_command') != row['compilation_recipe']
@@ -4229,15 +4348,15 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     start, owner, watchdog = [prepared_metadata(closed[key]) for key in ('start', 'owner_result', 'watchdog')]
     references.extend(closed[key] for key in ('start', 'owner_result', 'watchdog'))
     resolved_refs = start.get('source_refs')
-    if matched_triple or merge_only:
+    if matched_triple or merge_only or phased_writer:
         config_ref = closed.get('owner_config')
         if not isinstance(config_ref, dict):
             raise ValueError('Matched triple lacks its normal owner configuration')
         config = prepared_metadata(config_ref); references.append(config_ref)
         resolved_refs = recipe.get('source_refs')
-        if (config.get('input_ref') != row['compilation_recipe']
-                or config.get('source_refs_ref') != row['compilation_recipe']
-                or start.get('source_refs_ref') != row['compilation_recipe']
+        if (reference_identity(config.get('input_ref')) != row['compilation_recipe']
+                or reference_identity(config.get('source_refs_ref')) != row['compilation_recipe']
+                or reference_identity(start.get('source_refs_ref')) != row['compilation_recipe']
                 or not isinstance(resolved_refs, list) or len(resolved_refs) < 2
                 or config.get('source_refs') != resolved_refs[:2]
                 or start.get('source_refs') != resolved_refs[:2]
@@ -4250,7 +4369,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
         if any(start.get(key) != value or closed.get(key) != value for key,value in summary.items()):
             raise ValueError('Matched triple source count or digest differs')
         references.append(config['required_owner'])
-    if (start.get('input_authority') != row['compilation_recipe']
+    if (reference_identity(start.get('input_authority')) != row['compilation_recipe']
             or resolved_refs != recipe.get('source_refs')
             or owner.get('source_after') is not True
             or type(owner.get('returncode')) is not int or owner['returncode'] != 0
@@ -4271,9 +4390,13 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
             or type(closed.get('reaped')) is not bool):
         raise ValueError('Direct Writer transport outcome is inconsistent')
     receipt = closed.get('rd_terminal_receipt')
+    receipt_chunk = receipt.get('chunk') if isinstance(receipt, dict) else None
+    valid_receipt_chunk = ((type(receipt_chunk) is int and receipt_chunk > 0)
+                           or (phased_writer and isinstance(receipt_chunk, str)
+                               and re.fullmatch(r'chunk-[1-9][0-9]*', receipt_chunk) is not None))
     if ((closed['reaped'] and (not isinstance(receipt, dict)
                               or type(receipt.get('exit_code')) is not int or receipt['exit_code'] != 0
-                              or type(receipt.get('chunk')) is not int or receipt['chunk'] <= 0
+                              or not valid_receipt_chunk
                               or receipt.get('chunk') != closed.get('reaped_chunk')))
             or (not closed['reaped'] and receipt is not None)):
         raise ValueError('Direct Writer RD receipt differs from its terminal outcome')
@@ -4287,6 +4410,9 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
            or identity not in identities for identity in process_identities):
         raise ValueError('Direct Writer process closure does not cover its actual owner and children')
     argv = recipe['argv']
+    if phased_writer:
+        argv, phase_references = initial_sealed_writer_phases(row, recipe, closed, source, target=target)
+        references.extend(phase_references)
     if matched_triple:
         references.extend(initial_sealed_matched_triple(row, native_roles, recipe, closed, source, compiled, target=target))
     elif target not in ('prepare-captured-writer', 'prepare-blob-merge') or argv[:3] != [row['dependencies']['zig']['path'], 'build', target]:
@@ -4295,7 +4421,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if not cwd.is_absolute() or '..' in cwd.parts:
         raise ValueError('Unsafe direct Writer source root')
     environment = recipe['env']
-    if set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}:
+    if not phased_writer and set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}:
         raise ValueError('Unreviewed direct Writer environment')
     if 'ZIG_GLOBAL_CACHE_DIR' in environment and not Path(environment['ZIG_GLOBAL_CACHE_DIR']).is_absolute():
         raise ValueError('Unsafe direct Writer cache')
@@ -4315,7 +4441,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
             if value == '--prefix': prefix = Path(argument)
             if value == '--build-file': build_file = Path(argument)
             seen.add(value); index += 2
-        elif value in required or value == '-Dtest-optimize=safe' or re.fullmatch(r'-j[1-9][0-9]*', value):
+        elif value in required or value == '-Dtest-optimize=safe' or (phased_writer and value == '-Dprepare-test-error-tracing=true') or re.fullmatch(r'-j[1-9][0-9]*', value):
             if value in seen: raise ValueError('Duplicate direct Writer option')
             seen.add(value); index += 1
         else:
@@ -4323,23 +4449,24 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if not required | {'--prefix', '--summary'} <= seen:
         raise ValueError('Direct Writer required options differ')
     artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
-    if merge_only:
-        path = prefix / 'bin' / 'dict-blob-merge'
+    if merge_only or phased_writer:
+        role_key = 'merge' if merge_only else 'writer'
+        path = prefix / 'bin' / ('dict-blob-merge' if merge_only else 'dict-blob-build')
         info = path.lstat()
-        stored_stat = closed.get('installed_artifact_stats', {}).get('merge')
+        stored_stat = closed.get('installed_artifact_stats', {}).get(role_key)
         current_stat = list(info)
-        if (closed.get('normal_merge_emission_passed') is not True or closed.get('errors') != []
-                or closed.get('source_manifest') != row['compiled_source_authority']
-                or recipe.get('source_manifest') != row['compiled_source_authority']
-                or closed.get('installed_artifacts') != {'merge': artifact}
-                or recipe.get('expected_install') != {'merge': str(path)}
+        if ((merge_only and closed.get('normal_merge_emission_passed') is not True) or closed.get('errors') != []
+                or (initial_sealed_phase_reference(closed.get('source_manifest')) if phased_writer else closed.get('source_manifest')) != row['compiled_source_authority']
+                or (initial_sealed_phase_reference(recipe.get('source_manifest')) if phased_writer else recipe.get('source_manifest')) != row['compiled_source_authority']
+                or closed.get('installed_artifacts') != {role_key: artifact}
+                or recipe.get('expected_install') != {role_key: str(path)}
                 or artifact['path'] != str(path) or row['artifact'].get('mode') != 0o555
                 or not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o555 or info.st_nlink != 1
                 or not isinstance(stored_stat, list) or len(stored_stat) != len(current_stat)
                 or stored_stat[:7] + stored_stat[8:] != current_stat[:7] + current_stat[8:]
                 or [value for value in argv if value.startswith('-j')] != ['-j1']):
             raise ValueError('Direct Merge installed artifact or successful emission differs')
-        if build_file is None or not build_file.is_relative_to(cwd) or build_file.relative_to(cwd).as_posix() not in compiled:
+        if merge_only and (build_file is None or not build_file.is_relative_to(cwd) or build_file.relative_to(cwd).as_posix() not in compiled):
             raise ValueError('Direct Merge build graph is not in its guarded source manifest')
     elif not matched_triple and (closed.get('artifact') != artifact or artifact['path'] != str(prefix / 'bin' / 'dict-blob-build')):
         raise ValueError('Direct Writer installed artifact differs')
@@ -4347,7 +4474,10 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if len(declared) != len(resolved_refs):
         raise ValueError('Duplicate direct Writer source authority')
     manifest_ref = row['compiled_source_authority']
-    if declared.get(manifest_ref['path']) != manifest_ref:
+    declared_manifest = declared.get(manifest_ref['path'])
+    if phased_writer:
+        declared_manifest = initial_sealed_phase_reference(declared_manifest)
+    if declared_manifest != manifest_ref:
         raise ValueError('Direct Writer did not guard its source manifest')
     entry_point = 'tools/blob_merge.zig' if merge_only else 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
     if entry_point not in compiled or entry_point not in row['source_paths']:
@@ -4620,7 +4750,8 @@ def initial_sealed_blob_successor(original, native_roles):
         commands = recipe.get('commands', [])
         writer_only = (name == 'dict-blob-build' and (
             (len(commands) == 1 and 'prepare-captured-writer' in commands[0].get('argv', []))
-            or recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']))
+            or recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']
+            or ('phases' in recipe and recipe.get('argv', [])[:2] == ['/bin/sh', '-ec'])))
         verify_only = (name == 'dict-blob-verify' and (
             (len(commands) == 1 and 'prepare-blob-verify' in commands[0].get('argv', []))
             or recipe.get('argv', [])[2:5] == ['prepare-captured-writer', 'cli', 'prepare-blob-verify']))
