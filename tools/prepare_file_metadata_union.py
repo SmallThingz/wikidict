@@ -9,6 +9,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 import heapq
+import os
 from pathlib import Path
 import re
 import shutil
@@ -170,12 +171,16 @@ def child_identity(root, wiki, date, namespace_sha, row_limit=None):
 
 
 class DigestingReader:
-    def __init__(self, stream):
+    def __init__(self, stream, limit=None):
         self.stream = stream
         self.digest = hashlib.sha256()
+        self.size = 0
+        self.limit = limit
 
     def read(self, count):
         block = self.stream.read(count)
+        self.size += len(block)
+        require(self.limit is None or self.size <= self.limit, 'Union artifact exceeds byte limit')
         self.digest.update(block)
         return block
 
@@ -204,22 +209,38 @@ def archive_capture(root, destination, record):
 
 
 def extract_capture(archive_path, root):
+    before = v2.evidence.stamp(archive_path)
+    require(before[2] <= MAX_ARCHIVE, 'Union artifact exceeds byte limit')
     names = set()
     total = 0
-    with tarfile.open(archive_path, 'r|') as archive:
-        for member in archive:
-            name = v2.safe_name(member.name)
-            require(member.isfile() and name not in names and len(names) < MAX_ARCHIVE_FILES,
-                    'Unsafe or duplicate child archive member')
-            require(0 <= member.size <= v2.MAX_METADATA, 'Oversized child archive member')
-            total += member.size
-            require(total <= MAX_ARCHIVE_PAYLOAD, 'Child archive payload exceeds capacity')
-            names.add(name)
-            source = archive.extractfile(member)
-            require(source is not None, 'Missing child archive data')
-            with source, (root / name).open('xb') as output:
-                shutil.copyfileobj(source, output, 1024 * 1024)
-            require((root / name).stat().st_size == member.size, 'Truncated child archive member')
+    with archive_path.open('rb') as stream:
+        def unchanged():
+            value = os.fstat(stream.fileno())
+            opened = (value.st_dev, value.st_ino, value.st_size,
+                      value.st_mtime_ns, value.st_ctime_ns)
+            return opened == before and v2.evidence.stamp(archive_path) == before
+        require(unchanged(), 'Archive changed while extracting')
+        checked = DigestingReader(stream, MAX_ARCHIVE)
+        with tarfile.open(fileobj=checked, mode='r|') as archive:
+            for member in archive:
+                name = v2.safe_name(member.name)
+                require(member.isfile() and name not in names and len(names) < MAX_ARCHIVE_FILES,
+                        'Unsafe or duplicate child archive member')
+                require(0 <= member.size <= v2.MAX_METADATA, 'Oversized child archive member')
+                total += member.size
+                require(total <= MAX_ARCHIVE_PAYLOAD, 'Child archive payload exceeds capacity')
+                names.add(name)
+                source = archive.extractfile(member)
+                require(source is not None, 'Missing child archive data')
+                with source, (root / name).open('xb') as output:
+                    shutil.copyfileobj(source, output, 1024 * 1024)
+                require((root / name).stat().st_size == member.size, 'Truncated child archive member')
+        # tarfile stops at its end marker and may already have read ahead. Hash
+        # the unread physical suffix too, without counting its buffered bytes twice.
+        while checked.read(1024 * 1024):
+            pass
+        require(checked.size == before[2] and unchanged(), 'Archive changed while extracting')
+    return {'size': checked.size, 'sha256': checked.digest.hexdigest()}, before
 
 
 def read_manifest(root, require_complete=True):
@@ -282,7 +303,9 @@ def verify(root, require_complete=True):
             with tempfile.TemporaryDirectory(dir=temporary) as child:
                 child = Path(child)
                 archive = root / row['path']
-                extract_capture(archive, child)
+                archive_record, archive_stamp = extract_capture(archive, child)
+                require(archive_record == index['artifacts'][row['path']],
+                        'Archive changed while extracting')
                 require(v2.digest(small(child / MANIFEST, MAX_MANIFEST)) == row['manifest_sha256'],
                         'Archived child manifest differs')
                 record = child_identity(child, manifest['wiki'], manifest['date'],
@@ -294,7 +317,7 @@ def verify(root, require_complete=True):
                 # merge while the rest of the extracted capture is discarded.
                 (child / TSV).rename(snapshot)
                 snapshots.append(snapshot)
-                require(file_record(archive, MAX_ARCHIVE) == index['artifacts'][row['path']],
+                require(v2.evidence.stamp(archive) == archive_stamp,
                         'Archive changed during replay')
         totals = merge_rows(snapshots, root / INVENTORY, existing=root / TSV)
     require(all(manifest.get(k) == value for k, value in totals.items()), 'Union totals differ')

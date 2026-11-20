@@ -1,6 +1,7 @@
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
@@ -276,6 +277,150 @@ class UnionTest(unittest.TestCase):
         self.assertEqual(totals['rows'], 250001)
         self.assertGreater(totals['output_bytes'], v2.MAX_METADATA)
         self.assertEqual(union.merge_rows(snapshots, self.inv, existing=output), totals)
+
+
+    def test_extraction_digest_includes_complete_tar_suffix(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        suffix = b'ignored-after-tar-end\0' * 2000
+        with archive.open('ab') as stream:
+            stream.write(suffix)
+        self.rehash_outer()
+        target = self.root / 'extracted-with-suffix'
+        target.mkdir()
+        record, identity = union.extract_capture(archive, target)
+        self.assertEqual(record, union.file_record(archive, union.MAX_ARCHIVE))
+        self.assertEqual(identity, v2.evidence.stamp(archive))
+        self.assertEqual(record['size'], archive.stat().st_size)
+        self.assertEqual(union.verify(self.out)['rows'], 2)
+
+    def test_initial_archive_authentication_precedes_extraction(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        with archive.open('ab') as stream:
+            stream.write(b'unsealed-tail')
+        with mock.patch.object(union, 'extract_capture', side_effect=AssertionError('parsed before auth')) as extract:
+            with self.assertRaisesRegex(ValueError, 'inventory changed'):
+                union.verify(self.out)
+        extract.assert_not_called()
+
+    def test_archive_mutation_or_replacement_during_extraction_refused(self):
+        self.prepare()
+        original = (self.out / 'file-metadata.capture-0000.tar').read_bytes()
+        copy = union.shutil.copyfileobj
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                archive = self.root / ('mutate-%s.tar' % replacement)
+                archive.write_bytes(original)
+                target = self.root / ('mutate-%s' % replacement)
+                target.mkdir()
+                stamp = archive.stat()
+                fired = False
+                def mutate(source, destination, length):
+                    nonlocal fired
+                    copy(source, destination, length)
+                    if fired:
+                        return
+                    fired = True
+                    if replacement:
+                        sibling = archive.with_suffix('.replacement')
+                        sibling.write_bytes(original)
+                        sibling.replace(archive)
+                    else:
+                        with archive.open('r+b') as stream:
+                            stream.seek(-1, 2)
+                            stream.write(b'X')
+                    os.utime(archive, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+                with mock.patch.object(union.shutil, 'copyfileobj', side_effect=mutate):
+                    with self.assertRaisesRegex(ValueError, 'Archive changed while extracting'):
+                        union.extract_capture(archive, target)
+                self.assertTrue(fired)
+
+    def test_archive_growth_during_extraction_obeys_byte_limit(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        limit = archive.stat().st_size + 10
+        target = self.root / 'growing'
+        target.mkdir()
+        copy = union.shutil.copyfileobj
+        fired = False
+        def grow(source, destination, length):
+            nonlocal fired
+            copy(source, destination, length)
+            if not fired:
+                fired = True
+                with archive.open('ab') as stream:
+                    stream.write(b'X' * 11)
+        with mock.patch.object(union, 'MAX_ARCHIVE', limit), mock.patch.object(union.shutil, 'copyfileobj', side_effect=grow):
+            with self.assertRaisesRegex(ValueError, 'byte limit'):
+                union.extract_capture(archive, target)
+        self.assertTrue(fired)
+
+    def test_archive_tail_mutation_during_child_replay_refused(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        stamp = archive.stat()
+        replay = union.child_identity
+        fired = False
+        def mutate(*args, **kwargs):
+            nonlocal fired
+            result = replay(*args, **kwargs)
+            if not fired:
+                fired = True
+                with archive.open('r+b') as stream:
+                    stream.seek(-1, 2)
+                    stream.write(b'X')
+                os.utime(archive, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+            return result
+        with mock.patch.object(union, 'child_identity', side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, 'Archive changed during replay'):
+                union.verify(self.out)
+        self.assertTrue(fired)
+
+    def test_final_archive_authentication_still_checks_earlier_capture(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        replay = union.child_identity
+        calls = 0
+        def mutate(*args, **kwargs):
+            nonlocal calls
+            result = replay(*args, **kwargs)
+            calls += 1
+            if calls == 2:
+                with archive.open('ab') as stream:
+                    stream.write(b'changed-after-first-child')
+            return result
+        with mock.patch.object(union, 'child_identity', side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, 'Union changed during replay'):
+                union.verify(self.out)
+        self.assertEqual(calls, 2)
+
+    def test_verify_retains_two_archive_authentication_passes(self):
+        manifest = self.prepare()
+        with mock.patch.object(union, 'file_record', wraps=union.file_record) as check:
+            self.assertEqual(union.verify(self.out), manifest)
+        archives = [self.out / ('file-metadata.capture-%04d.tar' % number) for number in range(2)]
+        for archive in archives:
+            self.assertEqual(sum(call.args[0] == archive for call in check.call_args_list), 2)
+
+    def test_identical_archive_replacement_during_replay_refused(self):
+        self.prepare()
+        archive = self.out / 'file-metadata.capture-0000.tar'
+        replay = union.child_identity
+        fired = False
+        def replace(*args, **kwargs):
+            nonlocal fired
+            result = replay(*args, **kwargs)
+            if not fired:
+                fired = True
+                sibling = archive.with_suffix('.replacement')
+                sibling.write_bytes(archive.read_bytes())
+                sibling.replace(archive)
+            return result
+        with mock.patch.object(union, 'child_identity', side_effect=replace):
+            with self.assertRaisesRegex(ValueError, 'Archive changed during replay'):
+                union.verify(self.out)
+        self.assertTrue(fired)
 
 
 class BaseCaptureTest(unittest.TestCase):
