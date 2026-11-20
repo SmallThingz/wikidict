@@ -2851,14 +2851,23 @@ fn sourceBannerDeclaredPrelude(codes: LanguageCodes, raw: language_source.Sectio
 }
 
 fn sourceBannerPartition(codes: LanguageCodes, original: []const u8, source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section) bool {
+    return sourceBannerPartitionWithPrelude(codes, original, source, raw, rendered, false);
+}
+
+fn sourceBannerPartitionWithPrelude(codes: LanguageCodes, original: []const u8, source: MissingText, raw: []const language_source.Section, rendered: []const language_source.Section, unowned_prelude: bool) bool {
     if (raw.len < 2 or raw.len > 64 or raw.len != rendered.len or source.unknown or source.lost_missing_range) return false;
     const matches = codes.source_banner_fn orelse return false;
     var raw_cursor = std.math.sub(usize, @intFromPtr(raw[0].source.ptr), @intFromPtr(original.ptr)) catch return false;
     var cursor = std.math.sub(usize, @intFromPtr(rendered[0].source.ptr), @intFromPtr(source.bytes.ptr)) catch return false;
-    if (raw_cursor > original.len or cursor > source.bytes.len or std.mem.trim(u8, original[0..raw_cursor], " \t\r\n").len != 0) return false;
+    if (raw_cursor > original.len or cursor > source.bytes.len) return false;
+    if (!unowned_prelude and std.mem.trim(u8, original[0..raw_cursor], " \t\r\n").len != 0) return false;
     const prefix = std.mem.trim(u8, source.bytes[0..cursor], " \t\r\n");
-    if ((!sourceBannerPrelude(codes, prefix) and !sourceBannerDeclaredPrelude(codes, raw[0], rendered[0], prefix)) or
+    if ((!unowned_prelude and !sourceBannerPrelude(codes, prefix) and !sourceBannerDeclaredPrelude(codes, raw[0], rendered[0], prefix)) or
         !calibratedBoundaryRangesClean(source, 0, cursor)) return false;
+    if (unowned_prelude) {
+        if (std.mem.trim(u8, original[0..raw_cursor], " \t\r\n").len == 0 or prefix.len == 0) return false;
+        for (rendered) |expanded| if (!expanded.root_wiki_heading) return false;
+    }
     var first_code: ?[]const u8 = null;
     var distinct = false;
     for (raw, rendered) |authored, expanded| {
@@ -2866,6 +2875,7 @@ fn sourceBannerPartition(codes: LanguageCodes, original: []const u8, source: Mis
             authored.source.len > original.len - raw_cursor or expanded.source.len > source.bytes.len - cursor or
             @intFromPtr(authored.source.ptr) != @intFromPtr(original.ptr) + raw_cursor or
             @intFromPtr(expanded.source.ptr) != @intFromPtr(source.bytes.ptr) + cursor) return false;
+        if (unowned_prelude and !language_source.outsideNestedOrOpaque(original, raw_cursor)) return false;
         raw_cursor += authored.source.len; cursor += expanded.source.len;
         const raw_line = authored.source[0 .. std.mem.indexOfScalar(u8, authored.source, '\n') orelse authored.source.len];
         if (raw_line.len < 8 or !std.mem.startsWith(u8, raw_line, "{{-") or !std.mem.endsWith(u8, raw_line, "-}}")) return false;
@@ -2884,6 +2894,14 @@ fn sourceBannerPartition(codes: LanguageCodes, original: []const u8, source: Mis
         if (first_code) |first| distinct = distinct or !std.mem.eql(u8, first, code) else first_code = code;
     }
     return distinct and raw_cursor == original.len and cursor == source.bytes.len;
+}
+
+fn sourceBannerPairMatches(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section) bool {
+    if (!raw.hyphen_marker or rendered.hyphen_marker) return false;
+    const matches = codes.source_banner_fn orelse return false;
+    const line = rendered.source[0 .. std.mem.indexOfScalar(u8, rendered.source, '\n') orelse rendered.source.len];
+    const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse return false;
+    return std.mem.eql(u8, rendered.heading, heading.title) and matches(codes.ctx, raw.heading, heading.title, heading.level);
 }
 
 fn sourceBannerBoundaryOnly(codes: LanguageCodes, raw: language_source.Section, rendered: language_source.Section) bool {
@@ -2916,7 +2934,8 @@ fn rawPrefixBannerLanguage(codes: LanguageCodes, raw: []const u8, raw_sections: 
     // This exact root invocation must have an authenticated literal template
     // banner proof. No ordinary alias or code-shaped POS name is promoted.
     if (codes.source_banner_fn) |matches| if (matches(codes.ctx, canonical.code, heading, parsed.level)) {
-        for (rendered[1..]) |later| if (resolveSection(codes, later) == null) return null;
+        // This receipt owns the first physical region only. Later peer
+        // headings are isolated by the caller instead of vetoing this owner.
         return canonical;
     };
     if (parsed.level != 1) return null;
@@ -5885,9 +5904,44 @@ fn processMain(
     const raw_count_before_coalescing = raw_sections.items.len;
     if (raw_source) |raw| coalesceCorroboratedAnRawRegions(codes, raw, &raw_sections, page_sections.items);
     var raw_aligned = raw_sections.items.len != 0 and raw_sections.items.len == page_sections.items.len;
-    const complete_source_banners = raw_aligned and raw_source != null and !raw_conflicts.present and !sections.mixed_levels and
+    var complete_source_banners = raw_aligned and raw_source != null and !raw_conflicts.present and !sections.mixed_levels and
         raw_count_before_coalescing == raw_sections.items.len and
         sourceBannerPartition(codes, raw_source.?, source_missing, raw_sections.items, page_sections.items);
+    var unowned_banner_prelude = false;
+    const banner_prelude_candidate = candidate: {
+        if (!raw_aligned or raw_source == null or raw_conflicts.present or sections.mixed_levels or
+            source_missing.unknown or source_missing.lost_missing_range or
+            complete_source_banners or raw_sections.items.len < 2 or
+            raw_count_before_coalescing != raw_sections.items.len) break :candidate false;
+        const raw_start = @intFromPtr(raw_sections.items[0].source.ptr) - @intFromPtr(raw_source.?.ptr);
+        if (std.mem.trim(u8, raw_source.?[0..raw_start], " \t\r\n").len == 0) break :candidate false;
+        for (raw_sections.items, page_sections.items) |authored, rendered|
+            if (!sourceBannerPairMatches(codes, authored, rendered)) break :candidate false;
+        break :candidate true;
+    };
+    if (banner_prelude_candidate) {
+        if (early_heading_observation == null)
+            early_heading_observation = try presentation_document.observeHeadingAnchorsWithWikiScopeAlloc(
+                heading_arena.allocator(), title, source_missing, codes.link_trail, codes.namespace_catalog,
+                codes.behavior_switches, codes.image_options, reference_context, poem_phase, true);
+        const observed = early_heading_observation.?;
+        if (observed.page_wiki_scope_complete) {
+            for (page_sections.items, 0..) |section, index| {
+                const line = section.source[0 .. std.mem.indexOfScalar(u8, section.source, '\n') orelse section.source.len];
+                const heading = blobs.wikitext_syntax.controlHeading(line, null) orelse continue;
+                // The renderer records root H1s as content headings and root H2s separately.
+                const openings = switch (heading.level) {
+                    1 => observed.page_wiki_content_openings,
+                    2 => observed.page_wiki_openings,
+                    else => continue,
+                };
+                simpleApplyRootScope(source, page_sections.items[index..][0..1], openings);
+            }
+            unowned_banner_prelude = sourceBannerPartitionWithPrelude(codes, raw_source.?, source_missing,
+                raw_sections.items, page_sections.items, true);
+            complete_source_banners = unowned_banner_prelude;
+        }
+    }
     if (raw_aligned) for (raw_sections.items, page_sections.items) |raw_section, rendered_section| {
         // A short template name can be both a POS marker and an ISO code.
         // Equal section counts do not prove that its expansion is a language
@@ -5988,7 +6042,7 @@ fn processMain(
         } };
         break :blk try probe.isPureColorSwatchPrefix(page_prefix);
     };
-    const shared_prefix: ?[]const u8 = if (shared_swatch or try pageWideHatnotePrefix(page_allocator, codes, page_prefix))
+    const shared_prefix: ?[]const u8 = if (unowned_banner_prelude) null else if (shared_swatch or try pageWideHatnotePrefix(page_allocator, codes, page_prefix))
         page_prefix
     else
         try sharedImagePrefix(page_allocator, codes, page_prefix);
@@ -6119,6 +6173,7 @@ fn processMain(
     var pending_fragments: std.ArrayList(PageSourceFragment) = .empty;
     defer pending_fragments.deinit(page_allocator);
     var current: ?usize = null;
+    var source_banner_scope_active = false;
     // A head declaration certifies its proved H2 only. It cannot supply the
     // ordinary continuation owner for a later unresolved sibling H2.
     var headword_scope_active = false;
@@ -6162,6 +6217,7 @@ fn processMain(
         if (source_unowned_banner) fallbacks.unresolved_language_heading = true;
         var headword_scoped_owner = false;
         var sr_mul_scoped_owner = false;
+        var source_banner_scoped_owner = false;
         if (formatted_section) |matched| if (matched.owner == null) { fallbacks.unresolved_language_heading = true; };
         // A complete selected provider's code/name/category declaration is
         // stronger than interpreting its incidental template title as an ISO
@@ -6228,6 +6284,8 @@ fn processMain(
         if (resolved == null and index == 0) {
             if (raw_source) |raw| {
                 resolved = rawPrefixBannerLanguage(codes, raw, raw_sections.items, page_sections.items);
+                source_banner_scoped_owner = resolved != null and raw_sections.items.len != 0 and
+                    sourceBannerPairMatches(codes, raw_sections.items[0], section);
             }
         }
         if (resolved == null and index == 0 and sr_mul_candidate) {
@@ -6296,11 +6354,16 @@ fn processMain(
             resolved = .{ .code = "", .heading = "Unclassified" };
             fallbacks.unresolved_language_heading = true;
         }
+        if (resolved == null and source_banner_scope_active and !knownOuterSupportOrPos(section.heading)) {
+            resolved = .{ .code = "", .heading = "Unclassified" };
+            fallbacks.unresolved_language_heading = true;
+        }
         if (resolved == null and headword_scope_active) {
             resolved = .{ .code = "", .heading = "Unclassified" };
             fallbacks.unresolved_language_heading = true;
         }
         if (resolved) |language| {
+            source_banner_scope_active = source_banner_scoped_owner and language.code.len != 0;
             headword_scope_active = headword_scoped_owner and language.code.len != 0;
             sr_mul_scope_active = sr_mul_scoped_owner;
             const group_index = groupIndex(groups.items, language) orelse blk: {
@@ -6524,7 +6587,7 @@ fn processMain(
     const preserve_prefix = shared_prefix == null and page_prefix.len != 0 and
         groups.items.len == 1 and groups.items[0].language.code.len != 0 and
         !unresolved_prefix_owner and !missing_foreign_marker_prefix;
-    const declared_prefix_owner = if (!preserve_prefix and shared_prefix == null and !unresolved_prefix_owner)
+    const declared_prefix_owner = if (!unowned_banner_prelude and !preserve_prefix and shared_prefix == null and !unresolved_prefix_owner)
         sourceBannerPrefixOwner(codes, complete_source_banners, raw_sections.items, page_sections.items, page_prefix)
     else
         null;
@@ -23693,4 +23756,81 @@ test "source certified category owner retains canonical-code conflicts root proo
     try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", F.section("== {{bsv|bs}} ==\n# body\n"), expanded) == null);
     codes.source_category_heading_fn = null;
     try std.testing.expect(try sourceCategoryBannerOwner(codes, "ambasada", raw, expanded) == null);
+}
+
+test "source banner first region remains owned before an independently unknown authored peer" {
+    const raw_source = "{{-ro-}}\n# first\n{{-scn-sal-}}\n# unknown";
+    const source = "= [[Romanian]] =\n# first\n= Salentina =\n# unknown";
+    const raw_cut = std.mem.indexOf(u8, raw_source, "{{-scn-sal-}}").?;
+    const cut = std.mem.indexOf(u8, source, "= Salentina =").?;
+    const Resolver = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, value, "ro")) .{ .code = "ro", .heading = "Romanian" } else null;
+        }
+        fn matches(_: ?*const anyopaque, code: []const u8, heading: []const u8, level: u8) bool {
+            return level == 1 and std.mem.eql(u8, code, "ro") and std.mem.eql(u8, heading, "[[Romanian]]");
+        }
+    };
+    var codes: LanguageCodes = .{ .resolve_fn = Resolver.resolve, .source_banner_fn = Resolver.matches };
+    const raw = [_]language_source.Section{ .{ .heading = "ro", .source = raw_source[0..raw_cut], .hyphen_marker = true } };
+    var rendered = [_]language_source.Section{
+        .{ .heading = "[[Romanian]]", .source = source[0..cut] }, .{ .heading = "Salentina", .source = source[cut..] },
+    };
+    const owner = rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered).?;
+    try std.testing.expectEqualStrings("ro", owner.code);
+    try std.testing.expect(sourceBannerPairMatches(codes, raw[0], rendered[0]));
+    try std.testing.expect(resolveSection(codes, rendered[1]) == null);
+    try std.testing.expect(codes.resolve("scn-sal") == null);
+    rendered[0].heading = "Salentina";
+    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered) == null);
+    rendered[0].heading = "[[Romanian]]";
+    codes.source_banner_fn = null;
+    try std.testing.expect(rawPrefixBannerLanguage(codes, raw_source, &raw, &rendered) == null);
+}
+
+test "source banner partition keeps a physical preamble unowned only after protected raw and rendered root proofs" {
+    const raw_source = "[[Image:egg.jpg|thumb|egg]]\n{{-ro-}}\n# first\n{{-ca-}}\n# second";
+    const source = "[[Image:egg.jpg|thumb|egg]]\n= [[Romanian]] =\n# first\n= [[Catalan]] =\n# second";
+    const raw_start = std.mem.indexOf(u8, raw_source, "{{-ro-}}").?;
+    const raw_cut = std.mem.indexOf(u8, raw_source, "{{-ca-}}").?;
+    const start = std.mem.indexOf(u8, source, "= [[Romanian]] =").?;
+    const cut = std.mem.indexOf(u8, source, "= [[Catalan]] =").?;
+    const Resolver = struct {
+        fn resolve(_: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (std.mem.eql(u8, value, "ro")) return .{ .code = "ro", .heading = "Romanian" };
+            if (std.mem.eql(u8, value, "ca")) return .{ .code = "ca", .heading = "Catalan" };
+            return null;
+        }
+        fn matches(_: ?*const anyopaque, code: []const u8, heading: []const u8, level: u8) bool {
+            return level == 1 and ((std.mem.eql(u8, code, "ro") and std.mem.eql(u8, heading, "[[Romanian]]")) or
+                (std.mem.eql(u8, code, "ca") and std.mem.eql(u8, heading, "[[Catalan]]")));
+        }
+    };
+    var codes: LanguageCodes = .{ .resolve_fn = Resolver.resolve, .source_banner_fn = Resolver.matches };
+    const raw = [_]language_source.Section{
+        .{ .heading = "ro", .source = raw_source[raw_start..raw_cut], .hyphen_marker = true },
+        .{ .heading = "ca", .source = raw_source[raw_cut..], .hyphen_marker = true },
+    };
+    var rendered = [_]language_source.Section{
+        .{ .heading = "[[Romanian]]", .source = source[start..cut], .root_wiki_heading = true },
+        .{ .heading = "[[Catalan]]", .source = source[cut..], .root_wiki_heading = true },
+    };
+    const tracked = MissingText.untracked(source);
+    try std.testing.expect(!sourceBannerPartition(codes, raw_source, tracked, &raw, &rendered));
+    try std.testing.expect(sourceBannerPartitionWithPrelude(codes, raw_source, tracked, &raw, &rendered, true));
+    const nested_raw = "{{outer|\n" ++ raw_source ++ "}}\n";
+    const nested_start = "{{outer|\n".len + raw_start;
+    const nested_cut = "{{outer|\n".len + raw_cut;
+    const nested = [_]language_source.Section{
+        .{ .heading = "ro", .source = nested_raw[nested_start..nested_cut], .hyphen_marker = true },
+        .{ .heading = "ca", .source = nested_raw[nested_cut..], .hyphen_marker = true },
+    };
+    try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, nested_raw, tracked, &nested, &rendered, true));
+    rendered[1].root_wiki_heading = false;
+    try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tracked, &raw, &rendered, true));
+    rendered[1].root_wiki_heading = true;
+    var tainted = tracked; tainted.ranges = &.{.{ .start = 1, .end = 2, .occurrence = 1 }};
+    try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tainted, &raw, &rendered, true));
+    codes.source_banner_fn = null;
+    try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tracked, &raw, &rendered, true));
 }
