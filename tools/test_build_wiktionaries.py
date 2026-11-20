@@ -10659,6 +10659,33 @@ class RetainedNativeRoleCloneTests(unittest.TestCase):
             self.assertFalse((root/'workspace/native-blob-tools/bin/dict-blob-build').exists())
             self.assertEqual(origin.stat(),before)
 
+    def test_failed_private_copy_cleans_its_partial_and_retries_in_the_same_workspace(self):
+        import errno
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roles, origin = self.selection(root)
+            workspace = root / 'workspace'
+            role = 'dict-blob-build'
+            directory = workspace / 'native-blob-tools' / 'bin'
+            directory.mkdir(parents=True)
+            unrelated = directory / 'unrelated.part'
+            unrelated.write_bytes(b'retain')
+
+            def exhausted(destination, operation, source):
+                os.write(destination, b'incomplete copy')
+                raise OSError(errno.ENOSPC, 'no space for private executable')
+
+            with patch.object(b.fcntl, 'ioctl', side_effect=exhausted):
+                with self.assertRaises(OSError) as caught:
+                    roles.install_role(role, workspace)
+            self.assertEqual(caught.exception.errno, errno.ENOSPC)
+            self.assertEqual(set(directory.iterdir()), {unrelated})
+            with patch.object(b.fcntl, 'ioctl', side_effect=OSError(errno.EOPNOTSUPP, 'use copy')):
+                roles.install_role(role, workspace)
+            self.assertEqual(set(directory.iterdir()), {directory / role, unrelated})
+            self.assertEqual((directory / role).read_bytes(), origin.read_bytes())
+            self.assertEqual(unrelated.read_bytes(), b'retain')
+
     def test_origin_mutation_during_clone_fails_existing_guard_before_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);roles,origin=self.selection(root)

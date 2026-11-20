@@ -27,6 +27,7 @@ import stat
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -6227,24 +6228,26 @@ class RetainedNativeToolRoles:
             if sha256_file(target)!=artifact['sha256'] or target.stat().st_size!=artifact['bytes']:
                 raise ValueError('Existing private native role differs')
         else:
-            temporary=target.with_name(target.name+'.part')
-            with temporary.open('xb') as output,Path(artifact['path']).open('rb') as source:
-                # A private CoW inode preserves origin stamps and survives cache
-                # eviction without duplicating immutable executable extents.
-                try:
-                    fcntl.ioctl(output.fileno(),0x40049409,source.fileno())  # Linux FICLONE
-                except OSError as error:
-                    import errno
-                    if error.errno not in (errno.EXDEV,errno.EOPNOTSUPP,errno.ENOTTY,errno.EINVAL,errno.ENOSYS):
-                        raise
-                    output.seek(0);output.truncate();source.seek(0)
-                    shutil.copyfileobj(source,output,1024*1024)
-            self.require_unchanged()
-            if sha256_file(temporary)!=artifact['sha256'] or temporary.stat().st_size!=artifact['bytes']:
-                raise ValueError('Private native role copy differs')
-            temporary.chmod(artifact['mode'] & ~0o222)
-            # Atomic no-overwrite publication; discard only our temporary link.
-            os.link(temporary,target);temporary.unlink()
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name+'.', suffix='.part') as output:
+                temporary = Path(output.name)
+                with Path(artifact['path']).open('rb') as source:
+                    # A private CoW inode preserves origin stamps and survives cache
+                    # eviction without duplicating immutable executable extents.
+                    try:
+                        fcntl.ioctl(output.fileno(),0x40049409,source.fileno())  # Linux FICLONE
+                    except OSError as error:
+                        import errno
+                        if error.errno not in (errno.EXDEV,errno.EOPNOTSUPP,errno.ENOTTY,errno.EINVAL,errno.ENOSYS):
+                            raise
+                        output.seek(0);output.truncate();source.seek(0)
+                        shutil.copyfileobj(source,output,1024*1024)
+                output.flush()
+                self.require_unchanged()
+                if sha256_file(temporary)!=artifact['sha256'] or temporary.stat().st_size!=artifact['bytes']:
+                    raise ValueError('Private native role copy differs')
+                temporary.chmod(artifact['mode'] & ~0o222)
+                # Link the verified copy without overwriting an existing installation.
+                os.link(temporary,target)
         require_private_native_tool(target)
         self.tools[role]=self.bind_tool(role,target)
         self.require_unchanged()
