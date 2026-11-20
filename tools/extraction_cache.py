@@ -2109,7 +2109,8 @@ def prune_extraction_partials(parent):
             shutil.rmtree(path)
 
 
-def validate(root, expected):
+def validate(root, expected, *, validated_names=None):
+    """Optionally retain the asset names that passed the full content check."""
     marker = root / ".complete.json"
     record = read_marker(marker)
     if not isinstance(record, dict):
@@ -2123,6 +2124,8 @@ def validate(root, expected):
     if not isinstance(assets, list) or assets != record_assets(root):
         return False
     validate_extraction_completion(root)
+    if validated_names is not None:
+        validated_names.extend(row[0] for row in assets)
     return True
 
 
@@ -2180,7 +2183,8 @@ def probe(root, expected, output, *, dump=None, _after_verified=None):
                     receipt.get('indexes') != _receipt_indexes(source)):
                 print('Extraction cache miss: receipt does not bind the current dump and indexes.', file=sys.stderr)
                 return MISS
-        if not validate(source, validated_identity):
+        asset_names = []
+        if not validate(source, validated_identity, validated_names=asset_names):
             return MISS
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return MISS
@@ -2199,7 +2203,7 @@ def probe(root, expected, output, *, dump=None, _after_verified=None):
             (temporary / TREE).mkdir()
             # Link validated asset paths directly. copytree aggregates OSError
             # into shutil.Error and would hide module-stage EXDEV classification.
-            for name in walk_assets(source):
+            for name in asset_names:
                 destination = temporary / name
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 _owned_extraction_link(source / name, destination)
