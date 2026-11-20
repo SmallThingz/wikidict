@@ -1021,6 +1021,9 @@ const State = struct {
         }
     }
     fn put(self: State, w: *std.Io.Writer, row: usize, col: usize, cells: usize, text: []const u8, style: []const u8) !void {
+        return self.putLine(w, row, col, cells, text, style, .clip);
+    }
+    fn putLine(self: State, w: *std.Io.Writer, row: usize, col: usize, cells: usize, text: []const u8, style: []const u8, overflow: enum { clip, ellipsis }) !void {
         if (cells == 0) return;
         var safe: std.Io.Writer.Allocating = .init(self.a);
         defer safe.deinit();
@@ -1029,7 +1032,12 @@ const State = struct {
             b.* = ' ';
         };
         try w.print("\x1b[{d};{d}H{s}{s}", .{ row, col, palette(self.theme, self.color).base, style });
-        try w.writeAll(safe.written()[0..term.prefixBytes(safe.written(), cells)]);
+        const line = safe.written();
+        const end = term.prefixBytes(line, cells);
+        if (overflow == .ellipsis and end < line.len and term.cellWidth("…") <= cells) {
+            try w.writeAll(line[0..term.prefixBytes(line[0..end], cells - term.cellWidth("…"))]);
+            try w.writeAll("…");
+        } else try w.writeAll(line[0..end]);
     }
     fn helpCapacity(self: State) usize {
         return self.screen.rows -| 7;
@@ -1136,9 +1144,16 @@ const State = struct {
             if (self.searchPending()) try self.put(w, 3, 3, sz.cols - 4, try std.fmt.bufPrint(&buf, "Searching... {d}%  /  {d} matches", .{ self.search.cursor * 100 / @max(1, self.db.count()), self.count() }), p.muted);
             try self.put(w, 4, 3, 10, if (self.nav == .learn) "Study" else "Search /", if (self.focus == .search) p.accent else p.muted);
             const input_width = sz.cols - 15;
-            const query_view = try queryDisplay(self.a, self.query[0..self.len], self.cursor, input_width);
-            defer self.a.free(query_view.text);
-            try self.put(w, 4, 13, input_width, if (self.nav == .learn) "Tab game; Esc search" else query_view.text, p.base);
+            const query = self.query[0..self.len];
+            const query_view = if (self.focus == .search) try queryDisplay(self.a, query, self.cursor, input_width) else null;
+            defer if (query_view) |view| self.a.free(view.text);
+            if (self.nav == .learn) {
+                try self.put(w, 4, 13, input_width, "Tab game; Esc search", p.base);
+            } else if (query_view) |view| {
+                try self.put(w, 4, 13, input_width, view.text, p.base);
+            } else {
+                try self.putLine(w, 4, 13, input_width, query, p.base, .ellipsis);
+            }
             const show_matches = !empty_personal_list and (split_at != 0 or self.focus != .entry);
             if (show_matches) {
                 const cols = if (split_at == 0) sz.cols - 4 else split_at - 4;
@@ -1148,7 +1163,7 @@ const State = struct {
                     const n = offset + i;
                     if (n >= self.count()) break;
                     const title = try self.db.titleAt(self.recordIndex(n));
-                    try self.put(w, 7 + i, 3, cols, title, if (n == self.selected) p.selected else p.base);
+                    try self.putLine(w, 7 + i, 3, cols, title, if (n == self.selected) p.selected else p.base, .ellipsis);
                 }
                 if (self.count() == 0) {
                     try self.put(w, 7, 3, cols, if (self.searchPending()) "Searching..." else "No matching words.", p.muted);
@@ -1186,7 +1201,7 @@ const State = struct {
             try self.dock(w);
             if (self.help) {
                 try self.drawHelp(w);
-            } else if (self.focus == .search) try w.print("\x1b[{d};{d}H\x1b[?25h", .{ 4, 13 + query_view.caret_cells });
+            } else if (query_view) |view| try w.print("\x1b[{d};{d}H\x1b[?25h", .{ 4, 13 + view.caret_cells });
         }
         try w.writeAll("\x1b[?2026l");
         try term.writeAll(frame.written());
@@ -2059,6 +2074,23 @@ test "terminal table resize preserves folds scroll and disabled history state" {
     const after = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, reading.path, a, .limited(1024 * 1024));
     defer a.free(after);
     try std.testing.expectEqualStrings(persisted, after);
+}
+
+test "browsing shows the beginning of clipped titles and preserves whole display clusters" {
+    term.initLocale();
+    const state: State = .{ .a = std.testing.allocator, .db = undefined, .label = "", .theme = .terminal, .color = false, .details = false };
+    for ([_]struct { text: []const u8, cells: usize, expected: []const u8 }{
+        .{ .text = "Ætēaca:Germanisc word gelīcnessa", .cells = 10, .expected = "Ætēaca:Ge…" },
+        .{ .text = "e\u{301}日本語", .cells = 4, .expected = "e\u{301}日…" },
+        .{ .text = "機関車", .cells = 6, .expected = "機関車" },
+        .{ .text = "機関車", .cells = 1, .expected = "…" },
+        .{ .text = "a\t日", .cells = 4, .expected = "a 日" },
+    }) |case| {
+        var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
+        defer out.deinit();
+        try state.putLine(&out.writer, 4, 13, case.cells, case.text, "", .ellipsis);
+        try std.testing.expectEqualStrings(case.expected, out.written()["\x1b[4;13H\x1b[0m".len..]);
+    }
 }
 
 test "query viewport measures escaped controls while retaining raw clusters" {
