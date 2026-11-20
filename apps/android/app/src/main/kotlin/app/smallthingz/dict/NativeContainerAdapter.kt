@@ -160,6 +160,9 @@ internal fun paintNativeTableBorder(canvas: Canvas, edge: TableBorderSegment, co
         style = Paint.Style.STROKE
         strokeWidth = edge.width
     }
+    require(edge.stroke != TableStroke.Inset && edge.stroke != TableStroke.Outset) {
+        "Shaded table borders require their physical-side paint plan"
+    }
     if (edge.stroke != TableStroke.Dotted) {
         canvas.drawLine(edge.x1, edge.y1, edge.x2, edge.y2, paint)
         return
@@ -417,7 +420,8 @@ internal data class NativeContainerLeaf(val block: Block, val previous: Block?, 
     val ownerWrap: TextWrap? = null, val bodyTypographyExcluded: Boolean = false,
     val staticInlineParent: NativeStaticInlineParent? = null,
     val clippedAbsoluteScope: NativeClippedAbsoluteCoordinateScope? = null,
-    val cellForeground: NativeCellForegroundContext? = null)
+    val cellForeground: NativeCellForegroundContext? = null,
+    val semanticBorderInk: NativeSemanticBorderInk? = null)
 
 private data class NativePositionedParent(val paddingTop: Float)
 
@@ -684,7 +688,14 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         null, ContainerColor.Transparent -> inherited
                     }
                 }
-                CompositionLocalProvider(LocalAuthoredBackground provides background,
+                val semanticBorderInk = when (resolved.box.background) {
+                    is ContainerColor.Rgb, is ContainerColor.LightDark ->
+                        nativeBorderNormalOwnerInk(LocalNativeSemanticBorderInk.current,
+                            container, NativeSemanticBorderInkOrigin.Container, cellForeground, background)
+                    null, ContainerColor.Transparent -> LocalNativeSemanticBorderInk.current
+                }
+                CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk,
+                    LocalAuthoredBackground provides background,
                     LocalNativeCellForeground provides cellForeground) {
                     if (resolved.box.columns == null) prepareChildren() else CompositionLocalProvider(
                         androidx.compose.ui.platform.LocalLayoutDirection provides
@@ -770,7 +781,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                         roots[index], format, textContext.takeIf { inside || context.bodyOrigin != null }, align,
                         inside, inScrollport, ownerWrap.takeUnless { rendered.kind == "heading" }, bodyTypographyExcluded = excludesBody,
                         staticInlineParent = staticInlineParent, clippedAbsoluteScope = clippedScope,
-                        cellForeground = LocalNativeCellForeground.current)
+                        cellForeground = LocalNativeCellForeground.current, semanticBorderInk = LocalNativeSemanticBorderInk.current)
                     fun bindColumnPolicy(prepared: NativeFloatContextSpec): NativeFloatContextSpec {
                         val policy = original.columnBreakInside ?: return prepared
                         // A non-Text fallback keeps its original body. The column adapter

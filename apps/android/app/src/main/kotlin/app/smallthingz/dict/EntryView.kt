@@ -212,12 +212,14 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
     val context = LocalContext.current
     DisposableEffect(entry.key) { onDispose { SpeechPlayback.stop() } }
     val colors = MaterialTheme.colorScheme
+    val semanticBorderInk = nativeReaderRootBorderInk(entry)
     // Share immutable catalog indexes across all text in this entry, including
     // table cells. A nested EntryView supplies its own catalog and owner scope.
     val mediaOwners = remember(entry.key, entry.media) { MediaOwners(entry.media) }
     val missingLinkVisits = LocalMissingLinkVisits.current ?: remember { MissingLinkVisits() }
     val missingLinkOwner = remember(entry, readingState) { Any() }
-    CompositionLocalProvider(LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
+    CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk,
+        LocalEntryMedia provides entry.media, LocalEntryMediaOwners provides mediaOwners,
         LocalEntryEdition provides entry.edition, LocalReaderSettings provides settings, LocalMissingLinkVisits provides missingLinkVisits,
         LocalMissingLinkDocument provides entry.title, LocalMissingLinkOwner provides missingLinkOwner) {
       key(entry.key) {
@@ -796,6 +798,12 @@ internal fun ReferenceRow(reference: Reference, onLink: (EntryLink) -> Unit, ref
 /** Only the existing weighted reference body enters this scope; label/backlink UI stays outside. */
 @Composable
 internal fun ReferenceBody(reference: Reference, modifier: Modifier, onLink: (EntryLink) -> Unit) {
+    if (LocalNativeSemanticBorderInk.current != null) {
+        CompositionLocalProvider(LocalNativeSemanticBorderInk provides null) {
+            ReferenceBody(reference, modifier, onLink)
+        }
+        return
+    }
     if (LocalNativeContainerTextWrap.current != null) {
         CompositionLocalProvider(LocalNativeContainerTextWrap provides null) { ReferenceBody(reference, modifier, onLink) }
         return
@@ -989,8 +997,12 @@ private fun BlockContent(block: Block, onLink: (EntryLink) -> Unit, path: String
 }
 
 @Composable
-internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (EntryLink) -> Unit) =
-    RenderCompiledTable(table, feature, "root", false, "", onLink)
+internal fun CompiledTableView(table: Table, feature: Feature?, onLink: (EntryLink) -> Unit) {
+    val semanticBorderInk = nativeReaderRootBorderInk(table)
+    CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk) {
+        RenderCompiledTable(table, feature, "root", false, "", onLink)
+    }
+}
 
 private fun tableHasMinimumWidth(table: Table): Boolean {
     var found = false
@@ -1001,13 +1013,13 @@ private fun tableHasMinimumWidth(table: Table): Boolean {
 }
 
 private fun tableLayoutFeature(table: Table, feature: Feature?): Feature? =
-    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) || nativeHasCellForeground(table) }
+    feature?.takeUnless { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) || nativeHasCellOpacity(table) || nativeHasCellForeground(table) || nativeHasResolvedTableBorders(table) }
 
 @Composable
 private fun TableCaptionContext(table: Table, content: @Composable () -> Unit) {
     // A caption establishes the nested table's actual containing width. The outer
     // table's percentage input cannot replace that nearer measured constraint.
-    if (remember(table) { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) }) {
+    if (remember(rememberNativeTableBorderSourceKey(table)) { tableHasMinimumWidth(table) || nativeTableHasRowVisibility(table) }) {
         CompositionLocalProvider(LocalFloatTableWidthReference provides null) {
             WithoutBodyTypography(content)
         }
@@ -1163,6 +1175,12 @@ private fun TableMinimumContainingWidth(content: @Composable () -> Unit) {
 
 @Composable
 private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = "root", nested: Boolean = false, semanticPath: String = "") {
+  val resolvedBorderFailure = nativeTableResolvedBorderFailure(table)
+  if (resolvedBorderFailure != null) {
+      UnavailableAnonymousGrid(table, onLink, path, semanticPath, null, null,
+          resolvedBorderFailure, showWarning = true)
+      return
+  }
   if (table.style?.minWidth != null && LocalFloatTableWidthReference.current == null) {
       TableMinimumContainingWidth { TableView(table, onLink, path, nested, semanticPath) }
       return
@@ -1197,7 +1215,7 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
       else -> null
   } else null
   if (captionFailure != null) {
-      val retained = remember(table) { Block("table", 0, emptyList(), table = table) }
+      val retained = remember(rememberNativeTableBorderSourceKey(table)) { Block("table", 0, emptyList(), table = table) }
       val reader = FigureReaderContext(LocalEntryMedia.current, LocalReaderSettings.current,
           LocalEntryEdition.current, onLink, table)
       UnavailableAnonymousContent(retained, Modifier, captionFailure,
@@ -1213,7 +1231,7 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
       return
   }
   if (table.style?.let { it.cornerRadii != null && it.marginValues == null && it.containingDirection != null } == true) {
-      val retained = remember(table) { Block("table", 0, emptyList(), table = table) }
+      val retained = remember(rememberNativeTableBorderSourceKey(table)) { Block("table", 0, emptyList(), table = table) }
       val reader = FigureReaderContext(LocalEntryMedia.current, LocalReaderSettings.current,
           LocalEntryEdition.current, onLink, table)
       UnavailableAnonymousContent(retained, Modifier, "Numeric corner-table margins outside the responsive block are unavailable.",
@@ -1251,8 +1269,8 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
     val decorationHeight = listOfNotNull(constraints.maxHeight.takeIf { constraints.hasBoundedHeight }, window.height.takeIf { it > 0 }).minOrNull()
     val density = LocalDensity.current
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    var decorationProjection by remember(table, density.density, fontPixels, decorationWidth, decorationHeight) { mutableDoubleStateOf(1.0) }
-    val natural = remember(table, rootViewportCssWidth, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver, rtl) {
+    var decorationProjection by remember(rememberNativeTableBorderSourceKey(table), density.density, fontPixels, decorationWidth, decorationHeight) { mutableDoubleStateOf(1.0) }
+    val natural = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, density.density, fontPixels, decorationProjection, decorationWidth, decorationHeight, phaseObserver, rtl) {
       observeTablePhase(phaseObserver, TablePhase.Preparation) {
         tableRenderMetrics(table, with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = fontPixels,
@@ -1289,7 +1307,7 @@ private fun TableView(table: Table, onLink: (EntryLink) -> Unit, path: String = 
 
 @Composable
 private fun UnavailableTableLanguage(table: Table, direction: TableContainingDirection, onLink: (EntryLink) -> Unit) {
-    val retained = remember(table) { Block("table", 0, emptyList(), table = table) }
+    val retained = remember(rememberNativeTableBorderSourceKey(table)) { Block("table", 0, emptyList(), table = table) }
     val reader = FigureReaderContext(LocalEntryMedia.current, LocalReaderSettings.current,
         LocalEntryEdition.current, onLink, table)
     CompositionLocalProvider(LocalCompiledTableDirectionOwner provides table,
@@ -1315,13 +1333,13 @@ private fun BlockViewportTableView(table: Table, policy: TableBlockViewport,
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val rtl = policy.gridDirection == TableContainingDirection.Rtl
-    val natural = remember(table, policy, rootViewportCssWidth, density.density, bodyPixels) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), policy, rootViewportCssWidth, density.density, bodyPixels) {
         anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table, authoredStyle = policy.gridStyle)?.takeIf {
         it.isFinite() && it > 0f && it <= TablePixelLimit
     }
-    val captionMinimum = remember(table) { NativeLayoutInput(0) }
+    val captionMinimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
     val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
     CompositionLocalProvider(LocalTableContentWidths provides true,
         LocalLayoutDirection provides if (rtl) LayoutDirection.Rtl else LayoutDirection.Ltr,
@@ -1348,13 +1366,13 @@ private fun PairedViewportTableView(table: Table, policy: TableBlockViewport, na
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
     val rtl = policy.gridDirection == TableContainingDirection.Rtl
-    val natural = remember(table, policy, narrow, rootViewportCssWidth, density.density, bodyPixels) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), policy, narrow, rootViewportCssWidth, density.density, bodyPixels) {
         if (narrow) anonymousTableRenderMetrics(table, policy.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
         else tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() }, 0,
             density.density, containerFontPixels = bodyPixels, rtl = rtl, marginsConsumed = true, rootViewportCssWidth = rootViewportCssWidth)
     }
     val lineHeight = tableLineHeightPixels(table, authoredStyle = if (narrow) policy.gridStyle else table.style)
-    val minimum = remember(table) { NativeLayoutInput(0) }
+    val minimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
     CompositionLocalProvider(LocalTableContentWidths provides true,
         LocalNativeFractionalTableCoordinates provides true, LocalTableLineHeightPixels provides lineHeight) {
         TableBlockViewportBox(table, policy, minimum, false, 0, narrow = narrow) {
@@ -1374,12 +1392,12 @@ private fun FloatViewportTableView(table: Table, onLink: (EntryLink) -> Unit, pa
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, density.density, bodyPixels, rtl) {
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels,
             rtl = rtl, marginsConsumed = true, rootViewportCssWidth = rootViewportCssWidth)
     }
-    val minimum = remember(table) { NativeLayoutInput(0) }
+    val minimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
     CompositionLocalProvider(LocalTableContentWidths provides true,
         LocalNativeFractionalTableCoordinates provides true) {
         TableMarginBorderBox(table, minimum, false, 0, false, FloatMargins(0f, 0f, 0f, 0f)) {
@@ -1397,7 +1415,7 @@ private fun AutoMarginTableView(table: Table, onLink: (EntryLink) -> Unit, path:
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, density.density, bodyPixels, rtl) {
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
     }
@@ -1405,7 +1423,7 @@ private fun AutoMarginTableView(table: Table, onLink: (EntryLink) -> Unit, path:
     val marginValues = checkNotNull(table.style?.marginValues)
     val margins = resolveTableAutoMargins(marginValues, density.density, bodyPixels)
     val fixed = if (LocalFloatMarginsConsumed.current) FloatMargins(0f, 0f, 0f, 0f) else margins.fixed
-    val captionMinimum = remember(table) { NativeLayoutInput(0) }
+    val captionMinimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
     val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
     val scrolling = table.style?.isInline != true && !nested && !LocalNativeContainerScrollport.current
     CompositionLocalProvider(LocalTableContentWidths provides true, LocalTableLineHeightPixels provides lineHeight) {
@@ -1431,7 +1449,7 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
     val bodyPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val natural = remember(table, rootViewportCssWidth, density.density, bodyPixels, rtl) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, density.density, bodyPixels, rtl) {
         // This prepares decoration only. Content widths come from the real cells below.
         tableRenderMetrics(table, 1, with(density) { 10.dp.roundToPx() },
             with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels, rtl = rtl, rootViewportCssWidth = rootViewportCssWidth)
@@ -1450,7 +1468,7 @@ private fun ContentSizedTableView(table: Table, onLink: (EntryLink) -> Unit, pat
         table.style?.minWidth != null && (!it.isFinite() || it <= 0f || it > TablePixelLimit)
     }) {
         if (table.rowsHiddenMaxWidthPx != null) {
-            val captionMinimum = remember(table) { NativeLayoutInput(0) }
+            val captionMinimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
             val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
             TableContentViewport(scrolling = !nested && !LocalNativeContainerScrollport.current) {
                 NativeTableVisibilityColumn(table, nativeTableRowsHiddenAt(table, rootViewportCssWidth), captionMinimum,
@@ -1484,15 +1502,19 @@ private fun UnavailableAnonymousGrid(table: Table, onLink: (EntryLink) -> Unit, 
     semanticPath: String, cells: List<CaptionCellSlot>?, sink: SelectionGeometrySink?, reason: String,
     refuseIntrinsicQueries: Boolean = false, showWarning: Boolean = false) {
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
-    val projection = remember(table, rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
-    val bodyGeometry = remember(table, projection.rowsHidden) { arrayOfNulls<FloatTextGeometry>(1) }
-    val retainCellPaint = LocalNativeCellForeground.current != null || remember(table) { nativeHasCellForeground(table) }
+    val projection = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    val bodyGeometry = remember(rememberNativeTableBorderSourceKey(table), projection.rowsHidden) { arrayOfNulls<FloatTextGeometry>(1) }
+    val retainCellPaint = LocalNativeCellForeground.current != null || remember(rememberNativeTableBorderSourceKey(table)) { nativeHasCellForeground(table) }
     val inheritedBackground = LocalAuthoredBackground.current
     @Composable fun retainedCell(cell: Cell, content: @Composable () -> Unit) {
         val background = cell.background ?: table.style?.background ?: inheritedBackground
         val foreground = nativeCellForegroundContext(cell, background)
-        CompositionLocalProvider(LocalNativeCellForeground provides foreground,
-            LocalAuthoredBackground provides (if (retainCellPaint) background else LocalAuthoredBackground.current),
+        val installedBackground = if (retainCellPaint) background else inheritedBackground
+        val semanticBorderInk = nativeBorderNormalOwnerInk(LocalNativeSemanticBorderInk.current,
+            cell, NativeSemanticBorderInkOrigin.Cell, foreground, installedBackground)
+        CompositionLocalProvider(LocalNativeSemanticBorderInk provides semanticBorderInk,
+            LocalNativeCellForeground provides foreground,
+            LocalAuthoredBackground provides installedBackground,
             content = content)
     }
     val failure = LocalTableBlockLayoutFailure.current
@@ -1585,11 +1607,18 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     containerStyle: TextStyle? = null, contentWidths: Boolean = false,
     captionMinimumWidth: NativeLayoutInput<Int>? = null, anonymousGridStyle: TableStyle? = null,
     pairedHeightIntrinsics: Boolean = false, ownCollectionSemantics: Boolean = true) {
+    val resolvedBorderFailure = nativeTableResolvedBorderFailure(table, anonymousGridStyle ?: table.style,
+        anonymousGridStyle != null)
+    if (resolvedBorderFailure != null) {
+        UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
+            resolvedBorderFailure, refuseIntrinsicQueries = pairedHeightIntrinsics, showWarning = true)
+        return
+    }
     val widthInput = LocalFloatTableWidthReference.current
     val resolvedWidthReference = widthInput?.value ?: widthReference
     val phaseObserver = LocalTablePhaseObserver.current
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
-    val projection = remember(table, rootViewportCssWidth, phaseObserver) {
+    val projection = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, phaseObserver) {
         observeTablePhase(phaseObserver, TablePhase.Preparation) { nativeTableRowProjection(table, rootViewportCssWidth) }
     }
     val grid = projection.grid
@@ -1622,6 +1651,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         return
     }
     val opacityRequested = table.hasNativeCellOpacity()
+    val resolvedBordersRequested = nativeTableUsesResolvedBorders(table)
     val opacityOwner = LocalNativeCellOpacityTable.current?.takeIf { it.table === table &&
         selectionCells == null && anonymousGridStyle == null && !pairedHeightIntrinsics }
     if (opacityRequested && (opacityOwner == null || !nativeCellOpacityTableShape(table))) {
@@ -1636,11 +1666,11 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
-    val authoredColors = remember(table, projection.rowsHidden) { grid.cells.map { placed ->
+    val authoredColors = remember(rememberNativeTableBorderSourceKey(table), projection.rowsHidden) { grid.cells.map { placed ->
         canonicalColorArgb(placed.cell.background)?.let { androidx.compose.ui.graphics.Color(it) }
     } }
     val fallbackMessage = remember { NativeLayoutInput<String?>(null) }
-    var drawingPixels by remember(table, density.density, density.fontScale, fontPixels, resolvedWidthReference, decorationProjection, natural) { mutableStateOf<TablePixelLayout?>(null) }
+    var drawingPixels by remember(rememberNativeTableBorderSourceKey(table), density.density, density.fontScale, fontPixels, resolvedWidthReference, decorationProjection, natural) { mutableStateOf<TablePixelLayout?>(null) }
     val headerColor = MaterialTheme.colorScheme.surfaceContainerHigh
     val cellColor = MaterialTheme.colorScheme.surface
     val borderColor = MaterialTheme.colorScheme.outline
@@ -1649,9 +1679,10 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         return
     }
     if (natural == null) {
-        if (table.style?.minWidth != null || opacityRequested) {
+        if (table.style?.minWidth != null || opacityRequested || resolvedBordersRequested) {
             UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
-                "Table minimum-width layout is unavailable. Table content is retained.",
+                if (resolvedBordersRequested) "Resolved table border geometry is unavailable. Table content is retained."
+                else "Table minimum-width layout is unavailable. Table content is retained.",
                 refuseIntrinsicQueries = true, showWarning = true)
             return
         }
@@ -1676,6 +1707,22 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
         return
     }
     val styled = natural.style
+    // Capture original owners before any cell, inline span or link is entered.
+    // A table backdrop is not a table foreground policy; cells retain their
+    // existing independent normal/readability policy against that backdrop.
+    val tableBorderInk = LocalNativeSemanticBorderInk.current
+    val cellForegroundContexts = grid.cells.map { placed ->
+        nativeCellForegroundContext(placed.cell, placed.cell.background ?: styled?.background ?: inheritedBackground)
+    }
+    val cellBorderInks = grid.cells.mapIndexed { index, placed ->
+        nativeBorderNormalOwnerInk(tableBorderInk, placed.cell, NativeSemanticBorderInkOrigin.Cell,
+            cellForegroundContexts[index], placed.cell.background ?: styled?.background ?: inheritedBackground)
+    }
+    val hasResolvedBorders = styled?.hasResolvedTableBorder() == true
+    var resolvedBorderPaint by remember(NativeTableBorderOwner(table, table, NativeTableBorderOrigin.Table),
+        styled, tableBorderInk, cellBorderInks, borderColor, density.density, resolvedWidthReference, natural) {
+        mutableStateOf<NativeTableResolvedBorderPaint?>(null)
+    }
     val cornerDecoration = remember(styled) { styled?.cornerRadii?.let { corners ->
         NativeContainerDecoration(canonicalColorArgb(styled.background)?.toInt(),
             canonicalColorArgb(styled.border.color)?.toInt(), styled.border.width, nativeCorners = corners)
@@ -1685,7 +1732,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val lineHeightPixels = tableLineHeightPixels(table, containerStyle ?: inheritedContainerBodyStyle(),
         anonymousGridStyle ?: table.style)
     if (lineHeightPixels != null && (!lineHeightPixels.isFinite() || lineHeightPixels <= 0f || lineHeightPixels > TablePixelLimit)) {
-        if (table.style?.minWidth != null || opacityRequested) {
+        if (table.style?.minWidth != null || opacityRequested || resolvedBordersRequested) {
             UnavailableAnonymousGrid(table, onLink, path, semanticPath, selectionCells, selectionGeometry,
                 "Table line height exceeds native geometry. Table content is retained.",
                 refuseIntrinsicQueries = true, showWarning = true)
@@ -1723,7 +1770,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             val pixels = drawingPixels
             val rounded = cornerDecoration
             val collapsedBorders = observeTablePhase(phaseObserver, TablePhase.DrawCache) {
-                if (pixels != null && styled?.collapse == true)
+                if (pixels != null && styled?.collapse == true && !hasResolvedBorders)
                     collapsedTableBorders(grid, pixels, styled).flatMap(::tableBorderBands) else emptyList()
             }
             onDrawBehind {
@@ -1747,13 +1794,18 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                 if (styled?.collapse != true && !opacityGrouped) {
                     val fallback = TableStyleBorder(pixels.borderWidth.toFloat(), null)
                     val edges = styled?.cellEdges?.get(index) ?: TableCellBorders(fallback, fallback, fallback, fallback)
-                    separateCellBorderSegments(left.toFloat(), top.toFloat(), (left + cellWidth).toFloat(), bottom.toFloat(), edges).forEach { edge ->
+                    if (edges.hasResolvedTableBorder()) resolvedBorderPaint?.paintCell(drawContext.canvas.nativeCanvas, index)
+                    else separateCellBorderSegments(left.toFloat(), top.toFloat(), (left + cellWidth).toFloat(), bottom.toFloat(), edges).forEach { edge ->
                         val color = edge.color?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } } ?: borderColor
                         paintNativeTableBorder(drawContext.canvas.nativeCanvas, edge, color.toArgb())
                     }
                 }
             }
-            if (styled?.collapse == true) collapsedBorders.forEach { edge ->
+            if (styled?.collapse == true && hasResolvedBorders) {
+                resolvedBorderPaint?.let { paint ->
+                    if (!paint.paintCollapsed(drawContext.canvas.nativeCanvas)) paint.paintOuter(drawContext.canvas.nativeCanvas)
+                }
+            } else if (styled?.collapse == true) collapsedBorders.forEach { edge ->
                 fun x(value: Float) = if (layoutDirection == androidx.compose.ui.unit.LayoutDirection.Rtl) pixels.width - value else value
                 val color = edge.color?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } } ?: borderColor
                 paintNativeTableBorder(drawContext.canvas.nativeCanvas, edge.copy(x1 = x(edge.x1), x2 = x(edge.x2)), color.toArgb())
@@ -1763,7 +1815,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             } else {
                 val fallback = TableStyleBorder(pixels.borderWidth.toFloat(), null)
                 val outer = styled?.outerEdges ?: TableCellBorders(fallback, fallback, fallback, fallback)
-                separateCellBorderSegments(0f, 0f, pixels.width.toFloat(), pixels.height.toFloat(), outer).forEach { edge ->
+                if (outer.hasResolvedTableBorder()) resolvedBorderPaint?.paintOuter(drawContext.canvas.nativeCanvas)
+                else separateCellBorderSegments(0f, 0f, pixels.width.toFloat(), pixels.height.toFloat(), outer).forEach { edge ->
                     val color = edge.color?.let { canonicalColorArgb(it)?.let { argb -> Color(argb) } } ?: borderColor
                     paintNativeTableBorder(drawContext.canvas.nativeCanvas, edge, color.toArgb())
                 }
@@ -1800,7 +1853,8 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     android.graphics.Paint().apply { this.color = color.toArgb() }) }
                 val fallback = TableStyleBorder(natural.borderWidth.toFloat(), null)
                 val edges = styled?.cellEdges?.get(index) ?: TableCellBorders(fallback, fallback, fallback, fallback)
-                separateCellBorderSegments(bounds.left, bounds.top, bounds.right, bounds.bottom, edges).forEach { edge ->
+                if (edges.hasResolvedTableBorder()) resolvedBorderPaint?.paintCellAt(canvas, index, bounds.left, bounds.top)
+                else separateCellBorderSegments(bounds.left, bounds.top, bounds.right, bounds.bottom, edges).forEach { edge ->
                     val color = edge.color?.let { canonicalColorArgb(it)?.let(::Color) } ?: borderColor
                     paintNativeTableBorder(canvas, edge, color.toArgb())
                 }
@@ -1811,9 +1865,9 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     placed.row, placed.cell.rowspan, placed.column, placed.colspan)
                 if (placed.cell.header) heading()
             }.then(padding)) {
-                val cellForeground = nativeCellForegroundContext(placed.cell,
-                    placed.cell.background ?: styled?.background ?: inheritedBackground)
-                CompositionLocalProvider(LocalNativeCellForeground provides cellForeground,
+                val cellForeground = cellForegroundContexts[index]
+                CompositionLocalProvider(LocalNativeSemanticBorderInk provides cellBorderInks[index],
+                    LocalNativeCellForeground provides cellForeground,
                     LocalNativeDelegatedTable provides null,
                     LocalNativeDelegatedCell provides delegatedCell,
                     LocalFloatTableWidthReference provides null, LocalFloatMarginsConsumed provides false, LocalAuthoredBackground provides (placed.cell.background ?: styled?.background ?: inheritedBackground),
@@ -1989,16 +2043,31 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             cornerDecoration.prepareCorners(android.graphics.RectF(0f, 0f, pixels.width.toFloat(), pixels.height.toFloat()))
             null
         } catch (error: UnsupportedFloatLayout) { error } else null
-        return if (pixels == null || cornerFailure != null) {
+        var borderPaintFailure: String? = null
+        val preparedBorderPaint = if (pixels != null && hasResolvedBorders) try {
+            NativeTableResolvedBorderPaint(nativeTableResolvedBorderPlan(table, grid, pixels,
+                checkNotNull(styled), tableBorderInk, cellBorderInks, borderColor.toArgb()))
+        } catch (error: UnsupportedFloatLayout) {
+            borderPaintFailure = error.message ?: "Resolved table border geometry is unavailable. Table content is retained."
+            null
+        } catch (error: IllegalArgumentException) {
+            borderPaintFailure = "Resolved table border geometry is unavailable. Table content is retained."
+            null
+        } catch (error: IllegalStateException) {
+            borderPaintFailure = "Resolved table border owner is unavailable. Table content is retained."
+            null
+        } else null
+        return if (pixels == null || cornerFailure != null || borderPaintFailure != null) {
             if (anonymousGridStyle != null || pairedHeightIntrinsics) blockLayoutFailure?.update(
                 if (hasCorners) "Authored table corner geometry is unavailable at this size" else "Anonymous table grid is unavailable at this size")
             drawingPixels = null
+            resolvedBorderPaint = null
             if (table.style?.minWidth == null && !hasCorners && anonymousGridStyle == null && decorationProjection > 0.0 && tableContainsStyle(table) && !tableHasComputedCellStyle(table) && !opacityRequested) removeDecorations()
             // Keep the existing cells visible in an explicitly unavailable grid.
             // A later width change measures these same owners again, without
             // replacing active media or latching a composition-only error state.
             val width = (reference ?: incoming.maxWidth).coerceIn(0, TablePixelLimit)
-            fallbackMessage.update(if (hasCorners) "Authored table corner geometry is unavailable at this size. Table content is retained."
+            fallbackMessage.update(borderPaintFailure ?: if (hasCorners) "Authored table corner geometry is unavailable at this size. Table content is retained."
                 else "Table layout is unavailable at this size.")
             val warning = measurables.last().measure(Constraints(maxWidth = width))
             val retained = if (children.size == cells.size) children else cells.map {
@@ -2020,7 +2089,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     top += retained[index].height
                     item
                 }
-                val status = if (hasCorners) listOf(PositionedSemanticChild(NativeSemanticGroup(
+                val status = if (hasCorners || resolvedBordersRequested) listOf(PositionedSemanticChild(NativeSemanticGroup(
                     warning.measuredWidth, warning.measuredHeight, emptyList(), extraNodes = listOf(FloatInteractionNode(
                         0, FloatInteractionKind.MARKER, 0, 0, listOf(android.graphics.RectF(0f, 0f,
                             warning.measuredWidth.toFloat(), warning.measuredHeight.toFloat())), fallbackMessage.value, null, null))),
@@ -2040,6 +2109,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
             fallbackMessage.update(null)
             measurables.last().measure(Constraints.fixed(0, 0))
             drawingPixels = pixels
+            resolvedBorderPaint = preparedBorderPaint
             val cellContentOffsets = children.indices.map { index ->
                 tableCellContentOffset(pixels, grid.cells[index], children[index].height,
                     grid.cells[index].cell.style?.verticalAlign)
@@ -2624,6 +2694,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 box, !paragraphHasContent(block, preserveCompiledText = preserveCompiledText) && prefix.isEmpty()) { carried, published ->
                 val content: @Composable () -> Unit = {
                     CompositionLocalProvider(LocalNativeClippedAbsoluteCoordinateScope provides leaf.clippedAbsoluteScope,
+                        LocalNativeSemanticBorderInk provides leaf.semanticBorderInk,
                         LocalNativeCellForeground provides leaf.cellForeground,
                         LocalAuthoredBackground provides (if (leaf.cellForeground != null) leaf.cellForeground.background else LocalAuthoredBackground.current)) {
                         AnonymousBlockView(block, Modifier, onLink, media, settings, edition,
@@ -2843,6 +2914,7 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     @Composable fun originalChild(id: Int, originalWidth: NativeLayoutInput<Int>) {
         val leaf = originalChildren.getValue(id)
         CompositionLocalProvider(LocalNativeCellOpacityTable provides opacityTables[id],
+            LocalNativeSemanticBorderInk provides leaf.semanticBorderInk,
             LocalNativeCellForeground provides leaf.cellForeground,
             LocalAuthoredBackground provides (if (leaf.cellForeground != null) leaf.cellForeground.background else LocalAuthoredBackground.current),
             LocalFloatTableWidthReference provides originalWidth,
@@ -2957,7 +3029,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
             bodyOrigin = it.bodyOrigin?.copy(lineHeightInherited = false))
     }
     val rootViewportCssWidth = tableDocumentViewportCssWidth()
-    val projection = remember(table, rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
+    val projection = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth) { nativeTableRowProjection(table, rootViewportCssWidth) }
     val grid = projection.grid
     val cells = grid.cells.map { placed -> CaptionCellSlot { cellSink ->
         val childContext = tableContext.copy(textAlign = placed.cell.style?.textAlign ?: tableContext.textAlign)
@@ -2983,7 +3055,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
     } }
     val contentWidths = table.rowsHiddenMaxWidthPx != null || blockViewport != null || table.blockViewport?.isSeparateCornerGrid == true || LocalTableContentWidths.current || tableHasComputedCellStyle(table) || table.style?.marginValues != null || table.style?.minWidth != null
     val rtl = tableContext.direction == BidiResolvedDirection.Rtl
-    val natural = remember(table, rootViewportCssWidth, blockViewport, contentWidths, density.density, bodyPixels, rtl) {
+    val natural = remember(rememberNativeTableBorderSourceKey(table), rootViewportCssWidth, blockViewport, contentWidths, density.density, bodyPixels, rtl) {
         if (blockViewport != null) anonymousTableRenderMetrics(table, blockViewport.gridStyle, density.density, bodyPixels, rtl, rootViewportCssWidth)
         else tableRenderMetrics(table, if (contentWidths) 1 else with(density) { 136.dp.roundToPx() }, with(density) { 10.dp.roundToPx() },
                 with(density) { 40.dp.roundToPx() }, density.density, containerFontPixels = bodyPixels,
@@ -3046,7 +3118,7 @@ internal fun FigureCaptionTable(table: Table, context: AnonymousFlowContext, sty
             context.direction, sink) { insideSink ->
             val hasCaption = table.captionBlocks?.isNotEmpty() == true || table.caption.isNotEmpty()
             if (table.rowsHiddenMaxWidthPx != null) {
-                val captionMinimum = remember(table) { NativeLayoutInput(0) }
+                val captionMinimum = remember(rememberNativeTableBorderSourceKey(table)) { NativeLayoutInput(0) }
                 NativeTableVisibilityColumn(table, projection.rowsHidden, captionMinimum, with(density) { 6.dp.roundToPx() },
                     context.direction, sink = insideSink, caption = if (!hasCaption) null else ({ captionSink ->
                         TableCaptionContext(table) {

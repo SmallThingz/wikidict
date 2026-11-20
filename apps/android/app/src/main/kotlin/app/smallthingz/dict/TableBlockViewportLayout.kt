@@ -109,6 +109,7 @@ private fun tableBlockContainerStyle(policy: TableBlockViewport, intrinsic: Bool
         null, StyleBorder.None -> ContainerBorder.None
         is StyleBorder.Solid -> ContainerBorder.Solid(value.width, ContainerColor.Rgb(value.color))
         is StyleBorder.Edges -> ContainerBorder.Edges(edge(value.top), edge(value.right), edge(value.bottom), edge(value.left))
+        is StyleBorder.ResolvedEdges -> throw UnsupportedFloatLayout("Resolved table borders are unavailable in a block viewport.")
     }
     val width = source.width
     val fitContent = paired || policy.intrinsicContainingDirection != null

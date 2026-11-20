@@ -562,7 +562,9 @@ private fun prepareFigure(event: AnonymousFlowEvent.FigureObject, reader: Figure
             resolvedLineHeight = NativeLineHeightPolicy.Pixels(checkNotNull(captionHeight)).takeIf {
                 inheritedCellContext.resolvedLineHeight != null }) ?: inheritedCellContext
         FigureChildLayout(natural, sink, metricsInput = selectedMetrics, tableMetrics = tablePrepared.getOrThrow(), caption = { captionSink ->
-          CompositionLocalProvider(LocalFigureCaptionForeground provides captionColor,
+          CompositionLocalProvider(LocalNativeSemanticBorderInk provides NativeSemanticBorderInk(captionColor, figure,
+              NativeSemanticBorderInkOrigin.FigureCaption, authoredArgb = captionColor, authoredOwner = figure),
+              LocalFigureCaptionForeground provides captionColor,
               LocalNativeColumnTextDirection provides null,
               LocalNativeContainerTextContext provides captionCellContext,
               LocalCellWeight provides (if (inheritedCellContext?.cellText != null) style.fontWeight else LocalCellWeight.current),

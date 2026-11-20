@@ -573,6 +573,54 @@ class RubyModelCodecTest {
             }
             columnLayoutTail(value.columnBreakInside, "$label.columnBreakInside")
         }
+        private fun fixtureStyleBorder(value: StyleBorder, label: String) {
+            mark(label); mark("$label.tag")
+            fun oldEdge(edge: StyleBorderEdge, name: String) {
+                when (edge) {
+                    StyleBorderEdge.None -> byte(0)
+                    StyleBorderEdge.Hidden -> byte(1)
+                    is StyleBorderEdge.Solid -> { byte(2); positionedLength(edge.width, name); string(edge.color) }
+                    is StyleBorderEdge.Dotted -> { byte(3); positionedLength(edge.width, name); string(edge.color) }
+                }
+            }
+            fun resolvedEdge(edge: ResolvedStyleBorderEdge, name: String) {
+                mark(name); mark("$name.tag")
+                fun line(tag: Int, width: StyleLength, paint: StyleBorderPaint) {
+                    byte(tag); positionedLength(width, "$name.width"); mark("$name.paint")
+                    when (paint) {
+                        is StyleBorderPaint.Rgb -> { byte(0); string(paint.value, "$name.rgb") }
+                        StyleBorderPaint.OwnerCurrentColor -> byte(1)
+                    }
+                }
+                when (edge) {
+                    ResolvedStyleBorderEdge.None -> byte(0)
+                    ResolvedStyleBorderEdge.Hidden -> byte(1)
+                    is ResolvedStyleBorderEdge.Solid -> line(2, edge.width, edge.paint)
+                    is ResolvedStyleBorderEdge.Dotted -> line(3, edge.width, edge.paint)
+                    is ResolvedStyleBorderEdge.Inset -> line(4, edge.width, edge.paint)
+                    is ResolvedStyleBorderEdge.Outset -> line(5, edge.width, edge.paint)
+                }
+                mark("$name.end")
+            }
+            when (value) {
+                StyleBorder.None -> byte(0)
+                is StyleBorder.Solid -> { byte(1); positionedLength(value.width, label); string(value.color) }
+                is StyleBorder.Edges -> {
+                    byte(2); oldEdge(value.top, "$label.top"); oldEdge(value.right, "$label.right")
+                    oldEdge(value.bottom, "$label.bottom"); oldEdge(value.left, "$label.left")
+                }
+                is StyleBorder.ResolvedEdges -> {
+                    require(version == 'a' && yFlags and 0x100000 != 0)
+                    byte(3); resolvedEdge(value.top, "$label.top"); resolvedEdge(value.right, "$label.right")
+                    resolvedEdge(value.bottom, "$label.bottom"); resolvedEdge(value.left, "$label.left")
+                }
+            }
+            mark("$label.end")
+        }
+        fun isolatedStyleBorder(value: StyleBorder): ByteArray {
+            fixtureStyleBorder(value, "isolatedBorder")
+            return out.toByteArray()
+        }
         private fun minimumTableStyle(value: TableStyle?, label: String) {
             mark("$label.presence"); byte(if (value == null) 0 else 1)
             if (value == null) return
@@ -586,11 +634,7 @@ class RubyModelCodecTest {
             require(value.minWidth == null || extendedFeatures && yFlags and 512 != 0)
             mark("$label.flags"); byte(flags); mark("$label.extension"); byte(extension)
             value.background?.let { string(it) }
-            value.border?.let { border -> when (border) {
-                StyleBorder.None -> byte(0)
-                is StyleBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); string(border.color) }
-                else -> error("Unsupported fixture border")
-            } }
+            value.border?.let { fixtureStyleBorder(it, "$label.border") }
             value.collapse?.let { byte(it.ordinal) }
             fun edges(edges: StyleEdges, name: String) {
                 listOf(edges.top, edges.right, edges.bottom, edges.left).forEachIndexed { index, length -> positionedLength(length, "$label.$name.$index") }
@@ -645,11 +689,7 @@ class RubyModelCodecTest {
                 (if (value.minWidth != null) 64 else 0) or (if (value.verticalAlign != null) 128 else 0) or
                 (if (extended) 0x100 else 0)
             mark("$label.flags"); if (extended) u16(flags) else byte(flags)
-            value.border?.let { border -> when (border) {
-                StyleBorder.None -> byte(0)
-                is StyleBorder.Solid -> { byte(1); positionedLength(border.width, "$label.border"); string(border.color) }
-                else -> error("Unsupported fixture border")
-            } }
+            value.border?.let { fixtureStyleBorder(it, "$label.border") }
             value.padding?.let { edges -> listOf(edges.top, edges.right, edges.bottom, edges.left)
                 .forEachIndexed { index, length -> positionedLength(length, "$label.padding.$index") } }
             value.textAlign?.let { byte(it.ordinal) }
@@ -672,15 +712,27 @@ class RubyModelCodecTest {
             value.opacity?.let { mark("$label.opacity"); f32(it) }
             mark("$label.end")
         }
+        fun isolatedBorderTableStyle(value: TableStyle?): ByteArray {
+            minimumTableStyle(value, "isolatedTableStyle")
+            return out.toByteArray()
+        }
+        fun isolatedBorderCellStyle(value: CellStyle?): ByteArray {
+            opacityCellStyle(value, "isolatedCellStyle")
+            return out.toByteArray()
+        }
         private fun positionedTable(value: Table, label: String) {
-            require(value.geometry == null && value.blockViewport == null && value.floatViewport == null)
+            require(value.blockViewport == null && value.floatViewport == null)
+            val geometry = value.geometry
+            require(geometry == null || geometry == TableGeometry(border = geometry.border) &&
+                geometry.border?.let { it in 0..65535 } == true)
             mark("$label.flags"); byte(if (value.rowsHiddenMaxWidthPx == null) 1 else 0x21)
-            byte(0); spans(value.caption, "$label.caption"); mark("$label.rows"); u32(value.rows.size.toLong())
+            if (geometry == null) byte(0) else { byte(1); u16(checkNotNull(geometry.border)) }
+            spans(value.caption, "$label.caption"); mark("$label.rows"); u32(value.rows.size.toLong())
             value.rows.forEachIndexed { rowIndex, row ->
                 u32(row.size.toLong())
                 row.forEachIndexed { cellIndex, cell ->
                     val name = "$label.row$rowIndex.cell$cellIndex"
-                    byte(if (cell.header) 1 else 0); u16(cell.colspan); u16(cell.rowspan)
+                    byte(if (cell.header) 1 else 0); mark("$name.colspan"); u16(cell.colspan); mark("$name.rowspan"); u16(cell.rowspan)
                     byte(if (cell.background == null) 0 else 1); cell.background?.let { string(it) }
                     spans(cell.spans, "$name.spans")
                     if (cell.nestedTable == null) byte(0) else positionedTable(cell.nestedTable, "$name.nested")
@@ -7541,6 +7593,332 @@ class RubyModelCodecTest {
             }
             val bytes = wire.document(listOf(action), Sink.Container)
             if (depth == LegacyMaxTableDepth) assertNotNull(read(bytes)) else reject("M retains its existing table limit", bytes)
+        }
+    }
+
+    @Test fun resolvedBorderEdgesRetainCompleteStrokesTypedPaintAndOriginalOwners() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val em = StyleLength(StyleLengthUnit.Em, .125f)
+        val rgb = StyleBorderPaint.Rgb("#dddddd")
+        val own = StyleBorderPaint.OwnerCurrentColor
+        val candidates = listOf(ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.Hidden,
+            ResolvedStyleBorderEdge.Solid(zero, rgb), ResolvedStyleBorderEdge.Dotted(em, own),
+            ResolvedStyleBorderEdge.Inset(em, rgb), ResolvedStyleBorderEdge.Outset(zero, own))
+        val source = Span("link", "original", "Kept", targetFragment = "part", foreground = "#123456")
+        for (edge in candidates) {
+            val border = StyleBorder.ResolvedEdges(edge, edge, edge, edge)
+            val cellStyle = CellStyle(border = border, foreground = CellForeground.Inherit, opacity = 0f)
+            val cell = Cell(listOf(source), false, 1, 1, style = cellStyle)
+            val tableStyle = TableStyle(border = border, collapse = TableCollapse.Collapse)
+            val table = Table(emptyList(), listOf(listOf(cell)), TableGeometry(border = 1), tableStyle)
+            assertSame(border, table.style!!.border); assertSame(border, table.rows.single().single().style!!.border)
+            assertSame(edge, (table.style!!.border as StyleBorder.ResolvedEdges).top)
+            assertSame(source, table.rows.single().single().spans.single())
+            assertEquals(1, table.geometry!!.border)
+            val seen = mutableListOf<Span>()
+            PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(table)
+            assertEquals(listOf(source), seen); assertSame(source, seen.single())
+            assertEquals(EntryLink("Kept", "part"), seen.single().entryLink())
+        }
+        val tableBorder = StyleBorder.ResolvedEdges(ResolvedStyleBorderEdge.Outset(em, rgb),
+            ResolvedStyleBorderEdge.Hidden, ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.Solid(zero, own))
+        val cellBorder = StyleBorder.ResolvedEdges(ResolvedStyleBorderEdge.Inset(em, own),
+            ResolvedStyleBorderEdge.Dotted(em, rgb), ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.Hidden)
+        val original = Table(emptyList(), listOf(listOf(Cell(listOf(source), false, 1, 1,
+            style = CellStyle(border = cellBorder)))), TableGeometry(border = 1), TableStyle(border = tableBorder))
+        assertSame(tableBorder, original.style!!.border)
+        assertSame(cellBorder, original.rows.single().single().style!!.border)
+        assertEquals("#dddddd", (tableBorder.top as ResolvedStyleBorderEdge.Outset).paint.let { (it as StyleBorderPaint.Rgb).value })
+        assertSame(own, (cellBorder.top as ResolvedStyleBorderEdge.Inset).paint)
+        assertEquals(.125f, (cellBorder.top as ResolvedStyleBorderEdge.Inset).width.value)
+        assertEquals(StyleLengthUnit.Em, (cellBorder.top as ResolvedStyleBorderEdge.Inset).width.unit)
+        // The semantic owner color stays a typed reference; child link ink is neither copied nor consulted.
+        assertEquals("#123456", source.foreground)
+        assertEquals(StyleBorderPaint.OwnerCurrentColor, (tableBorder.left as ResolvedStyleBorderEdge.Solid).paint)
+    }
+
+    @Test fun resolvedBorderEdgesRefuseAmbiguousCellOverridesAndKeepCornerDomainClosed() {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val rgb = StyleBorderPaint.Rgb("#abcdef")
+        val solid = ResolvedStyleBorderEdge.Solid(zero, rgb)
+        val resolved = StyleBorder.ResolvedEdges(solid, solid, solid, solid)
+        for (side in listOf(CellBorder.None, CellBorder.Solid(zero, "#123456"), CellBorder.Double(zero, "#123456"))) {
+            val overrides = CellBorderEdges(top = side)
+            invalid("Complete resolved edges cannot be overwritten by direct cell sides") { CellStyle(border = resolved, borderEdges = overrides) }
+            for (legacy in listOf(StyleBorder.None, StyleBorder.Solid(zero, "#abcdef"),
+                    StyleBorder.Edges(StyleBorderEdge.None, StyleBorderEdge.Hidden, StyleBorderEdge.Solid(zero, "#abcdef"), StyleBorderEdge.Dotted(zero, "#abcdef")))) {
+                assertSame(overrides, CellStyle(border = legacy, borderEdges = overrides).borderEdges)
+            }
+        }
+        val corners = TableCornerRadii(zero, zero, zero, zero)
+        invalid("Resolved equal solids do not silently widen the existing corner domain") {
+            TableStyle(border = resolved, collapse = TableCollapse.Separate, cornerRadii = corners)
+        }
+        val none = StyleBorder.ResolvedEdges(ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.None,
+            ResolvedStyleBorderEdge.None, ResolvedStyleBorderEdge.None)
+        invalid("Resolved none is not the legacy literal corner spelling") {
+            TableStyle(border = none, collapse = TableCollapse.Separate, cornerRadii = corners)
+        }
+        assertSame(none, TableStyle(border = none).border)
+        for (legacy in listOf(StyleBorder.None, StyleBorder.Solid(zero, "#abcdef")))
+            assertSame(corners, TableStyle(border = legacy, collapse = TableCollapse.Separate, cornerRadii = corners).cornerRadii)
+        for (color in listOf("#ddd", "#ABCDEF", "abcdef", "#12345678", "currentColor", "transparent", ""))
+            invalid("Resolved RGB remains canonical opaque RGB") { StyleBorderPaint.Rgb(color) }
+        for (bad in listOf(-.1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+            invalid("Resolved line width retains ordinary finite nonnegative domain") {
+                ResolvedStyleBorderEdge.Inset(StyleLength(StyleLengthUnit.Em, bad), StyleBorderPaint.OwnerCurrentColor)
+            }
+        for (unit in StyleLengthUnit.entries) assertEquals(0f,
+            ResolvedStyleBorderEdge.Outset(StyleLength(unit, 0f), StyleBorderPaint.OwnerCurrentColor).width.value)
+    }
+
+    private fun resolvedBorderMixed() = StyleBorder.ResolvedEdges(
+        ResolvedStyleBorderEdge.Outset(StyleLength(StyleLengthUnit.Px, 1f), StyleBorderPaint.Rgb("#dddddd")),
+        ResolvedStyleBorderEdge.Hidden,
+        ResolvedStyleBorderEdge.Inset(StyleLength(StyleLengthUnit.Em, .125f), StyleBorderPaint.OwnerCurrentColor),
+        ResolvedStyleBorderEdge.Dotted(StyleLength(StyleLengthUnit.Px, 0f), StyleBorderPaint.Rgb("#112233")))
+    private fun resolvedBorderEmpty(hidden: Boolean = false): StyleBorder.ResolvedEdges {
+        val edge = if (hidden) ResolvedStyleBorderEdge.Hidden else ResolvedStyleBorderEdge.None
+        return StyleBorder.ResolvedEdges(edge, edge, edge, edge)
+    }
+    private fun resolvedBorderTable(tableBorder: StyleBorder? = resolvedBorderMixed(),
+        cellBorder: StyleBorder? = resolvedBorderEmpty(), values: List<Span> = listOf(
+            Span("link", "original cell", "Cell target", targetFragment = "cell", tooltip = "cell tip"))) =
+        Table(listOf(Span("link", "original caption", "Caption target", targetFragment = "caption")),
+            listOf(listOf(Cell(values, false, 1, 1, style = cellBorder?.let { CellStyle(border = it) }))),
+            TableGeometry(border = 1), TableStyle(border = tableBorder, collapse = TableCollapse.Collapse))
+    private fun resolvedBorderBlock(table: Table) = Block("table", 0, emptyList(), table = table)
+
+    @Test fun resolvedBordersUseLiteralTagThreeAndKeepEveryOldBorderByte() {
+        val mixed = resolvedBorderMixed()
+        val literal = byteArrayOf(3, 5, 0, 0, 0, -128, 63, 0, 7, 0, 0, 0) + "#dddddd".encodeToByteArray() +
+            byteArrayOf(1, 4, 1, 0, 0, 0, 62, 1, 3, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0) + "#112233".encodeToByteArray()
+        assertEquals(45, literal.size)
+        assertArrayEquals(literal, Wire('a', 0x100000).isolatedStyleBorder(mixed))
+        assertArrayEquals(byteArrayOf(3, 0, 0, 0, 0), Wire('a', 0x100000).isolatedStyleBorder(resolvedBorderEmpty()))
+        assertArrayEquals(byteArrayOf(3, 1, 1, 1, 1), Wire('a', 0x100000).isolatedStyleBorder(resolvedBorderEmpty(true)))
+        val px = StyleLength(StyleLengthUnit.Px, 1f)
+        val em = StyleLength(StyleLengthUnit.Em, 2f)
+        val oldSolid = StyleBorder.Solid(px, "#112233")
+        val oldEdges = StyleBorder.Edges(StyleBorderEdge.None, StyleBorderEdge.Hidden,
+            StyleBorderEdge.Solid(px, "#112233"), StyleBorderEdge.Dotted(em, "#abcdef"))
+        val solidBytes = byteArrayOf(1, 0, 0, 0, -128, 63, 7, 0, 0, 0) + "#112233".encodeToByteArray()
+        val edgeBytes = byteArrayOf(2, 0, 1, 2, 0, 0, 0, -128, 63, 7, 0, 0, 0) + "#112233".encodeToByteArray() +
+            byteArrayOf(3, 1, 0, 0, 0, 64, 7, 0, 0, 0) + "#abcdef".encodeToByteArray()
+        for ((border, expected) in listOf(StyleBorder.None to byteArrayOf(0), oldSolid to solidBytes, oldEdges to edgeBytes)) {
+            assertArrayEquals(expected, Wire('M').isolatedStyleBorder(border))
+            assertArrayEquals(expected, Wire('a', 0x100000).isolatedStyleBorder(border))
+            assertArrayEquals(Wire('M').isolatedBorderTableStyle(TableStyle(border = border)),
+                Wire('a', 0x100000).isolatedBorderTableStyle(TableStyle(border = border)))
+            assertArrayEquals(Wire('M').isolatedBorderCellStyle(CellStyle(border = border)),
+                Wire('a', 0x100000).isolatedBorderCellStyle(CellStyle(border = border)))
+            val old = resolvedBorderTable(border, border)
+            val oldWire = Wire('M').apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(old), "oldBorder") } }
+            val oldBytes = oldWire.document(emptyList(), Sink.Body)
+            assertEquals(old, read(oldBytes).sections.single().blocks.single().table)
+            // Literal new record under the true old M layout reaches the border's capability guard.
+            val at = oldWire.at.getValue("oldBorder.table.style.border")
+            val end = oldWire.at.getValue("oldBorder.table.style.border.end")
+            reject("Old M cannot borrow the new record", replace(oldBytes, at, end, literal))
+        }
+        for (version in listOf('M', 'a')) {
+            assertArrayEquals(byteArrayOf(0), Wire(version, 0x100000).isolatedBorderTableStyle(null))
+            assertArrayEquals(byteArrayOf(0), Wire(version, 0x100000).isolatedBorderCellStyle(null))
+        }
+        val legacy = Table(emptyList(), listOf(listOf(Cell(listOf(text("old")), false, 1, 1))), TableGeometry(border = 1))
+        val wire = Wire('M').apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(legacy)) } }
+        assertEquals(legacy, read(wire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table)
+    }
+
+    @Test fun resolvedBordersRoundtripTableCellAndEveryExistingBlockHolderWithoutBorrowingInk() {
+        val old = StyleBorder.Solid(StyleLength(StyleLengthUnit.Px, 1f), "#abcdef")
+        for ((tableBorder, cellBorder) in listOf(resolvedBorderMixed() to old, old to resolvedBorderMixed(),
+                resolvedBorderMixed() to resolvedBorderEmpty(), resolvedBorderEmpty(true) to resolvedBorderEmpty())) {
+            val original = resolvedBorderTable(tableBorder, cellBorder)
+            for (sink in listOf(Sink.Body, Sink.Container, Sink.CellBlocks, Sink.TableRichCaption, Sink.ReferenceBlocks,
+                    Sink.FigureRichCaption, Sink.FlowFigure, Sink.ScopeFigure)) {
+                val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(original), "resolved") } }
+                val bytes = wire.document(emptyList(), sink)
+                assertArrayEquals(byteArrayOf(68, 80, 82, 97, 0, 0, 16, 0), bytes.copyOf(8))
+                val actual = read(bytes)
+                val tables = mutableListOf<Table>()
+                val visitor = PresentationSpanVisitor { _, _ -> }.apply { onTable = { table, _, _ ->
+                    if (table.geometry?.border == 1) tables.add(table)
+                } }
+                actual.sections.forEach { visitor.blocks(it.blocks) }; actual.references.forEach { it.blocks?.let(visitor::blocks) }
+                assertEquals(listOf(original), tables)
+                assertEquals(EntryLink("Caption target", "caption"), tables.single().caption.single().entryLink())
+                assertEquals(EntryLink("Cell target", "cell"), tables.single().rows.single().single().spans.single().entryLink())
+            }
+        }
+        val nested = resolvedBorderTable().copy(caption = emptyList())
+        val parent = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nested))),
+            style = TableStyle(border = resolvedBorderEmpty()))
+        val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(parent), "nestedResolved") } }
+        val decoded = read(wire.document(emptyList(), Sink.Body)).sections.single().blocks.single().table!!
+        assertEquals(parent, decoded); assertEquals(nested, decoded.rows.single().single().nestedTable)
+        val ordinary = resolvedBorderTable(resolvedBorderEmpty(), null)
+        val plain = ordinary.rows.single().single().spans.single()
+        assertSame(plain, ordinary.rows.single().single().spans.single())
+        assertEquals("Cell target", plain.target)
+    }
+
+    @Test fun resolvedBordersRejectMalformedFieldsCapabilitiesAndIndependentHighFeatureDebt() {
+        val original = resolvedBorderTable(resolvedBorderMixed(), null)
+        val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(original), "strictResolved") } }
+        val bytes = wire.document(emptyList(), Sink.Body)
+        val name = "strictResolved.table.style.border"
+        for (mask in listOf(0L, 0x10000L, 0x20000L, 0x40000L, 0x80000L, 0x300000L, 0x100400L, 0x100800L))
+            reject("Resolved payload has independent capability custody", changed32(bytes, 4, mask))
+        reject("Unknown border variant", changed(bytes, wire.at.getValue(name), 4))
+        for (edge in listOf("top", "right", "bottom", "left")) for (tag in listOf(6, 255))
+            reject("Unknown resolved edge", changed(bytes, wire.at.getValue("$name.$edge.tag"), tag))
+        for (edge in listOf("top", "bottom", "left")) {
+            for (tag in listOf(2, 255)) {
+                reject("Unknown width unit", changed(bytes, wire.at.getValue("$name.$edge.width.unit"), tag))
+                reject("Unknown typed paint", changed(bytes, wire.at.getValue("$name.$edge.paint"), tag))
+            }
+            for (bad in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY))
+                reject("Finite nonnegative resolved width", changed32(bytes, wire.at.getValue("$name.$edge.width.value"), bad.toRawBits().toLong()))
+        }
+        val rgb = wire.at.getValue("$name.top.rgb.bytes")
+        reject("RGB remains lowercase canonical", changed(bytes, rgb + 1, 'D'.code))
+        reject("RGB requires hash prefix", changed(bytes, rgb, 'x'.code))
+        reject("RGB length is not a color fallback", changed32(bytes, wire.at.getValue("$name.top.rgb"), 0))
+        for (end in wire.at.getValue(name) until wire.at.getValue("$name.end"))
+            reject("Every resolved record truncation is refused", bytes.copyOf(end))
+        reject("Final EOF is strict", bytes + byteArrayOf(0))
+        for (border in listOf<StyleBorder?>(null, StyleBorder.None)) {
+            val unused = resolvedBorderTable(border, null)
+            val unusedWire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(unused)) } }
+            reject("Advertised resolved feature requires an actual new record", unusedWire.document(emptyList(), Sink.Body))
+        }
+        val mixed = resolvedBorderTable(values = listOf(intrinsicWireOwner(), atomicAutoWireOwner(), atomicWireOwner(), marginRubyOwner()))
+        val markedCell = mixed.rows.single().single().copy(style = CellStyle(border = resolvedBorderMixed(), opacity = .2f,
+            foreground = CellForeground.Inherit))
+        val joined = mixed.copy(rows = listOf(listOf(markedCell)))
+        val joinedWire = Wire('a', 0x1f0000 or 4).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(joined), "joinedResolved") } }
+        val joinedBytes = joinedWire.document(emptyList(), Sink.Body)
+        assertEquals(joined, read(joinedBytes).sections.single().blocks.single().table)
+        for (missing in listOf(0x10000, 0x20000, 0x40000, 0x80000, 0x100000))
+            reject("All five high features are independent", changed32(joinedBytes, 4, ((0x1f0000 or 4) and missing.inv()).toLong()))
+        for (extra in listOf(0x10000, 0x20000, 0x40000, 0x80000)) {
+            // Emit the selected prefix/tails correctly, with one actual legacy fixed Box but no extra new owner.
+            val noExtra = resolvedBorderTable(values = listOf(atomicWireOwner()))
+            val extraWire = Wire('a', 0x100004 or extra).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(noExtra)) } }
+            reject("Resolved border and fixed Box cannot earn another payload", extraWire.document(emptyList(), Sink.Body))
+        }
+        reject("Border does not earn inline font family", changed(joinedBytes, joinedWire.at.getValue("features"), 4))
+    }
+
+    @Test fun resolvedBordersKeepRestrictedHoldersAndUnitSpansClosedWithNestedIndependence() {
+        val source = Span("link", "original", "Original")
+        val cell = Cell(listOf(source), false, 1, 1)
+        val border = resolvedBorderEmpty()
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val edges = StyleEdges(zero, zero, zero, zero)
+        val auto = ContainerMargins(ContainerMargin.Length(zero), ContainerMargin.Auto, ContainerMargin.Length(zero), ContainerMargin.Auto)
+        val box = TableStyle(width = StyleWidth(StyleWidthUnit.Px, 100f), marginValues = auto, containingDirection = TableContainingDirection.Ltr)
+        val grid = TableStyle(collapse = TableCollapse.Collapse)
+        val viewport = TableBlockViewport(100, box, ContainerBoxSizing.ContentBox, StyleWidth(StyleWidthUnit.Percent, 100f),
+            grid, TableContainingDirection.Ltr, "ja")
+        invalid("Viewport converted box rejects resolved edges") { viewport.copy(boxStyle = box.copy(border = border)) }
+        invalid("Anonymous grid rejects resolved edges") { viewport.copy(gridStyle = grid.copy(border = border)) }
+        val intrinsic = viewport.copy(boxStyle = TableStyle(margins = edges),
+            focusPaint = TableScrollFocusPaint(TableScrollFocusMode.AuthoredNone), intrinsicContainingDirection = TableContainingDirection.Ltr)
+        val restricted = listOf(
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(display = TableDisplay.InlineTable)),
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(display = TableDisplay.InlineBlock)),
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(floatSide = TableFloatSide.Left)),
+            Table(emptyList(), listOf(listOf(cell)), blockViewport = viewport),
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(collapse = TableCollapse.Collapse, margins = edges), blockViewport = intrinsic),
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(floatSide = TableFloatSide.Right, margins = edges),
+                floatViewport = TableFloatViewport(100, TableContainingDirection.Ltr, TableContainingDirection.Ltr, "ja")),
+            Table(emptyList(), listOf(listOf(cell)), style = TableStyle(border = StyleBorder.None, collapse = TableCollapse.Separate,
+                cornerRadii = TableCornerRadii(zero, zero, zero, zero))))
+        for (table in restricted) {
+            invalid("Unsupported holder cannot acquire a new Table border") { table.copy(style = (table.style ?: TableStyle(border = StyleBorder.None)).copy(border = border)) }
+            invalid("Unsupported holder cannot acquire a new Cell border") { table.copy(rows = listOf(listOf(cell.copy(style = CellStyle(border = border))))) }
+        }
+        // Forge only the new border record into otherwise valid inline/float old models.
+        val literal = Wire('a', 0x100000).isolatedStyleBorder(border)
+        for (table in restricted.take(3)) {
+            val old = table.copy(style = table.style!!.copy(border = StyleBorder.None))
+            val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(old), "restricted") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            reject("Decoder enforces the same holder domain", replace(bytes, wire.at.getValue("restricted.table.style.border"),
+                wire.at.getValue("restricted.table.style.border.end"), literal))
+        }
+        for ((colspan, rowspan) in listOf(2 to 1, 1 to 2)) {
+            val merged = cell.copy(colspan = colspan, rowspan = rowspan)
+            val old = Table(emptyList(), listOf(listOf(merged)), style = TableStyle(border = StyleBorder.None))
+            assertSame(merged, old.rows.single().single())
+            invalid("Table record requires every direct cell to be unit") { old.copy(style = TableStyle(border = border)) }
+            invalid("A later marked cell cannot hide an earlier merged sibling") {
+                old.copy(rows = listOf(listOf(merged, cell.copy(style = CellStyle(border = resolvedBorderEmpty(true))))))
+            }
+            val inner = Table(emptyList(), listOf(listOf(cell)), style = TableStyle(border = border))
+            val outer = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, colspan, rowspan, nestedTable = inner))))
+            assertSame(inner, outer.rows.single().single().nestedTable)
+            val nestedOld = Table(emptyList(), listOf(listOf(merged)))
+            val markedOuter = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nestedOld))), style = TableStyle(border = border))
+            assertSame(nestedOld, markedOuter.rows.single().single().nestedTable)
+        }
+        val later = Table(emptyList(), listOf(listOf(cell, cell.copy(style = CellStyle(border = resolvedBorderEmpty(true))))))
+        val laterWire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(later), "laterResolved") } }
+        val laterBytes = laterWire.document(emptyList(), Sink.Body)
+        assertEquals(later, read(laterBytes).sections.single().blocks.single().table)
+        for (field in listOf("colspan", "rowspan")) reject("Later resolved cell closes every earlier direct span",
+            changed(laterBytes, laterWire.at.getValue("laterResolved.table.row0.cell0.$field"), 2))
+        val mutableRows = mutableListOf(listOf(cell))
+        val retained = Table(emptyList(), mutableRows, style = TableStyle(border = border))
+        mutableRows[0] = listOf(cell.copy(colspan = 2))
+        invalid("Deep validation rechecks mutated direct spans") { PresentationSpanVisitor { _, _ -> }.table(retained) }
+        mutableRows[0] = listOf(cell)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(retained)
+        assertSame(source, seen.single())
+        val mutableRestrictedRows = mutableListOf(listOf(cell))
+        val floating = Table(emptyList(), mutableRestrictedRows, style = TableStyle(floatSide = TableFloatSide.Left))
+        mutableRestrictedRows[0] = listOf(cell.copy(style = CellStyle(border = border)))
+        invalid("Deep validation rechecks mutated resolved holder") { PresentationSpanVisitor { _, _ -> }.table(floating) }
+        mutableRestrictedRows[0] = listOf(cell)
+        assertNotNull(floating.copy())
+    }
+
+    @Test fun resolvedBordersRetainCompleteItemContentAndTableBudgetsWithoutNewScalarCharges() {
+        val limit = 1 shl 20
+        val source = Span("link", "budget", "Original budget", targetFragment = "part")
+        fun table(rows: Int) = Table(emptyList(), java.util.Collections.nCopies(rows, emptyList<Cell>()) + listOf(listOf(
+            Cell(listOf(source), false, 1, 1, style = CellStyle(border = resolvedBorderMixed(), opacity = 0f)))),
+            style = TableStyle(border = resolvedBorderEmpty()))
+        // Both fixed records add zero items: final real row, Cell, and original action consume three.
+        val exact = table(limit - 3)
+        val seen = mutableListOf<Span>()
+        PresentationSpanVisitor { _, _ -> }.apply { onSpan = { seen.add(it) } }.table(exact)
+        assertEquals(listOf(source), seen); assertSame(source, seen.single())
+        invalid("Resolved styles do not reset the shared model budget") { PresentationSpanVisitor { _, _ -> }.table(table(limit - 2)) }
+        fun literal(rows: Int) = Wire('a', 0x100000).apply {
+            paragraphOverride = { positionedBlock(resolvedBorderBlock(table(rows)), "borderBudget") }
+        }.document(emptyList(), Sink.Body)
+        // Wire also counts the Section and Table Block; filler rows stay lightweight.
+        val decoded = read(literal(limit - 5)).sections.single().blocks.single().table!!
+        assertEquals(limit - 4, decoded.rows.size)
+        assertEquals(listOf(source), decoded.rows.last().single().spans)
+        assertEquals(resolvedBorderMixed(), decoded.rows.last().single().style!!.border)
+        reject("Resolved styles do not reset shared wire M plus one", literal(limit - 4))
+        val leaf = resolvedBorderTable(values = listOf(source)).copy(caption = emptyList(), geometry = null)
+        for (depth in listOf(16, 17)) {
+            val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(leaf), "borderDepth") } }
+            val bytes = wire.document(emptyList(), Sink.Container, containers = depth)
+            if (depth == 16) assertNotNull(read(bytes)) else reject("Border cannot reset content17", bytes)
+        }
+        for (depth in listOf(32, 33)) {
+            var nested = leaf
+            repeat(depth - 1) { nested = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1, nestedTable = nested)))) }
+            val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(nested), "borderTables") } }
+            val bytes = wire.document(emptyList(), Sink.Body)
+            if (depth == 32) assertNotNull(read(bytes)) else reject("Border cannot reset Table33", bytes)
         }
     }
 }

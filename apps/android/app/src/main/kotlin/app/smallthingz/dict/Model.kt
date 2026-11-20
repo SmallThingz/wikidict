@@ -816,6 +816,22 @@ data class RuleStyle(val height: StyleLength, val fill: ContainerColor, val marg
 data class BlockStyle(val margins: StyleEdges? = null, val padding: StyleEdges? = null) {
     init { require(margins != null || padding != null) { "Empty block style" } }
 }
+/** Color of the original TABLE or Cell owner, before descendant text and link paint. */
+sealed interface StyleBorderPaint {
+    data object OwnerCurrentColor : StyleBorderPaint
+    data class Rgb(val value: String) : StyleBorderPaint {
+        init { require(Regex("#[0-9a-f]{6}").matches(value)) { "Invalid resolved border RGB" } }
+    }
+}
+/** Complete source edges retain their original stroke until collapsed-border resolution. */
+sealed interface ResolvedStyleBorderEdge {
+    data object None : ResolvedStyleBorderEdge
+    data object Hidden : ResolvedStyleBorderEdge
+    data class Solid(val width: StyleLength, val paint: StyleBorderPaint) : ResolvedStyleBorderEdge
+    data class Dotted(val width: StyleLength, val paint: StyleBorderPaint) : ResolvedStyleBorderEdge
+    data class Inset(val width: StyleLength, val paint: StyleBorderPaint) : ResolvedStyleBorderEdge
+    data class Outset(val width: StyleLength, val paint: StyleBorderPaint) : ResolvedStyleBorderEdge
+}
 sealed interface StyleBorder {
     data object None : StyleBorder
     data class Solid(val width: StyleLength, val color: String) : StyleBorder {
@@ -823,6 +839,8 @@ sealed interface StyleBorder {
     }
     data class Edges(val top: StyleBorderEdge, val right: StyleBorderEdge,
         val bottom: StyleBorderEdge, val left: StyleBorderEdge) : StyleBorder
+    data class ResolvedEdges(val top: ResolvedStyleBorderEdge, val right: ResolvedStyleBorderEdge,
+        val bottom: ResolvedStyleBorderEdge, val left: ResolvedStyleBorderEdge) : StyleBorder
 }
 sealed interface StyleBorderEdge {
     data object None : StyleBorderEdge
@@ -1128,6 +1146,9 @@ data class CellStyle(val border: StyleBorder? = null, val padding: StyleEdges? =
             letterSpacing != null || width != null || minWidth != null || verticalAlign != null ||
             lineHeight != null || opacity != null || foreground != null) { "Empty cell style" }
         require(opacity == null || opacity.isFinite() && opacity in 0f..1f) { "Invalid cell opacity" }
+        require(border !is StyleBorder.ResolvedEdges || borderEdges == null) {
+            "Resolved cell edges cannot also carry per-side border overrides"
+        }
     }
 }
 data class Cell(val spans: List<Span>, val header: Boolean, val colspan: Int, val rowspan: Int,
@@ -1174,6 +1195,9 @@ data class TableBlockViewport(val maxViewportWidthPx: Long, val boxStyle: TableS
         maxViewportWidthPx, boxStyle, maxWidth, gridStyle, language)
     init {
         require(boxStyle.minWidth == null && gridStyle.minWidth == null) { "Table viewport styles cannot carry minimum width" }
+        require(boxStyle.border !is StyleBorder.ResolvedEdges && gridStyle.border !is StyleBorder.ResolvedEdges) {
+            "Resolved borders cannot be converted into table viewport styles"
+        }
         require(language.isNotEmpty() && validPresentationString(language)) { "Invalid table source language" }
         require(maxViewportWidthPx in 0L..0xffff_ffffL) { "Invalid table viewport threshold" }
         if (intrinsicContainingDirection != null) {
@@ -1217,6 +1241,7 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
     val rowsHiddenMaxWidthPx: Long? = null) {
     init {
         validateRowsHiddenPolicy()
+        validateResolvedBorderOwners()
         require(style?.minWidth == null || blockViewport == null && floatViewport == null) { "Responsive tables cannot carry minimum width" }
         require(style?.cornerRadii == null || style.collapse == TableCollapse.Separate) {
             "Ordinary table corners require explicit separate borders"
@@ -1275,6 +1300,22 @@ data class Table(val caption: List<Span>, val rows: List<List<Cell>>, val geomet
         require(style?.isInline != true || rows.any { it.isNotEmpty() }) { "Inline table requires a cell" }
         require(style?.isInline != true || rows.all { row -> row.all(::inlineTableCellShape) }) { "Unsupported inline table cell shape" }
     }
+}
+
+/** Each ordinary Table is an independent border owner, including an ordinary nested Table. */
+private fun Table.validateResolvedBorderOwners() {
+    var resolved = style?.border is StyleBorder.ResolvedEdges
+    var mergedCell = false
+    rows.forEach { row -> row.forEach { cell ->
+        if (cell.style?.border is StyleBorder.ResolvedEdges) resolved = true
+        if (cell.rowspan != 1 || cell.colspan != 1) mergedCell = true
+    } }
+    if (!resolved) return
+    require(style?.isInline != true && style?.floatSide == null && style?.cornerRadii == null &&
+        blockViewport == null && floatViewport == null) {
+        "Resolved borders require an ordinary nonfloating table without a viewport or corners"
+    }
+    require(!mergedCell) { "Resolved borders require unit spans on every direct cell" }
 }
 
 /** Row visibility never removes source rows, captions or their actions from validation. */
@@ -1686,6 +1727,7 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
     fun table(value: Table, tableDepth: Int = 1, contentDepth: Int = 0): Unit = withoutRelativeContainer {
         require(tableDepth <= MaxTableDepth) { "Table nesting is too deep" }
         value.validateRowsHiddenPolicy()
+        value.validateResolvedBorderOwners()
         if (value.rowsHiddenMaxWidthPx != null) charge(1)
         onTable(value, tableDepth, contentDepth)
         val rich = value.captionBlocks

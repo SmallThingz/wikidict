@@ -19,7 +19,7 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (cellForegroundHeader) r.u32().also {
             // Retain the implemented lower-word union; held Figure capabilities stay unknown.
-            require(it and 0xf0000L != 0L && it and 0xff3ffL == it &&
+            require(it and 0x1f0000L != 0L && it and 0x1ff3ffL == it &&
                 (it and 0xa0000L == 0L || it and 4L != 0L) &&
                 (it and 32768L == 0L || it and 16384L != 0L && it and 1L != 0L)) {
                 "Invalid wide presentation feature flags"
@@ -37,6 +37,7 @@ object BlobDecoder {
         r.atomicAutoLayouts = ownerGeometryFlags and 0x20000 != 0
         r.rubyAnnotationMargins = ownerGeometryFlags and 0x40000 != 0
         r.intrinsicLinesLayouts = ownerGeometryFlags and 0x80000 != 0
+        r.resolvedStyleBorders = ownerGeometryFlags and 0x100000 != 0
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
@@ -209,6 +210,7 @@ object BlobDecoder {
         require(r.atomicAutoLayouts == r.hasAtomicAutoLayout) { "Automatic inline box feature does not match payload" }
         require(r.rubyAnnotationMargins == r.hasRubyAnnotationMargins) { "Ruby annotation margins feature does not match payload" }
         require(r.intrinsicLinesLayouts == r.hasIntrinsicLinesLayout) { "Intrinsic inline lines feature does not match payload" }
+        require(r.resolvedStyleBorders == r.hasResolvedStyleBorder) { "Resolved style border feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -242,6 +244,8 @@ object BlobDecoder {
         var hasRubyAnnotationMargins = false
         var intrinsicLinesLayouts = false
         var hasIntrinsicLinesLayout = false
+        var resolvedStyleBorders = false
+        var hasResolvedStyleBorder = false
         var positionedContainers = false
         var hasPositionedContainers = false
         var tableMinimumWidths = false
@@ -1191,7 +1195,32 @@ object BlobDecoder {
             1 -> StyleBorder.Solid(styleLength(), styleRgb())
             2 -> { require(containerFonts) { "Per-edge style borders require M" }
                 StyleBorder.Edges(styleBorderEdge(), styleBorderEdge(), styleBorderEdge(), styleBorderEdge()) }
+            3 -> {
+                require(resolvedStyleBorders && containerFonts) { "Resolved style borders require their DPRa capability" }
+                require(buffer.remaining() >= 4) { "Truncated resolved border edges" }
+                StyleBorder.ResolvedEdges(resolvedStyleBorderEdge(), resolvedStyleBorderEdge(),
+                    resolvedStyleBorderEdge(), resolvedStyleBorderEdge()).also { hasResolvedStyleBorder = true }
+            }
             else -> error("Unknown style border")
+        }
+        private fun resolvedStyleBorderEdge(): ResolvedStyleBorderEdge = when (val tag = byte()) {
+            0 -> ResolvedStyleBorderEdge.None
+            1 -> ResolvedStyleBorderEdge.Hidden
+            2, 3, 4, 5 -> {
+                val width = styleLength()
+                val paint = when (byte()) {
+                    0 -> StyleBorderPaint.Rgb(styleRgb())
+                    1 -> StyleBorderPaint.OwnerCurrentColor
+                    else -> error("Unknown resolved border paint")
+                }
+                when (tag) {
+                    2 -> ResolvedStyleBorderEdge.Solid(width, paint)
+                    3 -> ResolvedStyleBorderEdge.Dotted(width, paint)
+                    4 -> ResolvedStyleBorderEdge.Inset(width, paint)
+                    else -> ResolvedStyleBorderEdge.Outset(width, paint)
+                }
+            }
+            else -> error("Unknown resolved border edge")
         }
         private fun styleBorderEdge(): StyleBorderEdge = when (byte()) {
             0 -> StyleBorderEdge.None

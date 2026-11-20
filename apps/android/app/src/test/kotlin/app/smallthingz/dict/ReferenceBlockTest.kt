@@ -31,6 +31,7 @@ class ReferenceBlockTest {
                 StyleBorder.None -> byte(0)
                 is StyleBorder.Solid -> { byte(1); length(value.width); string(value.color) }
                 is StyleBorder.Edges -> error("This legacy binary fixture does not encode per-edge borders")
+                is StyleBorder.ResolvedEdges -> error("This legacy binary fixture does not encode resolved borders")
             }
         }
         fun cellStyle(value: CellStyle?) {

@@ -149,6 +149,7 @@ class BlobDecoderTest {
         StyleBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
         is StyleBorder.Solid -> linkedMapOf("solid" to linkedMapOf("width" to producerStyleLength(value.width), "color" to value.color))
         is StyleBorder.Edges -> error("This legacy producer fixture does not encode per-edge borders")
+        is StyleBorder.ResolvedEdges -> error("This legacy producer fixture does not encode resolved borders")
     }
     private fun producerCellBorder(value: CellBorder): Map<String, Any?> = when (value) {
         CellBorder.None -> linkedMapOf("none" to emptyMap<String, Any?>())
