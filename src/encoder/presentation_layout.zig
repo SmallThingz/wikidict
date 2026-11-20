@@ -592,11 +592,19 @@ fn analyzePaoLocalNoun(a: A, kind: []const u8, index: usize, origin: ?usize, blo
     return analyze(a, kind, index, origin, projected orelse blocks, true);
 }
 
-const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form };
+const LexicalProjection = enum { ordinary, kyrgyz_example, bulgarian_request, id_request, greek_synonym, greek_noun_bullet, pao_noun_bullet, source_numbered, estonian_noun_form, source_decimal };
 fn lexicalProjection(block: wiki.Block, projection: LexicalProjection) wiki.Block {
     var result = block;
     switch (projection) {
         .ordinary => {},
+        .source_decimal => if (block.source_decimal_sense and block.kind == .paragraph) {
+            // Sense addresses are analysis-only; preserve the authored digits,
+            // paragraph, links, media and formatting in the stored body.
+            result.kind = .definition;
+            result.list_path = "#";
+            result.depth = 1;
+            if (std.mem.indexOfScalar(u8, block.text, '.')) |dot| result.number = block.text[0..dot];
+        },
         .pao_noun_bullet => if (paoNounGloss(block)) {
             result.kind = .definition;
             result.list_path = "#";
@@ -2282,9 +2290,18 @@ fn aragoneseGrammarPart(section: anytype, owner: ?[]const u8, wiki_id: []const u
     for (targets) |grammar| {
         if (!std.mem.eql(u8, section.title, grammar.title)) continue;
         var linked = false;
-        for (section.title_spans) |span| {
+        for (section.title_spans, 0..) |span, index| {
             if (span.provenance != .parsed or span.generated_diagnostic or span.flags.code or
-                span.role != .normal or span.image != null or span.ruby != null) return null;
+                span.role != .normal or span.ruby != null) return null;
+            // The original POS templates prefix the grammar link with this book icon.
+            // Leave its media and action intact. Only the grammar link declares the part.
+            if (span.image) |icon| {
+                if (index != 0 or span.kind != .link or span.text.len != 0 or span.self_link or
+                    span.target_fragment != null or !std.mem.eql(u8, span.target, "File:Open book 01.svg") or
+                    !std.mem.eql(u8, icon.file, "Open book 01.svg") or icon.width_px != 30 or
+                    icon.height_px != null or icon.alt != null or icon.map != null) return null;
+                continue;
+            }
             if (span.kind == .line_break or (span.kind == .text and std.mem.trim(u8, span.text, " \t\r\n").len == 0)) continue;
             if (linked or span.kind != .link or span.self_link or span.target_fragment != null or
                 !std.mem.eql(u8, span.text, grammar.title) or !std.mem.eql(u8, span.target, grammar.page)) return null;
@@ -2339,6 +2356,20 @@ test "Aragonese grammar links classify owned H2s without changing links or inven
             try std.testing.expectEqual(@as(usize, 2), address);
             try std.testing.expectEqualStrings("original", section.blocks[address].spans[0].target);
         }
+        const book: wiki.Span = .{ .kind = .link, .text = "", .target = "File:Open book 01.svg",
+            .image = .{ .file = "Open book 01.svg", .width_px = 30 } };
+        var decorated = [_]wiki.Span{ book, spans[0], spans[1], spans[2] };
+        section.title_spans = &decorated;
+        try std.testing.expectEqualStrings(case.kind, aragoneseGrammarPart(section, case.owner, "anwiktionary").?);
+        section.title_spans = decorated[0..2];
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+        section.title_spans = &decorated;
+        decorated[0].target = "File:Other.svg";
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+        decorated[0] = book;
+        decorated[1] = book;
+        try std.testing.expect(aragoneseGrammarPart(section, case.owner, "anwiktionary") == null);
+        section.title_spans = &spans;
         try std.testing.expect(aragoneseGrammarPart(section, case.owner, "eswiktionary") == null);
         try std.testing.expect(aragoneseGrammarPart(section, null, "anwiktionary") == null);
         section.title_depth = 1;
@@ -2791,6 +2822,16 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
         const declared_kind = if (unclassified and section.level == 2) null else
             partOfSpeech(section.title) orelse if (quechua) quechuaDefinitionPart(section) else if (dictionaryNounSection(section, owner, wiki_id)) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
+        const decimal_noun = decimal: {
+            const kind = if (unclassified) null else aragoneseGrammarPart(section, owner, wiki_id);
+            if (kind == null or !std.mem.eql(u8, kind.?, "Noun")) break :decimal false;
+            for (section.blocks) |block| {
+                if (block.source_decimal_sense and block.kind == .paragraph and block.depth == 0 and block.list_path.len == 0 and
+                    block.container == null and block.figure == null and block.flow == null and block.table == null)
+                    break :decimal true;
+            }
+            break :decimal false;
+        };
         const estonian_form = !unclassified and estonianNounFormSection(section, owner, wiki_id);
         const named_kind = declared_kind orelse (if (numbered_part) |proof| proof.kind else null) orelse grammar_kind orelse (if (estonian_form) @as(?[]const u8, "Noun form") else null) orelse if (unclassified) null else
             aragoneseGrammarPart(section, owner, wiki_id) orelse ownedKinyarwandaNounPart(section, owner) orelse ownedTurkishNounPart(section, owner) orelse ownedUrduNounPart(section, owner) orelse ownedPersianNounPart(section, owner) orelse ownedSindhiNounPart(section, owner) orelse ownedNavderNounPart(section, owner) orelse ownedMalagasyProperNounPart(section, owner) orelse ownedAuthoredLexicalPart(section, owner) orelse teluguGrammarMeaningPart(sections, i, owner) orelse morphologySiblingPart(sections, i, owner) orelse
@@ -2874,6 +2915,8 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
                 try analyzeSerbianMeaningParagraph(a, marker, i, section.blocks)
             else if (estonian_form)
                 try analyzeProjected(a, name, i, origin, section.blocks, true, .estonian_noun_form)
+            else if (decimal_noun)
+                try analyzeProjected(a, name, i, origin, section.blocks, false, .source_decimal)
             else if (grammar_kind != null)
                 try analyzeBulgarianVerb(a, name, i, origin, section.blocks)
             else if (declared_kind != null and std.mem.eql(u8, wiki_id, "blkwiktionary") and
@@ -14495,4 +14538,171 @@ test "Chinese compact etymology numbers require exact headings and preserve ordi
     }
     const support = [_]Section{ .{ .title = "词源1", .level = 3 }, .{ .title = "Support", .level = 4, .blocks = body } };
     try std.testing.expectEqual(@as(usize, 0), (try buildOwned(a, &support, "Independent owner")).lexemes.len);
+}
+
+const AragoneseDecimalTest = struct {
+    const Section = struct {
+        title: []const u8, level: u8, blocks: []const wiki.Block,
+        title_spans: []const wiki.Span, is_heading: bool = true,
+        title_depth: u8 = 0, title_list_path: []const u8 = "",
+    };
+    fn projected(a: A, entry: @import("blob_encoder").presentation_types.Entry) ![]const Section {
+        const flat = try SerbianMeaningTest.projected(a, entry);
+        const sections = try a.alloc(Section, flat.len);
+        for (flat, sections) |old, *section| section.* = .{
+            .title = old.title, .level = old.level, .blocks = old.blocks,
+            .title_spans = if (old.blocks.len != 0 and old.blocks[0].kind == .heading) old.blocks[0].spans else &.{},
+        };
+        return sections;
+    }
+};
+
+test "Aragonese decimal source addresses preserve standalone coalesced captions tables and complete Stored bodies" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const encoder = @import("blob_encoder"); const T = encoder.presentation_types;
+    const cases = .{
+        .{ "chirman", @embedFile("testdata/an-decimal-noun/chirman-reader.json"), @as(?usize, null), @as(usize, 0), &[_]usize{3} },
+        .{ "chirmana", @embedFile("testdata/an-decimal-noun/chirmana-reader.json"), @as(?usize, 1), @as(usize, 1), &[_]usize{2} },
+        .{ "calso", @embedFile("testdata/an-decimal-noun/calso-reader.json"), @as(?usize, 3), @as(usize, 6), &[_]usize{ 3, 4, 6, 8, 10 } },
+        .{ "badina", @embedFile("testdata/an-decimal-noun/badina-reader.json"), @as(?usize, 1), @as(usize, 3), &[_]usize{2} },
+    };
+    inline for (cases) |case| {
+        const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, case[1], .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+        const before = parsed.value.entries[0];
+        try std.testing.expectEqualStrings("aragonés", before.language.?);
+        try std.testing.expectEqualStrings("an", before.language_code);
+        try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+        var partitioned = before;
+        const sections = try a.dupe(@TypeOf(before.sections[0]), before.sections);
+        partitioned.sections = sections;
+        if (case[2]) |split_block| {
+            const old = before.sections[1].blocks;
+            try std.testing.expectEqual(T.BlockKind.paragraph, old[split_block].kind);
+            const blocks = try a.alloc(@TypeOf(old[0]), old.len + 1);
+            @memcpy(blocks[0..split_block], old[0..split_block]);
+            blocks[split_block] = old[split_block]; blocks[split_block].spans = old[split_block].spans[0..case[3]];
+            blocks[split_block + 1] = old[split_block]; blocks[split_block + 1].spans = old[split_block].spans[case[3]..];
+            @memcpy(blocks[split_block + 2 ..], old[split_block + 1 ..]);
+            sections[1].blocks = blocks;
+        }
+        if (std.mem.eql(u8, case[0], "badina")) {
+            try std.testing.expectEqual(@as(usize, 4), before.media.len);
+            try std.testing.expectEqualStrings("badina", sections[1].blocks[1].spans[0].text);
+            try std.testing.expect(sections[1].blocks[1].spans[0].bold);
+            try std.testing.expectEqualStrings("una badina", sections[1].blocks[1].spans[2].text);
+            try std.testing.expectEqualStrings("File:Not a Good Graving Day - Cedar Lawn Cemetery, Jackson MS.jpg", sections[1].blocks[1].spans[2].target);
+            try std.testing.expect(std.mem.startsWith(u8, sections[1].blocks[2].spans[0].text, " 1. acumulación"));
+        }
+        const projected = try AragoneseDecimalTest.projected(a, partitioned);
+        for (case[4], 0..) |block, ordinal| {
+            const value = &@constCast(projected[1].blocks)[block];
+            try std.testing.expectEqual(wiki.Kind.paragraph, value.kind);
+            // The independently reviewed source/Reader addresses above are the
+            // test's producer receipt; no paragraph-content inference in Layout.
+            value.source_decimal_sense = true;
+            value.text = try std.fmt.allocPrint(a, "{d}. ", .{ordinal + 1});
+        }
+        const actual = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
+        try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+        try std.testing.expectEqualStrings("Noun", actual.lexemes[0].kind);
+        try std.testing.expectEqual(@as(usize, 1), actual.lexemes[0].section);
+        try std.testing.expectEqual(case[4].len, actual.lexemes[0].definitions.len);
+        for (case[4], actual.lexemes[0].definitions) |block, sense| try std.testing.expectEqual(block, sense.block);
+        const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, actual, .{}), .{});
+        partitioned.organization = typed.value;
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = partitioned });
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, .language, .{ .heading = "aragonés", .code = "an" });
+        try std.testing.expectEqualDeep(T.Stored{ .entry = partitioned }, decoded);
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, decoded));
+        // Rejoin the actual round-tripped split blocks; every other field,
+        // action, style, example, table and media record must equal the original.
+        var restored = decoded;
+        restored.entry.organization = before.organization;
+        if (case[2]) |split_block| {
+            const decoded_sections = try a.dupe(@TypeOf(before.sections[0]), decoded.entry.sections);
+            const old = decoded.entry.sections[1].blocks;
+            const blocks = try a.alloc(@TypeOf(old[0]), old.len - 1);
+            @memcpy(blocks[0..split_block], old[0..split_block]);
+            blocks[split_block] = old[split_block];
+            blocks[split_block].spans = try std.mem.concat(a, @TypeOf(old[split_block].spans[0]), &.{old[split_block].spans, old[split_block + 1].spans});
+            @memcpy(blocks[split_block + 1 ..], old[split_block + 2 ..]);
+            decoded_sections[1].blocks = blocks; restored.entry.sections = decoded_sections;
+        }
+        try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
+        try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }), try encoder.presentation_codec.encodeAlloc(a, restored));
+        for (@constCast(projected[1].blocks)) |*block| block.source_decimal_sense = false;
+        const without_receipt = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
+        for (without_receipt.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+    }
+}
+
+test "Aragonese current badina decimal address preserves complete typed Figure flow and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const encoder = @import("blob_encoder"); const T = encoder.presentation_types;
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a,
+        @embedFile("testdata/an-decimal-noun/badina-current-reader.json"), .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("badina", before.title);
+    try std.testing.expectEqualStrings("aragonés", before.language.?);
+    try std.testing.expectEqualStrings("an", before.language_code);
+    const original = before.sections[1].blocks[1];
+    const original_flow = original.flow.?;
+    try std.testing.expectEqual(@as(usize, 3), original_flow.len);
+    try std.testing.expectEqualStrings("badina", original_flow[0].spans[0].text);
+    try std.testing.expect(original_flow[0].spans[0].bold);
+    const figure = original_flow[1].figure.?;
+    try std.testing.expect(figure.content == .image);
+    try std.testing.expectEqualStrings("Not a Good Graving Day - Cedar Lawn Cemetery, Jackson MS.jpg", figure.content.image.span.image.?.file);
+    try std.testing.expectEqualStrings("una badina", figure.caption[0].text);
+    try std.testing.expect(std.mem.startsWith(u8, original_flow[2].spans[0].text, " 1. acumulación"));
+    try std.testing.expectEqualStrings("augua", original_flow[2].spans[1].target);
+    try std.testing.expectEqualStrings("tierra", original_flow[2].spans[3].target);
+    // Partition only the source-proved final physical decimal line. Retain the
+    // complete independently compiled Figure and headword before its address.
+    var partitioned = before;
+    const sections = try a.dupe(@TypeOf(before.sections[0]), before.sections);
+    partitioned.sections = sections;
+    const old = before.sections[1].blocks;
+    const blocks = try a.alloc(@TypeOf(original), old.len + 1);
+    @memcpy(blocks[0..2], old);
+    blocks[1].flow = original_flow[0..2];
+    blocks[2] = original;
+    blocks[2].flow = null;
+    blocks[2].spans = original_flow[2].spans;
+    sections[1].blocks = blocks;
+    const projected = try AragoneseDecimalTest.projected(a, partitioned);
+    const sense = &@constCast(projected[1].blocks)[2];
+    sense.source_decimal_sense = true;
+    sense.text = "1. ";
+    const actual = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes.len);
+    try std.testing.expectEqualStrings("Noun", actual.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 1), actual.lexemes[0].definitions.len);
+    try std.testing.expectEqual(@as(usize, 2), actual.lexemes[0].definitions[0].block);
+    partitioned.organization = (try std.json.parseFromSlice(T.Layout, a,
+        try std.json.Stringify.valueAlloc(a, actual, .{}), .{})).value;
+    const encoded = try encoder.presentation_codec.encodeAlloc(a, .{ .entry = partitioned });
+    const decoded = try encoder.presentation_codec.decodeAlloc(a, encoded, before.title, .language, .{ .heading = "aragonés", .code = "an" });
+    try std.testing.expectEqualDeep(T.Stored{ .entry = partitioned }, decoded);
+    // Rejoin from the decoded values, including the exact original inline-node
+    // metadata, then compare every media/style/link/table/reference byte.
+    var restored = decoded;
+    const restored_sections = try a.dupe(@TypeOf(before.sections[0]), decoded.entry.sections);
+    const restored_blocks = try a.dupe(@TypeOf(original), decoded.entry.sections[1].blocks[0..2]);
+    const restored_flow = try a.alloc(@TypeOf(original_flow[0]), 3);
+    @memcpy(restored_flow[0..2], restored_blocks[1].flow.?);
+    restored_flow[2] = original_flow[2];
+    restored_flow[2].spans = decoded.entry.sections[1].blocks[2].spans;
+    restored_blocks[1].flow = restored_flow;
+    restored_sections[1].blocks = restored_blocks;
+    restored.entry.sections = restored_sections;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, try encoder.presentation_codec.encodeAlloc(a, .{ .entry = before }),
+        try encoder.presentation_codec.encodeAlloc(a, restored));
+    sense.source_decimal_sense = false;
+    const no_receipt = try buildForDictionary(a, projected, false, before.language, null, "anwiktionary");
+    for (no_receipt.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
 }

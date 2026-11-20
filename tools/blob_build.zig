@@ -68097,3 +68097,61 @@ test "retained ET coref03 normal Figure defaults preserve source and reject fore
         try std.testing.expect(ns.language_conversion == null);
     }
 }
+
+test "normal Aragonese Writer separates authored decimal nouns and retains complete paragraph bodies actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/an-decimal-noun/namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/an-decimal-noun/language-registry.tsv"));
+    try std.testing.expectEqualStrings("an", registry.resolveTrusted("Aragonés").?.code);
+    const codes = languageCodes(&registry, &ns);
+    const cases = .{
+        .{ "chirmán", @embedFile("testdata/an-decimal-noun/chirman-source.wikitext"), @embedFile("testdata/an-decimal-noun/chirman-separated.wikitext"), &[_]usize{2} },
+        .{ "chirmana", @embedFile("testdata/an-decimal-noun/chirmana-source.wikitext"), @embedFile("testdata/an-decimal-noun/chirmana-separated.wikitext"), &[_]usize{2} },
+        .{ "calso", @embedFile("testdata/an-decimal-noun/calso-source.wikitext"), @embedFile("testdata/an-decimal-noun/calso-separated.wikitext"), &[_]usize{ 2, 3, 5, 7, 9 } },
+    };
+    inline for (cases) |case| {
+        var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+        const output = try std.fs.path.join(a, &.{root, "output"});
+        var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+        // Exact original noun-body excerpts plus the literal authenticated
+        // provider output. This is source instantiation, not a saved expansion.
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case[0], case[1], case[1], null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename("aragonés", &filename)});
+        var mapped = try mmapPath(io, path); defer mapped.deinit(); const blob = try encoder.blob_format.inspect(mapped.bytes); const metadata = try blob.languageMetadata();
+        try std.testing.expectEqualStrings("an", metadata.code);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a); const record = (try index.find(case[0])).?;
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+        var unowned_report: encoder.presentation_document.Fallbacks = .{};
+        const unowned_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, case[0], .language, "aragonés", "an", case[1], null, .{}, &ns, &unowned_report);
+        const unowned = try encoder.presentation_codec.decodeAlloc(a, unowned_bytes, case[0], .language, metadata);
+        for (unowned.entry.organization.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+        try std.testing.expectEqualDeep(unowned.entry.media, decoded.entry.media);
+        try std.testing.expectEqualDeep(unowned.entry.references, decoded.entry.references);
+        const additional: usize = if (std.mem.eql(u8, case[0], "chirmán")) 0 else 1;
+        try std.testing.expectEqual(unowned.entry.sections[1].blocks.len + additional, decoded.entry.sections[1].blocks.len);
+        // An independently separated source oracle exercises the unchanged
+        // paragraph compiler without any declared-owner capability or projection.
+        var report: encoder.presentation_document.Fallbacks = .{};
+        const baseline = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, case[0], .language, "aragonés", "an", case[2], null, .{}, &ns, &report);
+        var expected = try encoder.presentation_codec.decodeAlloc(a, baseline, case[0], .language, metadata);
+        for (expected.entry.organization.lexemes) |lexeme| try std.testing.expectEqual(@as(usize, 0), lexeme.definitions.len);
+        try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+        const lexeme = decoded.entry.organization.lexemes[0];
+        try std.testing.expectEqualStrings("Noun", lexeme.kind); try std.testing.expectEqual(@as(usize, 1), lexeme.section);
+        try std.testing.expectEqual(case[3].len, lexeme.definitions.len);
+        for (case[3], lexeme.definitions) |block, sense| {
+            try std.testing.expectEqual(block, sense.block);
+            try std.testing.expectEqual(encoder.presentation_types.BlockKind.paragraph, decoded.entry.sections[1].blocks[block].kind);
+        }
+        expected.entry.organization = decoded.entry.organization;
+        try std.testing.expectEqualDeep(expected, decoded);
+        const encoded = try encoder.presentation_codec.encodeAlloc(a, decoded);
+        try std.testing.expectEqualDeep(decoded, try encoder.presentation_codec.decodeAlloc(a, encoded, case[0], .language, metadata));
+        try std.testing.expectEqualSlices(u8, encoded, try encoder.presentation_codec.encodeAlloc(a, expected));
+    }
+}

@@ -1343,17 +1343,17 @@ fn completeActionFocus(renderer: *compiler.Renderer, work: Work) !void {
 }
 
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool) !Work {
-    return workAllocWithMissingFragmentsIn(a, title, language, tracked, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root, final_document_body, null);
+    return workAllocWithMissingFragmentsIn(a, title, language, tracked, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root, final_document_body, null, null);
 }
 
-fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool, native_body_language: ?[]const u8) !Work {
+fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool, native_body_language: ?[]const u8, source_classified_language: ?[]const u8) !Work {
     const whole_body = for (fragments) |fragment| {
         if (fragment.whole_body) break true;
     } else false;
     var renderer: compiler.Renderer = .{
         .a = a,
         .page_source_focus_completion = true,
-        .native_body_language = native_body_language,
+        .native_body_language = native_body_language, .source_classified_language = source_classified_language,
         .literal_url_root = tracked.bytes,
         .content_root = if (whole_body) content_root else completeContentFragments(tracked, fragments, content_root),
         .context = .{
@@ -1419,10 +1419,10 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
 }
 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
-    return workWithHeadingOffsetsAllocIn(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, observe_wiki_scope, observe_structure_only, figure_sizing, content_root, null);
+    return workWithHeadingOffsetsAllocIn(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, observe_wiki_scope, observe_structure_only, figure_sizing, content_root, null, null);
 }
 
-fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, native_body_language: ?[]const u8) !Work {
+fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, native_body_language: ?[]const u8, source_classified_language: ?[]const u8) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
     var root_tables: std.ArrayList(usize) = .empty;
@@ -1437,7 +1437,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     defer wiki_all_openings.deinit(a);
     var wiki_rule_openings: std.ArrayList(usize) = .empty;
     defer wiki_rule_openings.deinit(a);
-    var renderer: compiler.Renderer = .{ .a = a, .native_body_language = native_body_language, .page_source_focus_completion = !observe_structure_only, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
+    var renderer: compiler.Renderer = .{ .a = a, .native_body_language = native_body_language, .source_classified_language = source_classified_language, .page_source_focus_completion = !observe_structure_only, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
     renderer.context.observe_structure_only = observe_structure_only;
     // This function has separate structural-observation and final callers.
     // Only the latter enters the existing opt-in diagnostic lifetime.
@@ -2006,9 +2006,9 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         break :current if (defaults.current(title, namespace_catalog)) defaults else null;
     } else null;
     const work = if (heading_observation != null)
-        try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code)
+        try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code, if (classified_owner) |owner| owner.code else null)
     else
-        try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code);
+        try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code, if (classified_owner) |owner| owner.code else null);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;

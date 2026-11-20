@@ -622,3 +622,5 @@ tools/testdata/za-prefix-owner/page-France.wikitext whitespace=-blank-at-eol
 tools/testdata/za-prefix-owner/page-football.wikitext whitespace=-blank-at-eol
 tools/testdata/za-prefix-owner/page-potassium.wikitext whitespace=-blank-at-eol
 tools/testdata/za-prefix-owner/page-train.wikitext whitespace=-blank-at-eol
+src/encoder/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof
+tools/testdata/an-decimal-noun/*.wikitext whitespace=-blank-at-eof

@@ -1976,6 +1976,8 @@ pub const Block = struct {
     heading_authored_id: []const u8 = "",
     // Build-only hint captured while rendering; it is not serialized into DPR2.
     relation_note: bool = false,
+    // Build-only source role; the unchanged paragraph body is serialized normally.
+    source_decimal_sense: bool = false,
 };
 
 // Quotes are resolved at build time before HTML repair. Internal labels have
@@ -8085,6 +8087,7 @@ pub const Renderer = struct {
     // Exact semantic code of the enclosing output record, supplied by Document.
     // A heading label or edition language cannot establish this font context.
     native_body_language: ?[]const u8 = null,
+    source_classified_language: ?[]const u8 = null,
     checked_page_inline_owner: ?*const table_style_profile.PageSourceInlineOwnerProof = null,
     required_page_inline_owner: ?*const table_style_profile.PageSourceInlineOwnerProof = null,
     emitted_page_inline_children: ?[]const Block = null,
@@ -36413,6 +36416,69 @@ pub const Renderer = struct {
         try self.bodyParagraph(blocks, prepared.source.bytes, if (seed) |value| prepared.forwardSeed(value) else null, pending_join);
     }
 
+    // These are the complete authored H2 bodies of Plantilla:-noun.masc-
+    // (3152/32844) and -noun.fem- (3153/32845). The linked declaration supplies
+    // the noun role; neither a decimal-looking paragraph nor the edition does.
+    fn aragoneseDecimalNounDomain(self: *const Renderer, blocks: []const Block, source: []const u8, start: usize, line: []const u8) bool {
+        const code = self.source_classified_language orelse return false;
+        const catalog = self.context.namespace_catalog orelse return false;
+        if (!std.mem.eql(u8, code, "an") or !std.mem.eql(u8, catalog.wiki, "anwiktionary") or
+            self.body_depth != 1 or self.in_reference or self.pre_block or self.parsed_pre or
+            self.figure_caption_depth != 0 or self.in_template_literal_scope or self.block_formatting.code or
+            self.body_link_target.len != 0 or self.navigation_target_probe != null or self.orphan_close_inline_origin) return false;
+        const root = self.literal_url_root orelse return false;
+        const tracked = self.body_missing orelse return false;
+        if (root.ptr != source.ptr or root.len != source.len or tracked.bytes.ptr != source.ptr or tracked.bytes.len != source.len or
+            tracked.unknown or tracked.lost_missing_range or start >= source.len or
+            (start != 0 and source[start - 1] != '\n') or line.ptr != source[start..].ptr or line.len > source.len - start) return false;
+        var heading: ?Block = null;
+        var at = blocks.len;
+        while (at != 0) {
+            at -= 1;
+            if (blocks[at].kind == .heading) { heading = blocks[at]; break; }
+        }
+        const declared = heading orelse return false;
+        if (declared.level != 2 or declared.depth != 0 or declared.list_path.len != 0 or declared.container != null) return false;
+        const male = "<H3>[[Image:Open_book_01.svg|30px]] ''[[Wiktionary:Sustantibo|Sustantivo masculín]]''</H3>";
+        const female = "<H3>[[Image:Open_book_01.svg|30px]] ''[[Wiktionary:Sustantibo|Sustantivo femenín]]''</H3>";
+        if (!std.mem.eql(u8, declared.text, male) and !std.mem.eql(u8, declared.text, female)) return false;
+        const heading_at = std.math.sub(usize, @intFromPtr(declared.text.ptr), @intFromPtr(source.ptr)) catch return false;
+        if (heading_at < 2 or heading_at >= start or declared.text.len + 2 > start - heading_at or
+            (heading_at != 2 and source[heading_at - 3] != '\n') or
+            !std.mem.eql(u8, source[heading_at - 2 .. heading_at], "==") or
+            !std.mem.eql(u8, source[heading_at + declared.text.len ..][0..2], "==")) return false;
+        for (tracked.ranges) |range| if (range.start < start + line.len and range.end > heading_at) return false;
+        for (tracked.literal_curly_ranges) |range| if (range.start < start + line.len and range.end > heading_at) return false;
+        for (tracked.generated_links) |range| if (range.start < start + line.len and range.end > heading_at) return false;
+        return aragoneseDecimalLine(line);
+    }
+    fn aragoneseDecimalLine(line: []const u8) bool {
+        if (line.len < 3 or line[0] < '1' or line[0] > '9') return false;
+        var at: usize = 1;
+        if (at < line.len and std.ascii.isDigit(line[at])) at += 1;
+        if (at >= line.len or line[at] != '.' or trim(line[at + 1 ..]).len == 0) return false;
+        at += 1;
+        // Complete physical prose and ordinary internal actions only. Brackets,
+        // templates, protected text, tables and multiline labels cannot lend a
+        // numeric boundary. A terminal authored BR remains in the same block.
+        while (at < line.len) {
+            if (starts(line[at..], "[[")) {
+                const end = std.mem.indexOfPos(u8, line, at + 2, "]]") orelse return false;
+                const inner = line[at + 2 .. end];
+                if (inner.len == 0 or std.mem.indexOfAny(u8, inner, "[]{}<>\r\n") != null) return false;
+                const target_end = std.mem.indexOfScalar(u8, inner, '|') orelse inner.len;
+                if (target_end == 0 or std.mem.indexOfAny(u8, inner[0..target_end], ":#") != null) return false;
+                at = end + 2;
+            } else if (line[at] == '<') {
+                return std.mem.eql(u8, trim(line[at..]), "<br />") or std.mem.eql(u8, trim(line[at..]), "<br>") or std.mem.eql(u8, trim(line[at..]), "<br/>");
+            } else {
+                if (std.mem.indexOfScalar(u8, "[]{}\r\n", line[at]) != null or line[at] < 0x20 and line[at] != '\t') return false;
+                at += 1;
+            }
+        }
+        return true;
+    }
+
     fn bodyRawParagraph(self: *Renderer, blocks: *std.ArrayList(Block), source: []const u8, raw: []const u8, fallback: ?QuoteSeed, quotes: *?QuoteBoundaryScan, pending_join: *?bool) Error!void {
         const parsed = if (self.parsed_pre) raw else trim(raw);
         const seed = (try self.rawBodyQuoteSeed(source, parsed, quotes)) orelse fallback;
@@ -37441,6 +37507,26 @@ pub const Renderer = struct {
             const line = std.mem.trimEnd(u8, input[start..end], "\r");
             pos = if (end < input.len) end + 1 else end;
             const clean = trim(line);
+            if (!anchored_inline and !link_label_scope and !formatting_join_pending and link_inline_join == null and
+                end == physical_end and self.aragoneseDecimalNounDomain(blocks.items, input, start, line))
+            {
+                // Flush the original preceding headword/media through its normal
+                // parser. Only this complete authored decimal line gets an address.
+                if (para) |p| try self.bodyRawParagraph(&blocks, input, input[p..start], if (p == 0) initial_quote else null, &body_quotes, &link_inline_join);
+                para = null;
+                const first = blocks.items.len;
+                var no_join: ?bool = null;
+                try self.bodyRawParagraph(&blocks, input, line, null, &body_quotes, &no_join);
+                if (blocks.items.len == first + 1) {
+                    const value = &blocks.items[first];
+                    if (value.kind == .paragraph and value.container == null and value.figure == null and value.flow == null and value.table == null and
+                        value.depth == 0 and value.list_path.len == 0 and value.spans.len != 0)
+                        value.source_decimal_sense = true;
+                }
+                @memset(&counts, 0);
+                previous_list_path = "";
+                continue;
+            }
             // A physical close outside a real table is authored literal text.
             // Earn provenance from this original block boundary, never from
             // a generic parsed token or a reconstructed display string.
@@ -121940,4 +122026,60 @@ test "completed SUP action rejects replaced intervals source mutation active sco
         }
         try std.testing.expectError(error.UncompiledPresentation, fixture_value.renderer.consumeCompletedActionFocus(owner));
     }
+}
+
+test "Aragonese physical decimal boundary needs the exact noun declaration independent owner and clean original source" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const NS = @import("namespace_registry");
+    var ns = try NS.Registry.init(a, @embedFile("testdata/an-decimal-noun/namespace-registry.tsv")); defer ns.deinit();
+    inline for (.{ @embedFile("testdata/an-decimal-noun/chirman-source.wikitext"), @embedFile("testdata/an-decimal-noun/chirmana-source.wikitext"),
+        @embedFile("testdata/an-decimal-noun/calso-source.wikitext"), @embedFile("testdata/an-decimal-noun/badina-source.wikitext") }) |source| {
+        const heading_start = std.mem.indexOf(u8, source, "==<H3>").? + 2;
+        const heading_end = std.mem.indexOfPos(u8, source, heading_start, "</H3>==").? + "</H3>".len;
+        const heading: Block = .{ .kind = .heading, .level = 2, .text = source[heading_start..heading_end] };
+        var renderer: Renderer = .{ .a = a, .context = .{ .namespace_catalog = &ns }, .source_classified_language = "an", .literal_url_root = source,
+            .body_missing = MissingText.untracked(source), .body_depth = 1 };
+        var at: usize = 0; var senses: usize = 0;
+        while (at < source.len) {
+            const end = std.mem.indexOfScalarPos(u8, source, at, '\n') orelse source.len;
+            const line = source[at..end];
+            if (Renderer.aragoneseDecimalLine(line)) {
+                try std.testing.expect(renderer.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                senses += 1;
+                var changed = renderer; changed.source_classified_language = null;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                changed = renderer; changed.source_classified_language = "es";
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                changed = renderer; changed.body_depth = 2;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                changed = renderer; changed.in_reference = true;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                changed = renderer; var unknown = MissingText.untracked(source); unknown.unknown = true; changed.body_missing = unknown;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                changed = renderer; unknown = MissingText.untracked(source); unknown.lost_missing_range = true; changed.body_missing = unknown;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                const ranges = [_]@import("missing_dependency").Range{.{ .start = @intCast(at), .end = @intCast(end), .occurrence = 1 }};
+                changed = renderer; unknown = MissingText.untracked(source); unknown.ranges = &ranges; changed.body_missing = unknown;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                var foreign = ns; foreign.wiki = "enwiktionary";
+                changed = renderer; changed.context.namespace_catalog = &foreign;
+                try std.testing.expect(!changed.aragoneseDecimalNounDomain(&.{heading}, source, at, line));
+                var copied = heading; copied.text = try a.dupe(u8, heading.text);
+                try std.testing.expect(!renderer.aragoneseDecimalNounDomain(&.{copied}, source, at, line));
+                copied = heading; copied.level = 3;
+                try std.testing.expect(!renderer.aragoneseDecimalNounDomain(&.{copied}, source, at, line));
+                try std.testing.expect(!renderer.aragoneseDecimalNounDomain(&.{ heading, .{ .kind = .heading, .level = 2, .text = "Other" } }, source, at, line));
+            }
+            at = if (end < source.len) end + 1 else end;
+        }
+        try std.testing.expectEqual(@as(usize, if (std.mem.indexOf(u8, source, "'''calso'''") != null) 5 else 1), senses);
+        // In particular, neither the headword nor the exact authored thumbnail
+        // caption supplies a sense boundary. No geometry/provider is fabricated.
+        try std.testing.expect(!Renderer.aragoneseDecimalLine("'''badina'''"));
+        try std.testing.expect(!Renderer.aragoneseDecimalLine("[[Imachen:Not a Good Graving Day - Cedar Lawn Cemetery, Jackson MS.jpg|thumb|una badina]]"));
+    }
+    for ([_][]const u8{ "1.", "0. zero", "01. padded", "100. outside", " 1. indented", "1. <nowiki>text</nowiki>", "1. {{template}}",
+        "1. [[broken", "1. [[File:caption|picture]]", "1. [[label\n1. inner]]", "1. [[target|{{argument}}]]", "1. <span>text</span>" }) |line|
+        try std.testing.expect(!Renderer.aragoneseDecimalLine(line));
+    try std.testing.expect(Renderer.aragoneseDecimalLine("1. [[presona|Presona]] ''literal''.<br />"));
 }
