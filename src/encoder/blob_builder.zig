@@ -3021,7 +3021,49 @@ fn sourceEqualsPrefix(codes: LanguageCodes, raw: []const u8, source: MissingText
     return equalsPrefixCertificate(codes, source, code, section);
 }
 
+// The original SS/ZU providers in sswiktionary emit this exact H1 and
+// immediately following included category. The frame is a boundary; only an
+// independently trusted language name supplies ownership. Template case is
+// never normalized or used as a language code here.
+fn ssBoldBannerLabel(codes: LanguageCodes, value: []const u8) ?[]const u8 {
+    const ns = codes.namespace_catalog orelse return null;
+    if (!std.mem.eql(u8, ns.wiki, "sswiktionary") or !std.mem.eql(u8, ns.content_language, "ss") or value.len > 4096) return null;
+    const prefix = "<div id=\"toc\" class=\"toccolours\" >'''";
+    const suffix = "'''</div>";
+    if (value.len <= prefix.len + suffix.len or !std.mem.startsWith(u8, value, prefix) or !std.mem.endsWith(u8, value, suffix)) return null;
+    const label = value[prefix.len .. value.len - suffix.len];
+    if (label.len == 0 or !std.mem.eql(u8, label, std.mem.trim(u8, label, " \t")) or
+        std.mem.indexOfAny(u8, label, "<>{}[]|\"'\r\n") != null or
+        blobs.part_kind.classify(label) != null or @import("presentation_layout.zig").partOfSpeech(label) != null) return null;
+    for ([_][]const u8{ "Pronunciation", "Usage notes", "Alternative forms" }) |name|
+        if (blobs.part_kind.named(label, name)) return null;
+    return label;
+}
+
+fn ssBoldBannerDeclaration(codes: LanguageCodes, section: language_source.Section) ?[]const u8 {
+    const label = ssBoldBannerLabel(codes, section.heading) orelse return null;
+    if (section.hyphen_marker) return null;
+    const end = std.mem.indexOfScalar(u8, section.source, '\n') orelse return null;
+    const heading = blobs.wikitext_syntax.controlHeading(section.source[0..end], null) orelse return null;
+    if (heading.level != 1 or !std.mem.eql(u8, heading.title, section.heading)) return null;
+    const tail = section.source[end + 1 ..];
+    const category = tail[0 .. std.mem.indexOfScalar(u8, tail, '\n') orelse tail.len];
+    if (!std.mem.startsWith(u8, category, "[[Category:") or !std.mem.endsWith(u8, category, "]]")) return null;
+    const parsed = codes.namespace_catalog.?.ofTitle(category[2 .. category.len - 2]);
+    if (parsed.id != 14 or !std.mem.eql(u8, parsed.text, label)) return null;
+    return label;
+}
+
+fn ssBoldBannerOwner(codes: LanguageCodes, section: language_source.Section) ?[]const u8 {
+    const label = ssBoldBannerDeclaration(codes, section) orelse return null;
+    if (codes.isLanguageBoundary(label)) return null;
+    _ = codes.resolveStrong(label) orelse
+        (if (codes.trusted_fn) |trusted| trusted(codes.ctx, label) else null) orelse return null;
+    return label;
+}
+
 fn hasExplicitLanguageDeclaration(codes: LanguageCodes, section: language_source.Section) bool {
+    if (ssBoldBannerDeclaration(codes, section) != null) return true;
     if (projectParentheticalDeclaration(codes, section) != null) return true;
     if (arabicLinkedOwner(codes, section.heading) != null) return true;
     if (arabicNorwegianDeclaration(codes, section.heading) != null) return true;
@@ -3270,7 +3312,12 @@ fn corroboratedAySynonymSupport(raw: []const language_source.Section, rendered: 
 
 fn appendClassifiedSection(a: std.mem.Allocator, codes: LanguageCodes, sections: *std.ArrayList(language_source.Section), owned_headings: *std.ArrayList([]u8), section: language_source.Section) !void {
     var projected = section;
-    if (try classificationHeadingProjectionAlloc(a, codes, section.heading)) |heading| {
+    if (ssBoldBannerOwner(codes, section)) |label| {
+        const heading = try a.dupe(u8, label);
+        errdefer a.free(heading);
+        try owned_headings.append(a, heading);
+        projected.heading = heading;
+    } else if (try classificationHeadingProjectionAlloc(a, codes, section.heading)) |heading| {
         errdefer a.free(heading);
         try owned_headings.append(a, heading);
         projected.heading = heading;
@@ -3995,6 +4042,7 @@ fn languageSections(source: []const u8, context: *const LanguageMarkers) languag
                 const normalized = classificationHeadingProjectionAlloc(std.heap.page_allocator, markers.codes.*, heading) catch return false;
                 defer if (normalized) |value| std.heap.page_allocator.free(value);
                 const projected = normalized orelse heading;
+                if (ssBoldBannerLabel(markers.codes.*, projected) != null) return true;
                 const section: language_source.Section = .{ .heading = projected, .source = "" };
                 if (hasExplicitLanguageDeclaration(markers.codes.*, section)) return true;
                 const classified = language_source.classificationHeading(projected);
@@ -23833,4 +23881,165 @@ test "source banner partition keeps a physical preamble unowned only after prote
     try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tainted, &raw, &rendered, true));
     codes.source_banner_fn = null;
     try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tracked, &raw, &rendered, true));
+}
+
+const SsBoldBannerFixture = struct {
+    const mixed_raw = @embedFile("testdata/ss-bold-owner/sawubona.raw.wikitext");
+    const mixed_expanded = @embedFile("testdata/ss-bold-owner/sawubona.expanded.wikitext");
+    const literal_raw = @embedFile("testdata/ss-bold-owner/ninjani.raw.wikitext");
+    const literal_expanded = @embedFile("testdata/ss-bold-owner/ninjani.expanded.wikitext");
+    const native_raw = @embedFile("testdata/ss-bold-owner/kutsakasa.raw.wikitext");
+    const native_expanded = @embedFile("testdata/ss-bold-owner/kutsakasa.expanded.wikitext");
+    const ordinary_raw = @embedFile("testdata/ss-bold-owner/mshana.raw.wikitext");
+    const ordinary_expanded = @embedFile("testdata/ss-bold-owner/mshana.expanded.wikitext");
+    const undeclared_raw = @embedFile("testdata/ss-bold-owner/indvuku.raw.wikitext");
+    const undeclared_expanded = @embedFile("testdata/ss-bold-owner/indvuku.expanded.wikitext");
+    const ss_heading = "<div id=\"toc\" class=\"toccolours\" >'''SiSwati'''</div>";
+    const unknown_heading = "<div id=\"toc\" class=\"toccolours\" >'''SíZulu'''</div>";
+    fn resolve(_: ?*const anyopaque, label: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, label, "ss") or std.mem.eql(u8, label, "SiSwati") or std.mem.eql(u8, label, "ordinary-ss")) return .{ .code = "ss", .heading = "SiSwati" };
+        if (std.mem.eql(u8, label, "zu") or std.mem.eql(u8, label, "Zulu")) return .{ .code = "zu", .heading = "Zulu" };
+        return TestLanguages.resolve(null, label);
+    }
+    fn trusted(ctx: ?*const anyopaque, label: []const u8) ?ResolvedLanguage {
+        if (std.mem.eql(u8, label, "SiSwati") or std.mem.eql(u8, label, "Zulu")) return resolve(ctx, label);
+        return TestLanguages.trusted(ctx, label);
+    }
+    fn get(ctx: ?*const anyopaque, label: []const u8) ?[]const u8 {
+        return if (resolve(ctx, label)) |language| language.code else null;
+    }
+    fn catalog(a: std.mem.Allocator) !@import("namespace_registry").Registry {
+        return @import("namespace_registry").Registry.init(a, @embedFile("testdata/ss-bold-owner/namespace-registry.tsv"));
+    }
+    fn codes(ns: *const @import("namespace_registry").Registry) LanguageCodes {
+        return .{ .namespace_catalog = ns, .get_fn = get, .resolve_fn = resolve, .strong_fn = trusted, .trusted_fn = trusted };
+    }
+    fn equalPage(a: std.mem.Allocator, title: []const u8, owner: []const u8, code: []const u8, source: []const u8, ns: *const @import("namespace_registry").Registry, actual: blobs.presentation_types.Entry) !void {
+        const payload = try presentation_document.compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, owner, code, MissingText.untracked(source), null, .{}, ns, null, null, .{}, null, null, &.{}, null, &.{}, if (code.len == 0) null else .{ .heading = owner, .code = code });
+        const expected = try blobs.presentation_codec.decodeAlloc(a, payload, title, .language, .{ .code = code, .heading = owner });
+        try std.testing.expectEqualDeep(expected.entry, actual);
+    }
+};
+
+test "SS original static bold banners preserve complete bodies and authored literal annotations" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var ns = try SsBoldBannerFixture.catalog(a); defer ns.deinit();
+    const F = SsBoldBannerFixture; const codes = F.codes(&ns);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ss-native", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    inline for (.{ .{ "ninjani", F.literal_raw, F.literal_expanded }, .{ "salani", @embedFile("testdata/ss-bold-owner/salani.raw.wikitext"), @embedFile("testdata/ss-bold-owner/salani.expanded.wikitext") }, .{ "kutsakasa", F.native_raw, F.native_expanded }, .{ "mshana", F.ordinary_raw, F.ordinary_expanded } }) |row|
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[2], row[1], null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "indvuku", F.undeclared_expanded, F.undeclared_raw, null);
+    _ = try writer.finish(codes);
+    inline for (.{ .{ "ninjani", F.literal_expanded }, .{ "salani", @embedFile("testdata/ss-bold-owner/salani.expanded.wikitext") }, .{ "kutsakasa", F.native_expanded }, .{ "mshana", F.ordinary_expanded } }) |row| {
+        const actual = (try LeadingRegionFixture.entry(a, root, "SiSwati", row[0])).?;
+        try std.testing.expectEqualStrings("ss", actual.language_code);
+        try F.equalPage(a, row[0], "SiSwati", "ss", row[1], &ns, actual);
+    }
+    const undeclared = (try LeadingRegionFixture.entry(a, root, "Unclassified", "indvuku")).?;
+    try std.testing.expectEqualStrings("", undeclared.language_code);
+    try F.equalPage(a, "indvuku", "Unclassified", "", F.undeclared_expanded, &ns, undeclared);
+    const report = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, try std.fs.path.join(a, &.{ root, "fallback-pages.jsonl" }), a, .limited(16384));
+    var lines = std.mem.splitScalar(u8, report, '\n'); var literal_seen = false;
+    while (lines.next()) |line| if (std.mem.indexOf(u8, line, "\"ninjani\"") != null) {
+        literal_seen = true;
+        try std.testing.expect(std.mem.indexOf(u8, line, "literal_markup") != null);
+        try std.testing.expect(std.mem.indexOf(u8, line, "missing_language_heading") == null);
+        try std.testing.expect(std.mem.indexOf(u8, line, "unresolved_language_heading") == null);
+    };
+    try std.testing.expect(literal_seen);
+
+    const ss_provider = @embedFile("testdata/ss-bold-owner/template-SS.wikitext");
+    const mixed_case = @embedFile("testdata/ss-bold-owner/template-Ss.wikitext");
+    try std.testing.expect(std.mem.startsWith(u8, ss_provider, "=" ++ F.ss_heading ++ "=\n<includeonly>[[Category:SiSwati]]</includeonly>"));
+    try std.testing.expectEqualStrings("#REDIRECT [[Template:W]]", mixed_case);
+    try std.testing.expect(!std.mem.eql(u8, ns.ofTitle("iThempleti:SS").text, ns.ofTitle("iThempleti:Ss").text));
+    try std.testing.expect(std.mem.indexOf(u8, @embedFile("testdata/ss-bold-owner/language-registry.tsv"), "ss\tSiSwati\tss\tSwati\tssw\n") != null);
+    // The literal annotation stays non-action text, never a language declaration.
+    for ([_][]const u8{ "ninjani", "salani" }) |title| {
+        const entry = (try LeadingRegionFixture.entry(a, root, "SiSwati", title)).?;
+        var text: std.ArrayList(u8) = .empty;
+        for (entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            try std.testing.expectEqualStrings("", span.target);
+            try text.appendSlice(a, span.text);
+        };
+        try std.testing.expect(std.mem.indexOf(u8, text.items, "<in plural>") != null);
+    }
+
+}
+
+test "SS mixed bold banners retain unknown SiZulu region and original global anchors" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const F = SsBoldBannerFixture; var ns = try F.catalog(a); defer ns.deinit(); const codes = F.codes(&ns);
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ss-mixed", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "sawubona", F.mixed_expanded, F.mixed_raw, null);
+    const stats = try writer.finish(codes); try std.testing.expectEqual(@as(usize, 2), stats.language_records);
+    const known = (try LeadingRegionFixture.entry(a, root, "SiSwati", "sawubona")).?;
+    const unknown = (try LeadingRegionFixture.entry(a, root, "Unclassified", "sawubona")).?;
+    const payload = try presentation_document.compileReportedWithLinkTrailAlloc(a, "sawubona", .language, "Unclassified", "", F.mixed_expanded, null, .{}, &ns, null);
+    const full = try blobs.presentation_codec.decodeAlloc(a, payload, "sawubona", .language, .{ .code = "", .heading = "Unclassified" });
+    try std.testing.expectEqual(@as(usize, 5), full.entry.sections.len);
+    try std.testing.expectEqualDeep(full.entry.sections[0..3], known.sections);
+    try std.testing.expectEqualDeep(full.entry.sections[3..], unknown.sections);
+    try std.testing.expectEqualStrings("ss", known.language_code);
+    try std.testing.expectEqualStrings("", unknown.language_code);
+    try std.testing.expectEqualStrings("SíZulu", unknown.sections[0].title);
+    try std.testing.expectEqualStrings("Tinchazelo_2", unknown.sections[1].anchor);
+    try std.testing.expectEqualStrings("siSwati", unknown.sections[1].blocks[0].spans[0].text);
+    try std.testing.expect(unknown.sections[1].blocks[0].spans[0].bold);
+    // Repeated authored siSwati prose cannot override the unknown banner.
+    try std.testing.expectEqual(@as(usize, 1), unknown.sections[1].blocks.len);
+}
+
+test "SS bold banner recognition rejects protected malformed POS and generic code authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = SsBoldBannerFixture; var ns = try F.catalog(a); defer ns.deinit(); const codes = F.codes(&ns);
+    try std.testing.expectEqualStrings("SiSwati", ssBoldBannerOwner(codes, .{ .heading = F.ss_heading, .source = F.literal_expanded }).?);
+    try std.testing.expect(ssBoldBannerLabel(codes, F.unknown_heading) != null);
+    try std.testing.expect(ssBoldBannerOwner(codes, .{ .heading = F.unknown_heading, .source = "=" ++ F.unknown_heading ++ "=\n[[Category:SíZulu]]\n* x" }) == null);
+    inline for (.{ "ss", "adj", "ordinary-ss", "SiSwati or Zulu" }) |label| {
+        const heading = "<div id=\"toc\" class=\"toccolours\" >'''" ++ label ++ "'''</div>";
+        try std.testing.expect(ssBoldBannerOwner(codes, .{ .heading = heading, .source = try std.fmt.allocPrint(a, "={s}=\n[[Category:SiSwati]]\n* x", .{heading}) }) == null);
+    }
+    inline for (.{ "Noun", "Etymology 2", "Pronunciation", "Usage notes", "Alternative forms" }) |label| {
+        const heading = "<div id=\"toc\" class=\"toccolours\" >'''" ++ label ++ "'''</div>";
+        try std.testing.expect(ssBoldBannerLabel(codes, heading) == null);
+    }
+    const negatives = [_][]const u8{
+        "<nowiki>" ++ F.ss_heading ++ "</nowiki>", "<!--" ++ F.ss_heading ++ "-->", "<pre>" ++ F.ss_heading ++ "</pre>",
+        "{{x|" ++ F.ss_heading ++ "}}", "prefix " ++ F.ss_heading, F.ss_heading ++ " trailing", F.ss_heading ++ F.unknown_heading,
+        "<div id=\"toc\" class=\"toccolours\" >''SiSwati''</div>", "<div id=\"toc\" class=\"toccolours\" >'''SiSwati'''",
+        "<div id=\"toc\" class=\"toccolours\" >'''[[SiSwati]]'''</div>", "<div id=\"toc\" class=\"toccolours\" >'''SiSwati <small>or Zulu</small>'''</div>",
+        "<div id=\"toc\" class=\"toccolours\" >'''SiSwati\nZulu'''</div>",
+    };
+    for (negatives) |heading| {
+        try std.testing.expect(ssBoldBannerLabel(codes, heading) == null);
+        try std.testing.expect(ssBoldBannerOwner(codes, .{ .heading = heading, .source = try std.fmt.allocPrint(a, "={s}=\n[[Category:SiSwati]]\n* x", .{heading}) }) == null);
+    }
+    var no_trust = codes; no_trust.strong_fn = null; no_trust.trusted_fn = null;
+    try std.testing.expect(ssBoldBannerOwner(no_trust, .{ .heading = F.ss_heading, .source = F.literal_expanded }) == null);
+
+    inline for (.{ "==" ++ F.ss_heading ++ "==\n[[Category:SiSwati]]\n* x", "=" ++ F.ss_heading ++ "=\n[[Category:Zulu]]\n* x", "=" ++ F.ss_heading ++ "=\n* no category" }) |source|
+        try std.testing.expect(ssBoldBannerDeclaration(codes, .{ .heading = F.ss_heading, .source = source }) == null);
+    const foreign_source = try std.mem.replaceOwned(u8, a, @embedFile("testdata/ss-bold-owner/namespace-registry.tsv"), "# wiki\tsswiktionary\n", "# wiki\totherwiktionary\n");
+    var foreign_ns = try @import("namespace_registry").Registry.init(a, foreign_source);
+    defer foreign_ns.deinit();
+    try std.testing.expect(ssBoldBannerLabel(F.codes(&foreign_ns), F.ss_heading) == null);
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/ss-refused", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit(); writer.language_codes = codes;
+    inline for (.{ .{ "nowiki", "<nowiki>" ++ F.literal_expanded ++ "</nowiki>" }, .{ "comment", "<!--" ++ F.literal_expanded ++ "-->\n* body" }, .{ "pre", "<pre>" ++ F.literal_expanded ++ "</pre>" }, .{ "wrong-category", "=" ++ F.ss_heading ++ "=\n[[Category:Zulu]]\n* body" } }) |row|
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, row[0], row[1], row[1], null);
+    const stats = try writer.finish(codes);
+    try std.testing.expectEqual(@as(usize, 4), stats.language_records);
+    for ([_][]const u8{ "nowiki", "comment", "pre", "wrong-category" }) |title| {
+        const entry = (try LeadingRegionFixture.entry(a, root, "Unclassified", title)).?;
+        try std.testing.expectEqualStrings("", entry.language_code);
+    }
+
 }

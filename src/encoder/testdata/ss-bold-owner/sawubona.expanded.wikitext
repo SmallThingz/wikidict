@@ -1,0 +1,20 @@
+=<div id="toc" class="toccolours" >'''SiSwati'''</div>=
+[[Category:SiSwati]]
+== Tinchazelo ==
+* '''siSwati''': [[sawubona]]
+
+== Kuhúmusha ==
+ *'''síChoza''': [[molo]] ([[:xh:molo|xh]])
+ *'''síJalimáne''': [[Hallo]] ([[:de:Hallo|de]])
+ *'''síNgísi''': [[hello]] ([[:en:hello|en]])
+ *'''síSpanish''': [[hola]] ([[:es:hola|es]])
+ *'''síZulu''': [[sawubona]] ([[:zu:sawubona|zu]])
+
+ *'''''Limburgs''''': [[haj]]
+ *'''''Nederlands''''': [[hallo]]
+
+=<div id="toc" class="toccolours" >'''SíZulu'''</div>=
+[[Category:SíZulu]]
+
+== Tinchazelo ==
+* '''siSwati''': [[sawubona]]

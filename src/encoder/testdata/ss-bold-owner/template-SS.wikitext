@@ -1,0 +1,2 @@
+=<div id="toc" class="toccolours" >'''SiSwati'''</div>=
+<includeonly>[[Category:SiSwati]]</includeonly><noinclude>[[Category:Wiktionary|Template ss]]</noinclude>

@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	sswiktionary
+# dump-date	20261001
+# content-language	ss
+-2	Tinkundla	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Lelibalulekile	Special	first-letter	0	0	0		compile_only	virtual_namespace
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Khuluma	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Bantfu	User	first-letter	1	0	0		compile_only	standard_build_input
+3	Khuluma nebantfu	User talk	first-letter	1	0	0		compile_only	discussion_namespace
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Khuluma ngeWiktionary	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk
+6	Lifayela	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image
+7	Khuluma ngelifayela	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	Khuluma ngeMediaWiki	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace
+10	iThempleti	Template	case-sensitive	1	0	0		compile_only	standard_build_input
+11	Khuluma ngethempleti	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+12	Lusito	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Khuluma ngelusito	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+14	Umkhakha	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Khuluma ngemkhakha	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Module	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Module talk	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
