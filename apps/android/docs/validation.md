@@ -1,6 +1,86 @@
 # Android validation
 
-## Current nested-pitch and FlexColumn integration — 2026-11-20
+## Current table-border integration — 2026-11-20
+
+The qualified Android production source is commit
+`b8ac8c2d47ec3f369cafb407d0dd6f6849c1f476`. Its [canonical application][application157]
+and [commit bridge][bridge157] bind the 17 integrated files: 12 main, four JVM-test
+and one instrumentation-test files, including seven new files. The canonical
+inventory contains 982 files. The ordinary decoder and native table renderer now
+consume the reviewed resolved table/cell borders, including owner-current-color
+paint and the supported inset/outset and collapsed-border geometry.
+
+[Host157][host157-current] passed 23 fresh focused JVM checks with no failures,
+skips or carry, and compiled all three Kotlin routes: 170 main, 153 unit-test and
+99 instrumentation sources. Its four new device controls were compiled only.
+
+The normal unfiltered `testDebugUnitTest` target then [passed all 1,214 current
+cases][host158-current] across 155 reports, with **zero failures, skips or carried
+cases**. This includes 1,212 correctness cases and two benchmark-named controls,
+without a performance claim. Main and unit Kotlin compilation and the test task
+all executed. The original invocation and independent closure returned zero;
+the closure verified source and protected artifacts, absent owned processes and
+free locks.
+
+Gradle's dependency cache, build directory, project cache, temporary files and
+qualification output now reside on HOME. The moved execution history contained
+old absolute output paths, so the admitted worker preserved that history by an
+atomic rename before the single Gradle invocation. Dependencies and compiled
+outputs were retained; Gradle regenerated path-sensitive history normally.
+The runtime filesystem reserve remained 2 GiB, and the original CPU, memory,
+task and time limits were retained. Earlier admission failures remain recorded
+and contribute no test credit.
+
+The subsequent [canonical lint/package continuation][canonical159-current]
+completed debug lint and ordinary unsigned release/vital tasks. It reused the
+full-suite result without repeating JVM or instrumentation tests. Debug lint
+reported **zero errors, 37 warnings and five hints**; none of its locations was
+on a line changed by the table-border integration. This is not a zero-findings
+lint result. Release compilation, R8, resource optimization and packaging
+succeeded. The [saved artifact audit][audit159-current] verifies the current
+[retained APK][apk159-current]:
+
+- Package `app.smallthingz.dict`, version **0.4.0 / code 4**, minimum API **31**
+  (Android 12) and target API **37**.
+- **10,963,937 bytes**, 32,768 bytes larger than the prior `bc0847` APK; SHA-256
+  `66d77b8967c513ec43f4710da88d248c148a9f8cce4e134268f3235c1540b42f`.
+- Four ABIs: `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64`; native libraries,
+  fonts and licence payloads match the prior verified package. The resolved-border
+  classes and methods are present in the compiled and optimized release evidence.
+- **Unsigned**. The saved verifier reports no valid signatures. Signing,
+  installation and publication were not performed. Original APKs and signer
+  locations remain unchanged.
+
+A separate [genuine Greek input check][greek159-current] used the already compiled
+Host157 `CountingInput`/`BlobDecoder` against the actual 3,799-byte language blob.
+The complete 5-by-3 table projection, its 15 cells and 64 resolved edges matched
+the saved Reader projection. Its [independent closure][greek159-physical]
+verified the compiled classes and released the read interval. This is scoped
+decoder/table evidence, not full-entry parity or a rendered-device result.
+
+There is **no current physical Android rendering or interaction acceptance**.
+The latest retained [owned access attempt][phone-namespace-hold] failed before
+ADB with `PermissionError(13, 'Permission denied')`, with zero events and no
+device command or input. No later owner/access clearance has been established,
+and no retry, alternate access path, signing or install action was taken here.
+Pixels, touch, selection and accessibility still require permitted device access,
+coordinated custody and a compatible authorized signed installation.
+
+This documentation-only update records the completed source and artifact
+boundary. The sections below retain their historical results and do not replace
+the current scope above.
+
+[application157]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/table-resolved-edges01/canonical-application01.json
+[bridge157]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/table-resolved-edges01/canonical-commit-bridge01.json
+[host157-current]: ../../../.tmp/renderer-core-oct28/sr-next268-source01/tallrik-cell-style01/android-consumer01/container-working01/host157/saved-result-peer-reader01.json
+[host158-current]: /home/a/.tmp/wikidict-android-host158-run01/saved-result-peer-reader01.json
+[canonical159-current]: /home/a/.tmp/wikidict-android-canonical159-run01/completion01.json
+[audit159-current]: /home/a/.tmp/wikidict-android-canonical159-run01/saved-result-peer-reader01.json
+[apk159-current]: /home/a/.tmp/wikidict-android-canonical159-run01/retained/app-release-unsigned.apk
+[greek159-current]: /home/a/.tmp/wikidict-android-genuine-greek01/runtime01/semantic-result01.json
+[greek159-physical]: /home/a/.tmp/wikidict-android-genuine-greek01/runtime01/direct-runtime01/independent-closure01.json
+
+## Historical nested-pitch and FlexColumn integration — 2026-11-20
 
 The current Android production source is commit
 `4b9d2dbacf2562e771ad9fc50e5ce634735a4fac`, **Android: render nested pitch and
