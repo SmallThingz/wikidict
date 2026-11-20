@@ -7268,6 +7268,12 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         }
         out += QStringLiteral("</ul><p><small>Media links open online in your browser.</small></p>");
     }
+    out += metadataStart(QStringLiteral("hr"));
+    if (sections.isEmpty() && preamble.isEmpty() && references.isEmpty() && media.isEmpty()
+        && !CompiledContent::present(entry.value(QStringLiteral("alias")))
+        && !CompiledContent::present(entry.value(QStringLiteral("redirect")))) {
+        out += QStringLiteral("<p>This entry has no content in this dictionary.</p>");
+    }
     const QString host = api_ ? LibraryStorage::sourceHost(api_->root()) : QString();
     QString source = host.isEmpty() ? QStringLiteral("https://www.wiktionary.org/") : QStringLiteral("https://") + host + QChar('/');
     if (!host.isEmpty()) {
@@ -7278,7 +7284,7 @@ QString MainWindow::entryHtml(const QJsonObject &entry, bool bodyBoundary) const
         else if (redirect.value(QStringLiteral("followed")).toBool()) pageTitle = redirect.value(QStringLiteral("target_title")).toString();
         if (!pageTitle.isEmpty()) source += QStringLiteral("wiki/") + QString::fromLatin1(QUrl::toPercentEncoding(pageTitle));
     }
-    out += metadataStart(QStringLiteral("hr")) + QStringLiteral("<p><small><a href='%1'>Wiktionary contributors</a> · <a href='https://creativecommons.org/licenses/by-sa/4.0/'>CC BY-SA 4.0</a></small></p>").arg(source.toHtmlEscaped());
+    out += QStringLiteral("<p><small><a href='%1'>Wiktionary contributors</a> · <a href='https://creativecommons.org/licenses/by-sa/4.0/'>CC BY-SA 4.0</a></small></p>").arg(source.toHtmlEscaped());
     return out + QStringLiteral("</body>");
 }
 

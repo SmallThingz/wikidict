@@ -19610,15 +19610,122 @@ private slots:
             QFile file(QDir(fixture_).filePath(it.key())); QVERIFY(file.open(QIODevice::ReadOnly));
             QCOMPARE(QCryptographicHash::hash(file.readAll(), QCryptographicHash::Sha256), it.value());
         }
-        // An intentionally empty body is a successful entry, not a failed or loading surface.
-        const QJsonObject empty{{"title", "Controlled empty entry"}, {"language", "English"},
-            {"language_code", "en"}, {"kind", "language"}, {"sections", QJsonArray{}}, {"media", QJsonArray{}}};
+        // This published Polish record has no body or metadata content. Keep it
+        // intact while explaining that state in Reading, before attribution.
+        const QByteArray publishedEmpty(R"json({
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "czytać",
+  "kind": "language",
+  "language": "polski",
+  "match_mode": "unicode-lowercase",
+  "record_count": 357229,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [],
+        "other_sections": []
+      },
+      "title": "czytać",
+      "display_title": [],
+      "kind": "language",
+      "language": "polski",
+      "language_code": "pl",
+      "sections": [],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}
+)json");
+        const auto emptyEnvelope = QJsonDocument::fromJson(publishedEmpty);
+        QVERIFY(emptyEnvelope.isObject());
+        const auto empty = emptyEnvelope.object().value(QStringLiteral("entries")).toArray().first().toObject();
+        const QString emptyMessage = QStringLiteral("This entry has no content in this dictionary.");
         reader->setAccessibleDescription(QStringLiteral("Description before empty composition"));
-        QVERIFY(window.renderResponse(response(empty)));
+        QVERIFY(window.renderResponse(publishedEmpty));
+        QCOMPARE(window.currentEntry_, empty);
+        QCOMPARE(QJsonDocument::fromJson(window.currentJson_), emptyEnvelope);
+        QCOMPARE(title(window), empty.value(QStringLiteral("title")).toString());
+        QCOMPARE(window.meta_->text(), QString::fromUtf8("polski · Dictionary"));
         QVERIFY(reader->accessibleDescription().isEmpty());
         QVERIFY(!window.readingUncommitted_ && !window.loading_);
         QVERIFY(!reader->document()->toPlainText().contains(failure));
         QVERIFY(window.listen_->isEnabled() && window.bookmark_->isEnabled());
+        const QString emptyText = reader->toPlainText().trimmed();
+        QVERIFY(emptyText.startsWith(emptyMessage));
+        QVERIFY(emptyText.contains(QStringLiteral("Wiktionary contributors")));
+        QVERIFY(emptyText.contains(QStringLiteral("CC BY-SA 4.0")));
+        QVERIFY(!window.currentJson_.contains(emptyMessage.toUtf8()));
+        auto *accessible = QAccessible::queryAccessibleInterface(reader);
+        QVERIFY(accessible && accessible->textInterface());
+        const auto *accessibleText = accessible->textInterface();
+        QVERIFY(accessibleText->text(0, accessibleText->characterCount()).trimmed().startsWith(emptyMessage));
+
+        const auto text = [](const QString &value) {
+            return QJsonObject{{"kind", "text"}, {"text", value}, {"target", ""}, {"trail", ""}};
+        };
+        QList<QPair<QJsonObject, QString>> contentControls;
+        contentControls.append({cat, QStringLiteral("A small animal.")});
+        auto preambleOnly = empty;
+        preambleOnly.insert("preamble_spans", QJsonArray{text(QStringLiteral("Only preamble content"))});
+        contentControls.append({preambleOnly, QStringLiteral("Only preamble content")});
+        auto bodyOnly = empty;
+        bodyOnly.insert("sections", QJsonArray{QJsonObject{{"title", "Body"}, {"level", 2},
+            {"blocks", QJsonArray{paragraph(QStringLiteral("Only body content"), QStringLiteral("px"), 0)}}}});
+        contentControls.append({bodyOnly, QStringLiteral("Only body content")});
+        auto mediaOnly = empty;
+        mediaOnly.insert("media", QJsonArray{QJsonObject{{"kind", "image"},
+            {"file", "Empty-entry-control.png"}, {"caption", "Only media content"}}});
+        contentControls.append({mediaOnly, QStringLiteral("Only media content")});
+        auto referencesOnly = empty;
+        referencesOnly.insert("references", QJsonArray{QJsonObject{{"kind", "fragment"},
+            {"spans", QJsonArray{text(QStringLiteral("Only reference content"))}}}});
+        contentControls.append({referencesOnly, QStringLiteral("Only reference content")});
+        auto aliasOnly = empty;
+        aliasOnly.insert("kind", "alias");
+        aliasOnly.insert("alias", QJsonObject{{"xml_target", "cat"}, {"target_title", "cat"}, {"fragment", QJsonValue::Null}});
+        contentControls.append({aliasOnly, QStringLiteral("Wiktionary contributors")});
+        auto redirected = empty;
+        redirected.insert("redirect", QJsonObject{{"source_title", "Empty alias"},
+            {"target_title", empty.value("title")}, {"fragment", QJsonValue::Null}, {"followed", true}});
+        contentControls.append({redirected, QStringLiteral("Redirected from Empty alias")});
+        for (const auto &control : contentControls) {
+            QVERIFY(window.renderResponse(response(control.first)));
+            QCOMPARE(window.currentEntry_, control.first);
+            QVERIFY(!window.readingUncommitted_);
+            QVERIFY(!reader->toPlainText().contains(emptyMessage));
+            QVERIFY(reader->toPlainText().contains(control.second));
+        }
+        for (int width : {900, 640}) {
+            window.resize(width, 640); QTRY_COMPARE(window.width(), width);
+            QTRY_COMPARE(window.compactNavigation_, width == 640);
+            QVERIFY(window.renderResponse(publishedEmpty));
+            reader->setFocus(); QTRY_VERIFY(reader->hasFocus());
+            QTest::keyClick(reader, Qt::Key_L, Qt::ControlModifier);
+            QTRY_VERIFY(window.search_->hasFocus() && window.search_->isVisible());
+            window.search_->selectAll(); QTest::keyClicks(window.search_, "cat");
+            QTest::keyClick(window.search_, Qt::Key_Return);
+            QTRY_COMPARE(title(window), QStringLiteral("cat"));
+            QTRY_VERIFY(!window.readingUncommitted_);
+            if (width == 900) {
+                QTRY_VERIFY(window.search_->hasFocus());
+                for (int presses = 0; presses < 32 && !reader->hasFocus(); ++presses) {
+                    QVERIFY(QApplication::focusWidget());
+                    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Tab);
+                }
+            }
+            QTRY_VERIFY(reader->hasFocus());
+            QVERIFY(reader->toPlainText().contains(QStringLiteral("A small animal.")));
+            QVERIFY(!reader->toPlainText().contains(emptyMessage));
+        }
     }
 
 
