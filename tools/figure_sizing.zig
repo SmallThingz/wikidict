@@ -1737,16 +1737,25 @@ pub const Registry = struct {
         };
         const gif = gifProfile(doc.source_profile);
         const webp = webpProfile(doc.source_profile);
-        var facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
+        // Coverage belongs to each requested file. Keep the index only while
+        // replaying the batches; the returned registry borrows the facts themselves.
+        const RequestedFact = struct { fact: *const FileFact, base_seen: bool = false };
+        var facts: std.StringHashMapUnmanaged(RequestedFact) = .empty;
+        defer facts.deinit(arena.child_allocator);
+        var name_scratch = std.heap.ArenaAllocator.init(arena.child_allocator);
+        defer name_scratch.deinit();
         var declared_heights: std.StringHashMapUnmanaged(*const SvgHeightObservation) = .empty;
         var height_occurrences: std.StringHashMapUnmanaged(SvgHeightAuthority) = .empty;
         for (doc.records, 0..) |*fact, i| {
             location.* = .{ .stage = "fact", .record = i, .file = fact.requested_file };
 
             if (i != 0 and std.mem.order(u8, doc.records[i - 1].requested_file, fact.requested_file) != .lt) return invalid;
-            const name = try canonicalFile(a, ns, fact.requested_file);
-            if (!equal(name, fact.requested_file) or fact.batch >= batches.count or
-                (try facts.getOrPut(a, name)).found_existing) return invalid;
+            const name = try canonicalFile(name_scratch.allocator(), ns, fact.requested_file);
+            if (!equal(name, fact.requested_file) or fact.batch >= batches.count) return invalid;
+            _ = name_scratch.reset(.retain_capacity);
+            const slot = try facts.getOrPut(arena.child_allocator, fact.requested_file);
+            if (slot.found_existing) return invalid;
+            slot.value_ptr.* = .{ .fact = fact };
             if ((fact.observed_svg_width_px == null) != (fact.observed_batch == null)) return invalid;
             if (fact.observed_batch) |observed_batch| {
                 if (observed_batch <= fact.batch or observed_batch >= batches.count or
@@ -1763,14 +1772,13 @@ pub const Registry = struct {
                         observation.batch <= fact.batch or observation.batch >= batches.count or
                         observation.observed_height_px != observation.height_px or observation.observed_width_px != fit) return invalid;
                     const key = try svgHeightKey(a, observation.wiki, observation.title, fact.canonical_file, observation.options, observation.height_px);
-                    const slot = try declared_heights.getOrPut(a, key);
-                    if (slot.found_existing) return invalid;
-                    slot.value_ptr.* = observation;
+                    const height = try declared_heights.getOrPut(a, key);
+                    if (height.found_existing) return invalid;
+                    height.value_ptr.* = observation;
                 }
             }
-            facts.getPtr(name).?.* = fact;
         }
-        var used_facts: std.StringHashMapUnmanaged(void) = .empty;
+        var seen_count: usize = 0;
         var used_observations: std.StringHashMapUnmanaged(u32) = .empty;
         var canonical_facts: std.StringHashMapUnmanaged(*const FileFact) = .empty;
         var jpeg_width_proofs: std.StringHashMapUnmanaged(bool) = .empty;
@@ -1858,18 +1866,23 @@ pub const Registry = struct {
             for (batch.requests, 0..) |requested, request_index| {
                 location.* = .{ .stage = "request", .batch = batch_index, .request = request_index };
 
-                const fact = if (jpeg_supplement) (canonical_facts.get(requested) orelse return invalid) else (facts.get(requested) orelse return invalid);
+                const row = if (jpeg_supplement) null else facts.getPtr(requested) orelse return invalid;
+                const fact = if (row) |entry| entry.fact else canonical_facts.get(requested) orelse return invalid;
                 location.file = fact.requested_file;
                 if ((try used_requests.getOrPut(temp, requested)).found_existing) return invalid;
                 if (jpeg_supplement) {
                     if (!equal(requested, fact.canonical_file) or !canonical_facts.contains(requested) or
                         fact.state != .eligible or !equal(fact.mime, "image/jpeg") or !equal(fact.mediatype, "BITMAP")) return invalid;
                 } else if (batch.observed_svg_width_px != null) {
-                    if ((fact.observed_batch orelse return invalid) != batch_index or !used_facts.contains(requested)) return invalid;
+                    if ((fact.observed_batch orelse return invalid) != batch_index or !row.?.base_seen) return invalid;
                 } else if (batch.observed_svg_occurrences != null) {
-                    if (!used_facts.contains(requested) or !equal(requested, fact.canonical_file) or
+                    if (!row.?.base_seen or !equal(requested, fact.canonical_file) or
                         fact.state != .eligible or !equal(fact.mime, "image/svg+xml") or !equal(fact.mediatype, "DRAWING")) return invalid;
-                } else if (fact.batch != batch_index or (try used_facts.getOrPut(a, fact.requested_file)).found_existing) return invalid;
+                } else {
+                    if (fact.batch != batch_index or row.?.base_seen) return invalid;
+                    row.?.base_seen = true;
+                    seen_count += 1;
+                }
                 var current = requested;
                 var seen: [50][]const u8 = undefined;
                 var count: usize = 0;
@@ -2029,7 +2042,7 @@ pub const Registry = struct {
                 for (observations) |raw_observation| {
                     const parsed = try parseSvgHeightObservation(temp, ns, server, raw_observation);
                     if (!used_requests.contains(parsed.canonical_file)) return invalid;
-                    const fact = facts.get(parsed.canonical_file) orelse return invalid;
+                    const fact = (facts.get(parsed.canonical_file) orelse return invalid).fact;
                     if (!equal(fact.requested_file, fact.canonical_file)) return invalid;
                     const key = try svgHeightKey(temp, doc.wiki, parsed.title, parsed.canonical_file, parsed.options, parsed.height);
                     const declared = declared_heights.get(key) orelse return invalid;
@@ -2048,7 +2061,7 @@ pub const Registry = struct {
         }
         location.* = .{ .stage = "coverage" };
         try batches.finish();
-        if (used_facts.count() != facts.count() or declared_heights.count() != height_occurrences.count()) return invalid;
+        if (seen_count != facts.count() or declared_heights.count() != height_occurrences.count()) return invalid;
         for (doc.records, 0..) |fact, index| {
             location.* = .{ .stage = "fact_consistency", .record = index, .file = fact.requested_file };
 
@@ -2076,7 +2089,7 @@ pub const Registry = struct {
         const height_bounds = try a.alloc(HeightBound, records.items.len);
         const svg_languages = try a.alloc(bool, records.items.len);
         for (records.items, resolved_files, height_bounds, svg_languages) |record, *resolved, *bound, *svg_language| {
-            const fact = facts.get(record.canonical_file) orelse canonical_facts.get(record.canonical_file) orelse return invalid;
+            const fact = if (facts.get(record.canonical_file)) |entry| entry.fact else canonical_facts.get(record.canonical_file) orelse return invalid;
             resolved.* = fact.canonical_file;
             svg_language.* = svg_language_model_proofs.get(fact.canonical_file) orelse false;
             // GIFHandler inherits bitmap dimensions. Animation frame selection
