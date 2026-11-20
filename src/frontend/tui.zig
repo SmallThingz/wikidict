@@ -889,6 +889,8 @@ const State = struct {
                     self.section = 0;
                     self.section_offset = 0;
                     self.jump_section = false;
+                    try output.terminalText(&formatted.writer, try self.db.titleAt(i));
+                    try formatted.writer.writeAll("\n\n");
                     try formatted.writer.writeAll("This entry's presentation could not be read.\n\nPress Esc to go back or / to search.");
                     break :entry;
                 };
@@ -1171,7 +1173,9 @@ const State = struct {
                     try w.writeAll(p.base);
                 }
             }
-            const hints: []const u8 = if (self.nav == .learn)
+            const hints: []const u8 = if (self.focus == .entry and self.loaded_unreadable)
+                "Esc back  / search  ? help"
+            else if (self.nav == .learn)
                 (if (self.count() != 0 and !self.study_has_meaning and !self.roundComplete()) "c Cards  o Open  n Skip  Esc search" else "Tab game  Esc search  Ctrl-C quit")
             else if (empty_personal_list) "/ search  5 Settings  ? help  q quit" else switch (self.focus) {
                 .search => if (sz.cols < 81) "type  ↑↓ select  Enter read  ^C quit" else "type to search  ↑↓ results  Enter read  Tab switch  Ctrl-U clear  Ctrl-C quit",
