@@ -457,7 +457,8 @@ def reveal_witness(reader, wanted, heading):
 
 def exercise(reader, heading_label, entry, witness, redirect_target, findings):
     reader.action(b'\x15wikidict-no-match-5400b4b7', lambda: reader.query() == 'wikidict-no-match-5400b4b7'
-                  and reader.page_is('search', count=0), 'empty search')
+                  and reader.page_is('search', count=0)
+                  and not reader.screen.display[2].lstrip().startswith('Searching...'), 'empty search')
     message_count = reader.text().count('No matching words.')
     if message_count != 1:
         findings.append(f'Expected one empty-search message, found {message_count}')

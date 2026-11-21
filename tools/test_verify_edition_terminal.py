@@ -13,6 +13,20 @@ from verify_reader_ux import CheckFailure, DOWN, ENTER, ReaderPty
 
 
 class EditionTerminalTests(unittest.TestCase):
+    def test_empty_search_waits_for_scan_completion_before_inspecting_message(self):
+        reader = Mock()
+        reader.query.return_value = 'wikidict-no-match-5400b4b7'
+        reader.page_is.return_value = True
+        reader.screen.display = ['', 'search / 74011 words / 0/0', '  Searching... 5%  /  0 matches']
+        def check_frames(keys, predicate, label):
+            self.assertFalse(predicate())
+            reader.screen.display[2] = ''
+            self.assertTrue(predicate())
+            raise CheckFailure('observed completed scan')
+        reader.action.side_effect = check_frames
+        with self.assertRaisesRegex(CheckFailure, 'observed completed scan'):
+            exercise(reader, 'inglise', 'Albania', 'Helifail (Ameerika)', None, [])
+
     def test_empty_state_defects_allow_entry_navigation_to_be_checked(self):
         for messages in (0, 2):
             with self.subTest(messages=messages):
