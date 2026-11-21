@@ -9,6 +9,7 @@ import stat
 
 BUILD_DISK_RESERVE_BYTES = 512 * 1024**2  # Maintained floor, separate from pending writes.
 MAX_DISK_BYTES = (1 << 63) - 1
+XZ_LIST_BATCH = 16
 _COUNTERS = ('input_rows', 'compile_only_rows', 'source_unavailable_rows', 'site_metadata_rows',
              'dispatched_rows', 'expanded_pages', 'fallback_pages', 'duplicate_rows', 'alias_pages')
 _FEATURES = {name + '.wikblb': kind for kind, name in enumerate(
@@ -72,9 +73,7 @@ def _coverage_bound(data):
     return total
 
 
-def compressed_blob_size(path, kind):
-    """Measure logical XZ bytes, not an integrity replacement for native verify."""
-    path = Path(path)
+def _compressed_blob_header(path, kind):
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode):
         raise ValueError(f'Unsupported compressed shard: {path}')
@@ -94,18 +93,36 @@ def compressed_blob_size(path, kind):
                 raise ValueError(f'Truncated compressed shard: {path}')
     if header != b'WIKBLB08' + bytes([kind]):
         raise ValueError(f'Expected compressed WIKBLB08 shard: {path}')
-    result = subprocess.run(['xz', '--robot', '--list', '--', str(path)],
+    return before
+
+
+def compressed_blob_sizes(members):
+    """Measure a bounded group in argv order. Native verification checks the contents."""
+    if not 1 <= len(members) <= XZ_LIST_BATCH:
+        raise ValueError('Invalid XZ listing batch size')
+    paths = [Path(path) for path, kind in members]
+    identities = [_compressed_blob_header(path, kind) for path, (_, kind) in zip(paths, members)]
+    result = subprocess.run(['xz', '--robot', '--list', '--', *map(str, paths)],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            check=True, timeout=60)
-    if len(result.stdout) > 65536:
+                            check=True, timeout=60 * len(paths))
+    if len(result.stdout) > 65536 * len(paths):
         raise ValueError('XZ listing exceeds metadata bound')
     rows = [row.split(b'\t') for row in result.stdout.splitlines() if row.startswith(b'file\t')]
-    if len(rows) != 1 or len(rows[0]) < 5 or not rows[0][4].isdigit():
+    if len(rows) != len(paths):
         raise ValueError('Invalid XZ logical size listing')
-    logical = _bytes(int(rows[0][4]))
-    if logical < 9 or _identity(path.lstat()) != _identity(before):
-        raise ValueError(f'Compressed shard changed: {path}')
-    return logical
+    sizes = []
+    for path, before, row in zip(paths, identities, rows):
+        if len(row) < 5 or not row[3].isdigit() or not row[4].isdigit():
+            raise ValueError('Invalid XZ logical size listing')
+        logical = _bytes(int(row[4]))
+        if logical < 9 or int(row[3]) != before.st_size or _identity(path.lstat()) != _identity(before):
+            raise ValueError(f'Compressed shard changed: {path}')
+        sizes.append(logical)
+    return sizes
+
+
+def compressed_blob_size(path, kind):
+    return compressed_blob_sizes([(path, kind)])[0]
 
 
 def require_merge_disk_space(shard_paths, destination, reserve_bytes,
@@ -180,6 +197,7 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         raise ValueError('Merge requires distinct verified shard roots')
     raw = fallback = manifests = coverage = metadata = 0
     stored = compressed = 0
+    pending_xz = []
     blob_count = 0
     sidecars = {'languages.tsv', 'namespace-coverage.json', 'fallback-pages.jsonl',
                 'page-coverage.json', '.verified'}
@@ -217,7 +235,10 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
         for path, kind in blobs:
             info = remember(path)
             if allow_compressed and path.name.endswith('.xz'):
-                raw = _add(raw, compressed_blob_size(path, kind))
+                pending_xz.append((path, kind))
+                if len(pending_xz) == XZ_LIST_BATCH:
+                    raw = _add(raw, *compressed_blob_sizes(pending_xz))
+                    pending_xz.clear()
                 compressed = _add(compressed, info.st_size)
             else:
                 raw = _add(raw, raw_size(path, kind))
@@ -225,6 +246,8 @@ def require_merge_disk_space(shard_paths, destination, reserve_bytes,
             blob_count += 1
         coverage = _add(coverage, _coverage_bound(
             read_small(root / 'namespace-coverage.json', 8 * 1024**2)))
+    if pending_xz:
+        raw = _add(raw, *compressed_blob_sizes(pending_xz))
     if reviewed_manifest_path is not None:
         metadata = _add(metadata, remember(Path(reviewed_manifest_path)).st_size)
     for path in metadata_paths:

@@ -72,6 +72,23 @@ class MergeDiskAdmissionTests(unittest.TestCase):
         self.assertFalse(self.destination.exists())
         self.assertEqual(before, {p: p.read_bytes() for p in before})
 
+    def test_compressed_merge_lists_multiple_shards_in_bounded_groups(self):
+        shards = []
+        logical = 0
+        for index in range(17):
+            shard, raw = self.shard('shard\t' + str(index))
+            payload = raw.read_bytes() + bytes(13 * index)
+            target = raw.with_suffix('.wikblb.xz')
+            target.write_bytes(lzma.compress(payload, preset=0))
+            raw.unlink()
+            shards.append(shard)
+            logical += len(payload)
+        with mock.patch.object(d.subprocess, 'run', wraps=d.subprocess.run) as listing:
+            receipt = self.admit(shards, allow_compressed=True)
+        self.assertEqual(receipt['raw_shard_bytes'], logical)
+        self.assertEqual(receipt['raw_blob_count'], len(shards))
+        self.assertEqual([len(call.args[0]) - 4 for call in listing.call_args_list], [16, 1])
+
     def test_compressed_and_mixed_shards_reserve_logical_output_not_transport(self):
         one, raw_one = self.shard('one')
         two, raw_two = self.shard('two',heading='French')

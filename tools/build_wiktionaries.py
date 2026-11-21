@@ -18,6 +18,7 @@ import fcntl
 from functools import lru_cache
 import gzip
 import hashlib
+import itertools
 import inspect
 import json
 import lzma
@@ -688,7 +689,7 @@ _PYTHON_TOOLING=bootstrap_python_tooling()
 prepared_child_imports()
 
 from compress_blobs import SHARD_BATCH_BYTES, SHARD_BATCH_FILES, compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
-from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
+from build_disk_limits import BUILD_DISK_RESERVE_BYTES, XZ_LIST_BATCH, require_merge_disk_space, compressed_blob_sizes
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact, execution_paths, refuse_execution_destinations, PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
 import reviewed_nonlexical as nonlexical
@@ -8402,13 +8403,15 @@ def seal_verified_publication_inventory(staging, *, fresh_compressed=False):
         if blobs!={name+'.xz' for name in expected}:
             raise ValueError('Unexpected or missing fresh compressed payload')
         logical={name:record for name,record in files.items() if name not in blobs}
-        for name,kind in expected.items():
-            target=artifact_path(staging/(name+'.xz'));before=index_identity(target.stat())
-            size=compressed_blob_size(target,kind)
-            decoded=verified_xz_record(target,size)
-            if decoded['size']!=size or index_identity(target.stat())!=before:
-                raise ValueError('Fresh compressed payload changed while reading: '+name)
-            logical[name]=decoded
+        for batch in itertools.batched(expected.items(), XZ_LIST_BATCH):
+            members = [(artifact_path(staging/(name+'.xz')), kind) for name, kind in batch]
+            before = [index_identity(path.stat()) for path, _ in members]
+            sizes = compressed_blob_sizes(members)
+            for (name, _), (target, _), stamp, size in zip(batch, members, before, sizes, strict=True):
+                decoded = verified_xz_record(target, size)
+                if decoded['size'] != size or index_identity(target.stat()) != stamp:
+                    raise ValueError('Fresh compressed payload changed while reading: '+name)
+                logical[name] = decoded
         if publication_inventory(staging,allow_raw=True)!=files:
             raise ValueError('Fresh compressed publication changed while sealing')
         files=logical

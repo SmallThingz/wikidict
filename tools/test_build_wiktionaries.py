@@ -4299,6 +4299,27 @@ class VerifiedPublicationInventoryTests(PublicationCompilerFixture):
                 final=root/'final';self.assertEqual(lzma.decompress((final/blob.name).read_bytes()),payload)
                 self.assertEqual(json.loads((final/'complete.json').read_text())['publication_files'][blob.name]['sha256'],b.sha256_file(final/blob.name))
 
+    def test_fresh_compressed_seal_binds_batched_sizes_to_the_correct_languages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / 'staging'
+            (staging / 'languages').mkdir(parents=True)
+            headings = [f'Language {i}' for i in range(17)]
+            write_coverage(staging)
+            (staging / 'languages.tsv').write_text('heading\n' + '\n'.join(headings) + '\n')
+            records = {}
+            for index, heading in enumerate(headings):
+                name = 'languages/' + hashlib.sha256(heading.encode()).hexdigest() + '.wikblb'
+                logical = b'WIKBLB08\x01' + bytes(index) + heading.encode()
+                records[name] = {'size': len(logical), 'sha256': hashlib.sha256(logical).hexdigest()}
+                (staging / (name + '.xz')).write_bytes(lzma.compress(logical, preset=0))
+            with patch.object(b, 'PROJECT', root), patch.object(b.subprocess, 'run', wraps=b.subprocess.run) as listing:
+                b.seal_verified_publication_inventory(staging, fresh_compressed=True)
+            sizes = [len(call.args[0]) - 4 for call in listing.call_args_list if call.args[0][:3] == ['xz', '--robot', '--list']]
+            self.assertEqual(sizes, [16, 1])
+            sealed = json.loads((staging / b.VERIFIED_INVENTORY_NAME).read_text())['files']
+            self.assertEqual({name: sealed[name] for name in records}, records)
+
     def test_fresh_compressed_seal_rejects_survivors_twins_unknown_and_changed_bytes(self):
         for fault in ('marker','raw-twin','extra','wrong-kind','changed'):
             with self.subTest(fault=fault),tempfile.TemporaryDirectory() as tmp:
