@@ -873,13 +873,15 @@ def validate_stream_header(header, schema, file_bytes):
     return rows
 
 
-def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None):
+def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record_offsets=None, _encoded_record=None):
     """Yield the header and exact declared records with bounded transient input."""
     path = Path(path)
     if identity_out is not None and (type(identity_out) is not dict or identity_out):
         raise ValueError('Stream identity output must be an empty dictionary')
     if record_offsets is not None and (type(record_offsets) is not list or record_offsets or schema != RAW_STREAM_SCHEMA):
         raise ValueError('Raw stream index output must be an empty list')
+    if _encoded_record is not None and (type(_encoded_record) is not dict or _encoded_record or schema != RAW_STREAM_SCHEMA):
+        raise ValueError('Raw record echo must be an empty dictionary')
     before = evidence.stamp(path)
     sha = hashlib.sha256() if identity_out is not None else None
     size = 0
@@ -908,7 +910,11 @@ def stream_values(path, schema, *, allow_encoded=True, identity_out=None, record
                 sha.update(raw); size += len(raw)
             if record_offsets is not None:
                 record_offsets.append((offset, len(raw), digest(raw)))
-            yield raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
+            value = raw_record_decode(raw, encoding) if schema == RAW_STREAM_SCHEMA else stream_decode(raw)
+            if _encoded_record is not None:
+                _encoded_record.clear()
+                _encoded_record.update(raw=raw, encoding=encoding)
+            yield value
         if source.read(1):
             raise ValueError('Trailing Figure stream records or bytes')
         if sha is not None:
@@ -2765,7 +2771,7 @@ class _HttpBatchReplay:
             raise error.with_traceback(traceback)
 
 
-def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False, origin_plan=None):
+def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache=None, *, profile_kind=FIGURE_PROFILE_V3, inventory_cache=None, allow_compatible_epochs=False, origin_plan=None, _encoded_record=None):
     # Return only this frame's authenticated retired-response identities.
     if not isinstance(source, dict):
         raise ValueError('Invalid Figure request source')
@@ -2791,7 +2797,8 @@ def replay_source(root, source, batch, wiki, date, namespace, http_files, prefix
         path = Path(source.get('path', ''))
         if not path.is_absolute() or path.resolve().is_relative_to(root.resolve()):
             raise ValueError('Complete Figure source aliases output')
-        complete, expected_batch = _complete_stream_batch(source, prefix_cache, inventory_cache=inventory_cache)
+        complete, expected_batch = _complete_stream_batch(source, prefix_cache, inventory_cache=inventory_cache,
+            _encoded_batch=None if _encoded_record is None else (batch, _encoded_record))
         if (complete['manifest']['wiki'] != wiki or complete['manifest']['date'] != date or
                 complete['namespace'] != namespace or expected_batch != batch):
             raise ValueError('Retained complete Figure batch identity differs')
@@ -3042,12 +3049,14 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
             offsets = http_replay.offsets
         if replay_identity is not None:
             replay_identity = http_replay.identity
-        frames = iter(http_replay.frames)
+        frames = ((batch, source, archive, None) for batch, source, archive in http_replay.frames)
     else:
-        batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets)
+        encoded_record = {}
+        batches = stream_values(raw_path, RAW_STREAM_SCHEMA, identity_out=replay_identity, record_offsets=offsets,
+                                _encoded_record=encoded_record)
         header = next(batches)
         sources = source_records(root / FILE_REQUESTS, header['base_batches']+header['observed_batches'])
-        frames = ((batch, source, None) for batch, source in zip(batches, sources, strict=True))
+        frames = ((batch, source, None, dict(encoded_record)) for batch, source in zip(batches, sources, strict=True))
     def selected_batches(selected):
         # The two complete traversals have validated every physical record.
         # Retain only offsets and digests, and replay each origin's own rows.
@@ -3079,10 +3088,10 @@ def replay_stream_capture(root, wiki, date, defaults, namespace, general, *, ret
         # All former whole-projection/inventory/provider/plan gates above retain
         # priority over an earlier HTTP proof error observed during that scan.
         http_replay.raise_source_error()
-    for batch, source, checked_archive in frames:
+    for batch, source, checked_archive, encoded_record in frames:
         frame_archived = (checked_archive if checked_archive is not None else
             replay_source(root, source, batch, wiki, date, namespace, http_files, prefix_cache, profile_kind=selected_profile, inventory_cache=inventory_cache,
-                          allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan))
+                          allow_compatible_epochs=projection.get('replay_contract') in (REPLAY_CONTRACT_V3, REPLAY_CONTRACT_V4, REPLAY_CONTRACT), origin_plan=plan, _encoded_record=encoded_record))
         for name, identity in frame_archived.items():
             if name in archived:
                 raise ValueError('Duplicate contained Figure HTTP archive identity')
@@ -3627,7 +3636,7 @@ def complete_stream_batch(reference, cache):
     return _complete_stream_batch(reference, cache)[1]
 
 
-def _complete_stream_batch(reference, cache, *, inventory_cache=None):
+def _complete_stream_batch(reference, cache, *, inventory_cache=None, _encoded_batch=None):
     # The replay caller needs both context and batch from the same checked
     # parent. Keep all cold replay, membership, indexed-byte and EOF guards.
     if (not isinstance(reference, dict) or set(reference) != {'kind', 'path', 'sha256', 'batch'} or
@@ -3654,6 +3663,12 @@ def _complete_stream_batch(reference, cache, *, inventory_cache=None):
             raise ValueError('Complete Figure raw source changed during read')
     if len(raw) != size or digest(raw) != sha:
         raise ValueError('Complete Figure batch bytes changed')
+    # The enclosing current stream already decoded this exact immutable byte
+    # string. Parent validation and every indexed read/hash fence above remain.
+    if _encoded_batch is not None:
+        batch, encoded_record = _encoded_batch
+        if (encoded_record['encoding'] == complete['raw_encoding'] and encoded_record['raw'] == raw):
+            return complete, batch
     return complete, raw_record_decode(raw, complete['raw_encoding'])
 
 

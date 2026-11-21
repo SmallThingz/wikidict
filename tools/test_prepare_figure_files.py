@@ -1104,6 +1104,33 @@ class FigureFileTests(unittest.TestCase):
         args.resume = args.output/f'figure-resume-{number:04d}.json'
         args.resume.write_bytes(figure.encoded(proof))
 
+    def test_encoded_parent_exact_match_fallback_and_mutation(self):
+        args, _, _ = self.complete_stream_fixture()
+        parent = args.output
+        cache = {}
+        complete = figure.read_complete_capture(parent / figure.MANIFEST, cache)
+        echo = {}
+        values = figure.stream_values(complete['raw_path'], figure.RAW_STREAM_SCHEMA, _encoded_record=echo)
+        next(values)
+        batch = next(values)
+        encoded = dict(echo)
+        values.close()
+        ref = {'kind': 'complete-stream', 'path': str(parent / figure.MANIFEST), 'sha256': complete['manifest_sha256'], 'batch': 0}
+        with patch.object(figure, 'raw_record_decode', side_effect=AssertionError('duplicate decode')):
+            self.assertIs(figure._complete_stream_batch(ref, cache, _encoded_batch=(batch, encoded))[1], batch)
+        original = figure.raw_record_decode
+        for other in ({**encoded, 'raw': encoded['raw'] + b' '}, {**encoded, 'encoding': 'different'}):
+            with patch.object(figure, 'raw_record_decode', wraps=original) as decode:
+                self.assertEqual(figure._complete_stream_batch(ref, cache, _encoded_batch=(batch, other))[1], batch)
+                self.assertEqual(decode.call_count, 1)
+        path = complete['raw_path']
+        raw = path.read_bytes()
+        changed = bytearray(raw)
+        changed[-3] ^= 1
+        path.write_bytes(changed)
+        with self.assertRaises(ValueError):
+            figure._complete_stream_batch(ref, cache, _encoded_batch=(batch, encoded))
+
     def test_complete_stream_reuse_adds_observation_without_refetch_or_parent_mutation(self):
         args, observation, _ = self.complete_stream_fixture()
         parent = args.output
