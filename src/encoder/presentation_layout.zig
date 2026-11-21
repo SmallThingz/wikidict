@@ -2417,11 +2417,11 @@ fn hasTopLevelNumberedGloss(blocks: []const wiki.Block) bool {
     return false;
 }
 
-fn malayalamNounSection(sections: anytype, index: usize, owner: []const u8) bool {
+fn classifiedNounSection(sections: anytype, index: usize, owner: []const u8, label: []const u8) bool {
     const section = sections[index];
     const S = @TypeOf(section);
     if (!@hasField(S, "is_heading") or !@hasField(S, "title_depth") or !@hasField(S, "title_list_path")) return false;
-    if (section.level != 3 or !std.mem.eql(u8, section.title, "നാമം") or !section.is_heading or
+    if (section.level != 3 or !std.mem.eql(u8, section.title, label) or !section.is_heading or
         section.title_depth != 0 or section.title_list_path.len != 0) return false;
     if (owner.len == 0 or std.mem.eql(u8, owner, "Unclassified")) return false;
 
@@ -2986,6 +2986,34 @@ test "Aromanian dictionary indexes seven source-declared lexical sections under 
     }
 }
 
+fn amharicNounGloss(sections: anytype, index: usize, owner: ?[]const u8, code: []const u8, wiki_id: []const u8) bool {
+    if (index < 2 or !std.mem.eql(u8, wiki_id, "amwiktionary") or !std.mem.eql(u8, code, "am") or
+        !std.mem.eql(u8, owner orelse "", "አማርኛ")) return false;
+    if (!std.mem.eql(u8, sections[index].title, "ገለፃ/ትርጉም")) return false;
+    const first = index - 2;
+    const labels = [_][]const u8{ "ቋንቋ", "የንግግር ክፍል", "ገለፃ/ትርጉም" };
+    const values = [_][]const u8{ "አማርኛ", "ስም" };
+    for (sections, 0..) |section, i| {
+        if (i < first or i > index) {
+            for (labels) |label| if (std.mem.eql(u8, section.title, label)) return false;
+            continue;
+        }
+        if (section.level != 3 or !std.mem.eql(u8, section.title, labels[i - first]) or !czechMeaningHeading(section)) return false;
+        if (i == index) continue;
+        if (section.blocks.len != 1) return false;
+        const field = section.blocks[0];
+        if (field.kind != .list_item or field.depth != 1 or !std.mem.eql(u8, field.list_path, "*") or
+            field.spans.len != 1 or field.table != null or field.feature != null or field.container != null or field.flow != null) return false;
+        const value = field.spans[0];
+        if (value.kind != .text or value.target.len != 0 or !teluguGrammarPlainSpan(value) or
+            !std.mem.eql(u8, value.text, values[i - first])) return false;
+    }
+    for (sections[index].blocks) |block| {
+        if (block.kind == .definition and block.depth == 1 and std.mem.eql(u8, block.list_path, "#") and sourceNumberedText(block)) return true;
+    }
+    return false;
+}
+
 fn quechuaDefinitionPart(section: anytype) ?[]const u8 {
     if (section.level != 3) return null;
     const headings = .{
@@ -3019,7 +3047,9 @@ pub fn buildForEntry(a: A, sections: anytype, unclassified: bool, owner: ?[]cons
 
 pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bool, owner: ?[]const u8, owner_code: []const u8, source_lexeme: ?SourceLexeme, wiki_id: []const u8, numbered_proofs: []const SourceNumberedLexeme, page_title: ?[]const u8) !Layout {
     const quechua = std.mem.eql(u8, wiki_id, "quwiktionary");
-    const malayalam = !unclassified and owner != null and owner_code.len != 0 and std.mem.eql(u8, wiki_id, "mlwiktionary");
+    // Manx templates Clowan:-noun- (2046/6670) and Clowan:-ennym- (2249/5343)
+    // both emit Ennymockle for nouns, including words in other languages.
+    const owned_noun_label: ?[]const u8 = if (unclassified or owner == null or owner_code.len == 0) null else if (std.mem.eql(u8, wiki_id, "mlwiktionary")) "നാമം" else if (std.mem.eql(u8, wiki_id, "gvwiktionary")) "Ennymockle" else null;
     const af_dictionary = std.mem.eql(u8, wiki_id, "afwiktionary");
     var lexemes: std.ArrayList(Lexeme) = .empty;
     var other: std.ArrayList(usize) = .empty;
@@ -3035,10 +3065,11 @@ pub fn buildForEntryWithClassifiedCode(a: A, sections: anytype, unclassified: bo
         const aromanian_noun = if (aromanian_part) |kind| std.mem.eql(u8, kind, "Noun") else false;
         const declared_aromanian = if (aromanian_part != null and (hasTopLevelNumberedGloss(section.blocks) or
             (aromanian_noun and aromanianNounWithoutGloss(sections, i, page_title, owner, wiki_id)))) aromanian_part else null;
+        const amharic_noun = !unclassified and amharicNounGloss(sections, i, owner, owner_code, wiki_id);
         const spanish_part = if (unclassified) null else spanishDefinitionPart(section, owner, owner_code, wiki_id);
         const declared_kind = if (unclassified and section.level == 2) null else
             partOfSpeech(section.title) orelse spanish_part orelse if (quechua) quechuaDefinitionPart(section) else if
-                (dictionaryNounSection(section, owner, wiki_id) or (malayalam and malayalamNounSection(sections, i, owner.?))) @as(?[]const u8, "Noun") else declared_aromanian;
+                (dictionaryNounSection(section, owner, wiki_id) or amharic_noun or (owned_noun_label != null and classifiedNounSection(sections, i, owner.?, owned_noun_label.?))) @as(?[]const u8, "Noun") else declared_aromanian;
         const grammar_kind = if (unclassified) null else ownedBulgarianVerbPart(section, owner);
         const decimal_noun = decimal: {
             const kind = if (unclassified) null else aragoneseGrammarPart(section, owner, wiki_id);
@@ -15099,18 +15130,18 @@ test "Malayalam Japanese noun in to keeps the two authored senses and complete R
 
     const Section = AragoneseDecimalTest.Section;
     var probe = [_]Section{ sections[0], sections[2] };
-    try std.testing.expect(malayalamNounSection(&probe, 1, owner));
+    try std.testing.expect(classifiedNounSection(&probe, 1, owner, "നാമം"));
     probe[0] = sections[3]; // The later unresolved Lojban heading cannot borrow Japanese ownership.
-    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    try std.testing.expect(!classifiedNounSection(&probe, 1, owner, "നാമം"));
     probe[0] = sections[0];
     probe[1].title_depth = 1;
-    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    try std.testing.expect(!classifiedNounSection(&probe, 1, owner, "നാമം"));
     probe[1] = sections[2];
     probe[1].blocks = &.{};
-    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    try std.testing.expect(!classifiedNounSection(&probe, 1, owner, "നാമം"));
     probe[1] = sections[2];
     probe[1].title = "നാമവിശേഷണം";
-    try std.testing.expect(!malayalamNounSection(&probe, 1, owner));
+    try std.testing.expect(!classifiedNounSection(&probe, 1, owner, "നാമം"));
     probe[1] = sections[2];
     try std.testing.expectEqual(@as(usize, 0), (try buildForEntryWithClassifiedCode(a, &probe, false, owner, "ja", null, "enwiktionary", &.{}, "to")).lexemes.len);
 }
@@ -15689,4 +15720,113 @@ test "actual French poids lourd organizes seven senses and eight quotations with
     try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
     try std.testing.expectEqualDeep(layout.lexemes[0].definitions, independent.lexemes[0].definitions);
     try std.testing.expectEqualDeep(layout.lexemes[0].definitions, unknown.lexemes[0].definitions);
+}
+
+test "Manx noun headings retain the two kayt senses and their six source links" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const Section = struct {
+        title: []const u8, level: u8, is_heading: bool = true,
+        title_depth: u8 = 0, title_list_path: []const u8 = "", blocks: []const wiki.Block = &.{},
+    };
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{ .title = "kayt" } };
+    // The two original numbered lines from kayt, page 2208, revision 13095.
+    const glosses = "# Kynney beg skybbylt dy [[sheeintagh|heeintagh]] [[eeder foalley|feill-eeagh]] kiare-chassagh, shelgeyr schleioil najooragh t'ayn, lesh [[clooie]] meein as [[ingin|ingnyn]] yn-yrjaghey echey. Ta ''Felis silvestris'' currit er y horçh feie as ta ''Felis catus'' currit er y horçh thie.\n" ++
+        "# [[Baagh|Cretoor]] co-chynneydagh jeh'n [[kynney|chynney]] ''Felidae'' ny cretooryn elley as ad cosoylagh lesh kiyt.\n";
+    var sections = [_]Section{
+        .{ .title = "Gaelg", .level = 2 },
+        .{ .title = "Ennymockle", .level = 3, .blocks = try renderer.renderBody(glosses) },
+    };
+    const layout = try buildForEntryWithClassifiedCode(a, &sections, false, "Gaelg", "gv", null, "gvwiktionary", &.{}, "kayt");
+    const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections, layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "kayt", .language, .{ .heading = "Gaelg", .code = "gv" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+    const noun = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings("Gaelg", noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 2), noun.definitions.len);
+    const targets = [_][]const u8{ "sheeintagh", "eeder foalley", "clooie", "ingin", "Baagh", "kynney" };
+    var count: usize = 0;
+    for (noun.definitions, 0..) |definition, i| {
+        try std.testing.expectEqual(i, definition.block);
+        const gloss = stored.entry.sections[noun.section].blocks[definition.block];
+        try std.testing.expectEqual(.definition, gloss.kind);
+        for (gloss.spans) |span| if (span.kind == .link) {
+            try std.testing.expect(count < targets.len);
+            try std.testing.expectEqualStrings(targets[count], span.target);
+            count += 1;
+        };
+    }
+    try std.testing.expectEqual(targets.len, count);
+    try std.testing.expectEqual(@as(usize, 0), (try buildForEntryWithClassifiedCode(a, &sections, false, "Gaelg", "gv", null, "enwiktionary", &.{}, "kayt")).lexemes.len);
+    sections[0].title = "Unknown language";
+    try std.testing.expect(!classifiedNounSection(&sections, 1, "Gaelg", "Ennymockle"));
+    sections[0].title = "Gaelg";
+    sections[1].blocks = try renderer.renderBody("* [[pishin]]");
+    try std.testing.expect(!classifiedNounSection(&sections, 1, "Gaelg", "Ennymockle"));
+}
+
+// Amharic 20261001, ሕይወት p1834/r17425. The two list fields describe the
+// independently classified entry; only the following numbered gloss owns a sense.
+test "Amharic noun fields address the separate original gloss and exclude ambiguous owners" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const Section = struct {
+        title: []const u8, title_spans: []const wiki.Span = &.{}, level: u8 = 3,
+        is_heading: bool = true, title_depth: u8 = 0, title_list_path: []const u8 = "", blocks: []const wiki.Block,
+    };
+    var sections = [_]Section{
+        .{ .title = "ቋንቋ", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = "አማርኛ" }} }} },
+        .{ .title = "የንግግር ክፍል", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = "ስም" }} }} },
+        .{ .title = "ገለፃ/ትርጉም", .blocks = &.{
+            .{ .kind = .definition, .depth = 1, .list_path = "#", .spans = &.{.{ .text = "የሚኖር አካልን ከሞተ አካል የሚለይ ባህሪ", .flags = .{ .bold = true } }} },
+            .{ .kind = .example, .depth = 2, .list_path = "#:" },
+        } },
+        .{ .title = "ተጠቃሽ መረጃዎች", .blocks = &.{.{ .kind = .list_item, .depth = 1, .list_path = "*", .spans = &.{.{ .text = "[[  ]]" }} }} },
+    };
+    var headings: [4]wiki.Span = undefined;
+    for (&sections, 0..) |*section, i| {
+        headings[i] = .{ .text = section.title };
+        section.title_spans = headings[i..][0..1];
+    }
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const layout = try buildForEntryWithClassifiedCode(a, &sections, false, "አማርኛ", "am", null, "amwiktionary", &.{}, "ሕይወት");
+    const bytes = try encoder.presentation_codec.encodeBuildAlloc(a, @as([]const wiki.Span, &.{}), &sections, layout, @as([]const T.Reference, &.{}), @as([]const T.Media, &.{}));
+    const stored = try encoder.presentation_codec.decodeAlloc(a, bytes, "ሕይወት", .language, .{ .heading = "አማርኛ", .code = "am" });
+    try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, stored));
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+    const noun = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("አማርኛ", noun.language);
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqual(@as(usize, 2), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{1}, noun.definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3 }, stored.entry.organization.other_sections);
+    const gloss = stored.entry.sections[noun.section].blocks[noun.definitions[0].block];
+    try std.testing.expectEqual(.definition, gloss.kind);
+    try std.testing.expectEqualStrings("የሚኖር አካልን ከሞተ አካል የሚለይ ባህሪ", gloss.spans[0].text);
+    try std.testing.expect(gloss.spans[0].bold);
+    const example = stored.entry.sections[noun.section].blocks[noun.definitions[0].examples[0]];
+    try std.testing.expectEqual(.example, example.kind);
+    try std.testing.expectEqual(@as(usize, 0), example.spans.len);
+    const reference = stored.entry.sections[3].blocks[0].spans[0];
+    try std.testing.expectEqual(.text, reference.kind);
+    try std.testing.expectEqualStrings("[[  ]]", reference.text);
+    try std.testing.expectEqualStrings("", reference.target);
+    try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
+    try std.testing.expect(!amharicNounGloss(&sections, 2, null, "am", "amwiktionary"));
+    try std.testing.expect(!amharicNounGloss(&sections, 2, "ኖርዌጅኛ", "no", "amwiktionary"));
+    try std.testing.expect(!amharicNounGloss(&sections, 2, "አማርኛ", "am", "otherwiki"));
+    const leading = [_]Section{sections[3]} ++ sections;
+    try std.testing.expect(amharicNounGloss(&leading, 3, "አማርኛ", "am", "amwiktionary"));
+    sections[3] = sections[1];
+    try std.testing.expect(!amharicNounGloss(&sections, 2, "አማርኛ", "am", "amwiktionary"));
 }
