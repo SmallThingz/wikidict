@@ -156,6 +156,9 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Retained Endrika:-ana- p10219/r58062 redirects to -nom- p2723/r3477705;
     // -déf- p2721/r37568643 emits its exact noun label. Ownership is independent.
     if (std.mem.eql(u8, title, "Anarana iombonana")) return "Noun";
+    // Own MG -mpam- p2719/r13831286 declares code=adj and category Adjectif;
+    // -def- p2721/r37568643 emits this exact H3 label. Owner stays independent.
+    if (std.mem.eql(u8, title, "Mpamaritra")) return "Adjective";
     // Teamplaid:-ainm- p1960/r77514 emits this exact noun heading.
     // Scottish Gaelic noun term: en.wiktionary.org/wiki/noun#Translations.
     if (std.mem.eql(u8, title, "Ainmear")) return "Noun";
@@ -15829,4 +15832,77 @@ test "Amharic noun fields address the separate original gloss and exclude ambigu
     try std.testing.expect(amharicNounGloss(&leading, 3, "አማርኛ", "am", "amwiktionary"));
     sections[3] = sections[1];
     try std.testing.expect(!amharicNounGloss(&sections, 2, "አማርኛ", "am", "amwiktionary"));
+}
+
+test "Malagasy adjective heading preserves four original definitions independent owners and noun siblings" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // Own 20261001 Endrika:-mpam- p2719/r13831286 declares code=adj,
+    // category Adjectif, and calls -def- with Mpamaritra at heading level 3.
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Mpamaritra").?);
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Anarana iombonana").?);
+    for ([_][]const u8{ "mpamaritra", "MPAMARITRA", "Mpamaritra ", " Mpamaritra", "Mpamaritra?", "Mpamaritra 2", "Mpamaritra [missing template]" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const heading = wiki.Block{ .kind = .heading, .level = 3, .spans = &.{.{ .text = " Mpamaritra " }} };
+    const laz = [_]wiki.Block{
+        heading,
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "ხანჭელი", .flags = .{ .bold = true } }} },
+        .{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "voankazo efa somary masaka" }} },
+        .{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "zavatra maitso" }} },
+    };
+    const ceb = [_]wiki.Block{
+        heading,
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "krimson", .flags = .{ .bold = true } }} },
+        .{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "zavatra izay misy loko mena" }} },
+    };
+    const tl = [_]wiki.Block{
+        heading,
+        .{ .kind = .paragraph, .spans = &.{.{ .text = "krimson", .flags = .{ .bold = true } }} },
+        .{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "zavatra mena mena" }} },
+    };
+    const noun = [_]wiki.Block{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "loko mena" }} }};
+    const cases = .{
+        .{ "Laz", laz[0..], @as(usize, 2) },
+        .{ "Cebuano", ceb[0..], @as(usize, 1) },
+        .{ "Tagalog", tl[0..], @as(usize, 1) },
+    };
+    inline for (cases) |case| {
+        const sections = [_]Section{
+            .{ .title = case[0], .level = 2 },
+            .{ .title = "Mpamaritra", .level = 3, .blocks = case[1] },
+            .{ .title = "Tsiahy", .level = 3 },
+            .{ .title = "Anarana iombonana", .level = 3, .blocks = &noun },
+        };
+        const owned = try buildOwned(a, &sections, case[0]);
+        try std.testing.expectEqual(@as(usize, 2), owned.lexemes.len);
+        const adjective = owned.lexemes[0];
+        try std.testing.expectEqualStrings(case[0], adjective.language);
+        try std.testing.expectEqualStrings("Adjective", adjective.kind);
+        try std.testing.expectEqual(@as(usize, 1), adjective.section);
+        try std.testing.expectEqual(case[2], adjective.definitions.len);
+        for (adjective.definitions, 0..) |definition, i| {
+            try std.testing.expectEqual(i + 2, definition.block);
+            try std.testing.expect(definition.parent == null);
+            try std.testing.expectEqualStrings(case[1][i + 2].spans[0].text, sections[adjective.section].blocks[definition.block].spans[0].text);
+        }
+        try std.testing.expectEqualStrings("Noun", owned.lexemes[1].kind);
+        try std.testing.expectEqualStrings(case[0], owned.lexemes[1].language);
+        try std.testing.expectEqual(@as(usize, 3), owned.lexemes[1].section);
+        try std.testing.expectEqual(@as(usize, 0), owned.lexemes[1].definitions[0].block);
+        const independent = try buildOwned(a, &sections, "retained independent owner");
+        for (independent.lexemes) |lexeme| try std.testing.expectEqualStrings("retained independent owner", lexeme.language);
+        const unresolved = try buildUnclassified(a, &sections);
+        try std.testing.expectEqual(@as(usize, 2), unresolved.lexemes.len);
+        for (unresolved.lexemes) |lexeme| try std.testing.expectEqualStrings("", lexeme.language);
+    }
+    const ambiguous = [_]Section{.{ .title = "Mpamaritra", .level = 2, .blocks = &laz }};
+    const unresolved_heading = try buildUnclassified(a, &ambiguous);
+    try std.testing.expectEqual(@as(usize, 0), unresolved_heading.lexemes.len);
+    try std.testing.expectEqualSlices(usize, &.{0}, unresolved_heading.other_sections);
+    var renderer: wiki.Renderer = .{ .a = a, .context = .{} };
+    const literal = try renderer.renderBody("<nowiki>===Mpamaritra===\n# literal, not a definition</nowiki>");
+    const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
 }
