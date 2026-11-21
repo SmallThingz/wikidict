@@ -6158,6 +6158,9 @@ class RetainedNativeToolRoles:
         self.compilation_payloads = {}
         self.closed_native_origin=(self.closed_whole_origin() if self.closed_whole_execution is not None else
                                    self.closed_execution_origin() if self.initial_sealed_generation is not None else None)
+        # Several roles often name the same compiled sources. Share their reads
+        # for this selection only; these files can retire after verification.
+        self._compilation_digests = {}
         shared_interfaces, shared_runtime = {}, None
         for role, row in self.records.items():
             artifact = row['artifact']
@@ -6242,6 +6245,7 @@ class RetainedNativeToolRoles:
                 raise ValueError('Retained native artifact bytes or mode differ')
             self.tools[role] = (None if self.closed_whole_execution is not None and role=='dict-bundle-build' else
                                 self.bind_tool(role,path) if not actual['mode'] & 0o222 else None)
+        del self._compilation_digests
         if self.initial_sealed_generation is not None:
             initial_sealed_generation(self.initial_sealed_generation, self)
             self.bind_input(Path(self.initial_sealed_generation['path']))
@@ -7008,7 +7012,10 @@ class RetainedNativeToolRoles:
         if previous is not None:
             if previous != stamp:raise ValueError('Retained native dependency identity changed')
             return dict(self.input_identities[path])
-        digest = sha256_file(path)
+        digests = None if retain else getattr(self, '_compilation_digests', None)
+        digest = digests.get(stamp) if digests is not None else None
+        if digest is None:
+            digest = sha256_file(path)
         after = path.lstat()
         if stamp != (after.st_dev, after.st_ino, after.st_mode, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
             raise ValueError('Retained native dependency changed while hashing')
@@ -7019,6 +7026,8 @@ class RetainedNativeToolRoles:
         if retain:
             self.inputs[path] = stamp
             self.input_identities[path]=identity
+        elif digests is not None:
+            digests[stamp] = digest
         return dict(identity)
 
     def bind_plain_category(self, name, path, digest, *, owned_roots):

@@ -8482,6 +8482,39 @@ class RetainedNativeRoleTests(unittest.TestCase):
                 dependencies=copy.deepcopy(dependencies if role=='dict-bundle-build' else {name:dependencies[name] for name in ('zig','worker_object','value_leaf_bc','worker_main_c')}))
         return roles,compiler
 
+    def test_overlapping_native_roles_hash_each_unchanged_source_once_per_selection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roles, compiler = self.fixture(Path(tmp))
+            compiler_sha = b.sha256_file(compiler)
+            source = Path(tmp) / 'source/src/encoder/presentation_compile.zig'
+            with patch.object(b, 'sha256_file', wraps=b.sha256_file) as digest:
+                selected = b.RetainedNativeToolRoles(roles, zig_sha256=compiler_sha)
+                self.assertEqual(digest.call_args_list.count(call(source)), 1)
+                self.assertNotIn(source, selected.inputs)
+                b.RetainedNativeToolRoles(roles, zig_sha256=compiler_sha)
+                self.assertEqual(digest.call_args_list.count(call(source)), 2)
+
+    def test_replaced_compilation_input_is_checked_again_between_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roles, compiler = self.fixture(Path(tmp))
+            source = Path(tmp) / 'source/src/encoder/presentation_compile.zig'
+            bind = b.RetainedNativeToolRoles.bind_input
+            visits = []
+
+            def replace_on_second_role(selection, path, *, retain=True):
+                if path == source:
+                    visits.append(path)
+                    if len(visits) == 2:
+                        replacement = path.with_suffix('.replacement')
+                        replacement.write_bytes(b'x' * path.stat().st_size)
+                        replacement.replace(path)
+                return bind(selection, path, retain=retain)
+
+            with patch.object(b.RetainedNativeToolRoles, 'bind_input', replace_on_second_role):
+                with self.assertRaisesRegex(ValueError, 'Retained native role source/ABI changed'):
+                    b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(len(visits), 2)
+
     def test_retained_source_manifest_accepts_checked_mode_without_rehashing_for_compilation(self):
         with tempfile.TemporaryDirectory() as tmp:
             roles, compiler = self.fixture(Path(tmp))
