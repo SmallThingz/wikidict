@@ -19825,7 +19825,13 @@ fn runCapturedWriterDiagnosticWithShared(io: std.Io, a: std.mem.Allocator, reque
     }, 64 * 1024);
 }
 
-const CapturedWriterSourceOrigin = struct { dump_path: []const u8, expander_root: []const u8, figure_input_root: ?[]const u8 = null, figure_page_observations_snapshot: ?[]const u8 = null };
+const CapturedWriterSourceOrigin = struct {
+    dump_path: []const u8,
+    expander_root: []const u8,
+    figure_input_root: ?[]const u8 = null,
+    figure_page_observations_snapshot: ?[]const u8 = null,
+    stylesheet_imports_snapshot: ?[]const u8 = null,
+};
 const CapturedWriterSourceFileIdentity = struct { device_major: u32, device_minor: u32, inode: u64, size: u64, mtime_ns: i128, ctime_ns: i128 };
 const CapturedWriterSourceIdentity = struct { version: u32, source: CapturedWriterSourceFileIdentity, indexes: [3]?CapturedWriterSourceFileIdentity, namespace_sha256: [32]u8, redirects_sha256: ?[32]u8 };
 fn capturedWriterSourceFileIdentity(file: std.Io.File) !CapturedWriterSourceFileIdentity {
@@ -20249,15 +20255,8 @@ fn capturedWriterRun(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRe
     // These exact captures require the normal source-backed owner/style route.
     if (category_dump == null) return error.MissingCapturedWriterNormalSource;
     stage.* = "table-style-loader";
-    const stylesheet_path = try std.fs.path.join(a, &.{ root, "stylesheet-imports.json" });
-    const stylesheet_snapshot = std.Io.Dir.cwd().readFileAlloc(io, stylesheet_path, a, .limited(2 * 1024 * 1024)) catch |err| switch (err) {
-        error.FileNotFound => null,
-        else => return err,
-    };
+    const stylesheet_snapshot = try capturedWriterReadStylesheet(io, a, request, captured.origin.stylesheet_imports_snapshot);
     defer if (stylesheet_snapshot) |bytes| a.free(bytes);
-    if (stylesheet_snapshot != null) {
-        try capturedWriterRequireSourceDependency(request, stylesheet_path);
-    } else try capturedWriterRequireSourceAbsence(request, stylesheet_path);
     const style_observation = try source_table_styles.observeWithImportsForTarget(a, namespaces, &category_dump.?, page_index.bytes, titles, stylesheet_snapshot, .screen);
     var table_styles = style_observation.authority;
     defer if (table_styles) |*authority| authority.deinit();
@@ -20466,6 +20465,7 @@ const CapturedWriterAuditInputs = struct {
         dump_path: []const u8, expander_root: []const u8, tool_path: []const u8,
         figure_input_root: ?[]const u8 = null,
         figure_page_observations_snapshot: ?[]const u8 = null,
+        stylesheet_imports_snapshot: ?[]const u8 = null,
         start_page: u64, requested_limit: ?u64, index_byte_offset: ?u64,
     },
     files: []const struct {
@@ -20548,7 +20548,8 @@ fn capturedWriterJoinAudit(a: std.mem.Allocator, request: CapturedWriterRequest,
         }
     }
     if (producer_count != 1 or dump_count != 1) return error.CapturedWriterAuditMismatch;
-    if (inputs.context.figure_page_observations_snapshot) |path| {
+    for ([_]?[]const u8{ inputs.context.figure_page_observations_snapshot, inputs.context.stylesheet_imports_snapshot }) |selected| {
+        const path = selected orelse continue;
         if (!std.fs.path.isAbsolute(path)) return error.CapturedWriterAuditMismatch;
         try capturedWriterRequireSourceDependency(request, path);
         var matches: usize = 0;
@@ -20565,9 +20566,9 @@ fn capturedWriterJoinAudit(a: std.mem.Allocator, request: CapturedWriterRequest,
         };
         if (matches != 1) return error.CapturedWriterAuditMismatch;
     }
-    // Normal role files under the historical root retain their original byte
-    // identities. A separately pinned Book root is the one explicit addition;
-    // the existing derived-language profile retains its own lineage validator.
+    // Normal files under the historical root retain their original bytes. The
+    // selected external inputs were checked above. A derived language profile
+    // has its own lineage validator.
     const prefix = try std.mem.concat(a, u8, &.{ request.expander_root, "/" }); defer a.free(prefix);
     const figure_prefix = if (request.figure_input_root) |root| try std.mem.concat(a, u8, &.{ root, "/" }) else null;
     defer if (figure_prefix) |value| a.free(value);
@@ -20615,6 +20616,7 @@ const CapturedWriterAuthenticatedCapture = struct {
         a.free(self.origin.dump_path); a.free(self.origin.expander_root);
         if (self.origin.figure_input_root) |root| a.free(root);
         if (self.origin.figure_page_observations_snapshot) |path| a.free(path);
+        if (self.origin.stylesheet_imports_snapshot) |path| a.free(path);
         a.free(self.namespace_kind);
     }
 };
@@ -20625,7 +20627,25 @@ fn capturedWriterOwnCapture(a: std.mem.Allocator, origin: CapturedWriterSourceOr
     errdefer if (figure_root) |path| a.free(path);
     const book = if (origin.figure_page_observations_snapshot) |path| try a.dupe(u8, path) else null;
     errdefer if (book) |path| a.free(path);
-    return .{ .origin = .{ .dump_path = dump_path, .expander_root = root, .figure_input_root = figure_root, .figure_page_observations_snapshot = book }, .namespace_kind = try a.dupe(u8, kind), .audit_dump = stamp };
+    const stylesheet = if (origin.stylesheet_imports_snapshot) |path| try a.dupe(u8, path) else null;
+    errdefer if (stylesheet) |path| a.free(path);
+    return .{ .origin = .{ .dump_path = dump_path, .expander_root = root, .figure_input_root = figure_root, .figure_page_observations_snapshot = book, .stylesheet_imports_snapshot = stylesheet }, .namespace_kind = try a.dupe(u8, kind), .audit_dump = stamp };
+}
+fn capturedWriterReadStylesheet(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest, selected: ?[]const u8) !?[]const u8 {
+    if (selected) |path| {
+        if (!std.fs.path.isAbsolute(path)) return error.InvalidCapturedWriterPath;
+        return try capturedWriterRead(io, a, try capturedWriterDependency(request, path), 2 * 1024 * 1024);
+    }
+    const path = try std.fs.path.join(a, &.{ request.expander_root, "stylesheet-imports.json" });
+    defer a.free(path);
+    std.Io.Dir.cwd().access(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            try capturedWriterRequireSourceAbsence(request, path);
+            return null;
+        },
+        else => return err,
+    };
+    return try capturedWriterRead(io, a, try capturedWriterDependency(request, path), 2 * 1024 * 1024);
 }
 fn capturedWriterObservationRoot(request: CapturedWriterRequest, a: std.mem.Allocator) ![]const u8 {
     const root = request.figure_page_observations_root orelse return request.expander_root;
@@ -20684,7 +20704,7 @@ fn capturedWriterAuthenticatedOriginWithShared(io: std.Io, a: std.mem.Allocator,
         for (inputs.files) |file| if (std.mem.eql(u8, file.path, inputs.context.dump_path)) { dump_stamp = file.identity; };
         // The historical /proc/self/exe record is data. Never open that path as
         // though it still named the producer of this original audit.
-        return capturedWriterOwnCapture(a, .{ .dump_path = inputs.context.dump_path, .expander_root = inputs.context.expander_root, .figure_input_root = inputs.context.figure_input_root, .figure_page_observations_snapshot = inputs.context.figure_page_observations_snapshot }, row.value.namespace_kind, dump_stamp);
+        return capturedWriterOwnCapture(a, .{ .dump_path = inputs.context.dump_path, .expander_root = inputs.context.expander_root, .figure_input_root = inputs.context.figure_input_root, .figure_page_observations_snapshot = inputs.context.figure_page_observations_snapshot, .stylesheet_imports_snapshot = inputs.context.stylesheet_imports_snapshot }, row.value.namespace_kind, dump_stamp);
     }
     const receipt_bytes = try capturedWriterRead(io, a, request.capture_receipt, 2 * 1024 * 1024); defer a.free(receipt_bytes);
     const receipt = try std.json.parseFromSlice(CapturedWriterReceipt, a, receipt_bytes, .{ .ignore_unknown_fields = true }); defer receipt.deinit();
@@ -20775,7 +20795,7 @@ fn capturedWriterRequireNormalRole(io: std.Io, a: std.mem.Allocator, request: Ca
 
 fn capturedWriterRequireNormalRoles(io: std.Io, a: std.mem.Allocator, request: CapturedWriterRequest) !void {
     try capturedWriterRequireNormalRole(io, a, request, request.expander_root, "namespace-registry.tsv", true);
-    inline for (.{ "interwiki-map.tsv", "behavior-switches.tsv", "image-options.tsv", "stylesheet-imports.json", "namespace-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-siteinfo.raw.json", "figure-page-observations.json", "page-language.json", "page-language.raw.json", "page-language.html" }) |name|
+    inline for (.{ "interwiki-map.tsv", "behavior-switches.tsv", "image-options.tsv", "namespace-siteinfo.raw.json", "figure-sizing.json", "figure-sizing.raw.json", "figure-sizing.site.json", "figure-siteinfo.raw.json", "figure-page-observations.json", "page-language.json", "page-language.raw.json", "page-language.html" }) |name|
         try capturedWriterRequireNormalRole(io, a, request, request.expander_root, name, false);
     if (request.figure_input_root) |root| {
         if (!std.fs.path.isAbsolute(root)) return error.InvalidCapturedWriterPath;
@@ -62824,6 +62844,56 @@ test "captured Writer Book selection carries authenticated first failure overrid
     try std.testing.expect(std.mem.indexOf(u8, selection, file.path) != null);
     var unsupported = request; unsupported.figure_page_observations_root = root;
     try std.testing.expectError(error.InvalidCapturedWriterObservationRoot, capturedWriterObservationPath(unsupported, selected.origin, a));
+}
+
+test "captured Writer uses the authenticated stylesheet selection for first failures and audits" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const io = std.testing.io;
+    const root = try tmp.dir.realPathFileAlloc(io, ".", a);
+    const worker = try std.fs.path.join(a, &.{root, "worker"});
+    try std.Io.Dir.cwd().createDirPath(io, worker);
+    var first = try CapturedWriterCliTest.fixture(io, a, worker);
+    try std.testing.expect((try capturedWriterReadStylesheet(io, a, first, null)) == null);
+
+    // This selector comes from the producer receipt, outside the worker's default path.
+    const sheet = try CapturedWriterCliTest.put(io, a, root, "selected-imports.json", "selected stylesheet bytes");
+    var receipt = try CapturedWriterCliTest.receipt(io, a, first);
+    receipt.input.stylesheet_imports_snapshot = sheet.path;
+    first.capture_receipt = try CapturedWriterCliTest.put(io, a, root, "first.json", try std.json.Stringify.valueAlloc(a, receipt, .{}));
+    const origin = try capturedWriterAuthenticatedOrigin(io, a, first); defer origin.deinit(a);
+    try std.testing.expectEqualStrings(sheet.path, origin.origin.stylesheet_imports_snapshot.?);
+    try std.testing.expectError(error.UnpinnedCapturedWriterSourceDependency, capturedWriterReadStylesheet(io, a, first, origin.origin.stylesheet_imports_snapshot));
+    first.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{first.dependencies, &.{sheet}});
+    try std.testing.expectEqualStrings("selected stylesheet bytes", (try capturedWriterReadStylesheet(io, a, first, origin.origin.stylesheet_imports_snapshot)).?);
+
+    var audit = try CapturedWriterAuditTest.make(io, a, worker, first);
+    audit.inputs.context.stylesheet_imports_snapshot = sheet.path;
+    audit.request.audit_capture.?.inputs = try CapturedWriterCliTest.put(io, a, worker, "audit-inputs.json", try std.json.Stringify.valueAlloc(a, audit.inputs, .{}));
+    const audited = try capturedWriterAuthenticatedOrigin(io, a, audit.request); defer audited.deinit(a);
+    try std.testing.expectEqualStrings(sheet.path, audited.origin.stylesheet_imports_snapshot.?);
+    // This index has no Common.css. The ordinary style loader must reject an
+    // explicit snapshot in both modes; ignoring it would compile the entry.
+    try std.testing.expectError(error.InvalidStylesheetImports, CapturedWriterCliTest.execute(io, a, root, first, "selected-first"));
+    try std.testing.expectError(error.InvalidStylesheetImports, CapturedWriterCliTest.execute(io, a, root, audit.request, "selected-audit"));
+    const File = @typeInfo(@FieldType(CapturedWriterAuditInputs, "files")).pointer.child;
+    const changed = try a.dupe(File, audit.inputs.files);
+    for (changed) |*file| {
+        if (std.mem.eql(u8, file.path, sheet.path)) file.sha256 = CapturedWriterCliTest.fingerprint;
+    }
+    audit.inputs.files = changed;
+    try std.testing.expectError(error.CapturedWriterAuditMismatch, capturedWriterJoinAudit(a, audit.request, audit.inputs, audit.summary, audit.row));
+    const fallback = try CapturedWriterCliTest.put(io, a, worker, "stylesheet-imports.json", "worker stylesheet bytes");
+    var both = first;
+    both.dependencies = try std.mem.concat(a, CapturedWriterFile, &.{first.dependencies, &.{fallback}});
+    var absences: std.ArrayList([]const u8) = .empty;
+    for (first.absent_dependencies) |path| if (!std.mem.eql(u8, path, fallback.path)) try absences.append(a, path);
+    both.absent_dependencies = try absences.toOwnedSlice(a);
+    try std.testing.expectEqualStrings("worker stylesheet bytes", (try capturedWriterReadStylesheet(io, a, both, null)).?);
+    try std.testing.expectEqualStrings("selected stylesheet bytes", (try capturedWriterReadStylesheet(io, a, both, sheet.path)).?);
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = sheet.path, .data = "changed stylesheet bytes!" });
+    try std.testing.expectError(error.CapturedWriterFileMismatch, capturedWriterReadStylesheet(io, a, both, sheet.path));
 }
 
 test "captured audit Book override preserves origin and explicit pinned replacement selection" {
