@@ -112,4 +112,62 @@ class NativeInlineBoxPitchTest {
         changed.forEach { assertNull(nativeInlineBoxPitchChildren(it)) }
         assertNotNull(nativeInlineBoxPitchChildren(owner))
     }
+
+    @Test fun retainedPegasusLevelPitchUsesStrictInteriorTopologyAndKeepsOutsideActions() {
+        // Retained Pegasus Reader, first pronunciation cell, spans 0..14.
+        // This level pitch has no drop indicator; null pitch children select the legacy branch.
+        val child = circle("ス")
+        val childText = checkNotNull(child.inlineBoxGroup).spans.single()
+        val before = text("ガ")
+        val after = text("スざ")
+        val owner = text("").copy(inlineBoxGroup = InlineBoxGroup(empty,
+            InlineBoxBorderEdges(solid, none, none, none), spans = listOf(before, child, after)))
+        val tokyo = Span("external_link", "Tokyo", "https://mg.wikipedia.org/wiki/Tokyo_dialect",
+            classes = "usage-label-accent ib-content label-content extiw", role = "label")
+        val heiban = Span("link", "Heiban", "平板型")
+        val brac = "usage-label-accent ib-brac label-brac"
+        val source = listOf(Span("text", "• "), Span("text", "(", classes = brac), tokyo,
+            Span("text", ")", classes = brac), Span("text", " "), text("ペ"), owner, Span("text", " "),
+            Span("text", "[pègás", classes = "Latn", code = true),
+            Span("text", "ú", classes = "Latn", code = true, strike = true),
+            Span("text", "súzá]", classes = "Latn", code = true), Span("text", " ("), heiban,
+            Span("text", " – [0])"), Span("line_break", "\n"))
+        val projection = rubyGraphicalProjection(source, "pegasus/pronunciation")
+        val expected = "• (Tokyo) ペガススざ [pègásúsúzá] (Heiban – [0])\n"
+        assertEquals(expected, projection.text)
+        assertEquals(expected, rubyBaseText(source))
+        val boxes = projection.ranges.filter { it.role == RubyTextRole.BoxGroup }
+        assertEquals(2, boxes.size)
+        assertSame(owner, boxes[0].span)
+        assertSame(child, boxes[1].span)
+        assertEquals(11 to 15, boxes[0].start to boxes[0].end)
+        assertEquals(12 to 13, boxes[1].start to boxes[1].end)
+        assertEquals("pegasus/pronunciation/spans/6", boxes[0].path)
+        assertEquals(boxes[0].path + "/inlineBoxGroup/spans/1", boxes[1].path)
+        assertNull(nativeInlineBoxPitchChildren(owner))
+        val pitchParents = boxes.indices.filter { nativeInlineBoxPitchChildren(checkNotNull(boxes[it].span)) != null }.toSet()
+        assertTrue(pitchParents.isEmpty())
+        assertEquals(listOf(-1, 0), nativeInlineBoxNestedParents(boxes.map { it.start to it.end }, pitchParents))
+        // Keep strict-interior refusal at either endpoint in this branch.
+        assertNull(nativeInlineBoxNestedParents(listOf(11 to 15, 11 to 12), pitchParents))
+        assertNull(nativeInlineBoxNestedParents(listOf(11 to 15, 14 to 15), pitchParents))
+        val leaves = projection.ranges.filter { it.role == RubyTextRole.Text }
+        for ((span, interval) in listOf(before to (11 to 12), childText to (12 to 13), after to (13 to 15),
+                tokyo to (3 to 8), heiban to (30 to 36))) {
+            val range = leaves.single { it.span === span }
+            assertEquals(interval, range.start to range.end)
+            assertEquals(span.text, projection.text.substring(range.start, range.end))
+        }
+        assertEquals(boxes[1].path + "/inlineBoxGroup/spans/0", leaves.single { it.span === childText }.path)
+        val actions = leaves.filter { it.span?.kind in setOf("link", "external_link") }
+        assertEquals(2, actions.size)
+        assertSame(tokyo, actions[0].span)
+        assertSame(heiban, actions[1].span)
+        assertTrue(actions[0].end <= boxes[0].start && actions[1].start >= boxes[0].end)
+        val flattened = rubyGraphicalSpans(source)
+        assertEquals(expected, flattened.joinToString("") { it.text + it.trail })
+        assertSame(tokyo, flattened.single { it.kind == "external_link" })
+        assertSame(heiban, flattened.single { it.kind == "link" })
+        assertSame(source[9], flattened.single { it.strike })
+    }
 }

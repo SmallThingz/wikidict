@@ -1,5 +1,27 @@
 # Android validation
 
+## Pegasus level-pitch regression — 2026-11-21
+
+The retained Pegasus pronunciation already uses the native strict-interior
+nesting path for its zero-padding level-pitch box without a drop indicator.
+No renderer change was needed. One regression test now checks the exact text,
+nested ranges, strict endpoint refusals and original Tokyo/Heiban link identities.
+
+[Host160][host160-current] passed **five fresh focused JVM tests**: the new
+Pegasus regression and four maintained pitch controls, with zero failures,
+skips or carry. Main Kotlin compilation was up to date; unit Kotlin compilation
+and the test task executed. Its independent closure verified the source,
+protected artifacts, absent owned processes and free locks.
+
+The inventory now declares 1,215 JVM tests. This focused run is not a new full
+1,215-case result. The full 1,214-case result and lint/unsigned APK below remain
+the evidence for the unchanged production source; packaging and instrumentation
+were not repeated. This test establishes projection and branch-selection
+behavior, not rendered pixels, touch or accessibility. The physical-device access
+hold below remains unchanged.
+
+[host160-current]: /home/a/.tmp/wikidict-android-host160-run01/saved-result-peer-reader01.json
+
 ## Current table-border integration — 2026-11-20
 
 The qualified Android production source is commit
@@ -14,7 +36,7 @@ paint and the supported inset/outset and collapsed-border geometry.
 skips or carry, and compiled all three Kotlin routes: 170 main, 153 unit-test and
 99 instrumentation sources. Its four new device controls were compiled only.
 
-The normal unfiltered `testDebugUnitTest` target then [passed all 1,214 current
+The normal unfiltered `testDebugUnitTest` target then [passed all 1,214 then-declared
 cases][host158-current] across 155 reports, with **zero failures, skips or carried
 cases**. This includes 1,212 correctness cases and two benchmark-named controls,
 without a performance claim. Main and unit Kotlin compilation and the test task
@@ -66,9 +88,9 @@ and no retry, alternate access path, signing or install action was taken here.
 Pixels, touch, selection and accessibility still require permitted device access,
 coordinated custody and a compatible authorized signed installation.
 
-This documentation-only update records the completed source and artifact
-boundary. The sections below retain their historical results and do not replace
-the current scope above.
+This section records the completed production-source and artifact boundary.
+The sections below retain their historical results and do not replace the
+current scopes above.
 
 [application157]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/table-resolved-edges01/canonical-application01.json
 [bridge157]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/table-resolved-edges01/canonical-commit-bridge01.json
