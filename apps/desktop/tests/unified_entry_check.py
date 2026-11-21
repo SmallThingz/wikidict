@@ -126,6 +126,20 @@ def validate_loaded_runtime(stderr, prefix, paths, sonames):
     return loaded
 
 
+def check_font_notices(prefix):
+    notices = {
+        "Newsreader-OFL.txt": "fdfad38143ec470553cae82a1e45320bdd1b9ec70415d37bd0171051d8a4ded8",
+        "NewGardiner-OFL.txt": "6d247806a1267268b915dedf9e0e1513b6c82dae722093e87def5f324a06e0ac",
+        "NotoSerifHentaigana-OFL.txt": "4061fdf96d90c8337d66506bbc240e0e1b5a58132967842ab831f6c76e821a28",
+        "HanaMinB-LICENSE.txt": "3983a1b74d18bc5e9fe733224838af1045df28a68d677432462a5a85da1b689e",
+        "NotoSansThaana-OFL.txt": "5de6fbfe9ca25509fd60e47be3fab3cc236abe20bc1b123a5c2bd12f067fd13c",
+    }
+    for name, digest in notices.items():
+        installed = prefix / "share/licenses/wikidict" / name
+        if hashlib.sha256(installed.read_bytes()).hexdigest() != digest:
+            raise RuntimeError(f"installed font notice differs from its source: {name}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)
@@ -172,18 +186,7 @@ def main():
         else:
             bin_dir = args.bin_dir.absolute()
         prefix = bin_dir.parent
-        desktop = Path(__file__).resolve().parents[1]
-        font_notices = (
-            desktop / "web/Newsreader-OFL.txt",
-            desktop / "src/fonts/NewGardiner-OFL.txt",
-            desktop / "src/fonts/NotoSerifHentaigana-OFL.txt",
-            desktop.parent / "shared/fonts/HanaMinB-LICENSE.txt",
-            desktop.parent / "shared/fonts/NotoSansThaana-OFL.txt",
-        )
-        for notice in font_notices:
-            installed = prefix / "share/licenses/wikidict" / notice.name
-            if installed.read_bytes() != notice.read_bytes():
-                raise RuntimeError(f"installed font notice differs from its source: {notice.name}")
+        check_font_notices(prefix)
         if args.private_qt_runtime:
             installed_bootstrap = prefix / "lib/libwikidict-test-settings.so"
             if args.bin_dir and bootstrap != installed_bootstrap.resolve(strict=True):
