@@ -172,6 +172,18 @@ def main():
         else:
             bin_dir = args.bin_dir.absolute()
         prefix = bin_dir.parent
+        desktop = Path(__file__).resolve().parents[1]
+        font_notices = (
+            desktop / "web/Newsreader-OFL.txt",
+            desktop / "src/fonts/NewGardiner-OFL.txt",
+            desktop / "src/fonts/NotoSerifHentaigana-OFL.txt",
+            desktop.parent / "shared/fonts/HanaMinB-LICENSE.txt",
+            desktop.parent / "shared/fonts/NotoSansThaana-OFL.txt",
+        )
+        for notice in font_notices:
+            installed = prefix / "share/licenses/wikidict" / notice.name
+            if installed.read_bytes() != notice.read_bytes():
+                raise RuntimeError(f"installed font notice differs from its source: {notice.name}")
         if args.private_qt_runtime:
             installed_bootstrap = prefix / "lib/libwikidict-test-settings.so"
             if args.bin_dir and bootstrap != installed_bootstrap.resolve(strict=True):

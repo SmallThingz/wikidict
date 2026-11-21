@@ -29,6 +29,10 @@ qt_add_resources(wikidict-fonts supplementary_han_font PREFIX "/fonts"
     BASE "${WIKIDICT_SHARED_FONT_DIR}"
     FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
           "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
+qt_add_resources(wikidict-fonts thaana_font PREFIX "/fonts"
+    BASE "${WIKIDICT_SHARED_FONT_DIR}"
+    FILES "${WIKIDICT_SHARED_FONT_DIR}/NotoSansThaana-Regular.ttf"
+          "${WIKIDICT_SHARED_FONT_DIR}/NotoSansThaana-OFL.txt")
 qt_add_resources(wikidict-fonts reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
@@ -88,6 +92,9 @@ wikidict_select_install_core("${WIKIDICT_EXECUTABLE}" "${DICT_FFI_LIBRARY}"
     "${WIKIDICT_CORE}/src/ffi/dict.h")
 install(TARGETS wikidict-gui LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardiner-OFL.txt"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../web/Newsreader-OFL.txt"
+    "${WIKIDICT_SHARED_FONT_DIR}/NotoSansThaana-OFL.txt"
     "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt"
     DESTINATION share/licenses/wikidict)
 install(FILES "${wikidict_install_ffi}" DESTINATION lib)

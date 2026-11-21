@@ -632,3 +632,6 @@ src/encoder/testdata/lt-direct-senses/ambasada.wikitext whitespace=-blank-at-eol
 src/encoder/testdata/io-labeled-open-link01/page0[123].wikitext whitespace=-blank-at-eol
 src/encoder/testdata/zh-piasu381-pitch/Gadget-Site.css whitespace=-blank-at-eol
 src/encoder/testdata/zh-piasu381-pitch/expanded.wikitext whitespace=-blank-at-eol
+
+# Preserve the verified upstream font notice byte for byte.
+apps/shared/fonts/NotoSansThaana-OFL.txt whitespace=-blank-at-eol

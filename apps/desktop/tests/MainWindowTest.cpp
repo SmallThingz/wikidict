@@ -33578,6 +33578,67 @@ private slots:
         }
     }
 
+    void bundledThaanaFallbackKeepsMarksAndPrimaryFonts() {
+        const QFont applicationFont = QApplication::font();
+        MainWindow window{QString()};
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 120000);
+        QCOMPARE(QApplication::font(), applicationFont);
+        const QString family = QStringLiteral("Noto Sans Thaana");
+        QVERIFY(QFontDatabase::applicationFallbackFontFamilies(QChar::Script_Thaana).contains(family));
+        QFile asset(QStringLiteral(":/fonts/NotoSansThaana-Regular.ttf"));
+        QVERIFY(asset.open(QIODevice::ReadOnly));
+        const QByteArray bytes = asset.readAll();
+        QCOMPARE(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex(),
+                 QByteArray("7543935bdcef770c9d3dd54222651b29040e5ec82f3bc58542392b2c7a9cbd3c"));
+        QFile license(QStringLiteral(":/fonts/NotoSansThaana-OFL.txt"));
+        QVERIFY(license.open(QIODevice::ReadOnly));
+        QCOMPARE(QCryptographicHash::hash(license.readAll(), QCryptographicHash::Sha256).toHex(),
+                 QByteArray("5de6fbfe9ca25509fd60e47be3fab3cc236abe20bc1b123a5c2bd12f067fd13c"));
+        const QRawFont bundled(bytes, 24, QFont::PreferDefaultHinting);
+        QVERIFY(bundled.isValid()); QVERIFY(bundled.fontTable("GSUB").isEmpty());
+        QVERIFY(!bundled.fontTable("GPOS").isEmpty());
+        const QString source = QString::fromUtf8("މަސް ދިވެހިބަސް\nއަހަރުގެ 12 ބައި ކުޅައެއްބައި، ޖަނަވާރުގެ ހަށިގަނޑުގެ ބައެއް، ކަނޑުގައި ދިރިއުޅޭ އެއްޗެއް");
+        const QList<QPair<QString, QFont>> primaryFonts{
+            {QStringLiteral("search"), window.search_->font()},
+            {QStringLiteral("title"), window.title_->font()},
+            {QStringLiteral("reading"), window.reading_->document()->defaultFont()}};
+        for (const auto &[role, base] : primaryFonts) {
+            for (const bool bold : {false, true}) {
+                QFont font = base; font.setBold(bold);
+                QTextLayout layout(source, font);
+                QTextOption option; option.setTextDirection(Qt::RightToLeft);
+                option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere); layout.setTextOption(option);
+                layout.beginLayout(); qreal y = 0;
+                while (true) {
+                    auto line = layout.createLine(); if (!line.isValid()) break;
+                    line.setLineWidth(600); line.setPosition(QPointF(0, y)); y += line.height();
+                }
+                layout.endLayout(); QCOMPARE(layout.text(), source); QCOMPARE(layout.font(), font);
+                for (int i = 0; i < source.size(); ++i) {
+                    if (source.at(i).script() != QChar::Script_Thaana) continue;
+                    QVERIFY(bundled.supportsCharacter(source.at(i)));
+                    const auto runs = layout.glyphRuns(i, 1); QVERIFY(!runs.isEmpty());
+                    for (const auto &run : runs) {
+                        QCOMPARE(run.rawFont().familyName(), family);
+                        QCOMPARE(run.rawFont().fontTable("cmap"), bundled.fontTable("cmap"));
+                        for (quint32 glyph : run.glyphIndexes()) QVERIFY(glyph != 0);
+                    }
+                }
+                QTextLayout latin(QStringLiteral("A12"), font);
+                latin.beginLayout(); auto latinLine = latin.createLine(); QVERIFY(latinLine.isValid());
+                latinLine.setLineWidth(100); latin.endLayout();
+                for (const auto &run : latin.glyphRuns()) QVERIFY(run.rawFont().familyName() != family);
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!directory.isEmpty()) {
+                    QVERIFY(QDir().mkpath(directory));
+                    QImage frame(640, qCeil(y) + 40, QImage::Format_ARGB32_Premultiplied); frame.fill(Qt::white);
+                    { QPainter painter(&frame); painter.setPen(Qt::black); layout.draw(&painter, QPointF(20, 20)); }
+                    QVERIFY(frame.save(QDir(directory).filePath(QStringLiteral("thaana-%1-%2.png").arg(role).arg(bold))));
+                }
+            }
+        }
+    }
+
     void bundledKanaFallbackKeepsArchaicAndOrdinaryGlyphs() {
         const QFont applicationFont = QApplication::font();
         MainWindow window{QString()};

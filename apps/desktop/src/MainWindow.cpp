@@ -3233,6 +3233,20 @@ void registerHanFallback() {
     Q_UNUSED(registered);
 }
 
+// The unchanged Thaana face supplies positioning tables and missing glyphs;
+// script fallback keeps the primary UI and reader families unchanged.
+void registerThaanaFallback() {
+    static const bool registered = [] {
+        const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/NotoSansThaana-Regular.ttf"));
+        const auto families = QFontDatabase::applicationFontFamilies(id);
+        if (id < 0 || families != QStringList{QStringLiteral("Noto Sans Thaana")})
+            throw DictApiError("unable to register bundled Thaana fallback font");
+        QFontDatabase::addApplicationFallbackFontFamily(QChar::Script_Thaana, families.first());
+        return true;
+    }();
+    Q_UNUSED(registered);
+}
+
 QString readerFamily() {
     static const QString family = [] {
         const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/reader.ttf"));
@@ -3287,6 +3301,7 @@ MainWindow::MainWindow(const QString &root, const QString &initialWord)
     : QMainWindow() {
     registerKanaFallback();
     registerHanFallback();
+    registerThaanaFallback();
     setupUi();
     restoreGeometry(QSettings().value(QStringLiteral("reader/windowGeometry")).toByteArray());
     const QByteArray storedSplitter = QSettings().value(QStringLiteral("reader/splitter")).toByteArray();
