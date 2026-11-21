@@ -1020,6 +1020,18 @@ def test_cache_report_command(argv, *, report, recorder, context):
         raise ValueError('Set ZIG_GLOBAL_CACHE_DIR in the build environment for this toolchain')
     assert not any(a.startswith('-Dqualification-cache-') for a in argv)
     family = 'prepare' if argv[2] == 'prepare-tests' else 'full'
+    if family == 'prepare' and any(arg.startswith('-Dprepare-test-filter=') for arg in argv[3:]):
+        groups = [arg.removeprefix('-Dprepare-test-group=') for arg in argv[3:]
+                  if arg.startswith('-Dprepare-test-group=')]
+        if len(groups) != 1:
+            raise ValueError('Explicit prepare-test filters require one prepare-test group')
+        # Zig combines filters with OR. Named cases use the logical root;
+        # a fixed partition already supplies its own filters in build.zig.
+        group = groups[0]
+        partitions = {row[1] for row in FULL_DIAGNOSTIC_ROOTS if row[1].startswith(('tools_', 'encoder_'))}
+        if group in partitions or group == 'tools_partitioned':
+            root = group.partition('_')[0]
+            raise ValueError(f'Explicit filters for {group} require -Dprepare-test-group={root}')
     token = hashlib.sha256(json.dumps(context, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = list(argv); result[2] = 'qualification-cache-artifacts'
     if context.get('report_dependencies', False) is True:

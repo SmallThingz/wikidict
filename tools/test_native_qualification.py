@@ -3212,6 +3212,25 @@ class TestCacheRetentionTests(unittest.TestCase):
             self.assertEqual(argv[2],'prepare-tests')
             self.assertNotIn('-Dprepare-test-group=encoder_compile',exported)
 
+    def test_filtered_cache_report_selects_a_logical_root_before_build(self):
+        def command(options):
+            return qualification.test_cache_report_command(['zig', 'build', 'prepare-tests', *options],
+                                                           report='/out', recorder='/recorder', context={})
+
+        selected = '-Dprepare-test-filter=ordinary Writer retained EN imagemap error'
+        for group in ('tools_partitioned', 'tools_normal', 'tools_core', 'tools_observations', 'tools_support',
+                      'encoder_compile', 'encoder_document', 'encoder_writer', 'encoder_support'):
+            with self.subTest(group=group):
+                flag = '-Dprepare-test-group=' + group
+                with self.assertRaisesRegex(ValueError, '-Dprepare-test-group=' + group.partition('_')[0] + '$'):
+                    command([flag, selected])
+                self.assertIn(flag, command([flag]))
+        for root in ('tools', 'encoder', 'lua', 'provider'):
+            flags = ['-Dprepare-test-group=' + root, selected]
+            self.assertEqual(command(flags)[3:5], flags)
+        with self.assertRaisesRegex(ValueError, 'one prepare-test group'):
+            command([selected])
+
     def test_cache_report_flags_use_the_build_environment_for_global_cache(self):
         for flags in (['--global-cache-dir', '/cache/global'], ['--global-cache-dir=/cache/global']):
             with self.subTest(flags=flags), self.assertRaisesRegex(ValueError, 'ZIG_GLOBAL_CACHE_DIR'):
