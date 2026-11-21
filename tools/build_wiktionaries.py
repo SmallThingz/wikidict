@@ -3491,13 +3491,14 @@ def require_index_identity(path, expected):
         raise ValueError('Page index changed between shards')
 
 
-def cleanup_dead_private_shards(shards_root):
-    """Remove only a private shard whose exact native writer PID is gone.
+def inactive_private_shards(shards_root):
+    """Identify partial shards only after checking all their writer PIDs.
 
     The edition lock excludes another controller, but subprocesses do not hold
     it. A detached native builder can survive its controller, so lock ownership
     alone is never evidence that its private output is inactive.
     """
+    inactive = []
     for partial in shards_root.iterdir():
         matched=re.fullmatch(r'\.[0-9]{8}\.part-([0-9]+)',partial.name)
         if not matched: continue
@@ -3513,7 +3514,19 @@ def cleanup_dead_private_shards(shards_root):
             raise ValueError(f'Cannot establish private shard owner death: {partial}') from error
         else:
             raise ValueError(f'Native builder PID still exists; preserve partial shard: {partial}')
+        inactive.append(partial)
+    return inactive
+
+
+def cleanup_dead_private_shards(shards_root):
+    for partial in inactive_private_shards(shards_root):
         remove_artifact_tree(partial)
+
+
+def check_internal_shard_writers(workspace):
+    shards = workspace / 'shards'
+    if not shards.is_symlink() and shards.is_dir():
+        inactive_private_shards(shards)
 
 
 def shard_state(items, registry, now_unix=None, interwiki_snapshot=None, auxiliary_snapshots=None, reviewed_nonlexical=None, *, build_identity=None, shard_pages=None):
@@ -3597,11 +3610,12 @@ def external_raw_shards(workspace, path, create=False):
 
 
 def cleanup_shard_workspace(workspace):
-    """Remove only the external shards recorded by this workspace."""
+    """Check for live writers before removing internal or recorded external shards."""
     artifact_path(workspace)
     if workspace.is_symlink() or (workspace.exists() and not workspace.is_dir()):
         raise ValueError(f'Unsafe shard workspace: {workspace}')
     if not workspace.exists(): return
+    check_internal_shard_writers(workspace)
     state_path=workspace/'state.json'
     if state_path.is_symlink(): raise ValueError(f'Unsafe shard state: {state_path}')
     state=read_build_envelope(state_path) if state_path.is_file() else {}
@@ -5718,6 +5732,7 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
             return existing['now_unix']
     if sealed_recovery is not None:
         return recover_sealed_workspace(workspace, expected, now_unix, build_identity, dump, sealed_recovery, native_roles)
+    check_internal_shard_writers(workspace)
     if (provider_update is not None and existing is not None and
             wikibase_provider_only_change(comparable, expected_comparable)):
         binding=existing.get('native_generation')

@@ -2204,6 +2204,23 @@ class BuildTest(PreparedToolsFixture):
                 b.cleanup_dead_private_shards(shards)
             self.assertEqual((active/'sentinel').read_text(),'active')
 
+    def test_cleanup_and_source_change_preserve_live_default_shard(self):
+        for operation in ('cleanup', 'change-source'):
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as tmp:
+                workspace = Path(tmp) / '20261001.shards'
+                b.prepare_shard_workspace(workspace, {'source': 'original'}, 123)
+                state = (workspace / 'state.json').read_bytes()
+                partial = workspace / 'shards' / f'.00000000.part-{os.getpid()}'
+                partial.mkdir(parents=True)
+                (partial / 'sentinel').write_text('active')
+                with self.assertRaisesRegex(ValueError, 'PID still exists'):
+                    if operation == 'cleanup':
+                        b.cleanup_shard_workspace(workspace)
+                    else:
+                        b.prepare_shard_workspace(workspace, {'source': 'changed'}, 123)
+                self.assertEqual((workspace / 'state.json').read_bytes(), state)
+                self.assertEqual((partial / 'sentinel').read_text(), 'active')
+
     def test_partial_shard_with_absent_writer_pid_is_cleaned(self):
         with tempfile.TemporaryDirectory() as tmp:
             shards=Path(tmp)
