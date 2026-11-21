@@ -131,6 +131,11 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Retained it Template:-verb- p1951/r4007156 passes Sezione=verbo;
     // Sezione voce p172588/r1880894 emits its exact ucfirst heading.
     if (std.mem.eql(u8, title, "Verbo")) return "Verb";
+    // The Italian form templates declare inflected sections separately from lemmata.
+    if (std.mem.eql(u8, title, "Voce verbale")) return "Verb form";
+    if (std.mem.eql(u8, title, "Aggettivo")) return "Adjective";
+    if (std.mem.eql(u8, title, "Aggettivo, forma flessa")) return "Adjective form";
+    if (std.mem.eql(u8, title, "Sostantivo, forma flessa")) return "Noun form";
     // Retained -sost- p47393/r1883907 selects sostantivo; Sezione voce
     // p172588/r1880894 emits this exact H3 and language-qualified noun category.
     // Lexical kind only: retain the independently established record owner.
@@ -12937,6 +12942,40 @@ test "Italian proper noun label preserves exact spelling and independent ownersh
     const literal = try renderer.renderBody("<nowiki>===Nome proprio===\n# literal</nowiki>");
     const protected = [_]Section{.{ .title = "Unknown", .level = 2, .blocks = literal }};
     try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &protected)).lexemes.len);
+}
+
+test "Italian inflection headings preserve lexical kind, definition offset and independent owner" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const heading = wiki.Block{ .kind = .heading };
+    const headword = wiki.Block{ .kind = .paragraph };
+    const table = wiki.Block{ .kind = .table, .table = .{ .rows = &.{.{ .cells = &.{.{ .spans = &.{} }} }} } };
+    const sense = wiki.Block{ .kind = .definition, .list_path = "#" };
+    // svagata has an inflection table before its adjective and noun senses.
+    const sections = [_]Section{
+        .{ .title = "Italiano", .level = 2, .blocks = &.{heading} },
+        .{ .title = "Aggettivo, forma flessa", .level = 3, .blocks = &.{ heading, headword, table, sense } },
+        .{ .title = "Sostantivo, forma flessa", .level = 3, .blocks = &.{ heading, headword, table, sense } },
+        .{ .title = "Voce verbale", .level = 3, .blocks = &.{ heading, headword, sense } },
+    };
+    const kinds = [_][]const u8{ "Adjective form", "Noun form", "Verb form" };
+    const offsets = [_]usize{ 3, 3, 2 };
+    for ([_][]const u8{ "italiano", "other independently supplied owner" }) |owner| {
+        const layout = try buildOwned(a, &sections, owner);
+        try std.testing.expectEqual(kinds.len, layout.lexemes.len);
+        for (layout.lexemes, kinds, offsets, 1..) |lexeme, kind, offset, section| {
+            try std.testing.expectEqualStrings(owner, lexeme.language);
+            try std.testing.expectEqualStrings(kind, lexeme.kind);
+            try std.testing.expectEqual(section, lexeme.section);
+            try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+            try std.testing.expectEqual(offset, lexeme.definitions[0].block);
+        }
+    }
+    try std.testing.expectEqualStrings("Adjective", partOfSpeech("Aggettivo").?);
+    for ([_][]const u8{ "Voce verbale?", "Voci verbali", "Aggettivo, forma", "Sostantivo, forma flessa 2" }) |title|
+        try std.testing.expect(partOfSpeech(title) == null);
 }
 
 test "actual Italian Pangea proper noun organization preserves complete Entry and Stored codec" {
