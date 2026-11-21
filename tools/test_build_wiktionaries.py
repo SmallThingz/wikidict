@@ -8269,6 +8269,21 @@ class ClosedPrefixTupleReplayTests(unittest.TestCase):
     def validate(self):
         return b.validated_figure_tuple(self.paths, self.fixture.wiki, self.fixture.date)
 
+    def test_missing_transitive_prefix_inputs_are_reported_before_payload_hashing(self):
+        for name in (self.figures.INVENTORY, self.figures.PLAN):
+            (self.closed_root / name).unlink()
+        fingerprint = self.figures.evidence.fingerprint
+        def witness(path, *args, **kwargs):
+            self.assertNotEqual(Path(path).parent, self.closed_root)
+            return fingerprint(path, *args, **kwargs)
+        with patch.object(self.figures.evidence, 'fingerprint', side_effect=witness), \
+                patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('Missing prefix reached replay')):
+            with self.assertRaises(FileNotFoundError) as error:
+                self.validate()
+        for item in (str(self.closed_root), self.figures.INVENTORY, self.figures.PLAN):
+            self.assertIn(item, str(error.exception))
+        self.assertFalse(b._FIGURE_TUPLE_REPLAYS)
+
     def test_closed_prefix_auxiliary_identity_and_workspace_share_one_semantic_replay(self):
         compiler = self.fixture.root/'controlled-compiler'
         compiler.write_bytes(b'controlled compiler identity'); compiler.chmod(0o555)

@@ -1635,7 +1635,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
     active, visited, closed_prefixes = set(), set(), set()
     complete_manifests = set()
 
-    def capture(directory):
+    def capture(directory, required=None):
         directory = Path(directory)
         if directory in active or directory.is_symlink() or not directory.is_dir():
             raise ValueError('Unsafe or recursive Figure capture authority')
@@ -1651,12 +1651,13 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                 # Compare top-level names without opening paths from the manifest.
                 required = {name.partition('/')[0] for name in manifest['artifacts']}
                 required.add(helper.COMPLETE)
-                missing = sorted(required.difference(path.name for path in members))
-                if missing:
-                    preview = ', '.join(missing[:8])
-                    if len(missing) > 8:
-                        preview += f' (+{len(missing) - 8} more)'
-                    raise FileNotFoundError(f'Missing Figure capture members in {directory}: {preview}')
+        if required:
+            missing = sorted(required.difference(path.name for path in members))
+            if missing:
+                preview = ', '.join(missing[:8])
+                if len(missing) > 8:
+                    preview += f' (+{len(missing) - 8} more)'
+                raise FileNotFoundError(f'Missing Figure capture members in {directory}: {preview}')
         directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members,
                                   _figure_replay_identity(directory, directory=True))
         if any(path.is_dir() and not path.is_symlink() for path in members):
@@ -1740,7 +1741,14 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
         # The semantic reader maps every closure artifact into this failed
         # directory, then replays its request journal for external authorities.
         # Collect the entire directory, including rejected and pending evidence.
-        if not capture(directory):
+        required = None
+        if deferred_capture is not None:
+            # A closed oversize prefix always replays this inventory, plan and
+            # journal. Report missing inputs before hashing its surviving files.
+            required = {helper.INVENTORY, helper.PLAN, helper.FILE_REQUESTS, helper.QUERY_INPUTS,
+                        helper.ROLES['figure-sizing-raw'], helper.ROLES['figure-sizing-site'],
+                        helper.ROLES['figure-siteinfo']}
+        if not capture(directory, required):
             return False
         closed_prefixes.add(path)
         return True
