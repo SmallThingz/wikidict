@@ -852,7 +852,7 @@ internal fun prepareNativeFloatText(
                             StyleWidthUnit.Em -> throw UnsupportedFloatLayout("Rounded inline radius cannot use em")
                         }
                     }, atomicLayout = atomic, radiusPercentage = model.radius?.unit == StyleWidthUnit.Percent, atomicAutoLayout = atomicAuto,
-                    intrinsicLinesLayout = intrinsicLines)
+                    intrinsicLinesLayout = intrinsicLines, verticalAlign = model.verticalAlign)
             }
             val clipped = range.span?.clippedAbsolute?.let { model ->
                 val scope = clippedAbsoluteScope ?: throw UnsupportedFloatLayout(

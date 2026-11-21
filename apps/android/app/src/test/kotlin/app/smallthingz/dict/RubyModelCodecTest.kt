@@ -235,6 +235,9 @@ class RubyModelCodecTest {
             value.content?.let { boxOverlayContent(it, "$label.content") }
         }
         private fun inlineBox(value: InlineBoxGroup, label: String) {
+            if (version == 'a' && yFlags and 0x400000 != 0) {
+                mark("$label.verticalAlign"); byte(if (value.verticalAlign == null) 0 else 1)
+            }
             listOf(value.padding.top, value.padding.right, value.padding.bottom, value.padding.left)
                 .forEachIndexed { index, edge -> boxLength(edge, "$label.padding$index") }
             boxBorder(value.border, "$label.border")
@@ -7938,5 +7941,59 @@ class RubyModelCodecTest {
             val bytes = wire.document(emptyList(), Sink.Body)
             if (depth == 32) assertNotNull(read(bytes)) else reject("Border cannot reset Table33", bytes)
         }
+    }
+
+    private fun bottomInlineFixture(aligned: Boolean = true): Span {
+        val zero = StyleLength(StyleLengthUnit.Px, 0f)
+        val pad = StyleLength(StyleLengthUnit.Px, 3f)
+        val edge = InlineBoxBorderEdge.Dotted(StyleLength(StyleLengthUnit.Px, 1f), InlineBoxColor.Rgb("#cc3333"))
+        val child = Span("text", "pesemisvahend", foreground = "#cc3300", background = "#ffdddd")
+        return child.copy(text = "", tooltip = "See vajab kontrollimist!", inlineBoxGroup = InlineBoxGroup(
+            StyleEdges(zero, pad, zero, pad), InlineBoxBorderEdges(edge, edge, edge, edge), spans = listOf(child),
+            verticalAlign = if (aligned) InlineBoxGroupVerticalAlign.Bottom else null))
+    }
+
+    @Test fun bottomInlinePrefixIsPerBoxAndRequiresItsOwnWideCapability() {
+        val baseline = bottomInlineFixture(false)
+        val aligned = bottomInlineFixture()
+        val values = listOf(baseline, text(" "), aligned, text("? "), Span("link", "seebiooper", target = "seebiooper"))
+        val wire = Wire('a', 0x400004)
+        val bytes = wire.document(values)
+        assertArrayEquals(byteArrayOf(68, 80, 82, 97, 4, 0, 64, 0), bytes.copyOf(8))
+        assertEquals(0, bytes[wire.at.getValue("root.0.box.verticalAlign")].toInt())
+        assertEquals(1, bytes[wire.at.getValue("root.2.box.verticalAlign")].toInt())
+        assertEquals(values, read(bytes).displayTitle)
+        assertEquals(listOf(baseline), read(Wire('Y', 4).document(listOf(baseline))).displayTitle)
+        val rounded = baseline.copy(inlineBoxGroup = checkNotNull(baseline.inlineBoxGroup).copy(radius = StyleWidth(StyleWidthUnit.Px, 2f)))
+        val mixed = listOf(aligned, rounded, atomicAutoWireOwner())
+        assertEquals(mixed, read(Wire('a', 0x420004).document(mixed)).displayTitle)
+        reject("Missing bottom capability", changed32(bytes, 4, 4))
+        reject("Missing same framing box capability", changed32(bytes, 4, 0x400000))
+        reject("Table bottom remains independent", changed32(bytes, 4, 0x600004))
+        reject("Unused bottom capability", Wire('a', 0x400004).document(listOf(baseline)))
+        val local = wire.at.getValue("root.2.fontFields")
+        reject("Reserved float bit is still unknown", changed(bytes, local, bytes[local].toInt() or 0x80))
+        for (tag in listOf(2, 128, 255)) reject("Unknown group alignment prefix", changed(bytes,
+            wire.at.getValue("root.2.box.verticalAlign"), tag))
+        reject("Truncated prefix", bytes.copyOf(wire.at.getValue("root.2.box.verticalAlign")))
+        reject("Strict record EOF", bytes + byteArrayOf(0))
+    }
+
+    @Test fun bottomInlineModelRetainsSourceActionsAndRejectsUnprovedOwnerShapes() {
+        val value = bottomInlineFixture()
+        val box = checkNotNull(value.inlineBoxGroup)
+        val link = Span("link", "seebiooper", target = "seebiooper")
+        val values = listOf(value, text("? "), link)
+        val projection = rubyGraphicalProjection(values)
+        assertEquals("pesemisvahend? seebiooper", projection.text)
+        assertSame(value, projection.ranges.single { it.role == RubyTextRole.BoxGroup }.span)
+        assertTrue(projection.ranges.any { it.span === link && it.start == box.spans.single().text.length + 2 })
+        invalid("Bottom owner cannot be an action") { value.copy(kind = "link", target = "seep") }
+        invalid("Child font remains equal") { value.copy(inlineBoxGroup = box.copy(spans = listOf(box.spans.single().copy(bold = true)))) }
+        invalid("Vertical padding is outside this domain") { box.copy(padding = box.padding.copy(top = StyleLength(StyleLengthUnit.Px, 1f))) }
+        invalid("Asymmetric horizontal padding") { box.copy(padding = box.padding.copy(left = StyleLength(StyleLengthUnit.Px, 2f))) }
+        invalid("Square box only") { box.copy(radius = StyleWidth(StyleWidthUnit.Px, 2f)) }
+        invalid("Ordinary text only") { box.copy(spans = listOf(link)) }
+        invalid("No zero dotted edge") { val e = InlineBoxBorderEdge.Dotted(StyleLength(StyleLengthUnit.Px, 0f), InlineBoxColor.Rgb("#cc3333")); box.copy(border = InlineBoxBorderEdges(e,e,e,e)) }
     }
 }

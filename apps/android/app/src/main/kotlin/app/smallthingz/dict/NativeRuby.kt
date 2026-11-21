@@ -2276,6 +2276,22 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
                     first, last, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
+        if (box?.verticalAlign == InlineBoxGroupVerticalAlign.Bottom) {
+            val primary = NativePrimaryFontMetrics.from(format.paint)
+            if (parent != null || nestedDecoration || shift != 0f || format.lineHeight != NativeLineHeightPolicy.Normal ||
+                styled.getSpans(0, styled.length, NativeAuthoredInlineMetrics::class.java).isNotEmpty() ||
+                styled.getSpans(0, styled.length, NativeRunLineMetrics::class.java).any {
+                    it.primary != primary || it.policy != NativeLineHeightPolicy.Normal
+                }) throw UnsupportedFloatLayout("Bottom inline owner lost its independent equal-metric normal text")
+            cuts.zipWithNext().forEach { (start, end) ->
+                if (start < end) {
+                    val measured = TextPaint(format.paint)
+                    styled.getSpans(start, end, MetricAffectingSpan::class.java).forEach { it.updateMeasureState(measured) }
+                    if (!measured.equalsForTextMeasurement(format.paint))
+                        throw UnsupportedFloatLayout("Bottom inline child differs from its declaring font")
+                }
+            }
+        }
         if (nestedDecoration) {
             val primary = NativePrimaryFontMetrics.from(format.paint)
             if (rtl || shift != 0f || styled.getSpans(0, styled.length, NativeAuthoredBaselineShift::class.java).any { it.shift != 0f } ||
@@ -3236,8 +3252,11 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         actionScopes.forEach { scope ->
             val primary = NativePrimaryFontMetrics.from(scope.format.paint).copy(baselineShift = scope.shift)
             val flags = if (scope.nativeStart == scope.nativeEnd) Spanned.SPAN_MARK_MARK else Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-            target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight, strut = true,
-                includePrimaryInNormal = true, independentNormalStrut = true), scope.nativeStart, scope.nativeEnd, flags)
+            // The bottom planner owns this declaring primary as an aligned height,
+            // rather than a second baseline strut (even for an equal-range root).
+            if (scope.format.box?.verticalAlign != InlineBoxGroupVerticalAlign.Bottom)
+                target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight, strut = true,
+                    includePrimaryInNormal = true, independentNormalStrut = true), scope.nativeStart, scope.nativeEnd, flags)
             if (scope.start == scope.end) {
                 val metrics = NativeAuthoredInlineMetrics(primary, scope.format.lineHeight, primary)
                 target.setSpan(metrics, scope.point, scope.point, Spanned.SPAN_MARK_MARK)
@@ -3246,7 +3265,8 @@ private class NativeRubyCompiler(private val original: Spanned, private val pain
         }
         boxScopes.forEach { scope ->
             val primary = NativePrimaryFontMetrics.from(scope.format.paint).copy(baselineShift = scope.shift)
-            if (scope.format.actionOwner == null) target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight,
+            if (scope.format.actionOwner == null && scope.format.box?.verticalAlign != InlineBoxGroupVerticalAlign.Bottom)
+                target.setSpan(NativeRunLineMetrics(primary, scope.format.lineHeight,
                 strut = true, includePrimaryInNormal = true, independentNormalStrut = true),
                 scope.nativeStart, scope.nativeEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             target.setSpan(NativeInlineBoxSpan(scope.format, scope.shift, scope.parentRtl, scope.overlays.map { it.body }),

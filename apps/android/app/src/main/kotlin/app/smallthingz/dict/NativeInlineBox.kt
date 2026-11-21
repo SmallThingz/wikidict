@@ -39,7 +39,8 @@ internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val paddin
     val currentColorPaint: NativeMissingLinkPaint? = null, val radius: Float? = null,
     val atomicLayout: NativeInlineAtomicBoxFormat? = null, val radiusPercentage: Boolean = false,
     val atomicAutoLayout: NativeInlineAtomicAutoBoxFormat? = null,
-    val intrinsicLinesLayout: NativeInlineIntrinsicLinesFormat? = null) {
+    val intrinsicLinesLayout: NativeInlineIntrinsicLinesFormat? = null,
+    val verticalAlign: InlineBoxGroupVerticalAlign? = null) {
     val isAtomic: Boolean get() = atomicLayout != null || atomicAutoLayout != null || intrinsicLinesLayout != null
     val overlays = overlays.toList()
     val leftAdvance = nativeInlineBoxCoordinate(padding.left.toDouble() + border.left.width)
@@ -52,6 +53,13 @@ internal class NativeInlineBoxFormat(val owner: NativeInlineBoxOwner, val paddin
                 listOf(padding.top, padding.right, padding.bottom, padding.left,
                     border.top.width, border.right.width, border.bottom.width, border.left.width).any { it != 0f }))
             throw UnsupportedFloatLayout("Intrinsic line owner requires its undecorated content box")
+        if (verticalAlign != null) {
+            val edge = border.top
+            if (isAtomic || radius != null || overlays.isNotEmpty() || padding.top != 0f || padding.bottom != 0f ||
+                padding.left != padding.right || !edge.dotted || edge.width <= 0f || edge.color == null ||
+                edge.color ushr 24 != 255 || listOf(border.right, border.bottom, border.left).any { it != edge })
+                throw UnsupportedFloatLayout("Bottom inline box lost its square horizontal-padding dotted shape")
+        }
         radius?.let { value ->
             if (!value.isFinite()) throw UnsupportedFloatLayout("Rounded inline radius is unavailable")
             if (!radiusPercentage) nativeInlineBoxCoordinates(value)

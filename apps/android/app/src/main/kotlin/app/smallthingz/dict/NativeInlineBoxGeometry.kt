@@ -15,6 +15,7 @@ internal class NativeInlineBoxGeometry(
     private val left: Float,
     private val right: Float,
     allowedOverflowStarts: Set<Int>,
+    private val bottomLines: List<NativeInlineBottomLine>? = null,
 ) : FloatTextGeometry {
     private val spans = spans.toList()
     override val text: CharSequence get() = raw.text
@@ -157,7 +158,8 @@ internal class NativeInlineBoxGeometry(
                 Layout.Alignment.ALIGN_CENTER -> coordinate((left.toDouble() + right - advance) / 2.0)
                 else -> throw UnsupportedFloatLayout("Inline box paragraph alignment is unavailable")
             }
-            val mapped = capture.mapped(orderedEdges.map { it.increment }, coordinate(alignedLeft.toDouble() - originalLeft))
+            val mapped = capture.mapped(orderedEdges.map { it.increment }, coordinate(alignedLeft.toDouble() - originalLeft),
+                bottomLines?.get(line))
             val advanceBounds = mapped.advanceBounds()
             if (start !in allowedOverflowStarts && (advanceBounds.left < left || advanceBounds.right > right))
                 throw UnsupportedFloatLayout("Inline box mapped advance exceeds its selected native line")
@@ -165,7 +167,7 @@ internal class NativeInlineBoxGeometry(
                 val value = owner.value
                 val box = value.box
                 val primary = NativePrimaryFontMetrics.from(value.format.paint)
-                val baseline = coordinate(mapped.baseline.toDouble() + value.shift)
+                val baseline = coordinate(mapped.baselineAt(maxOf(start, owner.start)).toDouble() + value.shift)
                 val top = coordinate(baseline.toDouble() + primary.ascent)
                 val bottom = coordinate(baseline.toDouble() + primary.descent)
                 val ownPieces = mapped.piecesForRange(maxOf(start, owner.start), minOf(end, owner.end))
@@ -310,7 +312,8 @@ internal class NativeInlineBoxGeometry(
     }
     private fun rectangleFragment(fragment: Fragment): NativeInlineActionFragment {
         val path = Path().apply { addRect(fragment.border.left, 0f, fragment.border.right, 1f, Path.Direction.CW) }
-        return NativeInlineActionFragment(fragment.line, fragment.first, fragment.last, path, lines[fragment.line].mapped.baseline)
+        return NativeInlineActionFragment(fragment.line, fragment.first, fragment.last, path,
+            lines[fragment.line].mapped.baselineAt(fragment.first))
     }
     fun actionFragments(start: Int, end: Int, includeBoxes: Boolean = true): List<NativeInlineActionFragment> {
         require(start in 0..text.length && end in start..text.length)
@@ -323,6 +326,8 @@ internal class NativeInlineBoxGeometry(
             else lines.flatMap { it.mapped.fragmentsForRange(a, b) }
         }
     }
+    fun baselineForOffset(offset: Int): Float = raw.baselineForOffset(offset) +
+        (bottomLines?.get(raw.nativeLineAt(offset))?.at(offset)?.shift ?: 0f)
     fun rectsOnLine(line: Int, start: Int, end: Int): List<RectF> = lines[line].mapped.rectsForRange(start, end)
     fun caretOnLine(line: Int, offset: Int): RectF? = lines[line].mapped.caretRect(offset,
         if (offset == raw.nativeRangeOfLine(line).second) NativeInlineBoundaryAffinity.Preceding else NativeInlineBoundaryAffinity.Following)
@@ -348,7 +353,9 @@ internal class NativeInlineBoxGeometry(
     override fun caretAt(x: Float, y: Float): NativeTextCaret {
         val line = lineAt(x, y)
         val offset = offsetOnLine(line, x, y)
-        return NativeTextCaret(offset, if (offset == raw.nativeRangeOfLine(line).second)
+        val affinity = lines[line].mapped.boundaryAffinityForPosition(offset, x, y)
+        return NativeTextCaret(offset, if (affinity == NativeInlineBoundaryAffinity.Preceding ||
+            (affinity == null && offset == raw.nativeRangeOfLine(line).second))
             NativeTextAffinity.Upstream else NativeTextAffinity.Downstream)
     }
     val cursorBounds: List<RectF> get() = fragments.filter { it.owner.value.format.cursor != null }.map { RectF(it.border) }

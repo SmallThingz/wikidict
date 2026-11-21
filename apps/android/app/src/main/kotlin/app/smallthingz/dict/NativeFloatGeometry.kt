@@ -386,6 +386,7 @@ private class NativeStaticFloatGeometry private constructor(
 
     internal override fun baselineForOffset(offset: Int): Float {
         ruby?.let { return it.baseline(offset) }
+        inlineBox?.let { return it.baselineForOffset(offset) }
         require(offset in 0..text.length)
         val line = layout.getLineForOffset(offset)
         return flow.baselines[line] + (authoredBaselineAt(offset)?.value?.shift ?: 0f)
@@ -1085,7 +1086,7 @@ private class NativeStaticFloatGeometry private constructor(
                     fitting.setSpan(NativeRubyLinePlan(fit.ends, fit.advances, allowEmptyTerminal = source.last() == '\n'),
                         0, fitting.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
-                val raw = build(fitting, paint, width, emptyList(), alignment, textDirection,
+                var raw = build(fitting, paint, width, emptyList(), alignment, textDirection,
                     lineSpacingExtra, lineSpacingMultiplier, requireDrainedAtBoundary, emptyList(),
                     insets = insets, includeFontPadding = includeFontPadding, rubyProbe = rubyProbe, inlineBoxProbe = true)
                 NativeTextWrapPlan.create(bounded, paint)?.validateResult(raw.layout)
@@ -1094,7 +1095,30 @@ private class NativeStaticFloatGeometry private constructor(
                 val overflow = fit?.overflowingStarts ?: (0 until raw.shapedLineCount).filter {
                     raw.nativeInlineVisibleAdvance(it) > (right - left).coerceAtLeast(0f)
                 }.map { raw.nativeRangeOfLine(it).first }.toSet()
-                val box = NativeInlineBoxGeometry(raw, spans, alignment, left, right, overflow)
+                val firstPadding = if (includeFontPadding) maxOf(0f, -raw.layout.topPadding.toFloat()) else 0f
+                val lastPadding = if (includeFontPadding) maxOf(0f, raw.layout.bottomPadding.toFloat()) else 0f
+                val bottom = nativeInlineBottomLines(raw, spans, paint, firstPadding, lastPadding)
+                if (bottom != null) {
+                    if (lineSpacingExtra != 0f || lineSpacingMultiplier != 1f)
+                        throw UnsupportedFloatLayout("Bottom inline owners require ordinary paragraph line spacing")
+                    // Native font padding surrounds the logical row bands. It does
+                    // not become an alignment target for a bottom participant.
+                    var y = firstPadding
+                    val tops = FloatArray(bottom.size)
+                    val bottoms = FloatArray(bottom.size)
+                    val baselines = FloatArray(bottom.size)
+                    bottom.forEachIndexed { line, placed ->
+                        tops[line] = y
+                        baselines[line] = nativeInlineBoxCoordinate(y.toDouble() - placed.metrics.top)
+                        y = nativeInlineBoxCoordinate(y.toDouble() + placed.metrics.height)
+                        bottoms[line] = y
+                    }
+                    raw = NativeStaticFloatGeometry(raw.text, width, raw.layout,
+                        raw.flow.copy(tops = tops, bottoms = bottoms, baselines = baselines,
+                            bottom = nativeInlineBoxCoordinate(y.toDouble() + lastPadding)),
+                        raw.nodeFactory, raw.decoration, raw.decorationBounds)
+                }
+                val box = NativeInlineBoxGeometry(raw, spans, alignment, left, right, overflow, bottom)
                 return NativeStaticFloatGeometry(raw.text, width, raw.layout, raw.flow, nodeFactory, decoration,
                     decorationBounds, inlineBox = box)
             }

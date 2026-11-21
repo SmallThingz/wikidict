@@ -1,8 +1,53 @@
 # Android validation
 
-## Current inline-table bottom alignment — 2026-11-21
+## Current non-atomic inline-box bottom alignment — 2026-11-21
 
-The qualified production source is commit
+The [canonical application][application164-current] binds twelve source/test
+files to the reviewed private postimages: nine main files, two JVM-test files and
+one instrumentation-test file. Three files are new; the canonical inventory now
+contains 985 files. The decoder consumes the `0x400000` wide-header capability and
+its per-group alignment prefix. It leaves the separate table-bottom capability
+and reserved span-font bit unchanged.
+
+The supported native path keeps ordinary text and the parent strut on their
+baseline, then aligns each supported box's logical bottom within its wrapped
+line. Glyph replay, decoration and offset queries use the same displacement.
+Unsupported owner shapes and custom parent line-height contexts remain refused.
+
+[Host164's saved target audit][audit164-current] verifies **11 fresh JVM passes**:
+five new codec/model/line-allocation checks and six maintained controls, with zero
+failures, skips or carry. Main, unit and instrumentation Kotlin compilation
+executed; instrumentation Java compilation was up to date. Both merged manifests
+retain minimum API **31** (Android 12) and target API **37**. The compiler emitted
+535 warning lines and no errors; the exact diagnostics remain in the audit.
+
+The enclosing [original run][host164-current] nevertheless exited **1** because
+its final whole-file guard observed an authorized concurrent change to
+`tools/build_disk_limits.py`. This failure remains recorded. The [independent
+closure][physical164-current] verified all other source/artifact conditions,
+absent owned processes and a free lock. The [runtime-impact review][impact164-current]
+shows that the changed corpus XZ functions are not called by this Android route:
+its only imported constant is unchanged, and the actual watchdog reserve was
+passed explicitly. The separate saved audit qualifies the Android target results
+after that reconciliation; it does not relabel the original run as successful.
+
+Four new device methods compiled only. Their glyph, wrapping, caret, tooltip and
+Compose-lowering oracles were **not executed on a device**. The current inventory
+declares 1,222 JVM cases, but no new full-suite, lint or APK result was produced.
+The 1,217-case result and retained unsigned APK below qualify the preceding
+`5c26f9c0` production source. Genuine ET producer-to-Android interoperability and
+physical rendering remain unverified. The existing pre-ADB access hold, signing,
+installation and publication holds are unchanged.
+
+[application164-current]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/et-inline-bottom01/canonical-application01.json
+[host164-current]: /home/a/.tmp/wikidict-android-host164-run01/completion01.json
+[audit164-current]: /home/a/.tmp/wikidict-android-host164-run01/saved-result-reconciled-reader01.json
+[physical164-current]: /home/a/.tmp/wikidict-android-host164-run01/runtime-physical-closure01.json
+[impact164-current]: /home/a/.tmp/wikidict-android-host164-run01/runtime-helper-drift-review01.json
+
+## Previous inline-table bottom alignment — 2026-11-21
+
+The qualified production source at this boundary was commit
 `5c26f9c0c512d3678c3f7d10c5a185ca49a83cd7`. Its
 [commit/source bridge][bridge161-current] binds the ten changed files to the
 982-file canonical inventory. Inline tables now have a separate bottom-alignment

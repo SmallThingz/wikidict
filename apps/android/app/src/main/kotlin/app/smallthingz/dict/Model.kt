@@ -448,11 +448,27 @@ private fun requireAtomicInlineOwner(owner: Span, group: InlineBoxGroup) {
     }
 }
 
+/** Absence preserves ordinary baseline participation. */
+enum class InlineBoxGroupVerticalAlign { Bottom }
+
+private fun requireBottomInlineOwner(owner: Span, group: InlineBoxGroup) {
+    require(owner.kind == "text" && owner.target.isEmpty() && owner.inlineStyle == null && owner.linkPaint == null &&
+        owner.direction in setOf("", "ltr", "rtl")) { "Invalid bottom inline owner" }
+    fun ordinaryFont(span: Span) = InlineFontSnapshot(span.fontScale, span.fontScaleBasis,
+        span.small, span.superscript, span.subscript, false, span.bold, span.italic, span.code,
+        span.language, span.classes, span.role, span.fontFeatures, span.fontFamily)
+    val font = ordinaryFont(owner)
+    require(group.spans.all { child -> sameRubyFont(font, ordinaryFont(child)) &&
+        child.underline == owner.underline && child.strike == owner.strike &&
+        child.inlineStyle == null && child.linkPaint == null }) { "Bottom inline children differ from their owner font" }
+}
+
 /** Child boundaries order detached text; overlay array order also retains authored paint order. */
 data class InlineBoxGroup(val padding: StyleEdges, val border: InlineBoxBorderEdges,
     val overlays: List<InlineBoxOverlay> = emptyList(), val spans: List<Span>, val radius: StyleWidth? = null,
     val atomicLayout: InlineBoxAtomicLayout? = null, val atomicAutoLayout: InlineBoxAtomicAutoLayout? = null,
-    val intrinsicLinesLayout: InlineBoxIntrinsicLinesLayout? = null) {
+    val intrinsicLinesLayout: InlineBoxIntrinsicLinesLayout? = null,
+    val verticalAlign: InlineBoxGroupVerticalAlign? = null) {
     init {
         require(spans.isNotEmpty()) { "Inline box requires a child" }
         PresentationSpanVisitor { _, _ -> }.inlineBoxGroup(this)
@@ -1551,6 +1567,18 @@ internal class PresentationSpanVisitor(private val visit: (List<Span>, Boolean) 
         strictBody: Boolean = false, owner: Span? = null) {
         require(listOf(value.atomicLayout, value.atomicAutoLayout, value.intrinsicLinesLayout).count { it != null } <= 1) {
             "Inline box atomic variants are exclusive"
+        }
+        if (value.verticalAlign != null) {
+            val edge = value.border.top as? InlineBoxBorderEdge.Dotted
+            require(value.atomicLayout == null && value.atomicAutoLayout == null && value.intrinsicLinesLayout == null &&
+                value.radius == null && value.overlays.isEmpty() && value.padding.top.value == 0f &&
+                value.padding.bottom.value == 0f && value.padding.left == value.padding.right &&
+                edge != null && edge.width.value > 0f && edge.color is InlineBoxColor.Rgb &&
+                listOf(value.border.right, value.border.bottom, value.border.left).all { it == edge } &&
+                value.spans.all { validAtomicInlineChild(it) && it.inlineStyle == null && it.linkPaint == null }) {
+                "Bottom inline box requires plain text, equal dotted RGB edges and horizontal padding"
+            }
+            if (owner != null) requireBottomInlineOwner(owner, value)
         }
         value.intrinsicLinesLayout?.let { intrinsic ->
             charge(2) // Both original source-line descriptors, in addition to the shared atomic record below.

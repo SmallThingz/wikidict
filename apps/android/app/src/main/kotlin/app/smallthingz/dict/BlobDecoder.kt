@@ -19,8 +19,8 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (cellForegroundHeader) r.u32().also {
             // Retain the implemented lower-word union; held Figure capabilities stay unknown.
-            require(it and 0x3f0000L != 0L && it and 0x3ff3ffL == it &&
-                (it and 0xa0000L == 0L || it and 4L != 0L) &&
+            require(it and 0x7f0000L != 0L && it and 0x7ff3ffL == it &&
+                (it and 0x4a0000L == 0L || it and 4L != 0L) &&
                 (it and 32768L == 0L || it and 16384L != 0L && it and 1L != 0L)) {
                 "Invalid wide presentation feature flags"
             }
@@ -39,6 +39,7 @@ object BlobDecoder {
         r.intrinsicLinesLayouts = ownerGeometryFlags and 0x80000 != 0
         r.resolvedStyleBorders = ownerGeometryFlags and 0x100000 != 0
         r.tableBottomAlignment = ownerGeometryFlags and 0x200000 != 0
+        r.inlineBoxBottomAlignment = ownerGeometryFlags and 0x400000 != 0
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
@@ -213,6 +214,7 @@ object BlobDecoder {
         require(r.intrinsicLinesLayouts == r.hasIntrinsicLinesLayout) { "Intrinsic inline lines feature does not match payload" }
         require(r.resolvedStyleBorders == r.hasResolvedStyleBorder) { "Resolved style border feature does not match payload" }
         require(r.tableBottomAlignment == r.hasTableBottomAlignment) { "Table bottom alignment feature does not match payload" }
+        require(r.inlineBoxBottomAlignment == r.hasInlineBoxBottomAlignment) { "Inline box bottom feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -248,6 +250,8 @@ object BlobDecoder {
         var hasIntrinsicLinesLayout = false
         var resolvedStyleBorders = false
         var hasResolvedStyleBorder = false
+        var inlineBoxBottomAlignment = false
+        var hasInlineBoxBottomAlignment = false
         var tableBottomAlignment = false
         var hasTableBottomAlignment = false
         var positionedContainers = false
@@ -592,6 +596,11 @@ object BlobDecoder {
             InlineBoxOverlayContent(boundary, font, height, align, spans())
         }
         private fun inlineBoxGroup(radiusDeclared: Boolean, atomicDeclared: Boolean): InlineBoxGroup = content {
+            val verticalAlign = if (inlineBoxBottomAlignment) when (byte()) {
+                0 -> null
+                1 -> InlineBoxGroupVerticalAlign.Bottom.also { hasInlineBoxBottomAlignment = true }
+                else -> error("Unknown inline box vertical alignment")
+            } else null
             require(buffer.remaining() >= 32 + (if (radiusDeclared) 5 else 0) +
                 (if (!atomicDeclared) 0 else if (intrinsicLinesLayouts) 26 else if (atomicAutoLayouts) 31 else 34)) {
                 "Truncated inline box group"
@@ -631,7 +640,8 @@ object BlobDecoder {
                     else -> error("Unknown inline box atomic variant")
                 }
             }
-            InlineBoxGroup(padding, border, overlays, children, radius, atomic, automatic, intrinsic).also { hasInlineBoxGroup = true }
+            InlineBoxGroup(padding, border, overlays, children, radius, atomic, automatic, intrinsic,
+                verticalAlign = verticalAlign).also { hasInlineBoxGroup = true }
         }
         fun bodyTypography(directions: Boolean): BodyTypography {
             require(remainingItems > 0) { "Body typography exceeds the presentation budget" }
