@@ -39,8 +39,12 @@ They include unresolved language/style decisions, unrepresented figures and imag
 maps, rejected targets, and visible Lua/extension errors as well as the original
 syntax and expansion failures. The builder also records
 `unsupported_parser_function` and specific operational failures such as
-`expansion_error:Timeout` or `expansion_error:expand:ErrorName`. A well-formed report
-preserves these defects for review; it does not qualify the affected rendering.
+`expansion_error:Timeout` or `expansion_error:expand:ErrorName`. When finalizing
+or reopening an edition, the builder rejects timeouts, out-of-memory errors,
+infrastructure failures, and expansion failures named `FileMetadataSnapshotMissing`
+or `InterfaceMessageSnapshotMissing`. For either missing-input error, the diagnostic
+names the affected title. Supply the required snapshot and rebuild the edition.
+Other recorded rendering defects remain available for comparison with the source.
 
 ## MediaWiki recovery oracle
 
