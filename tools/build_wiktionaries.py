@@ -38,7 +38,7 @@ def sha256_file(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def _read_prepared_metadata(path, expected=None):
+def _read_prepared_metadata(path, expected=None, *, allow_mode=False):
     """Read the JSON and its content descriptor from the same file opening."""
     if not path.is_absolute() or any(p.is_symlink() for p in (path, *path.parents)):
         raise ValueError('Unsafe prepared authorization metadata')
@@ -57,6 +57,11 @@ def _read_prepared_metadata(path, expected=None):
     if len(raw) != before.st_size or any(getattr(before, k) != getattr(info, k) for info in (opened, after) for k in fields):
         raise ValueError('Prepared metadata changed during authentication')
     observed = dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    if expected is not None and allow_mode and 'mode' in expected:
+        mode = expected['mode']
+        if type(mode) is not int or not 0 <= mode <= 0o777 or stat.S_IMODE(opened.st_mode) != mode:
+            raise ValueError('Prepared metadata mode changed during authentication')
+        observed['mode'] = mode
     if expected is not None and (set(expected) != set(observed) or expected['bytes'] != len(raw)
                                  or expected['sha256'] != observed['sha256']):
         raise ValueError('Prepared metadata changed during authentication')
@@ -65,6 +70,11 @@ def _read_prepared_metadata(path, expected=None):
 
 def prepared_metadata(reference):
     return _read_prepared_metadata(Path(reference['path']), reference)[1]
+
+
+def retained_source_manifest(reference):
+    """Native emission may additionally bind the mode of the source manifest itself."""
+    return _read_prepared_metadata(Path(reference['path']), reference, allow_mode=True)[1]
 
 
 class PreparedSourceGeneration:
@@ -4001,15 +4011,20 @@ def writer_figure_adopt_workspace(workspace, expected, now_unix, build_identity,
 
 
 def retained_compilation_source(row, native_roles):
+    return retained_compilation_sources(row, native_roles)[1]
+
+
+def retained_compilation_sources(row, native_roles):
     """Join a closed guard to exact native bytes and recorded helper changes."""
-    source = prepared_metadata(row['source'])
+    source = retained_source_manifest(row['source'])
     if source.get('fingerprint', row['source']['sha256']) == row['producer_source']:
-        return source
+        return source, source
     keys = ('compiled_source_authority', 'compilation_recipe', 'actual_emission_result', 'qualification_closure')
     if any(not isinstance(row.get(key), dict) for key in keys):
         raise ValueError('Retained native compilation authority is missing')
     refs = [row[key] for key in keys]
-    compiled, recipe, emitted, closed = [prepared_metadata(ref) for ref in refs]
+    compiled = retained_source_manifest(refs[0])
+    recipe, emitted, closed = [prepared_metadata(ref) for ref in refs[1:]]
     if (recipe.get('source_manifest') != row['source']
             or closed.get('source_manifest') != row['source']
             or recipe.get('native_compilation_source_manifest') != refs[0]
@@ -4162,7 +4177,7 @@ def retained_compilation_source(row, native_roles):
             raise ValueError('Retained compilation authority custody differs')
         if 'mode' in reference and observed['mode'] != reference['mode']:
             raise ValueError('Retained compilation authority mode differs')
-    return compiled
+    return source, compiled
 
 
 def validate_composite_source_inventory(plan, base, selected, auth_payload):
@@ -4308,7 +4323,7 @@ def initial_sealed_matched_triple(row, native_roles, recipe, closed, source, com
         prior_roles = prepared_metadata(prior_ref)
         prior = prior_roles[roles[selected[0]][1]]
         prior_source_ref = prior['source']
-        prior_source = prepared_metadata(prior_source_ref)
+        prior_source = retained_source_manifest(prior_source_ref)
         prior_files = prior_source.get('files', prior_source)
         if (prior.get('previous_role_binding') != row.get('previous_role_binding')
                 or prior['source_paths'] != row['source_paths']
@@ -4406,6 +4421,7 @@ def initial_sealed_writer_phases(row, recipe, closed, source, *, target):
     reference = source['normal_writer_phases']
     phases = prepared_metadata(initial_sealed_phase_reference(reference))
     references = [reference]
+    compiled_identity = initial_sealed_phase_reference(row['compiled_source_authority'])
     if (target != 'prepare-captured-writer' or recipe.get('phases') != reference
             or phases.get('tests_before_writer') is not True
             or phases.get('baseline_replayed') is not False
@@ -4415,8 +4431,8 @@ def initial_sealed_writer_phases(row, recipe, closed, source, *, target):
             or closed.get('actual_named_audits') != phases['expected_executions']
             or closed.get('required_named_audits') != phases['expected_executions']
             or closed.get('errors') != []
-            or initial_sealed_phase_reference(closed.get('source_manifest')) != row['compiled_source_authority']
-            or initial_sealed_phase_reference(recipe.get('source_manifest')) != row['compiled_source_authority']
+            or initial_sealed_phase_reference(closed.get('source_manifest')) != compiled_identity
+            or initial_sealed_phase_reference(recipe.get('source_manifest')) != compiled_identity
             or closed.get('source_projection') != recipe.get('canonical_projection')
             or closed.get('source_qualification') != recipe.get('source_qualification')):
         raise ValueError('Phased Writer lacks its exact successful qualification')
@@ -4480,11 +4496,13 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     keys = ('compilation_recipe', 'actual_emission_result', 'qualification_closure',
             'source', 'compiled_source_authority')
     references = [row[key] for key in keys]
-    recipe, emitted, closed, source, compiled = [prepared_metadata(ref) for ref in references]
+    recipe, emitted, closed = [prepared_metadata(ref) for ref in references[:3]]
+    source, compiled = [retained_source_manifest(ref) for ref in references[3:]]
     matched_triple = 'matched_role_source_join' in source
     merge_only = target == 'prepare-blob-merge'
     phased_writer = 'normal_writer_phases' in source
     reference_identity = initial_sealed_phase_reference if phased_writer else lambda value: value
+    compiled_identity = reference_identity(row['compiled_source_authority'])
     if phased_writer and (merge_only or matched_triple):
         raise ValueError('Phased Writer cannot claim another emission family')
     if merge_only and matched_triple:
@@ -4624,8 +4642,8 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
         stored_stat = closed.get('installed_artifact_stats', {}).get(role_key)
         current_stat = list(info)
         if ((merge_only and closed.get('normal_merge_emission_passed') is not True) or closed.get('errors') != []
-                or (initial_sealed_phase_reference(closed.get('source_manifest')) if phased_writer else closed.get('source_manifest')) != row['compiled_source_authority']
-                or (initial_sealed_phase_reference(recipe.get('source_manifest')) if phased_writer else recipe.get('source_manifest')) != row['compiled_source_authority']
+                or reference_identity(closed.get('source_manifest')) != compiled_identity
+                or reference_identity(recipe.get('source_manifest')) != compiled_identity
                 or closed.get('installed_artifacts') != {role_key: artifact}
                 or recipe.get('expected_install') != {role_key: str(path)}
                 or artifact['path'] != str(path) or row['artifact'].get('mode') != 0o555
@@ -4642,10 +4660,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if len(declared) != len(resolved_refs):
         raise ValueError('Duplicate direct Writer source authority')
     manifest_ref = row['compiled_source_authority']
-    declared_manifest = declared.get(manifest_ref['path'])
-    if phased_writer:
-        declared_manifest = initial_sealed_phase_reference(declared_manifest)
-    if declared_manifest != manifest_ref:
+    if reference_identity(declared.get(manifest_ref['path'])) != compiled_identity:
         raise ValueError('Direct Writer did not guard its source manifest')
     entry_point = 'tools/blob_merge.zig' if merge_only else 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
     if entry_point not in compiled or entry_point not in row['source_paths']:
@@ -4699,7 +4714,8 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
 def initial_sealed_target_emission(row, native_roles, *, target, full_graph=False):
     """Authenticate one actual successful install target; never promote the graph verdict."""
     references = [row[key] for key in ('compilation_recipe', 'actual_emission_result', 'qualification_closure', 'source')]
-    recipe, emitted, closed, source = [prepared_metadata(reference) for reference in references]
+    recipe, emitted, closed = [prepared_metadata(reference) for reference in references[:3]]
+    source = retained_source_manifest(row['source'])
     if 'argv' in recipe and 'actual_normal_command' in source:
         allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if 'matched_role_source_join' in source else ('prepare-captured-writer', 'prepare-blob-merge')
         if target not in allowed_targets or full_graph:
@@ -4709,7 +4725,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     guard_reference = recipe.get('source_guard_manifest', row['source'])
     composite = 'source_guard_manifest' in recipe
     if composite:
-        base_source = prepared_metadata(guard_reference)
+        base_source = retained_source_manifest(guard_reference)
         if (source.get('head') is not None or closed.get('source_guard_manifest') != guard_reference
                 or closed.get('source_payload_files') != recipe.get('source_payload_files')):
             raise ValueError('Composite source closure differs from its guarded payloads')
@@ -4928,7 +4944,7 @@ def initial_sealed_blob_successor(original, native_roles):
         target = 'prepare-captured-writer' if writer_only else 'prepare-blob-verify' if verify_only else 'prepare-blob-merge' if merge_only else 'prepare-blob-tools'
         _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only or merge_only))
         references.extend([after['previous_role_binding'],*target_references])
-        source = prepared_metadata(after['source']); inventory = source.get('files',source)
+        source = retained_source_manifest(after['source']); inventory = source.get('files',source)
         for relative in after['source_paths']:
             identity = (dict(inventory[relative], mode=source.get('modes',{}).get(relative,inventory[relative].get('mode',0o644)))
                         if 'source_guard_manifest' in recipe else native_roles.compilation_identity(after,relative))
@@ -4938,7 +4954,7 @@ def initial_sealed_blob_successor(original, native_roles):
     for interface,members,paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES:
         identities = []
         for name in members:
-            source = prepared_metadata(current[name]['source']); inventory = source.get('files',source)
+            source = retained_source_manifest(current[name]['source']); inventory = source.get('files',source)
             identities.append({path:(inventory[path]['bytes'],inventory[path]['sha256']) for path in paths})
         if any(value != identities[0] for value in identities[1:]):
             raise ValueError('Initial sealed blob successor changed '+interface+' ABI')
@@ -4980,7 +4996,7 @@ def initial_sealed_role_successor(original, native_roles):
             raise ValueError('Initial sealed successor lacks its original role binding')
         if prepared_metadata(after['previous_role_binding']) != original:
             raise ValueError('Initial sealed successor names another original role map')
-        old_source, new_source = prepared_metadata(before['source']), prepared_metadata(after['source'])
+        old_source, new_source = retained_source_manifest(before['source']), retained_source_manifest(after['source'])
         old_inventory, new_inventory = old_source.get('files',old_source), new_source.get('files',new_source)
         required = set(after['source_paths']) if name == 'dict-bundle-build' else {
             path for _,members,paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES if name in members for path in paths}
@@ -5019,7 +5035,7 @@ def initial_sealed_role_successor(original, native_roles):
             target='prepare-bundle-driver')
         references = [*writer_references, *driver_references]
         for row in (writer,driver):
-            source = prepared_metadata(row['source']); inventory = source.get('files',source)
+            source = retained_source_manifest(row['source']); inventory = source.get('files',source)
             for path in row['source_paths']:
                 identity = native_roles.compilation_identity(row,path)
                 if (any(identity[key] != inventory[path][key] for key in ('bytes','sha256'))
@@ -6125,9 +6141,8 @@ class RetainedNativeToolRoles:
                 raise ValueError('Retained native tool has the wrong role')
             if row['zig_sha256'] != zig_sha256:
                 raise ValueError('Retained native tool compiler differs')
-            source = prepared_metadata(row['source'])
+            source, compiled = retained_compilation_sources(row, self)
             inventory = source.get('files', source)
-            compiled = retained_compilation_source(row, self)
             compilation_reference = row['source'] if compiled == source else row['compiled_source_authority']
             fingerprint = compiled.get('fingerprint', compilation_reference['sha256'])
             if fingerprint != row['producer_source']:
@@ -6202,8 +6217,7 @@ class RetainedNativeToolRoles:
             shared_runtime = runtime
             # Bind the old inventory descriptor as well as the source projection.
             source_identity = self.bind_input(Path(row['source']['path']))
-            if (source_identity['bytes'] != row['source']['bytes'] or
-                    source_identity['sha256'] != row['source']['sha256']):
+            if any(source_identity[key] != value for key, value in row['source'].items()):
                 raise ValueError('Retained native source metadata changed')
             actual = self.bind_input(path)
             if actual != artifact or not actual['mode'] & 0o111:

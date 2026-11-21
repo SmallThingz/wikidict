@@ -8482,6 +8482,43 @@ class RetainedNativeRoleTests(unittest.TestCase):
                 dependencies=copy.deepcopy(dependencies if role=='dict-bundle-build' else {name:dependencies[name] for name in ('zig','worker_object','value_leaf_bc','worker_main_c')}))
         return roles,compiler
 
+    def test_retained_source_manifest_accepts_checked_mode_without_rehashing_for_compilation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roles, compiler = self.fixture(Path(tmp))
+            for row in roles.values():
+                reference = row['source']
+                reference['mode'] = stat.S_IMODE(Path(reference['path']).stat().st_mode)
+            with patch.object(b, '_read_prepared_metadata', wraps=b._read_prepared_metadata) as reads:
+                selected = b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(selected.provenance(), roles)
+            source_paths = {Path(row['source']['path']) for row in roles.values()}
+            self.assertEqual(sum(c.args[0] in source_paths for c in reads.call_args_list), len(roles))
+            source = roles['dict-blob-build']['source']
+            with self.assertRaises(ValueError):
+                b.prepared_metadata(source)
+            for invalid in (dict(source, mode=source['mode'] ^ 0o100), dict(source, mode=True),
+                            dict(source, unexpected=True), dict(source, sha256='0' * 64)):
+                roles['dict-blob-build']['source'] = invalid
+                with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                    b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+
+    def test_retained_source_manifest_mode_change_before_final_binding_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            roles, compiler = self.fixture(Path(tmp))
+            reference = roles['dict-blob-build']['source']
+            manifest = Path(reference['path'])
+            reference['mode'] = stat.S_IMODE(manifest.stat().st_mode)
+            bind = b.RetainedNativeToolRoles.bind_input
+
+            def change_manifest_mode(selection, path, *, retain=True):
+                if path == manifest:
+                    manifest.chmod(reference['mode'] ^ 0o100)
+                return bind(selection, path, retain=retain)
+
+            with patch.object(b.RetainedNativeToolRoles, 'bind_input', change_manifest_mode):
+                with self.assertRaisesRegex(ValueError, 'Retained native source metadata changed'):
+                    b.RetainedNativeToolRoles(roles, zig_sha256=b.sha256_file(compiler))
+
     def test_retained_roles_select_existing_tools_and_expander_without_compile(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);roles,compiler=self.fixture(root)

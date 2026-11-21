@@ -94,8 +94,12 @@ def fixture(root, change=None):
         closed['rd_terminal_receipt'] = {'chunk': chunk, 'exit_code': 0}
         closed['reaped_chunk'] = 'chunk-17'
     cl = write('runtime01/direct-runtime01/independent-closure01.json', closed)
+    if change == 'mode-on-role-manifests':
+        manifest = manifest_control
     source.update(actual_normal_command=cr, actual_result=rr, actual_closure=cl, compiled_source_manifest=manifest, fingerprint=manifest['sha256'], files=files, normal_writer_phases=phase_ref)
     row.update(compilation_recipe=cr, actual_emission_result=rr, qualification_closure=cl, source=write('phased-source.json', source), compiled_source_authority=manifest, producer_source=manifest['sha256'], artifact=dict(artifact, mode=365), source_paths=['tools/blob_build.zig', 'src/encoder/blob_format.zig'])
+    if change == 'mode-on-role-manifests':
+        row['source']['mode'] = 0o644
     if change == 'log-changed':
         (root / 'prepare-writer.stderr').write_text('changed\n')
     f.argv = argv
@@ -151,7 +155,7 @@ class PhasedWriterSuccessorTests(unittest.TestCase):
                     b.initial_sealed_target_emission(f.row, f.roles, target='prepare-captured-writer')
 
     def test_exact_closed_phases_and_honest_transport_gap(self):
-        for change in (None, 'transport-gap'):
+        for change in (None, 'transport-gap', 'mode-on-role-manifests'):
             with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
                 f = fixture(Path(tmp), change)
                 before = copy.deepcopy(f.row)
