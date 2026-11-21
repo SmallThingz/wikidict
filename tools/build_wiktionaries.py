@@ -1571,6 +1571,12 @@ _FIGURE_KERNEL_PATHS = (sys.platform.startswith('linux') and hasattr(os, 'O_PATH
                         os.path.isdir('/proc/self/fd'))
 
 
+def _capture_directory_members(directory):
+    # POSIX siblings have the same prefix. Sort their spellings once instead
+    # of comparing every parent component at each step of the sort.
+    return tuple(sorted(directory.iterdir(), key=os.fspath if os.name == 'posix' else None))
+
+
 def _figure_replay_identity(path, *, directory=False):
     """Bind a lexical name and its resolved object without reading payload bytes."""
     def fields(value):
@@ -1642,7 +1648,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
         if directory in visited:
             return True
         active.add(directory)
-        members = tuple(sorted(directory.iterdir()))
+        members = _capture_directory_members(directory)
         if deferred_capture is not None and directory == Path(root):
             # Reject missing members of a selected complete capture before reading
             # payloads. Only the full replay below can authenticate these files.
@@ -1670,7 +1676,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                 if parent.resolve() != parent or any(path.is_symlink() for path in (parent, *parent.parents)):
                     raise ValueError('Unsafe contained Figure replay authority')
                 st = parent.stat()
-                directories[parent] = (st.st_dev, st.st_ino, tuple(sorted(parent.iterdir())),
+                directories[parent] = (st.st_dev, st.st_ino, _capture_directory_members(parent),
                                        _figure_replay_identity(parent, directory=True))
             payload_members = tuple(contained.values())
         else:
@@ -1794,7 +1800,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                         if directory.resolve() != directory:
                             return False
                         st = directory.stat()
-                        identity = (st.st_dev, st.st_ino, tuple(sorted(directory.iterdir())),
+                        identity = (st.st_dev, st.st_ino, _capture_directory_members(directory),
                                     _figure_replay_identity(directory, directory=True))
                         if directories.setdefault(directory, identity) != identity:
                             raise ValueError('Contained Figure membership changed while collecting inputs')
@@ -1875,7 +1881,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
             raise ValueError('Figure replay input changed at final boundary')
     for directory, identity in directories.items():
         current = directory.stat()
-        if directory.is_symlink() or (current.st_dev, current.st_ino, tuple(sorted(directory.iterdir())),
+        if directory.is_symlink() or (current.st_dev, current.st_ino, _capture_directory_members(directory),
                 _figure_replay_identity(directory, directory=True)) != identity:
             raise ValueError('Figure replay membership changed while hashing')
     if (helper.producer(), helper.metadata.producer(), helper.site_info.producer()) != runtime:
@@ -2965,7 +2971,7 @@ def pinned_auxiliary_snapshots(snapshots, hashes, destination, capture_hashes=No
                         if any(Path(path).resolve()!=Path(path) or overlaps_owned(Path(path))
                                for path in (*guard[1],*guard[2])):continue
                 else:
-                    members=tuple(sorted(root.iterdir()))
+                    members=_capture_directory_members(root)
                     if ({path.name for path in members}!=set(inventory) or
                             any(path.is_symlink() or not path.is_file() for path in members)):continue
                     if name not in ('wikibase-entities','wikibase-entity-terms'):continue
@@ -7286,7 +7292,7 @@ class RetainedNativeToolRoles:
                 directories={Path(directory) for directory in guard[2]}
             else:
                 if name not in ('wikibase-entities','wikibase-entity-terms'):continue
-                members=tuple(sorted(root.iterdir()))
+                members=_capture_directory_members(root)
                 if ({member.name for member in members}!=set(inventory)
                         or any(member.is_symlink() or not member.is_file() for member in members)):continue
                 required={root/member:digest for member,digest in inventory.items()};directories={root}
@@ -7369,7 +7375,7 @@ class RetainedNativeToolRoles:
 
     def bind_capture(self, root, inventory, *, figure_guard=None):
         """Borrow only a complete freshly replayed capture under dispatch guards."""
-        directories={root:tuple(sorted(root.iterdir()))}
+        directories={root:_capture_directory_members(root)}
         expected={root/name:digest for name,digest in inventory.items()}
         if figure_guard is not None:
             runtime,identities,parents=figure_guard
@@ -7383,7 +7389,7 @@ class RetainedNativeToolRoles:
                 expected[path]=identity['sha256']
             for directory,identity in parents.items():
                 directory=Path(directory)
-                if (directory.stat().st_dev,directory.stat().st_ino,tuple(sorted(directory.iterdir())),
+                if (directory.stat().st_dev,directory.stat().st_ino,_capture_directory_members(directory),
                         _figure_replay_identity(directory,directory=True))!=identity:
                     raise ValueError('Borrowed Figure directory changed after replay')
                 directories[directory]=identity[2]
@@ -7452,7 +7458,7 @@ class RetainedNativeToolRoles:
         for path,expected in getattr(self,'borrowed_capture_directories',{}).items():
             st=path.stat()
             if (any(parent.is_symlink() for parent in (path,*path.parents)) or
-                    (st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_mtime_ns,st.st_ctime_ns,tuple(sorted(path.iterdir())))!=expected):
+                    (st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_mtime_ns,st.st_ctime_ns,_capture_directory_members(path))!=expected):
                 raise ValueError('Borrowed capture membership changed')
         for path, expected in self.directories.items():
             st=path.stat()
