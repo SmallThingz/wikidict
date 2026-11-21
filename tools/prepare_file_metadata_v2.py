@@ -78,20 +78,24 @@ def classify_response(data, titles, registry):
     return records
 
 
+def render_row(title, exists, width, height, mediatype, canonicaltitle):
+    if exists:
+        if mediatype not in MEDIATYPES or not canonicaltitle or canonicaltitle == '-':
+            raise ValueError('Incomplete positive v2 metadata')
+    elif (width, height, mediatype, canonicaltitle) != (0, 0, '-', '-'):
+        raise ValueError('Invalid negative v2 metadata')
+    line = '\t'.join((title, '1' if exists else '0', str(width), str(height), mediatype, canonicaltitle))
+    if line.count('\t') != 5 or '\r' in line or '\n' in line or '\0' in line:
+        raise ValueError('Unsafe file metadata TSV field')
+    return line
+
+
 def render(records):
     lines = [HEADER]
     for title in sorted(records, key=lambda x: x.encode('utf-8')):
         row = records[title]
-        if row['exists']:
-            if row['mediatype'] not in MEDIATYPES or not row['canonicaltitle'] or row['canonicaltitle'] == '-':
-                raise ValueError('Incomplete positive v2 metadata')
-        elif (row['width'], row['height'], row['mediatype'], row['canonicaltitle']) != (0, 0, '-', '-'):
-            raise ValueError('Invalid negative v2 metadata')
-        fields = (title, '1' if row['exists'] else '0', str(row['width']), str(row['height']),
-                  row['mediatype'], row['canonicaltitle'])
-        if any(any(c in value for c in '\t\r\n\0') for value in fields):
-            raise ValueError('Unsafe file metadata TSV field')
-        lines.append('\t'.join(fields))
+        lines.append(render_row(title, row['exists'], row['width'], row['height'],
+                                row['mediatype'], row['canonicaltitle']))
     raw = ('\n'.join(lines) + '\n').encode('utf-8')
     if len(raw) > MAX_METADATA:
         raise ValueError('File metadata exceeds bounded snapshot capacity')

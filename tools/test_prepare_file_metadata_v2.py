@@ -27,6 +27,29 @@ class ClassificationTest(unittest.TestCase):
     def setUp(self):
         self.registry = v1.Registry(registry_bytes(), WIKI, DATE)
 
+    def test_figure_stream_and_snapshot_share_row_validation_and_byte_limits(self):
+        import prepare_figure_metadata as figure
+
+        rows = [dict(requested_file='File:Audio α', state='unsupported', original_width=0,
+                     original_height=0, mediatype='AUDIO', canonical_file='File:音'),
+                dict(requested_file='File:Missing', state='missing', original_width=0,
+                     original_height=0, mediatype=None, canonical_file=None)]
+        projection = {'records': rows}
+        chunks = list(figure.provider_chunks(projection))
+        self.assertEqual(b''.join(chunks), figure.provider_tsv(projection))
+        with mock.patch.object(v2, 'MAX_METADATA', len(chunks[0]) + len(chunks[1])):
+            self.assertEqual(list(figure.provider_chunks(projection)), chunks)
+        with mock.patch.object(v2, 'MAX_METADATA', len(chunks[0]) + len(chunks[1]) - 1):
+            with self.assertRaisesRegex(ValueError, 'capacity'):
+                list(figure.provider_chunks(projection))
+        for field in ('requested_file', 'canonical_file'):
+            for separator in '\t\r\n\0':
+                changed = dict(rows[0])
+                changed[field] += separator
+                with self.subTest(field=field, separator=separator):
+                    with self.assertRaisesRegex(ValueError, 'TSV field'):
+                        list(figure.provider_chunks({'records': [changed]}))
+
     def test_authoritative_type_and_redirect_canonical_title_not_filename_extension(self):
         data = response(present('File:Canonical.bin', canonical='File:Canonical.bin'),
                         redirects=[{'from': 'File:Alias.svg', 'to': 'File:Canonical.bin'}])

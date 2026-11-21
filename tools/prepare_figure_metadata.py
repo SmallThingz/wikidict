@@ -1570,14 +1570,13 @@ def provider_chunks(projection):
     yield header
     for row in projection['records']:
         present = row['state'] != 'missing'
-        rendered = metadata.render({row['requested_file']: {
-            'exists': present, 'width': row['original_width'], 'height': row['original_height'],
-            'mediatype': row['mediatype'] if present else '-',
-            'canonicaltitle': row['canonical_file'] if present else '-',
-        }})
-        if not rendered.startswith(header):
-            raise ValueError('Provider renderer header changed')
-        yield rendered[len(header):]
+        line = metadata.render_row(row['requested_file'], present, row['original_width'],
+                                   row['original_height'], row['mediatype'] if present else '-',
+                                   row['canonical_file'] if present else '-')
+        raw = (line + '\n').encode('utf-8')
+        if len(header) + len(raw) > metadata.MAX_METADATA:
+            raise ValueError('File metadata exceeds bounded snapshot capacity')
+        yield raw
 
 
 def verify_provider_stream(path, projection):
