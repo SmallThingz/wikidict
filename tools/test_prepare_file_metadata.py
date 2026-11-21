@@ -718,6 +718,25 @@ class SpacingKernelTests(unittest.TestCase):
         except (ValueError, UnicodeError, TypeError, AttributeError) as error:
             return ('error', type(error).__name__, str(error))
 
+    def test_normalized_namespace_and_ascii_suffix_keep_native_spacing_and_bounds(self):
+        current, original, raw = self.registries()
+        prefix = current.specs[6]['name'] + ':'
+        room = 4096 - len(prefix.encode())
+        for body in ('', ' file_name', ' Ru__A   B.wav ', 'x' * room, 'x' * (room + 1),
+                     'a\0b', 'e\u0301.svg', '\u1100\u1161.txt', 'x\u200fy', '\ud800'):
+            with self.subTest(body=body[:12]):
+                self.assertEqual(self.outcome(current.spacing, prefix + body),
+                                 self.outcome(original.spacing, prefix + body))
+                self.assertEqual(self.outcome(current.file_title, prefix + body),
+                                 self.outcome(original.file_title, prefix + body))
+        # Removing a direction mark can expose a combining sequence after NFC.
+        # The resulting namespace spelling cannot establish a normalized prefix.
+        raw = raw.replace('ملف'.encode(), 'èA\u200f\u0301'.encode())
+        current, original = metadata.Registry(raw, WIKI, DATE), OriginalSpacingRegistry(raw, WIKI, DATE)
+        value = 'èA\u0301:Name.svg'
+        self.assertEqual(current.spacing(value), original.spacing(value))
+        self.assertEqual(current.spacing(value), 'èÁ:Name.svg')
+
     def test_explicit_spacing_unicode_boundaries_equal_original(self):
         current, original, raw = self.registries()
         held = (raw, dict(current.aliases), {key: dict(value) for key, value in current.specs.items()})

@@ -146,6 +146,7 @@ class Registry:
         self.case_lib.u8_totitle.restype = ctypes.c_void_p
         self.specs, self.aliases = {}, {}
         self.exact_aliases = {}
+        self.normalized_file_prefix = None
         for line in lines:
             if not line or line.startswith('#'):
                 continue
@@ -161,7 +162,10 @@ class Registry:
             for alias in (fields[1], fields[2], *fields[10:]):
                 if not alias:
                     continue
-                key = self.alias_key(self.spacing(alias))
+                normalized = self.spacing(alias)
+                if ns == 6 and alias == fields[1] == normalized and not normalized.isascii():
+                    self.normalized_file_prefix = normalized + ':'
+                key = self.alias_key(normalized)
                 if key in self.aliases and self.aliases[key] != ns:
                     raise ValueError('Conflicting file/media namespace alias')
                 self.aliases[key] = ns
@@ -178,7 +182,10 @@ class Registry:
         raw = text.encode('utf-8')
         if len(raw) > 4096 or '\0' in text:
             raise ValueError('Invalid or oversized file title')
-        if text.isascii():
+        prefix = self.normalized_file_prefix
+        # A colon ends the normalized namespace's combining sequence. An ASCII
+        # filename after that boundary cannot change the normalization of either.
+        if text.isascii() or (prefix and text.startswith(prefix) and text[len(prefix):].isascii()):
             normalized = text
         else:
             count = self.nfc_lib.utf8proc_decompose(raw, len(raw), None, 0, 10)
