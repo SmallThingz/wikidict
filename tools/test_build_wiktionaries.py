@@ -56,6 +56,8 @@ class PreparedToolsFixture(unittest.TestCase):
             return {name:fixture_blob_tool(workspace,name) for name in b.BLOB_TOOL_NAMES}
         mock=patch.object(b,'prepare_blob_tools',side_effect=prepare)
         mock.start();self.addCleanup(mock.stop)
+        capability=patch.object(b,'supports_acknowledged_shards',return_value=False)
+        capability.start();self.addCleanup(capability.stop)
 
 
 class ShardSourceIdentityTests(PreparedToolsFixture):
@@ -961,6 +963,30 @@ class FailedShardPayloadCleanupTests(unittest.TestCase):
             for item in evidence:
                 self.assertEqual((item/'shard-diagnostics/fallback-pages.jsonl').read_bytes(),b'exact fallback')
                 self.assertEqual(json.loads((item/'payload-cleanup.json').read_text())['removed'],[])
+
+    def test_acknowledged_writer_authenticates_current_shard_failure_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); shard=root/'00000007'; evidence=root/'failures'
+            writer=fixture_blob_tool(root)
+            args=['dump',str(root),'--expander-root','expander','--acknowledged-shards',str(evidence)]
+            command=[str(writer.path),*args]
+            def fail(start,limit,offset,invocation_id):
+                self.assertEqual((start,limit,offset),(7,2,100))
+                receipt=evidence/invocation_id/'failure.json'
+                b.write_failure_evidence(receipt,dict(schema='wikidict.blob-build.failure.v1',
+                    invocation_args=args,invocation_id=invocation_id,failure_class='deterministic-presentation',
+                    error_name='UncompiledPresentation',page=dict(ordinal=8,namespace=0,title='failed',page_id=1,revision_id=2)))
+                raise subprocess.CalledProcessError(1,command)
+            session=SimpleNamespace(args=args,command=command,active=True,run=fail)
+            with self.assertRaises(b.DeterministicPresentationFailure) as caught:
+                b.build_shard_with_retries(writer,[],shard,evidence,'testwiktionary','20261001',7,2,
+                    lambda:None,lambda:self.fail('failed shard was validated'),session=session,offset=100)
+            failure=caught.exception
+            self.assertEqual(failure.cmd,command)
+            self.assertTrue(failure.presentation_continuation_safe)
+            invoked=json.loads(Path(failure.failure_receipt).with_name('invocation.json').read_text())
+            self.assertEqual(invoked['index_byte_offset'],100)
+            self.assertEqual(invoked['transport'],'acknowledged-shards-v1')
 
     def test_nonpositive_failure_preserves_error_without_unproven_retry(self):
         for returncode in (-15,0):
@@ -1956,6 +1982,10 @@ class BuildTest(PreparedToolsFixture):
             self.assertEqual(lzma.decompress(target.read_bytes()),payload)
 
     def test_compressed_mode_retires_each_raw_shard_before_next_build(self):
+        for shared in (False,True):
+            with self.subTest(shared=shared):self.compressed_mode_retires_each_raw_shard(shared)
+
+    def compressed_mode_retires_each_raw_shard(self, shared):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);workspace=root/'work';exp=workspace/'expander/.bundle-expander';exp.mkdir(parents=True)
             (workspace/'expander/.incomplete').write_text('expander ready')
@@ -1963,6 +1993,17 @@ class BuildTest(PreparedToolsFixture):
             (exp/'dict-bundle-expander').write_text('worker');write_namespace_fixture(exp)
             cache=workspace/'input';cache.mkdir();(cache/'.complete.json').write_text(json.dumps({'source_pages':2}))
             events=[]
+            sessions=[]
+            @contextlib.contextmanager
+            def open_writer(tool,args):
+                sessions.append(args)
+                self.assertIn('--acknowledged-shards',args)
+                def emit(start,limit,offset,invocation_id):
+                    self.assertRegex(invocation_id,r'^[0-9a-f]{32}$')
+                    dest=Path(args[1])/f'{start:08d}'
+                    run([str(tool.path),args[0],str(dest),*args[2:],'--start-page',str(start),
+                         '--limit-pages',str(limit),'--index-byte-offset',str(offset)])
+                yield SimpleNamespace(active=True,args=args,command=[str(tool.path),*args],run=emit)
             def run(command):
                 if blob_command(command,'build-blobs'):
                     self.assertNotIn('--shard-pages',command)
@@ -1974,14 +2015,28 @@ class BuildTest(PreparedToolsFixture):
             def encode(path,block_size,workers):
                 self.assertEqual((block_size,workers),(1024*1024,1));self.assertEqual(events[-1][0],'verify')
                 Path(str(path)+'.xz').write_bytes(lzma.compress(path.read_bytes()));events.append(('compress',path.parent.name))
-            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run),patch.object(b,'compress',side_effect=encode),patch.object(b,'require_merge_disk_space',side_effect=ValueError('stop before merge')) as admit:
+            with patch.object(b,'SHARD_PAGES',1),patch.object(b,'run_checked',side_effect=run),patch.object(b,'compress',side_effect=encode),patch.object(b,'require_merge_disk_space',side_effect=ValueError('stop before merge')) as admit, \
+                 patch.object(b,'supports_acknowledged_shards',return_value=shared),patch.object(b,'acknowledged_shards',side_effect=open_writer):
                 with self.assertRaisesRegex(ValueError,'stop before merge'):
                     b.build_sharded(root/'dump',root/'staging',workspace,root/'registry','zig',1,[{'wiki':'test','date':'20260901'}],123,compress_shards=True)
             self.assertTrue(admit.call_args.kwargs['allow_compressed'])
             self.assertTrue(admit.call_args.kwargs['compressed_output'])
+            self.assertEqual(len(sessions),int(shared))
             self.assertEqual([x[0]for x in events],['build','verify','compress','build','verify','compress'])
             self.assertTrue((workspace/'shards/00000000/aliases.wikblb.xz').exists())
             self.assertTrue((workspace/'shards/00000001/aliases.wikblb.xz').exists())
+
+    def test_acknowledged_shard_invalid_reply_closes_pipes_before_join(self):
+        process=SimpleNamespace(stdin=io.BytesIO(),stdout=io.BytesIO(b'x'*8192))
+        def wait():
+            self.assertTrue(process.stdin.closed)
+            self.assertTrue(process.stdout.closed)
+            return 0
+        process.wait=wait
+        session=b.AcknowledgedShards(process,[],['dict-blob-build'])
+        with self.assertRaisesRegex(ValueError,'invalid acknowledged shard completion'):
+            session.run(0,1,0,'0'*32)
+        self.assertFalse(session.active)
 
     def test_direct_xz_merge_keeps_recovery_until_deep_verify_and_logical_seal(self):
         for verify_failure in (True,False):
@@ -5953,6 +6008,28 @@ class ExplicitLlvmWorkerTests(PreparedToolsFixture):
 
 
 class PreparedBlobToolsTests(unittest.TestCase):
+    def test_acknowledged_shard_probe_preserves_marker_and_legacy_fallback_under_job_watchdog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tool=fixture_blob_tool(Path(tmp))
+            command=[str(tool.path),'--acknowledged-shard-protocol']
+            for code,stdout,stderr,supported in (
+                (0,b'wikidict-acknowledged-shards-v1\n',b'',True),
+                (1,b'',b'usage: dict-blob-build <input> <output>\n',False),
+            ):
+                with self.subTest(code=code),patch.object(b.subprocess,'run',
+                        return_value=subprocess.CompletedProcess(command,code,stdout,stderr)) as invoked:
+                    self.assertIs(b.supports_acknowledged_shards(tool),supported)
+                    invoked.assert_called_once_with(command,cwd=b.PROJECT,stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            with patch.object(b.subprocess,'run',
+                    return_value=subprocess.CompletedProcess(command,0,b'unknown protocol\n',b'')):
+                with self.assertRaisesRegex(ValueError,'Unexpected acknowledged shard capability response'):
+                    b.supports_acknowledged_shards(tool)
+            with patch.object(b.subprocess,'run',
+                    return_value=subprocess.CompletedProcess(command,1,b'',b'Writer failed\n')):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    b.supports_acknowledged_shards(tool)
+
     def fixture(self, root):
         workspace=root/'work';workspace.mkdir()
         compiler=root/'zig';compiler.write_bytes(b'fixture compiler');compiler.chmod(0o755)
@@ -6242,7 +6319,8 @@ class PreparedBlobToolsTests(unittest.TestCase):
                 self.assertEqual(json.loads((staging/'page-coverage.json').read_text())['pages_seen'],2)
             with patch.object(b,'source_fingerprint',return_value=identity['source']),patch.object(b,'run_checked',side_effect=run), \
                  patch.object(b,'SHARD_PAGES',1),patch.object(b,'compress',side_effect=compress), \
-                 patch.object(b,'require_merge_disk_space',return_value={}),patch.object(b,'cleanup_shard_workspace',side_effect=cleanup):
+                 patch.object(b,'require_merge_disk_space',return_value={}),patch.object(b,'cleanup_shard_workspace',side_effect=cleanup), \
+                 patch.object(b,'supports_acknowledged_shards',return_value=False):
                 b.build_sharded(root/'dump',staging,workspace,root/'registry',str(compiler),1,
                     [{'wiki':'testwiktionary','date':'20261001'}],123,compress_shards=True)
             self.assertEqual(sum('prepare-blob-tools' in argv for argv in calls),1)

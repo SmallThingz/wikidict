@@ -54,6 +54,7 @@ const Options = struct {
     expansion_timeout_ms: ?u32 = null,
     now_unix: ?i64 = null,
     shard_pages: ?usize = null,
+    acknowledged_shard_evidence: ?[]const u8 = null,
     audit_presentation_errors: bool = false,
     audit_expanded_bytes: ?usize = null,
     failure_receipt: ?[]const u8 = null,
@@ -3682,6 +3683,10 @@ fn parseOptions(args: []const []const u8) !Options {
             if (index >= args.len or out.shard_pages != null) return error.Usage;
             out.shard_pages = try std.fmt.parseInt(usize, args[index], 10);
             if (out.shard_pages.? == 0) return error.Usage;
+        } else if (std.mem.eql(u8, arg, "--acknowledged-shards")) {
+            index += 1;
+            if (index >= args.len or out.acknowledged_shard_evidence != null or !std.fs.path.isAbsolute(args[index])) return error.Usage;
+            out.acknowledged_shard_evidence = args[index];
         } else if (std.mem.eql(u8, arg, "--workers")) {
             index += 1;
             if (index >= args.len) return error.Usage;
@@ -3735,6 +3740,9 @@ fn parseOptions(args: []const []const u8) !Options {
         if (out.index_byte_offset == null or out.limit_pages == null or out.limit_pages.? == 0 or
             out.start_page % shard_pages != 0) return error.Usage;
     }
+    if (out.acknowledged_shard_evidence != null and (out.start_page != 0 or out.index_byte_offset != null or
+        out.limit_pages != null or out.shard_pages != null or out.audit_presentation_errors or out.failure_receipt != null or
+        out.indexed_output_args.len != 0 or out.now_unix == null or !std.fs.path.isAbsolute(args[2]))) return error.Usage;
     try validateIndexedOutputArguments(out);
     if (out.indexed_output_args.len != 0 and (!std.fs.path.isAbsolute(args[1]) or
         !std.fs.path.isAbsolute(args[2]) or !std.fs.path.isAbsolute(out.expander_root))) return error.Usage;
@@ -4348,6 +4356,10 @@ fn runContinuous(
 pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len == 2 and std.mem.eql(u8, args[1], "--acknowledged-shard-protocol")) {
+        try std.Io.File.stdout().writeStreamingAll(init.io, "wikidict-acknowledged-shards-v1\n");
+        return;
+    }
     if (args.len > 1 and std.mem.eql(u8, args[1], "--check-figure-compatibility")) {
         try checkFigureCompatibility(init.io, std.heap.smp_allocator, args[2..]);
         if (args.len > 2 and std.mem.eql(u8, args[2], "--full"))
@@ -4361,11 +4373,11 @@ pub fn main(init: std.process.Init) !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--captured-pages"))
         return runCapturedWriterTransactionCli(init, args);
     if (args.len < 3) {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     }
     const options = parseOptions(args) catch {
-        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
+        diagnostics.printLine("usage: dict-blob-build <wiktionary.xml|multistream.xml.bz2|multistream.xml.zst> <output-root> --expander-root ROOT [--figure-input-root ROOT] [--figure-page-observations-snapshot FILE] [--start-page N] [--index-byte-offset N] [--limit-pages N] [--workers N] [--expansion-timeout-ms N] [--now-unix UNIX] [--shard-pages N | --acknowledged-shards FAILURE_ROOT] [--audit-presentation-errors [--audit-expanded-bytes N]] [--shared-inputs FILE... --indexed-page-outputs ORD OFFSET ROW_SHA256 NAME ...]\n", .{});
         return error.Usage;
     };
     var figure_inputs: ?WriterFigureInputs = if (options.figure_input_root) |root|
@@ -4651,6 +4663,12 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
         return;
     }
 
+    if (options.acknowledged_shard_evidence) |evidence_root| {
+        try runAcknowledgedShards(io, a, args, evidence_root, options, codes, &namespaces, &pool, &dump,
+            &page_index, page_index_kind, page_index_path, figure_inputs, &book_inputs);
+        return;
+    }
+
     if (options.indexed_output_args.len != 0) {
         try shared_inputs.verify();
         var index_cursor: IndexedOutputCursor = .{};
@@ -4664,6 +4682,84 @@ fn runBlobBuild(io: std.Io, a: std.mem.Allocator, args: []const []const u8, opti
     }
     try runOrdinaryOutput(io, a, args[2], options, codes, &namespaces, &pool, &dump,
         &page_index, page_index_kind, page_index_path, audit, figure_inputs, &book_inputs);
+}
+
+fn runAcknowledgedShards(
+    io: std.Io, a: std.mem.Allocator, args: []const []const u8, evidence_root: []const u8, common: Options,
+    codes: encoder.blob_builder.LanguageCodes, namespaces: *const namespace_registry.Registry,
+    pool: *ExpansionPool, dump: *dump_source.SourceReader, page_index: *const Mapped,
+    page_index_kind: dump_source.PageIndexKind, index_path: []const u8,
+    figure_inputs: ?*WriterFigureInputs, book_inputs: *CapturedWriterInputs,
+) !void {
+    var buffer: [160]u8 = undefined;
+    var reader = std.Io.File.stdin().readerStreaming(io, &buffer);
+    var next_start: ?usize = null;
+    var previous_offset: ?usize = null;
+    // EOF is the parent's orderly stop, including a failed verification or
+    // compression. No next raw shard exists until it sends another request.
+    while (try nextAcknowledgedShardFrame(&reader.interface)) |line| {
+        var fields = std.mem.splitScalar(u8, line, ' ');
+        var options = common;
+        options.start_page = std.fmt.parseInt(usize, fields.next() orelse return error.InvalidShardRequest, 10) catch return error.InvalidShardRequest;
+        const limit = std.fmt.parseInt(usize, fields.next() orelse return error.InvalidShardRequest, 10) catch return error.InvalidShardRequest;
+        const offset = std.fmt.parseInt(usize, fields.next() orelse return error.InvalidShardRequest, 10) catch return error.InvalidShardRequest;
+        const id = fields.next() orelse return error.InvalidShardRequest;
+        if (fields.next() != null or id.len != 32 or limit == 0 or
+            (next_start != null and options.start_page != next_start.?) or
+            (previous_offset != null and offset <= previous_offset.?)) return error.InvalidShardRequest;
+        for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidShardRequest;
+        next_start = std.math.add(usize, options.start_page, limit) catch return error.InvalidShardRequest;
+        previous_offset = offset;
+        options.limit_pages = limit;
+        options.index_byte_offset = offset;
+        const name = try std.fmt.allocPrint(a, "{d:0>8}", .{options.start_page});
+        defer a.free(name);
+        const shard = try std.fs.path.join(a, &.{ args[2], name });
+        defer a.free(shard);
+        if (std.Io.Dir.cwd().statFile(io, shard, .{ .follow_symlinks = false })) |_| return error.ShardAlreadyExists else |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        }
+        const evidence = try std.fs.path.join(a, &.{ evidence_root, id });
+        defer a.free(evidence);
+        const receipt = try std.fs.path.join(a, &.{ evidence, "failure.json" });
+        defer a.free(receipt);
+        const capture = &first_failure_capture_context.?;
+        const previous = capture.*;
+        defer capture.* = previous;
+        capture.output_root = shard;
+        capture.input.start_page = options.start_page;
+        capture.input.requested_limit = limit;
+        capture.input.index_byte_offset = offset;
+        capture.invocation_id = id;
+        capture.failure_evidence_root = evidence;
+        capture.attempted = false;
+        failure_receipt_context = .{ .io = io, .a = a, .path = receipt, .invocation_id = id, .invocation_args = args[1..] };
+        defer failure_receipt_context = null;
+        try runOrdinaryOutput(io, a, shard, options, codes, namespaces, pool, dump, page_index,
+            page_index_kind, index_path, null, figure_inputs, book_inputs);
+        var ready_buffer: [64]u8 = undefined;
+        const ready = try std.fmt.bufPrint(&ready_buffer, "ready {d}\n", .{options.start_page});
+        try std.Io.File.stdout().writeStreamingAll(io, ready);
+    }
+}
+
+fn nextAcknowledgedShardFrame(reader: *std.Io.Reader) !?[]const u8 {
+    // A final unterminated request is distinct from orderly EOF between shards.
+    _ = reader.peekByte() catch |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    };
+    const frame = reader.takeDelimiterInclusive('\n') catch return error.InvalidShardRequest;
+    return frame[0 .. frame.len - 1];
+}
+
+test "acknowledged shard frames require a newline and distinguish orderly EOF" {
+    var complete: std.Io.Reader = .fixed("0 1 0 0123456789abcdef0123456789abcdef\n");
+    try std.testing.expectEqualStrings("0 1 0 0123456789abcdef0123456789abcdef", (try nextAcknowledgedShardFrame(&complete)).?);
+    try std.testing.expect(try nextAcknowledgedShardFrame(&complete) == null);
+    var truncated: std.Io.Reader = .fixed("0 1 0 0123456789abcdef0123456789abcdef");
+    try std.testing.expectError(error.InvalidShardRequest, nextAcknowledgedShardFrame(&truncated));
 }
 
 fn runOrdinaryOutput(

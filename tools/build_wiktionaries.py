@@ -6212,25 +6212,29 @@ class PreparedBlobTool:
         self.require_unchanged()
         return [str(self.path),*args]
 
-    def run(self, args, edition, date, phase, **fields):
+    @contextmanager
+    def invocation(self, args):
         generation=getattr(_PREPARED_SOURCE,'value',None)
         if generation is not None:
             generation.require_unchanged(full_context=False)
             if generation.tools.get(self.path.name) is not self:
                 raise ValueError('Native command does not use the authorized prepared tool')
         command=self.command(args)
-        if 'native_working_directory' in fields:
-            raise ValueError('Selected native working directory cannot be overridden')
-        working_directory=getattr(self,'native_working_directory',None)
-        if working_directory is not None:
-            fields=dict(fields,native_working_directory=working_directory)
         try:
-            timed_run(command,edition,date,phase,**fields)
+            yield command,getattr(self,'native_working_directory',None)
         finally:
             self.require_unchanged()
             if generation is not None:generation.require_unchanged(full_context=False)
             retained=getattr(self,'retained_roles',None)
             if retained is not None:retained.require_unchanged()
+
+    def run(self, args, edition, date, phase, **fields):
+        if 'native_working_directory' in fields:
+            raise ValueError('Selected native working directory cannot be overridden')
+        with self.invocation(args) as (command,directory):
+            if directory is not None:
+                fields=dict(fields,native_working_directory=directory)
+            timed_run(command,edition,date,phase,**fields)
 
 
 RETAINED_NATIVE_ROLE_NAMES = (*BLOB_TOOL_NAMES, 'dict-bundle-build')
@@ -7746,7 +7750,67 @@ def retain_failed_shard_diagnostics(shard, evidence, *, retire_payload=True):
     return result['status'] not in ('cleanup-error','retained-completed')
 
 
-def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, date, start, limit, check_identity, validate):
+def supports_acknowledged_shards(tool):
+    if not isinstance(tool, PreparedBlobTool): return False
+    with tool.invocation(['--acknowledged-shard-protocol']) as (command,directory):
+        # The enclosing finite job supervises the Writer, including cold startup.
+        result=subprocess.run(command,cwd=directory or PROJECT,stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    if (result.returncode,result.stdout,result.stderr)==(0,b'wikidict-acknowledged-shards-v1\n',b''):
+        return True
+    if result.returncode==1 and not result.stdout and result.stderr.startswith(b'usage: dict-blob-build '):
+        return False
+    result.check_returncode()
+    raise ValueError('Unexpected acknowledged shard capability response')
+
+
+class AcknowledgedShards:
+    def __init__(self, process, args, command):
+        self.process=process
+        self.args=args
+        self.command=command
+        self.active=True
+
+    def stop(self):
+        if not self.active: return 0
+        self.active=False
+        try: self.process.stdin.close()
+        except BrokenPipeError: pass
+        # A malformed reply may still be filling the pipe. Release the reader
+        # before joining rather than waiting behind an unconsumed write.
+        self.process.stdout.close()
+        return self.process.wait()
+
+    def run(self, start, limit, offset, invocation_id):
+        try:
+            self.process.stdin.write(f'{start} {limit} {offset} {invocation_id}\n'.encode('ascii'))
+            self.process.stdin.flush()
+        except BrokenPipeError:
+            reply=b''
+        else:
+            reply=self.process.stdout.readline(64)
+        if reply==f'ready {start}\n'.encode('ascii'): return
+        returncode=self.stop()
+        if returncode: raise subprocess.CalledProcessError(returncode,self.command)
+        raise ValueError('Missing or invalid acknowledged shard completion')
+
+
+@contextmanager
+def acknowledged_shards(tool, args):
+    with tool.invocation(args) as (command,directory):
+        with subprocess.Popen(command,cwd=directory or PROJECT,stdin=subprocess.PIPE,stdout=subprocess.PIPE) as process:
+            session=AcknowledgedShards(process,args,command)
+            try:
+                yield session
+            except BaseException:
+                session.stop()
+                raise
+            else:
+                returncode=session.stop()
+                if returncode: raise subprocess.CalledProcessError(returncode,command)
+
+
+def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, date, start, limit, check_identity, validate, *, session=None, offset=None):
     evidence_root.mkdir(mode=0o700, exist_ok=True)
     if evidence_root.is_symlink() or not evidence_root.is_dir():
         raise ValueError('Invalid shard failure evidence directory')
@@ -7759,13 +7823,20 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
         evidence = evidence_root / invocation_id
         evidence.mkdir(mode=0o700)
         receipt = evidence / 'failure.json'
-        invocation_args = list(native_args) + ['--failure-receipt', str(receipt), '--invocation-id', invocation_id]
-        argv = tool.command(invocation_args)
+        shared=session is not None and session.active
+        invocation_args = (session.args if shared else
+            list(native_args) + ['--failure-receipt', str(receipt), '--invocation-id', invocation_id])
+        argv = session.command if shared else tool.command(invocation_args)
+        request=dict(index_byte_offset=offset,transport='acknowledged-shards-v1') if shared else {}
         (evidence / 'invocation.json').write_text(json.dumps(dict(
             invocation_id=invocation_id, argv=argv, start_page=start, pages=limit,
-            attempt=attempt), sort_keys=True) + '\n')
+            attempt=attempt,**request), sort_keys=True) + '\n')
         try:
-            tool.run(invocation_args, edition, date, 'shard_build', start_page=start, pages=limit, attempt=attempt)
+            if shared:
+                with build_phase(edition,date,'shard_build',start_page=start,pages=limit,attempt=attempt,shared_writer=True):
+                    session.run(start,limit,offset,invocation_id)
+            else:
+                tool.run(invocation_args, edition, date, 'shard_build', start_page=start, pages=limit, attempt=attempt)
         except subprocess.CalledProcessError as error:
             write_failure_evidence(evidence / 'exit.json', dict(returncode=error.returncode,
                 classification='pending-input-identity'))
@@ -7803,6 +7874,9 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
             validate()
         except ValueError as error:
             write_failure_evidence(evidence / 'coverage-error.json', dict(error=str(error)))
+            if shared:
+                returncode=session.stop()
+                if returncode: raise subprocess.CalledProcessError(returncode,argv) from error
             if not retain_failed_shard_diagnostics(shard,evidence): raise
             last_error = error
             print(f'Retrying shard with invalid coverage {edition} start={start} attempt={attempt}/{SHARD_RETRIES}', flush=True)
@@ -8178,82 +8252,100 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         continuous_handled=True
     failed_shards=[]
     if not continuous_handled:
-        # The contiguous prefix is already verified and in shard_paths.
-        for start in missing_starts:
-            limit=min(interval,indexed_pages-start)
-            offset=index['offsets'][start]
-            check_shard_inputs()
-            shard=shards_root/f'{start:08d}'
-            marker=shard/'.verified'
-            if shard.exists():
-                try:
-                    validate_page_coverage(shard,start,limit,index,offset)
-                except ValueError:
-                    print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
-                    remove_artifact_tree(shard)
-                else:
-                    verifier.run([str(shard)],
-                              edition,date,'resume_shard_verify',start_page=start,pages=limit)
-                    check_shard_inputs()
-                    if not marker.is_file(): marker.write_text('verified\n')
-                    if compress_shards:
-                        with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
-                            compress_verified_shard(shard)
-                    shard_paths.append(shard);continue
-            native_args=[str(dump),str(shard),
-                     '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
-                     '--index-byte-offset',str(offset),
-                     '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args,*writer_input_args]
-            evidence_root=workspace.with_name(workspace.name+'.failures')
-            try:
-                attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
-                    lambda:check_shard_inputs(),
-                    lambda:validate_page_coverage(shard,start,limit,index,offset))
-            except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
-                if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
-                        'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection',
-                        *MISSING_EXPANSION_INPUT_ERRORS):
-                    def check_audit_inputs():
-                        if generation is not None:generation.require_unchanged()
+        session=None
+        acknowledged_start=None
+        if compress_shards and presentation_audit_pages is None and shards_root.is_absolute() and workspace.is_absolute():
+            present=[os.path.lexists(shards_root/f'{start:08d}') for start in shard_starts]
+            if False in present:
+                first_missing=present.index(False)
+                if len(present)-first_missing>=2 and not any(present[first_missing:]):
+                    if supports_acknowledged_shards(blob_builder):
+                        acknowledged_start=shard_starts[first_missing]
+        with ExitStack() as shard_sessions:
+            # The contiguous prefix is already verified and in shard_paths.
+            for start in missing_starts:
+                limit=min(interval,indexed_pages-start)
+                offset=index['offsets'][start]
+                check_shard_inputs()
+                shard=shards_root/f'{start:08d}'
+                marker=shard/'.verified'
+                if shard.exists():
+                    try:
+                        validate_page_coverage(shard,start,limit,index,offset)
+                    except ValueError:
+                        print(f'Rebuilding shard with invalid coverage {items[0]["wiki"]} start={start}',flush=True)
+                        remove_artifact_tree(shard)
+                    else:
+                        verifier.run([str(shard)],
+                                  edition,date,'resume_shard_verify',start_page=start,pages=limit)
                         check_shard_inputs()
-                    # Earlier in-flight pages can remain unconsumed when a later
-                    # worker fails. Start at the shard lower bound, never ordinal+1.
-                    failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
-                        evidence_root,edition,date,start,indexed_pages,presentation_audit_pages,
-                        expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],check_audit_inputs,receipt)
-                    if continue_failed_shards:
-                        # Never extend a failed shard's audit into another shard.
-                        # Only this typed, source-bound rejection permits continuation.
-                        try:
-                            summary=audit_failed_shard(blob_builder,dump,expander,evidence_root,
-                                edition,date,start,indexed_pages,min(presentation_audit_pages,limit),
-                                expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],
-                                check_audit_inputs,failure.failure_receipt)
-                        except Exception as audit_error:
+                        if not marker.is_file(): marker.write_text('verified\n')
+                        if compress_shards:
+                            with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
+                                compress_verified_shard(shard)
+                        shard_paths.append(shard);continue
+                native_args=[str(dump),str(shard),
+                         '--expander-root',str(expander),'--start-page',str(start),'--limit-pages',str(limit),
+                         '--index-byte-offset',str(offset),
+                         '--workers',str(expansion_workers),'--now-unix',str(now_unix),*timeout_args,*reviewed_args,*writer_input_args]
+                evidence_root=workspace.with_name(workspace.name+'.failures')
+                if start==acknowledged_start:
+                    # Launch once for the absent suffix; the next request releases
+                    # the Writer only after verification and raw retirement.
+                    arguments=[str(dump),str(shards_root),'--expander-root',str(expander),
+                        '--workers',str(expansion_workers),'--now-unix',str(now_unix),
+                        '--acknowledged-shards',str(evidence_root),*timeout_args,*reviewed_args,*writer_input_args]
+                    session=shard_sessions.enter_context(acknowledged_shards(blob_builder,arguments))
+                try:
+                    attempt=build_shard_with_retries(blob_builder,native_args,shard,evidence_root,edition,date,start,limit,
+                        lambda:check_shard_inputs(),
+                        lambda:validate_page_coverage(shard,start,limit,index,offset),
+                        **({'session':session,'offset':offset} if session is not None else {}))
+                except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
+                    if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
+                            'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection',
+                            *MISSING_EXPANSION_INPUT_ERRORS):
+                        def check_audit_inputs():
+                            if generation is not None:generation.require_unchanged()
+                            check_shard_inputs()
+                        # Earlier in-flight pages can remain unconsumed when a later
+                        # worker fails. Start at the shard lower bound, never ordinal+1.
+                        failure.presentation_audit=lambda receipt=failure.failure_receipt:audit_failed_shard(blob_builder,dump,expander,
+                            evidence_root,edition,date,start,indexed_pages,presentation_audit_pages,
+                            expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],check_audit_inputs,receipt)
+                        if continue_failed_shards:
+                            # Never extend a failed shard's audit into another shard.
+                            # Only this typed, source-bound rejection permits continuation.
+                            try:
+                                summary=audit_failed_shard(blob_builder,dump,expander,evidence_root,
+                                    edition,date,start,indexed_pages,min(presentation_audit_pages,limit),
+                                    expansion_workers,now_unix,timeout_args,[*reviewed_args,*writer_input_args],
+                                    check_audit_inputs,failure.failure_receipt)
+                            except Exception as audit_error:
+                                failure.presentation_audit=None
+                                failure.add_note('Presentation continuation incomplete: '+str(audit_error))
+                                phase_event(edition,date,'presentation_diagnostic_continuation','incomplete',
+                                    error_type=type(audit_error).__name__,error=str(audit_error),
+                                    original_failure_receipt=failure.failure_receipt)
+                                raise failure from audit_error
                             failure.presentation_audit=None
-                            failure.add_note('Presentation continuation incomplete: '+str(audit_error))
-                            phase_event(edition,date,'presentation_diagnostic_continuation','incomplete',
-                                error_type=type(audit_error).__name__,error=str(audit_error),
-                                original_failure_receipt=failure.failure_receipt)
-                            raise failure from audit_error
-                        failure.presentation_audit=None
-                        failed_shards.append(failure)
-                        failure.presentation_audit_summary=summary
-                        phase_event(edition,date,'failed_shard_retained','end',start_page=start,pages=limit,
-                            original_failure_receipt=failure.failure_receipt,audit_complete=True,
-                            shard_verified=False,publication_created=False)
-                        continue
-                raise
-            # Preserve a completed shard if verification fails because of
-            # a transient tool/resource error. The next run revalidates it.
-            verifier.run([str(shard)],
-                      edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
-            check_shard_inputs()
-            marker.write_text('verified\n')
-            if compress_shards:
-                with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
-                    compress_verified_shard(shard)
-            shard_paths.append(shard)
+                            failed_shards.append(failure)
+                            failure.presentation_audit_summary=summary
+                            phase_event(edition,date,'failed_shard_retained','end',start_page=start,pages=limit,
+                                original_failure_receipt=failure.failure_receipt,audit_complete=True,
+                                shard_verified=False,publication_created=False)
+                            continue
+                    raise
+                # Preserve a completed shard if verification fails because of
+                # a transient tool/resource error. The next run revalidates it.
+                verifier.run([str(shard)],
+                          edition,date,'shard_verify',start_page=start,pages=limit,attempt=attempt)
+                check_shard_inputs()
+                marker.write_text('verified\n')
+                if compress_shards:
+                    with build_phase(edition,date,'shard_compress',start_page=start,pages=limit):
+                        compress_verified_shard(shard)
+                shard_paths.append(shard)
 
     if failed_shards:
         # Incomplete shard sets never enter coverage, merge or publication. Every
