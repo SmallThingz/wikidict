@@ -203,7 +203,7 @@ class AttemptIndexTests(unittest.TestCase):
             options = (*flags, '--interwiki-map-snapshot', interwiki['path'], '--shard-pages', '200', '--presentation-audit-pages', '50')
             auth = dict(input_selection=True, snapshot=snapshot, snapshot_context=deferred, extra_refs=[original, interwiki])
             freeze(options, **auth)
-            with self.assertRaisesRegex(ValueError, 'lacks a failed pre-production'):
+            with self.assertRaisesRegex(ValueError, 'lacks an ordered snapshot check'):
                 read_execution(base, path, guardian=True)
             preflight = dict(edition='blkwiktionary', date='20261001', phase='selected_snapshot_resolution', scope='pre_edition')
             stdout = record(run / 'tests.stdout', b''.join(b'BUILD_PHASE ' + json.dumps({**preflight, **event}).encode() + b'\n'
@@ -215,6 +215,42 @@ class AttemptIndexTests(unittest.TestCase):
             freeze((*options[:-1], '51'), **auth, exit_code=2, watchdog_code=2)
             with self.assertRaisesRegex(ValueError, 'Deferred whole-edition plan differs'):
                 read_execution(base, path, guardian=True)
+
+            def render_events(events):
+                return b''.join(b'BUILD_PHASE ' + json.dumps(event).encode() + b'\n' for event in events)
+
+            resolved = [{**preflight, 'event': 'start'}, {**preflight, 'event': 'end', 'status': 'success', 'seconds': 1}]
+            started = {**phase, 'event': 'start'}
+            published = [{**phase, 'phase': 'publish', 'event': 'start'},
+                         {**phase, 'phase': 'publish', 'event': 'end', 'status': 'success'}]
+            finished = {**phase, 'event': 'end', 'status': 'success', 'seconds': 2.5,
+                        'execution_mode': 'pipeline_run_may_reuse_verified_inputs_or_shards'}
+            target = root / 'output/blkwiktionary/20261001/complete.json'
+            target.parent.mkdir(parents=True)
+            metadata = dict(edition='blkwiktionary', date='20261001', input_pages=4000, status='built')
+            record(target, metadata)
+            valid = [*resolved, started, *published, finished]
+            stdout = record(run / 'tests.stdout', render_events(valid))
+            freeze(options, **auth)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            record(target, {**metadata, 'input_pages': 50})
+            with self.assertRaisesRegex(ValueError, 'output differs'):
+                read_execution(base, path, guardian=True)
+            record(target, metadata)
+            for invalid in ([*resolved, started, finished], [started, *resolved, *published, finished],
+                            [*resolved, *resolved, started, *published, finished],
+                            [*resolved, *published, started, finished],
+                            [*valid[:-1], {**finished, 'execution_mode': 'existing_output'}]):
+                stdout = record(run / 'tests.stdout', render_events(invalid))
+                freeze(options, **auth)
+                with self.assertRaises(ValueError):
+                    read_execution(base, path, guardian=True)
+            stdout = record(run / 'tests.stdout', render_events([*resolved, started]))
+            freeze(options, **auth, exit_code=2, watchdog_code=2)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_status'], 'no-terminal-production-clock')
+            stdout = record(run / 'tests.stdout', render_events([*resolved, started, {**finished, 'status': 'failure'}]))
+            freeze(options, **auth, exit_code=2, watchdog_code=2)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_status'], 'failure')
             stdout = record(run / 'tests.stdout', log)
             freeze(selected_catalog=True)
             self.assertEqual(read_execution(base, path, guardian=True)['closure_join'], 'reaped')
@@ -237,6 +273,10 @@ class AttemptIndexTests(unittest.TestCase):
             owner_module = record(root / 'build_resource_limits.py', b'limits')
             private_module = record(private / 'build_resource_limits.py', b'limits')
             copies = owner_module, private_module
+            stdout = record(run / 'tests.stdout', render_events(valid))
+            freeze(options, **auth, bootstrap_copy=copies)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            stdout = record(run / 'tests.stdout', b'')
             freeze(input_selection=True, bootstrap_copy=copies, exit_code=2, watchdog_code=2)
             self.assertEqual(read_execution(base, path, guardian=True)['production_status'], 'no-terminal-production-clock')
             (private / 'build_resource_limits.py').write_bytes(b'edited')

@@ -204,11 +204,11 @@ def guardian_whole(path, closure, result):
                     checked(ref)
                     if os.readlink(alias) == ref['path']:
                         continue
-            # Some failed invocations selected a private Python catalog and ran
-            # the watchdog from a separate installation of the same two modules.
-            # Count the command only when both original payloads still verify.
+            # Deferred selections can use private copies of the watchdog's
+            # bootstrap modules. Authenticate both original payloads here;
+            # the stdout check below separately establishes phase order.
             owner_ref = bootstrap.get(name)
-            if (code != 0 and owner_ref is not None
+            if ((code != 0 or deferred_preflight) and owner_ref is not None
                     and Path(owner_ref['path']).name == Path(ref['path']).name == name + '.py'
                     and (owner_ref['bytes'], owner_ref['sha256']) == (ref['bytes'], ref['sha256'])):
                 checked(owner_ref)
@@ -262,6 +262,7 @@ def guardian_whole(path, closure, result):
             'presentation_audit_limit': None, 'edition_output': str(output),
             'failed_builder_import': diagnostic is not None and failed_builder_import(diagnostic, builder, catalog['modules']),
             'failed_child_only': failed_child_only, 'deferred_preflight': deferred_preflight,
+            'deferred_input_pages': dated_snapshots['indexed_pages'] if deferred_preflight else None,
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
 
 
@@ -290,6 +291,7 @@ def read_execution(base, path, guardian=False):
     digest = hashlib.sha256()
     phases = []
     preflight_events = []
+    publication_events = []
     last_phase = None
     with Path(stdout['path']).open('rb') as stream:
         for line in _hashed_phase_lines(stream, digest, 1024 * 1024):
@@ -297,7 +299,11 @@ def read_execution(base, path, guardian=False):
             last_phase = phase
             if phase['phase'] == 'selected_snapshot_resolution' and len(preflight_events) < 3:
                 same_edition = (phase.get('edition'), phase.get('date')) == (edition, output.name)
-                preflight_events.append(phase['event'] if same_edition and phase.get('scope') == 'pre_edition' else None)
+                preflight_events.append((phase['event'], phase.get('status'))
+                                        if same_edition and not phases and phase.get('scope') == 'pre_edition' else None)
+            if guardian and closure['deferred_preflight'] and phase['phase'] == 'publish' and len(publication_events) < 3:
+                within_edition = len(phases) == 1 and (phase.get('edition'), phase.get('date')) == (edition, output.name)
+                publication_events.append((phase['event'], phase.get('status')) if within_edition else None)
             if phase['phase'] == 'edition_build':
                 if (phase['edition'], phase['date']) != (edition, output.name) or len(phases) == 2:
                     raise ValueError(f'Unexpected edition phase in {path}')
@@ -315,12 +321,24 @@ def read_execution(base, path, guardian=False):
         raise ValueError(f'Production outcome differs in {path}')
     # The builder resolves snapshots before entering edition_build. An empty log
     # or an interrupted build still leaves its production time unknown.
-    preflight_failed = (preflight_events == ['start', 'end'] and last_phase['phase'] == 'selected_snapshot_resolution'
-                        and last_phase.get('status') == 'failure')
+    preflight_failed = (preflight_events == [('start', None), ('end', 'failure')]
+                        and last_phase['phase'] == 'selected_snapshot_resolution')
     failed_before_build = (not phases and not closure['ordinary_producer_passed'] and result['returncode'] != 0
                            and (preflight_failed or (guardian and closure['failed_builder_import'])))
-    if guardian and closure['deferred_preflight'] and (phases or not preflight_failed or result['returncode'] == 0):
-        raise ValueError(f'Deferred validation lacks a failed pre-production snapshot check: {path}')
+    if guardian and closure['deferred_preflight']:
+        successful_pair = [('start', None), ('end', 'success')]
+        validated = preflight_events == successful_pair if phases else preflight_failed and failed_before_build
+        if not validated:
+            raise ValueError(f'Deferred validation lacks an ordered snapshot check before production: {path}')
+        if result['returncode'] == 0:
+            if publication_events != successful_pair or end.get('execution_mode') != 'pipeline_run_may_reuse_verified_inputs_or_shards':
+                raise ValueError(f'Deferred build lacks a completed production and publication: {path}')
+            metadata = json.loads((output / 'complete.json').read_bytes())
+            if ((metadata.get('edition'), metadata.get('date'), metadata.get('input_pages'))
+                    != (edition, output.name, closure['deferred_input_pages'])
+                    or type(metadata.get('input_pages')) is not int
+                    or metadata.get('status') not in ('built', 'empty')):
+                raise ValueError(f'Deferred build output differs from the selected edition: {path}')
     status = end['status'] if end else 'no-terminal-production-clock'
     return dict(edition=edition, attempt=attempt_key(base, path),
                 command_exit=result['returncode'], ordinary_build_passed=bool(closure['ordinary_producer_passed']),
