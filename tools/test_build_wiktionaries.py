@@ -3610,6 +3610,34 @@ class PublicationCompilerFixture(unittest.TestCase):
 
 
 class PublicationResumeTests(PublicationCompilerFixture):
+    def test_existing_output_replays_auxiliary_inputs_once_after_verifying_downloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(b, 'PROJECT', root):
+                item, target, _ = self.prepare(root)
+                complete = (target / 'complete.json').read_bytes()
+                events = []
+                digest = b.digest
+                validate = b._validated_auxiliary_state
+
+                def verified_download(path):
+                    value = digest(path)
+                    if path.name == item['name']:
+                        events.append('download')
+                    return value
+
+                def verified_snapshots(*args, **kwargs):
+                    events.append('snapshots')
+                    return validate(*args, **kwargs)
+
+                with patch.object(b, 'digest', verified_download), \
+                     patch.object(b, '_validated_auxiliary_state', verified_snapshots), \
+                     patch.object(b, 'run_checked') as native:
+                    self.assertEqual(b.build_locked([item], root, root / 'output', 'zig', 1), 'existing_output')
+                    native.assert_not_called()
+                self.assertEqual(events, ['download', 'snapshots'])
+                self.assertEqual((target / 'complete.json').read_bytes(), complete)
+
     def test_large_fallback_gzip_fresh_and_resume_preserve_sealed_bytes(self):
         for interrupted in ('fresh', 'partial', 'pair', 'gzip-only', 'corrupt'):
             with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:

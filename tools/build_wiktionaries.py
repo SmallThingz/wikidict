@@ -8724,7 +8724,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     for item in items:validate_item(item)
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     phase_edition,phase_date=phase_identity(items)
-    with build_phase(phase_edition,phase_date,'auxiliary_validation'):
+    with build_phase(phase_edition,phase_date,'auxiliary_preflight'):
         auxiliary_snapshots=dict(auxiliary_snapshots or {})
         require_figure_inputs(auxiliary_snapshots)
         registry=Path(auxiliary_snapshots.get('language-registry',downloads/phase_edition/phase_date/'language-registry.tsv'))
@@ -8732,7 +8732,9 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if not registry.is_file():raise ValueError('Missing pinned language registry')
         if not namespace.is_file():raise ValueError('Missing namespace registry')
         auxiliary_snapshots.update({'language-registry':registry,'namespace-registry':namespace})
-        auxiliary_hashes=verified_auxiliary_hashes(auxiliary_snapshots,phase_edition,phase_date)
+        # Fail early for missing inputs. build_input_identity validates their
+        # contents together after download and compiler verification.
+        preflight_selected_auxiliary_inputs(auxiliary_snapshots)
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
         verified_bytes=0
         for item in items:
