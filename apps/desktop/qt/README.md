@@ -1265,3 +1265,106 @@ Script_Han fallback preserves existing primary and kana font choices; U+20000 is
 verified as the real glyph104 with an outline and raster, alongside exact source,
 copy and accessibility offsets. First-use observations include ordinary UI
 construction and explicitly make no cold-cache or matched performance claim.
+
+## Fixed-color table circles and nested pitch source projection
+
+The selected dependent hunks preserve percent-radius dotted circles, separate
+ancestor and child pitch geometry, declaring-owner table border paint, and block
+decoration below floating content. Fixed-color actionless circles may occupy an
+ordinary direct table cell without acquiring currentColor source metadata. All
+existing frame, cell, source-range, font and unsupported-geometry checks remain.
+Authored non-ASCII spaces retain their original text and advance through HTML
+composition. The exact corrected Chinese 408 Reader is a repository fixture; an
+explicit environment fixture override retains its previous behavior.
+
+The earlier fixed-circle native qualification passed thirteen current methods and carries ten
+historical methods separately. This private canonical projection preserves other
+maintained patch sections and excludes unrelated private absolute-container, font
+and header-accessibility changes. It is not a rebuilt canonical binary. Prior scoped App and genuine Thai/MG GUI
+qualification have passed within the limits below. Level-pitch native and App
+qualification, the private installed package and scoped genuine installed
+Pegasus acceptance now pass. This source projection retains those exact reviewed
+changes; its canonical binary was not rebuilt.
+
+The qualified App correction also admits metric-free Help on unrounded, plain,
+actionless inline owners without overlays. Existing source, range, background and
+style checks remain, with invalid-style/action/overlay recovery controls and the
+complete genuine Reader04 chemical label. One current affected method passed,
+covering wide and compact genuine MG/Thai fixture geometry, tooltip boundaries
+and the exact source actions separately from generated section/footer links.
+Eight unaffected methods retain their original successful results and source
+correspondence; this is nine distinct scoped methods, not nine current executions.
+The previous ownership and action-oracle failures remain linked in the manifest.
+The product archive, MOC and qualified native libraries were retained for the
+final test-only continuation. No extra native change, full-suite run or rebuilt
+canonical binary is implied. Installed Thai/MG default rendering, six Help advisories through the keyboard
+workflow, entry recovery, settled notice action and same-profile font/language
+restoration subsequently passed. Initial notice transition and restored viewport
+were not demonstrated; a saved last word was not automatically opened. The
+conditional Pegasus entry refused in that earlier flow, which remains recorded
+as partial rather than being restamped by the later corrected run.
+
+The level-pitch successor admits the genuine Pegasus parent with zero
+padding and no drop indicator, retaining the existing padded drop-pitch domain.
+Its nested dotted single-character ring, source ranges and plain-owner restrictions
+are unchanged. The Root native control, with the test-only level-envelope and
+paint-oracle correction below, and the full Reader fixture exercise
+the level geometry, all authored actions, wide/compact/re-expanded layout and
+malformed-source recovery. An explicit WIKIDICT_PEGASUS_READER_JSON value remains
+authoritative; only an absent variable falls back to the checked-in exact fixture.
+Both Gui and Widgets were rebuilt because the private predicate is inlined in
+both. All eight native build actions completed and twelve selected controls passed.
+The original padded-parent containment failure and the later isolated-ring-mask
+failure remain recorded. Zero-padding level geometry requires the shared content
+band and a child border extending one device-scaled pixel above and below it.
+A level-only paint translation avoids y=0 harness clipping. The independent paint
+oracle composes each line's black parent top band before its gray child ring, then
+advances to the next line. Every isolated ring-mask pixel outside content remains
+checked: same-line intersections are gray and later-line intersections are black.
+No pixels are excluded and no tolerance is added. Actual images established the
+three later-line intersections in the 144-dpi wrapped case.
+The corrected native method passed at both DPIs through wide, wrapped and
+re-expanded geometry, pixel checks and malformed-source recovery. Twelve actual
+prior passes and ten historical controls retain their original evidence. This is
+one current native test, not a repeated full suite; the canonical patch was not
+rebuilt. The App continuation subsequently passed the full genuine Pegasus
+fixture at wide and compact widths, including all 21 authored actions, four
+source image actions, five generated section links, three generated Commons
+media links and two attribution links. The media oracle requires exact labels,
+ranges, source order and placement after the body and before attribution;
+unknown links are rejected. Geometry, nested ring paint, source text, tooltip
+and malformed-source recovery checks remain unchanged.
+
+The initial App compile failure came from two same-byte CompiledContent headers
+with distinct identities. Placing the unchanged test translation unit in an
+isolated directory removed that quoted-include shadow; no product change was
+needed. Its next execution passed the percent Help method and exposed the three
+omitted generated media links in the nested test's expected actions. Both failed
+receipts remain linked separately. The final continuation compiled only the
+corrected nested test, linked it and linked the GUI. It retained 21 objects, the
+paid product archive, MOC and both native libraries. One current nested method,
+the actual preceding percent Help pass and seven historical method proofs form
+nine qualified scoped methods, without reexecuting the healthy methods.
+
+The ordinary private CMake package and installed runtime smoke also passed,
+producing a 192-leaf bundle without activating the documented prefix. A separate
+normal installed GUI run then passed the scoped genuine Pegasus flow at 640x600
+and 1000x700. Its full 711-character Reading body, wrapped definition, parent top
+stroke and single gray dotted child ring were visible without observed horizontal
+inline-text clipping. All 21 source actions exposed native accessible link roles,
+targets, Press and Set Focus in source order; three media and two attribution
+links were separate. This does not claim exhaustive link activation.
+
+The settled compact notice had its complete visible label and accessible name;
+real Space opened Media and speech, and normal Reading return succeeded. A real
+Return on the missing target kept all 711 characters with an explicit no-entry
+message. Ordinary Library import of the exact Thai04 blob opened its 272-character
+body, and AltLeft restored the complete Pegasus body. Normal Quit closed all 12
+owned process births and the namespace/socket; all 192 package leaves and input
+pins remained unchanged. This was an offline flow, with no media/network launch.
+
+The initial asynchronous notice transition was unobserved. Settings/restart were
+not repeated, and no source-exact numeric pixel geometry or full-corpus claim is
+made. Earlier partial and failed runs retain their original outcomes. The native,
+App, package and scoped genuine GUI evidence support this reviewed source
+projection. No canonical binary was rebuilt.

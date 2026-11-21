@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "f9707e8b27db3a864acb8acdffb65a4a5d560b57cf454e9208f8451bf71903e3",
-      "bytes": 1110993,
+      "sha256": "be2da581575ab71dfd058500cafa49aac69ee19c20ad2965e2274e3b77845d8f",
+      "bytes": 1158532,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "c1d215455367fbc39a6ade3fde67a3dfedd2635a4909826f5da35471531b7ed1",
-          "bytes": 842849
+          "qualified_sha256": "035dfdc3c95b41e7c4d23744437f420960a2a393f8074e28e4520e826cfcf9ea",
+          "bytes": 867158
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -68,8 +68,8 @@
           "path": "src/gui/text/qtextengine.cpp",
           "new_file": false,
           "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
-          "qualified_sha256": "455d7f63ddfadd864924074074eacacedbdbcaf3fee83ebb6f5a9445e9b998eb",
-          "bytes": 170793
+          "qualified_sha256": "64f93c46f5fa6dea7b0bf8567665b949813e7aad0e5c21ca95790a8f8a9608bf",
+          "bytes": 171186
         },
         {
           "path": "src/gui/text/qtextengine_p.h",
@@ -89,8 +89,8 @@
           "path": "src/gui/text/qtextlayout.cpp",
           "new_file": false,
           "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
-          "qualified_sha256": "10a92af3946677b04fb98bb44333c8bfa28e2de3707c633db5e33f32e31d639c",
-          "bytes": 156159
+          "qualified_sha256": "82a7487976280eb3d2bf2f364ee23ff44d3e1572a43d500e7fe0c557b31c15d6",
+          "bytes": 157484
         },
         {
           "path": "src/gui/text/qtextlogicalflow_p.h",
@@ -138,8 +138,8 @@
           "path": "src/widgets/widgets/qwidgettextcontrol.cpp",
           "new_file": false,
           "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
-          "qualified_sha256": "1361279f80d4588c09245bc7adf3d09bb1e42a678d3e6000933f05af2bbb7894",
-          "bytes": 123361
+          "qualified_sha256": "de799bc0b26660c9bbc8b670c8c202af0cffaabf8f61b3df64d71825590c376b",
+          "bytes": 123333
         },
         {
           "path": "src/widgets/widgets/qwidgettextcontrol_p_p.h",
@@ -201,15 +201,15 @@
           "path": "src/gui/text/qtextinlinebox_p.h",
           "new_file": true,
           "upstream_sha256": null,
-          "bytes": 29929,
-          "qualified_sha256": "0f288ed17dfb8320690fc05feb737c7bf8bb8dcee3db0d1748e0dcfe3063e964"
+          "bytes": 46539,
+          "qualified_sha256": "31c8e90757d46f478eb1f23de2c9f798e94f6cec1cb981799d56134413e7b48e"
         }
       ]
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "8513152f367a68bdd400f422b4bb3546b61fbcbd37c019ef26ddae520327b7fd",
-      "bytes": 1393570,
+      "sha256": "e385d62219b8232eb4f8408aa1c6e073bd72316e1c7d6799a2e4a85e6942e8df",
+      "bytes": 1474033,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +222,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "6e083f942be2dff70d2ec208c5571d84a054e4d71cb5f9a59ecc086df3563ff8",
-          "bytes": 1396164
+          "qualified_sha256": "5b77c87ca7f08d92bed3df92de6ee4c95a5744117552ece0860dcb7511301383",
+          "bytes": 1475696
         }
       ]
     },
@@ -401,8 +401,8 @@
       "reader": 176,
       "ffi": 177,
       "app": 190,
-      "title": "たびぢ",
-      "language": "日語",
+      "title": "\u305f\u3073\u3062",
+      "language": "\u65e5\u8a9e",
       "wide": [
         900,
         700
@@ -411,7 +411,7 @@
         640,
         600
       ],
-      "internal_missing_target": "旅路#日語",
+      "internal_missing_target": "\u65c5\u8def#\u65e5\u8a9e",
       "successful_destination_record": false,
       "whole_frontend": false
     },
@@ -4771,10 +4771,10 @@
           "bytes": 51901,
           "sha256": "fefd0c0528902e3abd1bf4959559d9bb1e20700fd16bee792a3ba8a3cc55eb6b"
         },
-        "source_title": "တမွန်ႏ",
+        "source_title": "\u1010\u1019\u103d\u1014\u103a\u108f",
         "source_owner": "Pa'o Karen/blk",
         "source_page": "7195/r15998",
-        "target_title": "မှန်",
+        "target_title": "\u1019\u103e\u1014\u103a",
         "target_owner": "Burmese/my",
         "target_page": "7196/r15999",
         "selection": {
@@ -4927,6 +4927,768 @@
         "The existing native control body matches qualified Native209; the complete canonical binary was not rebuilt.",
         "The genuine source caption retains its unresolved source template link; no source-content correction is claimed."
       ]
+    },
+    "fixed_circle_table_and_nested_pitch_projection": {
+      "status": "qualified source projection; Pegasus native, scoped App, private installed runtime and scoped genuine GUI passed; canonical binary not rebuilt",
+      "native_qualification": {
+        "path": "/home/a/wikidict-pegasus-native05/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 59259,
+        "sha256": "978846e3b2fe2c3bca671d26fdd6e9343df09a833ccb1c2109444ac3d7fe6b56"
+      },
+      "source_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/preparation01.json",
+        "bytes": 7395,
+        "sha256": "2a20e60c64e676b68c4a733de845945f85799fd823d8a9dce7a4a2bd75959ff5"
+      },
+      "native_current_methods": 1,
+      "native_historical_methods": 10,
+      "canonical_binary_rebuilt": false,
+      "canonical_source_applied": true,
+      "app_qualification": {
+        "path": "/home/a/wikidict-pegasus-app03/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 44885,
+        "sha256": "c4ce4f64ae011071fc742b6dd70a1bbbdff918d4b201da2c1aac043729196bc6"
+      },
+      "genuine_gui_qualification": {
+        "report": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pegasus-corrected-normal-desktop-ui01/UI_RESULT01.json",
+          "bytes": 18864,
+          "sha256": "55b93fe5348a37f563912a934e250b352a6f127c5a5626af9b772d0409c87044"
+        },
+        "physical": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/pegasus-corrected-normal-desktop-ui01/independent-closure01.json",
+          "bytes": 3166,
+          "sha256": "3e84b9f34479262fcd5c841a3b08adad4af136d2cc232e0b22792b0c8e509905"
+        }
+      },
+      "scope": "Exact dependent MG percent/dotted/nested, Greek resolved borders and TR float paint hunks, Unicode text preservation, and direct-cell fixed-color circle admission. Metric-free Help on unrounded plain actionless owners preserves the original structure/style/source contract.",
+      "context_mappings": [
+        {
+          "step": "source262",
+          "domain": "native",
+          "relative": "src/gui/text/qtextdocumentlayout.cpp",
+          "private_unchanged_context": "if (positioned && !replayingCurrent && (wikidictRelativeAuto(frame) || wikidictAbsoluteContainer(frame) || wikidictFigurePositionedMedia(frame))) {",
+          "preserved_canonical_context": "if (positioned && !replayingCurrent && (wikidictRelativeAuto(frame) || wikidictFigurePositionedMedia(frame))) {",
+          "changed_lines_from_qualified_delta_unchanged": true
+        },
+        {
+          "step": "source262",
+          "domain": "app",
+          "relative": "src/MainWindow.cpp",
+          "private_unchanged_context": "auto cellContext = context; cellContext.relativeContainingBlock = false;",
+          "preserved_canonical_context": "auto cellContext = context;",
+          "changed_lines_from_qualified_delta_unchanged": true
+        }
+      ],
+      "excluded_private_features": [
+        "absolute/intrinsic-float extension",
+        "Thaana font registration",
+        "itemviews header accessibility"
+      ],
+      "reader04_fixture_sha256": "ea58bf806097d1fa8b6774cfcf3b5e6d8021ecac6ef2a3250adc5f3a3b6fafe7",
+      "fixture_override": "An explicitly set WIKIDICT_ZH408_READER_JSON is preserved; an absent variable selects the exact repository fixture.",
+      "source_composition": {
+        "files": [
+          {
+            "path": "src/gui/text/qtextdocumentlayout.cpp",
+            "before_sha256": "c1d215455367fbc39a6ade3fde67a3dfedd2635a4909826f5da35471531b7ed1",
+            "after_sha256": "035dfdc3c95b41e7c4d23744437f420960a2a393f8074e28e4520e826cfcf9ea",
+            "bytes": 867158,
+            "patch": "0001-logical-flow-renderer.patch",
+            "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/src/gui/text/qtextdocumentlayout.cpp",
+              "bytes": 867158,
+              "sha256": "035dfdc3c95b41e7c4d23744437f420960a2a393f8074e28e4520e826cfcf9ea"
+            }
+          },
+          {
+            "path": "src/gui/text/qtextengine.cpp",
+            "before_sha256": "455d7f63ddfadd864924074074eacacedbdbcaf3fee83ebb6f5a9445e9b998eb",
+            "after_sha256": "64f93c46f5fa6dea7b0bf8567665b949813e7aad0e5c21ca95790a8f8a9608bf",
+            "bytes": 171186,
+            "patch": "0001-logical-flow-renderer.patch",
+            "upstream_sha256": "e072b6ce45339b39d1f352f12d49294877bd10cc597d87d1163e0b49dc363e56",
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/src/gui/text/qtextengine.cpp",
+              "bytes": 171186,
+              "sha256": "64f93c46f5fa6dea7b0bf8567665b949813e7aad0e5c21ca95790a8f8a9608bf"
+            }
+          },
+          {
+            "path": "src/gui/text/qtextlayout.cpp",
+            "before_sha256": "10a92af3946677b04fb98bb44333c8bfa28e2de3707c633db5e33f32e31d639c",
+            "after_sha256": "82a7487976280eb3d2bf2f364ee23ff44d3e1572a43d500e7fe0c557b31c15d6",
+            "bytes": 157484,
+            "patch": "0001-logical-flow-renderer.patch",
+            "upstream_sha256": "a6b8d41c3b4f0d81777edbc84ca53037940ddf3066fa95223fb95cd56ee9c2a8",
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/src/gui/text/qtextlayout.cpp",
+              "bytes": 157484,
+              "sha256": "82a7487976280eb3d2bf2f364ee23ff44d3e1572a43d500e7fe0c557b31c15d6"
+            }
+          },
+          {
+            "path": "src/widgets/widgets/qwidgettextcontrol.cpp",
+            "before_sha256": "1361279f80d4588c09245bc7adf3d09bb1e42a678d3e6000933f05af2bbb7894",
+            "after_sha256": "de799bc0b26660c9bbc8b670c8c202af0cffaabf8f61b3df64d71825590c376b",
+            "bytes": 123333,
+            "patch": "0001-logical-flow-renderer.patch",
+            "upstream_sha256": "41b0bfa7c8e4b3d89b5fe4c534c0e5830738a84ecb573acb9e98755053fced55",
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/src/widgets/widgets/qwidgettextcontrol.cpp",
+              "bytes": 123333,
+              "sha256": "de799bc0b26660c9bbc8b670c8c202af0cffaabf8f61b3df64d71825590c376b"
+            }
+          },
+          {
+            "path": "src/gui/text/qtextinlinebox_p.h",
+            "before_sha256": "0f288ed17dfb8320690fc05feb737c7bf8bb8dcee3db0d1748e0dcfe3063e964",
+            "after_sha256": "c1d788c9b4a606f0751748905bd06abc56d58b549c01ced3074251d5aef2ccba",
+            "bytes": 46338,
+            "patch": "0001-logical-flow-renderer.patch",
+            "upstream_sha256": null,
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/src/gui/text/qtextinlinebox_p.h",
+              "bytes": 46338,
+              "sha256": "c1d788c9b4a606f0751748905bd06abc56d58b549c01ced3074251d5aef2ccba"
+            }
+          },
+          {
+            "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+            "before_sha256": "6e083f942be2dff70d2ec208c5571d84a054e4d71cb5f9a59ecc086df3563ff8",
+            "after_sha256": "88e8310707e69ecc4971af94938dfab68b149212425ab57ac73972207418b03d",
+            "bytes": 1460738,
+            "patch": "0002-layout-regressions.patch",
+            "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
+            "forward_reverse_exact": true,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/native-postimages/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+              "bytes": 1460738,
+              "sha256": "88e8310707e69ecc4971af94938dfab68b149212425ab57ac73972207418b03d"
+            }
+          }
+        ],
+        "patches": [
+          {
+            "file": "0001-logical-flow-renderer.patch",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/apps/desktop/qt/0001-logical-flow-renderer.patch",
+              "bytes": 1110993,
+              "sha256": "f9707e8b27db3a864acb8acdffb65a4a5d560b57cf454e9208f8451bf71903e3"
+            },
+            "after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/postimages/apps/desktop/qt/0001-logical-flow-renderer.patch",
+              "bytes": 1158324,
+              "sha256": "02ea1a8ec4b8e4fdc7d88cf24508faf474acbdb31457613c9c9d4498b38a1b6a"
+            },
+            "changed_sections": [
+              "src/gui/text/qtextdocumentlayout.cpp",
+              "src/gui/text/qtextengine.cpp",
+              "src/gui/text/qtextlayout.cpp",
+              "src/widgets/widgets/qwidgettextcontrol.cpp",
+              "src/gui/text/qtextinlinebox_p.h"
+            ],
+            "other_sections_unchanged": true
+          },
+          {
+            "file": "0002-layout-regressions.patch",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/apps/desktop/qt/0002-layout-regressions.patch",
+              "bytes": 1393570,
+              "sha256": "8513152f367a68bdd400f422b4bb3546b61fbcbd37c019ef26ddae520327b7fd"
+            },
+            "after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration01/postimages/apps/desktop/qt/0002-layout-regressions.patch",
+              "bytes": 1458930,
+              "sha256": "af2aaaf46fef0c1d677ffeff08f7e8b7960417b0889530d1ce65c892029bbbd8"
+            },
+            "changed_sections": [
+              "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp"
+            ],
+            "other_sections_unchanged": true
+          }
+        ],
+        "zero_fuzz": true,
+        "forward_reverse_exact": true,
+        "other_patch_sections_unchanged": true
+      },
+      "previous_app_preparation": {
+        "path": "/home/a/wikidict-fixed-circle-app01/preparation01.json",
+        "bytes": 1959,
+        "sha256": "927d20292e62846252c3306fe169066bf997e9072931845b4b94172f97ec8e89"
+      },
+      "current_app_preparation": {
+        "path": "/home/a/wikidict-unrounded-help-app02/preparation01.json",
+        "bytes": 1998,
+        "sha256": "c81cd1ffaebe05f7a518736be47f2df733c0942cba398bc32bd7dc5be96b6d51"
+      },
+      "unrounded_help_source_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/preparation01.json",
+        "bytes": 7936,
+        "sha256": "783560d3596698f983210182fd2e3751f8b004fecb4397ef335d4ab79d71e9c1"
+      },
+      "unrounded_help_app_qualification": {
+        "path": "/home/a/wikidict-unrounded-help-app02/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 27405,
+        "sha256": "122e458cfed94c622f8c025ff76121c1cde1cc752a2fae694a14281221d11fb1"
+      },
+      "current_test_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/app-media-preparation01.json",
+        "bytes": 3704,
+        "sha256": "4fa0c3de8649c041a9d73f5397f3a1eba5b88dfdd0c5728e2d171f57c3300e5f"
+      },
+      "preserved_app_failures": [
+        {
+          "path": "/home/a/wikidict-unrounded-help-app01/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 12564,
+          "sha256": "40be8d03698e0c3ac088245f9876815cda3da8722ecc03bfc9869b4729abb275"
+        },
+        {
+          "bytes": 7201,
+          "path": "/home/a/wikidict-fixed-circle-app01/qualification01/direct-runtime01/independent-closure01.json",
+          "sha256": "6903275833efbc5ccfb27e50ca05c3154d028da70c3536b1fb5f61342b365d8e"
+        }
+      ],
+      "prior_native_qualification": {
+        "path": "/home/a/wikidict-fixed-circle-native01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 68279,
+        "sha256": "c7de673e310df490491cef1076c6b0cfe721199229a7f5255251838daac87811"
+      },
+      "prior_app_qualification": {
+        "path": "/home/a/wikidict-unrounded-help-app02/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 27405,
+        "sha256": "122e458cfed94c622f8c025ff76121c1cde1cc752a2fae694a14281221d11fb1"
+      },
+      "level_pitch_product": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/product-preparation01.json",
+        "bytes": 2800,
+        "sha256": "c730586ed2ad681e0b822800f0e65c48bd077df0aa2ae27d17976aa059eb50ed"
+      },
+      "conditional_app_runner": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/app-runner-preparation05.json",
+        "bytes": 3497,
+        "sha256": "fe8530d1e9fd08be3e92599d8729834a410870b35beb69c6afb8130e6570bd4f"
+      },
+      "prior_genuine_gui_scoped": {
+        "report": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/fixed-circle-normal-desktop-ui01/UI_RESULT01.json",
+          "bytes": 11470,
+          "sha256": "ccd17a617d19f486c01c4861ff7837b00b53e45e7cadd89a17e66bbdf48c230f"
+        },
+        "physical": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/fixed-circle-normal-desktop-ui01/FLOW_CLOSED01.json",
+          "bytes": 927,
+          "sha256": "c1ad396bc85141383a633f9326694dfb929983e4ddc2f4b3859539ad81647900"
+        },
+        "core_result": "PASS scoped corrected Thai408+MGflat default rendering, tooltip keyboard workflow, entry navigation, notice action, same-profile font/language restoration",
+        "overall_result": "PARTIAL: conditional Pegasus renders safe refusal; do not classify full flow as all-pass",
+        "limits": "No fullApp/corpus/publication claim. Prior failures remain preserved, no381 replay or physical device. No current GUI/lease; all24 task-owned process births across two invocations gone, source/package pins unchanged.",
+        "notice_initial_limit": "First postReturn snapshot still Search, so initial notice paint/width transition unobserved. Earlier offscreen Find SetFocus refused; corrected viaCtrl+L before valid language selection. Stale Thai272 intermediate MG-labeled reads retained and not accepted as MG.",
+        "restart_limits": {
+          "actual_startup": "Reading153 normal search prompt, Findword empty. SavedlastWord not automatically opened or prefilled.",
+          "window_limit": "Saved640\u00d7600geometry exists, but new fullscreenCage display opens1280\u00d7720. A later controlled640 resize is not a restored-viewport pass."
+        }
+      },
+      "pegasus_failure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/fixed-circle-normal-desktop-ui01/restart01/PEGASUS_FAILURE01.json",
+        "bytes": 4705,
+        "sha256": "c46eef7afb5764b82ee9b3a78df6e1085d60eecbde30563b0c111166473cb0d8"
+      },
+      "pegasus_reader": {
+        "path": "/home/a/wikidict-mg-pegasus-plain-parent01/reader01/mg-plain-parent-96007-owner-000.stdout",
+        "bytes": 67536,
+        "sha256": "958321f32501ee952e530231ac47db08f6764bad7d488f38794d7fa7b213d87b"
+      },
+      "pegasus_fixture": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/canonical-integration05/postimages/apps/desktop/tests/fixtures/mg-pegasus-reader.json",
+        "bytes": 67536,
+        "sha256": "958321f32501ee952e530231ac47db08f6764bad7d488f38794d7fa7b213d87b"
+      },
+      "prior_app_scope": {
+        "current_methods": [
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+        ],
+        "retained_methods": [
+          "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+          "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+          "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+          "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+          "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+          "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+          "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639"
+        ],
+        "qualified_methods": [
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses",
+          "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+          "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+          "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+          "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+          "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+          "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+          "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639"
+        ],
+        "retained_test_proof": {
+          "before_test": {
+            "bytes": 2888340,
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/posts02/app/MainWindowTest.cpp",
+            "sha256": "c8458fb208954d258dd5f567f5fde1e84e79d5d9c08ad84f7106834079b83bed"
+          },
+          "current_test_source": {
+            "bytes": 2892241,
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/posts01/tests/MainWindowTest.cpp",
+            "sha256": "01a548a290a4a3eac35cdf5141b7e469cc0858bfeba1e7ac3633c70bcb63d57a"
+          },
+          "method_changes": [
+            {
+              "after": {
+                "bytes": 40600,
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/method-after01.inc",
+                "sha256": "5dd5a6695fd6e5b35cb7cd6a0de314efd9c6bd1e8ca7f7a5c0063eec2f38f443"
+              },
+              "before": {
+                "bytes": 36699,
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/method-before01.inc",
+                "sha256": "88c80cf2a0b3ca3003d7ac08cca446ea16e6093ae33f7145e8b3cfa6e864d36b"
+              },
+              "name": "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+            }
+          ],
+          "method_proofs": [
+            {
+              "body_unchanged": true,
+              "bytes": 12587,
+              "name": "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+              "sha256": "526d104f10a127c5aa1bbefe38f7ce30312236e5881bc60082b44b35533130ea",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 3863,
+              "name": "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+              "sha256": "9584f576b440c858412080fb4fb546e9d3f9f835a6eaa9441d4611fdbae1dab5",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 11677,
+              "name": "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+              "sha256": "4a9a6a4209f300c19c1d14fc97ffd1dfd1d9e0fc1f496da53edc8875a7754f3e",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 2682,
+              "name": "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+              "sha256": "c62d1f4c8ff40a9ac14268891b3aa90a8d6b9ec21969e8535eeba4f1d6dd0bf5",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 4013,
+              "name": "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+              "sha256": "8a64bfc24c526702cf7041886dea2a9b2ee8f3e88c57c32c579114197f9cdf34",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 7089,
+              "name": "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+              "sha256": "bc6187f5ddb77a0f4fb362bd9d0e54a90a6314d072321e2897755e31b3ca4fb4",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 9740,
+              "name": "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+              "sha256": "5d8930b35a3678fb703cb4743dc8c5b2ad79b799daf1f76f429bcccc85881a68",
+              "unrounded_help_negative_constructed": false
+            },
+            {
+              "body_unchanged": true,
+              "bytes": 9507,
+              "name": "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639",
+              "sha256": "669757a768f3c4a3640240625c75b5e84b52cfa5755bbe8811a62dba79a84fbd",
+              "unrounded_help_negative_constructed": false
+            }
+          ],
+          "previous_binding": {
+            "bytes": 846255,
+            "path": "/home/a/wikidict-fixed-circle-app01/binding01.json",
+            "sha256": "ea9fdd52406116ff034ce57e61683edc48656a8ac4db0fb1021708815a505d90"
+          },
+          "previous_closure": {
+            "bytes": 7201,
+            "path": "/home/a/wikidict-fixed-circle-app01/qualification01/direct-runtime01/independent-closure01.json",
+            "sha256": "6903275833efbc5ccfb27e50ca05c3154d028da70c3536b1fb5f61342b365d8e"
+          },
+          "previous_test_elf": {
+            "bytes": 59770008,
+            "path": "/home/a/wikidict-fixed-circle-app01/bin/dict-qt-tests",
+            "sha256": "0d179f98ae3d708e16336f464e9e673175a037ddea7cba1c9dac94109852e5b3"
+          },
+          "previous_xml": {
+            "bytes": 6585,
+            "path": "/home/a/wikidict-fixed-circle-app01/tests.xml",
+            "sha256": "d8d1158ea97bb3ece39f3668f954603f161e17bfc874f9960567cfeacc313744"
+          },
+          "retained_methods": [
+            "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+            "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+            "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+            "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+            "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+            "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+            "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+            "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639"
+          ]
+        },
+        "current_test_source_transition": {
+          "after": {
+            "bytes": 2897953,
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/posts02/tests/MainWindowTest.cpp",
+            "sha256": "69637b6aef9ace5b4341f1fa9c8bf55f35d8a120b37365885b226859088ba1ee"
+          },
+          "before": {
+            "bytes": 2892241,
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/posts01/tests/MainWindowTest.cpp",
+            "sha256": "01a548a290a4a3eac35cdf5141b7e469cc0858bfeba1e7ac3633c70bcb63d57a"
+          },
+          "method_changes": [
+            {
+              "after": {
+                "bytes": 46312,
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/method-after02.inc",
+                "sha256": "1be0e9c50f6e18102fb8df3d0811d832a05ceeaf87ac500b822f5be161d1ae52"
+              },
+              "before": {
+                "bytes": 40600,
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/method-after01.inc",
+                "sha256": "5dd5a6695fd6e5b35cb7cd6a0de314efd9c6bd1e8ca7f7a5c0063eec2f38f443"
+              },
+              "name": "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+            }
+          ],
+          "previous_binding": {
+            "bytes": 857641,
+            "path": "/home/a/wikidict-unrounded-help-app01/binding01.json",
+            "sha256": "c607dc75e8443b1159057265ae20651ddb50bf67bd0ea39ada98a8822e4fc4b4"
+          },
+          "previous_closure": {
+            "bytes": 12564,
+            "path": "/home/a/wikidict-unrounded-help-app01/qualification01/direct-runtime01/independent-closure01.json",
+            "sha256": "40be8d03698e0c3ac088245f9876815cda3da8722ecc03bfc9869b4729abb275"
+          },
+          "previous_xml": {
+            "bytes": 3593,
+            "path": "/home/a/wikidict-unrounded-help-app01/tests.xml",
+            "sha256": "fa63cf41eacdb5ce3a4071df542cad1d9853f09ab5ecfb9e404abb3580a48eb4"
+          }
+        },
+        "source_transaction": {
+          "bytes": 4740,
+          "path": "/home/a/wikidict-unrounded-help-source01/runtime01/direct-runtime01/independent-closure01.json",
+          "sha256": "c5f8f1d94dfbd76a05ff9069cff711ef08482b97ce282a01d511c800ef82c160"
+        },
+        "product_source_preparation": {
+          "bytes": 7936,
+          "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/fixed-circle-table01/unrounded-help01/preparation01.json",
+          "sha256": "783560d3596698f983210182fd2e3751f8b004fecb4397ef335d4ab79d71e9c1"
+        },
+        "retained_product_archive": {
+          "bytes": 11136610,
+          "path": "/home/a/wikidict-unrounded-help-app01/lib/libwikidict-product.a",
+          "sha256": "c6f999cd60b07dc117677f4eeffcd80072d853718e5f7225c9beb934c059b898"
+        },
+        "native_libraries_rebuilt": false,
+        "whole_suite_reexecuted": false
+      },
+      "native_test_source_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/native-observation-preparation06.json",
+        "bytes": 15444,
+        "sha256": "6a5850b8f4319b49b53937c793aa1e5467c54bfa96bb24d551a41242f8f8c220"
+      },
+      "paid_pegasus_native_build": {
+        "path": "/home/a/wikidict-pegasus-native01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 113384,
+        "sha256": "7c9b3b2a67303e48198c87b44a6d09bd90e52deb690d92ba3872862f162096be"
+      },
+      "pegasus_native_failed_xml": {
+        "path": "/home/a/wikidict-pegasus-native01/layout.xml",
+        "bytes": 28585,
+        "sha256": "8680fbb0a4865c9173bd59ab9b541c53ec2a732cfb8ce851b29e635556d63c11"
+      },
+      "native_release": {
+        "path": "/home/a/wikidict-pegasus-native05/runtime01/direct-runtime01/release01.json",
+        "bytes": 355,
+        "sha256": "e03e007f1433e084b61e211f117b4e7f03906445c4a62483aeff80ededd9133a"
+      },
+      "diagnostic_predecessor": {
+        "path": "/home/a/wikidict-pegasus-native04/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 52820,
+        "sha256": "8cfefd2cd91746939cabe5bed983f5600064ccae5851d3b4e1ba207d4df28a60"
+      },
+      "diagnostic_predecessor_xml": {
+        "bytes": 8531,
+        "path": "/home/a/wikidict-pegasus-native04/layout.xml",
+        "sha256": "523697259e13cd3ad748b2723d8f4db4ed18fdc6fbedd926e1ce3b7a9d6002b5"
+      },
+      "native_retained_current_methods": 12,
+      "app_completed_observation": {
+        "bytes": 290419,
+        "path": "/home/a/wikidict-pegasus-app03/completed-observation01.json",
+        "sha256": "5612bd453f5e04c6d17da48712eef718ccba1f825b890797bf8fdba0323ab554"
+      },
+      "app_test_xml": {
+        "path": "/home/a/wikidict-pegasus-app03/tests.xml",
+        "bytes": 1315,
+        "sha256": "d6fc4273f9d8b3feddc71de1cd900a1da864ed506186cbf93378ac5733d52492"
+      },
+      "source_placement_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/app-source-placement01.json",
+        "bytes": 3893,
+        "sha256": "b9ffb15dbdf0a0c636719fe079061374d57a974d7cd444247d9048df82e2ddb9"
+      },
+      "pegasus_app_preserved_failures": [
+        {
+          "bytes": 19380,
+          "path": "/home/a/wikidict-pegasus-app01/qualification01/direct-runtime01/independent-closure01.json",
+          "sha256": "df720ac3b76bef5a6e5dd8e72428a9313e501ed53e2f254f1c67f218d9a035e6"
+        },
+        {
+          "bytes": 25249,
+          "path": "/home/a/wikidict-pegasus-app02/qualification01/direct-runtime01/independent-closure01.json",
+          "sha256": "d85bf180d646bffafaca88fea46802e617fd242e558524ac048b8d885085f211"
+        }
+      ],
+      "package_qualification": {
+        "path": "/home/a/wikidict-pegasus-install01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 4146,
+        "sha256": "b09883d6b555dec04f9763726bcab28bb851c4c5414453346e02d6a1d1df7a26"
+      },
+      "package_stage_result": {
+        "bytes": 127807,
+        "path": "/home/a/wikidict-pegasus-install01/stage-result01.json",
+        "sha256": "a6e4f2f911bf27d8fc478a7649173fe142ac316234cea5ad40d2d01afd25641c"
+      },
+      "package_prefix": "/home/a/wikidict-pegasus-install01/prefix",
+      "package_leaf_count": 192,
+      "app_scope": {
+        "test_methods": [
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions"
+        ],
+        "retained_test_methods": [
+          "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+          "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+          "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+          "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+          "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+          "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+          "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639",
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+        ],
+        "qualified_test_methods": [
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses",
+          "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+          "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+          "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+          "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+          "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+          "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+          "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639"
+        ],
+        "selected_compile_count": 1,
+        "retained_object_count": 21,
+        "product_archive_rebuilt": false,
+        "retained_product_archive": {
+          "bytes": 11132890,
+          "path": "/home/a/wikidict-pegasus-app02/lib/libwikidict-product.a",
+          "sha256": "24aa832a05e79db623e1d8fb2557d82fa43fbe63d69da910ee84d5fcba5cd8c2"
+        },
+        "source_transaction": {
+          "bytes": 5228,
+          "path": "/home/a/wikidict-pegasus-source01/runtime01/direct-runtime01/independent-closure01.json",
+          "sha256": "0693ac34466237f2afeefba38f7b7c279d5fe135552fa6847935a947f161cf10"
+        },
+        "source_placement_correction": {
+          "bytes": 3893,
+          "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/app-source-placement01.json",
+          "sha256": "b9ffb15dbdf0a0c636719fe079061374d57a974d7cd444247d9048df82e2ddb9"
+        },
+        "test_source_correction": {
+          "bytes": 3704,
+          "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/app-media-preparation01.json",
+          "sha256": "4fa0c3de8649c041a9d73f5397f3a1eba5b88dfdd0c5728e2d171f57c3300e5f"
+        },
+        "prior_failed_app_closure": {
+          "bytes": 19380,
+          "path": "/home/a/wikidict-pegasus-app01/qualification01/direct-runtime01/independent-closure01.json",
+          "sha256": "df720ac3b76bef5a6e5dd8e72428a9313e501ed53e2f254f1c67f218d9a035e6"
+        },
+        "prior_test_app_closure": {
+          "bytes": 25249,
+          "path": "/home/a/wikidict-pegasus-app02/qualification01/direct-runtime01/independent-closure01.json",
+          "sha256": "d85bf180d646bffafaca88fea46802e617fd242e558524ac048b8d885085f211"
+        },
+        "compiled_test_source": {
+          "bytes": 2913680,
+          "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/pegasus-level-pitch01/isolated-tests02/MainWindowTest.cpp",
+          "sha256": "fce87b11d3ec8eb7fda8b3c0b330bd6d4c9dc1b07def3d6682f73c2b9233ad56"
+        },
+        "gui_link_executed": true,
+        "whole_suite_reexecuted": false,
+        "retained_current_methods": [
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+        ],
+        "retained_historical_methods": [
+          "roundedWholeLinkKeepsOrdinaryPaintSourceGeometryAndFocus",
+          "roundedWholeLinkRejectsUnownedGeometryAndRecovers",
+          "resolvedTableBordersKeepDeclaringInkAndSourceCells",
+          "typedPhysicalCellBordersKeepOverrideAndSourceOwnership",
+          "turkishFigureAndFollowingStripPreserveSourceAndPaint",
+          "figureMediaNestedPositionedGroupUsesScrollClipAndPaintOrder",
+          "inlineImageNoticeFitsOrdinaryPaintAfterStatusTransitionAt639"
+        ],
+        "retained_test_proof_in": {
+          "path": "/home/a/wikidict-pegasus-app03/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 44885,
+          "sha256": "c4ce4f64ae011071fc742b6dd70a1bbbdff918d4b201da2c1aac043729196bc6"
+        },
+        "completed_observation": {
+          "bytes": 290419,
+          "path": "/home/a/wikidict-pegasus-app03/completed-observation01.json",
+          "sha256": "5612bd453f5e04c6d17da48712eef718ccba1f825b890797bf8fdba0323ab554"
+        }
+      },
+      "prior_pegasus_scope_pending": {
+        "native_current_count": 1,
+        "native_retained_count": 22,
+        "app_current_methods": [
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions",
+          "percentDottedTooltipBoxesKeepSourceHelpAndNativeEllipses"
+        ],
+        "app_retained_count": 7,
+        "shared_wire_changed": false,
+        "gui_widgets_both_rebuilt_required": true,
+        "native_prior_current_count": 12,
+        "native_historical_count": 10,
+        "gui_widgets_rebuilt_in_prior_job": true,
+        "native_current_job_test_only": true,
+        "native_passed": true,
+        "app_passed": false,
+        "genuine_gui_passed": false
+      },
+      "pegasus_scope": {
+        "native_current_count": 1,
+        "native_retained_count": 22,
+        "app_current_methods": [
+          "nestedPitchReaderKeepsAncestorChildGeometryAndActions"
+        ],
+        "app_retained_count": 8,
+        "shared_wire_changed": false,
+        "gui_widgets_both_rebuilt_required": true,
+        "native_prior_current_count": 12,
+        "native_historical_count": 10,
+        "gui_widgets_rebuilt_in_prior_job": true,
+        "native_current_job_test_only": true,
+        "native_passed": true,
+        "app_passed": true,
+        "genuine_gui_passed": true,
+        "package_passed": true
+      },
+      "media_oracle": {
+        "source_actions": 21,
+        "source_image_actions": 4,
+        "generated_section_actions": 5,
+        "generated_media_actions": 3,
+        "generated_footer_actions": 2,
+        "total_distinct_actions": 31,
+        "unknown_actions_rejected": true,
+        "range_checks": "Every anchor exact text/range, media after body and sections in source order, footer after media."
+      },
+      "genuine_gui_scope": {
+        "package": "/home/a/wikidict-pegasus-install01/prefix",
+        "package_qualification": {
+          "path": "/home/a/wikidict-pegasus-install01/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 4146,
+          "sha256": "b09883d6b555dec04f9763726bcab28bb851c4c5414453346e02d6a1d1df7a26"
+        },
+        "package_stage_result": {
+          "path": "/home/a/wikidict-pegasus-install01/stage-result01.json",
+          "bytes": 127807,
+          "sha256": "a6e4f2f911bf27d8fc478a7649173fe142ac316234cea5ad40d2d01afd25641c"
+        },
+        "reading_characters": 711,
+        "widths": [
+          640,
+          1000
+        ],
+        "heights": [
+          600,
+          700
+        ],
+        "source_action_count": 21,
+        "generated_media_link_count": 3,
+        "generated_footer_link_count": 2,
+        "source_action_order_verified": true,
+        "frames": [
+          {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/pegasus-corrected-normal-desktop-ui01/settled640-frame.png",
+            "bytes": 50064,
+            "sha256": "c893ca5e1e75853a715e104599258560f504c8cc4a574ddd8fec6923971305c3"
+          },
+          {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/pegasus-corrected-normal-desktop-ui01/compact-pitch-frame.png",
+            "bytes": 43504,
+            "sha256": "6b6ea905046f213d2e79c2666db1174e1f2082d672dd97d1f556b5f787bd76f4"
+          },
+          {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/pegasus-corrected-normal-desktop-ui01/wide-pitch-frame.png",
+            "bytes": 77111,
+            "sha256": "30bbd1d7ec25b0ba5b14b5c757b22cf1b64243bb6ae9eede5fe5f8d12362cadd"
+          }
+        ],
+        "visual": {
+          "frames": [
+            "settled640-frame.png",
+            "compact-pitch-frame.png",
+            "wide-pitch-frame.png"
+          ],
+          "observed": "Full wrapped definition, legible pronunciation, parent overline and single gray dotted child circle. No observed horizontal inline-text clipping. Heading crossed squares are explicit authored30px SVGs with online images disabled.",
+          "notice": "Settled640 complete visible label; AX full name. Earliest initial640 is Search and does not prove initial notice transition. No sizeHint/font inference."
+        },
+        "accessibility_scope": "All21 source actions expose native link role/name/target/Press/Set Focus; three media links and two footer links are separate. No exhaustive activation or external/media launch.",
+        "keyboard": {
+          "notice": "Set Focus then real Space opened Media and speech; images/audio unchecked; normal Reading return succeeded. One list guard transiently failed before input, current lease reconciled once, then successful guarded key.",
+          "missing_target": "Focused \u30da\u30fc\u30ac\u30bd\u30b9 then real Return: explicit No exact entry label, full711 Reading retained.",
+          "recovery": "Ordinary Library imported exact genuine Thai04 blob, normal language selection/search/Return opened272-character Thai body; real AltLeft restored full711 Pegasus."
+        },
+        "limits": [
+          "No repeated full settings/restart flow; prior evidence remains separate.",
+          "Initial async notice transition unobserved.",
+          "No source-exact numeric pixel geometry claim."
+        ],
+        "owned_process_births_closed": 12,
+        "package_leaf_count": 192,
+        "package_pins_equal": true,
+        "input_pins_equal": true,
+        "normal_quit_exit_code": 0,
+        "scoped_passed": true,
+        "initial_notice_transition_observed": false,
+        "settings_restart_repeated": false,
+        "exhaustive_link_activation": false,
+        "source_exact_numeric_pixel_geometry": false,
+        "full_corpus_qualified": false
+      },
+      "ready_for_authorized_maintained_integration": true
     }
   },
   "packaged_distribution_source_equivalence": false,

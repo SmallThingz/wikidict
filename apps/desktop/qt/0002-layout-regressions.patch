@@ -22,9 +22,9 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,14993 @@
-
-
+@@ -3,24 +3,15255 @@
+ 
+ 
  #include <QTest>
 +#include <QtGui/private/qtextdocumentlayout_p.h>
 +#include <QtGui/private/qtextengine_p.h>
@@ -66,7 +66,7 @@
 +#include <limits>
 +#include <stdexcept>
 +#include <optional>
-
+ 
  #include <qtextdocument.h>
  #include <qabstracttextdocumentlayout.h>
  #include <qdebug.h>
@@ -79,7 +79,7 @@
 +#include <qtextbrowser.h>
  #include <qscrollbar.h>
  #endif
-
+ 
  using namespace Qt::StringLiterals;
 +
 +// Exercise the same query an image intrinsic-size handler uses while its
@@ -903,11 +903,11 @@
 +        range.setCharFormat(format); document.markContentsDirty(0, document.characterCount()); document.setLayoutEnabled(true);
 +    }
 +};
-
+ 
  class tst_QTextDocumentLayout : public QObject
  {
      Q_OBJECT
-
+ 
  private slots:
 +    void borderOnlyOverlaysKeepSourceMetricsBrushAndCellCoordinates()
 +    {
@@ -1858,6 +1858,10 @@
 +    void rubyEmptyReadingHasOwnerMetricsWithoutLogicalText();
 +    void rubyFlatShapingPreservesOwnerAndScalarBoundaries();
 +    void rubyFlatShapingUsesNativeDirectionWithoutControlText();
++    void actionlessBoxesKeepChildLinkContentHitsAndFocus();
++    void actionlessChildLinksRefuseForeignPolicyAndRecover();
++    void percentDottedInlineBoxesKeepEllipsesGlyphsAndSource();
++    void nestedPitchKeepsAncestorAdvanceChildRingsAndSource();
 +    void roundedInlineBoxesSliceOneDecorationAndKeepSelection();
 +    void roundedWholeLinksKeepCurvedHitsNativeFocusAndSource();
 +    void roundedWholeLinksRefuseForeignPolicyAndRecover();
@@ -7892,6 +7896,178 @@
 +        }
 +    }
 +
++    void resolvedTableBordersKeepOwnersRawRankAndSharedJunctions()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57d0, policy = QTextFormat::UserProperty + 0x57da;
++        constexpr int edgesProperty = QTextFormat::UserProperty + 0x58b0, inkProperty = edgesProperty + 1, scope = edgesProperty + 2;
++        const auto edge = [](int mode, double width, const QVariant &paint) {
++            return mode < 2 ? QVariantMap{{"style", mode}}
++                : QVariantMap{{"style", mode}, {"width", width}, {"paint", paint}};
++        };
++        const auto all = [&](int mode, double width, const QVariant &paint) {
++            QVariantList result; for (int i = 0; i < 4; ++i) result.append(edge(mode, width, paint)); return result;
++        };
++        const auto apply = [&](QTextTableCell cell, const QVariantList &edges, const QColor &ink) {
++            auto format = cell.format().toTableCellFormat();
++            format.setProperty(edgesProperty, edges); format.setProperty(inkProperty, ink);
++            for (int i = 0; i < 4; ++i) {
++                const auto value = edges[i].toMap(); const int mode = value.value("style").toInt();
++                const auto paint = value.value("paint");
++                const QColor color = mode < 2 ? QColor(Qt::transparent) : paint.metaType().id() == QMetaType::QColor ? paint.value<QColor>() : ink;
++                const double width = mode < 2 ? 0 : value.value("width").toDouble();
++                const auto style = mode == 2 ? QTextFrameFormat::BorderStyle_Solid : mode == 3 ? QTextFrameFormat::BorderStyle_Dotted
++                    : mode == 4 ? QTextFrameFormat::BorderStyle_Inset : mode == 5 ? QTextFrameFormat::BorderStyle_Outset : QTextFrameFormat::BorderStyle_None;
++                if (i == 0) { format.setTopBorder(width); format.setTopBorderStyle(style); format.setTopBorderBrush(color); }
++                else if (i == 1) { format.setRightBorder(width); format.setRightBorderStyle(style); format.setRightBorderBrush(color); }
++                else if (i == 2) { format.setBottomBorder(width); format.setBottomBorderStyle(style); format.setBottomBorderBrush(color); }
++                else { format.setLeftBorder(width); format.setLeftBorderStyle(style); format.setLeftBorderBrush(color); }
++            }
++            cell.setFormat(format);
++        };
++        for (int dpi : {96, 144}) for (bool collapse : {false, true}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++            QImage device(700, 450, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254)); device.fill(Qt::white);
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.documentLayout()->setPaintDevice(&device);
++            doc.setDocumentMargin(0); doc.setTextWidth(400);
++            QTextTableFormat format; format.setMargin(12); format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
++            format.setCellPadding(12); format.setCellSpacing(collapse ? 0 : 4); format.setWidth(320); format.setBorderCollapse(collapse);
++            format.setLayoutDirection(direction); format.setProperty(owner, QStringLiteral("wikidict.table-box/1"));
++            format.setProperty(owner + 2, 0); format.setProperty(policy, QStringLiteral("wikidict.cell-style/1"));
++            format.setProperty(scope, QStringLiteral("wikidict.resolved-table-border/1")); format.setProperty(inkProperty, QColor("#223344"));
++            format.setProperty(edgesProperty, all(5, 1, QColor("#dddddd")));
++            QTextCursor cursor(&doc); auto *table = cursor.insertTable(2, 2, format);
++            const QColor inks[] = {QColor("#aa0000"), QColor("#0000aa"), QColor("#008800"), QColor("#884400")};
++            for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column) {
++                auto cell = table->cellAt(row, column);
++                apply(cell, all(4, 1, QStringLiteral("owner_current_color")), inks[row * 2 + column]);
++                auto cellFormat = cell.format().toTableCellFormat(); cellFormat.setBackground(QColor(row == 0 ? "#dffffe" : "#eef9ff")); cell.setFormat(cellFormat);
++                QTextCharFormat child; child.setForeground(Qt::magenta); child.setAnchor(true); child.setAnchorHref(QStringLiteral("dict:resolved-cell"));
++                cell.firstCursorPosition().insertText(QStringLiteral("Cell %1").arg(row * 2 + column), child);
++            }
++            const auto source = doc.toRawText(); doc.setLayoutEnabled(true);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const QRectF tableBox = native->tableBoundingRect(table); QVERIFY(tableBox.isValid());
++            const auto raster = [&] {
++                QImage result = device; result.fill(Qt::white);
++                QPainter painter(&result); QAbstractTextDocumentLayout::PaintContext context; native->draw(&painter, context); return result;
++            };
++            const QImage image = raster();
++            const QString directory = QStringLiteral(".tmp/resolved-table-borders"); QVERIFY(QDir().mkpath(directory));
++            QVERIFY(image.save(directory + QString("/table-%1-%2-%3.png").arg(dpi).arg(collapse).arg(direction == Qt::RightToLeft)));
++            const auto tones = [](const QImage &image, auto accepts) {
++                int n = 0;
++                for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
++                    n += accepts(image.pixelColor(x, y));
++                return n;
++            };
++            const auto storedEdges = table->format().property(edgesProperty).toList();
++            for (const auto &stored : storedEdges)
++                QCOMPARE(stored.toMap().value("paint").value<QColor>(), QColor("#dddddd"));
++            // Shared half-bands may antialias; retain source RGB separately from raster coverage.
++            QVERIFY(tones(image, [](QColor c) {
++                return c.red() == c.green() && c.green() == c.blue() && c.red() >= 221 && c.red() < 255;
++            }) > 10);
++            // A small antialiased font need not cover a whole pixel. Compare
++            // every cell's content interior against the same layout with only
++            // descendant foreground paint disabled; owner edges stay intact.
++            QList<QTextCursor> textRanges;
++            QList<QTextCharFormat> textFormats;
++            QList<QRectF> textInteriors;
++            for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column) {
++                const auto cell = table->cellAt(row, column);
++                auto range = cell.firstCursorPosition();
++                range.setPosition(cell.lastCursorPosition().position(), QTextCursor::KeepAnchor);
++                QCOMPARE(range.selectedText(), QStringLiteral("Cell %1").arg(row * 2 + column));
++                const auto textFormat = range.charFormat();
++                QCOMPARE(textFormat.foreground(), QBrush(Qt::magenta));
++                QCOMPARE(textFormat.anchorHref(), QStringLiteral("dict:resolved-cell"));
++                const auto interior = native->blockBoundingRect(cell.firstCursorPosition().block());
++                QVERIFY(interior.isValid());
++                for (const auto &prior : textInteriors) QVERIFY(!prior.intersects(interior));
++                textRanges.append(range); textFormats.append(textFormat); textInteriors.append(interior);
++            }
++            doc.setLayoutEnabled(false);
++            QTextCharFormat noForeground; noForeground.setForeground(QColor(0, 0, 0, 0));
++            for (auto &range : textRanges) range.mergeCharFormat(noForeground);
++            doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source);
++            const QImage withoutForeground = raster();
++            for (int index = 0; index < textRanges.size(); ++index) {
++                const auto cell = table->cellAt(index / 2, index % 2);
++                QCOMPARE(native->blockBoundingRect(cell.firstCursorPosition().block()), textInteriors[index]);
++                QCOMPARE(cell.format().property(inkProperty).value<QColor>(), inks[index]);
++                QCOMPARE(textRanges[index].charFormat().foreground(), QBrush(QColor(0, 0, 0, 0)));
++                QCOMPARE(textRanges[index].charFormat().anchorHref(), QStringLiteral("dict:resolved-cell"));
++                const QColor background(index < 2 ? "#dffffe" : "#eef9ff");
++                const QRect interior = textInteriors[index].toAlignedRect().intersected(image.rect());
++                QVERIFY(!interior.isEmpty());
++                int covered = 0, colored = 0;
++                for (int y = interior.top(); y <= interior.bottom(); ++y) for (int x = interior.left(); x <= interior.right(); ++x) {
++                    const QColor negative = withoutForeground.pixelColor(x, y), positive = image.pixelColor(x, y);
++                    QCOMPARE(negative, background); // Known no-text-paint control, inside this cell only.
++                    if (positive == negative) continue;
++                    ++covered;
++                    QVERIFY(positive.red() >= negative.red() && positive.blue() >= negative.blue()
++                        && positive.green() < negative.green());
++                    colored += positive.red() > positive.green() + 30 && positive.blue() > positive.green() + 30;
++                }
++                QVERIFY(covered > 5); QVERIFY(colored > 5);
++                qInfo().nospace() << "resolved-cell-text dpi=" << dpi << " collapse=" << collapse
++                    << " rtl=" << (direction == Qt::RightToLeft) << " cell=" << index
++                    << " covered=" << covered << " magenta-tones=" << colored << " negative-text=0";
++            }
++            doc.setLayoutEnabled(false);
++            for (int index = 0; index < textRanges.size(); ++index) textRanges[index].setCharFormat(textFormats[index]);
++            doc.setLayoutEnabled(true); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source);
++            QCOMPARE(raster(), image); // Restore exact foreground before every remaining border assertion.
++            if (collapse) {
++                const int green = tones(image, [](QColor c) { return c.green() > c.red() + 20 && c.green() > c.blue() + 20; });
++                const int brown = tones(image, [](QColor c) { return c.red() > c.green() + 15 && c.green() > c.blue() + 15; });
++                QVERIFY(direction == Qt::LeftToRight ? green > 0 && brown == 0 : brown > 0 && green == 0);
++            }
++            for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column)
++                QCOMPARE(table->cellAt(row, column).format().property(inkProperty).value<QColor>(), inks[row * 2 + column]);
++            QTextCursor action = doc.find("Cell 0"); QCOMPARE(action.charFormat().anchorHref(), QStringLiteral("dict:resolved-cell"));
++            const QRect clip(0, 30, 400, 100); QImage partial = device; partial.fill(Qt::white);
++            { QPainter painter(&partial); painter.setClipRect(clip); QAbstractTextDocumentLayout::PaintContext context; context.clip = clip; native->draw(&painter, context); }
++            QImage expected = device; expected.fill(Qt::white);
++            { QPainter painter(&expected); painter.setClipRect(clip); painter.drawImage(0, 0, image); }
++            QCOMPARE(partial, expected);
++            for (int width : {280, 430, 400}) { doc.setTextWidth(width); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source); }
++            doc.setLayoutEnabled(false);
++            for (int row = 0; row < 2; ++row) for (int column = 0; column < 2; ++column)
++                apply(table->cellAt(row, column), all(row == column ? 3 : 4, 1 + row * 2 + column,
++                    QStringLiteral("owner_current_color")), inks[row * 2 + column]);
++            doc.setLayoutEnabled(true); native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            const QImage unequal = raster(); QVERIFY(unequal != image);
++            QVERIFY(unequal.save(directory + QString("/junction-%1-%2-%3.png").arg(dpi).arg(collapse).arg(direction == Qt::RightToLeft)));
++            QCOMPARE(doc.toRawText(), source);
++            const auto retainedFormat = table->cellAt(0, 0).format().toTableCellFormat();
++            QLinearGradient gradient(0, 0, 20, 0); gradient.setColorAt(0, Qt::red); gradient.setColorAt(1, Qt::blue);
++            for (const QBrush &brush : {QBrush(gradient), QBrush(Qt::red, Qt::Dense4Pattern)}) {
++                doc.setLayoutEnabled(false); auto mixed = retainedFormat;
++                mixed.clearProperty(edgesProperty); mixed.clearProperty(inkProperty);
++                mixed.setTopBorderBrush(brush); table->cellAt(0, 0).setFormat(mixed);
++                doc.setLayoutEnabled(true); native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++                doc.setLayoutEnabled(false); table->cellAt(0, 0).setFormat(retainedFormat); doc.setLayoutEnabled(true);
++                native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            }
++            // An opaque declaring owner is mandatory even when descendants are colored.
++            doc.setLayoutEnabled(false); auto bad = table->cellAt(0, 0).format(); bad.clearProperty(inkProperty); table->cellAt(0, 0).setFormat(bad); doc.setLayoutEnabled(true);
++            native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++            doc.setLayoutEnabled(false); apply(table->cellAt(0, 0), all(4, 1, QStringLiteral("owner_current_color")), inks[0]); doc.setLayoutEnabled(true);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(doc.toRawText(), source);
++            // Hidden wins before width, and a None edge is not a transparent wide stroke.
++            doc.setLayoutEnabled(false); apply(table->cellAt(0, 0), all(1, 0, {}), inks[0]); doc.setLayoutEnabled(true);
++            native->documentSize(); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++            QCOMPARE(table->cellAt(0, 0).format().toTableCellFormat().topBorder(), 0.0);
++            doc.setLayoutEnabled(false); table->mergeCells(0, 0, 1, 2); doc.setLayoutEnabled(true);
++            native->documentSize(); QVERIFY(native->wikidictParagraphBoxLayoutError() != 0);
++        }
++    }
++
 +    void physicalTableBordersHonorHiddenConflictAcrossColspan()
 +    {
 +        constexpr int tableOwner = QTextFormat::UserProperty + 0x57d0, policy = QTextFormat::UserProperty + 0x57da;
@@ -9311,6 +9487,92 @@
 +                if (sample == 0) { initialFirst = firstRect; initialLast = lastRect; initialSize = size; }
 +                if (sample == 2) { QCOMPARE(firstRect, initialFirst); QCOMPARE(lastRect, initialLast); QCOMPARE(size, initialSize); }
 +                ++sample;
++            }
++        }
++    }
++
++    void plainContainerDecorationStaysBelowFloatPaint()
++    {
++        constexpr int owner = QTextFormat::UserProperty + 0x57e0;
++        constexpr int clear = QTextFormat::UserProperty + 0x57e1;
++        for (int dpi : {96, 144}) for (int alpha : {128, 255}) for (int depth : {1, 2}) {
++            QImage image(850, 420, QImage::Format_ARGB32_Premultiplied);
++            image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(qRound(dpi / .0254));
++            QTextDocument doc; doc.setLayoutEnabled(false); doc.setDocumentMargin(0);
++            doc.setDefaultFont(QFont(QStringLiteral("DejaVu Sans"), 12));
++            doc.documentLayout()->setPaintDevice(&image);
++            QTextCursor cursor(&doc);
++            QTextFrameFormat plain; plain.setMargin(0); plain.setPadding(0); plain.setBorder(0);
++            plain.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++            plain.setProperty(owner, QStringLiteral("wikidict.plain-container/1")); plain.setProperty(clear, 0);
++            QList<QTextFrame *> owners;
++            for (int level = 0; level < depth; ++level) owners.append(cursor.insertFrame(plain));
++            QTextFrameFormat floating; floating.setMargin(0); floating.setPadding(0); floating.setBorder(2);
++            floating.setBorderStyle(QTextFrameFormat::BorderStyle_Solid); floating.setBorderBrush(QColor(0, 0, 255));
++            floating.setWidth(100); floating.setHeight(140); floating.setPosition(QTextFrameFormat::FloatRight);
++            const QColor floatFill(200, 0, 0, alpha); floating.setBackground(floatFill);
++            auto *child = cursor.insertFrame(floating);
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("dict:float-paint"));
++            const int first = cursor.position(); cursor.insertText(QStringLiteral("FLOAT"), link);
++            const int last = cursor.position(); const QTextBlock floatBlock = cursor.block();
++            cursor.setPosition(owners.first()->lastPosition() + 1);
++            auto stripFormat = plain; stripFormat.setHeight(70); stripFormat.setBackground(QColor(246, 248, 250));
++            auto *strip = cursor.insertFrame(stripFormat);
++            QTextBlockFormat centered; centered.setAlignment(Qt::AlignHCenter); cursor.setBlockFormat(centered);
++            cursor.insertText(QStringLiteral("etimolojinin çekimlemesi"));
++            cursor.setPosition(strip->lastPosition() + 1);
++            auto clearedFormat = plain; clearedFormat.setProperty(clear, 3);
++            auto *cleared = cursor.insertFrame(clearedFormat); cursor.insertText(QStringLiteral("After clear"));
++            for (QTextBlock block = doc.begin(); block.isValid(); block = block.next())
++                if (block.length() == 1) block.setVisible(false);
++            const QString raw = doc.toRawText();
++            QTextCursor selection(&doc); selection.setPosition(first); selection.setPosition(last, QTextCursor::KeepAnchor);
++            const QString selected = selection.selectedText();
++            doc.setLayoutEnabled(true);
++            auto *native = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(native);
++            QImage firstPaint;
++            for (int width : {500, 320, 500}) {
++                doc.setTextWidth(width); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                const QRectF floatRect = native->frameBoundingRect(child), stripRect = native->frameBoundingRect(strip);
++                const QRectF intersection = floatRect.intersected(stripRect);
++                QVERIFY2(intersection.height() >= 40, "The control must actually overlap decoration and float.");
++                QCOMPARE(stripRect.width(), qreal(width));
++                QVERIFY(native->frameBoundingRect(cleared).top() >= floatRect.bottom());
++                image.fill(Qt::white);
++                { QPainter painter(&image); QAbstractTextDocumentLayout::PaintContext context; native->draw(&painter, context); }
++                const QPoint sample(qRound(floatRect.center().x()), qRound(intersection.bottom() - 12));
++                QImage oracle(1, 1, image.format()); oracle.fill(QColor(246, 248, 250));
++                { QPainter painter(&oracle); painter.fillRect(oracle.rect(), floatFill); }
++                QCOMPARE(image.pixelColor(sample), oracle.pixelColor(0, 0));
++                // The Figure-side edge must not be erased by the later full-width strip.
++                const QPoint edge(qRound(floatRect.left()), sample.y());
++                bool blue = false;
++                for (int x = edge.x(); x <= edge.x() + 2; ++x) {
++                    const QColor pixel = image.pixelColor(x, edge.y());
++                    blue |= pixel.blue() > 240 && pixel.red() < 20 && pixel.green() < 20;
++                }
++                QVERIFY(blue);
++                const QRect clip = QRect(sample - QPoint(8, 8), QSize(17, 17));
++                QImage clipped(image.size(), image.format()); clipped.setDotsPerMeterX(image.dotsPerMeterX());
++                clipped.setDotsPerMeterY(image.dotsPerMeterY()); clipped.fill(Qt::white);
++                { QPainter painter(&clipped); painter.setClipRect(clip); QAbstractTextDocumentLayout::PaintContext context;
++                  context.clip = clip; native->draw(&painter, context); }
++                QCOMPARE(clipped.copy(clip), image.copy(clip));
++                const auto line = floatBlock.layout()->lineAt(0);
++                const QPointF hit = floatRect.topLeft() + floatBlock.layout()->position()
++                    + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->anchorAt(hit), QStringLiteral("dict:float-paint"));
++                QCOMPARE(doc.toRawText(), raw); QCOMPARE(selection.selectedText(), selected);
++                if (width == 500) {
++                    if (firstPaint.isNull()) firstPaint = image.copy();
++                    else QCOMPARE(image, firstPaint);
++                }
++                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                if (!directory.isEmpty() && alpha == 255 && depth == 2) {
++                    QVERIFY(QDir().mkpath(directory));
++                    QVERIFY(image.save(directory + QStringLiteral("/tr-float-paint-%1-%2.png").arg(dpi).arg(width)));
++                }
 +            }
 +        }
 +    }
@@ -15016,10 +15278,10 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15617,2672 @@
+@@ -648,5 +15879,3334 @@
      }
  }
-
+ 
 +// Future methods for the EXISTING tst_QTextDocumentLayout class.
 +// Source-only: no target, test runner, build, or current source registration.
 +// Include the candidate qtextrubyrangemap_p.h when the complete Ruby seam is reviewed.
@@ -15519,6 +15781,668 @@
 +        return native->wikidictParagraphBoxLayoutError() == 0;
 +    }
 +};
++
++namespace {
++struct ChildLinkBoxControl : RoundedLinkControl {
++    ChildLinkBoxControl(int dpi, bool projected = false) : RoundedLinkControl(dpi, -1, projected)
++    {
++        auto source = QJsonDocument::fromJson(policy.value("action").toMap().value("source").toByteArray()).object();
++        auto group = source.value("inline_box_group").toObject();
++        auto child = group.value("spans").toArray().first().toObject();
++        child.insert("kind", "link"); child.insert("target", target); child.insert("tooltip", "original child advice");
++        group.insert("spans", QJsonArray{child}); source.insert("inline_box_group", group);
++        source.insert("kind", "text"); source.insert("target", "");
++        policy.remove("action");
++        policy.insert("childAction", QVariantMap{{"source", QJsonDocument(source).toJson(QJsonDocument::Compact)}, {"href", href}});
++        format.setToolTip("original child advice"); install(policy);
++    }
++};
++}
++
++void tst_QTextDocumentLayout::actionlessBoxesKeepChildLinkContentHitsAndFocus()
++{
++    int ordinaryOverlapProbes = 0, projectedOverlapProbes = 0;
++    for (int dpi : {96, 144}) {
++        ChildLinkBoxControl stock(dpi), projected(dpi, true);
++        const QString original = stock.document.toRawText();
++        for (qreal width : {800.0, 110.0, 800.0}) {
++            QVERIFY(stock.layout(width)); QVERIFY(projected.layout(width));
++            QCOMPARE(stock.document.toRawText(), original);
++            const auto *layout = stock.document.begin().layout();
++            const auto pieces = QCompiledInlineBox::slices(layout); QVERIFY(!pieces.isEmpty());
++            if (width == 110) QVERIFY(pieces.size() > 1);
++            QPainterPath expected;
++            for (const auto &piece : pieces) {
++                QPainterPath content; content.addRect(piece.geometry.content.translated(layout->position()));
++                expected = expected.united(content);
++            }
++            for (auto *fixture : {&stock, &projected}) {
++                const auto position = fixture->native->wikidictLogicalPosition(fixture->first);
++                QCOMPARE(position.value("inlineBoxActionFirst").toInt(), fixture->first);
++                QCOMPARE(position.value("inlineBoxActionLast").toInt(), fixture->last);
++                QCOMPARE(position.value("inlineBoxActionHref").toString(), fixture->href);
++                QCOMPARE(position.value("inlineBoxActionPath").value<QPainterPath>(), expected);
++                QCOMPARE(position.value("actionRect").toRectF(), expected.boundingRect());
++                QCOMPARE(position.value("handled").toBool(), fixture->projected);
++                std::array<int, 4> exposedEdges{};
++                for (qsizetype index = 0; index < pieces.size(); ++index) {
++                    const auto &piece = pieces.at(index);
++                    const QRectF border = piece.geometry.border.translated(layout->position());
++                    const QRectF content = piece.geometry.content.translated(layout->position());
++                    QList<QPair<int, QPointF>> candidates{{0, QPointF(content.center().x(), (border.top() + content.top()) / 2)},
++                        {2, QPointF(content.center().x(), (content.bottom() + border.bottom()) / 2)}};
++                    if (piece.geometry.first) candidates.append({3, QPointF((border.left() + content.left()) / 2, content.center().y())});
++                    if (piece.geometry.last) candidates.append({1, QPointF((content.right() + border.right()) / 2, content.center().y())});
++                    for (const auto &candidate : candidates) {
++                        const int side = candidate.first; const QPointF point = candidate.second;
++                        const QString detail = QStringLiteral("dpi=%1 width=%2 projected=%3 piece=%4 side=%5 point=(%6,%7) border=(%8,%9,%10,%11) content=(%12,%13,%14,%15)")
++                            .arg(dpi).arg(width).arg(fixture->projected).arg(index).arg(side).arg(point.x(), 0, 'g', 16).arg(point.y(), 0, 'g', 16)
++                            .arg(border.x()).arg(border.y()).arg(border.width()).arg(border.height())
++                            .arg(content.x()).arg(content.y()).arg(content.width()).arg(content.height());
++                        QVERIFY2(border.contains(point) && !content.contains(point), qPrintable(detail));
++                        const int hit = fixture->native->hitTest(point, Qt::ExactHit);
++                        const auto anchor = fixture->native->anchorAt(point);
++                        if (expected.contains(point)) {
++                            // A wrapped slice's border can overlap another slice's real
++                            // content. That content still uses ordinary glyph hit testing.
++                            bool coveredByOtherSlice = false;
++                            for (qsizetype other = 0; other < pieces.size(); ++other)
++                                if (other != index && pieces.at(other).geometry.content.translated(layout->position()).contains(point))
++                                    coveredByOtherSlice = true;
++                            QVERIFY2(coveredByOtherSlice, qPrintable(detail));
++                            QVERIFY2(hit >= fixture->first && hit < fixture->last, qPrintable(detail + QStringLiteral(" hit=%1").arg(hit)));
++                            QVERIFY2(anchor == fixture->href, qPrintable(detail + QStringLiteral(" href=") + anchor));
++                            if (fixture->projected) ++projectedOverlapProbes; else ++ordinaryOverlapProbes;
++                        } else {
++                            ++exposedEdges[size_t(side)];
++                            QVERIFY2(hit == -1, qPrintable(detail + QStringLiteral(" hit=%1").arg(hit)));
++                            QVERIFY2(anchor.isEmpty(), qPrintable(detail + QStringLiteral(" href=") + anchor));
++                        }
++                        QVERIFY2(fixture->native->hitTest(point, Qt::FuzzyHit) >= 0, qPrintable(detail));
++                    }
++                    const QPointF point = content.center();
++                    QVERIFY(expected.contains(point));
++                    const int hit = fixture->native->hitTest(point, Qt::ExactHit);
++                    QVERIFY(hit >= fixture->first && hit < fixture->last);
++                    QCOMPARE(fixture->native->anchorAt(point), fixture->href);
++                    QTextCursor character(&fixture->document); character.setPosition(hit);
++                    character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                    QCOMPARE(character.charFormat().toolTip(), QStringLiteral("original child advice"));
++                }
++                for (int side = 0; side < 4; ++side)
++                    QVERIFY2(exposedEdges[size_t(side)] > 0, qPrintable(QStringLiteral("missing exposed edge dpi=%1 width=%2 projected=%3 side=%4")
++                        .arg(dpi).arg(width).arg(fixture->projected).arg(side)));
++            }
++            stock.image.fill(Qt::white);
++            { QPainter painter(&stock.image); stock.native->draw(&painter, {}); }
++            const auto ordinary = stock.image;
++            QAbstractTextDocumentLayout::PaintContext context;
++            QAbstractTextDocumentLayout::Selection selected;
++            selected.cursor = QTextCursor(&stock.document); selected.cursor.setPosition(stock.first);
++            selected.cursor.setPosition(stock.last, QTextCursor::KeepAnchor);
++            const QPen pen(Qt::magenta, 2, Qt::DotLine);
++            selected.format.setProperty(QTextFormat::OutlinePen, pen); context.selections.append(selected);
++            QImage wanted = ordinary;
++            { QPainter painter(&wanted); painter.setPen(pen); painter.setBrush(Qt::NoBrush); painter.drawPath(expected); }
++            stock.image.fill(Qt::white);
++            { QPainter painter(&stock.image); stock.native->draw(&painter, context); }
++            QCOMPARE(stock.image, wanted);
++            QCOMPARE(stock.document.toRawText(), original);
++        }
++    }
++    QVERIFY(ordinaryOverlapProbes > 0); QVERIFY(projectedOverlapProbes > 0);
++#ifndef QT_NO_WIDGETS
++    ChildLinkBoxControl fixture(96);
++    struct Browser : QTextBrowser { using QTextBrowser::focusNextPrevChild; };
++    Browser browser; browser.setDocument(&fixture.document); browser.setOpenLinks(false); browser.setOpenExternalLinks(false);
++    QVERIFY(fixture.layout(800)); browser.setTextCursor(QTextCursor(&fixture.document));
++    const QList<QPair<int, int>> ranges{{0, fixture.first}, {fixture.first, fixture.last},
++        {fixture.last, fixture.document.characterCount() - 1}};
++    // The adjacent ordinary anchors deliberately have the same href.
++    for (const auto &range : ranges) {
++        QVERIFY(browser.focusNextPrevChild(true));
++        QCOMPARE(browser.textCursor().selectionStart(), range.first);
++        QCOMPARE(browser.textCursor().selectionEnd(), range.second);
++    }
++#endif
++}
++
++void tst_QTextDocumentLayout::actionlessChildLinksRefuseForeignPolicyAndRecover()
++{
++    ChildLinkBoxControl fixture(96);
++    QVERIFY(fixture.layout(800));
++    auto nullable = fixture.policy;
++    auto nullableAction = nullable.value("childAction").toMap();
++    auto nullableOwner = QJsonDocument::fromJson(nullableAction.value("source").toByteArray()).object();
++    auto nullableGroup = nullableOwner.value("inline_box_group").toObject();
++    nullableGroup.insert("radius", QJsonValue(QJsonValue::Null));
++    nullableOwner.insert("inline_box_group", nullableGroup);
++    nullableAction.insert("source", QJsonDocument(nullableOwner).toJson(QJsonDocument::Compact));
++    nullable.insert("childAction", nullableAction);
++    QVERIFY(QCompiledInlineBox::parse(nullable, nullptr)); fixture.install(nullable); QVERIFY(fixture.layout(800));
++    fixture.install(fixture.policy); QVERIFY(fixture.layout(800));
++    const auto good = fixture.policy;
++    const QString text = fixture.document.toRawText();
++    QList<QVariantMap> invalid;
++    auto bad = good; bad.insert("action", good.value("childAction")); invalid.append(bad);
++    bad = good; bad.insert("radius", 0.0); invalid.append(bad);
++    auto action = good.value("childAction").toMap(); action.insert("href", "dict:forged");
++    bad = good; bad.insert("childAction", action); invalid.append(bad);
++    auto owner = QJsonDocument::fromJson(good.value("childAction").toMap().value("source").toByteArray()).object();
++    owner.insert("kind", "link"); owner.insert("target", "invented owner");
++    action = good.value("childAction").toMap(); action.insert("source", QJsonDocument(owner).toJson(QJsonDocument::Compact));
++    bad = good; bad.insert("childAction", action); invalid.append(bad);
++    for (const auto &value : invalid) {
++        QVERIFY(!QCompiledInlineBox::parse(value, nullptr));
++        fixture.install(value); QVERIFY(!fixture.layout(800));
++        fixture.install(good); QVERIFY(fixture.layout(800));
++        QCOMPARE(fixture.document.toRawText(), text);
++    }
++    fixture.install(good, "dict:foreign"); QVERIFY(!fixture.layout(800));
++    fixture.install(good); QVERIFY(fixture.layout(800));
++    auto changedFont = fixture.format; changedFont.setFontPointSize(fixture.font.pointSizeF() + 1);
++    fixture.document.setLayoutEnabled(false);
++    QTextCursor range(&fixture.document); range.setPosition(fixture.first); range.setPosition(fixture.last, QTextCursor::KeepAnchor);
++    changedFont.setProperty(QCompiledInlineBox::Property, good); range.setCharFormat(changedFont);
++    fixture.document.setLayoutEnabled(true); QVERIFY(!fixture.layout(800));
++    fixture.install(good); QVERIFY(fixture.layout(800));
++    QCOMPARE(fixture.document.toRawText(), text);
++}
++
++void tst_QTextDocumentLayout::nestedPitchKeepsAncestorAdvanceChildRingsAndSource()
++{
++    const QByteArray genuineOwnerBytes = R"PITCHJSON({"kind":"text","text":"","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"inline_box_group":{"padding":{"top":{"unit":"px","value":1},"right":{"unit":"px","value":1},"bottom":{"unit":"px","value":1},"left":{"unit":"px","value":1}},"border":{"top":{"solid":{"width":{"unit":"px","value":1},"color":{"current_color":{}}}},"right":{"none":{}},"bottom":{"none":{}},"left":{"none":{}}},"overlays":[{"insets":{"top":{"unit":"px","value":0},"right":{"unit":"percent","value":0},"bottom":{"unit":"percent","value":67},"left":null},"border":{"top":{"none":{}},"right":{"solid":{"width":{"unit":"px","value":1},"color":{"current_color":{}}}},"bottom":{"none":{}},"left":{"none":{}}}}],"spans":[{"kind":"text","text":"ロ","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"inline_box_group":{"padding":{"top":{"unit":"px","value":0},"right":{"unit":"px","value":0},"bottom":{"unit":"px","value":0},"left":{"unit":"px","value":0}},"border":{"top":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"right":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"bottom":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"left":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}}},"overlays":[],"spans":[{"kind":"text","text":"ス","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"radius":{"unit":"percent","value":50}},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"コ","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}]},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"})PITCHJSON";
++    const auto genuineOwner = QJsonDocument::fromJson(genuineOwnerBytes).object();
++    const auto genuineGroup = genuineOwner.value("inline_box_group").toObject();
++    const auto genuineParts = genuineGroup.value("spans").toArray();
++    const auto plainPrototype = genuineParts.first().toObject();
++    const auto ringPrototype = genuineParts.at(1).toObject();
++    // Exact parent and child from the Malagasy Reader entry ペガスス座, revision 35552966.
++    const auto levelOwner = QJsonDocument::fromJson(R"PITCHJSON({"kind":"text","text":"","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"inline_box_group":{"padding":{"top":{"unit":"px","value":0},"right":{"unit":"px","value":0},"bottom":{"unit":"px","value":0},"left":{"unit":"px","value":0}},"border":{"top":{"solid":{"width":{"unit":"px","value":1},"color":{"current_color":{}}}},"right":{"none":{}},"bottom":{"none":{}},"left":{"none":{}}},"overlays":[],"spans":[{"kind":"text","text":"ガ","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"inline_box_group":{"padding":{"top":{"unit":"px","value":0},"right":{"unit":"px","value":0},"bottom":{"unit":"px","value":0},"left":{"unit":"px","value":0}},"border":{"top":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"right":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"bottom":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}},"left":{"dotted":{"width":{"unit":"px","value":1},"color":{"rgb":"#808080"}}}},"overlays":[],"spans":[{"kind":"text","text":"ス","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}],"radius":{"unit":"percent","value":50}},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"},{"kind":"text","text":"スざ","target":"","trail":"","language":"ja","classes":"Jpan","direction":"","explanation":"","tooltip":null,"foreground":null,"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"}]},"bold":false,"italic":false,"code":false,"small":false,"superscript":false,"subscript":false,"strike":false,"underline":false,"role":"normal"})PITCHJSON").object();
++    struct Case { QString text; QList<int> rings; bool level = false; };
++    // The first drop and the level case must exactly reproduce their respective Reader owners.
++    const QList<Case> cases{{QStringLiteral("ロスコ"), {1}}, {QStringLiteral("ヌエッチケ"), {0,3}},
++        {QStringLiteral("ラリンピ"), {3}}, {QStringLiteral("エズス"), {2}},
++        {QStringLiteral("たくちい"), {1}}, {QStringLiteral("スカ"), {0}}, {QStringLiteral("ガススざ"), {1}, true}};
++    for (int caseIndex = 0; caseIndex < cases.size(); ++caseIndex) for (int dpi : {96, 144}) {
++        const auto &sample = cases.at(caseIndex);
++        auto owner = sample.level ? levelOwner : genuineOwner;
++        auto group = owner.value("inline_box_group").toObject(); QJsonArray spans;
++        for (int at = 0; at < sample.text.size();) {
++            if (sample.rings.contains(at)) {
++                auto child = ringPrototype; auto childGroup = child.value("inline_box_group").toObject();
++                auto leaf = childGroup.value("spans").toArray().first().toObject(); leaf["text"] = sample.text.mid(at,1);
++                childGroup["spans"] = QJsonArray{leaf}; child["inline_box_group"] = childGroup; spans.append(child); ++at;
++            } else {
++                const int first = at; while (at < sample.text.size() && !sample.rings.contains(at)) ++at;
++                auto leaf = plainPrototype; leaf["text"] = sample.text.mid(first,at-first); spans.append(leaf);
++            }
++        }
++        group["spans"] = spans; owner["inline_box_group"] = group;
++        if (caseIndex == 0) QCOMPARE(owner, genuineOwner);
++        if (sample.level) QCOMPARE(owner, levelOwner);
++        QJsonArray leaves; QList<QPair<int,QJsonObject>> sourceChildren;
++        QVERIFY(QCompiledInlineBox::nestedPitchSource(owner, &leaves, &sourceChildren));
++        QCOMPARE(sourceChildren.size(), sample.rings.size());
++        BorderOverlayControl fixture(false, 500, sample.text, true, false);
++        QImage image(640, 480, QImage::Format_ARGB32_Premultiplied);
++        image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(image.dotsPerMeterX());
++        fixture.document.setLayoutEnabled(false);
++        fixture.font = QFont(QStringLiteral("Noto Sans CJK JP"), 18);
++        fixture.document.setDefaultFont(fixture.font); fixture.layout()->setPaintDevice(&image);
++        auto option = fixture.document.defaultTextOption(); option.setWrapMode(QTextOption::WrapAnywhere);
++        fixture.document.setDefaultTextOption(option);
++        auto plainFormat = fixture.range.charFormat(); plainFormat.clearProperty(QCompiledInlineBox::Property); plainFormat.setFont(fixture.font);
++        fixture.range.setCharFormat(plainFormat); fixture.document.setLayoutEnabled(true); fixture.layout()->documentSize();
++        QCOMPARE(fixture.layout()->property("_wikidictInlineBoxNestedPitchCapability").toString(), QString::fromLatin1(QCompiledInlineBox::NestedPitchCapability));
++        const auto raw = fixture.document.toRawText(); const int first = fixture.range.selectionStart();
++        const int last = fixture.range.selectionEnd(), local = first - fixture.range.block().position();
++        const auto *ordinary = fixture.range.block().layout(); QCOMPARE(ordinary->lineCount(), 1);
++        const auto ordinaryLine = ordinary->lineAt(0);
++        const qreal plainWidth = ordinaryLine.cursorToX(local + sample.text.size()) - ordinaryLine.cursorToX(local);
++        QList<qreal> plainAdvances; QList<quint32> plainGlyphs;
++        for (int at = 0; at < sample.text.size(); ++at) {
++            plainAdvances.append(ordinaryLine.cursorToX(local+at+1)-ordinaryLine.cursorToX(local+at));
++            const auto runs = ordinary->glyphRuns(local+at,1); QVERIFY(!runs.isEmpty());
++            QList<quint32> indexes; for (const auto &run : runs) indexes.append(run.glyphIndexes());
++            QCOMPARE(indexes.size(), 1); QVERIFY(indexes.first() != 0); plainGlyphs.append(indexes.first());
++        }
++        const qreal scale = QCompiledInline::deviceScale(QFont(fixture.font, &image));
++        auto policy = fixture.policy; policy["font"] = fixture.font;
++        if (sample.level) {
++            policy["padding"] = QVariantList{0.0, 0.0, 0.0, 0.0};
++            policy["overlays"] = QVariantList{};
++        }
++        policy["borderSource"] = QJsonDocument(owner).toJson(QJsonDocument::Compact);
++        QVariantList children;
++        for (int offset : sample.rings) children.append(QVariantMap{
++            {"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&fixture.document))},
++            {"first", first+offset}, {"last", first+offset+1}, {"source", sample.text.mid(offset,1)}, {"font", fixture.font},
++            {"padding", QVariantList{0.0,0.0,0.0,0.0}}, {"widths", QVariantList{1.0,1.0,1.0,1.0}},
++            {"colors", QVariantList{QColor("#808080"),QColor("#808080"),QColor("#808080"),QColor("#808080")}},
++            {"radius", 50.0}, {"radiusUnit", QStringLiteral("percent")}, {"borderStyle", QStringLiteral("dotted")}});
++        policy["nestedChildren"] = children; QVERIFY(QCompiledInlineBox::parse(policy,nullptr));
++        const qreal narrow = plainAdvances.first() * 1.65 + 4 * scale;
++        int phase = 0;
++        for (qreal width : {500.0, narrow, 500.0}) {
++            fixture.install(policy); fixture.document.setTextWidth(width); fixture.layout()->documentSize();
++            const QByteArray context = QStringLiteral("case=%1 dpi=%2 phase=%3 error=%4").arg(caseIndex).arg(dpi).arg(phase)
++                .arg(fixture.layout()->wikidictParagraphBoxLayoutError()).toUtf8();
++            QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(),0);
++            QCOMPARE(fixture.document.toRawText(),raw); QCOMPARE(fixture.range.selectedText(),sample.text);
++            const auto *layout = fixture.range.block().layout();
++            QVERIFY(phase == 1 ? layout->lineCount() > 1 : layout->lineCount() == 1);
++            const auto pieces = QCompiledInlineBox::slices(layout); QVERIFY2(!pieces.isEmpty(),context.constData());
++            QList<QCompiledInlineBox::PaintSlice> parents, rings;
++            for (const auto &piece : pieces) {
++                if (piece.box.identity.contains("nestedChildren")) parents.append(piece); else rings.append(piece);
++            }
++            QVERIFY(!parents.isEmpty()); QCOMPARE(rings.size(),sample.rings.size());
++            qreal parentWidth = 0; for (const auto &piece : parents) parentWidth += piece.geometry.border.width();
++            const int horizontalPadding = sample.level ? 0 : 2;
++            QVERIFY2(qAbs(parentWidth - (plainWidth + (horizontalPadding + 2 * sample.rings.size()) * scale)) < .08,context.constData());
++            for (int at = 0; at < sample.text.size(); ++at) {
++                const auto runs = layout->glyphRuns(local+at,1); QVERIFY(!runs.isEmpty());
++                QList<quint32> indexes; for (const auto &run : runs) indexes.append(run.glyphIndexes());
++                QCOMPARE(indexes,QList<quint32>{plainGlyphs.at(at)});
++            }
++            for (int index = 0; index < rings.size(); ++index) {
++                const auto &ring = rings.at(index); const int offset = sample.rings.at(index);
++                QCOMPARE(ring.box.first,first+offset); QCOMPARE(ring.box.last,first+offset+1);
++                QVERIFY2(qAbs(ring.geometry.border.width() - plainAdvances.at(offset) - 2*scale) < .08,context.constData());
++                const auto enclosing = std::find_if(parents.cbegin(),parents.cend(),[&](const auto &p){return p.line==ring.line;});
++                QVERIFY(enclosing != parents.cend());
++                if (!sample.level) {
++                QVERIFY(ring.geometry.border.left() >= enclosing->geometry.padding.left() - .02);
++                QVERIFY(ring.geometry.border.right() <= enclosing->geometry.padding.right() + .02);
++                QVERIFY(ring.geometry.border.top() >= enclosing->geometry.padding.top() - .02);
++                QVERIFY(ring.geometry.border.bottom() <= enclosing->geometry.padding.bottom() + .02);
++                } else {
++                    const auto rectangle = [](const QRectF &r) {
++                        return QStringLiteral("[%1,%2,%3,%4]").arg(r.x(),0,'g',16).arg(r.y(),0,'g',16)
++                            .arg(r.width(),0,'g',16).arg(r.height(),0,'g',16);
++                    };
++                    const QByteArray measured = QStringLiteral("%1 ring=%2 scale=%3 parent-content=%4 parent-padding=%5 ring-content=%6 ring-border=%7")
++                        .arg(QString::fromUtf8(context)).arg(index).arg(scale,0,'g',16)
++                        .arg(rectangle(enclosing->geometry.content)).arg(rectangle(enclosing->geometry.padding))
++                        .arg(rectangle(ring.geometry.content)).arg(rectangle(ring.geometry.border)).toUtf8();
++                    qInfo().noquote() << measured;
++                    QVERIFY2(ring.geometry.border.left() >= enclosing->geometry.padding.left() - .02,measured.constData());
++                    QVERIFY2(ring.geometry.border.right() <= enclosing->geometry.padding.right() + .02,measured.constData());
++                    QVERIFY2(qAbs(ring.geometry.content.top() - enclosing->geometry.content.top()) < .02,measured.constData());
++                    QVERIFY2(qAbs(ring.geometry.content.bottom() - enclosing->geometry.content.bottom()) < .02,measured.constData());
++                    QVERIFY2(qAbs(enclosing->geometry.padding.top() - enclosing->geometry.content.top()) < .02,measured.constData());
++                    QVERIFY2(qAbs(enclosing->geometry.padding.bottom() - enclosing->geometry.content.bottom()) < .02,measured.constData());
++                    QVERIFY2(qAbs(ring.geometry.border.top() - (enclosing->geometry.padding.top() - scale)) < .02,measured.constData());
++                    QVERIFY2(qAbs(ring.geometry.border.bottom() - (enclosing->geometry.padding.bottom() + scale)) < .02,measured.constData());
++                }
++                const auto glyph = layout->glyphRuns(local+offset,1); QCOMPARE(glyph.size(),1);
++                QVERIFY(!glyph.first().positions().isEmpty());
++                QVERIFY2(qAbs(glyph.first().positions().first().x() - ring.geometry.content.left()) < .08,context.constData());
++                if (offset == 0) QVERIFY(qAbs(ring.geometry.border.left() - enclosing->geometry.content.left()) < .08);
++                if (offset + 1 == sample.text.size()) QVERIFY(qAbs(ring.geometry.border.right() - enclosing->geometry.content.right()) < .08);
++            }
++            QList<qreal> scales(pieces.size(),scale); QList<QCompiledInlineBox::OverlayPaint> overlays;
++            QVERIFY(QCompiledInlineBox::overlayPaints(pieces,scales,&overlays));
++            QCOMPARE(overlays.size(), sample.level ? 0 : 1);
++            if (!sample.level) {
++                const QRectF containing = parents.first().geometry.padding.united(parents.last().geometry.padding);
++                const QRectF expected(containing.right()-scale,containing.top(),scale,containing.height()*.33);
++                const auto observed = overlays.first().geometry.border;
++                QVERIFY(qAbs(observed.x()-expected.x()) < .0001 && qAbs(observed.y()-expected.y()) < .0001
++                    && qAbs(observed.width()-expected.width()) < .0001 && qAbs(observed.height()-expected.height()) < .0001);
++            }
++            QList<QCompiledInlineBox::Decoration> decorations;
++            QVERIFY(QCompiledInlineBox::decorations(pieces,scales,&decorations));
++            const QPointF paintOffset = sample.level ? QPointF(24,48) : QPointF();
++            image.fill(Qt::white); { QPainter painter(&image); painter.translate(paintOffset);
++                fixture.layout()->draw(&painter,QAbstractTextDocumentLayout::PaintContext{}); }
++            int gray = 0, black = 0; for (int y=0;y<image.height();++y) for(int x=0;x<image.width();++x) {
++                gray += image.pixelColor(x,y)==QColor("#808080"); black += image.pixelColor(x,y)==QColor(Qt::black);
++            }
++            QVERIFY(gray>0); QVERIFY(black>0);
++            if (sample.level) {
++                const QPointF origin = fixture.layout()->blockBoundingRect(fixture.range.block()).topLeft() + paintOffset;
++                const QRectF ringContent = rings.first().geometry.content.translated(origin);
++                const QRectF ringBounds = rings.first().geometry.border.translated(origin);
++                const QRectF ringExclusion = ringBounds.adjusted(-2*scale,-2*scale,2*scale,2*scale);
++                const QRectF canvas(image.rect());
++                const auto rectangle = [](const QRectF &r) {
++                    return QStringLiteral("[%1,%2,%3,%4]").arg(r.x(),0,'g',16).arg(r.y(),0,'g',16)
++                        .arg(r.width(),0,'g',16).arg(r.height(),0,'g',16);
++                };
++                QVERIFY2(canvas.contains(ringBounds),context.constData());
++                QCOMPARE(rings.size(),1); QVERIFY(overlays.isEmpty());
++                QImage topMask=image, ringMask=image; topMask.fill(Qt::white); ringMask.fill(Qt::white);
++                { QPainter painter(&topMask);
++                    for (const auto &parent : parents) {
++                        const QRectF border=parent.geometry.border.translated(origin);
++                        const QRectF padding=parent.geometry.padding.translated(origin);
++                        QVERIFY2(canvas.contains(border),context.constData());
++                        QCOMPARE(parent.box.widths[1],0.0); QCOMPARE(parent.box.widths[2],0.0); QCOMPARE(parent.box.widths[3],0.0);
++                        painter.fillRect(QRectF(border.left(),border.top(),border.width(),padding.top()-border.top()),Qt::black);
++                        qInfo().noquote() << QStringLiteral("%1 parent-line=%2 border=%3 padding=%4 content=%5 top-band=%6")
++                            .arg(QString::fromUtf8(context)).arg(parent.line).arg(rectangle(border)).arg(rectangle(padding))
++                            .arg(rectangle(parent.geometry.content.translated(origin)))
++                            .arg(rectangle(QRectF(border.left(),border.top(),border.width(),padding.top()-border.top())));
++                    }
++                }
++                int roundedChildren=0;
++                { QPainter painter(&ringMask); painter.translate(origin); painter.setPen(Qt::NoPen); painter.setBrush(QColor("#808080"));
++                    for (int i=0;i<pieces.size();++i) if (pieces.at(i).box.identity.contains("radius")) {
++                        ++roundedChildren; painter.drawPath(decorations.at(i).border);
++                    }
++                }
++                QCOMPARE(roundedChildren,1);
++                // Inline decorations paint in ascending line order: each parent before its child.
++                // A later line's overline can cover the prior line's overflowing ring border.
++                QImage expectedPaint=image, sameLineTopMask=image, laterLineTopMask=image;
++                expectedPaint.fill(Qt::white); sameLineTopMask.fill(Qt::white); laterLineTopMask.fill(Qt::white);
++                { QPainter painter(&expectedPaint), sameLine(&sameLineTopMask), laterLine(&laterLineTopMask);
++                    painter.setPen(Qt::NoPen);
++                    for (int line=0;line<layout->lineCount();++line) {
++                        for (const auto &parent : parents) if (parent.line==line) {
++                            const QRectF border=parent.geometry.border.translated(origin);
++                            const QRectF padding=parent.geometry.padding.translated(origin);
++                            const QRectF band(border.left(),border.top(),border.width(),padding.top()-border.top());
++                            painter.fillRect(band,Qt::black);
++                            if (line==rings.first().line) sameLine.fillRect(band,Qt::black);
++                            if (line>rings.first().line) laterLine.fillRect(band,Qt::black);
++                        }
++                        painter.setBrush(QColor("#808080"));
++                        for (int i=0;i<pieces.size();++i)
++                            if (pieces.at(i).line==line && pieces.at(i).box.identity.contains("radius"))
++                                painter.drawPath(decorations.at(i).border.translated(origin));
++                    }
++                }
++                int sameLineIntersections=0, laterLineIntersections=0, uncoveredRingPixels=0, wrongCompositeOrder=0;
++                int expectedTop=0, observedTop=0, expectedRingOutsideContent=0, observedRingOutsideContent=0;
++                for (int y=0;y<image.height();++y) for (int x=0;x<image.width();++x) {
++                    const QPointF center(x+.5,y+.5);
++                    if (topMask.pixelColor(x,y)==QColor(Qt::black) && !ringExclusion.contains(center)) {
++                        ++expectedTop; observedTop += image.pixelColor(x,y)==QColor(Qt::black);
++                        if (image.pixelColor(x,y)!=QColor(Qt::black))
++                            qInfo().noquote() << QStringLiteral("%1 top-mismatch pixel=(%2,%3) actual=%4 top-mask=%5 ring-mask=%6")
++                                .arg(QString::fromUtf8(context)).arg(x).arg(y).arg(image.pixelColor(x,y).name(QColor::HexArgb))
++                                .arg(topMask.pixelColor(x,y).name(QColor::HexArgb)).arg(ringMask.pixelColor(x,y).name(QColor::HexArgb));
++                    }
++                    if (ringMask.pixelColor(x,y)==QColor("#808080") && !ringContent.contains(center)) {
++                        ++expectedRingOutsideContent;
++                        const bool sameLine=sameLineTopMask.pixelColor(x,y)==QColor(Qt::black);
++                        const bool laterLine=laterLineTopMask.pixelColor(x,y)==QColor(Qt::black);
++                        const QColor expectedColor=expectedPaint.pixelColor(x,y);
++                        if (laterLine) ++laterLineIntersections;
++                        else if (sameLine) ++sameLineIntersections;
++                        else ++uncoveredRingPixels;
++                        wrongCompositeOrder += expectedColor!=(laterLine ? QColor(Qt::black) : QColor("#808080"));
++                        observedRingOutsideContent += image.pixelColor(x,y)==expectedColor;
++                        if (image.pixelColor(x,y)!=expectedColor)
++                            qInfo().noquote() << QStringLiteral("%1 ring-mismatch pixel=(%2,%3) actual=%4 expected=%5 same-line=%6 later-line=%7 top-mask=%8 ring-mask=%9")
++                                .arg(QString::fromUtf8(context)).arg(x).arg(y).arg(image.pixelColor(x,y).name(QColor::HexArgb))
++                                .arg(expectedColor.name(QColor::HexArgb)).arg(sameLine).arg(laterLine)
++                                .arg(topMask.pixelColor(x,y).name(QColor::HexArgb)).arg(ringMask.pixelColor(x,y).name(QColor::HexArgb));
++                    }
++                }
++                const QByteArray paintContext=QStringLiteral("%1 paint-offset=(%2,%3) top=%4/%5 ring-outside-content=%6/%7 rounded=%8 overlays=%9")
++                    .arg(QString::fromUtf8(context)).arg(paintOffset.x()).arg(paintOffset.y()).arg(observedTop).arg(expectedTop)
++                    .arg(observedRingOutsideContent).arg(expectedRingOutsideContent).arg(roundedChildren).arg(overlays.size()).toUtf8();
++                qInfo().noquote() << paintContext;
++                const QByteArray orderContext=QStringLiteral("%1 same-line-intersections=%2 later-line-intersections=%3 uncovered-ring=%4 wrong-order=%5")
++                    .arg(QString::fromUtf8(paintContext)).arg(sameLineIntersections).arg(laterLineIntersections)
++                    .arg(uncoveredRingPixels).arg(wrongCompositeOrder).toUtf8();
++                qInfo().noquote() << orderContext;
++                // Persist the failing paint and both independent masks before the assertions below can return.
++                const auto diagnosticDirectory=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                if (!diagnosticDirectory.isEmpty()) {
++                    const bool directoryReady=QDir().mkpath(diagnosticDirectory);
++                    const QString stem=QStringLiteral("mg-nested-diagnostic-%1-%2-%3").arg(caseIndex).arg(dpi).arg(phase);
++                    const bool actualSaved=directoryReady && image.save(QDir(diagnosticDirectory).filePath(stem+QStringLiteral("-actual.png")));
++                    const bool topSaved=directoryReady && topMask.save(QDir(diagnosticDirectory).filePath(stem+QStringLiteral("-top-mask.png")));
++                    const bool ringSaved=directoryReady && ringMask.save(QDir(diagnosticDirectory).filePath(stem+QStringLiteral("-ring-mask.png")));
++                    const bool compositeSaved=directoryReady && expectedPaint.save(QDir(diagnosticDirectory).filePath(stem+QStringLiteral("-expected-composite.png")));
++                    qInfo().noquote() << QStringLiteral("%1 pre-assert-diagnostics stem=%2 actual=%3 top-mask=%4 ring-mask=%5 expected-composite=%6")
++                        .arg(QString::fromUtf8(context)).arg(stem).arg(actualSaved).arg(topSaved).arg(ringSaved).arg(compositeSaved);
++                }
++                // The top mask is outside the shared content band, excluding the ring.
++                // Wide phases require a long stroke; wrapped phases check all available mask pixels.
++                QVERIFY2(phase==1 ? expectedTop>0 : expectedTop>plainWidth*.5,paintContext.constData());
++                QVERIFY2(observedTop==expectedTop,paintContext.constData());
++                // Every isolated ring-mask pixel outside content remains checked, including later-line overlap.
++                QVERIFY2(expectedRingOutsideContent>0,paintContext.constData());
++                QVERIFY2(sameLineIntersections+laterLineIntersections+uncoveredRingPixels==expectedRingOutsideContent,orderContext.constData());
++                QVERIFY2(wrongCompositeOrder==0,orderContext.constData());
++                QVERIFY2(observedRingOutsideContent==expectedRingOutsideContent,orderContext.constData());
++            }
++            if ((caseIndex < 2 || sample.level) && phase < 2) {
++                const auto directory=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                if (!directory.isEmpty()) { QVERIFY(QDir().mkpath(directory));
++                    QVERIFY(image.save(QDir(directory).filePath(QStringLiteral("mg-nested-%1-%2-%3.png").arg(caseIndex).arg(dpi).arg(phase)))); }
++            }
++            ++phase;
++        }
++        for (int which=0;which<7;++which) {
++            auto bad=policy; auto badChildren=children; auto child=badChildren.first().toMap();
++            if(which==0) bad.remove("nestedChildren");
++            if(which==1) { child["first"]=first; child["last"]=last; child["source"]=sample.text; }
++            if(which==2) child["widths"]=QVariantList{1.0,2.0,1.0,1.0};
++            if(which==3) child["font"]=QFont(QStringLiteral("DejaVu Sans"),12);
++            if(which==4) child["nestedChildren"]=children;
++            if(which==5) child["source"]=QStringLiteral("x");
++            if(which==6) badChildren.append(children.first());
++            badChildren[0]=child; if(which!=0) bad["nestedChildren"]=badChildren;
++            QVERIFY(!QCompiledInlineBox::parse(bad,nullptr));
++        }
++        auto bad=policy;bad.remove("nestedChildren");fixture.install(bad);fixture.layout()->documentSize();
++        QVERIFY(fixture.layout()->wikidictParagraphBoxLayoutError()!=0);
++        fixture.install(policy);fixture.layout()->documentSize();QCOMPARE(fixture.layout()->wikidictParagraphBoxLayoutError(),0);
++        QCOMPARE(fixture.document.toRawText(),raw);QCOMPARE(fixture.range.selectedText(),sample.text);
++    }
++}
++
++void tst_QTextDocumentLayout::percentDottedInlineBoxesKeepEllipsesGlyphsAndSource()
++{
++    const QString help = QStringLiteral("Vowel sign appearing in front of the initial consonant.");
++    for (int dpi : {96, 144}) for (const QString &text : {QStringLiteral("e"), QStringLiteral("ai"), QStringLiteral("e ai e ai e ai e ai")}) {
++        QImage image(640, 360, QImage::Format_ARGB32_Premultiplied);
++        image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(image.dotsPerMeterX());
++        QTextDocument document; document.setLayoutEnabled(false);
++        QFont font(QStringLiteral("DejaVu Sans"), 18); document.setDefaultFont(font); document.setDocumentMargin(20);
++        auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++        native->setPaintDevice(&image);
++        QCOMPARE(native->property("_wikidictInlineBoxPercentDottedCapability").toString(), QString::fromLatin1(QCompiledInlineBox::PercentDottedCapability));
++        QTextOption option; option.setWrapMode(QTextOption::WrapAnywhere); document.setDefaultTextOption(option);
++        QTextCursor cursor(&document); QTextCharFormat format; format.setFont(font); format.setForeground(Qt::black); format.setToolTip(help);
++        format.setProperty(QCompiledInline::Property, QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false}, {"cursor", QStringLiteral("help")}});
++        cursor.insertText(text, format);
++        QVariantMap map{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))}, {"first", 0}, {"last", int(text.size())},
++            {"source", text}, {"font", font}, {"padding", QVariantList{0.0, 0.0, 0.0, 0.0}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor("#808080"), QColor("#808080"), QColor("#808080"), QColor("#808080")}}};
++        for (qreal width : {500.0, 90.0}) {
++            document.setLayoutEnabled(false); format.clearProperty(QCompiledInlineBox::Property);
++            auto ordinary = format; ordinary.clearProperty(QCompiledInline::Property);
++            cursor.select(QTextCursor::Document); cursor.setCharFormat(ordinary); document.setLayoutEnabled(true); document.setTextWidth(width);
++            // Document-owned layouts take their text from the block, not QTextLayout::text().
++            native->documentSize(); const auto plainGlyphs = document.begin().layout()->glyphRuns(0, text.size());
++            QVERIFY(!plainGlyphs.isEmpty());
++            for (qreal radius : {0.0, 25.0, 50.0, 125.0}) for (bool dotted : {false, true}) {
++                auto policy = map; policy.insert("radius", radius); policy.insert("radiusUnit", QStringLiteral("percent"));
++                if (dotted) policy.insert("borderStyle", QStringLiteral("dotted"));
++                QVERIFY(QCompiledInlineBox::parse(policy, nullptr));
++                document.setLayoutEnabled(false); auto boxed = format; boxed.setProperty(QCompiledInlineBox::Property, policy);
++                cursor.select(QTextCursor::Document); cursor.setCharFormat(boxed); document.setLayoutEnabled(true); native->documentSize();
++                QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0);
++                QCOMPARE(document.toRawText(), text); QCOMPARE(cursor.selectedText(), text);
++                QCOMPARE(cursor.charFormat().toolTip(), help); QVERIFY(cursor.charFormat().anchorHref().isEmpty());
++                QVERIFY(QCompiledInlineBox::helpOnly(cursor.charFormat().property(QCompiledInline::Property)));
++                const auto *layout = document.begin().layout(); const auto parts = QCompiledInlineBox::slices(layout); QVERIFY(!parts.isEmpty());
++                const qreal scale = QCompiledInline::deviceScale(QFont(font, &image));
++                QList<qreal> scales(parts.size(), scale); QList<QCompiledInlineBox::Decoration> shapes;
++                QVERIFY(QCompiledInlineBox::decorations(parts, scales, &shapes)); QCOMPARE(shapes.size(), parts.size());
++                qreal fullWidth = 0; for (const auto &part : parts) fullWidth += part.geometry.border.width();
++                const qreal height = parts.first().geometry.border.height(); qreal before = 0;
++                int ringPoints = 0, paintedPoints = 0;
++                for (int i = 0; i < parts.size(); ++i) {
++                    const auto &part = parts.at(i); QCOMPARE(part.box.identity.value("radius").toDouble(), radius);
++                    QCOMPARE(part.box.identity.value("radiusUnit").toString(), QStringLiteral("percent"));
++                    for (qreal y = .25; y < height; y += .5) for (qreal x = .25; x < part.geometry.border.width(); x += .5) {
++                        const QPointF point = part.geometry.border.topLeft() + QPointF(x, y);
++                        const qreal wholeX = before + x;
++                        if (radius >= 50) {
++                            const qreal nx = (wholeX - fullWidth / 2) / (fullWidth / 2), ny = (y - height / 2) / (height / 2);
++                            const qreal distance = nx * nx + ny * ny;
++                            if (qAbs(distance - 1) > .04) QCOMPARE(shapes.at(i).outer.contains(point), distance < 1);
++                        }
++                        if (shapes.at(i).border.contains(point)) { QVERIFY(shapes.at(i).outer.contains(point)); ++paintedPoints; }
++                    }
++                    before += part.geometry.border.width();
++                }
++                auto solidParts = parts; for (auto &part : solidParts) part.box.identity.remove("borderStyle");
++                QList<QCompiledInlineBox::Decoration> solid; QVERIFY(QCompiledInlineBox::decorations(solidParts, scales, &solid));
++                for (int i = 0; i < parts.size(); ++i) {
++                    const auto rect = parts.at(i).geometry.border;
++                    for (qreal y = rect.top() + .25; y < rect.bottom(); y += .5) for (qreal x = rect.left() + .25; x < rect.right(); x += .5) {
++                        const QPointF point(x, y); ringPoints += solid.at(i).border.contains(point);
++                        if (shapes.at(i).border.contains(point)) QVERIFY(solid.at(i).border.contains(point));
++                    }
++                }
++                QVERIFY(paintedPoints > 0); QVERIFY(ringPoints > 0);
++                if (dotted) QVERIFY2(paintedPoints < ringPoints * .85, "Dotted border became a solid ring");
++                image.fill(Qt::white); QPainter painter(&image); native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{}); painter.end();
++                int gray = 0, black = 0;
++                for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
++                    gray += image.pixelColor(x, y) == QColor("#808080"); black += image.pixelColor(x, y) == QColor(Qt::black);
++                }
++                QVERIFY(gray > 0); QVERIFY(black > 0);
++                const auto shaped = layout->glyphRuns(0, text.size()); QVERIFY(!shaped.isEmpty());
++                QList<quint32> actualGlyphs, expectedGlyphs;
++                for (const auto &run : shaped) { actualGlyphs.append(run.glyphIndexes()); QCOMPARE(run.rawFont(), plainGlyphs.first().rawFont()); }
++                for (const auto &run : plainGlyphs) expectedGlyphs.append(run.glyphIndexes());
++                QCOMPARE(actualGlyphs, expectedGlyphs);
++                if (width == 500 && radius == 50 && dotted && text.size() <= 2) {
++                    const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                    if (!directory.isEmpty()) { QVERIFY(QDir().mkpath(directory)); QVERIFY(image.save(QDir(directory).filePath(QStringLiteral("mg-percent-%1-%2.png").arg(text).arg(dpi)))); }
++                }
++            }
++        }
++        auto good = map; good.insert("radius", 50.0); good.insert("radiusUnit", QStringLiteral("percent")); good.insert("borderStyle", QStringLiteral("dotted"));
++        for (const QVariant &badUnit : {QVariant(QStringLiteral("em")), QVariant(QStringLiteral("px")), QVariant(2)}) {
++            auto bad = good; bad.insert("radiusUnit", badUnit); QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        }
++        auto bad = good; bad.remove("radius"); QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        bad = good; bad["radius"] = -1.0; QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        bad = good; bad["borderStyle"] = QStringLiteral("dashed"); QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        bad = good; bad["colors"] = QVariantList{QColor("#808080"), QColor(Qt::red), QColor("#808080"), QColor("#808080")}; QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        bad = good; bad["widths"] = QVariantList{1.0, 2.0, 1.0, 1.0}; QVERIFY(!QCompiledInlineBox::parse(bad, nullptr));
++        auto changedHelp = cursor.charFormat().property(QCompiledInline::Property).toMap(); changedHelp.insert("height", 40.0);
++        QVERIFY(!QCompiledInlineBox::helpOnly(changedHelp));
++    }
++    // Fixed-color Help/plain circles from genuine 408 and MG are independent
++    // owners in ordinary cells. Their paint policy must not become borderSource.
++    for (int dpi : {96, 144}) for (bool helpOwner : {false, true}) {
++        QImage image(960, 360, QImage::Format_ARGB32_Premultiplied);
++        image.setDotsPerMeterX(qRound(dpi / .0254)); image.setDotsPerMeterY(image.dotsPerMeterX());
++        QTextDocument document; document.setLayoutEnabled(false);
++        QFont font(QStringLiteral("DejaVu Sans"), 18); document.setDefaultFont(font);
++        auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++        native->setPaintDevice(&image);
++        QTextTableFormat tableFormat; tableFormat.setBorder(0); tableFormat.setCellPadding(8); tableFormat.setCellSpacing(0);
++        tableFormat.setWidth(QTextLength(QTextLength::PercentageLength, 100));
++        auto *table = QTextCursor(&document).insertTable(1, 2, tableFormat); QVERIFY(table);
++        auto cursor = table->cellAt(0, 0).firstCursorPosition(); const int first = cursor.position();
++        QTextCharFormat format; format.setFont(font); format.setForeground(Qt::black);
++        if (helpOwner) {
++            format.setToolTip(help);
++            format.setProperty(QCompiledInline::Property, QVariantMap{{"policy", QStringLiteral("wikidict.inline-text/1")}, {"normalized", false}, {"cursor", QStringLiteral("help")}});
++        }
++        cursor.insertText(QStringLiteral("e"), format);
++        QVariantMap policy{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))}, {"first", first}, {"last", first + 1},
++            {"source", QStringLiteral("e")}, {"font", font}, {"padding", QVariantList{0.0, 0.0, 0.0, 0.0}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor("#808080"), QColor("#808080"), QColor("#808080"), QColor("#808080")}},
++            {"radius", 50.0}, {"radiusUnit", QStringLiteral("percent")}, {"borderStyle", QStringLiteral("dotted")}};
++        cursor.setPosition(first); cursor.setPosition(first + 1, QTextCursor::KeepAnchor);
++        auto boxed = format; boxed.setProperty(QCompiledInlineBox::Property, policy); cursor.setCharFormat(boxed);
++        table->cellAt(0, 1).firstCursorPosition().insertText(QStringLiteral("Neighbor"));
++        const QString original = document.toRawText(); document.setLayoutEnabled(true);
++        for (qreal width : {900.0, 640.0, 900.0}) {
++            document.setTextWidth(width); native->documentSize();
++            QCOMPARE(native->wikidictParagraphBoxLayoutError(), 0); QCOMPARE(document.toRawText(), original);
++            const auto block = document.findBlock(first); QVERIFY(block.isValid());
++            const auto glyphs = block.layout()->glyphRuns(first - block.position(), 1); QVERIFY(!glyphs.isEmpty());
++            const auto parts = QCompiledInlineBox::slices(block.layout()); QCOMPARE(parts.size(), 1);
++            const auto &part = parts.first(); QCOMPARE(part.box.first, first); QCOMPARE(part.box.last, first + 1);
++            QVERIFY(!QCompiledInlineBox::hasBorderSource(part.box)); QVERIFY(!QCompiledInlineBox::hasAction(part.box));
++            QCOMPARE(cursor.selectedText(), QStringLiteral("e")); QCOMPARE(cursor.currentTable(), table);
++            QCOMPARE(cursor.charFormat().toolTip(), helpOwner ? help : QString());
++            QList<QCompiledInlineBox::Decoration> shapes;
++            QVERIFY(QCompiledInlineBox::decorations(parts, {QCompiledInline::deviceScale(QFont(font, &image))}, &shapes));
++            QCOMPARE(shapes.size(), 1); const auto rect = part.geometry.border;
++            QVERIFY(rect.width() > 0 && rect.height() > 0);
++            QVERIFY(shapes.first().outer.contains(rect.center()));
++            QVERIFY(!shapes.first().outer.contains(rect.topLeft() + QPointF(.1, .1)));
++            const QPointF origin = native->blockBoundingRect(block).topLeft();
++            const QRectF cell = native->tableCellBoundingRect(table, table->cellAt(0, 0));
++            QVERIFY(cell.contains(rect.translated(origin).center()));
++            image.fill(Qt::white); QPainter painter(&image); native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{}); painter.end();
++            int ringInk = 0;
++            const QRect pixels = rect.translated(origin).adjusted(-1, -1, 1, 1).toAlignedRect().intersected(image.rect());
++            for (int y = pixels.top(); y <= pixels.bottom(); ++y) for (int x = pixels.left(); x <= pixels.right(); ++x) {
++                const QColor ink = image.pixelColor(x, y);
++                if (shapes.first().border.contains(QPointF(x + .5, y + .5) - origin)
++                    && ink.red() >= 120 && ink.red() < 250
++                    && qAbs(ink.red() - ink.green()) <= 2 && qAbs(ink.green() - ink.blue()) <= 2) ++ringInk;
++            }
++            QVERIFY(ringInk > 0);
++            if (width == 640) {
++                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                if (!directory.isEmpty()) { QVERIFY(QDir().mkpath(directory)); QVERIFY(image.save(QDir(directory).filePath(
++                    QStringLiteral("fixed-circle-cell-%1-%2.png").arg(dpi).arg(helpOwner ? "help" : "plain")))); }
++            }
++        }
++    }
++    // The new paint class does not waive ownership, typography or table scope.
++    for (const QString &invalid : {QStringLiteral("nested-table"), QStringLiteral("floating-table"),
++             QStringLiteral("viewport-table"), QStringLiteral("non-table-frame"), QStringLiteral("cross-cell"),
++             QStringLiteral("wrong-source"), QStringLiteral("wrong-font")}) {
++        QTextDocument document; document.setLayoutEnabled(false);
++        QFont font(QStringLiteral("DejaVu Sans"), 18); document.setDefaultFont(font);
++        auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native);
++        QTextCursor insertion(&document); QTextTableFormat tableFormat;
++        if (invalid == QStringLiteral("floating-table")) tableFormat.setPosition(QTextFrameFormat::FloatRight);
++        if (invalid == QStringLiteral("viewport-table")) tableFormat.setProperty(QTextFormat::UserProperty + 0x57f5, true);
++        auto *table = insertion.insertTable(1, 2, tableFormat); QVERIFY(table);
++        insertion = table->cellAt(0, 0).firstCursorPosition();
++        if (invalid == QStringLiteral("nested-table")) {
++            table = insertion.insertTable(1, 1); insertion = table->cellAt(0, 0).firstCursorPosition();
++        } else if (invalid == QStringLiteral("non-table-frame")) {
++            auto *frame = insertion.insertFrame(QTextFrameFormat()); insertion = frame->firstCursorPosition();
++        }
++        const int first = insertion.position(); QTextCharFormat format; format.setFont(font);
++        insertion.insertText(QStringLiteral("e"), format);
++        int last = first + 1; QString source = QStringLiteral("e");
++        if (invalid == QStringLiteral("cross-cell")) {
++            auto peer = table->cellAt(0, 1).firstCursorPosition(); peer.insertText(QStringLiteral("e"), format);
++            last = peer.position(); source = QString(last - first, QChar('e'));
++        }
++        if (invalid == QStringLiteral("wrong-source")) source = QStringLiteral("o");
++        QFont declared = font; if (invalid == QStringLiteral("wrong-font")) declared.setPointSize(20);
++        QVariantMap policy{{"capability", QString::fromLatin1(QCompiledInlineBox::Capability)},
++            {"document", QVariant::fromValue(static_cast<QObject *>(&document))}, {"first", first}, {"last", last},
++            {"source", source}, {"font", declared}, {"padding", QVariantList{0.0, 0.0, 0.0, 0.0}},
++            {"widths", QVariantList{1.0, 1.0, 1.0, 1.0}},
++            {"colors", QVariantList{QColor("#808080"), QColor("#808080"), QColor("#808080"), QColor("#808080")}},
++            {"radius", 50.0}, {"radiusUnit", QStringLiteral("percent")}, {"borderStyle", QStringLiteral("dotted")}};
++        QVERIFY(QCompiledInlineBox::parse(policy, nullptr));
++        insertion.setPosition(first); insertion.setPosition(first + 1, QTextCursor::KeepAnchor);
++        format.setProperty(QCompiledInlineBox::Property, policy); insertion.setCharFormat(format);
++        document.setLayoutEnabled(true); document.setTextWidth(640); native->documentSize();
++        QVERIFY2(native->wikidictParagraphBoxLayoutError() != 0, qPrintable(invalid));
++    }
++}
 +
 +void tst_QTextDocumentLayout::roundedInlineBoxesSliceOneDecorationAndKeepSelection()
 +{

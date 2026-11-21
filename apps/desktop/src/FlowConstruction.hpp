@@ -45,6 +45,8 @@ struct RenderContext {
     QString containerOwnerHtml;
     qreal containerOwnerBodyPoints = 0;
     QColor inheritedInk;
+    QColor tableOwnerInk; // Actual enclosing HTML owner, before child spans or links.
+    QColor tableAuthoredInk; // Retained separately if an owner contrast policy conflicts.
     QJsonObject captionLinkPaint;
     bool computedCellTraits = false;
     bool cellLineInheritance = false;

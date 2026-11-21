@@ -96,14 +96,15 @@ inline bool inlineBoxUsesBorderSource(const QJsonObject &span) {
         if (border.value(key).toObject().value("solid").toObject().value("color").toObject().contains("current_color")) return true;
     return false;
 }
-inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound) {
+inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bool sourceBound, bool rounded = false) {
     const auto border = containerObject(value, {"top", "right", "bottom", "left"},
         {"top", "right", "bottom", "left"});
     for (const auto key : {"top", "right", "bottom", "left"}) {
         const auto edge = object(border.value(key)); require(edge.size() == 1);
         const auto tag = edge.keys().first();
-        require((tag == "none" || (!sourceBound && tag == "hidden") || tag == "solid") && edge.value(tag).isObject());
-        if (tag == "solid") {
+        require((tag == "none" || (!sourceBound && tag == "hidden") || tag == "solid"
+            || (rounded && !sourceBound && tag == "dotted")) && edge.value(tag).isObject());
+        if (tag == "solid" || tag == "dotted") {
             const auto solid = containerObject(edge.value(tag), {"width", "color"}, {"width", "color"});
             containerLength(solid.value("width"));
             const auto color = object(solid.value("color")); require(color.size() == 1);
@@ -120,7 +121,130 @@ inline void inlineBoxBorder(const QJsonValue &value, const QJsonObject &span, bo
         } else require(edge.value(tag).toObject().isEmpty());
     }
 }
+inline bool inlineBoxHelpOnly(const QJsonValue &value) {
+    if (!present(value)) return true;
+    if (!value.isObject()) return false;
+    const auto style = value.toObject();
+    const QStringList keys{"cursor", "decoration", "line_height", "baseline_shift", "font_normalized", "wrap"};
+    for (auto it = style.begin(); it != style.end(); ++it) if (!keys.contains(it.key())) return false;
+    if (style.value("cursor") != QJsonValue(QStringLiteral("help"))) return false;
+    if (style.contains("font_normalized") && (!style.value("font_normalized").isBool()
+        || style.value("font_normalized").toBool())) return false;
+    for (const char *key : {"decoration", "line_height", "baseline_shift", "wrap"})
+        if (present(style.value(QLatin1String(key)))) return false;
+    return true;
+}
+inline bool hasNestedPitchChildren(const QJsonObject &owner)
+{
+    for (const auto &value : owner.value("inline_box_group").toObject().value("spans").toArray())
+        if (value.toObject().value("inline_box_group").isObject()) return true;
+    return false;
+}
+// One relative pitch owner, with one or two separated single-character rings.
+// The semantic tree stays intact; flattened leaves are only the text import.
+inline bool nestedPitchSource(const QJsonObject &owner, QJsonArray *leaves = nullptr,
+                              QList<QPair<int, QJsonObject>> *circles = nullptr)
+{
+    const auto present = [](const QJsonValue &v) { return !v.isUndefined() && !v.isNull(); };
+    const auto length = [](const char *unit, double value) {
+        return QJsonObject{{"unit", QString::fromLatin1(unit)}, {"value", value}};
+    };
+    const QJsonObject none{{"none", QJsonObject{}}};
+    const QJsonObject stroke{{"solid", QJsonObject{{"width", length("px", 1)},
+        {"color", QJsonObject{{"current_color", QJsonObject{}}}}}}};
+    const QJsonObject dotted{{"dotted", QJsonObject{{"width", length("px", 1)},
+        {"color", QJsonObject{{"rgb", QStringLiteral("#808080")}}}}}};
+    const auto ordinary = [&](const QJsonObject &span) {
+        if (span.value("kind") != QJsonValue(QStringLiteral("text"))
+            || !span.value("text").isString() || span.value("target") != QJsonValue(QString())
+            || span.value("trail") != QJsonValue(QString()) || span.value("direction") != QJsonValue(QString())) return false;
+        for (const char *key : {"image", "ruby", "inline_padding_group", "inline_action_group", "inline_box",
+             "clipped_absolute", "citation_marker", "audio_control", "audio", "inline_style", "link_paint",
+             "target_fragment", "background", "tooltip"}) if (present(span.value(QLatin1StringView(key)))) return false;
+        for (const char *key : {"underline", "strike", "superscript", "subscript"})
+            if (present(span.value(QLatin1StringView(key))) && span.value(QLatin1StringView(key)) != QJsonValue(false)) return false;
+        return true;
+    };
+    const auto text = [&](const QJsonObject &span) {
+        const QString s = span.value("text").toString();
+        if (!ordinary(span) || present(span.value("inline_box_group")) || s.isEmpty() || !s.isValidUtf16()) return false;
+        for (char32_t c : s.toUcs4())
+            if (QChar::isSpace(c) || c <= 0x1f || (c >= 0x7f && c <= 0x9f)
+                || c == 0xfffc || c == 0x2028 || c == 0x2029 || c == 0x061c || c == 0x200e || c == 0x200f
+                || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)
+                || c == 0x00ad || c == 0x200b || c == 0x2060 || c == 0xfeff
+                || QChar::direction(c) == QChar::DirR || QChar::direction(c) == QChar::DirAL) return false;
+        return true;
+    };
+    const auto style = [](QJsonObject span) {
+        span.remove("text"); span.remove("trail"); span.remove("inline_box_group");
+        for (const auto &key : span.keys()) if (span.value(key).isNull()) span.remove(key);
+        for (const char *key : {"bold", "italic", "code", "small", "underline", "strike", "superscript", "subscript"})
+            if (span.value(QLatin1StringView(key)) == QJsonValue(false)) span.remove(QLatin1StringView(key));
+        return span;
+    };
+    const auto groupShape = [&](const QJsonObject &g, double padding) {
+        const QStringList allowed{"padding", "border", "overlays", "spans", "radius"};
+        for (const auto &key : g.keys()) if (!allowed.contains(key)) return false;
+        if (!g.value("padding").isObject() || g.value("padding").toObject().size() != 4
+            || !g.value("border").isObject() || g.value("border").toObject().size() != 4
+            || !g.value("overlays").isArray() || !g.value("spans").isArray()) return false;
+        for (const char *key : {"top", "right", "bottom", "left"})
+            if (g.value("padding").toObject().value(QLatin1StringView(key)) != length("px", padding)) return false;
+        return true;
+    };
+    const auto group = owner.value("inline_box_group").toObject();
+    if (!ordinary(owner) || !owner.value("text").toString().isEmpty()
+        || present(group.value("radius"))) return false;
+    const QJsonObject border{{"top", stroke}, {"right", none}, {"bottom", none}, {"left", none}};
+    const QJsonObject indicator{{"insets", QJsonObject{{"top", length("px", 0)}, {"right", length("percent", 0)},
+        {"bottom", length("percent", 67)}, {"left", QJsonValue(QJsonValue::Null)}}},
+        {"border", QJsonObject{{"top", none}, {"right", stroke}, {"bottom", none}, {"left", none}}}};
+    const auto overlays = group.value("overlays").toArray();
+    if (group.value("border") != border) return false;
+    if (overlays.isEmpty()) {
+        // A level pitch has no drop marker or surrounding padding.
+        if (!groupShape(group, 0)) return false;
+    } else if (!groupShape(group, 1) || overlays.size() != 1 || overlays.first() != indicator) {
+        return false;
+    }
+    QJsonArray flattened; QList<QPair<int, QJsonObject>> nested;
+    bool previousCircle = false, plain = false; int offset = 0;
+    for (const auto &value : group.value("spans").toArray()) {
+        if (!value.isObject()) return false;
+        const auto span = value.toObject();
+        if (style(span) != style(owner)) return false;
+        QJsonObject leaf = span;
+        if (present(span.value("inline_box_group"))) {
+            const auto child = span.value("inline_box_group").toObject();
+            if (previousCircle || nested.size() == 2 || !ordinary(span) || !span.value("text").toString().isEmpty()
+                || !groupShape(child, 0) || !child.value("overlays").toArray().isEmpty()
+                || child.value("radius") != length("percent", 50) || child.value("spans").toArray().size() != 1) return false;
+            for (const char *key : {"top", "right", "bottom", "left"})
+                if (child.value("border").toObject().value(QLatin1StringView(key)) != dotted) return false;
+            leaf = child.value("spans").toArray().first().toObject();
+            if (!text(leaf) || leaf.value("text").toString().size() != 1 || leaf.value("text").toString().front().isSurrogate()
+                || style(leaf) != style(owner)) return false;
+            nested.append({offset, span}); previousCircle = true;
+        } else {
+            if (!text(span)) return false;
+            plain = true; previousCircle = false;
+        }
+        const int size = leaf.value("text").toString().size();
+        if (size > (1 << 20) - offset) return false;
+        offset += size; flattened.append(leaf);
+    }
+    if (nested.isEmpty() || !plain) return false;
+    if (leaves) *leaves = flattened;
+    if (circles) *circles = nested;
+    return true;
+}
+
 inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
+    if (hasNestedPitchChildren(span)) {
+        require(nestedPitchSource(span));
+        return span.value("inline_box_group").toObject();
+    }
     // This first native domain keeps ordinary child runs and their actions.
     // More complex owners are rejected before an empty owner can render away.
     const bool wholeLink = span.value("kind") == QStringLiteral("link");
@@ -130,7 +254,7 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
         && (wholeLink ? span.value("target").isString() && !span.value("target").toString().isEmpty()
                       : span.value("target").toString().isEmpty()));
     for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group",
-                           "inline_style", "link_paint", "target_fragment", "audio_control", "citation_marker"})
+                           "link_paint", "target_fragment", "audio_control", "citation_marker"})
         require(!present(span.value(key)));
     require(!span.value("superscript").toBool() && !span.value("subscript").toBool()
         && (!present(span.value("direction")) || span.value("direction").toString().isEmpty()));
@@ -142,17 +266,34 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
     const auto group = containerObject(span.value("inline_box_group"),
         {"padding", "border", "overlays", "spans", "radius"}, {"padding", "border", "overlays", "spans"});
     const bool rounded = present(group.value("radius"));
+    const bool sourceBound = inlineBoxUsesBorderSource(span);
+    // Help is metric-free on an ordinary actionless label too. It does not
+    // authorize child actions, source-bound overlays or richer inline styles.
+    bool plainHelp = !rounded && !wholeLink && !sourceBound
+        && present(span.value("inline_style")) && inlineBoxHelpOnly(span.value("inline_style"))
+        && group.value("overlays").isArray() && group.value("overlays").toArray().isEmpty();
+    if (plainHelp) {
+        const auto children = group.value("spans").toArray();
+        plainHelp = !children.isEmpty();
+        for (const auto &raw : children) {
+            const auto child = raw.toObject();
+            plainHelp = plainHelp && raw.isObject() && child.value("kind") == QJsonValue(QStringLiteral("text"))
+                && child.value("target") == QJsonValue(QString());
+        }
+    }
+    require(inlineBoxHelpOnly(span.value("inline_style"))
+        && (rounded || plainHelp || !present(span.value("inline_style"))));
     if (rounded) {
         const auto radius = containerObject(group.value("radius"), {"unit", "value"}, {"unit", "value"});
-        require(radius.value("unit") == QStringLiteral("px") && radius.value("value").isDouble()
+        require((radius.value("unit") == QStringLiteral("px") || radius.value("unit") == QStringLiteral("percent"))
+            && radius.value("value").isDouble()
             && std::isfinite(radius.value("value").toDouble()) && radius.value("value").toDouble() >= 0
             && radius.value("value").toDouble() <= std::numeric_limits<float>::max());
     }
     containerEdges(group.value("padding"));
     require(group.value("overlays").isArray());
-    const bool sourceBound = inlineBoxUsesBorderSource(span);
     const auto border = group.value("border").toObject();
-    inlineBoxBorder(group.value("border"), span, sourceBound);
+    inlineBoxBorder(group.value("border"), span, sourceBound, rounded);
     if (sourceBound) {
         require(!rounded && !wholeLink && span.value("target") == QJsonValue(QString())
             && span.value("direction") == QJsonValue(QString()));
@@ -181,7 +322,9 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
     }
     if (rounded || wholeLink) {
         const auto edge = border.value("top").toObject();
-        require(edge.contains("solid") && edge.value("solid").toObject().value("color").toObject().contains("rgb"));
+        const QString style = edge.keys().first();
+        require((style == "solid" || (rounded && style == "dotted"))
+            && edge.value(style).toObject().value("color").toObject().contains("rgb"));
         for (const auto key : {"right", "bottom", "left"}) require(border.value(key) == border.value("top"));
     }
     require(group.value("spans").isArray());
@@ -212,7 +355,9 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
         }
         require(child.value("text").isString() && child.value("trail").isString());
         for (const auto key : {"image", "ruby", "inline_action_group", "inline_padding_group", "inline_box_group",
-                               "inline_style", "link_paint", "audio_control", "citation_marker"}) require(!present(child.value(key)));
+                               "link_paint", "audio_control", "citation_marker"}) require(!present(child.value(key)));
+        require(inlineBoxHelpOnly(child.value("inline_style"))
+            && (rounded || plainHelp || !present(child.value("inline_style"))));
         // Effective child style may repeat its declaring owner's background.
         // Different child paint remains outside this single static box domain.
         if (present(child.value("background")))
@@ -224,9 +369,15 @@ inline QJsonObject inlineBoxGroup(const QJsonObject &span) {
         inlineBoxText(text);
         source += text;
     }
-    require(children.first().toObject().value("kind") == "text"
-        && children.last().toObject().value("kind") == "text"
-        && !source.front().isSpace() && !source.back().isSpace());
+    const bool childLink = !wholeLink && !sourceBound && !rounded && children.size() == 1
+        && children.first().toObject().value("kind") == "link";
+    if (childLink) {
+        const auto child = children.first().toObject();
+        require(span.value("target") == QJsonValue(QString()) && child.value("target").isString() && !child.value("target").toString().isEmpty()
+            && !present(child.value("target_fragment")));
+    } else require(children.first().toObject().value("kind") == "text"
+        && children.last().toObject().value("kind") == "text");
+    require(!source.front().isSpace() && !source.back().isSpace());
     return group;
 }
 inline void containerMargins(const QJsonValue &value) {

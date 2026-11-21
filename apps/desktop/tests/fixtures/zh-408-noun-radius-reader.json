@@ -1,0 +1,3173 @@
+{
+  "schema": "dict.results.v1",
+  "operation": "lookup",
+  "query": "แกโดลิเนียม",
+  "kind": "language",
+  "language": "泰語",
+  "match_mode": "exact-utf8",
+  "record_count": 1,
+  "total_matches": 1,
+  "offset": 0,
+  "has_more": false,
+  "matches": [],
+  "entries": [
+    {
+      "organization": {
+        "lexemes": [
+          {
+            "language": "泰語",
+            "kind": "Noun",
+            "section": 2,
+            "etymology": null,
+            "definitions": [
+              {
+                "block": 1,
+                "parent": null,
+                "examples": [],
+                "quotations": [],
+                "notes": [],
+                "form": null
+              }
+            ],
+            "introduction": [
+              0
+            ],
+            "other_blocks": [],
+            "related_sections": []
+          }
+        ],
+        "other_sections": [
+          0,
+          1
+        ]
+      },
+      "title": "แกโดลิเนียม",
+      "display_title": [
+        {
+          "kind": "text",
+          "text": "แกโดลิเนียม",
+          "target": "",
+          "trail": "",
+          "language": "",
+          "classes": "Thai",
+          "direction": "",
+          "explanation": "",
+          "tooltip": null,
+          "foreground": null,
+          "bold": false,
+          "italic": false,
+          "code": false,
+          "small": false,
+          "superscript": false,
+          "subscript": false,
+          "strike": false,
+          "underline": false,
+          "role": "headword"
+        }
+      ],
+      "kind": "language",
+      "language": "泰語",
+      "language_code": "th",
+      "sections": [
+        {
+          "level": 2,
+          "title": "泰语",
+          "anchor": "泰语",
+          "anchor_fallback": ".E6.B3.B0.E8.AF.AD",
+          "blocks": []
+        },
+        {
+          "level": 3,
+          "title": "读音",
+          "anchor": "读音",
+          "anchor_fallback": ".E8.AF.BB.E9.9F.B3",
+          "blocks": [
+            {
+              "kind": "table",
+              "depth": 0,
+              "spans": [],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": {
+                "caption": [],
+                "rows": [
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "external_link",
+                            "text": "寫法",
+                            "target": "https://zh.wikipedia.org/wiki/%E6%B3%B0%E6%96%87%E5%AD%97",
+                            "trail": "",
+                            "language": "",
+                            "classes": "extiw",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "แกโดลิเนียม",
+                            "target": "",
+                            "trail": "",
+                            "language": "th",
+                            "classes": "Thai th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 1.25,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "æ",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "k",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "o",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ɗ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "l",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "i",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "e",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ī",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "y",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "m",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "none": {}
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "external_link",
+                            "text": "音素",
+                            "target": "https://zh.wikipedia.org/wiki/%E6%B3%B0%E6%96%87%E5%AD%97",
+                            "trail": "",
+                            "language": "",
+                            "classes": "extiw",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "แก-โด-ลิ-เนี่ยม",
+                            "target": "",
+                            "trail": "",
+                            "language": "th",
+                            "classes": "th-reading Thai",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 1.25,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "line_break",
+                            "text": "\n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "æ",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "th-reading",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "k",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "–",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "o",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "th-reading",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ɗ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "–",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "l",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "i",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "–",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "inline_style": {
+                              "decoration": null,
+                              "line_height": null,
+                              "baseline_shift": null,
+                              "font_normalized": false,
+                              "cursor": "help"
+                            },
+                            "inline_box_group": {
+                              "padding": {
+                                "top": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "right": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "bottom": {
+                                  "unit": "px",
+                                  "value": 0
+                                },
+                                "left": {
+                                  "unit": "px",
+                                  "value": 0
+                                }
+                              },
+                              "border": {
+                                "top": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "right": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "bottom": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                },
+                                "left": {
+                                  "dotted": {
+                                    "width": {
+                                      "unit": "px",
+                                      "value": 1
+                                    },
+                                    "color": {
+                                      "rgb": "#808080"
+                                    }
+                                  }
+                                }
+                              },
+                              "overlays": [],
+                              "spans": [
+                                {
+                                  "kind": "text",
+                                  "text": "e",
+                                  "target": "",
+                                  "trail": "",
+                                  "language": "",
+                                  "classes": "th-reading",
+                                  "direction": "",
+                                  "explanation": "",
+                                  "tooltip": "Vowel sign appearing in front of the initial consonant.",
+                                  "foreground": null,
+                                  "font_scale": 0.8333333134651184,
+                                  "font_scale_basis": "normal_body",
+                                  "inline_style": {
+                                    "decoration": null,
+                                    "line_height": null,
+                                    "baseline_shift": null,
+                                    "font_normalized": false,
+                                    "cursor": "help"
+                                  },
+                                  "bold": false,
+                                  "italic": false,
+                                  "code": false,
+                                  "small": false,
+                                  "superscript": false,
+                                  "subscript": false,
+                                  "strike": false,
+                                  "underline": false,
+                                  "role": "normal"
+                                }
+                              ],
+                              "radius": {
+                                "unit": "percent",
+                                "value": 50
+                              }
+                            },
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "n",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ī",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "ˋ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "y",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": " ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "m",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "th-reading",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 0.8333333134651184,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "none": {}
+                          },
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "泰語羅馬化",
+                            "target": "Wiktionary:泰語羅馬化",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 2,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "派汶拼音",
+                            "target": "Wiktionary:泰語羅馬化",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "gɛɛ-doo-lí-nîiam",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "tr",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "none": {}
+                          },
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "link",
+                            "text": "皇家轉寫",
+                            "target": "Wiktionary:泰語羅馬化",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "kae-do-li-niam",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "tr",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "none": {}
+                          },
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "cells": [
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "(",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "external_link",
+                            "text": "標準泰語",
+                            "target": "https://zh.wikipedia.org/wiki/%E6%B3%B0%E8%AF%AD",
+                            "trail": "",
+                            "language": "",
+                            "classes": "extiw",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ") ",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "IPA",
+                            "target": "Wiktionary:國際音標",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "(",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "說明",
+                            "target": "附录:泰語發音",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ")",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": true,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": true,
+                        "colspan": 2,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "edges": {
+                              "top": {
+                                "none": {}
+                              },
+                              "right": {
+                                "solid": {
+                                  "width": {
+                                    "unit": "px",
+                                    "value": 1
+                                  },
+                                  "color": "#d3d3d3"
+                                }
+                              },
+                              "bottom": {
+                                "none": {}
+                              },
+                              "left": {
+                                "none": {}
+                              }
+                            }
+                          },
+                          "padding": {
+                            "top": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "right": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "bottom": {
+                              "unit": "px",
+                              "value": 10
+                            },
+                            "left": {
+                              "unit": "px",
+                              "value": 10
+                            }
+                          },
+                          "text_align": "center"
+                        }
+                      },
+                      {
+                        "spans": [
+                          {
+                            "kind": "text",
+                            "text": "/kɛː˧.doː˧.li˦˥.nia̯m˥˩/",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "IPA",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "font_scale": 1.100000023841858,
+                            "font_scale_basis": "normal_body",
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": false,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "pronunciation"
+                          },
+                          {
+                            "kind": "text",
+                            "text": "(",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "link",
+                            "text": "R",
+                            "target": "Category:Rhymes:泰語/ia̯m",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          },
+                          {
+                            "kind": "text",
+                            "text": ")",
+                            "target": "",
+                            "trail": "",
+                            "language": "",
+                            "classes": "",
+                            "direction": "",
+                            "explanation": "",
+                            "tooltip": null,
+                            "foreground": null,
+                            "bold": false,
+                            "italic": false,
+                            "code": false,
+                            "small": false,
+                            "superscript": true,
+                            "subscript": false,
+                            "strike": false,
+                            "underline": false,
+                            "role": "normal"
+                          }
+                        ],
+                        "header": false,
+                        "colspan": 1,
+                        "rowspan": 1,
+                        "background": null,
+                        "style": {
+                          "border": {
+                            "none": {}
+                          },
+                          "text_align": "center"
+                        }
+                      }
+                    ]
+                  }
+                ],
+                "style": {
+                  "border": {
+                    "solid": {
+                      "width": {
+                        "unit": "px",
+                        "value": 1
+                      },
+                      "color": "#a9a9a9"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "level": 3,
+          "title": "名词",
+          "anchor": "名词",
+          "anchor_fallback": ".E5.90.8D.E8.AF.8D",
+          "blocks": [
+            {
+              "kind": "paragraph",
+              "depth": 0,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "แกโดลิเนียม",
+                  "target": "",
+                  "trail": "",
+                  "language": "th",
+                  "classes": "headword-line Thai headword",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "font_scale": 1.25,
+                  "font_scale_basis": "normal_body",
+                  "bold": true,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "headword"
+                },
+                {
+                  "kind": "text",
+                  "text": " (",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "headword-line",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "headword"
+                },
+                {
+                  "kind": "text",
+                  "text": "gɛɛ-doo-lí-nîiam",
+                  "target": "",
+                  "trail": "",
+                  "language": "th-Latn",
+                  "classes": "headword-line tr Latn",
+                  "direction": "ltr",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "headword"
+                },
+                {
+                  "kind": "text",
+                  "text": ")",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "headword-line",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "headword"
+                }
+              ],
+              "feature": null,
+              "list_path": "",
+              "number": "",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            },
+            {
+              "kind": "definition",
+              "depth": 1,
+              "spans": [
+                {
+                  "kind": "text",
+                  "text": "〈",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": "化学词汇",
+                  "foreground": null,
+                  "background": "#f5faff",
+                  "inline_style": {
+                    "decoration": null,
+                    "line_height": null,
+                    "baseline_shift": null,
+                    "font_normalized": false,
+                    "cursor": "help"
+                  },
+                  "inline_box_group": {
+                    "padding": {
+                      "top": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "right": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "bottom": {
+                        "unit": "px",
+                        "value": 0
+                      },
+                      "left": {
+                        "unit": "px",
+                        "value": 0
+                      }
+                    },
+                    "border": {
+                      "top": {
+                        "solid": {
+                          "width": {
+                            "unit": "px",
+                            "value": 1
+                          },
+                          "color": {
+                            "rgb": "#cedff2"
+                          }
+                        }
+                      },
+                      "right": {
+                        "solid": {
+                          "width": {
+                            "unit": "px",
+                            "value": 1
+                          },
+                          "color": {
+                            "rgb": "#cedff2"
+                          }
+                        }
+                      },
+                      "bottom": {
+                        "solid": {
+                          "width": {
+                            "unit": "px",
+                            "value": 1
+                          },
+                          "color": {
+                            "rgb": "#cedff2"
+                          }
+                        }
+                      },
+                      "left": {
+                        "solid": {
+                          "width": {
+                            "unit": "px",
+                            "value": 1
+                          },
+                          "color": {
+                            "rgb": "#cedff2"
+                          }
+                        }
+                      }
+                    },
+                    "overlays": [],
+                    "spans": [
+                      {
+                        "kind": "text",
+                        "text": "化",
+                        "target": "",
+                        "trail": "",
+                        "language": "",
+                        "classes": "",
+                        "direction": "",
+                        "explanation": "",
+                        "tooltip": "化学词汇",
+                        "foreground": null,
+                        "background": "#f5faff",
+                        "inline_style": {
+                          "decoration": null,
+                          "line_height": null,
+                          "baseline_shift": null,
+                          "font_normalized": false,
+                          "cursor": "help"
+                        },
+                        "bold": false,
+                        "italic": false,
+                        "code": false,
+                        "small": false,
+                        "superscript": false,
+                        "subscript": false,
+                        "strike": false,
+                        "underline": false,
+                        "role": "normal"
+                      }
+                    ]
+                  },
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "text",
+                  "text": "〉",
+                  "target": "",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                },
+                {
+                  "kind": "link",
+                  "text": "钆",
+                  "target": "钆",
+                  "trail": "",
+                  "language": "",
+                  "classes": "",
+                  "direction": "",
+                  "explanation": "",
+                  "tooltip": null,
+                  "foreground": null,
+                  "bold": false,
+                  "italic": false,
+                  "code": false,
+                  "small": false,
+                  "superscript": false,
+                  "subscript": false,
+                  "strike": false,
+                  "underline": false,
+                  "role": "normal"
+                }
+              ],
+              "feature": null,
+              "list_path": "#",
+              "number": "1",
+              "level": 0,
+              "anchor": "",
+              "anchor_fallback": "",
+              "table": null
+            }
+          ]
+        }
+      ],
+      "preamble_spans": [],
+      "references": [],
+      "media": [],
+      "redirect": null,
+      "alias": null
+    }
+  ]
+}

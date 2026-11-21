@@ -338,6 +338,13 @@ inline constexpr int cellOwnerFontProperty = QTextFormat::UserProperty + 0x57f0;
 inline constexpr int tablePhysicalEdgesProperty = QTextFormat::UserProperty + 0x57de;
 inline constexpr int tableCornerRadiiProperty = QTextFormat::UserProperty + 0x5810;
 inline constexpr int cellHiddenEdgesProperty = QTextFormat::UserProperty + 0x57df;
+inline constexpr int resolvedBorderEdgesProperty = QTextFormat::UserProperty + 0x58b0;
+inline constexpr int resolvedBorderOwnerInkProperty = QTextFormat::UserProperty + 0x58b1;
+inline constexpr int resolvedTableBordersProperty = QTextFormat::UserProperty + 0x58b2;
+inline const QString resolvedTableBordersCapability = QStringLiteral("wikidict.resolved-table-border/1");
+inline bool hasResolvedBorder(const QJsonObject &style) {
+    return style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("resolved_edges"));
+}
 inline const QString cellStyleCapability = QStringLiteral("wikidict.cell-style/1");
 inline QJsonObject inlineFontSnapshot(const QJsonValue &value);
 struct CellLineInput {
@@ -422,6 +429,7 @@ inline bool emptyCompiledCell(const QJsonObject &cell) {
 }
 inline bool hasExtendedCellStyle(const QJsonObject &style) {
     return style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("edges"))
+         || hasResolvedBorder(style)
          || present(style.value(QStringLiteral("border_edges")))
         || present(style.value(QStringLiteral("letter_spacing")))
         || present(style.value(QStringLiteral("width")))
@@ -1349,13 +1357,25 @@ inline int compiledTableSpan(const QJsonValue &value, bool allowAbsent = true) {
 }
 
 inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints, int indent, bool resetTextAlignment = false,
-                                const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1) {
+                                const QString &listMarker = {}, int tableDepth = 1, qreal tableOriginPoints = -1,
+                                const QColor &ownerInk = {}, const QJsonArray &cellOwnerInks = {}) {
     const auto minimum = tableMinimumWidthPolicy(table, containerPoints);
     bool hasCell = false;
     for (const auto &row : table.value(QStringLiteral("rows")).toArray())
         hasCell |= !row.toObject().value(QStringLiteral("cells")).toArray().isEmpty();
     const auto viewport = tableBlockViewport(table);
     const auto floatViewport = tableFloatViewport(table);
+    const auto sourceStyle = table.value(QStringLiteral("style")).toObject();
+    bool resolvedBorders = hasResolvedBorder(sourceStyle);
+    for (const auto &row : table.value(QStringLiteral("rows")).toArray())
+        for (const auto &cell : row.toObject().value(QStringLiteral("cells")).toArray())
+            resolvedBorders |= hasResolvedBorder(cell.toObject().value(QStringLiteral("style")).toObject());
+    if (resolvedBorders && (!hasCell || !viewport.isEmpty() || !floatViewport.isEmpty()
+        || tableDisplay(sourceStyle) != 0 || present(sourceStyle.value(QStringLiteral("float_side")))
+        || present(sourceStyle.value(QStringLiteral("corner_radii")))
+        || !ownerInk.isValid() || ownerInk.alpha() != 255
+        || cellOwnerInks.size() != table.value(QStringLiteral("rows")).toArray().size()))
+        throw std::runtime_error("unsupported resolved table border owner");
     if (!floatViewport.isEmpty() && (indent != 0 || !listMarker.isEmpty() || tableDepth != 1))
         throw std::runtime_error("unsupported table float viewport containing context");
     bool styled = !viewport.isEmpty() || !listMarker.isEmpty() || resetTextAlignment || present(table.value(QStringLiteral("style")))
@@ -1367,12 +1387,25 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled && !hasCell) return {};
     QJsonArray rows;
+    qsizetype ownerRow = 0;
     for (const QJsonValue &rowValue : table.value(QStringLiteral("rows")).toArray()) {
         QJsonArray cells;
+        const auto inks = ownerRow < cellOwnerInks.size() ? cellOwnerInks.at(ownerRow).toArray() : QJsonArray();
+        ++ownerRow;
+        if (resolvedBorders && inks.size() != rowValue.toObject().value(QStringLiteral("cells")).toArray().size())
+            throw std::runtime_error("missing resolved cell owner ink");
         for (const QJsonValue &cellValue : rowValue.toObject().value(QStringLiteral("cells")).toArray()) {
             const QJsonObject cell = cellValue.toObject();
             QJsonObject shape{{"rowspan", compiledTableSpan(cell.value(QStringLiteral("rowspan")))},
                 {"colspan", compiledTableSpan(cell.value(QStringLiteral("colspan")))}};
+            if (resolvedBorders) {
+                if (shape.value(QStringLiteral("rowspan")).toInt() != 1 || shape.value(QStringLiteral("colspan")).toInt() != 1
+                    || (hasResolvedBorder(cell.value(QStringLiteral("style")).toObject())
+                        && present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("border_edges")))))
+                    throw std::runtime_error("unsupported resolved cell border domain");
+                styleColor(inks.at(cells.size()));
+                shape.insert(QStringLiteral("resolved_owner_ink"), inks.at(cells.size()));
+            }
             if (present(cell.value(QStringLiteral("style")))) { shape.insert(QStringLiteral("style"), cell.value(QStringLiteral("style"))); styled = true; }
             if (!viewport.isEmpty() || present(table.value(QStringLiteral("style")).toObject().value(QStringLiteral("corner_radii"))))
                 shape.insert(QStringLiteral("background"), cell.value(QStringLiteral("background")).isUndefined()
@@ -1389,6 +1422,7 @@ inline QString tableStyleMarker(const QJsonObject &table, qreal containerPoints,
     }
     if (!styled && !hasCell) return {};
     QJsonObject metadata{{"container_points", containerPoints}, {"indent", indent}, {"rows", rows}};
+    if (resolvedBorders) metadata.insert(QStringLiteral("resolved_owner_ink"), ownerInk.name());
     if (!minimum.isEmpty()) metadata.insert(QStringLiteral("minimum_source"), table);
     metadata.insert(QStringLiteral("empty_nested"), tableDepth > 1);
     if (!viewport.isEmpty()) metadata.insert(QStringLiteral("block_viewport"), viewport);
@@ -2027,6 +2061,36 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         if (table && rows.size() != table->rows()) throw std::runtime_error("table style row count mismatch");
         const bool floatViewport = present(record.value.value(QStringLiteral("float_viewport")));
         const bool intrinsicViewport = intrinsicTableViewport(record.value.value(QStringLiteral("block_viewport")).toObject());
+        bool resolvedBorders = hasResolvedBorder(record.value.value(QStringLiteral("style")).toObject());
+        for (const auto &row : rows) for (const auto &cell : row.toArray())
+            resolvedBorders |= hasResolvedBorder(cell.toObject().value(QStringLiteral("style")).toObject());
+        if (resolvedBorders) {
+            const auto style = record.value.value(QStringLiteral("style")).toObject();
+            if (!table || tableDisplay(style) != 0 || present(style.value(QStringLiteral("float_side")))
+                || present(style.value(QStringLiteral("corner_radii")))
+                || present(record.value.value(QStringLiteral("block_viewport"))) || floatViewport)
+                throw std::runtime_error("unsupported resolved table border holder");
+            styleColor(record.value.value(QStringLiteral("resolved_owner_ink")));
+            for (const auto &row : rows) for (const auto &cellValue : row.toArray()) {
+                const auto cell = cellValue.toObject();
+                if (compiledTableSpan(cell.value(QStringLiteral("rowspan")), false) != 1
+                    || compiledTableSpan(cell.value(QStringLiteral("colspan")), false) != 1
+                    || (hasResolvedBorder(cell.value(QStringLiteral("style")).toObject())
+                        && present(cell.value(QStringLiteral("style")).toObject().value(QStringLiteral("border_edges")))))
+                    throw std::runtime_error("unsupported resolved table cell holder");
+                styleColor(cell.value(QStringLiteral("resolved_owner_ink")));
+            }
+            QPointer<QTextDocument> live(document);
+            QPointer<QAbstractTextDocumentLayout> native(document->documentLayout());
+            const int revision = document->revision(), count = document->characterCount();
+            const auto capability = native ? native->property("_wikidictResolvedTableBordersCapability") : QVariant();
+            if (!live || !native || live->documentLayout() != native || live->revision() != revision
+                || live->characterCount() != count || capability.metaType().id() != QMetaType::QString
+                || capability != QVariant(resolvedTableBordersCapability))
+                throw std::runtime_error("missing paired resolved table border layout");
+        } else if (record.value.contains(QStringLiteral("resolved_owner_ink"))) {
+            throw std::runtime_error("unused resolved table owner ink");
+        }
         const auto length = [&](const QJsonValue &value) {
             return floatViewport || intrinsicViewport ? tableBoxLength(value, points, false).value(QStringLiteral("value")).toDouble()
                 : styleLengthUnits(value, document, points);
@@ -2080,7 +2144,44 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 throw std::runtime_error("missing paired physical border layout");
             return result;
         };
+        const auto resolvedBorder = [&](const QJsonValue &value) {
+            const auto object = value.toObject();
+            if (!value.isObject() || object.size() != 1 || !object.contains(QStringLiteral("resolved_edges")))
+                throw std::runtime_error("invalid resolved border union");
+            const auto physical = typedStyle(object.value(QStringLiteral("resolved_edges")), {"top", "right", "bottom", "left"});
+            if (physical.size() != 4) throw std::runtime_error("incomplete resolved border");
+            QVariantList result;
+            for (const QString &side : {QStringLiteral("top"), QStringLiteral("right"), QStringLiteral("bottom"), QStringLiteral("left")}) {
+                const auto edge = physical.value(side).toObject();
+                if (!physical.value(side).isObject() || edge.size() != 1)
+                    throw std::runtime_error("invalid resolved border edge");
+                const QString kind = edge.keys().first();
+                const int mode = QStringList{"none", "hidden", "solid", "dotted", "inset", "outset"}.indexOf(kind);
+                const auto payload = edge.value(kind);
+                if (mode < 0 || !payload.isObject() || payload.toObject().size() != (mode < 2 ? 0 : 2))
+                    throw std::runtime_error("invalid resolved border line");
+                if (mode < 2) { result.append(QVariantMap{{QStringLiteral("style"), mode}}); continue; }
+                const auto line = payload.toObject();
+                const qreal width = tableBoxLength(line.value(QStringLiteral("width")), points, false).value(QStringLiteral("value")).toDouble();
+                const auto paintValue = line.value(QStringLiteral("paint"));
+                const auto paint = paintValue.toObject();
+                if (!paintValue.isObject() || paint.size() != 1) throw std::runtime_error("invalid resolved border paint");
+                QVariant ink;
+                if (paint.contains(QStringLiteral("rgb"))) ink = styleColor(paint.value(QStringLiteral("rgb")));
+                else if (paint.contains(QStringLiteral("owner_current_color"))
+                    && paint.value(QStringLiteral("owner_current_color")).isObject()
+                    && paint.value(QStringLiteral("owner_current_color")).toObject().isEmpty()) ink = QStringLiteral("owner_current_color");
+                else throw std::runtime_error("unsupported resolved border paint");
+                result.append(QVariantMap{{QStringLiteral("style"), mode}, {QStringLiteral("width"), width}, {QStringLiteral("paint"), ink}});
+            }
+            return result;
+        };
         QTextTableFormat format = table ? table->format() : record.empty >= 0 ? emptyTableDefaults(record, indent) : QTextTableFormat();
+        if (resolvedBorders) {
+            format.setProperty(resolvedTableBordersProperty, resolvedTableBordersCapability);
+            format.setProperty(cellStylePolicyProperty, cellStyleCapability);
+            format.setProperty(resolvedBorderOwnerInkProperty, styleColor(record.value.value(QStringLiteral("resolved_owner_ink"))));
+        }
         if (present(record.value.value(QStringLiteral("block_viewport")))) {
             const bool cornerSeparate = cornerSeparateTableViewport(record.value.value(QStringLiteral("block_viewport")).toObject());
             const auto geometry = intrinsicViewport ? intrinsicTableGridGeometry(record.value.value(QStringLiteral("empty_geometry")))
@@ -2133,7 +2234,10 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
         if (present(style.value(QStringLiteral("background")))) format.setBackground(styleColor(style.value(QStringLiteral("background"))));
         if (present(style.value(QStringLiteral("border")))) {
             const auto spec = style.value(QStringLiteral("border")).toObject();
-            if (spec.contains(QStringLiteral("edges"))) {
+            if (spec.contains(QStringLiteral("resolved_edges"))) {
+                format.setProperty(resolvedBorderEdgesProperty, resolvedBorder(style.value(QStringLiteral("border"))));
+                format.setBorder(0); format.setBorderStyle(QTextFrameFormat::BorderStyle_None);
+            } else if (spec.contains(QStringLiteral("edges"))) {
                 if (spec.size() != 1 || !table) throw std::runtime_error("physical table border requires a real table owner");
                 format.setProperty(tablePhysicalEdgesProperty, QVariantMap{
                     {QStringLiteral("padding"), QVariantList{0.0, 0.0, 0.0, 0.0}},
@@ -2269,7 +2373,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             before.setBlockCharFormat(font);
         }
         const auto legacyCellBorder = record.value.value(QStringLiteral("empty_geometry")).toObject().value(QStringLiteral("border"));
-        const bool generatedZeroCellBorder = format.hasProperty(tablePhysicalEdgesProperty)
+        const bool generatedZeroCellBorder = (format.hasProperty(tablePhysicalEdgesProperty) || format.hasProperty(resolvedBorderEdgesProperty))
             && (!present(legacyCellBorder) || (legacyCellBorder.isDouble() && legacyCellBorder.toDouble() == 0));
         bool cellFormatsChanged = false;
         const auto materializeZeroCellBorder = [&](QTextTableCell cell) {
@@ -2297,7 +2401,7 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                         !cell.firstCursorPosition().charFormat().anchorNames().isEmpty())
                         throw std::runtime_error("table style unexpected cell");
                     // A validated implicit empty cell has no authored border.
-                    if (format.hasProperty(tablePhysicalEdgesProperty)) materializeZeroCellBorder(cell);
+                    if (format.hasProperty(tablePhysicalEdgesProperty) || resolvedBorders) materializeZeroCellBorder(cell);
                     if (floatViewport || intrinsicViewport) {
                         auto filler = cell.format().toTableCellFormat();
                         filler.setPadding(0); filler.setBorder(0);
@@ -2396,7 +2500,27 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
                 if (vertical >= 0) cellFormat.setVerticalAlignment(QTextCharFormat::VerticalAlignment(vertical));
                 if (present(cellStyle.value(QStringLiteral("border")))) {
                     const auto spec = cellStyle.value(QStringLiteral("border")).toObject();
-                    if (spec.contains(QStringLiteral("edges"))) {
+                    if (spec.contains(QStringLiteral("resolved_edges"))) {
+                        const auto physical = resolvedBorder(cellStyle.value(QStringLiteral("border")));
+                        const QColor ownerInk = styleColor(expected.value(QStringLiteral("resolved_owner_ink")));
+                        cellFormat.setProperty(resolvedBorderEdgesProperty, physical);
+                        cellFormat.setProperty(resolvedBorderOwnerInkProperty, ownerInk);
+                        for (int i = 0; i < 4; ++i) {
+                            const auto edge = physical[i].toMap();
+                            const int mode = edge.value(QStringLiteral("style")).toInt();
+                            const qreal width = mode < 2 ? 0 : edge.value(QStringLiteral("width")).toDouble();
+                            const auto style = mode == 2 ? QTextFrameFormat::BorderStyle_Solid : mode == 3
+                                ? QTextFrameFormat::BorderStyle_Dotted : mode == 4 ? QTextFrameFormat::BorderStyle_Inset
+                                : mode == 5 ? QTextFrameFormat::BorderStyle_Outset : QTextFrameFormat::BorderStyle_None;
+                            const auto paint = edge.value(QStringLiteral("paint"));
+                            const QColor color = mode < 2 ? QColor(Qt::transparent)
+                                : paint.metaType().id() == QMetaType::QColor ? paint.value<QColor>() : ownerInk;
+                            if (i == 0) { cellFormat.setTopBorder(width); cellFormat.setTopBorderStyle(style); cellFormat.setTopBorderBrush(color); }
+                            else if (i == 1) { cellFormat.setRightBorder(width); cellFormat.setRightBorderStyle(style); cellFormat.setRightBorderBrush(color); }
+                            else if (i == 2) { cellFormat.setBottomBorder(width); cellFormat.setBottomBorderStyle(style); cellFormat.setBottomBorderBrush(color); }
+                            else { cellFormat.setLeftBorder(width); cellFormat.setLeftBorderStyle(style); cellFormat.setLeftBorderBrush(color); }
+                        }
+                    } else if (spec.contains(QStringLiteral("edges"))) {
                         if (spec.size() != 1) throw std::runtime_error("invalid cell border union");
                         const auto physical = physicalBorder(spec.value(QStringLiteral("edges")));
                         int hidden = 0;
