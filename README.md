@@ -563,9 +563,10 @@ the outer session lost its terminal and independent checks verified the failed
 child's exit and cleanup.
 The [per-edition retry times](data/corpus-campaign-current01/local-edition-retry-times.tsv)
 combine the historical timings and later attempts, counting each recorded build
-once. A logged failure during snapshot selection has command time and never
-starts edition production. An empty log or an interrupted production clock
-leaves the production duration unknown. The rate stays blank when a production
+once. A logged snapshot-selection failure or a verified top-level import error
+in the selected builder records command time before edition production starts.
+An unexplained empty log or an interrupted production clock leaves the
+production duration unknown. The rate stays blank when a production
 duration or selected output is missing.
 
 The native verifier checks the selected directory.

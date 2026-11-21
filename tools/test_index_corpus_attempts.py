@@ -12,6 +12,25 @@ SCRIPT = Path(__file__).with_name('index_corpus_attempts.py').resolve()
 
 
 class AttemptIndexTests(unittest.TestCase):
+    def test_bootstrap_failure_requires_the_original_import_and_selected_module(self):
+        from index_corpus_attempts import failed_builder_import
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'build_wiktionaries.py'
+            body = b'from compress_blobs import compress, SHARD_BATCH_BYTES\n\ndef main():\n    pass\n'
+            script.write_bytes(body)
+            builder = dict(path=str(script), bytes=len(body), sha256=hashlib.sha256(body).hexdigest())
+            helper = str(script.with_name('compress_blobs.py'))
+            modules = {'compress_blobs': {'path': helper}}
+            error = (f'Traceback (most recent call last):\n  File "{script}", line 1, in <module>\n'
+                     f'    from compress_blobs import compress, SHARD_BATCH_BYTES\n'
+                     f"ImportError: cannot import name 'SHARD_BATCH_BYTES' from 'compress_blobs' ({helper})\n").encode()
+            self.assertTrue(failed_builder_import(error, builder, modules))
+            for other in (error.replace(b'line 1', b'line 3'), error.replace(b'in <module>', b'in main'),
+                          error.replace(f'({helper})'.encode(), b'(/other.py)'), b''):
+                self.assertFalse(failed_builder_import(other, builder, modules))
+            script.write_bytes(body + b'# changed\n')
+            self.assertFalse(failed_builder_import(error, builder, modules))
+
     def test_external_guardian_uses_original_identity_and_rejects_partial_or_damaged_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -43,7 +62,8 @@ class AttemptIndexTests(unittest.TestCase):
             stderr = record(run / 'tests.stderr', diagnostics)
 
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
-                       input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True):
+                       input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
+                       snapshot=None, guard_snapshot=True):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
@@ -51,9 +71,15 @@ class AttemptIndexTests(unittest.TestCase):
                     command.update(selection=selection, source_refs=[builder, selection, catalog_ref])
                 if input_selection:
                     command.pop('current_python_catalog')
-                    selection = record(root / 'inputs.json', dict(manifest=selected_manifest or manifest))
+                    inputs = dict(snapshots={'language-registry': snapshot}) if snapshot else dict(manifest=selected_manifest or manifest)
+                    selection = record(root / 'inputs.json', inputs)
                     command.update(input_step='ordinary_whole', input_selection=selection,
                                    source_refs=[builder, selection, manifest])
+                    if snapshot:
+                        command['input_step'] = 'whole build using the sealed worker'
+                        command['source_refs'][1] = dict(selection, mode=0o644)
+                        if guard_snapshot:
+                            command['source_refs'].append(snapshot)
                     if guard_selector:
                         command['source_refs'].append(selector)
                 command_ref = record(root / 'command.json', command)
@@ -123,6 +149,15 @@ class AttemptIndexTests(unittest.TestCase):
             freeze(input_selection=True, selected_manifest=record(root / 'unselected.json', b'{}'))
             with self.assertRaisesRegex(ValueError, 'Selected input manifest differs'):
                 read_execution(base, path, guardian=True)
+            snapshot = record(root / 'languages.tsv', b'Sesotho\tst\n')
+            flags = ('--exact-snapshot-selection', '--language-registry-snapshot', snapshot['path'])
+            freeze(flags, input_selection=True, snapshot=snapshot)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            for options, guarded in [(flags, False), (flags[:-1] + ('different.tsv',), True),
+                                     (flags + flags[1:], True), (flags[:1], True)]:
+                freeze(options, input_selection=True, snapshot=snapshot, guard_snapshot=guarded)
+                with self.assertRaisesRegex(ValueError, 'Guarded snapshots differ'):
+                    read_execution(base, path, guardian=True)
             freeze(selected_catalog=True)
             self.assertEqual(read_execution(base, path, guardian=True)['closure_join'], 'reaped')
             closure = json.loads(path.read_bytes())

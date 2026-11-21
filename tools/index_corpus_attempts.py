@@ -25,6 +25,28 @@ def checked(reference):
 CLOSURE = Path('direct-runtime01/independent-closure01.json')
 
 
+def failed_builder_import(stderr, builder, modules):
+    """Identify a single top-level import failure in the selected builder."""
+    lines = stderr.decode('utf-8', errors='replace').splitlines()
+    if len(lines) != 4 or lines[0] != 'Traceback (most recent call last):':
+        return False
+    frame = re.fullmatch(r'  File "([^"]+)", line ([1-9][0-9]*), in <module>', lines[1])
+    error = re.fullmatch(r"ImportError: cannot import name '(\w+)' from '(\w+)' \((.+)\)", lines[3])
+    if not frame or frame[1] != builder['path'] or not error or modules.get(error[2], {}).get('path') != error[3]:
+        return False
+    # A missing historical source or an unrelated traceback cannot establish
+    # when production stopped. Match the actual unindented import in the file.
+    try:
+        source = checked(builder).decode().splitlines()
+        statement = source[int(frame[2]) - 1]
+    except (OSError, ValueError, IndexError):
+        return False
+    prefix = f'from {error[2]} import '
+    return (statement.startswith(prefix) and lines[2] == '    ' + statement
+            and error[1] in [name.strip() for name in statement[len(prefix):].split(',')]
+            and 'def main():' in source[int(frame[2]):])
+
+
 def attempt_key(base, path):
     # Keep the published legacy keys. Other owners retain receipts in their
     # own directories, so give those an explicit workspace-relative identity.
@@ -108,12 +130,29 @@ def guardian_whole(path, closure, result):
         if json.loads(checked(catalog_ref)) != catalog:
             raise ValueError(f'Python catalog differs: {path}')
     else:
-        # The ordinary whole-edition driver binds its manifest via input_selection
-        # and records each member of the inline Python catalog in the source guard.
+        # Older drivers put the manifest in the selection. Exact-snapshot builds
+        # pin it directly in the command and list the auxiliary files separately.
         selection = command.get('input_selection')
-        if command.get('input_step') != 'ordinary_whole' or selection not in refs:
+        if (not isinstance(selection, dict) or not {'path', 'bytes', 'sha256'} <= selection.keys()
+                or not any(all(ref.get(key) == value for key, value in selection.items()) for ref in refs)):
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
-        manifest_ref = json.loads(checked(selection))['manifest']
+        inputs = json.loads(checked(selection))
+        if 'manifest' in inputs and command.get('input_step') == 'ordinary_whole':
+            manifest_ref = inputs['manifest']
+        elif set(inputs) == {'snapshots'} and argv.count('--exact-snapshot-selection') == 1:
+            snapshots = inputs['snapshots']
+            flags = [arg for arg in argv if arg.startswith('--') and arg.split('=', 1)[0].endswith('-snapshot')]
+            if (not isinstance(snapshots, dict) or not snapshots
+                    or sorted(flags) != sorted('--' + name + '-snapshot' for name in snapshots)
+                    or any(ref not in refs or option('--' + name + '-snapshot') != ref['path']
+                           for name, ref in snapshots.items())):
+                raise ValueError(f'Guarded snapshots differ from selected arguments: {path}')
+            matches = [ref for ref in refs if ref['path'] == str(manifest_path)]
+            if len(matches) != 1:
+                raise ValueError(f'Expected one guarded input manifest: {path}')
+            manifest_ref = matches[0]
+        else:
+            raise ValueError(f'Missing guarded whole-edition selection: {path}')
         if (manifest_ref not in refs or manifest_ref['path'] != str(manifest_path)
                 or manifest_ref['sha256'] != manifest_hash or manifest_path.stat().st_size != manifest_ref['bytes']):
             raise ValueError(f'Selected input manifest differs: {path}')
@@ -152,11 +191,15 @@ def guardian_whole(path, closure, result):
     with Path(stderr['path']).open('rb') as stream:
         if os.fstat(stream.fileno()).st_size != stderr['bytes']:
             raise ValueError(stderr['path'])
-        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        diagnostic = None
+        if code != 0 and result['stdout']['bytes'] == 0 and stderr['bytes'] <= 8192:
+            diagnostic = stream.read()
+        digest = (hashlib.sha256(diagnostic) if diagnostic is not None else hashlib.file_digest(stream, 'sha256')).hexdigest()
         if digest != stderr['sha256'] or os.fstat(stream.fileno()).st_size != stderr['bytes']:
             raise ValueError(stderr['path'])
     return {**closure, 'whole_edition_selected': True, 'page_limit': None,
             'presentation_audit_limit': None, 'edition_output': str(output),
+            'failed_builder_import': diagnostic is not None and failed_builder_import(diagnostic, builder, catalog['modules']),
             'failed_child_only': failed_child_only,
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
 
@@ -211,9 +254,10 @@ def read_execution(base, path, guardian=False):
         raise ValueError(f'Production outcome differs in {path}')
     # The builder resolves snapshots before entering edition_build. An empty log
     # or an interrupted build still leaves its production time unknown.
-    failed_before_build = (not phases and not closure['ordinary_producer_passed'] and preflight_events == ['start', 'end']
-                           and last_phase['phase'] == 'selected_snapshot_resolution'
-                           and last_phase.get('status') == 'failure' and result['returncode'] != 0)
+    preflight_failed = (preflight_events == ['start', 'end'] and last_phase['phase'] == 'selected_snapshot_resolution'
+                        and last_phase.get('status') == 'failure')
+    failed_before_build = (not phases and not closure['ordinary_producer_passed'] and result['returncode'] != 0
+                           and (preflight_failed or (guardian and closure['failed_builder_import'])))
     status = end['status'] if end else 'no-terminal-production-clock'
     return dict(edition=edition, attempt=attempt_key(base, path),
                 command_exit=result['returncode'], ordinary_build_passed=bool(closure['ordinary_producer_passed']),
