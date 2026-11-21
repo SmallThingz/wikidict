@@ -15786,6 +15786,44 @@ class RetainedCompilerIdentityReuseTests(unittest.TestCase):
         return b.prepare_blob_tools(root/'workspace', str(compiler), 'testwiktionary', '20261001',
             identity, expander_args=['dump', str(root/'output'), '--expander-only'], retained_roles=selection)
 
+    def test_compact_phase_emits_recoverable_identity_and_preserves_inline_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            selection, compiler, identity = self.selection(root)
+            roles = identity['native_tool_roles']
+            path = root / 'qualified-roles.json'
+            original = json.dumps(roles).encode() + b' ' * b.NATIVE_ROLE_DETAILS_MIN_BYTES
+            path.write_bytes(original)
+            reference = dict(path=str(path), bytes=len(original), sha256=b.sha256_file(path))
+            records = []
+            with patch.object(b, 'source_fingerprint', return_value=identity['source']), \
+                 patch.object(b, 'timed_run'), \
+                 patch.object(b, 'phase_event', side_effect=lambda *args, **fields: records.append(fields)):
+                self.prepare(root, selection, compiler, identity)
+                self.assertEqual(records[-1]['native_role_provenance'], roles)
+                selection.phase_provenance_reference = reference
+                self.prepare(root, selection, compiler, identity)
+                compact = records[-1]
+                self.assertNotIn('native_role_provenance', compact)
+                self.assertEqual(b.prepared_metadata(compact['native_role_provenance_ref']), roles)
+                self.assertEqual(compact['status'], 'success')
+
+                for payload, update_ref in ((b'{}', False), (None, False),
+                                            (original.replace(b'{', b'{"unused":1,', 1), True),
+                                            (json.dumps(roles).encode(), True)):
+                    with self.subTest(size=len(payload) if payload is not None else None):
+                        if payload is None:
+                            path.unlink()
+                        else:
+                            path.write_bytes(payload)
+                        if update_ref:
+                            selection.phase_provenance_reference = dict(path=str(path), bytes=len(payload),
+                                                                       sha256=b.sha256_file(path))
+                        self.prepare(root, selection, compiler, identity)
+                        self.assertNotIn('native_role_provenance_ref', records[-1])
+                        self.assertEqual(records[-1]['native_role_provenance'], roles)
+                        self.assertIsNot(records[-1]['native_role_provenance'], selection.records)
+
     def test_bound_compiler_digest_reused_across_preparation_without_reading_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);selection,compiler,identity=self.selection(root);calls=[];reads=[];events=[]

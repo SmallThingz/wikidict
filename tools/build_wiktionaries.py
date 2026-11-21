@@ -6819,10 +6819,28 @@ class RetainedNativeToolRoles:
         self.tools[role]=self.bind_tool(role,target)
         self.require_unchanged()
 
+    # Set only when the caller supplies an authenticated on-disk role selection.
+    phase_provenance_reference = None
+
+    def _checked_records(self):
+        self.require_unchanged()
+        return self.records
+
     def provenance(self):
         import copy
-        self.require_unchanged()
-        return copy.deepcopy(self.records)
+        return copy.deepcopy(self._checked_records())
+
+    def phase_provenance_fields(self, records):
+        import copy
+        reference = self.phase_provenance_reference
+        if reference is not None and reference['bytes'] >= NATIVE_ROLE_DETAILS_MIN_BYTES:
+            try:
+                if prepared_metadata(reference) == records:
+                    return {'native_role_provenance_ref': dict(reference)}
+            except (ValueError, OSError, RecursionError):
+                # A missing or changed telemetry source still permits a full inline record.
+                pass
+        return {'native_role_provenance': copy.deepcopy(records)}
 
     def prepared_dispatch(self):
         """Snapshot existing dispatch guards for explicit parent authorization."""
@@ -7214,7 +7232,7 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 if (expander_args is not None or build_identity is None
                         or build_identity.get('retained_runtime_source') != runtime_scope):
                     raise ValueError('Retained runtime selection cannot compile or relink')
-                selected_provenance = retained_roles.provenance()
+                selected_provenance = retained_roles._checked_records()
                 source = retained_runtime_fingerprints(runtime_scope, selected_provenance)[0]
             else:
                 if build_identity is not None and 'retained_runtime_source' in build_identity:
@@ -7232,7 +7250,7 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                         or retained_roles.zig_sha256 != compiler_sha
                         or build_identity is None
                         or build_identity.get('native_tool_roles') != (selected_provenance
-                            if runtime_scope is not None else retained_roles.provenance())):
+                            if runtime_scope is not None else retained_roles._checked_records())):
                     raise ValueError('Retained roles do not match this ordinary preparation')
                 request=getattr(_PREPARED_SOURCE,'request',None)
                 if request is not None:
@@ -7243,16 +7261,17 @@ def prepare_blob_tools(workspace, zig, edition, date, build_identity=None, *, ex
                 tools=retained_roles.prepare(expander_args, edition, date, workspace=workspace,figure_inputs=figure_inputs)
                 post_started=time.monotonic()
                 if runtime_scope is not None:
-                    selected_provenance = retained_roles.provenance()
+                    selected_provenance = retained_roles._checked_records()
                     current = retained_runtime_fingerprints(
                         retained_runtime_scope(retained_roles), selected_provenance)[0]
                 else:
                     current = source_fingerprint()
                 if current!=source or retained_roles.bind_input(compiler)['sha256']!=compiler_sha:
                     raise ValueError('Source or compiler changed during retained role selection')
+                if runtime_scope is None:
+                    selected_provenance = retained_roles._checked_records()
                 outcome.update(preparation='retained-role-selection', orchestration_source=source,
-                    zig_sha256=compiler_sha, native_role_provenance=(selected_provenance
-                        if runtime_scope is not None else retained_roles.provenance()),
+                    zig_sha256=compiler_sha, **retained_roles.phase_provenance_fields(selected_provenance),
                     selected_native_artifacts={name:dict(path=str(tool.path),bytes=tool.stamp[2],
                         mode=stat.S_IMODE(tool.stamp[-1]),sha256=tool.sha256)
                         for name,tool in retained_roles.tools.items() if tool is not None})
@@ -9149,6 +9168,8 @@ def main():
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
     p.add_argument('--python-tooling-json',help='Explicit source-bound Python script/helper selection; native source root remains separately bound')
     role_args = p.add_mutually_exclusive_group()
+    p.add_argument('--compact-phase-provenance', action='store_true',
+                   help='Log large matching role records by their verified --retained-native-roles-ref')
     role_args.add_argument('--retained-native-roles-ref', help='Path, byte count and SHA-256 descriptor of a retained native roles JSON file')
     role_args.add_argument('--retained-native-roles-json',help='Explicit source-bound retained native role selection for one compressed edition; original producer provenance is retained')
     p.add_argument('--resource-mode',choices=('cgroup','watchdog'),default='cgroup',
@@ -9266,8 +9287,12 @@ def main():
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
     try:
         require_auxiliary_tooling(auxiliary)
+        if a.compact_phase_provenance and a.retained_native_roles_ref is None:
+            raise ValueError('--compact-phase-provenance requires --retained-native-roles-ref')
         retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig, reference=a.retained_native_roles_ref,
             sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
+        if a.compact_phase_provenance:
+            retained_roles.phase_provenance_reference = json.loads(a.retained_native_roles_ref)
     except (ValueError,OSError,KeyError,TypeError) as error:p.error(str(error))
     print(f'Building {len(groups)} editions with up to {a.jobs} concurrent jobs and {a.threads} workers per edition',flush=True)
     options={}
