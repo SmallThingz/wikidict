@@ -95,15 +95,32 @@ def guardian_whole(path, closure, result):
             raise ValueError(f'Expected one {name}: {path}')
         return argv[argv.index(name) + 1]
 
+    catalog = json.loads(option('--python-tooling-json'))
+    manifest_path = Path(option('--input-manifest'))
+    manifest_hash = option('--input-manifest-sha256')
     catalog_ref = command.get('current_python_catalog')
-    if catalog_ref is None:
+    if catalog_ref is None and 'selection' in command:
         selection = command['selection']
         if selection not in command['source_refs']:
             raise ValueError(f'Edition selection was not guarded: {path}')
         catalog_ref = json.loads(checked(selection))['python_tooling']
-    catalog = json.loads(checked(catalog_ref))
-    if json.loads(option('--python-tooling-json')) != catalog:
-        raise ValueError(f'Python catalog differs: {path}')
+    if catalog_ref is not None:
+        if json.loads(checked(catalog_ref)) != catalog:
+            raise ValueError(f'Python catalog differs: {path}')
+    else:
+        # The ordinary whole-edition driver binds its manifest via input_selection
+        # and records each member of the inline Python catalog in the source guard.
+        selection = command.get('input_selection')
+        if command.get('input_step') != 'ordinary_whole' or selection not in refs:
+            raise ValueError(f'Missing guarded whole-edition selection: {path}')
+        manifest_ref = json.loads(checked(selection))['manifest']
+        if (manifest_ref not in refs or manifest_ref['path'] != str(manifest_path)
+                or manifest_ref['sha256'] != manifest_hash or manifest_path.stat().st_size != manifest_ref['bytes']):
+            raise ValueError(f'Selected input manifest differs: {path}')
+        guarded = {(ref['path'], ref['bytes'], ref['sha256']) for ref in refs}
+        for ref in (catalog['selector'], *catalog['modules'].values()):
+            if (ref['path'], ref['bytes'], ref['sha256']) not in guarded:
+                raise ValueError(f'Unguarded Python catalog member: {ref["path"]}')
     builder = catalog['modules']['build_wiktionaries']
     script = builder['path']
     if (argv.count(script) != 1 or argv.index(script) >= argv.index('--python-tooling-json')
@@ -119,9 +136,8 @@ def guardian_whole(path, closure, result):
     after_wiki = argv.index('--wikis') + 2
     if after_wiki < len(argv) and not argv[after_wiki].startswith('--'):
         raise ValueError(f'Expected one wiki argument: {path}')
-    manifest_path = Path(option('--input-manifest'))
     raw = manifest_path.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != option('--input-manifest-sha256'):
+    if hashlib.sha256(raw).hexdigest() != manifest_hash:
         raise ValueError(f'Input manifest differs: {path}')
     manifest = json.loads(raw)
     if manifest['requested_editions'] != [edition]:

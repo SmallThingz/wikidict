@@ -27,7 +27,8 @@ class AttemptIndexTests(unittest.TestCase):
                 return dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
 
             builder = record(root / 'builder.py', b'previously guarded source')
-            catalog = dict(modules={'build_wiktionaries': builder})
+            selector = record(root / 'selector.py', b'catalog selector')
+            catalog = dict(modules={'build_wiktionaries': builder}, selector=selector)
             catalog_ref = record(root / 'catalog.json', catalog)
             manifest = record(root / 'manifest.json', dict(requested_editions=['blkwiktionary'],
                 files=[dict(wiki='blkwiktionary', date='20261001')]))
@@ -41,12 +42,20 @@ class AttemptIndexTests(unittest.TestCase):
             diagnostics = b'build diagnostic\n' * 32768
             stderr = record(run / 'tests.stderr', diagnostics)
 
-            def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False, cleanup=True):
+            def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
+                       input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
                     selection = record(root / 'selection.json', dict(python_tooling=command.pop('current_python_catalog')))
                     command.update(selection=selection, source_refs=[builder, selection, catalog_ref])
+                if input_selection:
+                    command.pop('current_python_catalog')
+                    selection = record(root / 'inputs.json', dict(manifest=selected_manifest or manifest))
+                    command.update(input_step='ordinary_whole', input_selection=selection,
+                                   source_refs=[builder, selection, manifest])
+                    if guard_selector:
+                        command['source_refs'].append(selector)
                 command_ref = record(root / 'command.json', command)
                 start = dict(input_authority=command_ref, source_refs=command['source_refs'])
                 if selected_catalog:
@@ -106,6 +115,14 @@ class AttemptIndexTests(unittest.TestCase):
 
             from index_corpus_attempts import read_execution
             base = workspace / 'receipts'
+            freeze(input_selection=True)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            freeze(input_selection=True, guard_selector=False)
+            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                read_execution(base, path, guardian=True)
+            freeze(input_selection=True, selected_manifest=record(root / 'unselected.json', b'{}'))
+            with self.assertRaisesRegex(ValueError, 'Selected input manifest differs'):
+                read_execution(base, path, guardian=True)
             freeze(selected_catalog=True)
             self.assertEqual(read_execution(base, path, guardian=True)['closure_join'], 'reaped')
             closure = json.loads(path.read_bytes())
