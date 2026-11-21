@@ -13,6 +13,8 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -689,6 +691,8 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                     val actions = sectionRows.mapValues { (_, item) -> actionsForSection(item) }
                     bodyText?.exceptionOrNull()?.let { ReaderLayoutUnavailable(it.message ?: NativeContainerOwnerFontUnavailable) }
                     NativeDocumentOverflowItem(documentOverflow, visibleRows.slice(run).map { it.key }) {
+                    val positionedTableSource = NativeTableScopeEntrySource.from(entry, visibleRows, folded.toMap(), run,
+                        blocks, rows.map { it.key }, remainingMedia)
                     val opacitySource = remember(NativeCellOpacitySourceIdentity(entry), visibleRows.map { it.key }, run) {
                         nativeCellOpacityEntrySource(entry, visibleRows, run)
                     }.takeIf { blocks.any { it.table?.let(::nativeHasCellOpacity) == true } }
@@ -700,7 +704,7 @@ fun EntryView(entry: Entry, bookmarked: Boolean, onBookmark: () -> Unit, onLink:
                             blocks.any { it.needsContainerDocumentExtent() || it.needsFigureDocumentExtent() || it.hasContainerDisclosure() } || nativeAudioDocumentScrollNeeded(blocks),
                         positionedPaintRoot = true, bodyAdjoining = entry.bodyAdjoining,
                         bodyTextContext = bodyText?.getOrNull(), referenceLayoutParagraphs = referenceParagraphs,
-                         cellOpacitySource = opacitySource)
+                         cellOpacitySource = opacitySource, positionedTableSource = positionedTableSource)
                     }
                 } else if (rowIndex !in floatCovered) {
                     row.referenceBatch?.let { CompiledReferenceBatchView(it, entry.references, row.key, readerLink, referenceLayoutTarget) }
@@ -1664,6 +1668,14 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     val delegatedFallback = delegated?.fallbackReason != null
     SideEffect { delegated?.composedFallback(delegatedFallback) }
     val density = LocalDensity.current
+    // This operational layer is lossless only after the original complete surfaces
+    // and default grid paint pass the contained-scope proof. It also bounds touch
+    // candidates from short ordinary siblings. Fallback removes this layer.
+    val scopeClipMinimum = if (delegated?.scopeSource != null && !delegatedFallback) {
+        val minimum = LocalViewConfiguration.current.minimumTouchTargetSize
+        with(density) { minimum.width.toPx() to minimum.height.toPx() }
+    } else null
+    SideEffect { delegated?.scopeGridClipPolicy(scopeClipMinimum) }
     val inheritedBackground = LocalAuthoredBackground.current
     val inheritedColor = canonicalColorArgb(inheritedBackground)?.let { Color(it) }
     val fontPixels = with(density) { MaterialTheme.typography.bodyLarge.fontSize.toPx() }
@@ -1758,8 +1770,9 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
     Layout(modifier = widthModifier.then(captionMinimumWidth?.tableExtentModifier ?: Modifier)
         .then(blockLayoutFailure?.tableExtentModifier ?: Modifier)
         .testTag(if (path == "root") "compiled-table-grid" else "compiled-table-grid-$path")
+        .then(if (scopeClipMinimum != null) Modifier.clipToBounds() else Modifier)
         .onGloballyPositioned { coordinates ->
-            delegated?.let { it.gridCoordinates = coordinates; it.validateAfterPlacement() }
+            delegated?.positionedGrid(coordinates, scopeClipMinimum)
         }
         .then(if (ownCollectionSemantics) Modifier.semantics {
             collectionInfo = androidx.compose.ui.semantics.CollectionInfo(grid.rows, grid.columns)
@@ -1879,7 +1892,7 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     LocalCellWeight provides cellWeight) {
                     val cellPath = "$semanticPath/cell-$index"
                     val selection = selectionCells?.get(index)
-                    val blocks = placed.cell.blocks
+                    val blocks = delegated?.scopeSource?.blocks?.get(index) ?: placed.cell.blocks
                     val paragraph = if (intrinsicTable) intrinsicTableSingleParagraph(placed.cell) else null
                     if (opacityOwner != null && blocks == null && placed.cell.nestedTable == null)
                         StyledText(placed.cell.spans, onLink = onLink,
@@ -2187,11 +2200,13 @@ private fun TableGridView(table: Table, onLink: (EntryLink) -> Unit, path: Strin
                     val placed = grid.cells[index]
                     val left = pixels.physicalCellLeft(placed.column, placed.colspan, layoutDirection == LayoutDirection.Rtl)
                     val offset = cellContentOffsets[index]
-                    if (offset == 0f) child.place(left, pixels.cellTop(placed.row))
+                    val scopeRank = delegated?.scopeSource?.rank(index)
+                    if (scopeRank != null) delegated.cells[index].placedScopeRank(scopeRank)
+                    if (offset == 0f) child.place(left, pixels.cellTop(placed.row), zIndex = scopeRank?.toFloat() ?: 0f)
                     else {
                         val top = pixels.cellTop(placed.row) + offset
                         val integralTop = kotlin.math.floor(top).toInt()
-                        child.placeWithLayer(left, integralTop) { translationY = top - integralTop }
+                        child.placeWithLayer(left, integralTop, zIndex = scopeRank?.toFloat() ?: 0f) { translationY = top - integralTop }
                     }
                 }
             }
@@ -2560,7 +2575,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     fixedHeightReachable: Boolean = false, positionedPaintRoot: Boolean = false,
     bodyAdjoining: BodyAdjoiningPolicy? = null, bodyTextContext: ContainerTextContext? = null,
     referenceLayoutParagraphs: Map<String, ReferenceLayoutParagraph> = emptyMap(),
-    cellOpacitySource: NativeCellOpacityEntrySource? = null) {
+    cellOpacitySource: NativeCellOpacityEntrySource? = null,
+    positionedTableSource: NativeTableScopeEntrySource? = null) {
     val density = LocalDensity.current
     val contentWidths = LocalTableContentWidths.current
     val inheritedAlign = LocalCellTextAlign.current
@@ -2597,6 +2613,10 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     } ?: ContainerTextContext(if (normalBodySize.value == 0f) 1f else
         baseStyle.fontSize.value / normalBodySize.value, rootLineHeight)
     val absoluteCell = nativeDelegatedAbsoluteCell(LocalNativeDelegatedCell.current, blocks)
+    val scopeCell = LocalNativeDelegatedCell.current?.takeIf { owner ->
+        owner.table.scopeSource?.owns(owner.index, blocks) == true
+    }
+    val scopeEntry = positionedTableSource?.takeIf { it.owns(blocks, blockPaths) }
     val sourceIds = remember { linkedMapOf<String, Int>() }
     fun sourceId(key: String): Int = sourceIds.getOrPut(key) { sourceIds.size }
     val mediaControls = mutableMapOf<Int, List<EmbeddedMediaControl>>()
@@ -2617,7 +2637,8 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
         baseStyle, figureInheritedAlign(inheritedAlign, LocalLayoutDirection.current), normalBodySize,
         density, documentViewport,
         rtl, LocalReaderDarkTheme.current, documentSurface || fixedHeightReachable, ::sourceId,
-        positionedPaintReachable = positionedPaintRoot, staticInlineAlign = inheritedAlign) { leaf ->
+        positionedPaintReachable = positionedPaintRoot, staticInlineAlign = inheritedAlign,
+        positionedCell = scopeCell) { leaf ->
         val block = leaf.block
         val index = leaf.id
         val gap = leaf.gap
@@ -2856,7 +2877,9 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
                 }, minimumWidth = { containingWidth -> table?.style?.minWidth?.let {
                     tableMinimumWidthPixels(it, density.density, normalBodyPixels, containingWidth)
                 } }, overflowViewport = nativeTableAdmitted && table != null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && !inCell && !leaf.inScrollport,
-                delegatedTable = table?.takeIf { !nativeTableRowsHiddenAt(it, documentViewport) && nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && tableFeature == null && !inCell && !leaf.inScrollport && (nativeDelegatedFigureTable(it) || nativeDelegatedAbsoluteTable(it)) },
+                delegatedTable = table?.takeIf { !nativeTableRowsHiddenAt(it, documentViewport) && nativeTableAdmitted && blockViewport == null && floatViewport == null && !cornerFocusTable && intrinsicTable == null && tableFeature == null && !inCell && !leaf.inScrollport && (nativeDelegatedFigureTable(it) || nativeDelegatedAbsoluteTable(it) ||
+                    scopeEntry?.contains(it) == true && NativeTablePositionedScopeSource.from(it) != null) },
+                positionedTableSource = scopeEntry,
                 autoMarginTable = automaticTable, autoMargins = automaticMargins.takeIf { automaticTable != null },
                 fixedMarginTable = fixedTable, pairedMarginTable = pairedTable,
                 blockViewport = blockViewport,
@@ -2893,15 +2916,15 @@ internal fun NativeFloatBlockContext(blocks: List<Block>, onLink: (EntryLink) ->
     fun flattened(items: List<NativeFloatContextSpec>): List<NativeFloatContextSpec> = items.flatMap { item ->
         (item as? NativeFloatContextSpec.Container)?.preparedParts?.let(::flattened) ?: listOf(item)
     }
-    if (absoluteCell != null) {
+    if (absoluteCell != null || scopeCell != null) {
         val revision = listOf(blocks, rootContext, baseStyle, settings, edition, media,
             LocalMissingLinkOwner.current, flattened(originalParts).filterIsInstance<NativeFloatContextSpec.Text>().map {
                 listOf(it.prepared.native?.paint?.typeface, it.prepared.native?.paint?.textSize,
                     it.prepared.stateDescription, it.prepared.ordinaryLinkPaintRevision)
             })
-        SideEffect { absoluteCell.preparedAbsoluteSource(revision) }
+        SideEffect { (absoluteCell ?: checkNotNull(scopeCell)).preparedAbsoluteSource(revision) }
     }
-    val delegatedFailure = absoluteCell?.table?.fallbackReason
+    val delegatedFailure = (absoluteCell ?: scopeCell)?.table?.fallbackReason
     // Keep the same source slots and resource preparation alive. The existing unavailable
     // context path retains all original text/actions after a measured table proof refuses.
     val parts = if (delegatedFailure == null) originalParts else originalParts.map { part ->

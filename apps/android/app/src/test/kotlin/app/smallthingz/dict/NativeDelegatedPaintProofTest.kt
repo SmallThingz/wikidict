@@ -360,4 +360,56 @@ class NativeDelegatedPaintProofTest {
         assertEquals(original.map { it.physicalSurface }, required.map { it.physicalSurface })
         assertTrue(!permitted(required, actualExport.copy(otherInk = listOf(box(90f, 30f, 100f, 40f)))))
     }
+
+    @Test fun clippedScopeUsesOriginalCellZOrderForTheFullCompensatedBand() {
+        val source = checkNotNull(NativeTablePositionedScopeSource.from(nativePicdicScopeFixture("Chest.jpg")))
+        val originalOwners = List(3) { Any() }
+        val grid = box(0f, 0f, 310f, 252f)
+        // Genuine-shaped short header/whitespace neighbor, not 48px placeholders.
+        val boxes = listOf(box(0f, 0f, 310f, 28f), box(0f, 28f, 310f, 224f), box(0f, 224f, 310f, 252f))
+        val surfaces = listOf(box(4f, 4f, 306f, 24f), box(4f, 32f, 306f, 249f), box(4f, 228f, 306f, 248f))
+        val measured = originalOwners.indices.map { index -> NativeDelegatedMeasuredCell(originalOwners[index], generation,
+            boxes[index], surfaces[index], listOf(NativeDelegatedInputAncestor(boxes[index], false),
+                NativeDelegatedInputAncestor(grid, false)), ink = listOf(surfaces[index]), deferredInk = emptyList(),
+            input = listOf(surfaces[index]), minimumTouchWidth = 48f, minimumTouchHeight = 48f,
+            ordinaryStateInk = listOf(surfaces[index]), ordinaryInk = listOf(surfaces[index]), rootOwner = root,
+            innerClip = surfaces[index]) }
+        val surroundings = NativeDelegatedSurroundings(generation, grid, emptyList(), emptyList(), root,
+            NativeDelegatedRootState(rootView, grid, grid, emptyList()))
+        val ranks = listOf(0, 3, 2)
+        fun decision(cells: List<NativeDelegatedMeasuredCell> = measured, around: NativeDelegatedSurroundings = surroundings,
+            order: List<Int> = ranks, current: Boolean = true, rootAllocation: NativeFloatBounds = grid,
+            clip: NativeTableScopeMeasuredClip? = NativeTableScopeMeasuredClip(grid, 48f, 48f)) = nativeTableScopePaintDecision(
+                around, cells, originalOwners, source, order, current, rootAllocation, clip)
+        assertTrue(decision() is NativeDelegatedPaintDecision.Permitted)
+        // The old visible-cell proof intentionally has no such original View order grant.
+        assertTrue(nativeDelegatedPaintDecision(surroundings, measured, originalOwners) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(order = listOf(0, 1, 2)) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(current = false) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(rootAllocation = box(0f, 1f, 310f, 252f)) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(rootAllocation = box(0f, 0f, 310f, 251f)) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(clip = null) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(clip = NativeTableScopeMeasuredClip(grid, 48f, 253f)) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(clip = NativeTableScopeMeasuredClip(box(0f, 1f, 310f, 252f), 48f, 48f)) is NativeDelegatedPaintDecision.Unavailable)
+        // A near-only ordinary target cannot escape the actual large Table clip.
+        assertTrue(decision(around = surroundings.copy(otherInput = listOf(box(10f, -8f, 20f, -1f)))) is NativeDelegatedPaintDecision.Permitted)
+        val paddingOnly = box(20f, 243f, 30f, 248f)
+        assertTrue(decision(around = surroundings.copy(otherInk = listOf(paddingOnly))) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(around = surroundings.copy(otherInput = listOf(paddingOnly))) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(around = surroundings.copy(otherInput = null)) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(around = surroundings.copy(rootState = surroundings.rootState!!.copy(
+            fallbackInput = listOf(paddingOnly)))) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(around = surroundings.copy(otherInk = listOf(box(310f, 0f, 320f, 300f)))) is NativeDelegatedPaintDecision.Permitted)
+        assertTrue(decision(measured.map { it.copy(generation = Any()) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.reversed()) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.toMutableList().also { it[1] = it[1].copy(innerClip = boxes[1]) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.toMutableList().also { it[1] = it[1].copy(
+            physicalSurface = box(4f, 64f, 306f, 301f), innerClip = box(4f, 64f, 306f, 301f)) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.map { it.copy(minimumTouchHeight = 500f) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.toMutableList().also { it[1] = it[1].copy(realInputAncestors =
+            listOf(NativeDelegatedInputAncestor(box(0f, 28f, 310f, 48f), false))) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision(measured.toMutableList().also { it[0] = it[0].copy(input = listOf(box(4f, -1f, 306f, 24f))) }) is NativeDelegatedPaintDecision.Unavailable)
+        assertTrue(decision() is NativeDelegatedPaintDecision.Permitted)
+    }
+
 }

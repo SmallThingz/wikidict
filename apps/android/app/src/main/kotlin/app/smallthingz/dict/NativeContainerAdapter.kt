@@ -477,6 +477,23 @@ private fun Container.hasClippedAbsoluteDescendant(): Boolean {
     return found
 }
 
+/** A scoped cell is provisionally measured only under its original whole-Entry owner.
+ * It remains paint/input gated until the separate table proof covers its full physical box. */
+internal fun nativeContainerOwnerAuthorityFailure(container: Container, resolved: ContainerViewportStyle,
+    fixedHeightReachable: Boolean, positionedPaintReachable: Boolean,
+    positionedCell: NativeDelegatedCellOwner? = null): String? {
+    val ownedScope = positionedCell?.ownsScope(container) == true
+    return when {
+        resolved.needsDocumentExtent() && !fixedHeightReachable &&
+            resolved.box.positioning !is ContainerPositioning.Absolute && !ownedScope ->
+            "Container overflow needs this owner's document extent export"
+        (resolved.box.positioning != null || resolved.box.absolutePosition != null || resolved.box.absoluteStatic != null) &&
+            !positionedPaintReachable && !ownedScope ->
+            "Positioned painting needs this owner's Entry stacking context"
+        else -> null
+    }
+}
+
 /** Table/Figure descendants start independent adapter trees and never lend this anchor. */
 private fun Container.hasOrdinaryAbsoluteDescendant(): Boolean = blocks.any { block ->
     block.container?.let { it.style.absolutePosition != null || it.style.absoluteStatic != null ||
@@ -503,6 +520,7 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
     density: Density, rootViewport: Double, rtl: Boolean, dark: Boolean, fixedHeightReachable: Boolean,
     id: (String) -> Int, positionedPaintReachable: Boolean = false,
     staticInlineAlign: androidx.compose.ui.text.style.TextAlign? = null,
+    positionedCell: NativeDelegatedCellOwner? = null,
     leaf: @Composable (NativeContainerLeaf) -> List<NativeFloatContextSpec>
 ): List<NativeFloatContextSpec> {
     val disclosureState = rememberNativeContainerDisclosureState(blocks)
@@ -708,7 +726,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     NativeAbsoluteTextPlacement(absolute.left.value * density.density,
                         absolute.top.value * density.density - positionedParent.paddingTop)
                 val scopePolicy = try {
-                    scope?.let { NativePositionedScrollportPolicy(container, positionedOverflowAt(it, rootViewport)) }
+                    scope?.let { NativePositionedScrollportPolicy(container, positionedOverflowAt(it, rootViewport),
+                        positionedCell?.takeIf { owner -> owner.ownsScope(container) }) }
                 } catch (error: UnsupportedFloatLayout) {
                     textFailure = textFailure ?: error.message ?: "Positioned viewport geometry is unavailable"
                     null
@@ -754,11 +773,8 @@ internal fun prepareNativeContainerTree(blocks: List<Block>, path: String, gridP
                     inScrollport && positionedParent == null && scope == null && (resolved.box.positioning != null || ordinaryAbsolute != null || ordinaryStatic != null || resolved.box.columns != null ||
                         resolved.box.layout == ContainerLayout.FlexRow || resolved.box.layout == ContainerLayout.FlexColumn) ->
                         "This child layout is unavailable inside a local scrollport"
-                    resolved.needsDocumentExtent() && !fixedHeightReachable && absolute == null ->
-                        "Container overflow needs this owner's document extent export"
-                    (resolved.box.positioning != null || ordinaryAbsolute != null || ordinaryStatic != null) && !positionedPaintReachable ->
-                        "Positioned painting needs this owner's Entry stacking context"
-                    else -> null
+                    else -> nativeContainerOwnerAuthorityFailure(container, resolved, fixedHeightReachable,
+                        positionedPaintReachable, positionedCell)
                 }
                 result += if (domainFailure == null) prepared else prepared.copy(unavailableReason = domainFailure)
             } else {

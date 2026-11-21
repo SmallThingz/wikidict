@@ -135,4 +135,149 @@ class NativePositionedAdapterTest {
         assertSame(delegated, legacy.preparedParts!!.single())
     }
 
+
+    @Test fun picdicScopeRetainsMapFallbackSourcesAndSignedPaddingCompensation() {
+        for (file in listOf("Chest.jpg", "Human body features-nb.svg")) {
+            val label = if (file == "Chest.jpg") "sefuba" else "mmele"
+            val source = nativePicdicScopeFixture(file)
+            val plan = checkNotNull(NativeTablePositionedScopeSource.from(source))
+            val scope = plan.scope
+            val spans = scope.blocks.single().spans
+            assertEquals(1, plan.scopeIndex)
+            assertSame(source.rows[1][0].blocks!!.single(), plan.blocks[1].single())
+            assertSame(source.rows[0][0].spans, plan.blocks[0].single().spans)
+            assertSame(source.rows[2][0].spans, plan.blocks[2].single().spans)
+            assertEquals(" \n", plan.blocks[2].single().spans.joinToString("") { it.text })
+            assertEquals(file, spans.first().image!!.file)
+            assertEquals(310L, spans.first().image!!.widthPx)
+            assertEquals(listOf(0.0, 0.0, 1.0, 1.0), spans.first().image!!.map!!.regions.single().coordinates)
+            assertEquals(label, spans.first().image!!.map!!.regions.single().action.target)
+            assertEquals(ImageMapDescription.BottomRight, spans.first().image!!.map!!.description)
+            assertEquals(label, spans.first().image!!.tooltip)
+            assertEquals(label, spans[2].target)
+            assertEquals(listOf("link", "line_break", "link", "text", "line_break"), spans.map { it.kind })
+            assertFalse(nativeDelegatedAbsoluteTable(source))
+            val margin = ContainerMargin.Length(px(0f))
+            val equivalent = scope.style.copy(margins = null, marginValues = ContainerMargins(margin, margin,
+                ContainerMargin.Length(SignedContainerMargin(StyleLengthUnit.Px, -25f)), margin))
+            for (style in listOf(scope.style, equivalent)) for (density in listOf(1f, 1.25f)) {
+                val owner = scope.copy(style = style)
+                val text = PreparedNativeFloatText("\ufffc\n$label \n", null, Any(), null, menu = {}, fallback = {})
+                val leaf = NativeFloatContextSpec.Text(text, 0f, "scope/paragraph")
+                val spec = nativeContainerSpec(71, style.atViewport(500.0), listOf(leaf), density, 24f,
+                    false, false, false, positioned = NativePositionedScrollportPolicy(owner, PositionedOverflowX.Hidden))
+                assertNull(spec.unavailableReason)
+                assertTrue(spec.isolatesFloats); assertTrue(spec.relativeAuto)
+                assertNull(spec.fixedContentHeight); assertNull(spec.preparedParts)
+                val scrollport = checkNotNull(spec.scrollport)
+                assertSame(leaf, scrollport.parts.single())
+                assertSame(text, (scrollport.parts.single() as NativeFloatContextSpec.Text).prepared)
+                assertEquals(PositionedOverflowX.Hidden, scrollport.positioned!!.overflowX)
+                assertEquals(25f * density, scrollport.padding.bottom, 0f)
+                assertEquals(0f, spec.padding(310).bottom, 0f)
+                assertEquals(-25f * density, spec.margins(310).bottom, 0f)
+                for (width in listOf(200, 310, 500)) {
+                    val imageWidth = 310f * density
+                    assertEquals(width, spec.contentWidth(width, ContainerWidths(imageWidth, imageWidth)))
+                    val contentHeight = 157.125f * density // Controlled ready-image line height, not a downloaded raster claim.
+                    val allocation = nativePositionedScrollportAllocation(width, contentHeight,
+                        NativeFloatBounds(0f, 0f, imageWidth, contentHeight), scrollport.padding)
+                    assertEquals(contentHeight + 25f * density, allocation.usedHeight, 0f)
+                    assertEquals(maxOf(0f, imageWidth - width), allocation.overflow, 0f)
+                    assertFalse(allocation.verticalOverflow)
+                    val cursor = NativeMarginCursor(NativeMarginCollapse(false, false))
+                    val profile = NativeAdjoiningMargins(0f, spec.margins(width).bottom, false)
+                    val first = cursor.begin(profile); cursor.end(first, allocation.usedHeight, profile)
+                    val following = cursor.begin(NativeAdjoiningMargins(0f, 0f, false))
+                    assertEquals(contentHeight, following.borderTop, 0f)
+                }
+            }
+            val changed = source.copy(rows = source.rows.toMutableList().also { rows ->
+                rows[1] = listOf(source.rows[1][0].copy(blocks = listOf(source.rows[1][0].blocks!!.single().copy(
+                    container = scope.copy(style = scope.style.copy(positionedScope = scope.style.positionedScope!!.copy(
+                        overflowX = PositionedOverflowX.Scroll)))))))
+            })
+            assertNull(NativeTablePositionedScopeSource.from(changed))
+        }
+    }
+
+    @Test fun positionedScopeAuthorityBindsCompleteEntryProjectionAndItsOriginalCell() {
+        val fixture = nativePicdicScopeFixture("Chest.jpg")
+        val listSpan = Span("link", "Mmele", "mmele", targetFragment = "Setswana")
+        val entry = Entry("sefuba", emptyList(), "language", "Setswana", "tn", listOf(
+            Section(2, "Setswana", listOf(Block("list_item", 1, listOf(listSpan), listPath = "*"))),
+            Section(3, "Setswantsho", listOf(Block("table", 0, emptyList(), table = fixture)))
+        ), emptyList(), media = listOf(Media("Chest.jpg", "image", "sefuba")))
+        val rows = visibleEntryReadingRows(entry, emptySet())
+        val projected = nativeScopeTestProjection(entry, rows)
+        assertEquals(listOf(rows.indices), floatBodyRuns(rows, entry.bodyAdjoining, entry.language))
+        val receipt = checkNotNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), rows.indices,
+            projected.first, projected.second, emptyList()))
+        val actualTable = projected.first.single { it.table != null }.table!!
+        val actualList = projected.first.first { it.kind == "list_item" }
+        assertSame(listSpan, actualList.spans.single())
+        assertTrue(receipt.contains(actualTable))
+        assertTrue(entry.textDetails.isNotEmpty())
+        assertNotNull(NativeTableScopeEntrySource.from(entry, rows, mapOf("abbreviations" to true), rows.indices,
+            projected.first, projected.second, emptyList()))
+        val detailsOpen = checkNotNull(NativeTableScopeEntrySource.from(entry, rows, mapOf("abbreviations" to false), rows.indices,
+            projected.first, projected.second, emptyList()))
+        assertNotEquals(receipt.revision, detailsOpen.revision)
+        assertEquals(receipt.revision, checkNotNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), rows.indices,
+            projected.first, projected.second, emptyList())).revision)
+        val owner = NativeDelegatedTableOwner(actualTable, receipt) { }
+        val scopeSource = checkNotNull(owner.scopeSource)
+        val cell = owner.cells[scopeSource.scopeIndex]
+        assertNull(nativeContainerOwnerAuthorityFailure(scopeSource.scope, scopeSource.scope.style.atViewport(500.0),
+            fixedHeightReachable = false, positionedPaintReachable = false, positionedCell = cell))
+        assertNotNull(nativeContainerOwnerAuthorityFailure(scopeSource.scope.copy(), scopeSource.scope.style.atViewport(500.0),
+            fixedHeightReachable = false, positionedPaintReachable = false, positionedCell = cell))
+        assertNotNull(nativeContainerOwnerAuthorityFailure(scopeSource.scope, scopeSource.scope.style.atViewport(500.0),
+            fixedHeightReachable = false, positionedPaintReachable = false))
+        assertFalse(owner.permitsOriginalOwners()) // Source enrollment never grants a measured View.
+        assertFalse(cell.scopePublicationCurrent())
+        assertFalse(receipt.owns(projected.first.drop(1), projected.second.drop(1)))
+        assertNull(NativeTableScopeEntrySource.from(entry.copy(), rows, emptyMap(), rows.indices,
+            projected.first, projected.second, emptyList()))
+        assertNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), 1..rows.lastIndex,
+            projected.first, projected.second, emptyList()))
+        assertNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), rows.indices,
+            projected.first.reversed(), projected.second, emptyList()))
+        assertNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), rows.indices,
+            projected.first, projected.second.reversed(), emptyList()))
+        assertNull(NativeTableScopeEntrySource.from(entry, rows, emptyMap(), rows.indices,
+            projected.first, projected.second, entry.media))
+        assertNull(NativeTablePositionedScopeSource.from(fixture.copy(rows = fixture.rows.toMutableList().also {
+            it[2] = listOf(fixture.rows[2][0].copy(spans = emptyList(), nestedTable = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1))))))
+        })))
+    }
+
+}
+
+/** Source-matched controlled tree; it is not a newly decoded TN response. */
+internal fun nativePicdicScopeFixture(file: String): Table {
+    fun px(value: Float) = StyleLength(StyleLengthUnit.Px, value)
+    val label = if (file == "Chest.jpg") "sefuba" else "mmele"
+    val mapAction = ImageMapAction(ImageMapActionKind.Internal, label, null, label)
+    val image = Span("link", "", "File:$file", image = InlineImage(file, widthPx = 310,
+        alt = label, tooltip = label, map = ImageMap(ImageMapDescription.BottomRight,
+            listOf(ImageMapRegion(ImageMapShape.Rect, listOf(0.0, 0.0, 1.0, 1.0), mapAction)))))
+    val source = listOf(image, Span("line_break", "\n"), Span("link", label, label),
+        Span("text", " "), Span("line_break", "\n"))
+    val scope = Container(listOf(Block("paragraph", 0, source)), ContainerStyle(
+        positioning = ContainerPositioning.RelativeAuto,
+        positionedScope = PositionedScope(TextWrap.NoWrap, PositionedOverflowX.Hidden, PositionedOverflowY.Auto),
+        padding = StyleEdges(px(0f), px(0f), px(25f), px(0f)),
+        margins = SignedContainerEdges(px(0f), px(0f), SignedContainerMargin(StyleLengthUnit.Px, -25f), px(0f))))
+    return Table(emptyList(), listOf(
+        listOf(Cell(listOf(Span("link", "Picture dictionary", "Wiktionary:Picture dictionary")), true, 1, 1)),
+        listOf(Cell(emptyList(), false, 1, 1, blocks = listOf(Block("container", 0, emptyList(), container = scope)))),
+        listOf(Cell(listOf(Span("text", " "), Span("line_break", "\n")), false, 1, 1))))
+}
+
+internal fun nativeScopeTestProjection(entry: Entry, rows: List<ReadingRow>): Pair<List<Block>, List<String>> {
+    val visible = rows.filter { it.block != null || it.heading?.let { value -> sectionHeadingVisible(value, entry.language) } == true }
+    return visible.map { it.block ?: it.headingBlock ?: Block("heading", 0,
+        listOf(Span("text", sectionHeadingLabel(checkNotNull(it.heading), entry.language, null))),
+        level = checkNotNull(it.heading).level) } to visible.map { it.key }
 }

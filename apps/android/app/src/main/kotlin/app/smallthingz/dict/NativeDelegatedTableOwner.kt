@@ -59,7 +59,30 @@ internal data class NativeDelegatedAbsoluteFlow(val owner: NativeDelegatedCellOw
 internal val LocalNativeDelegatedAbsoluteFlow = staticCompositionLocalOf<NativeDelegatedAbsoluteFlow?> { null }
 
 internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegatedTableOwner) {
-    val sourceBlock: Block = checkNotNull(tableGrid(table.table).cells[index].cell.blocks).single()
+    val sourceBlock: Block = table.scopeSource?.blocks?.get(index)?.single()
+        ?: checkNotNull(tableGrid(table.table).cells[index].cell.blocks).single()
+    fun ownsScope(source: Container): Boolean = table.scopeSource?.ownsScope(index, source) == true
+    private var scopePublication: NativeTableViewportGeometry? = null
+    private var scopeContextPublication: NativeTableViewportGeometry? = null
+    private var placedScopeRank: Int? = null
+    fun placedScopeRank(value: Int) { placedScopeRank = value }
+    fun currentScopeRank(): Int? = placedScopeRank
+    fun publishedScope(source: Container, geometry: NativeTableViewportGeometry?) {
+        check(ownsScope(source))
+        if (scopePublication !== geometry) {
+            scopePublication = geometry; scopeContextPublication = null; table.invalidate()
+        }
+    }
+    fun observedScopeContext(geometry: NativeFloatContextGeometry) {
+        if (table.scopeSource?.scopeIndex != index) return
+        val expected = scopePublication
+        fun includes(context: NativeFloatContextGeometry): Boolean = context.inputLeaves().any {
+            it.geometry === expected || (it.geometry as? NativeFloatContextGeometry)?.let(::includes) == true
+        }
+        scopeContextPublication = expected?.takeIf { includes(geometry) }
+    }
+    fun scopePublicationCurrent(): Boolean = table.scopeSource?.scopeIndex != index ||
+        scopePublication != null && scopeContextPublication === scopePublication
     private val absoluteFlowBlocks: List<Block> = if (!table.ordinaryAbsolute) emptyList() else buildList {
         fun collect(block: Block) {
             if (block.figure != null || block.flow != null) add(block)
@@ -130,6 +153,9 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
 
     fun clear(view: NativeFloatTextView) {
         if (originalView === view) {
+            scopePublication = null
+            scopeContextPublication = null
+            placedScopeRank = null
             originalView = null
             physical = null
             scrollableBounds = null
@@ -159,6 +185,7 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
 
     /** No text traversal or envelope rebuilding occurs on the draw/input/AX hot path. */
     fun currentPlacement(root: LayoutCoordinates, generation: Any): Boolean {
+        if (!scopePublicationCurrent()) return false
         val stamp = placement ?: return false
         val view = originalView ?: return false
         if (stamp.root !== root || stamp.generation !== generation || physical !== stamp.surface ||
@@ -238,7 +265,8 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
             envelopeBuildCount++
         }
         val local = checkNotNull(envelopes)
-        if (local.deferred.isEmpty()) return missing("deferred envelope is empty")
+        if (!scopePublicationCurrent()) return missing("original scope publication changed")
+        if (table.scopeSource == null && local.deferred.isEmpty()) return missing("deferred envelope is empty")
         placement = Placement(root, generation, surface, cell, coordinates, nativeCoordinates, boxes, clip)
         return NativeDelegatedMeasuredCell(view, generation, cellBox, physicalBox, ancestors,
             local.ink.map(::translated), local.deferred.map(::translated), local.input.map(::translated),
@@ -250,7 +278,11 @@ internal class NativeDelegatedCellOwner(val index: Int, val table: NativeDelegat
 /** Provisional composition still has one real cell graph. It is neither painted nor made
  * interactive until the post-layout proof succeeds. A refusal recomposes the existing
  * complete unavailable-content branch; the provisional graph remains gated meanwhile. */
-internal class NativeDelegatedTableOwner(val table: Table, private val invalidateParent: () -> Unit) {
+internal class NativeDelegatedTableOwner(val table: Table,
+    private val scopeEntry: NativeTableScopeEntrySource?, private val invalidateParent: () -> Unit) {
+    constructor(table: Table, invalidateParent: () -> Unit) : this(table, null, invalidateParent)
+    val scopeSource: NativeTablePositionedScopeSource? = scopeEntry?.takeIf { it.contains(table) }
+        ?.let { NativeTablePositionedScopeSource.from(table) }
     val ordinaryAbsolute: Boolean = nativeDelegatedAbsoluteTable(table)
     private var statePaintRevision by mutableStateOf(0)
     fun statePaintChanged() {
@@ -323,7 +355,10 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
      * parent draw. Admission and immutable placement are rechecked before either phase. */
     fun paintOriginalState(canvas: android.graphics.Canvas, focus: Boolean) {
         statePaintRevision
-        if (permitsOriginalOwners()) cells.forEach { it.paintOriginalState(canvas, focus) }
+        if (permitsOriginalOwners()) {
+            val ordered = if (scopeSource == null) cells else cells.sortedBy { scopeSource.rank(it.index) }
+            ordered.forEach { it.paintOriginalState(canvas, focus) }
+        }
         // This is the existing upper AndroidView's priority, including parent selection
         // handles over a Child placeholder. Keep paint and real interop hit order aligned.
         paintRootState(canvas, focus)
@@ -341,6 +376,21 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
     private var width: Int? = null
     private var rootCoordinates: LayoutCoordinates? = null
     var gridCoordinates: LayoutCoordinates? = null
+    private var scopeClipCoordinates: LayoutCoordinates? = null
+    private var scopeClipMinimum: Pair<Float, Float>? = null
+    fun scopeGridClipPolicy(minimum: Pair<Float, Float>?) {
+        require(minimum == null || scopeSource != null)
+        if (scopeClipMinimum != minimum) {
+            scopeClipMinimum = minimum; scopeClipCoordinates = null
+            invalidate(); invalidateParent()
+        }
+    }
+    fun positionedGrid(coordinates: LayoutCoordinates, clippedMinimum: Pair<Float, Float>?) {
+        gridCoordinates = coordinates
+        scopeClipCoordinates = coordinates.takeIf { scopeSource != null && clippedMinimum != null &&
+            clippedMinimum == scopeClipMinimum }
+        validateAfterPlacement()
+    }
     private var measuredSurroundings: NativeDelegatedSurroundings? = null
     private data class DocumentOverflow(val generation: Any, val bounds: NativeDelegatedDocumentOverflow)
     private var documentOverflow: DocumentOverflow? = null
@@ -451,6 +501,7 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         val root = rootCoordinates?.takeIf { it.isAttached } ?: return false
         val grid = gridCoordinates?.takeIf { it.isAttached } ?: return false
         val state = rootStatePlacement ?: return false
+        if (scopeSource != null && (scopeClipCoordinates !== grid || scopeClipMinimum == null)) return false
         return rootStateView === state.view && rootStateSurface === state.surface &&
             rootStateCoordinates === state.coordinates && state.view.isAttachedToWindow &&
             state.view.currentMeasuredGeometry === state.surface && state.view.delegatedStateOwner === this &&
@@ -464,6 +515,9 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
     private fun decision(): Evaluation? {
         val root = rootCoordinates?.takeIf { it.isAttached } ?: return null
         val grid = gridCoordinates?.takeIf { it.isAttached } ?: return null
+        // Parent callbacks precede the grid callback. A changed policy stays pending,
+        // never authorized, until this pass publishes its actual clipping coordinator.
+        if (scopeSource != null && (scopeClipMinimum == null || scopeClipCoordinates !== grid)) return null
         val surroundings = measuredSurroundings ?: return null
         if (cells.any { !it.placementReported() }) return null
         val stateView = rootStateView ?: return null
@@ -530,7 +584,13 @@ internal class NativeDelegatedTableOwner(val table: Table, private val invalidat
         val input = surroundings.copy(allocation = tableBounds, rootOwner = root,
             rootState = NativeDelegatedRootState(stateView, stateBounds, stateClip,
                 rootStateInput.map { it.translated(stateBounds.left, stateBounds.top) }, surroundings.rootFallbackInput))
-        return when (val decision = nativeDelegatedPaintDecision(input, measured, expected)) {
+        val decision = if (scopeSource == null) nativeDelegatedPaintDecision(input, measured, expected) else
+            nativeTableScopePaintDecision(input, measured, expected, scopeSource,
+                cells.map { it.currentScopeRank() ?: -1 }, cells.all { it.scopePublicationCurrent() },
+                NativeFloatBounds(0f, 0f, root.size.width.toFloat(), root.size.height.toFloat()),
+                scopeClipMinimum?.takeIf { scopeClipCoordinates === grid }?.let {
+                    NativeTableScopeMeasuredClip(tableBounds, it.first, it.second) })
+        return when (decision) {
             is NativeDelegatedPaintDecision.Permitted -> Evaluation(decision)
             is NativeDelegatedPaintDecision.Unavailable -> unavailable(decision.reason, "paint/input proof; actualAllocation=$tableBounds")
         }

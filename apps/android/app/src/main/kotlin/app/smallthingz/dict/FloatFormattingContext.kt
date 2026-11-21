@@ -31,7 +31,7 @@ internal fun floatBodyRuns(rows: List<ReadingRow>, bodyAdjoining: BodyAdjoiningP
     }
     // A cell opacity group needs the preceding source paint in the same measured
     // body scene; identities, source paths and reference barriers stay unchanged.
-    if (rows.any { it.block?.table?.let(::nativeHasCellOpacity) == true }) return listOf(rows.indices)
+    if (rows.any { it.block?.table?.let { table -> nativeHasCellOpacity(table) || nativeHasTablePositionedScope(table) } == true }) return listOf(rows.indices)
     val prefix = rows.firstOrNull()?.takeIf { it.heading?.isAuthoredBodyPrefix() == true }
     val headingPrefixStart = if (prefix != null && rows.any { it.heading?.headingStyle != null })
         rows.indexOfFirst { it.sectionKey == prefix.key && it.block != null } else -1
@@ -53,7 +53,7 @@ internal fun Block.hasNativeAudioControlBody(): Boolean = kind in nativeBodyText
     spans.any { it.audioControl != null }
 
 /** An authored Container needs the same block context even when its active style has no float. */
-internal fun Block.needsNativeBlockContext(): Boolean = ruleStyle != null || container != null || table?.blockViewport != null || table?.let(::nativeHasCellOpacity) == true || hasBodyFloat() || hasNativeAudioControlBody() ||
+internal fun Block.needsNativeBlockContext(): Boolean = ruleStyle != null || container != null || table?.blockViewport != null || table?.let { nativeHasCellOpacity(it) || nativeHasTablePositionedScope(it) } == true || hasBodyFloat() || hasNativeAudioControlBody() ||
     table?.style?.let { it.marginValues != null && !it.isInline } == true
 
 /** An enrolled table cell needs its original native context even when its Figure

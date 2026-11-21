@@ -117,7 +117,8 @@ internal fun nativeScrollportUnavailable(style: ContainerStyle, flexItem: Boolea
     }
 }
 
-internal data class NativePositionedScrollportPolicy(val source: Container, val overflowX: PositionedOverflowX)
+internal data class NativePositionedScrollportPolicy(val source: Container, val overflowX: PositionedOverflowX,
+    val cellOwner: NativeDelegatedCellOwner? = null)
 internal data class NativeOrdinaryHiddenScrollportPolicy(val source: Container)
 internal data class NativeScrollportSpec(val parts: List<NativeFloatContextSpec>, val padding: FloatMargins,
     val positioned: NativePositionedScrollportPolicy? = null,
@@ -649,6 +650,7 @@ private fun NativeOwnedContainerScrollport(spec: NativeScrollportSpec, linkColor
     val positioned = spec.positioned
     val ordinaryHidden = spec.ordinaryHidden
     val source = positioned?.source ?: checkNotNull(ordinaryHidden).source
+    val scopeCell = positioned?.cellOwner?.takeIf { it.ownsScope(source) }
     val userEnabled = positioned?.overflowX == PositionedOverflowX.Scroll
     val description = if (positioned != null) "Positioned" else "Hidden"
     val identity = NativePositionedScopeIdentity(source)
@@ -810,8 +812,10 @@ private fun NativeOwnedContainerScrollport(spec: NativeScrollportSpec, linkColor
                         val result = if (failure == null && geometry != null) Result.success(geometry)
                             else Result.failure(UnsupportedFloatLayout(failure ?: "$description geometry is unavailable"))
                         val sealed = export.seal(ticket)
-                        if (sealed != null) export.publish(sealed, result,
-                            geometry?.extents?.ink, geometry.takeIf { result.isFailure })
+                        if (sealed != null) {
+                            export.publish(sealed, result, geometry?.extents?.ink, geometry.takeIf { result.isFailure })
+                            scopeCell?.publishedScope(source, projected.takeIf { result.isSuccess })
+                        } else scopeCell?.publishedScope(source, null)
                     }
                     publication.publish(input, placement.takeIf { geometry != null })
                     return layout(viewport, height) {

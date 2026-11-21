@@ -1,6 +1,59 @@
 # Android validation
 
-## Current completed-empty edition import and selection — 2026-11-21
+## Current table-cell positioned scopes and inline image maps — 2026-11-21
+
+The native table path now carries supported positioned scopes through cell
+measurement, clipping and input ownership. The qualified shape uses the existing
+relative positioning, no-wrap, hidden horizontal overflow, automatic vertical
+overflow and signed bottom margin fields. Unsupported vertical overflow remains
+refused. Inline image maps now resolve their CSS dimensions before native float
+layout and retain their original region, file-description and fallback actions.
+No model, decoder or wire format changed.
+
+The [canonical application][application166-current] applies thirteen qualified
+files: ten main and three JVM-test files, including two new main files. The
+canonical inventory contains 993 files. The [combined saved audit][audit166-current]
+qualifies **16 selected JVM checks**: five new controls and eleven maintained
+controls. Fifteen passed in the [original run][partial166-current]. Its remaining
+negative fixture accidentally retained text spans while adding a nested table,
+so the model rejected the fixture before the intended native refusal check.
+That original failed run is preserved. The correction clears only those spans;
+the [single-method continuation][host166-current] passed the corrected check.
+The other fifteen methods and all production inputs are unchanged.
+
+The original run executed main, unit-test and instrumentation Kotlin compilation;
+instrumentation Java was up to date. The continuation reused up-to-date main
+output and executed only unit compilation and its one selected test. It invoked
+no instrumentation task. The combined audit authenticates all three source
+memberships and carries the unchanged instrumentation result. The original
+compiler emitted 537 warning lines and the continuation 228, with no compiler
+errors. Saved merged manifests retain minimum API **31** (Android 12) and target
+API **37**.
+
+The original run took 631.521 seconds with sampled peak PSS of 2,852,317,184 bytes.
+The successful continuation took 239.591 seconds with sampled peak PSS of
+1,460,132,864 bytes. Its [independent physical closure][physical166-current]
+verified exact source and protected artifacts, absent owned processes and a free
+build lock. Existing HOME caches and outputs were reused; no clean build or
+history reset was performed.
+
+These checks do not establish genuine positioned-wrapper interoperability:
+the retained Setswana producer output still flattened that wrapper. Host controls
+cover the explicit native scope contract and image-map sizing/actions. There is
+no new full 1,234-case suite, lint, APK, device pixel, touch, scroll, hover,
+selection or accessibility result. Historical installed62 evidence and the prior
+unsigned canonical163 APK do not qualify these new production bytes. Physical
+coverage still requires permitted access, coordinated custody and a compatible
+authorized signed installation. The recorded pre-ADB `EACCES` dependency and
+signing, installation and publication holds remain unchanged.
+
+[application166-current]: ../../../.tmp/renderer-core-oct28/tn-picdic-android01/canonical-application01.json
+[host166-current]: /home/a/.tmp/wikidict-android-host166-run02/completion01.json
+[audit166-current]: /home/a/.tmp/wikidict-android-host166-run02/saved-result-peer-reader01.json
+[partial166-current]: /home/a/.tmp/wikidict-android-host166-run01/saved-partial-result-peer-reader01.json
+[physical166-current]: /home/a/.tmp/wikidict-android-host166-run02/runtime-physical-closure01.json
+
+## Previous completed-empty edition import and selection — 2026-11-21
 
 The Library's normal **Import** menu now offers **Dictionary file** and
 **Completed-empty edition folder**. A validated completed-empty edition becomes

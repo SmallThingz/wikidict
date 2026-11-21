@@ -205,6 +205,7 @@ private data class NativeImage(
     val id: Int, val offset: Int, val span: Span, val state: InlineImageAssetState,
     val paint: TextPaint, val pixels: InlineImagePixels, val ink: NativeFloatBounds, val fallbackWidth: Float?,
     val normalBodyPixels: Float, val imagePixelDensity: Float,
+    val imageMap: NativeInlineImageMap?,
     val draw: (Canvas, RectF) -> Unit,
 )
 
@@ -220,7 +221,7 @@ private class NativeInlineImageSpan(private val image: NativeImage) : Replacemen
         nativeImageOccurrencePlacement(image.span.image?.occurrenceLayout, image.normalBodyPixels, image.imagePixelDensity)
     override fun drawNativeImage(canvas: Canvas, outer: RectF) = image.draw(canvas, outer)
     override val nativeImageSelectionBounds: NativeFloatBounds? get() =
-        if (image.span.image?.verticalAlign == null && image.span.linkPaint == null) null else nativeUsedMetrics.let {
+        if (image.span.image?.verticalAlign == null && image.span.linkPaint == null && image.imageMap == null) null else nativeUsedMetrics.let {
             NativeFloatBounds(0f, it.top, image.pixels.width, it.bottom)
         }
     override fun nativePaintBounds(lineTop: Float, lineBottom: Float): NativeFloatBounds =
@@ -970,6 +971,7 @@ internal fun prepareNativeFloatText(
     var details by remember { mutableStateOf<NativeImage?>(null) }
     val images = mutableListOf<NativeImage>()
     val imageActions = mutableMapOf<Int, NativeImageActions>()
+    val imageMapActions = mutableMapOf<Int, List<() -> Unit>>()
     val imageDarkTheme = LocalReaderDarkTheme.current
     var offset = 0
     visibleSpans.forEachIndexed { id, span ->
@@ -1021,13 +1023,30 @@ internal fun prepareNativeFloatText(
                 (0.5f - borderWidth).coerceAtLeast(0f) else 0f
             val imageInk = NativeFloatBounds(-markerOverflow, -markerOverflow,
                 outerPixels.width + markerOverflow, outerPixels.height + markerOverflow)
+            val imageMap = image.map?.let {
+                val path = ruby?.leaves?.getOrNull(id)?.range?.takeIf { it.span === span }?.path ?: "span-$id"
+                val layout = ready?.takeIf { dimensions != null }?.let { asset ->
+                    inlineImageLayoutPixels(image, asset.originalWidth, asset.originalHeight, asset.mime)
+                }
+                NativeInlineImageMap(span, path, offset, ready?.originalWidth, ready?.originalHeight,
+                    layout?.width, layout?.height)
+            }
             val nativeImage = NativeImage(id, offset, span, state, paint, outerPixels, imageInk, dimensions?.width,
-                with(density) { normalBodySize.toPx() }, density.density, draw)
+                with(density) { normalBodySize.toPx() }, density.density, imageMap, draw)
+            imageMap?.let { source ->
+                key(documentOwner, captionOwner, NativeTextAdvisoryIdentity(span, source.path), offset, edition, uri, onLink) {
+                    imageMapActions[id] = remember {
+                        source.actions.indices.map { index ->
+                            { source.activate(index, onLink, uri::openUri) }
+                        }
+                    }
+                }
+            }
             images += nativeImage
-            if (span.linkPaint != null) {
+            if (span.linkPaint != null || imageMap != null) {
                 // Keep one action for this source occurrence across size/asset-state remeasure.
                 // A changed caller or source gets new callbacks; details read the current asset.
-                key(documentOwner, captionOwner, id, offset, span, edition, uri, onLink) {
+                key(documentOwner, captionOwner, id, offset, imageMap?.let { NativeTextAdvisoryIdentity(span, it.path) } ?: span, edition, uri, onLink) {
                     val currentImage by rememberUpdatedState(nativeImage)
                     imageActions[id] = remember {
                         val url = inlineImageLinkUrl(span, edition)
@@ -1432,6 +1451,8 @@ internal fun prepareNativeFloatText(
                                 missingLinkPaint = state, focusPaint = focus, citationMarker = citationMarker, clippedAbsoluteLocation = clippedLocation))
                         }
                         val firstImage = nativeLinks.size
+                        // Keep every old image/marker/control ID; map actions get separate source slots.
+                        var nextImageMapId = firstImage + visibleSpans.size + 2 + paintedHeadingActions.size
                         images.forEach { image ->
                             val model = image.span.image!!
                             val url = inlineImageLinkUrl(image.span, edition)
@@ -1445,9 +1466,12 @@ internal fun prepareNativeFloatText(
                             val advice = image.span.imageTooltip
                             val hasDetails = !advice.isNullOrEmpty() || image.state is InlineImageAssetState.Ready ||
                                 image.state is InlineImageAssetState.GeometryUnavailable || image.state == InlineImageAssetState.Failed
+                            val imageMap = image.imageMap
+                            val imageClick = click.takeIf { imageMap == null }
+                            val descriptionAction = click.takeIf { imageMap?.hasDescription == true }
                             val accessibilityLabel = inlineImageAccessibilityLabel(model, when {
-                                click != null -> "Open image link"
-                                hasDetails -> "Image details"
+                                imageClick != null -> "Open image link"
+                                hasDetails || imageMap != null -> "Image details"
                                 else -> null
                             })
                             val fragments = geometry.rectsForRange(image.offset, image.offset + 1)
@@ -1458,10 +1482,31 @@ internal fun prepareNativeFloatText(
                                 advisorySources[firstImage + image.id] = it
                             }
                             add(FloatInteractionNode(firstImage + image.id, FloatInteractionKind.IMAGE, image.offset, image.offset + 1,
-                                fragments, accessibilityLabel, advice, click,
+                                fragments, accessibilityLabel, advice, imageClick,
                                 imageStatus(image.state) + if (unresolved) " Image link source unavailable" else "",
-                                if (hasDetails) authoredActions?.onDetails ?: ({ details = image }) else null,
+                                if (hasDetails || imageMap != null) authoredActions?.onDetails ?: ({ details = image }) else null,
+                                advisoryIdentity = imageMap?.let { NativeTextAdvisoryIdentity(it.span, it.path) },
+                                customActions = descriptionAction?.let { listOf(NativeHeadingAction("Image description", false, it)) }.orEmpty(),
                                 focusPaint = focus, sourceFocusVisible = image.span.linkPaint != null))
+                            imageMap?.let { source ->
+                                // A map belongs to the actual replacement image, never its reserved line band.
+                                val outer = fragments.singleOrNull()
+                                    ?: throw UnsupportedFloatLayout("Inline image map lost its original image rectangle")
+                                val content = nativeInlineImageMapContentBounds(ImageMapBounds(outer.left.toDouble(),
+                                    outer.top.toDouble(), outer.width().toDouble(), outer.height().toDouble()),
+                                    if (model.border) image.imagePixelDensity.toDouble() else 0.0)
+                                    ?: throw UnsupportedFloatLayout("Inline image map content bounds are unavailable")
+                                val bounds = RectF(content.left.toFloat(), content.top.toFloat(),
+                                    (content.left + content.width).toFloat(), (content.top + content.height).toFloat())
+                                source.actions.forEachIndexed { index, action ->
+                                    add(FloatInteractionNode(nextImageMapId++, FloatInteractionKind.LINK,
+                                        source.start, source.end, listOf(RectF(bounds)), action.label, action.label,
+                                        imageMapActions.getValue(image.id)[index],
+                                        if (source.available) null else "Image map geometry unavailable",
+                                        hitTest = { x, y -> source.accepts(index, content, x.toDouble(), y.toDouble()) },
+                                        advisoryIdentity = NativeTextAdvisoryIdentity(source.span, "${source.path}/map-action-$index")))
+                                }
+                            }
                         }
                         val afterImages = firstImage + visibleSpans.size
                         if (prefix.isNotEmpty()) {
@@ -1488,7 +1533,7 @@ internal fun prepareNativeFloatText(
         if (!authoredHeading) nodes else nodes.filter { it.kind == FloatInteractionKind.HEADING } +
             nodes.filter { it.kind != FloatInteractionKind.HEADING }
     } }
-    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, referenceLayoutBacklink, outsideReferenceMarker, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection, terminalFallback) { Any() }
+    val revision = remember(visibleSpans, annotated, effective, shapeKey, prepared, images.map { listOf(it.state, it.pixels, it.fallbackWidth, it.normalBodyPixels.takeIf { _ -> it.span.image?.occurrenceLayout != null }) }, imageActions.toMap(), imageMapActions.toMap(), bodyPixels.takeIf { imageActions.isNotEmpty() }, imageDarkTheme, density, rtl, paragraphGaps, containAtEnd, insets, prefix, prefixStyle, heading, headingActions, nativeLineHeight, inlineRevision, layoutUnavailable, sourceFamily, authoredHeading, ownerDirection, headingLabel, ownerWrap, ownerFont, cellMetricRevision, sourceLineStarts, referenceBacklink, referenceLayoutBacklink, outsideReferenceMarker, citationTargetAnchor, staticInlineParent, staticParentPaint?.typeface, staticParentPaint?.textSize, columnTextDirection, terminalFallback) { Any() }
     val citationPreparation = rememberNativeCitationPreparation(revision,
         citationSourceRanges.mapNotNull { it.span.citationMarker?.anchor },
         layoutUnavailable ?: textState.takeIf { prepared.values.any { value -> !value.available } })
@@ -1575,9 +1620,29 @@ internal fun prepareNativeFloatText(
         }
     }
     return PreparedNativeFloatText(annotated.text, layoutUnavailable ?: textState, revision, factory, {
-        val detail = details
+        // A map menu is tied to the original occurrence and reads its current asset state.
+        val detail = details?.let { selected -> if (selected.imageMap == null) selected else
+            images.singleOrNull { it.id == selected.id && it.span === selected.span &&
+                it.imageMap?.path == selected.imageMap.path } }
         DropdownMenu(expanded = detail != null, onDismissRequest = { details = null }) {
             if (detail != null) {
+                detail.imageMap?.let { source ->
+                    source.actions.forEachIndexed { index, action ->
+                        DropdownMenuItem(text = { Text(action.label) }, onClick = {
+                            details = null; imageMapActions.getValue(detail.id)[index]()
+                        })
+                    }
+                    if (source.hasDescription) {
+                        val description = imageActions[detail.id]?.onClick ?: inlineImageLinkUrl(detail.span, edition)?.let { url ->
+                            { uri.openUri(url) }
+                        } ?: detail.span.takeIf { it.kind == "link" && !it.target.startsWith("File:") }?.let { span ->
+                            { onLink(span.entryLink()) }
+                        }
+                        description?.let { activate -> DropdownMenuItem(text = { Text("Image description") }, onClick = {
+                            details = null; activate()
+                        }) }
+                    }
+                }
                 detail.span.imageTooltip?.takeIf { it.isNotEmpty() }?.let { DropdownMenuItem(text = { Text(it) }, onClick = {}, enabled = false) }
                 if (detail.state == InlineImageAssetState.Failed || detail.state is InlineImageAssetState.GeometryUnavailable) DropdownMenuItem(text = { Text("Retry image") }, onClick = {
                     details = null; owner.retry(detail.span.image!!)

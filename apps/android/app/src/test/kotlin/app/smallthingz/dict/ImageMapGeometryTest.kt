@@ -79,4 +79,98 @@ class ImageMapGeometryTest {
         assertEquals(values.map { it.toBits() }, map.regions.single().coordinates.map { it.toBits() })
         assertEquals("", map.regions.single().action.targetFragment)
     }
+    @Test fun inlineMapUsesOriginalOccurrenceReadyBasisAndExactTinyRegionWithoutFileFallback() {
+        val self = ImageMapAction(ImageMapActionKind.Internal, "mmele", null, "mmele")
+        val fallback = ImageMapAction(ImageMapActionKind.External, "https://example.test/default", null, "default")
+        val region = ImageMapRegion(ImageMapShape.Rect, listOf(0.0, 0.0, 1.0, 1.0), self)
+        val map = ImageMap(ImageMapDescription.BottomRight, listOf(region, region.copy()), fallback)
+        val original = Span("link", "", target = "File:Human body features-nb.svg",
+            image = InlineImage("Human body features-nb.svg", 310, null, "body", "body", true, map))
+        val textFallback = Span("link", "mmele", target = "mmele")
+        val spans = listOf(original, Span("text", "\n", "", ""), textFallback)
+        val image = NativeInlineImageMap(original, "span-0", 0, 563, 685, 310.0, 377.0)
+        assertSame(original, image.span)
+        assertSame(map, image.map)
+        assertSame(self, image.actions[0])
+        assertSame(self, image.actions[1])
+        assertSame(fallback, image.actions[2])
+        assertEquals(0, image.start); assertEquals(1, image.end)
+        assertTrue(image.hasDescription)
+        assertEquals("span-0", image.path)
+        assertEquals("https://tn.wiktionary.org/wiki/File%3AHuman%20body%20features-nb.svg",
+            inlineImageLinkUrl(original, "tnwiktionary-20261001"))
+        // Retained original asset dimensions; layout dimensions use the existing client rounding.
+        val firstLayout = checkNotNull(inlineImageLayoutPixels(checkNotNull(original.image), 563, 685, "image/svg+xml"))
+        assertEquals(InlineImageLayoutPixels(310.0, 377.0), firstLayout)
+        val chest = original.copy(target = "File:Chest.jpg", image = original.image!!.copy(file = "Chest.jpg"))
+        val secondLayout = checkNotNull(inlineImageLayoutPixels(checkNotNull(chest.image), 927, 755, "image/jpeg"))
+        assertEquals(InlineImageLayoutPixels(310.0, 252.0), secondLayout)
+        val smaller = NativeInlineImageMap(chest, "span-1", 1, 927, 755, secondLayout.width, secondLayout.height)
+        for (density in listOf(0.7f, 1f, 1.3f, 2f, 2.5f)) {
+            val pixels = checkNotNull(inlineImagePixels(checkNotNull(original.image), 563, 685, density, "image/svg+xml"))
+            val d = density.toDouble()
+            val outer = ImageMapBounds(31.0, 47.0, pixels.width.toDouble() + 2.0 * d, pixels.height.toDouble() + 2.0 * d)
+            val content = checkNotNull(nativeInlineImageMapContentBounds(outer, d))
+            val dx = content.width / firstLayout.width; val dy = content.height / firstLayout.height
+            val ratio = (firstLayout.width + firstLayout.height) / (563.0 + 685.0)
+            val x = content.left + 0.5 * ratio * dx; val y = content.top + 0.5 * ratio * dy
+            assertTrue(image.accepts(0, content, x, y))
+            assertFalse(image.accepts(1, content, x, y)) // original first region, not equal-target last
+            assertFalse(image.accepts(2, content, x, y))
+            // The source edge scales below1, then rounds to1 before physical scaling.
+            assertTrue(image.accepts(0, content, content.left + 1.01 * ratio * dx, y))
+            assertFalse(image.accepts(0, content, content.left + 1.01 * dx, y))
+            assertTrue(image.accepts(2, content, content.left + 1.01 * dx, y))
+            assertFalse(image.accepts(2, content, outer.left, outer.top)) // no border/File fallback
+            assertFalse(image.accepts(2, content, content.left + content.width, y))
+            val smallerPixels = checkNotNull(inlineImagePixels(checkNotNull(chest.image), 927, 755, density, "image/jpeg"))
+            val smallerContent = ImageMapBounds(19.0, 23.0, smallerPixels.width.toDouble(), smallerPixels.height.toDouble())
+            val smallerRatio = (secondLayout.width + secondLayout.height) / (927.0 + 755.0)
+            val sx = smallerContent.left + 0.5 * smallerRatio * smallerContent.width / secondLayout.width
+            val sy = smallerContent.top + 0.5 * smallerRatio * smallerContent.height / secondLayout.height
+            // The second original source rectangle collapses to zero; no minimum-target invention.
+            assertFalse(smaller.accepts(0, smallerContent, sx, sy))
+            assertFalse(smaller.accepts(1, smallerContent, sx, sy))
+            assertTrue(smaller.accepts(2, smallerContent, sx, sy))
+        }
+        val calls = mutableListOf<Any>()
+        image.activate(0, { calls += it }, { calls += it })
+        image.activate(1, { calls += it }, { calls += it })
+        image.activate(2, { calls += it }, { calls += it })
+        calls += textFallback.entryLink()
+        assertEquals(listOf(EntryLink("mmele"), EntryLink("mmele"), fallback.target, EntryLink("mmele")), calls)
+        assertSame(original, spans[0]); assertSame(textFallback, spans[2])
+        assertEquals(EntryLink("mmele"), textFallback.entryLink())
+        assertEquals(listOf(0.0, 0.0, 1.0, 1.0), region.coordinates)
+    }
+
+    @Test fun inlineMapUnavailableGeometryAndDescriptionNoneRetainIndependentActionsAndSource() {
+        val self = action("same label")
+        val map = ImageMap(ImageMapDescription.None, listOf(region(ImageMapShape.Rect, "same label", 0.0, 0.0, 1.0, 1.0)), self)
+        val original = Span("text", "", "", "", image = InlineImage("Map.svg", 310, null, "", null, false, map))
+        val missing = NativeInlineImageMap(original, "group-0/span-0", 4, null, null, 310.0, 310.0)
+        assertFalse(missing.available)
+        assertFalse(missing.hasDescription)
+        assertNull(inlineImageLinkUrl(original, "tnwiktionary-20261001"))
+        assertFalse(missing.accepts(0, full, 0.0, 0.0))
+        assertFalse(missing.accepts(1, full, 50.0, 50.0))
+        assertSame(self, missing.actions[1])
+        assertEquals(4, missing.start); assertEquals(5, missing.end)
+        val ready = NativeInlineImageMap(original, missing.path, missing.start, 310, 310, 310.0, 310.0)
+        assertTrue(ready.available)
+        assertTrue(ready.accepts(0, full, 0.1, 0.1))
+        assertTrue(ready.accepts(1, full, 50.0, 50.0))
+        val second = NativeInlineImageMap(original, "group-1/span-0", 5, 310, 310, 310.0, 310.0)
+        assertSame(original, second.span); assertNotEquals(ready.path, second.path)
+        assertEquals(5, second.start); assertEquals(6, second.end)
+        assertNull(nativeInlineImageMapContentBounds(full, 50.0))
+        assertNull(nativeInlineImageMapContentBounds(full, Double.NaN))
+        assertNull(nativeInlineImageMapContentBounds(full.copy(left = Double.MAX_VALUE, width = Double.MAX_VALUE), 0.0))
+        val noDefaultSpan = original.copy(image = original.image!!.copy(map = map.copy(defaultAction = null)))
+        val noDefault = NativeInlineImageMap(noDefaultSpan, "span-0", 0, 927, 755, 310.0, 252.0)
+        assertFalse(noDefault.accepts(0, full, 0.01, 0.01))
+        assertEquals(1, noDefault.actions.size)
+        assertEquals(map, original.image?.map)
+    }
+
 }

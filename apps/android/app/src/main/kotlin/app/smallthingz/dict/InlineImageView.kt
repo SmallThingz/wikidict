@@ -72,12 +72,15 @@ internal fun inlineImageOuterPixels(content: InlineImagePixels, bordered: Boolea
 
 /** MediaWiki's client dimensions use positive half-away rounding. The physical
  * 960px cache thumbnail is not the original SVG's natural size. */
-internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrinsicHeight: Long, density: Float,
-    originalMime: String? = null): InlineImagePixels? {
-    require(intrinsicWidth > 0 && intrinsicHeight > 0 && density.isFinite() && density > 0f)
-    if (image.staticPoster != null) return InlineImagePixels(
-        (checkNotNull(image.widthPx).toDouble() * density).also { figureCoordinate(it) }.toFloat(),
-        (checkNotNull(image.heightPx).toDouble() * density).also { figureCoordinate(it) }.toFloat())
+internal data class InlineImageLayoutPixels(val width: Double, val height: Double)
+
+/** Exact client layout basis, before physical density/cap conversion. Image-map
+ * coordinate rounding must not reverse a rounded Float pixel size back to CSS. */
+internal fun inlineImageLayoutPixels(image: InlineImage, intrinsicWidth: Long, intrinsicHeight: Long,
+    originalMime: String? = null): InlineImageLayoutPixels? {
+    require(intrinsicWidth > 0 && intrinsicHeight > 0)
+    if (image.staticPoster != null) return InlineImageLayoutPixels(
+        checkNotNull(image.widthPx).toDouble(), checkNotNull(image.heightPx).toDouble())
     val mime = originalMime?.substringBefore(';')?.trim()?.lowercase()
     val heightOnly = image.widthPx == null && image.heightPx != null
     if (heightOnly && mime?.startsWith("image/") != true) return null
@@ -98,11 +101,22 @@ internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrins
         cssWidth = requestedWidth
         cssHeight = rounded(intrinsicHeight.toDouble() * cssWidth / intrinsicWidth).coerceAtLeast(1.0)
     }
-    val w = cssWidth * density
-    val h = cssHeight * density
+    return InlineImageLayoutPixels(cssWidth, cssHeight)
+}
+
+internal fun inlineImagePixels(image: InlineImage, intrinsicWidth: Long, intrinsicHeight: Long, density: Float,
+    originalMime: String? = null): InlineImagePixels? {
+    require(intrinsicWidth > 0 && intrinsicHeight > 0 && density.isFinite() && density > 0f)
+    if (image.staticPoster != null) return InlineImagePixels(
+        (checkNotNull(image.widthPx).toDouble() * density).also { figureCoordinate(it) }.toFloat(),
+        (checkNotNull(image.heightPx).toDouble() * density).also { figureCoordinate(it) }.toFloat())
+    val layout = inlineImageLayoutPixels(image, intrinsicWidth, intrinsicHeight, originalMime) ?: return null
+    val w = layout.width * density
+    val h = layout.height * density
     val projection = min(1.0, MaxComputedFontPixels / max(w, h))
     return InlineImagePixels((w * projection).toFloat(), (h * projection).toFloat())
 }
+
 internal fun inlineImageInkTop(metrics: InlineImageFontMetrics, height: Float,
     alignment: InlineImageVerticalAlign? = null): Float = when (alignment) {
     null, InlineImageVerticalAlign.Middle -> metrics.baselineShift - (metrics.xHeight + height) / 2f

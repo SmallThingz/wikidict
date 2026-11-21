@@ -141,6 +141,7 @@ internal sealed interface NativeFloatContextSpec {
         val preferredWidth: (Int) -> Int? = { null }, val overflowViewport: Boolean = false,
         val scrollport: NativeScrollportSpec? = null,
         val delegatedTable: Table? = null, val autoMarginTable: Table? = null,
+        val positionedTableSource: NativeTableScopeEntrySource? = null,
         val autoMargins: NativeTableAutoMargins? = null,
         val blockViewport: TableBlockViewport? = null,
         val blockBox: ((Int) -> NativeTableBlockBox)? = null,
@@ -239,8 +240,8 @@ internal fun NativeFloatContextLayout(
     val delegatedTables = linkedMapOf<Int, NativeDelegatedTableOwner>()
     leaves.filterIsInstance<NativeFloatContextSpec.Child>().forEach { part ->
         part.delegatedTable?.let { table -> androidx.compose.runtime.key("delegated-table", part.id) {
-            delegatedTables[part.id] = remember(NativeDelegatedTableIdentity(table)) {
-                NativeDelegatedTableOwner(table, parentMeasureInput::invalidate)
+            delegatedTables[part.id] = remember(NativeDelegatedTableIdentity(table), part.positionedTableSource?.revision) {
+                NativeDelegatedTableOwner(table, part.positionedTableSource, parentMeasureInput::invalidate)
             }
         } }
     }
@@ -996,6 +997,7 @@ internal fun NativeFloatContextLayout(
                             catch (_: IllegalArgumentException) { throw UnsupportedFloatLayout("Document overflow exceeds Compose measurement range") }
                         }
                         if (documentSurface) documentPublisher?.publish(documentOwner, width, documentScrollBounds)
+                        if (!localScrollport) delegatedCell?.observedScopeContext(geometry)
                         onMeasuredGeometry?.invoke(geometry, inputGeometry)
                         Result.success(geometry)
                     } catch (failure: UnsupportedFloatLayout) { Result.failure(failure) }
