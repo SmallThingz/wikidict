@@ -1042,6 +1042,169 @@ def test_cache_report_command(argv, *, report, recorder, context):
                      '-Dqualification-cache-context=' + token]
 
 
+def _installed_cache_file(path):
+    """Read one exact build output or keeper without admitting a mutable alias."""
+    import hashlib, os, stat
+    path = _retention_path(path)
+    before = _retention_stamp(path)
+    if not stat.S_ISREG(before['mode']) or before['uid'] != os.geteuid():
+        raise ValueError('Installed-cache provenance requires owned regular files')
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(block)
+    if _retention_stamp(path) != before:
+        raise ValueError('Installed-cache file changed while recording')
+    return dict(path=str(path), bytes=before['size'], sha256=digest.hexdigest(),
+                mode=stat.S_IMODE(before['mode']), stamp=before)
+
+
+def _installed_cache_history(file_record):
+    # Historical raw outputs must never become generic operative source refs.
+    return dict(recorded_path=file_record['path'], recorded_bytes=file_record['bytes'],
+                recorded_sha256=file_record['sha256'], recorded_mode=file_record['mode'],
+                recorded_stamp=file_record['stamp'], present_at_install=True, operative=False)
+
+
+def _reuse_installed_cache_receipt(output, cache_local, role, raw_path, installed_path, source_fingerprint):
+    """Reuse an owned receipt only while every recorded file identity is exact."""
+    import hashlib, json, os, stat
+    from pathlib import Path
+    try:
+        before = _retention_stamp(output)
+        if not stat.S_ISREG(before['mode']) or before['uid'] != os.geteuid() or before['mode'] & 0o022 or before['size'] > 65536:
+            return None
+        payload = json.loads(output.read_bytes())
+        if not isinstance(payload, dict):
+            return None
+        if _retention_stamp(output) != before:
+            return None
+        integrity = payload.pop('receipt_payload_sha256')
+        encoded = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+        if hashlib.sha256(encoded).hexdigest() != integrity:
+            return None
+        payload['receipt_payload_sha256'] = integrity
+        if (payload['schema'], payload['role'], payload['cache_local'], payload['cache_key'], payload['captured_source_fingerprint']) != (
+                'wikidict.installed-cache-provenance.v1', role, str(cache_local), raw_path.parent.name, source_fingerprint):
+            return None
+        final = payload['historical_compiler_outputs']['final']
+        keeper = payload['installed_at_install']
+        if not payload['raw_and_installed_same_bytes'] or payload['retirement_authorized'] or payload['raw_output_retention_required']:
+            return None
+        if (final['recorded_path'], keeper['path']) != (str(raw_path), str(installed_path)):
+            return None
+        if (final['recorded_bytes'], final['recorded_sha256']) != (keeper['bytes'], keeper['sha256']):
+            return None
+        if final['recorded_stamp'] != _retention_stamp(raw_path) or keeper['stamp'] != _retention_stamp(installed_path):
+            return None
+        candidates = [raw_path.parent / (role + suffix) for suffix in ('_zcu.o', '_zcu.obj')]
+        present = [path for path in candidates if os.path.lexists(path)]
+        pair = payload['historical_compiler_outputs']['paired_object']
+        if pair['status'] == 'missing':
+            if present:
+                return None
+        elif pair['status'] == 'recorded':
+            recorded = pair['output']
+            if len(present) != 1 or str(present[0]) != recorded['recorded_path'] or _retention_stamp(present[0]) != recorded['recorded_stamp']:
+                return None
+        else:
+            return None
+        return payload
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def record_installed_cache_artifact(output, cache_local, role, raw_path, installed_path, source_fingerprint):
+    """Bind the actual Build LazyPath to its installed keeper; never scans or deletes."""
+    import json, os, re, tempfile, time
+    from pathlib import Path
+    output = _retention_path(output)
+    cache_local = _retention_path(cache_local)
+    raw_path = _retention_path(raw_path)
+    installed_path = _retention_path(installed_path)
+    if output.is_relative_to(cache_local) or installed_path.is_relative_to(cache_local) or output == installed_path:
+        raise ValueError('Install provenance cannot write into a live cache or overwrite its keeper')
+    if installed_path.name != raw_path.name:
+        raise ValueError('Installed keeper name differs from the emitted artifact')
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', role) or role in ('.', '..'):
+        raise ValueError('Invalid installed role name')
+    if source_fingerprint and not re.fullmatch(r'[0-9a-f]{64}', source_fingerprint):
+        raise ValueError('Invalid captured source fingerprint')
+    relative = raw_path.relative_to(cache_local)
+    if len(relative.parts) != 3 or relative.parts[0] != 'o' or not re.fullmatch(r'[0-9a-f]{32}', relative.parts[1]):
+        raise ValueError('Emitted artifact is outside the selected cache output namespace')
+    if raw_path.name not in (role, role + '.exe'):
+        raise ValueError('Emitted artifact name differs from the installed role')
+    prior = _reuse_installed_cache_receipt(output, cache_local, role, raw_path, installed_path, source_fingerprint)
+    if prior is not None:
+        return prior
+    raw = _installed_cache_file(raw_path)
+    installed = _installed_cache_file(installed_path)
+    if not raw['bytes'] or not raw['mode'] & 0o111 or not installed['mode'] & 0o111:
+        raise ValueError('Installed role is not a nonempty executable')
+    if (raw['bytes'], raw['sha256']) != (installed['bytes'], installed['sha256']):
+        raise ValueError('Installed keeper differs from the emitted artifact')
+    candidates = [raw_path.parent / (role + suffix) for suffix in ('_zcu.o', '_zcu.obj')]
+    present = [path for path in candidates if os.path.lexists(path)]
+    paired = dict(pair_basis='same emitted cache key and Zig zcu filename', status='missing', recorded_candidates=[str(path) for path in candidates], operative=False)
+    object_record = None
+    if len(present) == 1:
+        object_record = _installed_cache_file(present[0])
+        paired = dict(pair_basis='same emitted cache key and Zig zcu filename', status='recorded', output=_installed_cache_history(object_record), operative=False)
+    elif len(present) > 1:
+        paired['status'] = 'ambiguous'
+    for item in (raw, installed, object_record):
+        if item is not None and _retention_stamp(Path(item['path'])) != item['stamp']:
+            raise ValueError('Installed-cache inputs changed before publication')
+    payload = dict(schema='wikidict.installed-cache-provenance.v1', recorded_unix_ns=time.time_ns(), role=role,
+        cache_local=str(cache_local), cache_key=relative.parts[1],
+        captured_source_fingerprint=source_fingerprint, source_fingerprint_bound=bool(source_fingerprint),
+        installed_at_install=installed,
+        historical_compiler_outputs=dict(final=_installed_cache_history(raw), paired_object=paired),
+        raw_and_installed_same_bytes=True,
+        raw_and_installed_same_inode=(raw['stamp']['dev'], raw['stamp']['ino']) == (installed['stamp']['dev'], installed['stamp']['ino']),
+        raw_output_retention_required=False, retirement_authorized=False,
+        retirement_policy='Separate current-borrower and cache-index-coherent retirement required; no raw path is a consumer dependency.')
+    import hashlib
+    payload['receipt_payload_sha256'] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _retention_path(output)
+    # One concise current-install record, also for repeated builds into one prefix.
+    with tempfile.TemporaryDirectory(dir=output.parent) as staging:
+        staged = Path(staging) / 'report.json'
+        with staged.open('x') as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True); stream.write('\n')
+            stream.flush(); os.fsync(stream.fileno())
+        os.replace(staged, output)
+        if os.name == 'posix':
+            directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
+    return payload
+
+
+def validate_installed_cache_provenance(report_reference, installed_reference):
+    """Authenticate history and the keeper only, even after raw outputs retire."""
+    from pathlib import Path
+    report = _retention_json(report_reference)
+    if report.get('schema') != 'wikidict.installed-cache-provenance.v1':
+        raise ValueError('Unknown installed-cache provenance schema')
+    original = report['installed_at_install']
+    current = _installed_cache_file(installed_reference['path'])
+    for key in ('path', 'bytes', 'sha256'):
+        if current[key] != installed_reference[key] or current[key] != original[key]:
+            raise ValueError('Installed keeper no longer matches its install receipt')
+    for key in ('dev', 'ino', 'uid', 'gid', 'nlink', 'size', 'mtime_ns'):
+        if current['stamp'][key] != original['stamp'][key]:
+            raise ValueError('Installed keeper identity changed after installation')
+    old_mode = original['mode']
+    if current['mode'] not in (old_mode, old_mode & ~0o222):
+        raise ValueError('Unexpected keeper mode transition')
+    if 'mode' in installed_reference and current['mode'] != installed_reference['mode']:
+        raise ValueError('Installed role mode differs from its closure')
+    return report
+
+
 def record_test_cache_artifacts(output, cache_local, context, pairs):
     """Build.Run passes actual LazyPath outputs; read metadata, never ELF bytes."""
     import json, os, re, stat
@@ -1790,6 +1953,14 @@ def close_passed_native_qualification(request, *, reconcile_protected=None):
 
 if __name__ == '__main__':
     import sys
+    if len(sys.argv)>1 and sys.argv[1]=='record-installed-cache':
+        # Optional install provenance must not change an existing artifact result.
+        try:
+            from pathlib import Path
+            if len(sys.argv) != 8: raise ValueError('Expected prefix cache role emitted installed fingerprint')
+            record_installed_cache_artifact(Path(sys.argv[2])/'share/wikidict/writer-cache-output.json', *sys.argv[3:])
+        except Exception as error: print('INSTALLED_CACHE_REPORT_DEFERRED '+repr(error),file=sys.stderr)
+        raise SystemExit(0)
     if len(sys.argv)>1 and sys.argv[1]=='record-test-cache':
         # Reporting is optional housekeeping, never a qualification exit status.
         try: record_test_cache_artifacts(sys.argv[2],sys.argv[3],sys.argv[4],sys.argv[5:])

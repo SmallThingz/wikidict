@@ -181,7 +181,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "build_diagnostics", .module = build_diagnostics_mod },
     });
     const captured_writer_options = b.addOptions();
-    captured_writer_options.addOption([]const u8, "source_fingerprint", b.option([]const u8, "captured-source-fingerprint", "Exact immutable source binding for retained-page diagnostics") orelse "");
+    const captured_source_fingerprint = b.option([]const u8, "captured-source-fingerprint", "Exact immutable source binding for retained-page diagnostics") orelse "";
+    captured_writer_options.addOption([]const u8, "source_fingerprint", captured_source_fingerprint);
     blob_build_exe.root_module.addOptions("captured_writer_options", captured_writer_options);
     blob_build_exe.root_module.link_libc = true;
     blob_build_exe.root_module.linkSystemLibrary("bz2", .{});
@@ -201,13 +202,31 @@ pub fn build(b: *std.Build) void {
     blob_verify_exe.root_module.addImport("xz", blob_xz_mod);
     blob_verify_exe.root_module.link_libc = true;
 
+    const writer_cache_provenance = b.option(bool, "writer-cache-provenance", "Record retained Writer cache-output provenance") orelse false;
     const prepare_captured_writer = b.step("prepare-captured-writer", "Prepare the existing blob tool for authenticated retained-page diagnostics");
     const prepare_blob_tools = b.step("prepare-blob-tools", "Prepare native blob build, merge and verification tools");
     const prepare_blob_verify = b.step("prepare-blob-verify", "Prepare only the existing native blob verification tool");
     for ([_]*std.Build.Step.Compile{ blob_build_exe, blob_merge_exe, blob_verify_exe }) |artifact| {
         const install = b.addInstallArtifact(artifact, .{});
         prepare_blob_tools.dependOn(&install.step);
-        if (artifact == blob_build_exe) prepare_captured_writer.dependOn(&install.step);
+        if (artifact == blob_build_exe) {
+            prepare_captured_writer.dependOn(&install.step);
+            if (captured_source_fingerprint.len == 0 and !writer_cache_provenance) continue;
+            // Record the actual compiler LazyPath, without searching cache indexes.
+            const report = b.addSystemCommand(&.{"python3"});
+            report.has_side_effects = true;
+            report.addFileArg2(b.path("tools/native_qualification.py"), .{ .make_absolute = true });
+            report.addArg("record-installed-cache");
+            report.addDirectoryArg2(.{ .relative = .{ .base = .install_prefix, .sub_path = "" } }, .{ .make_absolute = true });
+            report.addDirectoryArg2(std.Build.LazyPath.cache_root, .{ .make_absolute = true });
+            report.addArg(artifact.name);
+            report.addArtifactArg2(artifact, .{ .make_absolute = true });
+            report.addFileArg2(.{ .relative = .{ .base = .install_bin, .sub_path = artifact.out_filename } }, .{ .make_absolute = true });
+            report.addArg(captured_source_fingerprint);
+            report.step.dependOn(&install.step);
+            prepare_captured_writer.dependOn(&report.step);
+            if (writer_cache_provenance) prepare_blob_tools.dependOn(&report.step);
+        }
         if (artifact == blob_verify_exe) prepare_blob_verify.dependOn(&install.step);
     }
 

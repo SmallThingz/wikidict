@@ -4815,5 +4815,135 @@ class ToolsPartitionAdoptionTests(unittest.TestCase):
         with self.assertRaises(KeyError):fixture.preparation_checks()(missing)
 
 
+class InstalledCacheProvenanceTests(unittest.TestCase):
+    def fixture(self, root, key='a' * 32, content=b'fake executable'):
+        cache = root / 'local'
+        raw = cache / 'o' / key / 'dict-blob-build'
+        raw.parent.mkdir(parents=True)
+        raw.write_bytes(content); raw.chmod(0o755)
+        keeper = root / 'prefix/bin/dict-blob-build'
+        keeper.parent.mkdir(parents=True, exist_ok=True)
+        keeper.write_bytes(content); keeper.chmod(0o755)
+        output = root / 'prefix/share/wikidict/writer-cache-output.json'
+        return cache, raw, keeper, output
+
+    def reference(self, path):
+        return dict(path=str(path), bytes=path.stat().st_size,
+                    sha256=hashlib.sha256(path.read_bytes()).hexdigest(), mode=path.stat().st_mode & 0o777)
+
+    def record(self, cache, raw, keeper, output):
+        return qualification.record_installed_cache_artifact(output, cache, 'dict-blob-build', raw, keeper, 'b' * 64)
+
+    def test_actual_key_pair_and_keeper_are_recorded_without_scanning(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            obj = raw.with_name('dict-blob-build_zcu.o'); obj.write_bytes(b'paired object')
+            with patch.object(Path, 'iterdir', side_effect=AssertionError('cache walk')), patch.object(Path, 'glob', side_effect=AssertionError('cache glob')):
+                report = self.record(cache, raw, keeper, output)
+            self.assertEqual(report['cache_key'], 'a' * 32)
+            self.assertEqual(report['historical_compiler_outputs']['final']['recorded_path'], str(raw))
+            self.assertEqual(report['historical_compiler_outputs']['paired_object']['output']['recorded_sha256'], hashlib.sha256(b'paired object').hexdigest())
+            self.assertEqual(report['installed_at_install']['sha256'], self.reference(keeper)['sha256'])
+            self.assertFalse(report['retirement_authorized'])
+            self.assertFalse(report['raw_output_retention_required'])
+            def operative_refs(value):
+                if isinstance(value, dict):
+                    return ([value['path']] if {'path', 'bytes', 'sha256'} <= value.keys() else []) + [p for v in value.values() for p in operative_refs(v)]
+                return [p for v in value for p in operative_refs(v)] if isinstance(value, list) else []
+            self.assertEqual(operative_refs(report), [str(keeper)])
+
+    def test_sealed_keeper_validates_after_raw_outputs_retire(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            obj = raw.with_name('dict-blob-build_zcu.o'); obj.write_bytes(b'paired object')
+            self.record(cache, raw, keeper, output)
+            report_ref = self.reference(output)
+            raw.unlink(); obj.unlink(); keeper.chmod(0o555)
+            report = qualification.validate_installed_cache_provenance(report_ref, self.reference(keeper))
+            self.assertTrue(report['raw_and_installed_same_bytes'])
+
+    def test_changed_installed_bytes_cannot_restamp_old_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            self.record(cache, raw, keeper, output)
+            report_ref = self.reference(output)
+            keeper.write_bytes(b'replacement executable')
+            with self.assertRaises(ValueError):
+                qualification.validate_installed_cache_provenance(report_ref, self.reference(keeper))
+
+    def test_report_cannot_overwrite_cache_or_installed_keeper(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            for invalid in (raw, raw.with_name('report.json'), keeper):
+                with self.assertRaises(ValueError): self.record(cache, raw, keeper, invalid)
+            self.assertEqual(raw.read_bytes(), b'fake executable')
+            self.assertEqual(keeper.read_bytes(), b'fake executable')
+
+    def test_ambiguous_paired_objects_are_not_presented_as_one_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            raw.with_name('dict-blob-build_zcu.o').write_bytes(b'ELF object')
+            raw.with_name('dict-blob-build_zcu.obj').write_bytes(b'COFF object')
+            report = self.record(cache, raw, keeper, output)
+            pair = report['historical_compiler_outputs']['paired_object']
+            self.assertEqual(pair['status'], 'ambiguous')
+            self.assertNotIn('output', pair)
+            self.assertFalse(pair['operative'])
+
+    def test_mutation_before_publication_is_refused(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            obj = raw.with_name('dict-blob-build_zcu.o'); obj.write_bytes(b'paired object')
+            original = qualification._installed_cache_file
+            def observed(path):
+                result = original(path)
+                if path == obj:
+                    stamp = raw.stat(); raw.write_bytes(b'mutated executable')
+                    os.utime(raw, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 1))
+                return result
+            with patch.object(qualification, '_installed_cache_file', side_effect=observed):
+                with self.assertRaises(ValueError): self.record(cache, raw, keeper, output)
+            self.assertFalse(output.exists())
+
+    def test_repeated_install_replaces_only_one_concise_record(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cache, raw, keeper, output = self.fixture(root)
+            self.record(cache, raw, keeper, output)
+            cache, raw, keeper, output = self.fixture(root, key='c' * 32, content=b'new executable')
+            report = self.record(cache, raw, keeper, output)
+            self.assertEqual(report['cache_key'], 'c' * 32)
+            self.assertEqual(report['historical_compiler_outputs']['paired_object']['status'], 'missing')
+            self.assertEqual([p.name for p in output.parent.iterdir()], ['writer-cache-output.json'])
+
+    def test_unchanged_receipt_reuses_exact_identities_without_hashes_or_fsync(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            raw.with_name('dict-blob-build_zcu.o').write_bytes(b'paired object')
+            first = self.record(cache, raw, keeper, output)
+            original = output.read_bytes(); stamp = qualification._retention_stamp(output)
+            with patch.object(qualification, '_installed_cache_file', side_effect=AssertionError('rehashed unchanged artifact')), patch.object(os, 'fsync', side_effect=AssertionError('rewrote unchanged receipt')):
+                self.assertEqual(self.record(cache, raw, keeper, output), first)
+            self.assertEqual(output.read_bytes(), original)
+            self.assertEqual(qualification._retention_stamp(output), stamp)
+
+    def test_changed_identity_or_receipt_integrity_requires_fresh_verification(self):
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            cache, raw, keeper, output = self.fixture(Path(temp))
+            obj = raw.with_name('dict-blob-build_zcu.o'); obj.write_bytes(b'paired object')
+            self.record(cache, raw, keeper, output)
+            # Same bytes on another inode are still a new compiler output.
+            replacement = obj.with_name('replacement'); replacement.write_bytes(obj.read_bytes()); os.replace(replacement, obj)
+            with patch.object(qualification, '_installed_cache_file', wraps=qualification._installed_cache_file) as observed:
+                self.record(cache, raw, keeper, output)
+                self.assertEqual(observed.call_count, 3)
+            payload = json.loads(output.read_text()); payload['recorded_unix_ns'] += 1
+            output.write_text(json.dumps(payload))
+            with patch.object(qualification, '_installed_cache_file', wraps=qualification._installed_cache_file) as observed:
+                self.record(cache, raw, keeper, output)
+                self.assertEqual(observed.call_count, 3)
+
+
 if __name__ == '__main__':
     unittest.main()
