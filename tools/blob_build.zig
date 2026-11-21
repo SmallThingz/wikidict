@@ -3313,7 +3313,7 @@ fn parseSiteMainPage(a: std.mem.Allocator, bytes: []const u8, namespaces: *const
     // record only after the namespace profile attachment has succeeded.
     var figure_core_revision: ?[]const u8 = null;
     if (general.object.get("git-hash")) |revision| if (revision == .string) {
-        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9" }) |known_revision| {
+        inline for (.{ "79b81ba96674efc8a803fc956bc501d347d440d2", "0470f6c99a6456a366635bf25a517a1f951de6f5", "ead780177c5a02aa63ac6fd3a50977df9719fe63", "f45897451256aa3799aecc5d7ee320ade22beaec", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2", "6e76237de1cf29c08427d191f110a2c38c2b4cf9" }) |known_revision| {
             if (std.mem.eql(u8, revision.string, known_revision)) figure_core_revision = known_revision;
         }
     };
@@ -68714,5 +68714,64 @@ test "normal LT source banner declarations preserve distinct owners and complete
         try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
         try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes[0].definitions.len);
         try std.testing.expectEqualStrings(if (std.mem.eql(u8, row.code, "en")) "Adjective" else "Noun", actual.organization.lexemes[0].kind);
+    }
+}
+
+test "SS d191 complete defaults and 194 captured Figure facts load through normal source roles" {
+    const a = std.testing.allocator; const io = std.testing.io;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(io, ".", temp);
+    const ns_bytes = @embedFile("testdata/d191-consumer/ss-namespace.tsv");
+    const defaults_bytes = @embedFile("testdata/d191-consumer/ss-defaults.json");
+    try tmp.dir.writeFile(io, .{ .sub_path = "namespace-registry.tsv", .data = ns_bytes });
+    try tmp.dir.writeFile(io, .{ .sub_path = "figure-siteinfo.raw.json", .data = defaults_bytes });
+    var ns = try namespace_registry.Registry.init(a, ns_bytes); defer ns.deinit();
+    const core = "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2";
+    const main_page = try parseSiteMainPage(temp, defaults_bytes, &ns);
+    try std.testing.expectEqualStrings(core, main_page.figure_core_revision orelse return error.TestUnexpectedResult);
+    const site = (try loadFigureSite(io, temp, root, &ns)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(core, site.core_revision);
+    try std.testing.expectEqual(@as(?u32, 250), site.source_context.defaults.default_thumbnail_width);
+    try std.testing.expect(!site.source_context.defaults.rtl);
+    try std.testing.expect(site.source_context.missing_media_profile == null);
+    try std.testing.expect(ns.figure_source_defaults == null);
+    try std.testing.expect(ns.manual_conversion_context == null);
+    try std.testing.expect(ns.language_conversion == null);
+    const Slice = struct {
+        bytes: []const u8,
+        fn readAt(context: *anyopaque, out: []u8, offset: u64) !usize {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            if (offset >= self.bytes.len) return 0;
+            const start: usize = @intCast(offset); const n = @min(out.len, self.bytes.len - start, 181);
+            @memcpy(out[0..n], self.bytes[start..][0..n]); return n;
+        }
+        fn input(self: *@This()) figure_sizing.StreamInput { return .{ .context = self, .read_at = readAt, .size = self.bytes.len }; }
+    };
+    var p = Slice{ .bytes = @embedFile("testdata/d191-consumer/ss-projection.json") };
+    var r = Slice{ .bytes = @embedFile("testdata/d191-consumer/ss-raw.json") };
+    var projection = p.input(); var raw = r.input();
+    var figures = try figure_sizing.Registry.initStream(a, &projection, &raw,
+        @embedFile("testdata/d191-consumer/ss-site.json"), &ns, site.core_revision);
+    defer figures.deinit();
+    try std.testing.expect(projection.digest != null and raw.digest != null);
+    try std.testing.expectEqual(@as(usize, 190), figures.records.len);
+    try std.testing.expectEqual(@as(u32, 1), figures.missing_files.count());
+    for (figures.records) |record| {
+        try std.testing.expectEqual(@as(?encoder.presentation_types.FigureSizingPolicy, .requested_fit),
+            try figure_sizing.Registry.resolve(&figures, a, record.canonical_file, .thumbnail, @min(record.original_width, 180), null));
+    }
+    // Unknown source and foreign language remain unsupported through the actual loader.
+    for (0..2) |mode| {
+        var value = try std.json.parseFromSliceLeaky(std.json.Value, temp, defaults_bytes, .{ .allocate = .alloc_always });
+        const general = value.object.getPtr("query").?.object.getPtr("general").?;
+        try general.object.put(temp, if (mode == 0) "git-hash" else "lang",
+            .{ .string = if (mode == 0) "0000000000000000000000000000000000000000" else "et" });
+        try tmp.dir.writeFile(io, .{ .sub_path = "figure-siteinfo.raw.json", .data = try std.json.Stringify.valueAlloc(temp, value, .{}) });
+        if (mode == 0) try std.testing.expectError(error.InvalidFigureSizingSource, loadFigureSite(io, temp, root, &ns))
+        else try std.testing.expectError(error.InvalidLanguageConversionProfile, loadFigureSite(io, temp, root, &ns));
+        try std.testing.expect(ns.figure_source_defaults == null);
+        try std.testing.expect(ns.manual_conversion_context == null);
+        try std.testing.expect(ns.language_conversion == null);
     }
 }

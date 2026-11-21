@@ -30,7 +30,8 @@ const wmf4_core = "d45799ff7a503ab18523e720d5e3686761c84c87";
 // The reviewed 992ad source changes only metadata-map storage, description
 // short URLs and unrelated config; V4 geometry stays the same. The response
 // must still prove each exact approved extension registration independently.
-const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9" };
+const d191_core = "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2";
+const wmf4_cores = [_][]const u8{ wmf4_core, "bb3b6755d485f60478c87c907f0557c53117142d", "93f1cdcc57c0891fb208c960a9f7fff6ca1ca35c", "a2f17941896ce97ea79981632f6ec9ffd9a79802", "992ad5e3679f848254828e823860ba8b3ad3b39b", "bfe24921d500b20f2938fb8fe2a09cf5cac80161", "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2", "f03f1fdaa2d112807b6ce63170eb50e86de615bd", "6e76237de1cf29c08427d191f110a2c38c2b4cf9", d191_core };
 fn wmf4Epoch(core: []const u8) bool {
     for (wmf4_cores) |member| if (equal(core, member)) return true;
     return false;
@@ -717,7 +718,7 @@ fn mediaRevision(core: []const u8, name: []const u8, prior: []const u8) []const 
 }
 // Keep complete reviewed sets, not independently interchangeable revisions.
 fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
-    if (equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
+    if (equal(core, d191_core) or equal(core, "992ad5e3679f848254828e823860ba8b3ad3b39b") or equal(core, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or equal(core, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or equal(core, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")) return .{
         "b7208776bccdcbbfa4252f67f3e924b79b6587b9", "7755b61c361899ff83792940cf1eb20923a69bba",
         "6c890ba5064565386a35082e16c0d511b789ac6b", "43498dc2d52c37d98294e4bbf73a0e8a70bd1aea",
     };
@@ -728,6 +729,11 @@ fn mediaVariant(core: []const u8) ?[media_extensions.len][]const u8 {
     return null;
 }
 fn mediaSetAccepted(core: []const u8, actual: [media_extensions.len][]const u8) bool {
+    // This newly observed epoch proves one complete set, not the older WMF set.
+    if (equal(core, d191_core)) {
+        for (mediaVariant(core).?, actual) |expected, revision| if (!equal(expected, revision)) return false;
+        return true;
+    }
     var original = true;
     for (media_extensions, actual) |pair, revision| {
         if (!equal(revision, mediaRevision(core, pair[0], pair[1]))) original = false;
@@ -743,7 +749,14 @@ fn mediaProfileSet(value: Value) ![media_extensions.len][]const u8 {
     for (media_extensions, 0..) |pair, i| revisions[i] = try string(value, pair[0]);
     return revisions;
 }
+fn d191Profile(core: []const u8, value: Value) bool {
+    if (!equal(core, d191_core)) return true;
+    if (value != .object) return false;
+    const kind = value.object.get("kind") orelse return false;
+    return kind == .string and equal(kind.string, "wikimedia-imagehandler-v4");
+}
 fn profile(value: Value, site_bytes: []const u8, core: []const u8) !void {
+    if (!d191Profile(core, value)) return invalid;
     const gif = gifProfile(value);
     const webp = webpProfile(value);
     if (value != .object or value.object.count() != profile_strings.len + 3 + @as(usize, if (gif) 2 else 0) + @as(usize, if (webp) 2 else 0)) return invalid;
@@ -1067,7 +1080,7 @@ fn validateFileSource(a: A, doc: anytype, records_count: u64, batch_count: u64, 
             !equal(try string(empty_general, "git-hash"), doc.core_revision)) return invalid;
         return null;
     }
-    if (!acceptedResponseCore(doc.core_revision, epochs)) return invalid;
+    if (!acceptedResponseCore(doc.core_revision, epochs) or !d191Profile(source_core_revision.?, doc.source_profile)) return invalid;
     try profile(doc.source_profile, site, doc.core_revision);
     if (webpProfile(doc.source_profile) and (!contract or !epochs)) return invalid;
     const gif = gifProfile(doc.source_profile);
@@ -1818,6 +1831,7 @@ pub const Registry = struct {
             const source = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{ .allocate = .alloc_always });
             const raw_general = try field(try field(source, "query"), "general");
             const batch_core = try string(raw_general, "git-hash");
+            if (!d191Profile(batch_core, doc.source_profile)) return invalid;
             if (!equal(batch_core, doc.core_revision) and
                 !(epochs and gif and responseEpoch(doc.core_revision) and responseEpoch(batch_core))) return invalid;
             if (batch.observed_svg_occurrences != null and !equal(batch_core, current_core) and !equal(batch_core, registration_core)) return invalid;
@@ -7614,4 +7628,120 @@ test "retained ET coref03 media inventory keeps exact complete registration" {
     _ = try mediaRegistration(query, try mediaProfileSet(expected));
     try expected.object.put(a, "TimedMediaHandler", .{ .string = "a27dbe9cdf6eb97e0e3fb9e8bc762a66b2d7b663" });
     try std.testing.expectError(invalid, mediaRegistration(query, try mediaProfileSet(expected)));
+}
+
+const D191RetainedTest = struct {
+    const f03 = "f03f1fdaa2d112807b6ce63170eb50e86de615bd";
+    const input: ResponseEpochTestSource.Fixture = .{
+        .projection = @embedFile("testdata/d191-consumer/et-projection.json"),
+        .raw = @embedFile("testdata/d191-consumer/et-raw.json"),
+        .site = @embedFile("testdata/d191-consumer/et-site.json"),
+    };
+    fn document(a: A) !FilesDocument {
+        const value = try std.json.parseFromSliceLeaky(Value, a, input.projection, .{ .allocate = .alloc_always });
+        return std.json.parseFromValueLeaky(FilesDocument, a, try replayDocumentShape(a, value), .{ .allocate = .alloc_always });
+    }
+    fn init(a: A, fixture: ResponseEpochTestSource.Fixture, ns: *const namespaces.Registry, streamed: bool, source_core: []const u8) !Registry {
+        if (!streamed) return Registry.init(a, fixture.projection, fixture.raw, fixture.site, ns, source_core, generator_sha256);
+        var p = StreamTestSource.Slice{ .bytes = fixture.projection, .chunk = 173 };
+        var r = StreamTestSource.Slice{ .bytes = fixture.raw, .chunk = 197 };
+        var projection = p.input(); var raw = r.input();
+        var result = try Registry.initStream(a, &projection, &raw, fixture.site, ns, source_core);
+        errdefer result.deinit();
+        try std.testing.expect(projection.digest != null and raw.digest != null);
+        return result;
+    }
+    fn v5(a: A, value: *Value) !void {
+        try value.object.put(a, "kind", .{ .string = "wikimedia-imagehandler-v5" });
+        try value.object.put(a, "webp_handler_core_revision", .{ .string = current_core });
+        try value.object.put(a, "webp_handler_sha256", .{ .string = "4a3fa93de539a2a13ce9cc9475af5e3e45037a5a576cac2df21139120593fe5a" });
+        try value.object.getPtr("handler_families").?.object.put(a, webp_handler.mime,
+            try std.json.parseFromSliceLeaky(Value, a, "{\"handler_class\":\"MediaWiki\\\\Media\\\\WebPHandler\",\"mediatype\":\"BITMAP\"}", .{}));
+    }
+};
+
+test "d191 retained mixed ET 101 facts preserve aggregate stream and exact width authority" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/d191-consumer/et-namespace.tsv")); defer ns.deinit();
+    const doc = try D191RetainedTest.document(temp);
+    const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, D191RetainedTest.input.raw, .{ .allocate = .alloc_always });
+    try std.testing.expectEqual(@as(usize, 101), doc.records.len);
+    try std.testing.expectEqual(@as(usize, 3), source.batches.len);
+    for (source.batches, [_]usize{ 1, 50, 50 }, 0..) |batch, expected, index| {
+        try std.testing.expectEqual(expected, batch.requests.len);
+        const value = try std.json.parseFromSliceLeaky(Value, temp, batch.response, .{});
+        try std.testing.expectEqualStrings(if (index == 0) D191RetainedTest.f03 else d191_core,
+            try string(try field(try field(value, "query"), "general"), "git-hash"));
+    }
+    var original = try D191RetainedTest.init(a, D191RetainedTest.input, &ns, false, D191RetainedTest.f03); defer original.deinit();
+    const streamed = try ResponseEpochTestSource.seal(temp, doc, source.batches, D191RetainedTest.input.site, true, replay_contract_v6);
+    var replayed = try D191RetainedTest.init(a, streamed, &ns, true, D191RetainedTest.f03); defer replayed.deinit();
+    try std.testing.expectEqualDeep(original.records, replayed.records);
+    try std.testing.expectEqualDeep(original.resolved_files, replayed.resolved_files);
+    var eligible: usize = 0;
+    for (doc.records) |fact| {
+        if (fact.state == .eligible) {
+            eligible += 1;
+            const width = @min(fact.original_width, 180);
+            for ([_]*Registry{ &original, &replayed }) |registry| {
+                try std.testing.expectEqual(@as(?types.FigureSizingPolicy, .requested_fit), try Registry.resolve(registry, a, fact.requested_file, .thumbnail, width, null));
+                // SVG has a separately source-proved upfit rule; bitmap bounds stay exact.
+                if (!equal(fact.mime, "image/svg+xml"))
+                    try std.testing.expectEqual(@as(?types.FigureSizingPolicy, null), try Registry.resolve(registry, a, fact.requested_file, .thumbnail, fact.original_width + 1, null));
+            }
+        } else if (fact.state == .missing) {
+            try std.testing.expect(try Registry.isMissingFile(&original, a, fact.requested_file));
+            try std.testing.expect(try Registry.isMissingFile(&replayed, a, fact.requested_file));
+        }
+    }
+    try std.testing.expect(eligible > 0);
+}
+
+test "d191 mixed response rejects unknown epochs legacy profiles and incomplete or old media sets" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const temp = arena.allocator();
+    var ns = try namespaces.Registry.init(a, @embedFile("testdata/d191-consumer/et-namespace.tsv")); defer ns.deinit();
+    for (0..7) |mode| {
+        var doc = try D191RetainedTest.document(temp);
+        const source = try std.json.parseFromSliceLeaky(RawFileBatches, temp, D191RetainedTest.input.raw, .{ .allocate = .alloc_always });
+        const batches = try temp.dupe(RawFileBatch, source.batches);
+        var response = try std.json.parseFromSliceLeaky(Value, temp, batches[1].response, .{ .allocate = .alloc_always });
+        const query = response.object.getPtr("query").?;
+        const extensions = query.object.getPtr("extensions").?;
+        if (mode == 0) {
+            try query.object.getPtr("general").?.object.put(temp, "git-hash", .{ .string = "0000000000000000000000000000000000000000" });
+        } else if (mode == 1) {
+            // A complete previously known WMF set is not the observed d191 set.
+            for (extensions.array.items) |*extension| for (wmf4_media_extensions) |pair| {
+                if (equal(try string(extension.*, "name"), pair[0])) try extension.object.put(temp, "vcs-version", .{ .string = pair[1] });
+            };
+        } else if (mode == 2 or mode == 3 or mode == 4) {
+            var found: ?usize = null;
+            for (extensions.array.items, 0..) |extension, index| if (equal(try string(extension, "name"), "TimedMediaHandler")) { found = index; break; };
+            const index = found orelse return error.TestUnexpectedResult;
+            if (mode == 2) _ = extensions.array.orderedRemove(index)
+            else if (mode == 3) try extensions.array.append(extensions.array.items[index])
+            else try extensions.array.items[index].object.put(temp, "vcs-version", .{ .string = "0000000000000000000000000000000000000000" });
+        } else if (mode == 5) {
+            try D191RetainedTest.v5(temp, &doc.source_profile);
+            // This is a valid historical f03 V5 header; the d191 child must veto it.
+            try profile(doc.source_profile, D191RetainedTest.input.site, D191RetainedTest.f03);
+        } else {
+            try doc.source_profile.object.put(temp, "kind", .{ .string = "wikimedia-imagehandler-v3" });
+        }
+        batches[1].response = try std.json.Stringify.valueAlloc(temp, response, .{});
+        for ([_]bool{ false, true }) |streamed| {
+            const bad = try ResponseEpochTestSource.seal(temp, doc, batches, D191RetainedTest.input.site, streamed, replay_contract_v6);
+            try std.testing.expectError(invalid, D191RetainedTest.init(a, bad, &ns, streamed, D191RetainedTest.f03));
+        }
+    }
+    var doc = try D191RetainedTest.document(temp);
+    try std.testing.expect(d191Profile(d191_core, doc.source_profile));
+    try D191RetainedTest.v5(temp, &doc.source_profile);
+    try std.testing.expect(!d191Profile(d191_core, doc.source_profile));
+    // A d191 defaults source cannot acquire a V5 grant from a historical anchor.
+    try std.testing.expectError(invalid, validateFileSource(temp, doc, doc.records.len, 3, D191RetainedTest.input.site, &ns, d191_core, true, true));
+    try doc.source_profile.object.put(temp, "kind", .{ .string = "wikimedia-imagehandler-v3" });
+    try std.testing.expect(!d191Profile(d191_core, doc.source_profile));
 }

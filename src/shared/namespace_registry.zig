@@ -227,6 +227,7 @@ pub const Registry = struct {
               std.mem.eql(u8, revision.string, "bfe24921d500b20f2938fb8fe2a09cf5cac80161") or
               std.mem.eql(u8, revision.string, "6c5fe215cf45da0b1448e7ece41bde087e7ef4e2") or
               std.mem.eql(u8, revision.string, "f03f1fdaa2d112807b6ce63170eb50e86de615bd") or
+              std.mem.eql(u8, revision.string, "d1919ec5e4ebd7b0dea1ff6ea1cb4347a9349ca2") or
               std.mem.eql(u8, revision.string, "6e76237de1cf29c08427d191f110a2c38c2b4cf9")))
         {
             if (general.object.get("rtl")) |rtl| if (rtl == .bool) {
