@@ -6676,6 +6676,7 @@ fn processMain(
                 telugu_support = try teluguSupportCategoryLanguage(codes, source, raw_source, raw_sections.items, page_sections.items);
                 break :telugu telugu_support;
             } orelse simple_support;
+        var amharic_category_owner: ?ResolvedLanguage = null;
         var paragraph_support: ?ResolvedLanguage = null;
         const explicit = if (page_sections.items.len == 0)
             (try slovenianSupportCategoryLanguage(codes, title, source, raw_source, raw_sections.items, page_sections.items)) orelse
@@ -6687,7 +6688,14 @@ fn processMain(
                 tsongaLabelledHeadword(codes, title, raw_source, source_missing) orelse
                 unsectionedPairedOrthographyLanguage(codes, raw_source, source_missing) orelse
                 unsectionedPlainBoldPrefixLanguage(codes, raw_source, source) orelse
-                unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
+                category: {
+                    const resolved = unsectionedLanguage(codes, raw_source orelse source);
+                    if (resolved) |proved| {
+                        if (raw_source != null and std.mem.eql(u8, proved.code, "am") and
+                            std.mem.eql(u8, codes.namespace_catalog.?.wiki, "amwiktionary")) amharic_category_owner = proved;
+                    }
+                    break :category resolved;
+                } orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
             support;
         if (support != null) fallbacks.unresolved_language_heading = unresolved_before_sections;
@@ -6765,10 +6773,10 @@ fn processMain(
             else &.{},
             // A successful paragraph arm selected the heading-free owner, so
             // earlier unrelated support cannot shadow its proof. Otherwise keep
-            // existing SIMPLE/Telugu authority. Other rules/defaults grant none.
+            // the proved AM category or existing SIMPLE/Telugu authority.
             if (support_numbered_lexemes.len != 0)
                 .{ .heading = language.heading, .code = language.code, .source_numbered_lexemes = support_numbered_lexemes }
-            else if (paragraph_support orelse simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
+            else if (paragraph_support orelse amharic_category_owner orelse simple_support orelse telugu_support) |proved| if (std.mem.eql(u8, proved.code, language.code) and
                 std.mem.eql(u8, proved.heading, language.heading))
                 .{ .heading = proved.heading, .code = proved.code } else null else null,
             codes.table_styles,
@@ -7942,6 +7950,59 @@ const AmharicSupportCategoryFixture = struct {
         return amharicSupportCategoryLanguage(codes, expanded, raw, raw_sections.items, page_sections.items);
     }
 };
+
+// Dated amwiktionary p1834/r17425. The category supplies the owner separately
+// from the three fields consumed by the layout classifier.
+test "Amharic raw category forwards the owner of a separate numbered noun gloss" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var namespaces = try AmharicSupportCategoryFixture.namespaces(a);
+    defer namespaces.deinit();
+    var codes = TestLanguages.codes();
+    codes.namespace_catalog = &namespaces;
+    const source = "<!-- ይህ ቀለል ያለ የቃላት ገለፃና ትርጉም ምስጫ ቅጽ ነው፡፡ በቅጹ ውስጥ በ\"<\"ና  በ\">\" መሃከል ያሉ መመሪያዎች ሊሰርዙት ይችላሉ-->\n" ++
+        "\n" ++
+        "=== ቋንቋ ===\n" ++
+        "* አማርኛ\n" ++
+        "=== የንግግር ክፍል ===\n" ++
+        "\n" ++
+        "* ስም\n" ++
+        "=== ገለፃ/ትርጉም ===\n" ++
+        "# '''የሚኖር አካልን ከሞተ አካል የሚለይ ባህሪ'''\n" ++
+        "#: <!-- ምሳሌ-->\n" ++
+        "\n" ++
+        "=== ተጠቃሽ መረጃዎች ===\n" ++
+        "* [[ <!--Wiktionary:Entry layout explained--> ]]\n" ++
+        "\n" ++
+        "[[መደብ:አማርኛ]]\n" ++
+        "[[መደብ:ስም]]";
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/blobs", .{tmp.sub_path});
+    var writer = try Writer.init(std.testing.io, a, root);
+    defer writer.deinit();
+    writer.language_codes = codes;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ሕይወት", source, source, null);
+    _ = try writer.finish(codes);
+    var mapped = try mmapPath(std.testing.io, try languageBlobPathAlloc(a, root, "አማርኛ"));
+    defer mapped.deinit();
+    const blob = try blob_format.inspect(mapped.bytes);
+    const metadata = try blob.languageMetadata();
+    try std.testing.expectEqualStrings("am", metadata.code);
+    var index = try blob.buildTrustedIndexAlloc(a);
+    defer index.deinit(a);
+    const record = (try index.find("ሕይወት")).?;
+    const decoded = try blobs.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, metadata);
+    try std.testing.expectEqual(@as(usize, 1), decoded.entry.organization.lexemes.len);
+    const noun = decoded.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqual(@as(usize, 2), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+    try std.testing.expectEqualSlices(usize, &.{1}, noun.definitions[0].examples);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 3 }, decoded.entry.organization.other_sections);
+}
 
 test "Amharic corroborated support headings retain language owner and lexical body" {
     var tmp = std.testing.tmpDir(.{});
