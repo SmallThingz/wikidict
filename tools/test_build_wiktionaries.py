@@ -4234,19 +4234,42 @@ class VerifiedPublicationInventoryTests(PublicationCompilerFixture):
                 self.assertEqual(b.build_locked([item],root,root/'output','zig',1),'resumed_publication')
                 self.assertEqual(lzma.open(target/'supplemental.wikblb.xz').read(),b'WIKBLB08fixture')
 
-    def test_decoder_diagnostics_are_bounded_and_owned_child_is_reaped(self):
+    def test_xz_stream_padding_and_concatenation_across_read_boundaries(self):
+        payload = b'dictionary row\n' * 90000
+        first = lzma.compress(payload, preset=1)
+        last = lzma.compress(b'end', preset=1)
+        joined = payload + b'end'
+        expected = {'size': len(joined), 'sha256': hashlib.sha256(joined).hexdigest()}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(b.subprocess, 'Popen', side_effect=AssertionError('unexpected subprocess')):
+            path = Path(tmp) / 'fixture.wikblb.xz'
+            for padding in (0, 4, 65536, 65536 * 2 + 4):
+                with self.subTest(padding=padding):
+                    path.write_bytes(first + bytes(padding) + last + bytes(4))
+                    self.assertEqual(b.verified_xz_record(path, len(joined)), expected)
+            for invalid in (b'', b'\0' * 4, bytes(4) + first, first + bytes(3), first + bytes(2) + last, first + last[:-1]):
+                with self.subTest(size=len(invalid)):
+                    path.write_bytes(invalid)
+                    with self.assertRaisesRegex(ValueError, 'Invalid verified compressed payload'):
+                        b.verified_xz_record(path, len(joined))
+
+    def test_xz_record_streams_incompressible_input_and_enforces_memory_limit(self):
+        payload = hashlib.shake_256(b'ordinary dictionary test').digest(160 * 1024)
+        expected = {'size': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
         with tempfile.TemporaryDirectory() as tmp:
-            path=Path(tmp)/'fixture.wikblb.xz';path.write_bytes(lzma.compress(b'WIKBLB08fixture',preset=1))
-            real_popen=subprocess.Popen;children=[]
-            def noisy_decoder(argv,**kwargs):
-                self.assertIn('--format=xz',argv);self.assertNotIn('--single-stream',argv)
-                self.assertIn('--threads=1',argv);self.assertIn('--memlimit-decompress=64MiB',argv)
-                child=real_popen([sys.executable,'-B','-c',"import sys;sys.stderr.buffer.write(b'x'*65537);sys.stderr.flush();sys.stdout.buffer.write(b'WIKBLB08fixture');sys.stdout.flush()"],**kwargs)
-                children.append(child);return child
-            with patch.object(b.subprocess,'Popen',side_effect=noisy_decoder):
-                with self.assertRaisesRegex(ValueError,'stderr exceeds bound'):b.verified_xz_record(path,15)
-            self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
-            self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
+            path = Path(tmp) / 'fixture.wikblb.xz'
+            for check in (lzma.CHECK_NONE, lzma.CHECK_CRC32, lzma.CHECK_CRC64, lzma.CHECK_SHA256):
+                if lzma.is_check_supported(check):
+                    with self.subTest(check=check):
+                        path.write_bytes(lzma.compress(payload, check=check, preset=1))
+                        self.assertGreater(path.stat().st_size, 2 * 65536)
+                        self.assertEqual(b.verified_xz_record(str(path), len(payload)), expected)
+            # A four-byte payload with a valid XZ block header requesting a
+            # 256 MiB LZMA2 dictionary. The decoder must reject it on the header.
+            path.write_bytes(bytes.fromhex(
+                'fd377a585a000004e6d6b44602002101200000000988a576010003776f726400'
+                'ceab13ac05dcc4e100011c046f2c9cc11fb6f37d010000000004595a'))
+            with self.assertRaisesRegex(ValueError, 'Invalid verified compressed payload'):
+                b.verified_xz_record(path, 4)
 
     def test_fresh_compressed_seal_keeps_logical_v1_and_publication_resume(self):
         with tempfile.TemporaryDirectory() as tmp:

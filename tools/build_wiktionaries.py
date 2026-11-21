@@ -20,6 +20,7 @@ import gzip
 import hashlib
 import inspect
 import json
+import lzma
 import os
 import re
 import resource
@@ -8420,39 +8421,48 @@ def seal_verified_publication_inventory(staging, *, fresh_compressed=False):
 
 
 def verified_xz_record(path, expected_size):
-    """Reuse strict XZ decoding, with bounded logical output and diagnostics."""
-    child=subprocess.Popen(['xz','--format=xz','--decompress','--stdout','--threads=1',
-                            '--memlimit-decompress=64MiB','--',str(path)],
-                           stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
-    errors=bytearray();stderr_overflow=threading.Event()
-    def capture_errors():
-        while block:=child.stderr.read(4096):
-            if len(errors)+len(block)>64*1024:
-                stderr_overflow.set()
-                try:child.terminate()
-                except ProcessLookupError:pass
-                return
-            errors.extend(block)
-    reader=threading.Thread(target=capture_errors,daemon=True)
-    size=0;digest=hashlib.sha256()
-    try:
-        reader.start()
-        while block:=child.stdout.read(min(1024*1024,expected_size-size+1)):
-            size+=len(block)
-            if size>expected_size:raise ValueError('Verified decoded payload exceeds sealed size: '+str(path))
-            digest.update(block)
-        status=child.wait();reader.join(timeout=5)
-        if reader.is_alive():raise ValueError('Verified XZ diagnostic reader did not close')
-        if stderr_overflow.is_set():raise ValueError('Verified XZ decoder stderr exceeds bound')
-        if status!=0:raise ValueError('Invalid verified compressed payload: '+str(path)+'; '+errors.decode('utf-8','replace'))
-        return {'size':size,'sha256':digest.hexdigest()}
-    finally:
-        if child.poll() is None:
-            child.terminate()
-            try:child.wait(timeout=5)
-            except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
-        if reader.ident is not None:reader.join(timeout=5)
-        child.stdout.close();child.stderr.close()
+    """Hash bounded logical bytes from every stream in a complete XZ file."""
+    if type(expected_size) is not int or expected_size < 0:
+        raise ValueError('Invalid verified decoded size')
+    invalid = f'Invalid verified compressed payload: {path}'
+    size = 0
+    digest = hashlib.sha256()
+    data = b''
+    with open(path, 'rb') as source:
+        while True:
+            decoder = lzma.LZMADecompressor(format=lzma.FORMAT_XZ, memlimit=64 * 1024**2)
+            while not decoder.eof:
+                if decoder.needs_input and not data:
+                    data = source.read(64 * 1024)
+                    if not data:
+                        raise ValueError(f'{invalid}; incomplete XZ stream')
+                try:
+                    block = decoder.decompress(data, max_length=min(1024**2, expected_size - size + 1))
+                except lzma.LZMAError as exc:
+                    raise ValueError(f'{invalid}; {exc}') from exc
+                data = b''
+                size += len(block)
+                if size > expected_size:
+                    raise ValueError(f'Verified decoded payload exceeds sealed size: {path}')
+                digest.update(block)
+            if not lzma.is_check_supported(decoder.check):
+                raise ValueError(f'{invalid}; unsupported XZ integrity check')
+            data = decoder.unused_data
+            del decoder
+            # XZ permits a multiple of four zero bytes between streams or after
+            # the final stream. Every other byte must belong to another stream.
+            padding = 0
+            while True:
+                data = data or source.read(64 * 1024)
+                if not data or data[0] != 0:
+                    break
+                rest = data.lstrip(b'\0')
+                padding += len(data) - len(rest)
+                data = rest
+            if padding % 4:
+                raise ValueError(f'{invalid}; invalid XZ stream padding')
+            if not data:
+                return {'size': size, 'sha256': digest.hexdigest()}
 
 
 def validate_verified_publication_inventory(staging, verified_compressed=None):
