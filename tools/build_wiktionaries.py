@@ -8047,6 +8047,16 @@ def compress_verified_shard(shard):
     if pending: commit_batch(pending)
 
 
+def edition_extraction_cache(workspace, selected):
+    if selected is not None:
+        return Path(selected)
+    legacy = workspace/'input'/'extraction-cache'
+    if os.path.lexists(legacy):
+        return legacy
+    # A retry can borrow the immutable repack and explicitly reuse this writable cache.
+    return workspace/'extraction-cache'
+
+
 def extraction_cache_args(cache_root, staged):
     if cache_root is None:return []
     cache_root=Path(cache_root).absolute()
@@ -8147,7 +8157,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     if generation is None and not worker_ready:
         if expander_build.exists(): remove_artifact_tree(expander_build)
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
-        extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
+        extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
                   expander_args=[str(dump),str(expander_build),
                      *(['--expander-only'] if retained_roles is not None else []),
@@ -9218,7 +9228,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     else:
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')
-        extraction_cache=Path(extraction_cache_root) if extraction_cache_root is not None else workspace/'input'/'extraction-cache'
+        extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
         timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),

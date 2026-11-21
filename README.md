@@ -206,6 +206,12 @@ place. Keep the directory intact until the retry finishes. This also works when
 the previous attempt completed the repack and failed later while compiling an
 entry.
 
+New builds keep their extraction and native-object cache alongside `input` in
+`YYYYMMDD.shards/extraction-cache`. Once the earlier build has ended, pass
+that path as `--extraction-cache-root` along with `--staged-input-root` to
+reuse both. This preserves the dump inode that the extracted indexes refer
+to. Existing workspaces with a cache under `input` keep using it in place.
+
 For an edition that repeatedly fails late in a shard, the Python corpus builder
 accepts `--shard-pages 1000` to verify and checkpoint every 1,000 indexed pages.
 The default is 100,000. Keep the same interval when resuming a build so the

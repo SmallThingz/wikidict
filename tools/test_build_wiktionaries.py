@@ -5887,7 +5887,7 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
                 self.assertEqual(tool_arguments(command)[:2],[str(workspace/'input/pages.xml.zst'),
                     str(root/'output/testwiktionary/20260901.building')])
                 self.assertNotIn('--expander-only',command)
-                expected=cache if explicit else workspace/'input/extraction-cache'
+                expected=cache if explicit else workspace/'extraction-cache'
                 self.assertEqual(command[command.index('--extraction-cache-root')+1],str(expected))
                 staged=json.loads((workspace/'input/.complete.json').read_text())
                 self.assertEqual(staged['source_pages'],1)
@@ -5902,7 +5902,7 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
             root=Path(tmp);workspace=root/'fresh-work';(workspace/'input').mkdir(parents=True)
             cache=root/'old-cache';cache.mkdir()
             (workspace/'input/.complete.json').write_text(json.dumps({'dump_sha256':'c'*64,'index_sha256':'d'*64}))
-            for selected,expected in [(cache,cache),(None,workspace/'input/extraction-cache')]:
+            for selected,expected in [(cache,cache),(None,workspace/'extraction-cache')]:
                 with patch.object(b,'expander_ready',return_value=False), \
                      patch.object(b,'pipeline_snapshot_args',return_value=[]), \
                      patch.object(b,'timed_run',side_effect=RuntimeError('stop before native execution')) as run:
@@ -5916,6 +5916,21 @@ class ExplicitExtractionCacheTests(PreparedToolsFixture):
                 self.assertEqual(command[command.index('--verified-dump-sha256')+1],'c'*64)
                 self.assertEqual(command[command.index('--verified-index-sha256')+1],'d'*64)
                 self.assertIn('--expander-only',command)
+
+    def test_existing_nested_cache_stays_reusable_in_its_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            workspace = root/'previous'/'testwiktionary'/'20261001.shards'
+            staged = workspace/'input'
+            staged.mkdir(parents=True)
+            items = [{'wiki': 'testwiktionary', 'date': '20261001'}]
+            cache = b.edition_extraction_cache(workspace, None)
+            legacy = staged/'extraction-cache'
+            legacy.mkdir()
+            self.assertEqual(b.edition_extraction_cache(workspace, None), legacy)
+            self.assertEqual(b.edition_extraction_cache(workspace, cache), cache)
+            with self.assertRaisesRegex(ValueError, 'overlaps owned build paths'):
+                b.selected_staged_input_root(items, staged, root/'next', extraction_cache_root=legacy)
 
     def test_cache_command_uses_current_staged_digests_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6460,10 +6475,12 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
             root=Path(tmp)
             with patch.object(b,'stage_seekable_dump',wraps=b.stage_seekable_dump) as stage:
                 item,borrowed=self.fixture(root);before=self.identities(borrowed)
+                cache = b.edition_extraction_cache(borrowed.parent, None)
+                cache.mkdir()
                 for outcome in ('success','failure'):
                     with self.subTest(outcome=outcome):
                         try:
-                            with b.borrowed_staged_input([item],borrowed,root/'new-output') as (selected,check):
+                            with b.borrowed_staged_input([item],borrowed,root/'new-output',extraction_cache_root=cache) as (selected,check):
                                 self.assertEqual(selected,borrowed)
                                 b.validated_staged_dump([item],selected)
                                 if outcome=='failure':raise self.RouteReached()
