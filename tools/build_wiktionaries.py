@@ -6309,6 +6309,7 @@ class RetainedNativeToolRoles:
         if set(roles) != set(RETAINED_NATIVE_ROLE_NAMES):
             raise ValueError('Incomplete retained native tool roles')
         self.records = copy.deepcopy(roles)
+        self.writer_reviewed_alias_sha256 = None
         self.initial_sealed_context = None
         self.initial_sealed_generation = self.records['dict-bundle-build'].pop('initial_sealed_generation', None)
         self.closed_whole_execution = self.records['dict-bundle-build'].pop('closed_whole_execution', None)
@@ -6373,6 +6374,13 @@ class RetainedNativeToolRoles:
                         or ('mode' in expected and identity['mode'] != expected['mode'])
                         or ('modes' in source and identity['mode'] != source['modes'][relative])):
                     raise ValueError('Retained native role source/ABI changed: '+relative)
+            if role == 'dict-blob-build' and 'tools/reviewed_language_aliases.json' in projection:
+                # Keep the authenticated compiled authority, never a later read
+                # of a compilation-only source copy that may have retired.
+                native_inventory = compiled.get('files', compiled)
+                authority = native_inventory.get('tools/reviewed_language_aliases.json')
+                if authority is not None:
+                    self.writer_reviewed_alias_sha256 = authority['sha256']
             for interface, members, names in RETAINED_NATIVE_ROLE_ABI_INTERFACES:
                 if role not in members:
                     continue
@@ -9420,6 +9428,34 @@ def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs, ref
     return RetainedNativeToolRoles(roles, compiler_path=Path(compiler).resolve(strict=True))
 
 
+def validate_writer_reviewed_alias_markers(registry, retained_roles):
+    """Fail early only when this Writer proves a different marker authority."""
+    if retained_roles is None:
+        return
+    expected=getattr(retained_roles,'writer_reviewed_alias_sha256',None)
+    if expected is None:
+        # Older/unavailable projections retain the native Writer's validation.
+        return
+    expected=expected.encode('ascii')
+    with Path(registry).open('rb') as stream:
+        while raw := stream.readline(64*1024):
+            if len(raw)==64*1024 and not raw.endswith(b'\n'):
+                # Oversized records stay native checks; skip with bounded memory.
+                while raw and not raw.endswith(b'\n'):
+                    raw=stream.readline(64*1024)
+                continue
+            line=raw.rstrip(b'\r\n')
+            if not line.startswith(b'# reviewed-alias\t'):
+                continue
+            fields=line.split(b'\t')
+            # Malformed markers and alias membership remain native checks.
+            if len(fields)!=5:
+                continue
+            if fields[4]!=expected:
+                raise ValueError('Language registry reviewed alias differs from selected Writer authority')
+    retained_roles.require_unchanged()
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--workspace-root-spec',help='Bound workspace directory identity for a retained producer source')
@@ -9587,6 +9623,11 @@ def main():
     try: options['edition_options']=resolve_edition_snapshot_options(manifest,groups,a.downloads.resolve(),auxiliary,workspace=workspace,metadata_network=a.metadata_network,figure_reuse_batches=tuple(a.figure_reuse_batch))
     except (ValueError,OSError) as error:p.error(str(error))
     if retained_roles is not None:
+        try:
+            for value in options['edition_options'].values():
+                registry=value['auxiliary_snapshots'].get('language-registry')
+                if registry is not None:validate_writer_reviewed_alias_markers(registry,retained_roles)
+        except (ValueError,OSError) as error:p.error(str(error))
         for value in options['edition_options'].values():value['retained_roles']=retained_roles
     if a.interwiki_map_snapshot:
         for value in options['edition_options'].values():value['interwiki_snapshot']=a.interwiki_map_snapshot.resolve()

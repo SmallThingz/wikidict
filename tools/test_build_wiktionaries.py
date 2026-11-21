@@ -43,6 +43,89 @@ def tool_arguments(command):
     return command[command.index('--')+1:]
 
 
+class WriterReviewedAliasPreflightTests(unittest.TestCase):
+    def test_selected_writer_accepts_healthy_subset_and_rejects_stale_explicit_registry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);evidence=root/'tools/reviewed_language_aliases.json'
+            evidence.parent.mkdir();evidence.write_bytes(b'{"schema":"retained Writer authority"}\n')
+            digest=b.sha256_file(evidence)
+            roles=object.__new__(b.RetainedNativeToolRoles)
+            roles.inputs={};roles.input_identities={}
+            roles.writer_reviewed_alias_sha256=digest
+            roles.records={'dict-blob-build':{'source_root':str(root),'source_paths':['tools/reviewed_language_aliases.json']},
+                           'dict-blob-merge':{'source_root':'/unrelated/other-role'}}
+            registry=root/'explicit-registry.tsv'
+            # A subset is valid; neither marker-free registries nor this check
+            # require every editorial alias to be present.
+            registry.write_text('de\tDeutsch\n# reviewed-alias\tde\tDeutsch\tactual-reference\t'+digest+'\n')
+            manifest={'language_registries':[dict(name=registry.name,size=registry.stat().st_size,sha256=b.sha256_file(registry))]}
+            self.assertEqual(manifest['language_registries'][0]['sha256'],b.sha256_file(registry))
+            with patch.object(roles,'require_unchanged') as unchanged:
+                b.validate_writer_reviewed_alias_markers(registry,roles)
+                unchanged.assert_called_once_with()
+            registry.write_text(registry.read_text().replace(digest,'0'*64))
+            # A stale authority marker can still be exactly manifest-authentic.
+            manifest['language_registries'][0].update(size=registry.stat().st_size,sha256=b.sha256_file(registry))
+            self.assertEqual(manifest['language_registries'][0]['sha256'],b.sha256_file(registry))
+            with patch.object(roles,'require_unchanged'):
+                with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                    b.validate_writer_reviewed_alias_markers(registry,roles)
+
+    def test_marker_free_and_unavailable_writer_proof_keep_native_validation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);registry=root/'registry.tsv';registry.write_text('de\tDeutsch\n')
+            roles=SimpleNamespace(records={'dict-blob-build':{'source_paths':[]}})
+            b.validate_writer_reviewed_alias_markers(registry,roles)
+            registry.write_text('# reviewed-alias\tde\tDeutsch\told\t'+'0'*64+'\n')
+            b.validate_writer_reviewed_alias_markers(registry,roles)
+            b.validate_writer_reviewed_alias_markers(registry,None)
+
+
+class WriterReviewedAliasBoundedReadTests(unittest.TestCase):
+    def test_large_plain_records_do_not_hide_later_stale_markers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            registry=Path(tmp)/'registry.tsv'
+            registry.write_bytes(b'x'*(1024*1024)+b'\n# reviewed-alias\tde\tDeutsch\tid\t'+b'0'*64+b'\n')
+            roles=SimpleNamespace(writer_reviewed_alias_sha256='1'*64,require_unchanged=lambda:None)
+            real_open=Path.open;sizes=[]
+            class Bounded:
+                def __enter__(self):self.stream=real_open(registry,'rb');return self
+                def __exit__(self,*args):self.stream.close()
+                def readline(self,size=-1):
+                    sizes.append(size)
+                    if not 0<size<=64*1024:raise AssertionError('unbounded registry read')
+                    return self.stream.readline(size)
+            with patch.object(Path,'open',lambda *args,**kwargs:Bounded()):
+                with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                    b.validate_writer_reviewed_alias_markers(registry,roles)
+            self.assertTrue(sizes)
+
+
+class WriterReviewedAliasCompiledAuthorityTests(unittest.TestCase):
+    def test_normal_constructor_keeps_compiled_authority_when_unused_source_copy_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);roles,compiler=RetainedNativeRoleTests('test_overlapping_native_roles_hash_each_unchanged_source_once_per_selection').fixture(root)
+            writer=roles['dict-blob-build'];relative='tools/reviewed_language_aliases.json'
+            evidence=Path(writer['source_root'])/relative;evidence.write_bytes(b'original compiled alias evidence')
+            digest=b.sha256_file(evidence)
+            inventory=json.loads(Path(writer['source']['path']).read_text())
+            inventory[relative]=dict(bytes=evidence.stat().st_size,sha256=digest,mode=0o644)
+            manifest=root/'writer-source.json';manifest.write_text(json.dumps(inventory))
+            writer.update(source=dict(path=str(manifest),bytes=manifest.stat().st_size,sha256=b.sha256_file(manifest)),
+                producer_source=b.sha256_file(manifest),source_paths=[*writer['source_paths'],relative])
+            selected=b.RetainedNativeToolRoles(roles,zig_sha256=b.sha256_file(compiler))
+            self.assertEqual(selected.writer_reviewed_alias_sha256,digest)
+            # Compilation-only payloads may retire/change; the installed Writer
+            # still embeds the original authenticated bytes, never this new copy.
+            evidence.write_bytes(b'later unrelated source copy')
+            registry=root/'registry.tsv'
+            registry.write_text('# reviewed-alias\tde\tDeutsch\tid\t'+digest+'\n')
+            b.validate_writer_reviewed_alias_markers(registry,selected)
+            registry.write_text('# reviewed-alias\tde\tDeutsch\tid\t'+b.sha256_file(evidence)+'\n')
+            with self.assertRaisesRegex(ValueError,'selected Writer authority'):
+                b.validate_writer_reviewed_alias_markers(registry,selected)
+
+
 class PreparedToolsFixture(unittest.TestCase):
     def setUp(self):
         super().setUp()
