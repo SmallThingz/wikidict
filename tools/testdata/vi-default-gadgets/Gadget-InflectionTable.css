@@ -1,0 +1,289 @@
+/**
+ * This CSS page provides styling for the {{inflection-table-top}} family of templates.
+ *
+ * The style rules are complex and have various dependencies on one another.
+ * They have been comprehensively tested on desktop and mobile.
+ * Take care before making any changes. If you're not confident with CSS,
+ * consider requesting help from an interface administrator.
+ */
+
+.inflection-table-wrapper {
+	padding: 3px;
+	margin: 0.5em 0;
+	background: var(--wikt-palette-paleblue);
+	border: 1px solid var(--wikt-palette-grey);
+	position: relative;
+	max-width: 100%;
+	box-sizing: border-box;
+	overflow-x: auto;
+}
+
+.inflection-table-wrapper.inflection-table-collapsed {
+	overflow: hidden;
+}
+
+.inflection-table-wrapper.inflection-table-no-title {
+	border: 0;
+	padding: 0;
+}
+
+.inflection-table-wrapper > table {
+	display: table;
+	width: 100%;
+	margin: 0;
+	text-align: center;
+	border-collapse: collapse;
+	border: 1px solid var(--wikt-palette-grey-6);
+	background: var(--wikt-palette-white);
+}
+
+.inflection-table-wrapper > table > caption {
+	display: table-caption;
+	background: var(--wikt-palette-paleblue);
+	text-align: left;
+	font-size: 95%;
+	padding: 0.1em 0.5em;
+	font-weight: bold;
+}
+
+.inflection-table-wrapper.wide > table > tbody > tr {
+	font-size: 90%;
+}
+
+.inflection-table-wrapper > table > tbody > tr > td,
+.inflection-table-wrapper > table > tbody > tr > th {
+	padding: 0.15em 0.6em;
+	border: solid var(--wikt-palette-grey-6);
+	border-width: 0 1px 1px 0;
+}
+
+.inflection-table-wrapper > table > tbody > tr > td:not(.secondary):not(.separator) {
+	min-width: 5em;
+}
+
+/* very-narrow is for tables of unusually short words (e.g. pronouns). The :not
+   selectors are styling-wise unnecessary but must stay: they give this rule the
+   specificity it needs to beat the previous one. */
+.inflection-table-wrapper.very-narrow > table > tbody > tr > td:not(.secondary):not(.separator) {
+	min-width: auto;
+}
+
+.inflection-table-wrapper > table > tbody > tr > td.secondary {
+	background: var(--wikt-palette-lightergrey);
+}
+
+.inflection-table-wrapper > table > tbody > tr > th.secondary,
+.inflection-table-wrapper > table > tbody > tr > th.outer {
+	font-style: italic;
+}
+
+.inflection-table-wrapper > table > tbody > tr > th.secondary > sup,
+.inflection-table-wrapper > table > tbody > tr > th.outer > sup {
+	font-style: normal;
+}
+
+/* separator and blank cells: see [[Template:la-adecl]], [[Template:ga-decl-noun]] */
+.inflection-table-wrapper .separator {
+	height: 0.5em;
+	width: 0.5em;
+	min-height: 0.5em;
+	min-width: 0.5em;
+	padding: 0;
+	background: var(--wikt-palette-paleblue);
+}
+.inflection-table-wrapper .separator[rowspan] {
+	border-top: 1px solid var(--wikt-palette-paleblue);
+	border-bottom: 1px solid var(--wikt-palette-paleblue);
+}
+.inflection-table-wrapper .separator[colspan] {
+	border-left: 1px solid var(--wikt-palette-paleblue);
+	border-right: 1px solid var(--wikt-palette-paleblue);
+}
+
+/* blank cell at end of row: see [[Template:sco-conj-be]] */
+.inflection-table-wrapper .blank-end-row {
+	background: var(--wikt-palette-paleblue);
+	border-right: 1px solid var(--wikt-palette-paleblue);
+	border-top: 1px solid var(--wikt-palette-paleblue);
+	border-bottom: 1px solid var(--wikt-palette-paleblue);
+}
+
+/* Notes at foot of table */
+
+.inflection-table-notes {
+	text-align: left;
+	margin: 0.2em 0.5em 0.2em;
+}
+
+.inflection-table-notes p {
+	margin: 0.5em 0 0.2em;
+}
+
+.inflection-table-wrapper.wide > .inflection-table-notes {
+	font-size: 90%;
+}
+
+/* Collapsibility */
+
+html.client-js .inflection-table-collapsed > table,
+html.client-js .inflection-table-collapsed > table > tbody > tr > td,
+html.client-js .inflection-table-collapsed > table > tbody > tr > th {
+	border-color: transparent;
+}
+
+html.client-js .inflection-table-collapsed > table > tbody {
+	visibility: collapse; /* not implemented in Safari - see the .no-vc fallback below */
+}
+
+html.client-js .inflection-table-collapsed > table > caption {
+	margin-bottom: -0.15em; /* hack: trims excess height from the collapsed box */
+}
+
+html.client-js .inflection-table-collapsed .inflection-table-notes {
+	display: none;
+}
+
+/* Fallback for browsers without visibility: collapse. JS removes .no-vc when unneeded. */
+html.client-js .inflection-table-collapsible.no-vc.inflection-table-collapsed {
+	max-height: calc(1.5em + 8px); /* almost 1lh (= 1.6em) + wrapper padding and border */
+	overflow: hidden;
+}
+html.client-js .inflection-table-collapsible.no-vc.inflection-table-collapsed > table > tbody {
+	visibility: hidden;
+}
+html.client-js .inflection-table-collapsible.no-vc > table > caption {
+	white-space: nowrap; /* a second line would be occluded by the max-height above */
+}
+.inflection-table-wrapper .no-vc-spacer {
+	display: inline-block;
+	width: 4em;
+}
+
+/* keeps the [hide] link from scrolling away when the table is uncollapsed */
+.inflection-table-wrapper .NavToggle {
+	position: sticky;
+	right: 0.5em; /* matches padding on <caption> */
+	background: inherit;
+}
+
+/* Single border display style - EXPERIMENTAL! */
+
+.inflection-table-wrapper.single-border {
+	padding: 0;
+	border: 0;
+}
+
+.inflection-table-wrapper.single-border > table > caption {
+	border: 1px solid var(--wikt-palette-grey);
+	border-bottom: 0;
+}
+
+html.client-js .inflection-table-collapsed.single-border > table > caption {
+	border-bottom: 1px solid var(--wikt-palette-grey);
+}
+
+.inflection-table-wrapper.inflection-table-collapsible.single-border .inflection-table-notes {
+	border: 1px solid var(--wikt-palette-grey);
+	border-top: 0;
+}
+
+/* Mobile styling */
+
+@media all and (max-width: 639px) { /* matches calc(640px - 1px) in Minerva CSS */
+	.inflection-table-wrapper {
+		overflow: auto;
+		max-width: 100%;
+		width: auto !important; /* overrides the inline style that works around a CSS sanitiser lacuna; !important is required to win */
+	}
+
+	.inflection-table-collapsed tbody {
+		display: none;
+	}
+
+	.inflection-table-wrapper .NavToggle {
+		position: sticky;
+		right: 0.5em;
+		background: inherit;
+	}
+
+	/* stick a single left-hand column of header cells in place */
+	.inflection-table-wrapper.sticky-left-column > table > tbody > tr > th:first-child {
+		position: sticky;
+		left: -4px; /* counteracts 3px wrapper padding + 1px table border */
+		max-width: 35vw;
+	}
+	.inflection-table-wrapper.inflection-table-no-title.sticky-left-column > table > tbody > tr > th:first-child {
+		left: -1px; /* counteracts 1px table border */
+	}
+}
+
+/* Transliterations: paler, on their own line */
+
+.inflection-table-wrapper:not(.tr-alongside) table > tbody td span.tr {
+	color: var(--wikt-palette-grey-9); /* TODO slightly below AAA contrast on a -0 background */
+}
+.inflection-table-wrapper:not(.tr-alongside) table > tbody td span.tr:before {
+	content: "\a"; /* newline */
+	white-space: pre;
+}
+.inflection-table-wrapper:not(.tr-alongside) table > tbody td span.mention-gloss-paren {
+	display: none;
+}
+
+/* Inflection boxes - multiple tables inside one box */
+
+.inflection-box > table {
+	background: none;
+	border: 0;
+}
+
+.inflection-box > table > tbody > tr > td {
+	padding: 0 0.2em;
+	border: 0;
+	vertical-align: top;
+}
+
+.inflection-box .inflection-table-wrapper {
+	display: inline-block;
+	vertical-align: top;
+	margin: 0.2em 0.1em;
+}
+
+/* overqualified on purpose, to beat the no-title palette rule below */
+.inflection-box .inflection-table-wrapper > table.inflection-table {
+	background: var(--wikt-palette-white);
+}
+
+.inflection-box.flow-vertical .inflection-table-wrapper {
+	display: block;
+	width: auto !important; /* see the note on the mobile rule above */
+}
+
+.inflection-box.flow-vertical .inflection-table-wrapper + .inflection-table-wrapper {
+	margin-top: 0.5em;
+}
+
+/* Palettes: dark-on-light */
+
+.inflection-table-wrapper.inflection-table-no-title > table {
+	background-color: var(--wikt-p-0);
+}
+
+.inflection-table tr.secondary > th,
+.inflection-table th.secondary {
+	background-color: var(--wikt-p-1);
+}
+
+.inflection-table th {
+	background-color: var(--wikt-p-2);
+}
+
+.inflection-table tr.outer > th,
+.inflection-table th.outer {
+	background-color: var(--wikt-p-4);
+}
+
+.inflection-table tr.darker > td,
+.inflection-table td.darker {
+	background-color: var(--wikt-p-g-1) !important; /* !important beats the more specific td.secondary rule */
+}

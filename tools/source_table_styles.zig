@@ -159,8 +159,13 @@ fn readIndexedGadget(
     const line = page_index[offset..end];
     if (line.len > 16 * 1024) return error.InvalidTableStylesSource;
     const row = try dump_source.parsePageIndexLine(title_index.kind, line);
+    // ResourceLoader serializes CSS-capable content handlers directly. A gadget
+    // stylesheet may use TemplateStyles' sanitized-css model without acquiring
+    // the selector scoping of a <templatestyles> inclusion.
+    const matches_model = std.mem.eql(u8, row.content_model, model) or
+        (std.mem.eql(u8, model, "css") and std.mem.eql(u8, row.content_model, "sanitized-css"));
     if (row.ns != 8 or !row.has_source or row.redirect != null or
-        !std.mem.eql(u8, row.content_model, model) or !std.mem.eql(u8, row.title, title) or
+        !matches_model or !std.mem.eql(u8, row.title, title) or
         row.page_id == 0 or row.revision_id == 0 or dump_source.sourceLen(row.source) > max_source_bytes)
         return error.InvalidTableStylesSource;
     const encoded = try source.readAlloc(a, row.source);
@@ -611,4 +616,46 @@ test "ordinary gadget loader refuses a title index that omits a retained definit
     var namespaces = try namespace_registry.Registry.init(a, namespace_registry.english_test_fixture); defer namespaces.deinit();
     try std.testing.expectError(error.InvalidTableStylesSource,
         observeWithImportsForTarget(a, &namespaces, &reader, full_index, title_index, null, .screen));
+}
+
+test "ordinary default gadget loader preserves retained VI sanitized CSS with exact model provenance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const css = @embedFile("testdata/vi-default-gadgets/Gadget-InflectionTable.css");
+    var pages = [_]DefaultGadgetTesting.Page{
+        .{ .title = "MediaWiki:Common.css", .model = "css", .body = ".probe{text-align:right}", .id = 1, .revision = 10 },
+        .{ .title = "MediaWiki:Gadgets-definition", .model = "wikitext", .body = "* InflectionTable[hidden|default]|InflectionTable.css", .id = 232821, .revision = 2565105 },
+        .{ .title = "MediaWiki:Gadget-InflectionTable.css", .model = "sanitized-css", .body = css, .id = 321773, .revision = 2514515 },
+    };
+    for ([_][]const u8{ "css", "sanitized-css" }) |model| {
+        pages[2].model = model;
+        const result = try DefaultGadgetTesting.observe(a, &pages);
+        var authority = result.authority orelse return error.TestUnexpectedResult; defer authority.deinit();
+        const proof = authority.provenance.default_gadgets orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), proof.sheets.len);
+        try std.testing.expectEqual(@as(usize, 2), authority.profile.retained_sources.len);
+        try std.testing.expectEqualStrings(css, authority.profile.retained_sources[0].css);
+        try std.testing.expectEqualStrings(pages[0].body, authority.profile.retained_sources[1].css);
+        try std.testing.expect(!proof.sheets[0].unknown_applicability);
+        const indexed = proof.sheets[0].indexed;
+        try std.testing.expectEqualStrings(model, indexed.content_model);
+        try std.testing.expectEqualStrings(pages[2].title, indexed.title);
+        try std.testing.expectEqual(@as(u64, 321773), indexed.page_id);
+        try std.testing.expectEqual(@as(u64, 2514515), indexed.revision_id);
+        try std.testing.expectEqual(css.len, indexed.encoded_source_bytes);
+        try std.testing.expectEqual(css.len, indexed.decoded_source_bytes);
+        try std.testing.expectEqualStrings(&sha256(css), &indexed.encoded_source_sha256);
+        try std.testing.expectEqualStrings(&sha256(css), &indexed.decoded_source_sha256);
+        try std.testing.expect(!indexed.source_needs_decode);
+    }
+    for ([_][]const u8{ "wikitext", "javascript", "json", "unknown-css" }) |model| {
+        pages[2].model = model;
+        try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
+    }
+    pages[2].model = "sanitized-css";
+    pages[2].redirect = "MediaWiki:Other.css";
+    try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
+    pages[2].redirect = "";
+    pages[1].model = "sanitized-css";
+    try std.testing.expectError(error.InvalidTableStylesSource, DefaultGadgetTesting.observe(a, &pages));
 }
