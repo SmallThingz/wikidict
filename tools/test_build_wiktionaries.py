@@ -3597,7 +3597,19 @@ class FallbackNamespaceHistogramTests(unittest.TestCase):
                     self.assertEqual({'old': 37}, reasons)
 
 
-class PublicationResumeTests(unittest.TestCase):
+class PublicationCompilerFixture(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Publication and resume hash the compiler identity, but must never invoke it.
+        directory = cls.enterClassContext(tempfile.TemporaryDirectory())
+        compiler = Path(directory) / 'zig'
+        compiler.write_bytes(b'#!/bin/sh\necho "unexpected compiler invocation" >&2\nexit 1\n')
+        compiler.chmod(0o555)
+        cls.enterClassContext(patch.dict(os.environ, PATH=directory + os.pathsep + os.environ['PATH']))
+
+
+class PublicationResumeTests(PublicationCompilerFixture):
     def test_large_fallback_gzip_fresh_and_resume_preserve_sealed_bytes(self):
         for interrupted in ('fresh', 'partial', 'pair', 'gzip-only', 'corrupt'):
             with self.subTest(interrupted=interrupted), tempfile.TemporaryDirectory() as tmp:
@@ -4017,7 +4029,7 @@ class PublicationResumeTests(unittest.TestCase):
                 self.assertFalse((target/b.VERIFIED_MARKER).exists())
 
 
-class VerifiedPublicationInventoryTests(unittest.TestCase):
+class VerifiedPublicationInventoryTests(PublicationCompilerFixture):
     prepare = PublicationResumeTests.prepare
     """Synthetic interrupted staging; never compile or bless native fixtures."""
     def interrupted(self, root):
@@ -4321,7 +4333,7 @@ class ExpansionDeadlineTests(unittest.TestCase):
 
 
 
-class VerifiedResumeCleanupOrderTests(unittest.TestCase):
+class VerifiedResumeCleanupOrderTests(PublicationCompilerFixture):
     """Owned synthetic staging only; no native compilation or actual corpus input."""
     prepare = PublicationResumeTests.prepare
 
