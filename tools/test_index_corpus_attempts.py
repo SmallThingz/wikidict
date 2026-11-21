@@ -63,7 +63,7 @@ class AttemptIndexTests(unittest.TestCase):
 
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
                        input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
-                       snapshot=None, guard_snapshot=True):
+                       snapshot=None, guard_snapshot=True, bootstrap_copy=None):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
@@ -82,6 +82,11 @@ class AttemptIndexTests(unittest.TestCase):
                             command['source_refs'].append(snapshot)
                     if guard_selector:
                         command['source_refs'].append(selector)
+                    if bootstrap_copy:
+                        guarded, selected = bootstrap_copy
+                        modules = {**catalog['modules'], 'build_resource_limits': selected}
+                        command['argv'][command['argv'].index('--python-tooling-json') + 1] = json.dumps({**catalog, 'modules': modules})
+                        command['source_refs'].insert(0, guarded)
                 command_ref = record(root / 'command.json', command)
                 start = dict(input_authority=command_ref, source_refs=command['source_refs'])
                 if selected_catalog:
@@ -174,6 +179,20 @@ class AttemptIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Incomplete guardian closure'):
                 read_execution(base, path, guardian=True)
             stdout = record(run / 'tests.stdout', b'')
+            private = root / 'private'
+            private.mkdir()
+            owner_module = record(root / 'build_resource_limits.py', b'limits')
+            private_module = record(private / 'build_resource_limits.py', b'limits')
+            copies = owner_module, private_module
+            freeze(input_selection=True, bootstrap_copy=copies, exit_code=2, watchdog_code=2)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_status'], 'no-terminal-production-clock')
+            (private / 'build_resource_limits.py').write_bytes(b'edited')
+            with self.assertRaisesRegex(ValueError, 'build_resource_limits.py'):
+                read_execution(base, path, guardian=True)
+            (private / 'build_resource_limits.py').write_bytes(b'limits')
+            freeze(input_selection=True, bootstrap_copy=copies)
+            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                read_execution(base, path, guardian=True)
             freeze(detached=True, exit_code=1, watchdog_code=1, selected_catalog=True)
             row = read_execution(base, path, guardian=True)
             self.assertEqual(row['command_exit'], 1)

@@ -157,9 +157,21 @@ def guardian_whole(path, closure, result):
                 or manifest_ref['sha256'] != manifest_hash or manifest_path.stat().st_size != manifest_ref['bytes']):
             raise ValueError(f'Selected input manifest differs: {path}')
         guarded = {(ref['path'], ref['bytes'], ref['sha256']) for ref in refs}
-        for ref in (catalog['selector'], *catalog['modules'].values()):
-            if (ref['path'], ref['bytes'], ref['sha256']) not in guarded:
-                raise ValueError(f'Unguarded Python catalog member: {ref["path"]}')
+        bootstrap = dict(zip(('build_resource_limits', 'build_watchdog_guardian'), refs[:2]))
+        for name, ref in [('selector', catalog['selector']), *catalog['modules'].items()]:
+            if (ref['path'], ref['bytes'], ref['sha256']) in guarded:
+                continue
+            # Some failed invocations selected a private Python catalog and ran
+            # the watchdog from a separate installation of the same two modules.
+            # Count the command only when both original payloads still verify.
+            owner_ref = bootstrap.get(name)
+            if (code != 0 and owner_ref is not None
+                    and Path(owner_ref['path']).name == Path(ref['path']).name == name + '.py'
+                    and (owner_ref['bytes'], owner_ref['sha256']) == (ref['bytes'], ref['sha256'])):
+                checked(owner_ref)
+                checked(ref)
+                continue
+            raise ValueError(f'Unguarded Python catalog member: {ref["path"]}')
     builder = catalog['modules']['build_wiktionaries']
     script = builder['path']
     if (argv.count(script) != 1 or argv.index(script) >= argv.index('--python-tooling-json')
