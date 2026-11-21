@@ -64,7 +64,7 @@ const Packet = struct {
 const DirectStyles = struct { responses: []const []const u8, receipt: []const u8 };
 pub const DirectGetContext = direct_source_get.Context(DirectStyles);
 const canonicalCurrentUrl = direct_source_get.canonicalCurrentUrl;
-const directGetTransport = direct_source_get.validateTransport;
+const directGetTransport = direct_source_get.validatePageLanguageTransport;
 // This owned capsule is transport evidence only. It has no Profile/Compiler or
 // source-parent authority; the Writer eagerly constructs every parent first.
 pub const SourceParentCapsule = struct {
@@ -900,6 +900,39 @@ test "page language controlled index supports two independent contiguous respons
     try std.testing.expect(ControlledIndex.second(&r, Fixture.normal).?.outer_languages == null);
 }
 
+
+test "Figure GETs keep main-namespace scope when page language accepts supplemental titles" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try namespaces.Registry.init(a, namespaces.french_test_fixture);
+    defer ns.deinit();
+    for ([_][]const u8{
+        @embedFile("testdata/fr-source-root-language01/page-language.json"),
+        @embedFile("testdata/controlled-fr-supplemental/page-language.json"),
+    }) |bytes| {
+        var packet = try parseLimited(a, bytes, max_index_bytes);
+        const rows = packet.object.getPtr("direct_get_contexts").?;
+        try std.testing.expectEqual(@as(usize, 1), rows.array.items.len);
+        const row = &rows.array.items[0];
+        const language = try std.json.parseFromValue(DirectGetContext, a, row.*, .{});
+        const accepted = try directGetTransport(a, &ns, language.value);
+        try row.object.put(a, "styles", .null);
+        const figure = try std.json.parseFromValue(direct_source_get.Context(?bool), a, row.*, .{});
+        if (language.value.page.namespace == 0) {
+            const result = try direct_source_get.validateTransport(a, &ns, figure.value);
+            try std.testing.expectEqualStrings(accepted.url, result.url);
+        } else {
+            try std.testing.expectEqual(@as(i32, 118), language.value.page.namespace);
+            try std.testing.expectError(invalid, direct_source_get.validateTransport(a, &ns, figure.value));
+            var styled = language.value;
+            styled.styles.receipt = "{}";
+            try std.testing.expectError(invalid, directGetTransport(a, &ns, styled));
+            styled.styles = .{ .responses = &.{"body{}"}, .receipt = "" };
+            try std.testing.expectError(invalid, directGetTransport(a, &ns, styled));
+        }
+    }
+}
 
 test "current supplemental source binds registry full title response and both input hashes" {
     const a = std.testing.allocator;

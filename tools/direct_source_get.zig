@@ -113,6 +113,16 @@ fn directDocumentUrl(a: A, ns: *const namespaces.Registry, record: anytype, url:
 }
 const Transport = struct { url: []const u8, observation: prefix_parser.Observation };
 pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
+    if (record.page.namespace != 0) return invalid;
+    return validateDocumentTransport(a, ns, record);
+}
+
+pub fn validatePageLanguageTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
+    if (record.page.namespace != 0 and (record.styles.responses.len != 0 or record.styles.receipt.len != 0)) return invalid;
+    return validateDocumentTransport(a, ns, record);
+}
+
+fn validateDocumentTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
     if (!eq(record.profile, "source-parent-direct-get-v1") or !validPage(record.page) or
         record.response.len == 0 or record.response.len > 2 * 1024 * 1024 or
         record.prefix.len == 0 or record.prefix.len > 512 * 1024 or !std.mem.startsWith(u8, record.response, record.prefix) or
@@ -190,8 +200,7 @@ pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) 
     const observation = if (page.namespace == 0)
         try prefix_parser.parseCurrentAlloc(a, record.prefix, page.id, page.revision, page.title)
     else observed: {
-        if (record.mode != .@"current-canonical" or record.response_kind != .@"complete-response" or
-            record.styles.responses.len != 0 or record.styles.receipt.len != 0) return invalid;
+        if (record.mode != .@"current-canonical" or record.response_kind != .@"complete-response") return invalid;
         const spec = ns.storedPageSpec(page.title, page.namespace) catch return invalid;
         const local_title = ns.ofTitle(page.title).text;
         if (spec.role == .compile_only or local_title.len == 0) return invalid;
