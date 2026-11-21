@@ -835,13 +835,30 @@ def exchange_export_batch(process, titles, hints, storage, alias_references=Fals
             process.stdin.write(encoded)
     process.stdin.flush()
     at_line_start = True
-    with export_spool(storage, 'wb') as compressed:
+    # Most small views fit in memory. Keep the original bytes until the frame
+    # grows large enough to justify a compression round trip.
+    prefix = io.BytesIO()
+    compressed = None
+    with ExitStack() as resources:
         while part := process.stdout.readline(128 * 1024):
             if at_line_start and part == b'\n':
-                return True
-            compressed.write(part)
+                break
             at_line_start = part.endswith(b'\n')
-    return False
+            if compressed is None:
+                if prefix.tell() + len(part) <= 256 * 1024:
+                    prefix.write(part)
+                    continue
+                compressed = resources.enter_context(export_spool(storage, 'wb'))
+                compressed.write(prefix.getbuffer())
+                prefix.close()
+            compressed.write(part)
+        else:
+            return None  # EOF before the native end-of-batch marker.
+    if compressed is None:
+        prefix.seek(0)
+        return prefix
+    storage.seek(0)
+    return export_spool(storage, 'rb')
 
 
 @contextmanager
@@ -860,7 +877,8 @@ def checked_export_session(argv, *, alias_references=False):
                     deadline = time.monotonic() + 60
                     try:
                         exchange = pool.submit(exchange_export_batch, process, titles, hints, storage, alias_references, browse_offset)
-                        if not exchange.result(timeout=60):
+                        decoded = exchange.result(timeout=60)
+                        if decoded is None:
                             code = wait_export_child(process, max(0, deadline - time.monotonic()))
                             require(code == 0, f'export batch failed with status {code}')
                             raise ScanError('export session ended without completing the batch')
@@ -874,8 +892,7 @@ def checked_export_session(argv, *, alias_references=False):
                         if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
                             raise subprocess.TimeoutExpired(argv, 60) from error
                         raise
-                    storage.seek(0)
-                    with export_spool(storage, 'rb') as decoded:
+                    with decoded:
                         yield decoded
 
             try:

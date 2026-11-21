@@ -1,6 +1,7 @@
 import bz2
 import errno
 import gzip
+import io
 import json
 import hashlib
 import os
@@ -1179,6 +1180,20 @@ class BatchExportBoundaryTests(unittest.TestCase):
                             self.assertEqual(payload, result.read())
                             self.assertEqual(limit == 64, storage._rolled)
                             self.assertLess(storage.tell(), len(payload) // 10)
+
+    def test_export_session_retains_small_frames_and_compresses_large_frames(self):
+        for codec in {audit.zstd, None}:
+            for length in (0, 128 * 1024 + 1, 256 * 1024, 256 * 1024 + 1):
+                with self.subTest(codec=codec, length=length):
+                    # For a full-size read, the next chunk may start with the
+                    # record's newline. Only a separate blank line ends the batch.
+                    body = b'x' * (length - 1) + b'\n' if length else b''
+                    child = mock.Mock(stdin=io.BytesIO(), stdout=io.BytesIO(body + b'\nnext\n'))
+                    with io.BytesIO() as storage, mock.patch.object(audit, 'zstd', codec):
+                        with audit.exchange_export_batch(child, ['x'], None, storage) as frame:
+                            self.assertEqual(frame.read(), body)
+                        self.assertEqual(bool(storage.getvalue()), length > 256 * 1024)
+                    self.assertEqual(child.stdout.read(), b'next\n')
 
     def test_export_session_reuses_child_and_frames_long_records(self):
         child = '''
