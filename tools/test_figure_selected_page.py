@@ -116,6 +116,21 @@ class SelectedPageFigureTests(unittest.TestCase):
                 other, _ = self.selection([title])
                 figure.selected_page_inventory(catalogue, other, namespace, self.wiki, self.date)
 
+    def test_authored_file_underscores_resolve_only_to_corresponding_catalogue_spaces(self):
+        filename = 'Osthyvel 20050723 001.jpg'
+        args = self.args(links=(filename.replace(' ', '_'),))
+        namespace = self.namespace.read_bytes()
+        catalogue = figure.selected_inventory(args, namespace)
+        page, _ = self.selection(['File:Osthyvel_20050723_001.jpg', 'File:' + filename])
+        selected = figure.selected_page_inventory(catalogue, page, namespace, self.wiki, self.date)
+        self.assertEqual(selected['titles'], ['ملف:' + filename])
+        self.assertEqual(selected['selected_page'], page)
+        for title in ('File:_Osthyvel_20050723_001.jpg', 'File:Osthyvel__20050723_001.jpg',
+                      'File:Osthyvel_20050723_002.jpg', 'Media:Osthyvel_20050723_001.jpg'):
+            with self.subTest(title=title), self.assertRaises(ValueError):
+                other, _ = self.selection([title])
+                figure.selected_page_inventory(catalogue, other, namespace, self.wiki, self.date)
+
     def test_duplicate_occurrences_share_one_file_and_keep_source_order(self):
         args = self.args()
         catalogue = figure.selected_inventory(args, self.namespace.read_bytes())

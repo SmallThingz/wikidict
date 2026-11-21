@@ -1796,7 +1796,7 @@ def selected_page_inventory(catalogue, page, namespace_raw, wiki, date):
         prefix, _, body = name.partition(':')
         canonical = registry.file_title(name)
         if (registry.aliases.get(registry.alias_key(prefix)) != 6 or
-                canonical.partition(':')[2] != body or raw[start:end] != ('[[' + name).encode('utf-8') or
+                canonical.partition(':')[2] != body.replace('_', ' ') or raw[start:end] != ('[[' + name).encode('utf-8') or
                 not (raw[end:end+1] == b'|' or raw[end:end+2] == b']]')):
             raise ValueError('Selected Figure occurrence differs from original source')
         names.add(canonical)
