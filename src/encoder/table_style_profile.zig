@@ -2194,6 +2194,17 @@ fn languageValueRefutes(range: []const u8, value: []const u8) bool {
     }
     return !std.ascii.eqlIgnoreCase(range_primary, value_primary);
 }
+// The independently observed page root may supply a missing distant ancestor.
+// It cannot move the search back to, or below, an already matched element.
+fn canAppendPageRoot(root: *const TextElement, witness: *const TextElement, budget: *usize) bool {
+    var outer: ?*const TextElement = root;
+    while (outer) |node| : (outer = node.parent) {
+        if (node == witness or budget.* == 0) return false;
+        budget.* -= 1;
+    }
+    return true;
+}
+
 const TextSelector = struct {
     // A known nonmatch can refuse this candidate; a match remains uncertain.
     language_range: ?[]const u8 = null,
@@ -2238,11 +2249,13 @@ const TextSelector = struct {
     fn matchIn(self: TextSelector, element: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         if (page_scoped) if (element.alternative_ancestry) |alternative| {
             if (alternative.alternative_ancestry != null) return .unknown;
-            var primary = element.*; primary.alternative_ancestry = null;
-            const left = self.matchIn(&primary, true);
-            const right = self.matchIn(alternative, true);
+            const left = self.matchBranch(element, true);
+            const right = self.matchBranch(alternative, true);
             return if (left == right) left else .unknown;
         };
+        return self.matchBranch(element, page_scoped);
+    }
+    fn matchBranch(self: TextSelector, element: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         if (self.ancestorClassesRefute(element) or self.ancestorIdsRefute(element)) return .no;
         if (self.own_attribute_complete) {
             const name = self.required_own_attribute orelse return .unknown;
@@ -2266,6 +2279,7 @@ const TextSelector = struct {
         if (self.direct_children and !element.physical_ancestry_complete) return .unknown;
         var cursor = element.parent;
         var entered_root = false;
+        var last_match = element;
         var index = self.chain.len - 1;
         while (index != 0) {
             index -= 1;
@@ -2275,10 +2289,18 @@ const TextSelector = struct {
                 cursor = parent.parent;
             } else {
                 while (true) {
-                    if (cursor == null and !entered_root and !element.physical_ancestry_complete) { cursor = root; entered_root = true; }
+                    if (cursor == null and !entered_root and !element.physical_ancestry_complete) {
+                        var budget: usize = 4096;
+                        if (!canAppendPageRoot(root, last_match, &budget)) return .unknown;
+                        cursor = root;
+                        entered_root = true;
+                    }
                     const parent = cursor orelse return if (element.physical_ancestry_complete) .no else .unknown;
                     cursor = parent.parent;
-                    if (self.chain[index].matches(parent)) break;
+                    if (self.chain[index].matches(parent)) {
+                        last_match = parent;
+                        break;
+                    }
                 }
             }
         }
@@ -7734,6 +7756,7 @@ const ContainerSelector = struct {
         // A selected root and its independently observed outer nodes are only
         // positive distant ancestors. Missing matches cannot close the chain.
         if (page_root) |root| {
+            if (!canAppendPageRoot(root, element, budget)) return combine(own, .unknown);
             var outer: ?*const TextElement = root;
             while (outer) |ancestor| : (outer = ancestor.parent) {
                 const matched = self.matchAt(index - 1, ancestor, false, budget, null);
@@ -7749,10 +7772,13 @@ const ContainerSelector = struct {
         if (page_scoped) if (element.alternative_ancestry) |alternative| {
             if (alternative.alternative_ancestry != null) return .unknown;
             var primary = element.*; primary.alternative_ancestry = null;
-            const left = self.matchIn(&primary, true);
-            const right = self.matchIn(alternative, true);
+            const left = self.matchBranch(&primary, element, true);
+            const right = self.matchBranch(alternative, alternative, true);
             return if (left == right) left else .unknown;
         };
+        return self.matchBranch(element, element, page_scoped);
+    }
+    fn matchBranch(self: @This(), element: *const TextElement, original: *const TextElement, page_scoped: bool) ContainerSelectorMatch {
         // A separate source-issued element relation remains the only positive
         // sibling authority; the parser-root proof does not add adjacency.
         if (self.adjacent_sibling != null) return self.match(element);
@@ -7797,7 +7823,9 @@ const ContainerSelector = struct {
         var budget: usize = 4096;
         var descendant_root: ?*const TextElement = if (element.physical_ancestry_complete) null else root;
         for (self.chain) |part| if (part.direct_parent) { descendant_root = null; break; };
-        const actual = self.matchAt(self.chain.len - 1, element, element.physical_ancestry_complete, &budget, descendant_root);
+        // Projected selection fields must not change the physical identity of a
+        // witness. The walker reads only this branch's compounds and parents.
+        const actual = self.matchAt(self.chain.len - 1, original, element.physical_ancestry_complete, &budget, descendant_root);
         if (actual == .known) return if (self.uncertain) .unknown else .known;
         // Only the independent complete physical path can close this domain.
         if (element.physical_ancestry_complete and actual == .no) return .no;
@@ -37896,4 +37924,118 @@ test "observed margin importance keeps ambiguous winners and computed invalid re
     try std.testing.expectEqualDeep(types.StyleEdges.all(.{ .unit = .px, .value = 0 }), box.style.margins.?);
     // An unknown environment remains unresolved, even with the same winning bytes.
     try std.testing.expect((try observedFigureEdges(a, path.declarations, .{ .complete = false }, false, false, 1, null)).unresolved);
+}
+
+test "container descendant selectors require distinct ordered witnesses around a selected root" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var rules = try parseForTargetAlloc(a,
+        ".mw-parser-output .mw-parser-output .entry{width:10px}" ++
+        ".mw-parser-output .entry{height:4px}" ++
+        ".mw-parser-output body .entry{padding:3px}", .screen);
+    defer rules.deinit();
+    try std.testing.expectEqual(@as(usize, 3), rules.container_rules.len);
+    const repeated = rules.container_rules[0].selector;
+    const ordinary = rules.container_rules[1].selector;
+    const reversed = rules.container_rules[2].selector;
+    const body: TextElement = .{ .tag = "body" };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &body };
+    var entry: TextElement = .{ .tag = "div", .classes = "entry", .parent = &root, .page_style_root = &root };
+    try std.testing.expectEqual(ContainerSelectorMatch.known, ordinary.matchIn(&entry, true));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, repeated.matchIn(&entry, true));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, reversed.matchIn(&entry, true));
+    const inner: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &root };
+    entry.parent = &inner;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, repeated.matchIn(&entry, true));
+    // A detached selected root still supplies a positive ancestor. A shared
+    // outer node cannot place that root above its own BODY ancestor.
+    entry.parent = null;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, ordinary.matchIn(&entry, true));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, repeated.matchIn(&entry, true));
+    entry.parent = &body;
+    try std.testing.expectEqual(ContainerSelectorMatch.known, ordinary.matchIn(&entry, true));
+    try std.testing.expectEqual(ContainerSelectorMatch.unknown, reversed.matchIn(&entry, true));
+    entry.physical_ancestry_complete = true;
+    try std.testing.expectEqual(ContainerSelectorMatch.no, reversed.matchIn(&entry, true));
+}
+
+test "page scoped public paint and geometry require ordered distinct witnesses on both branches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Check = struct {
+        fn uncertain(alloc: std.mem.Allocator, paint: *const Profile, geometry: *const Profile, node: *const TextElement) !void {
+            const text = try paint.resolveTextPaint(alloc, node, "");
+            try std.testing.expect(text.weight != null and text.weight.? == .unknown);
+            try std.testing.expect((try geometry.resolveContainerIn(alloc, node, "")).unresolved);
+        }
+        fn known(alloc: std.mem.Allocator, paint: *const Profile, geometry: *const Profile, node: *const TextElement) !void {
+            const text = try paint.resolveTextPaint(alloc, node, "");
+            try std.testing.expect(text.weight != null and text.weight.? == .value and text.weight.?.value);
+            const box = try geometry.resolveContainerIn(alloc, node, "");
+            try std.testing.expect(!box.unresolved and box.specified and box.style.width != null);
+            try std.testing.expect(box.style.width.? == .length);
+            try std.testing.expectEqual(types.StyleWidth{ .unit = .px, .value = 10 }, box.style.width.?.length);
+        }
+    };
+    var global = try parseForTargetAlloc(a, "", .screen);
+    defer global.deinit();
+    var paint = try parseForTargetAlloc(a, ".mw-parser-output .entry{font-weight:bold}", .screen);
+    defer paint.deinit();
+    paint.page_style_parent = &global;
+    var geometry = try parseForTargetAlloc(a, ".mw-parser-output .entry{width:10px}", .screen);
+    defer geometry.deinit();
+    geometry.page_style_parent = &global;
+    const body: TextElement = .{ .tag = "body" };
+    const root: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &body };
+    const other: TextElement = .{ .tag = "div", .classes = "entry", .parent = &root, .page_style_root = &root };
+    var subject: TextElement = .{ .tag = "div", .classes = "mw-parser-output entry", .parent = &body };
+    subject.page_style_root = &subject;
+    subject.alternative_ancestry = &other;
+    // A subject cannot supply its own ancestor. An independent matching
+    // alternative cannot make the disagreeing primary branch certain.
+    try Check.uncertain(a, &paint, &geometry, &subject);
+    subject.parent = &root;
+    try Check.known(a, &paint, &geometry, &subject);
+    // Both branch directions must retain the disagreement.
+    var reversed_subject = other;
+    subject.parent = &body;
+    subject.alternative_ancestry = null;
+    reversed_subject.alternative_ancestry = &subject;
+    try Check.uncertain(a, &paint, &geometry, &reversed_subject);
+
+    var repeated_paint = try parseForTargetAlloc(a, ".mw-parser-output .mw-parser-output .entry{font-weight:bold}", .screen);
+    defer repeated_paint.deinit();
+    repeated_paint.page_style_parent = &global;
+    var repeated_geometry = try parseForTargetAlloc(a, ".mw-parser-output .mw-parser-output .entry{width:10px}", .screen);
+    defer repeated_geometry.deinit();
+    repeated_geometry.page_style_parent = &global;
+    var detached: TextElement = .{ .tag = "div", .classes = "entry", .page_style_root = &root };
+    // The selected root is a valid positive distant ancestor; it may not
+    // become two witnesses when the chain requires two distinct ancestors.
+    try Check.known(a, &paint, &geometry, &detached);
+    try Check.uncertain(a, &repeated_paint, &repeated_geometry, &detached);
+    detached.parent = &root;
+    try Check.uncertain(a, &repeated_paint, &repeated_geometry, &detached);
+    const nested: TextElement = .{ .tag = "div", .classes = "mw-parser-output", .parent = &root };
+    detached.parent = &nested;
+    try Check.known(a, &repeated_paint, &repeated_geometry, &detached);
+
+    var reversed_paint = try parseForTargetAlloc(a, ".mw-parser-output body .entry{font-weight:bold}", .screen);
+    defer reversed_paint.deinit();
+    reversed_paint.page_style_parent = &global;
+    var reversed_geometry = try parseForTargetAlloc(a, ".mw-parser-output body .entry{width:10px}", .screen);
+    defer reversed_geometry.deinit();
+    reversed_geometry.page_style_parent = &global;
+    detached.parent = &root;
+    try Check.uncertain(a, &reversed_paint, &reversed_geometry, &detached);
+    detached.parent = &body;
+    try Check.uncertain(a, &reversed_paint, &reversed_geometry, &detached);
+    // A complete physical chain can establish a real nonmatch. The observed
+    // descendant root cannot be reinserted above its own BODY parent.
+    detached.physical_ancestry_complete = true;
+    try std.testing.expect((try reversed_paint.resolveTextPaint(a, &detached, "")).weight == null);
+    const absent = try reversed_geometry.resolveContainerIn(a, &detached, "");
+    try std.testing.expect(!absent.unresolved and absent.style.width == null);
 }
