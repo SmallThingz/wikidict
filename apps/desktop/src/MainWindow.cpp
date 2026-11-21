@@ -3189,6 +3189,7 @@ struct LoadedDataset {
     QString missingWord;
     QStringList matchingLanguages;
     bool emptyLibrary = false;
+    std::optional<LibraryStorage::EmptyRelease> emptyRelease;
 };
 
 bool titleLess(const QString &left, const QString &right) {
@@ -3414,7 +3415,9 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     QSignalBlocker languageBlocker(language_);
                     kind_->setCurrentIndex(kind_->findData(api_->kind()));
                     language_->setCurrentText(api_->language());
-                    resultStatus_->setText(QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
+                    resultStatus_->setText(loaded->emptyRelease
+                        ? loaded->emptyRelease->summary() + QStringLiteral(" Your current dictionary is still open.")
+                        : QStringLiteral("Could not open the selected dictionary. Your current dictionary is still open."));
                     if (compactNavigation_) focusSearch();
                 } else {
                     if (loaded->emptyLibrary && !root.isEmpty())
@@ -3425,7 +3428,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     sections_->clear();
                     sections_->setEnabled(false);
                     bookmark_->setEnabled(false);
-                    title_->setHtml(QStringLiteral("Open your dictionaries"));
+                    title_->setHtml(loaded->emptyRelease ? QStringLiteral("This release has no dictionaries")
+                        : QStringLiteral("Open your dictionaries"));
                     meta_->setText(QStringLiteral("Your words stay on this computer."));
                     ++readingComposition_;
                     static_cast<ReadingBrowser *>(reading_)->clearDisclosures();
@@ -3434,17 +3438,23 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                     const QPointer<QTextBrowser> descriptionBrowser(reading_);
                     const QPointer<QTextDocument> descriptionDocument(reading_->document());
                     const quint64 descriptionComposition = readingComposition_;
-                    reading_->setHtml(loaded->emptyLibrary
-                        ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
-                        : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
+                    const QString descriptionText = loaded->emptyRelease
+                        ? loaded->emptyRelease->summary() + QStringLiteral("\nOpen Library to choose another dictionary folder.")
+                        : loaded->emptyLibrary
+                            ? QStringLiteral("No dictionaries are installed yet.\nOpen Library to import a dictionary, download one, or choose an existing folder.")
+                            : QStringLiteral("Could not open this dictionary.\nOpen Library to import a dictionary, download one, or choose an existing folder.");
+                    reading_->setHtml(loaded->emptyRelease
+                        ? QStringLiteral("<p>%1</p><p><a href='library:'>Open Library</a> to choose another dictionary folder.</p>").arg(loaded->emptyRelease->summary().toHtmlEscaped())
+                        : loaded->emptyLibrary
+                            ? QStringLiteral("<p>No dictionaries are installed yet.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>")
+                            : QStringLiteral("<p>Could not open this dictionary.</p><p><a href='library:'>Open Library</a> to import a dictionary, download one, or choose an existing folder.</p>"));
                     if (descriptionOwner && descriptionBrowser && descriptionDocument
                         && descriptionBrowser->document() == descriptionDocument
                         && descriptionOwner->readingComposition_ == descriptionComposition
-                        && descriptionDocument->toPlainText() == (loaded->emptyLibrary
-                        ? QStringLiteral("No dictionaries are installed yet.\nOpen Library to import a dictionary, download one, or choose an existing folder.")
-                        : QStringLiteral("Could not open this dictionary.\nOpen Library to import a dictionary, download one, or choose an existing folder.")))
+                        && descriptionDocument->toPlainText() == descriptionText)
                         descriptionBrowser->setAccessibleDescription(QString());
-                    resultStatus_->setText(QStringLiteral("No dictionary open"));
+                    resultStatus_->setText(loaded->emptyRelease ? QStringLiteral("Completed empty release - no dictionary open")
+                        : QStringLiteral("No dictionary open"));
                 }
                 return;
             }
@@ -3540,6 +3550,11 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             loaded->originEdition = LibraryStorage::editionIdentity(root);
             if (!expectedRoot.isEmpty() && (loaded->originRoot != expectedRoot || loaded->originEdition != expectedEdition))
                 throw DictApiError("The saved dictionary has changed. Open its original folder.");
+            loaded->emptyRelease = LibraryStorage::completedEmptyRelease(root);
+            if (loaded->emptyRelease) {
+                loaded->emptyLibrary = true;
+                return loaded;
+            }
             // Removing the final dictionary retains its manifest and cache.
             // Only a valid empty manifest with no remaining blobs is empty.
             QFile manifest(directory.filePath(QStringLiteral("languages.tsv")));

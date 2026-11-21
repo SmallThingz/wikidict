@@ -24783,6 +24783,116 @@ private slots:
         QTRY_COMPARE(title(window), QStringLiteral("cat"));
         QVERIFY(window.search_->isEnabled());
         QVERIFY(window.results_->isEnabled());
+        // A completed empty publication has source identity, not import guidance.
+        QTemporaryDir release(QDir::currentPath() + QStringLiteral("/.tmp/empty-publication-XXXXXX"));
+        QVERIFY(release.isValid());
+        const QJsonObject complete{{"edition", "aawiktionary"}, {"date", "20261001"},
+            {"status", "empty"}, {"input_pages", 101}, {"blobs", 0}};
+        const auto writeRelease = [](const QString &root, const QString &name, const QByteArray &bytes) {
+            QFile file(QDir(root).filePath(name));
+            return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+        };
+        const QByteArray completeBytes = QJsonDocument(complete).toJson();
+        QVERIFY(writeRelease(release.path(), QStringLiteral("complete.json"), completeBytes));
+        QVERIFY(writeRelease(release.path(), QStringLiteral("languages.tsv"), QByteArrayLiteral("heading\n")));
+        const auto fact = LibraryStorage::completedEmptyRelease(release.path());
+        QVERIFY(fact); QCOMPARE(fact->edition, QStringLiteral("aawiktionary"));
+        QCOMPARE(fact->date, QStringLiteral("20261001")); QCOMPARE(fact->inputPages, qint64(101));
+        const QString summary = QStringLiteral("Completed aawiktionary release (2026-10-01): 101 source pages processed, no published dictionaries.");
+        QCOMPARE(fact->summary(), summary);
+        QVERIFY(!LibraryStorage::completedEmptyRelease(empty.path()));
+        const QVariant oldSources = QSettings().value(QStringLiteral("library/catalogSources"));
+        const auto restoreSources = qScopeGuard([&] { QSettings().setValue(QStringLiteral("library/catalogSources"), oldSources); });
+        QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+        MainWindow published(release.path());
+        published.reading_->setAccessibleDescription(QStringLiteral("Prior empty release description"));
+        published.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!published.loading_, 30000);
+        QVERIFY(!published.api_); QVERIFY(published.reading_->accessibleDescription().isEmpty());
+        QCOMPARE(published.title_->toPlainText(), QStringLiteral("This release has no dictionaries"));
+        QCOMPARE(published.reading_->toPlainText(), summary + QStringLiteral("\nOpen Library to choose another dictionary folder."));
+        QCOMPARE(published.resultStatus_->text(), QStringLiteral("Completed empty release - no dictionary open"));
+        QVERIFY(!published.search_->isEnabled() && !published.results_->isEnabled());
+        QCOMPARE(QSettings().value(QStringLiteral("reader/root")).toString(), QDir(release.path()).absolutePath());
+        for (int width : {900, 640}) {
+            published.resize(width, 600); published.showCompactPane(false);
+            QCoreApplication::processEvents();
+            const QTextCursor link = published.reading_->document()->find(QStringLiteral("Open Library"));
+            QVERIFY(!link.isNull()); QCOMPARE(link.charFormat().anchorHref(), QStringLiteral("library:"));
+            QVERIFY(published.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-empty-release-%1.png").arg(width)));
+            LibraryDialog library(&published, release.path()); library.resize(width, 600); library.show();
+            QTRY_VERIFY_WITH_TIMEOUT(!library.busy_, 30000);
+            QCOMPARE(library.installed_->topLevelItemCount(), 0);
+            QCOMPARE(library.installedSummary_->text(), summary + QStringLiteral(" Choose another library folder to read a dictionary."));
+            QVERIFY(!library.libraryChanged() && !library.originalRootChanged());
+            QVERIFY(library.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-empty-release-library-%1.png").arg(width)));
+            library.done(QDialog::Rejected);
+        }
+        published.resize(640, 600); published.showCompactPane(false); published.activateWindow();
+        published.reading_->setFocus(); QTRY_VERIFY(published.reading_->hasFocus());
+        QTest::keyClick(published.reading_, Qt::Key_Home, Qt::ControlModifier);
+        QTest::keyClick(published.reading_, Qt::Key_Tab);
+        bool releaseLibraryOpened = false;
+        QTimer closeReleaseLibrary;
+        connect(&closeReleaseLibrary, &QTimer::timeout, &published, [&] {
+            if (auto *dialog = static_cast<LibraryDialog *>(published.findChild<QDialog *>(QStringLiteral("libraryDialog"))); dialog && dialog->isVisible() && !dialog->busy_) {
+                releaseLibraryOpened = dialog->selectedRoot() == release.path()
+                    && dialog->installedSummary_->text().startsWith(summary);
+                dialog->done(QDialog::Rejected);
+            }
+        });
+        closeReleaseLibrary.start(20); QTest::keyClick(published.reading_, Qt::Key_Return); closeReleaseLibrary.stop();
+        QVERIFY(releaseLibraryOpened); QVERIFY(!published.api_);
+        // The warm proposal keeps the old reader, selectors, entry and saved root.
+        window.openRoot(fixture_, QStringLiteral("cat"));
+        QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        QTRY_COMPARE(title(window), QStringLiteral("cat"));
+        const auto *currentApi = window.api_.get(); const auto currentEntry = window.currentEntry_;
+        const QString currentReading = window.reading_->toPlainText();
+        const QString currentLanguage = window.language_->currentText(); const int currentKind = window.kind_->currentIndex();
+        const QVariant currentRoot = QSettings().value(QStringLiteral("reader/root"));
+        window.openRoot(release.path()); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+        QCOMPARE(window.api_.get(), currentApi); QCOMPARE(window.currentEntry_, currentEntry);
+        QCOMPARE(window.reading_->toPlainText(), currentReading); QCOMPARE(title(window), QStringLiteral("cat"));
+        QCOMPARE(window.language_->currentText(), currentLanguage); QCOMPARE(window.kind_->currentIndex(), currentKind);
+        QCOMPARE(QSettings().value(QStringLiteral("reader/root")), currentRoot);
+        QCOMPARE(window.resultStatus_->text(), summary + QStringLiteral(" Your current dictionary is still open."));
+        QVERIFY(window.search_->isEnabled());
+        window.resize(640, 600); window.showCompactPane(false); QCoreApplication::processEvents();
+        QVERIFY(window.grab().save(QStringLiteral(".tmp/ui-screenshots/desktop-empty-release-warm-640.png")));
+        // A claimed empty publication must match its metadata and actual files.
+        for (const QString &problem : {QStringLiteral("json"), QStringLiteral("edition"), QStringLiteral("date"),
+                QStringLiteral("boolean-pages"), QStringLiteral("negative-pages"), QStringLiteral("fractional-pages"),
+                QStringLiteral("blobs"), QStringLiteral("manifest"), QStringLiteral("raw"), QStringLiteral("compressed"),
+                QStringLiteral("orphan"), QStringLiteral("unfinished"), QStringLiteral("marker"), QStringLiteral("symlink")}) {
+            QTemporaryDir rejected(QDir::currentPath() + QStringLiteral("/.tmp/rejected-empty-release-XXXXXX"));
+            QVERIFY(rejected.isValid()); QJsonObject invalid = complete;
+            if (problem == QStringLiteral("edition")) invalid["edition"] = QStringLiteral("<invalid>");
+            if (problem == QStringLiteral("date")) invalid["date"] = QStringLiteral("20260230");
+            if (problem == QStringLiteral("boolean-pages")) invalid["input_pages"] = true;
+            if (problem == QStringLiteral("negative-pages")) invalid["input_pages"] = -1;
+            if (problem == QStringLiteral("fractional-pages")) invalid["input_pages"] = 1.5;
+            if (problem == QStringLiteral("blobs")) invalid["blobs"] = 1;
+            QVERIFY(writeRelease(rejected.path(), QStringLiteral("complete.json"), problem == QStringLiteral("json") ? QByteArrayLiteral("{") : QJsonDocument(invalid).toJson()));
+            QVERIFY(writeRelease(rejected.path(), QStringLiteral("languages.tsv"), problem == QStringLiteral("manifest") ? QByteArrayLiteral("heading\nEnglish\n") : QByteArrayLiteral("heading\n")));
+            if (problem == QStringLiteral("raw")) QVERIFY(writeRelease(rejected.path(), QStringLiteral("supplemental.wikblb"), QByteArrayLiteral("broken")));
+            if (problem == QStringLiteral("compressed")) QVERIFY(writeRelease(rejected.path(), QStringLiteral("supplemental.wikblb.xz"), QByteArrayLiteral("broken")));
+            if (problem == QStringLiteral("orphan")) { QVERIFY(QDir(rejected.path()).mkdir(QStringLiteral("languages"))); QVERIFY(writeRelease(rejected.path(), QStringLiteral("languages/orphan.wikblb"), QByteArrayLiteral("broken"))); }
+            if (problem == QStringLiteral("unfinished")) QVERIFY(writeRelease(rejected.path(), QStringLiteral(".incomplete"), {}));
+            if (problem == QStringLiteral("marker")) QVERIFY(writeRelease(rejected.path(), QStringLiteral(".desktop-edition"), QByteArrayLiteral("frwiktionary-20261001")));
+            if (problem == QStringLiteral("symlink")) { QVERIFY(QFile::remove(rejected.filePath(QStringLiteral("complete.json")))); QVERIFY(QFile::link(release.filePath(QStringLiteral("complete.json")), rejected.filePath(QStringLiteral("complete.json")))); }
+            bool refused = false;
+            try { (void)LibraryStorage::completedEmptyRelease(rejected.path()); } catch (const std::exception &) { refused = true; }
+            QVERIFY2(refused, qPrintable(problem));
+            MainWindow failed(rejected.path()); failed.show(); QTRY_VERIFY_WITH_TIMEOUT(!failed.loading_, 30000);
+            QVERIFY(!failed.api_); QVERIFY(failed.reading_->toPlainText().contains(QStringLiteral("Could not open this dictionary.")));
+            QVERIFY(!failed.reading_->toPlainText().contains(QStringLiteral("Completed aawiktionary")));
+            QCOMPARE(QSettings().value(QStringLiteral("reader/root")), currentRoot);
+        }
+        auto removedRelease = complete; removedRelease["status"] = QStringLiteral("complete"); removedRelease["blobs"] = 1;
+        QVERIFY(writeRelease(release.path(), QStringLiteral("complete.json"), QJsonDocument(removedRelease).toJson()));
+        QVERIFY(!LibraryStorage::completedEmptyRelease(release.path()));
+        QVERIFY(writeRelease(release.path(), QStringLiteral("complete.json"), completeBytes));
     }
 
     void compactEmptyReadingOpensLibraryByKeyboard() {

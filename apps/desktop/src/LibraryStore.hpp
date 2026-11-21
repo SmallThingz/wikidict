@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 class QTemporaryDir;
@@ -48,6 +49,14 @@ using Progress = std::function<void(const QString &, qint64, qint64)>;
 void recoverPendingMutation(const QString &root);
 QString sourceHost(const QString &root);
 QString editionIdentity(const QString &root);
+struct EmptyRelease {
+    QString edition;
+    QString date;
+    qint64 inputPages = 0;
+    QString summary() const;
+};
+// A completed empty publication is different from an unpopulated library folder.
+std::optional<EmptyRelease> completedEmptyRelease(const QString &root);
 bool isHttpsUrl(const QUrl &url);
 QList<CatalogItem> parseCatalog(const QByteArray &data);
 bool catalogItemInstalled(const CatalogItem &item, const QString &installedEdition,

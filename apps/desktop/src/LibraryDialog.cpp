@@ -302,10 +302,12 @@ void LibraryDialog::refreshInstalled(std::function<void(const QString &)> finish
     const QString root = root_;
     auto listed = std::make_shared<QList<LibraryStorage::Dictionary>>();
     auto recovered = std::make_shared<bool>(false);
-    runWorker([root, listed, recovered] {
+    auto emptyRelease = std::make_shared<std::optional<LibraryStorage::EmptyRelease>>();
+    runWorker([root, listed, recovered, emptyRelease] {
         *recovered = QFileInfo::exists(QDir(root).filePath(QStringLiteral(".desktop-mutation.json")));
         *listed = LibraryStorage::installed(root);
-    }, [this, listed, recovered, root, finished = std::move(finished)](const QString &error) {
+        *emptyRelease = LibraryStorage::completedEmptyRelease(root);
+    }, [this, listed, recovered, emptyRelease, root, finished = std::move(finished)](const QString &error) {
         installed_->clear();
         dictionaries_ = error.isEmpty() ? *listed : QList<LibraryStorage::Dictionary>{};
         bool hasWordCounts = false;
@@ -323,7 +325,8 @@ void LibraryDialog::refreshInstalled(std::function<void(const QString &)> finish
                 total += dictionary.bytes;
             }
             installedSummary_->setText(dictionaries_.isEmpty()
-                ? QStringLiteral("No dictionaries yet. Import a file or download one below.")
+                ? (*emptyRelease ? (*emptyRelease)->summary() + QStringLiteral(" Choose another library folder to read a dictionary.")
+                    : QStringLiteral("No dictionaries yet. Import a file or download one below."))
                 : QStringLiteral("%1 %2, %3").arg(dictionaries_.size())
                         .arg(dictionaries_.size() == 1 ? QStringLiteral("dictionary") : QStringLiteral("dictionaries"), LibraryStorage::formatBytes(total)));
         } else {

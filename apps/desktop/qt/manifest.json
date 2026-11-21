@@ -6791,6 +6791,444 @@
         "implemented_in_this_projection": false,
         "qualified_in_this_projection": false
       }
+    },
+    "completed_empty_release": {
+      "status": "Reviewed source projection with focused private App, installed package and scoped genuine empty-release GUI qualification; canonical binary not rebuilt.",
+      "source_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/preparation01.json",
+        "bytes": 8236,
+        "sha256": "3c7d0be369a1d3d04c60d6358d65b2e89a4b07e14885909c205d6331df86e150"
+      },
+      "source_projection": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/apps/desktop/src/MainWindow.cpp",
+          "private_before": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/accessibility-name01/posts01/product/MainWindow.cpp",
+            "bytes": 498701,
+            "sha256": "6409c2bcce91a37df0eeac2ff3fb67c9fb7d6536adc913d5e1dd9d75a4600292"
+          },
+          "private_before_keeper": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/accessibility-name01/posts01/product/MainWindow.cpp",
+            "bytes": 498701,
+            "sha256": "6409c2bcce91a37df0eeac2ff3fb67c9fb7d6536adc913d5e1dd9d75a4600292"
+          },
+          "private_after": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/product/MainWindow.cpp",
+            "bytes": 499843,
+            "sha256": "d82996829de3cc24993bb4e4216cb1cabe05c093cc40fb91176b6924cc453f5b"
+          },
+          "patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/MainWindow.cpp.patch",
+            "bytes": 5761,
+            "sha256": "21a409ed0b7b59d8476739600efd18a51b39caef1c19d22230acda8237154645"
+          },
+          "unique_context_hunks": [
+            {
+              "private_line": 3189,
+              "canonical_line": 3189,
+              "before_sha256": "423fb8e65d82018a962480c64963fb2b77cfdd151e3d1a900fc84d62aa4a663d",
+              "after_sha256": "e0f9a70beb30696b76b6c805f78cb3f2dbcdbee02fd78cdb8cb3f07c92e4478e"
+            },
+            {
+              "private_line": 3429,
+              "canonical_line": 3415,
+              "before_sha256": "77b32650669fb976f5edc449f59492d8d59c010b2f2c993d20b17f784be59794",
+              "after_sha256": "e95a1a483bd7fa07b420032cb68708f53b377d32e920e9d5663b1d837acbd291"
+            },
+            {
+              "private_line": 3440,
+              "canonical_line": 3428,
+              "before_sha256": "721c3a659cdd9393b4ea4425e4b53a540f76eda472dc21cbefe898a235069028",
+              "after_sha256": "11367dcac4c9f7c4e9f96568ff8789df8c5c1f4b572164dafcd4bbb6b08e377b"
+            },
+            {
+              "private_line": 3449,
+              "canonical_line": 3438,
+              "before_sha256": "23327925166b62e8a8c55bbea2ac23f86430483c7663bda967842f0d91bd530c",
+              "after_sha256": "3c016cb2a648e659fe8be238231e9781ff798419e30eff38fc3c1fb28116dc03"
+            },
+            {
+              "private_line": 3555,
+              "canonical_line": 3550,
+              "before_sha256": "f38e2f2b5ae371afd1897c6548c027f123734a16265fd786ef6108256ea2d0bf",
+              "after_sha256": "8d46d10ab928e899b0c651fab5720e83d24f93f9337e3dde373316489233f45a"
+            }
+          ],
+          "forward_reverse_exact": true,
+          "preexisting_canonical_private_difference_preserved": true,
+          "canonical_equals_private_before": false,
+          "canonical_equals_private_after": false
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/apps/desktop/src/LibraryDialog.cpp",
+          "private_before": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/library-replacement01/posts01/product/LibraryDialog.cpp",
+            "bytes": 35294,
+            "sha256": "b9fd959ba5e3f0714681d54354e7f8da153f8ee0acd01831cdb444a268b73515"
+          },
+          "private_before_keeper": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/library-replacement01/posts01/product/LibraryDialog.cpp",
+            "bytes": 35294,
+            "sha256": "b9fd959ba5e3f0714681d54354e7f8da153f8ee0acd01831cdb444a268b73515"
+          },
+          "private_after": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/product/LibraryDialog.cpp",
+            "bytes": 35620,
+            "sha256": "5f0c885d262b180831c39d255f88571a6e29bfc6841615e5f632b70b956564f4"
+          },
+          "patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/LibraryDialog.cpp.patch",
+            "bytes": 1767,
+            "sha256": "c46f13ac6c8d670aa182f00bb6ba79f6ed51a0f307cd2ac9cb76646e2a60695b"
+          },
+          "unique_context_hunks": [
+            {
+              "private_line": 302,
+              "canonical_line": 302,
+              "before_sha256": "e0911daf065f430f4e561a1d0075cf59af3a40eed3aa59ab5d82d7de6bc0ac74",
+              "after_sha256": "4c99b4a910736906daa91d3321b4f6d553d43145cb9fb0b3c4c4f4dad09a2855"
+            },
+            {
+              "private_line": 323,
+              "canonical_line": 325,
+              "before_sha256": "d9a5a8ccc3100436e363d02663aecd4434fc2d7fa5c3dbde556fc0b276aa57db",
+              "after_sha256": "8638583e1ff555c09e512540fe4af5e0cc312d3a33e66dc03c766b2e7a93cc1d"
+            }
+          ],
+          "forward_reverse_exact": true,
+          "preexisting_canonical_private_difference_preserved": true,
+          "canonical_equals_private_before": true,
+          "canonical_equals_private_after": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/apps/desktop/src/LibraryStore.cpp",
+          "private_before": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/eu-number-table-layout-private01/qt/postimages/apps/desktop/src/LibraryStore.cpp",
+            "bytes": 38031,
+            "sha256": "bc4530041b33d375b1efccc5fc75710abcdd349d23b386b2b8f8a3eb58dc70ab"
+          },
+          "private_before_keeper": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/eu-number-table-layout-private01/qt/postimages/apps/desktop/src/LibraryStore.cpp",
+            "bytes": 38031,
+            "sha256": "bc4530041b33d375b1efccc5fc75710abcdd349d23b386b2b8f8a3eb58dc70ab"
+          },
+          "private_after": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/product/LibraryStore.cpp",
+            "bytes": 41211,
+            "sha256": "c2b2475acd680ac12d1adef7ad033013329513308e16a48dd0ed237a8e12f3ae"
+          },
+          "patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/LibraryStore.cpp.patch",
+            "bytes": 3545,
+            "sha256": "10895ae9fb308e915f00c728d8eb024c1ce0ff4dd702d69d6216650a1c38d50f"
+          },
+          "unique_context_hunks": [
+            {
+              "private_line": 459,
+              "canonical_line": 459,
+              "before_sha256": "165e7c412e12ca6b76e1c9ecdc60d78da4deffc8ffcd614015b97cd573057229",
+              "after_sha256": "aecc3e6925629bec58f36fdf2d13ff9ef2b43e819b5441bd433445132f730656"
+            }
+          ],
+          "forward_reverse_exact": true,
+          "preexisting_canonical_private_difference_preserved": true,
+          "canonical_equals_private_before": true,
+          "canonical_equals_private_after": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/apps/desktop/src/LibraryStore.hpp",
+          "private_before": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/eu-number-table-layout-private01/qt/postimages/apps/desktop/src/LibraryStore.hpp",
+            "bytes": 2113,
+            "sha256": "e569a75d7836632d3caa578dc261d736a33390c6a8500748de6cd797b91d6287"
+          },
+          "private_before_keeper": {
+            "path": "/home/a/wikidict-empty-release-source01/transaction/app-header.before.hpp",
+            "bytes": 2113,
+            "sha256": "e569a75d7836632d3caa578dc261d736a33390c6a8500748de6cd797b91d6287"
+          },
+          "private_after": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/include/LibraryStore.hpp",
+            "bytes": 2407,
+            "sha256": "d529020c440ed70dff871fe9e51d1d08038d584bac5d1d31930965d1a4af4fbd"
+          },
+          "patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/LibraryStore.hpp.patch",
+            "bytes": 843,
+            "sha256": "3010e2aa2ecac1b9301adcad1334d54402ba902c85c858aff5a8681c99beb0ce"
+          },
+          "unique_context_hunks": [
+            {
+              "private_line": 8,
+              "canonical_line": 8,
+              "before_sha256": "ad14495cde616e04f841a3e70a8a674c1de1eda8adfebf8a48b4c19ad7e3d251",
+              "after_sha256": "983eebf9bdedf8d451e215d1fa809df888fe3185f9a574ec3207a5e1f8df692c"
+            },
+            {
+              "private_line": 48,
+              "canonical_line": 49,
+              "before_sha256": "56f0cc95b9dcde37a06faa6c74b7f48b88c9cc124f0fe8e079d20e93994e3233",
+              "after_sha256": "523518d232f683053f96014b6035fc69493f6910d2196fce138537a6ca014a42"
+            }
+          ],
+          "forward_reverse_exact": true,
+          "preexisting_canonical_private_difference_preserved": true,
+          "canonical_equals_private_before": true,
+          "canonical_equals_private_after": true
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/apps/desktop/tests/MainWindowTest.cpp",
+          "private_before": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/app-image-off01/posts01/tests/MainWindowTest.cpp",
+            "bytes": 2925978,
+            "sha256": "a05bc25ad07fb0b00e8adf33ad69f06ab7a807941242954784910cf11dcbda47"
+          },
+          "private_before_keeper": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/app-image-off01/posts01/tests/MainWindowTest.cpp",
+            "bytes": 2925978,
+            "sha256": "a05bc25ad07fb0b00e8adf33ad69f06ab7a807941242954784910cf11dcbda47"
+          },
+          "private_after": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/tests/MainWindowTest.cpp",
+            "bytes": 2936258,
+            "sha256": "48e5b1ab66793fb7bc1998ed1f1e9f97c65571d4d51657e3ba3010550da97a16"
+          },
+          "patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/MainWindowTest.cpp.patch",
+            "bytes": 10725,
+            "sha256": "e8897dd02a5d1dd959fa0a72f6bf4f27eadccb3fc73082f48043ed289451ca74"
+          },
+          "unique_context_hunks": [
+            {
+              "private_line": 26131,
+              "canonical_line": 24783,
+              "before_sha256": "144dca167925decb075cbea91f622193e2c7852786e7a9a0e59f279a20fde0b7",
+              "after_sha256": "012662fe64d07830e3821b135610cbbf939b88a9514cef3f89adc343fff44758"
+            }
+          ],
+          "forward_reverse_exact": true,
+          "preexisting_canonical_private_difference_preserved": true,
+          "canonical_equals_private_before": false,
+          "canonical_equals_private_after": false
+        }
+      ],
+      "canonical_base_commit": "0e6692f4eb278044416e0980ac9d5ed492f48287",
+      "source_transaction": {
+        "path": "/home/a/wikidict-empty-release-source01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 5212,
+        "sha256": "8993721d57b7a8077909959a4cf5f15118c221c23ed4a2291c1531cad98ebc7f"
+      },
+      "source_transaction_result": {
+        "bytes": 200981,
+        "path": "/home/a/wikidict-empty-release-source01/transaction/transaction-result01.json",
+        "sha256": "976546baa23647ecc8426616b2e0726815b6a297c0899a2939fada7af25a8f18"
+      },
+      "current_source_inventory": {
+        "path": "/home/a/wikidict-empty-release-source01/transaction/source-inventory01.json",
+        "bytes": 109690,
+        "sha256": "a9b8157ef88271504beed4d02fc1297561d590f03810439caef686432363cecc"
+      },
+      "canonical_source_bridge": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/canonical-source-bridge01.json",
+        "bytes": 9657,
+        "sha256": "7d32ba5c331535d592d8e927eb53a168f9c1878d306b4c7272bded3b7679acc1"
+      },
+      "prior_app_qualification": {
+        "path": "/home/a/wikidict-library-replacement-app01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 53071,
+        "sha256": "8b91895fd666c4aef185059a382f62049a3c0a215037f76e60db1af0a046f211"
+      },
+      "prior_scopes_historical_only": true,
+      "prior_warm_defect": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/library-replacement-normal-desktop-ui01/AA_WARM_RESULT01.json",
+        "bytes": 16794,
+        "sha256": "101532cc4e71347122dccdf155a3ac8ed32353c73a22f7315159fabc492580e3"
+      },
+      "prior_cold_defect": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/library-replacement-normal-desktop-ui01/cold-aa01/AA_COLD_RESULT01.json",
+        "bytes": 2647,
+        "sha256": "a2a9646aff8130535ee572636c0abd023934b4842cae540ea994ac16000eabc1"
+      },
+      "prior_cold_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/library-replacement-normal-desktop-ui01/cold-aa01/independent-closure01.json",
+        "bytes": 3301,
+        "sha256": "e5ff5b665d43175b27c6ecfe47faa99ad5ed4b7abc758ff65afb8bd57c32ea03"
+      },
+      "current_app_methods": [
+        "emptyLibraryGuidanceDoesNotExposeInternalErrors"
+      ],
+      "selected_app_compile_count": 4,
+      "retained_app_object_count": 18,
+      "app_qualification": {
+        "path": "/home/a/wikidict-empty-release-app01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 70191,
+        "sha256": "c3b8fea2e41d865744e11c7b14cfb3bfb8dd9b6e48a019471231f5fa1a22723e"
+      },
+      "private_package_qualification": {
+        "path": "/home/a/wikidict-empty-release-install01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 96672,
+        "sha256": "c528ee8457d09051139247c26e1c34907dc0fac2ec6bb0c9cb86a3140729f60a"
+      },
+      "genuine_gui_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/AFAR_RESULT01.json",
+        "bytes": 5023,
+        "sha256": "d36f61bcac08f2c6002118ebcdc58db141a00213be46cff79c542a063cc51498"
+      },
+      "native_changed": false,
+      "native_tests_reexecuted": false,
+      "core_changed": false,
+      "replacement_callback_unchanged": true,
+      "canonical_source_applied": true,
+      "canonical_binary_rebuilt": false,
+      "app_test_xml": {
+        "bytes": 7842,
+        "path": "/home/a/wikidict-empty-release-app01/tests.xml",
+        "sha256": "7481221260dc99b153c5ce6b6a51fd79784389818424ce7baaee6a1d23d55779"
+      },
+      "app_frames": [
+        {
+          "bytes": 36406,
+          "path": "/home/a/wikidict-empty-release-app01/test-run/.tmp/ui-screenshots/desktop-empty-release-640.png",
+          "sha256": "3992db384b97e37b76a01106fea22674314c72d64776d794f59d99d74cb4a7ab"
+        },
+        {
+          "bytes": 51343,
+          "path": "/home/a/wikidict-empty-release-app01/test-run/.tmp/ui-screenshots/desktop-empty-release-900.png",
+          "sha256": "1159eb7e8becf6ef8545dc0bc698d7410bde858e1e2a295aa013345331249bf5"
+        },
+        {
+          "bytes": 41995,
+          "path": "/home/a/wikidict-empty-release-app01/test-run/.tmp/ui-screenshots/desktop-empty-release-library-640.png",
+          "sha256": "221f3eeabce88daec69ef0d0ff044c1c1ea36617d4ae372082889af97ef8ccef"
+        },
+        {
+          "bytes": 43972,
+          "path": "/home/a/wikidict-empty-release-app01/test-run/.tmp/ui-screenshots/desktop-empty-release-library-900.png",
+          "sha256": "36abb56664905974b30d9dd28989bf6f7961c16c2efbb6622b8a00a383c742b3"
+        },
+        {
+          "bytes": 49939,
+          "path": "/home/a/wikidict-empty-release-app01/test-run/.tmp/ui-screenshots/desktop-empty-release-warm-640.png",
+          "sha256": "3f31223e71240a3d0845904b512e7004e7c465aaaf4e1289df05d36feaaabb4e"
+        }
+      ],
+      "private_package_stage": {
+        "path": "/home/a/wikidict-empty-release-install01/stage-result01.json",
+        "bytes": 128921,
+        "sha256": "37aedda5b11a19f5e68830e128f9f080b6c0501247f377c91d7f1acf0920f655"
+      },
+      "genuine_gui_closures": [
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/independent-closure01.json",
+          "bytes": 3254,
+          "sha256": "5ea75e5b45914d9201e5ef6cc064317e1dd9cc6cd85c54bc5858f1a24ecf5266"
+        },
+        {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/independent-closure01.json",
+          "bytes": 3261,
+          "sha256": "efeaeaabf8e80483ab0193a8f2fc64c3099a1dbeefc608382fa446bf448a1766"
+        }
+      ],
+      "genuine_gui_scope": {
+        "source_status": {
+          "edition": "aawiktionary",
+          "date": "20261001",
+          "status": "empty",
+          "input_pages": 101,
+          "blobs": 0,
+          "languages_tsv": "heading\n"
+        },
+        "warm": {
+          "retained_Wasser_characters": 72,
+          "before_after_reading_exact": true,
+          "summary_location": "Settled Search sidebar resultStatus; not a transient QStatusBar claim.",
+          "window_widths": [
+            1000,
+            640
+          ],
+          "frames": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/aa-main-wide-frame.png",
+              "bytes": 54285,
+              "sha256": "194bb84ab7f283ed9f58d479e11ef761694b7aae1426dd6c3d9de3daa48f5972"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/aa-main-search-frame.png",
+              "bytes": 26666,
+              "sha256": "380246ba87fa747427522f0f8e72e60bb11b33bb2fe5fd086cfa9ccb733d72ce"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/aa-reading-compact-frame.png",
+              "bytes": 28568,
+              "sha256": "f82be1b4f82d3f2782fece4ffd617ed353b4f8263de867157eed084028099c3e"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/aa-library-frame.png",
+              "bytes": 59507,
+              "sha256": "d4769b7877ed13f0436340057c3b4a574d1a6f8fda6c2c873ea9446b7478e5a2"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/aa-library-compact-frame.png",
+              "bytes": 43079,
+              "sha256": "2cd9c66786b07d57056bc8b9d9da1bc1a530619121fc08e305cdcb18b6e64a78"
+            }
+          ],
+          "closure": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/independent-closure01.json",
+            "bytes": 3254,
+            "sha256": "5ea75e5b45914d9201e5ef6cc064317e1dd9cc6cd85c54bc5858f1a24ecf5266"
+          }
+        },
+        "cold": {
+          "window_sizes": [
+            "1000x700",
+            "640x600",
+            "480x480"
+          ],
+          "heading_and_source_summary_visible": true,
+          "open_library_focused_then_real_return_at_480": true,
+          "ordinary_blank_folder_guidance": "No dictionaries yet. Import a file or download one below.",
+          "frames": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/aa-wide-frame.png",
+              "bytes": 51913,
+              "sha256": "becb13ee29dcb3873401c0e9eb8567ffaa5b3f5f760fc53963b1a70498e7dd21"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/aa-compact-frame.png",
+              "bytes": 36385,
+              "sha256": "2d1caebca20f404a8ad652eb09c33f7e2f0fa4a316402979db6fe0b485262d92"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/aa-480-frame.png",
+              "bytes": 33494,
+              "sha256": "acb768becc953cb19c89b1e64fa5a5aab59ba51ea9bea7912ef258fe0f884ad3"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/aa-cold-library-480-frame.png",
+              "bytes": 42938,
+              "sha256": "ce6af37d992e349cfdd1d34d898edce13881450ea7854cdb45aa89eea3ee991f"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/aa-cold-library-wide-frame.png",
+              "bytes": 81945,
+              "sha256": "12682771a8932cec4b1b1831252df23c1c97b33294db16fffbb7eaaabcedf0c7"
+            }
+          ],
+          "closure": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/aa-corrected-normal-desktop-ui01/cold-fr01/independent-closure01.json",
+            "bytes": 3261,
+            "sha256": "efeaeaabf8e80483ab0193a8f2fc64c3099a1dbeefc608382fa446bf448a1766"
+          }
+        },
+        "preservation": "Both sessions exited normally; all twelve owned process identities per session, namespaces and sockets closed. Selected data, 179 package files and 13 symlinks remained unchanged.",
+        "limits": [
+          "Only this completed Afar publication has no published dictionaries; no claim of absent source words.",
+          "Malformed metadata/file controls are focused App evidence; no malformed genuine GUI test was performed.",
+          "No all-21-empty-edition GUI, exact pixel/contrast metric, unrelated French acceptance, full-suite or global claim."
+        ]
+      },
+      "canonical_source_applied_role": "Intended maintained postimage; actual application is recorded separately."
     }
   },
   "packaged_distribution_source_equivalence": false,

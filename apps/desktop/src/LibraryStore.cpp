@@ -459,6 +459,48 @@ bool catalogItemInstalled(const CatalogItem &item, const QString &installedEditi
 QString editionIdentity(const QString &root) {
     return installedEditionGroup(root);
 }
+QString EmptyRelease::summary() const {
+    return QStringLiteral("Completed %1 release (%2): %3 source pages processed, no published dictionaries.")
+        .arg(edition, QDate::fromString(date, QStringLiteral("yyyyMMdd")).toString(Qt::ISODate),
+            QLocale().toString(inputPages));
+}
+std::optional<EmptyRelease> completedEmptyRelease(const QString &root) {
+    const QDir directory(root);
+    const QFileInfo completeFile(directory.filePath(QStringLiteral("complete.json")));
+    if (!completeFile.exists() && !completeFile.isSymLink()) return std::nullopt;
+    if (!directory.exists() || !directory.isReadable() || !completeFile.isFile() || completeFile.isSymLink())
+        fail(QStringLiteral("Cannot read the completed release metadata."));
+    QJsonParseError parseError;
+    const auto document = QJsonDocument::fromJson(readFile(completeFile.filePath(), 4 * 1024 * 1024), &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        fail(QStringLiteral("The completed release metadata is invalid."));
+    const auto complete = document.object();
+    if (complete.value(QStringLiteral("status")).toString() != QStringLiteral("empty")) return std::nullopt;
+    EmptyRelease release{complete.value(QStringLiteral("edition")).toString(),
+        complete.value(QStringLiteral("date")).toString(),
+        complete.value(QStringLiteral("input_pages")).toInteger(-1)};
+    const auto pages = complete.value(QStringLiteral("input_pages"));
+    const auto blobs = complete.value(QStringLiteral("blobs"));
+    if (!QRegularExpression(QStringLiteral("^[a-z][a-z0-9_-]*wiktionary$")).match(release.edition).hasMatch()
+        || QDate::fromString(release.date, QStringLiteral("yyyyMMdd")).toString(QStringLiteral("yyyyMMdd")) != release.date
+        || release.date.size() != 8 || !pages.isDouble() || release.inputPages < 0
+        || pages.toDouble() != double(release.inputPages) || !blobs.isDouble() || blobs.toDouble() != 0
+        || installedEditionGroup(root) != release.edition + QChar('-') + release.date)
+        fail(QStringLiteral("The completed empty release metadata is inconsistent."));
+    const QFileInfo incomplete(directory.filePath(QStringLiteral(".incomplete")));
+    const QFileInfo index(directory.filePath(QStringLiteral("languages.tsv")));
+    const QFileInfo languages(directory.filePath(QStringLiteral("languages")));
+    const QDir languageDirectory(languages.filePath());
+    const QStringList blobNames{QStringLiteral("*.wikblb"), QStringLiteral("*.wikblb.xz")};
+    const auto entries = QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot;
+    if (incomplete.exists() || incomplete.isSymLink() || !index.isFile() || index.isSymLink()
+        || readFile(index.filePath(), 16) != QByteArrayLiteral("heading\n")
+        || !directory.entryList(blobNames, entries).isEmpty() || languages.isSymLink()
+        || (languages.exists() && (!languages.isDir() || !languageDirectory.isReadable()
+            || !languageDirectory.entryList(blobNames, entries).isEmpty())))
+        fail(QStringLiteral("The completed empty release does not match this dictionary folder."));
+    return release;
+}
 QString sourceHost(const QString &root) {
     QString group = installedEditionGroup(root);
     if (group.isEmpty()) return {};

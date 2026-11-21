@@ -1431,12 +1431,58 @@ to Wasser. No replacement was accepted in that genuine flow, and no external
 media link was activated. All 12 process identities closed and the 179 package
 files plus 13 symlinks stayed unchanged.
 
-A separate genuine Afar empty-publication issue remains: its Library uses
-ordinary empty-folder import/download guidance, and a warm switch reports an
-opening failure while correctly preserving the active Wasser reader. The source
-publication is valid and empty. A shared validated empty-release fact and
-truthful warm/cold wording are a separate correction; this milestone neither
-implements that correction nor grants cold-start or global acceptance.
+That milestone also recorded a separate genuine Afar empty-publication
+issue: generic empty-folder guidance and a warm opening-failure message despite
+a valid empty publication. Its original observations remain preserved. The
+following completed-empty-release correction has separate qualification; the
+replacement milestone does not acquire additional coverage retrospectively.
 
 This is a reviewed source projection with scoped private-binary qualification.
 The canonical binary was not rebuilt.
+
+## Completed empty-publication source projection
+
+A completed empty release is distinct from an unpopulated library folder. The
+shared LibraryStorage fact validates the empty status, zero blob count, integral
+source-page count, matching edition/date identity, header-only language index,
+absence of unfinished state and actual raw/compressed blobs, and regular
+metadata/index files. It does not infer a dictionary or word count from pages.
+
+Cold Main and Library identify that release and direct the user to another
+folder. A warm proposal preserves the active reader, entry, selectors and saved
+root while reporting that the selected release is complete and empty. Generic
+blank-folder and damaged-metadata handling remain distinct. The completed
+replacement-confirmation callback and Qt/core code are unchanged.
+
+The existing empty-library test slot adds source-shaped metadata, cold/Library
+views at 900/640, keyboard access, warm reader/root preservation and contradictory
+metadata/file controls, retaining its original blank/damaged/recovery assertions.
+The focused existing QtTest method passed, including its five saved views,
+four affected compiles and 18 retained objects. The new private package passed
+installation and smoke with the paid Qt/core and CMake probe retained. The prior
+committed ET, accessibility and replacement evidence remains historical and is
+not restamped as coverage of this correction.
+
+Two ordinary sessions used the same installed package and a verified copy of
+the completed aawiktionary 2026-10-01 publication: 101 source pages processed,
+zero published dictionaries and a header-only language index. In the warm
+session, the 72-character Wasser reading remained byte-for-byte unchanged. The
+settled Search sidebar and Library showed the source-specific explanation and
+folder guidance at 1000 and 640 pixels; this is not a transient status-bar claim.
+
+Cold views at 1000x700, 640x600 and 480x480 showed the full empty-release heading,
+source/date/page summary and Open Library link without observed clipping. The
+native link was focused and real Return opened Library at 480 pixels. An
+ordinary blank folder still showed its distinct import/download guidance.
+Both sessions quit normally, all twelve owned process identities per session
+closed, and the selected data plus 179 package files and 13 symlinks stayed
+unchanged.
+
+The controlled malformed-metadata checks belong to the focused App test, not
+to genuine GUI execution. This does not claim that Afar has no source words,
+acceptance of all 21 empty editions, exact pixel metrics or unrelated French
+behavior.
+
+This is a reviewed source projection with scoped private-binary qualification.
+The canonical binary was not rebuilt; no whole-suite or global acceptance is
+claimed.
