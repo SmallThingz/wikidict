@@ -11565,6 +11565,23 @@ test "retained FR Lakta Vojo literal nonleading opener preserves complete body a
     try std.testing.expectEqual(@as(usize, 0), stored.entry.references.len);
     try std.testing.expectEqual(@as(usize, 1), stored.entry.media.len);
     try std.testing.expectEqualStrings("LL-Q143 (epo)-Lepticed7-Lakta Vojo.wav", stored.entry.media[0].file);
+    // The authored proper-noun label organizes its own definition even when
+    // this renderer-only input has no independently resolved language owner.
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.organization.lexemes.len);
+    const lexeme = stored.entry.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Proper noun", lexeme.kind);
+    try std.testing.expectEqualStrings("", lexeme.language);
+    try std.testing.expectEqual(@as(usize, 1), lexeme.definitions.len);
+    const section = stored.entry.sections[lexeme.section];
+    try std.testing.expectEqualStrings("Nom propre", section.title);
+    const sense = section.blocks[lexeme.definitions[0].block];
+    try std.testing.expectEqual(types.BlockKind.definition, sense.kind);
+    var galaxy_link = false;
+    for (sense.spans) |span| {
+        if (span.kind == .link and std.mem.eql(u8, span.text, "Voie lactée") and
+            std.mem.eql(u8, span.target, "Voie lactée")) galaxy_link = true;
+    }
+    try std.testing.expect(galaxy_link);
 }
 
 test "retained UR word of day hides complete inclusion body preserving visible table actions and codec" {

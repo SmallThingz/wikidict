@@ -1,0 +1,188 @@
+<div class="bandeau-voir modele-voir"><span class="bandeau-voir-icone">''Voir aussi''</span> : <span class="">[[poids-lourd]]</span></div>
+== <span class='sectionlangue' id='fr'>[[Portail:Français|Français]]</span>[[Catégorie:français]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: <span class="siècle">''(Siècle à préciser[[Catégorie:Dates manquantes en français]])''</span> → voir ''[[poids#fr|poids]]''&#32;et ''[[lourd#fr|lourd]]''
+
+=== <span class="titredef" id="fr-nom-1">Locution nominale</span><span id="fr-nom" style="font-size:0;"></span>[[Catégorie:Locutions nominales en français]] ===
+{| class="wikitable flextable flextable-fr-mfsp"
+
+
+! Singulier !! Pluriel
+|-
+
+| '''<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>poids lourd</bdi></span>'''
+| <bdi lang="fr" xml:lang="fr" class="lang-fr">[[poids lourds#fr|poids lourds]]</bdi>
+
+|-
+| colspan="2" |[[Annexe:Prononciation/français|<span class="API" title="Prononciation API">\pwa luʁ\</span>]]
+
+|}
+[[Image:Kenworth_W900_semi_in_red.jpg|thumb|Un '''poids lourd''' américain. (1)]]
+[[Image:Batista with World Heavyweight Championship.jpg|thumb|Champion du monde '''poids lourd'''. (2)]]
+'''poids lourd''' [[Annexe:Prononciation/français|<span class="API" title="Prononciation API">\pwa luʁ\</span>]] <span class="ligne-de-forme"  ><i>masculin</i></span>
+# [[véhicule|Véhicule]] [[automobile]] de plus de 3,5 tonnes, conçu pour le transport de marchandises ; [[camion]].
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''L’État a choisi le dossier Cofiroute et son tunnel de dix kilomètres à deux niveaux de circulation superposés réservé aux seuls véhicules légers : les '''poids lourds''' n’emprunteront pas l'ouvrage, ils auront le leur.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(Denis Lemarié, ''Chroniques de Versailles : Janvier à juillet 2005'', Publibook, 2005, page 181)</span></span>[[Catégorie:Exemples en français]]
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Hier, aux alentours de 18 heures, un accident s’est produit sur l’autoroute A63 au niveau de Labouheyre, dans les Landes entre une voiture et un '''poids lourd'''.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(journal ''Sud-Ouest'', édition ''Charente-Maritime / Charente'', 20 août 2022, page 7)</span></span>[[Catégorie:Exemples en français]]
+# ''(<span title="Les sports de combat regroupent les sports qui nécessitent de combattre, avec ou sans accessoires." id="fr-sports de combat">Sports de combat</span>)''[[Catégorie:Lexique en français des sports de combat]] Catégorie pour les athlètes plus [[lourd]]s que la [[moyenne]].
+# <span class="emploi"><span id="extension"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#P|Par extension]]</span>)''</span> <span class="term" id="fr-sportif"><i>(<span class="texte">Sport
+</span>)</i></span>[[Catégorie:Sportifs en français]] [[athlète|Athlète]] faisant partie de cette [[catégorie]].
+## ''(<span title="La boxe est un combat aux poings avec des gants, et des règles strictes." id="fr-boxe">Boxe</span>)''[[Catégorie:Lexique en français de la boxe]] Boxeur pesant plus de 90,719 kg.
+##* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''A son volant, un balaise en livrée de grande maison corrigeait son faciès de '''poids lourd''', qui eût pu inquiéter, par une impassibilité du meilleur style.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>([[w:Albert Simonin|Albert Simonin]], ''Hotu soit qui mal y pense'', Gallimard, 1971, page 13)</span></span>[[Catégorie:Exemples en français]]
+# <span class="emploi"><span id="figuré"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#F|Sens figuré]]</span>)''</span>[[Catégorie:Métaphores en français]] <span class="emploi"><span id="extension"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#P|Par extension]]</span>)''</span> Personne importante dans une organisation.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''[Titre] Les '''poids lourds''' du gouvernement présents à la rentrée des députés LRM''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(<cite style="font-style:normal" class="ouvrage" >Alexandre Lemarié,&#32;[https://www.lemonde.fr/politique/article/2018/08/31/les-poids-lourds-du-gouvernement-presents-a-la-rentree-des-deputes-lrm_5348726_823448.html ''Les poids lourds du gouvernement présents à la rentrée des députés LRM''], Le Monde. Mis en ligne le 31 août 2018</cite>)</span></span>[[Catégorie:Exemples en français]]
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Si certains '''poids lourds''' républicains, dont le chef des sénateurs Mitch McConnell, ont fini par admettre la victoire de Joe Biden, le président sortant peut encore compter sur le soutien indéfectible de dizaines de parlementaires.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(AFP, ''Nancy Pelosi réélue présidente de la Chambre des représentants'', radio-canada.ca, 3 janvier 2021)</span></span>[[Catégorie:Exemples en français]]
+# <span class="emploi"><span id="figuré"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#F|Sens figuré]]</span>)''</span>[[Catégorie:Métaphores en français]] <span class="emploi"><span id="extension"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#P|Par extension]]</span>)''</span> Entreprise ou entité parmi les plus grandes de sa catégorie.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Un '''poids lourd''' du web a manifesté son intention de construire une plateforme logistique dans la ville d’Eure-et-Loir.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(<cite style="font-style:normal" class="ouvrage" >C.C.,&#32;[https://www.bfmtv.com/economie/chartres-la-ville-qui-a-ferme-la-porte-a-un-geant-du-e-commerce-et-ses-2000-emplois-a-la-cle-1562770.html ''Chartres, la ville qui a fermé la porte à un géant du e-commerce et ses 2000 emplois à la clé'']&#32;sur ''BFMTV.com'', NextInteractive. Mis en ligne le 9 novembre 2018</cite>)</span></span>[[Catégorie:Exemples en français]]
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Cet entretien s’est tenu quelques semaines après le webinaire organisé par le Medef international le 20 avril dernier, durant lequel les '''poids lourds''' du tissu économique français avaient réaffirmé leur soutien aux projets français dans le pays le plus peuplé d’Asie centrale.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>(Hadrien Canter, ''[https://www.novastan.org/fr/ouzbekistan/les-relations-franco-ouzbekes-relancees-par-un-appel-entre-les-deux-gouvernements/ Les relations franco-ouzbèkes relancées par un appel entre les deux gouvernements]'', novastan.org, 18 mai 2020)</span></span>[[Catégorie:Exemples en français]]
+# <span class="emploi"><span id="figuré"></span>''(<span class="texte">[[Annexe:Glossaire grammatical#F|Sens figuré]]</span>)''</span>[[Catégorie:Métaphores en français]] Chose, personne ou expérience qui assombrit la vie, la rend plus difficile.
+#* <span class="example"><q><bdi lang="fr" xml:lang="fr" class="lang-fr">''Que nous le voulions ou non, tous ceux que nous côtoyons […] ''entrent dans notre vie'' plus ou moins profondément. S’ils ne sont pas au point de départ de la relation, acceptés tels qu’ils sont, il deviennent en nous eux aussi, des « '''poids lourds''' » et même des parasites qui dans notre effort de rejet mobilisent une partie importante de nos énergies.''</bdi></q> <span class="sources"><span class="tiret">—&#160;</span>([[w:Michel Quoist|Michel Quoist]], ''Construire l’homme'', Éditions de l'atelier, Paris, 1997, page 56)</span></span>[[Catégorie:Exemples en français]]
+
+==== <span class="" title="">Variantes orthographiques</span> ====
+* [[PL]]
+* [[poids-lourd]]
+
+==== <span class="titrederiv" title="">Dérivés</span> ====
+* [[mi-lourd]] (2)
+
+==== <span class="titretrad" title="">Traductions</span> ====
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''<i>Véhicule de plus de 3,5 tonnes</i>'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span data-translation-lang="de" class="trad-de">Allemand</span>[[Catégorie:Traductions en allemand]] : <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[LKW#de|LKW]]</bdi>&nbsp;<span class="trad-exposant">[[:de:LKW|<span class="trad-existe">(de)</span>]]</span> ''masculin''</span>, <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[Lastkraftwagen#de|Lastkraftwagen]]</bdi>&nbsp;<span class="trad-exposant">[[:de:Lastkraftwagen|<span class="trad-existe">(de)</span>]]</span> ''masculin''</span>, <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[Schwerlaster#de|Schwerlaster]]</bdi>&nbsp;<span class="trad-exposant">[[:de:Schwerlaster|<span class="trad-existe">(de)</span>]]</span> ''masculin''</span>, <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[Fernlastzug#de|Fernlastzug]]</bdi>&nbsp;<span class="trad-exposant">[[:de:Fernlastzug|<span class="trad-absent">(de)</span>]]</span> ''masculin''</span>
+* <span data-translation-lang="en" class="trad-en">Anglais</span>[[Catégorie:Traductions en anglais]] : <span class="translation"><bdi lang="en" xml:lang="en" class="lang-en">[[HGV#en|HGV]]</bdi>&nbsp;<span class="trad-exposant">[[:en:HGV|<span class="trad-existe">(en)</span>]]</span></span>, <span class="translation"><bdi lang="en" xml:lang="en" class="lang-en">[[heavy goods vehicle#en|heavy goods vehicle]]</bdi>&nbsp;<span class="trad-exposant">[[:en:heavy goods vehicle|<span class="trad-existe">(en)</span>]]</span></span>
+* <span data-translation-lang="ca" class="trad-ca">Catalan</span>[[Catégorie:Traductions en catalan]] : <span class="translation"><bdi lang="ca" xml:lang="ca" class="lang-ca">[[camió#ca|camió]]</bdi>&nbsp;<span class="trad-exposant">[[:ca:camió|<span class="trad-existe">(ca)</span>]]</span> ''masculin''</span>
+* <span data-translation-lang="oc" class="trad-oc">Occitan</span>[[Catégorie:Traductions en occitan]] : <span class="translation"><bdi lang="oc" xml:lang="oc" class="lang-oc">[[camion#oc|camion]]</bdi>&nbsp;<span class="trad-exposant">[[:oc:camion|<span class="trad-existe">(oc)</span>]]</span></span>
+* <span data-translation-lang="pl" class="trad-pl">Polonais</span>[[Catégorie:Traductions en polonais]] : <span class="translation"><bdi lang="pl" xml:lang="pl" class="lang-pl">[[ciężarówka#pl|ciężarówka]]</bdi>&nbsp;<span class="trad-exposant">[[:pl:ciężarówka|<span class="trad-existe">(pl)</span>]]</span></span>
+* <span data-translation-lang="ru" class="trad-ru">Russe</span>[[Catégorie:Traductions en russe]] : <span class="translation"><bdi lang="ru" xml:lang="ru" class="lang-ru">[[грузовой автомобиль#ru|грузовой автомобиль]]</bdi>&nbsp;<span class="trad-exposant">[[:ru:грузовой автомобиль|<span class="trad-existe">(ru)</span>]]</span> <bdi lang="ru-Latn" xml:lang="ru-Latn" class="lang-ru-Latn">gruzovoï avtomobiľ</bdi></span>
+* <span data-translation-lang="se" class="trad-se">Same du Nord</span>[[Catégorie:Traductions en same du Nord]] : <span class="translation"><bdi lang="se" xml:lang="se" class="lang-se">[[guorbmebiila#se|guorbmebiila]]</bdi>&nbsp;<span class="trad-exposant">[[Wiktionnaire:Pas de wiktionnaire dans cette langue|<span class="trad-nowikt">(*)</span>]]</span></span>
+* <span data-translation-lang="cs" class="trad-cs">Tchèque</span>[[Catégorie:Traductions en tchèque]] : <span class="translation"><bdi lang="cs" xml:lang="cs" class="lang-cs">[[náklaďák#cs|náklaďák]]</bdi>&nbsp;<span class="trad-exposant">[[:cs:náklaďák|<span class="trad-existe">(cs)</span>]]</span></span>
+</div></div></div><div style="clear:both"></div></div></div>
+
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''<i>Catégorie pour les athlètes</i>'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span data-translation-lang="de" class="trad-de">Allemand</span>[[Catégorie:Traductions en allemand]] : <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[Schwergewicht#de|Schwergewicht]]</bdi>&nbsp;<span class="trad-exposant">[[:de:Schwergewicht|<span class="trad-existe">(de)</span>]]</span> ''neutre''</span>
+* <span data-translation-lang="en" class="trad-en">Anglais</span>[[Catégorie:Traductions en anglais]] : <span class="translation"><bdi lang="en" xml:lang="en" class="lang-en">[[heavyweight#en|heavyweight]]</bdi>&nbsp;<span class="trad-exposant">[[:en:heavyweight|<span class="trad-existe">(en)</span>]]</span></span>
+* <span data-translation-lang="ca" class="trad-ca">Catalan</span>[[Catégorie:Traductions en catalan]] : <span class="translation"><bdi lang="ca" xml:lang="ca" class="lang-ca">[[pes pesant#ca|pes pesant]]</bdi>&nbsp;<span class="trad-exposant">[[:ca:pes pesant|<span class="trad-absent">(ca)</span>]]</span></span>
+* <span data-translation-lang="fi" class="trad-fi">Finnois</span>[[Catégorie:Traductions en finnois]] : <span class="translation"><bdi lang="fi" xml:lang="fi" class="lang-fi">[[raskassarja#fi|raskassarja]]</bdi>&nbsp;<span class="trad-exposant">[[:fi:raskassarja|<span class="trad-existe">(fi)</span>]]</span></span>
+* <span data-translation-lang="sv" class="trad-sv">Suédois</span>[[Catégorie:Traductions en suédois]] : <span class="translation"><bdi lang="sv" xml:lang="sv" class="lang-sv">[[tungvikt#sv|tungvikt]]</bdi>&nbsp;<span class="trad-exposant">[[:sv:tungvikt|<span class="trad-existe">(sv)</span>]]</span></span>
+</div></div></div><div style="clear:both"></div></div></div>
+
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''<i>Athlète faisant partie de cette catégorie</i>'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-width:  26em; -webkit-column-width: 26em; -moz-column-width:  26em;  vertical-align: top; text-align: left;"><div class="translations">
+* <span data-translation-lang="de" class="trad-de">Allemand</span>[[Catégorie:Traductions en allemand]] : <span class="translation"><bdi lang="de" xml:lang="de" class="lang-de">[[Gewichtheben#de|Gewichtheben]]</bdi>&nbsp;<span class="trad-exposant">[[:de:Gewichtheben|<span class="trad-existe">(de)</span>]]</span> ''neutre''</span>
+* <span data-translation-lang="en" class="trad-en">Anglais</span>[[Catégorie:Traductions en anglais]] : <span class="translation"><bdi lang="en" xml:lang="en" class="lang-en">[[heavyweight#en|heavyweight]]</bdi>&nbsp;<span class="trad-exposant">[[:en:heavyweight|<span class="trad-existe">(en)</span>]]</span></span>
+</div></div></div><div style="clear:both"></div></div></div>
+
+==== <span class="titrehypo" title="Mots dont le sens est plus spécifique que « poids lourd »">Hyponymes</span> ====
+: ''Véhicule'' :
+* [[camion]]
+* [[train double]]
+* [[véhicule articulé]]
+
+==== <span class="titrevoc" title="">Vocabulaire apparenté par le sens</span> ====
+<div class="boite ">
+<div class="NavFrame  ">
+<div class="NavHead"><span class="nav-head-title">'''Catégories en boxe anglaise'''</span>&nbsp;<span class="nav-head-number"></span></div>
+<div class="NavContent">
+<div style="column-count: 1; -webkit-column-count: 1; -moz-column-count: 1;  vertical-align: top; text-align: left;">
+{| class="wikitable" style="text-align:center; width:60%;"
+|+ 
+|-
+|
+! scope=col | Boxe professionnelle
+! scope=col | Boxe amateur
+|-
+! scope=row | [[poids paille]]s
+|inférieur à 47,128 kg (105 livres)
+|
+|-
+! scope=row | [[poids mi-mouche]]s
+|entre 47,128 et 48,988 kg (108 livres)
+|
+|-
+! scope=row | [[poids mouche]]s
+|entre 48,988 et 50,802 kg (112 livres)
+|inférieur à 48 kg
+|-
+! scope=row | [[poids super-mouche]]s
+|entre 50,802 et 52,163 kg (115 livres)
+|entre 48 et 51 kg
+|-
+! scope=row | [[poids coq]]s
+|entre 52,163 et 53,525 kg (118 livres)
+|entre 51 et 54 kg
+|-
+! scope=row | [[poids super-coq]]s
+|entre 53,525 et 55,338 kg (122 livres)
+|
+|-
+! scope=row | [[poids plume]]s
+|entre 55,338 et 57,152 kg (126 livres)
+|entre 54 et 57 kg
+|-
+! scope=row | [[poids super-plume]]s
+|entre 57,152 et 58,967 kg (130 livres)
+|
+|-
+! scope=row | [[poids léger]]s
+|entre 58,967 et 61,237 kg (135 livres)
+|entre 57 et 60 kg
+|-
+! scope=row | [[poids super-léger]]s
+|entre 61,237 et 63,503 kg (140 livres)
+|entre 60 et 64 kg
+|-
+! scope=row | [[poids welter]]s (ou [[poids mi-moyen]]s)
+|entre 63,503 et 66,678 kg (147 livres)
+|entre 64 et 69 kg
+|-
+! scope=row | [[poids super-welter]]s (ou [[poids super mi-moyen]]s)
+|entre 66,678 et 69,853 kg (154 livres)
+|
+|-
+! scope=row | [[poids moyen]]s
+|entre 69,853 et 72,574 kg (160 livres)
+|entre 69 et 75 kg
+|-
+! scope=row | [[poids super-moyen]]s
+|entre 72,574 et 76,205 kg (168 livres)
+|
+|-
+! scope=row | [[poids mi-lourd]]s
+|entre 76,205 et 79,378 kg (175 livres)
+|entre 75 et 81 kg
+|-
+! scope=row | [[poids lourd-léger|poids lourds-légers]]
+|entre 79,378 et 90,719 kg (200 livres)
+|
+|-
+! scope=row | [[poids lourd]]s
+|plus de 90,719 kg
+|entre 81 et 91 kg
+|-
+! scope=row | [[poids super-lourd]]s
+|
+|plus de 91 kg
+|-
+|}
+</div></div><div style="clear:both"></div></div></div>
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* [[Annexe:Prononciation/français|<span class="API" title="Prononciation API">\pwa luʁ\</span>]]
+** <span class="audio-pronunciation"><span class="audio-region" data-region=""><small>(Région à préciser)</small></span>&nbsp;: écouter «&nbsp;<span lang="fr" class="audio-word" data-word="poids lourd">poids lourd</span>[[Catégorie:Prononciations audio en français]] <span class="audio-ipa" data-ipa="ɛ̃ pwa luʁ">[[Annexe:Prononciation/français|<span class="API" title="Prononciation API">[ɛ̃ pwa luʁ]</span>]]</span>&nbsp;» <span class="audio-file" data-file="Fr-poids-lourd.ogg">[[File:Fr-poids-lourd.ogg]]</span></span>
+** <span class="audio-pronunciation"><span class="audio-region" data-region="France (Île-de-France)">France (Île-de-France)</span>&nbsp;: écouter «&nbsp;<span lang="fr" class="audio-word" data-word="poids lourd">poids lourd</span>[[Catégorie:Prononciations audio en français]] <span class="audio-ipa" data-ipa="pwa luʁ">[[Annexe:Prononciation/français|<span class="API" title="Prononciation API">[pwa luʁ]</span>]]</span>&nbsp;» <span class="audio-file" data-file="Fr-Paris--poids lourd.ogg">[[File:Fr-Paris--poids lourd.ogg]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Lyon (France)">Lyon (France)</span>&nbsp;: écouter «&nbsp;<span lang="fr" class="audio-word" data-word="poids lourd">poids lourd</span>[[Catégorie:Prononciations audio en français]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=poids_lourd&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en français]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q150 (fra)-WikiLucas00-poids lourd.wav">[[File:LL-Q150 (fra)-WikiLucas00-poids lourd.wav]]</span></span>
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Somain (France)">Somain (France)</span>&nbsp;: écouter «&nbsp;<span lang="fr" class="audio-word" data-word="poids lourd">poids lourd</span>[[Catégorie:Prononciations audio en français]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=poids_lourd&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en français]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-poids lourd.wav">[[File:LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-poids lourd.wav]]</span></span>
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:poids lourd|<span lang="fr" xml:lang="fr" class="lang-fr"><bdi>poids lourd</bdi></span>]] sur l’encyclopédie Wikipédia [[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en français]]
+
+[[Catégorie:Véhicules en français]]

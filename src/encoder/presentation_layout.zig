@@ -46,10 +46,16 @@ pub fn partOfSpeech(title: []const u8) ?[]const u8 {
     // Lexical kind only: the independently established owner is unchanged.
     if (std.mem.eql(u8, title, "Adjectif")) return "Adjective";
     if (std.mem.eql(u8, title, "Nom commun")) return "Noun";
+    // Retained FR poids lourd p1500140/r38425888 authors S|nom|fr; its
+    // expansion names this nominal phrase and its matching noun category.
+    // Lexical kind only: preserve independently supplied or unknown ownership.
+    if (std.mem.eql(u8, title, "Locution nominale")) return "Noun";
     // FR S|symbole|conv invokes section -> types de mots/data (symbole,
     // mot="symbole", abrev="symb"); section uppercases only the initial.
     // Lexical kind only: keep the independently established or unknown owner.
     if (std.mem.eql(u8, title, "Symbole")) return "Symbol";
+    // FR Lakta Vojo declares {{S|nom propre|eo}} and the matching proper-noun category.
+    if (std.mem.eql(u8, title, "Nom propre")) return "Proper noun";
     // Retained TH drinking straw p16614/r5758517 and stool p30858/r1999346
     // author this H3 above en-noun/headwords and matching noun categories.
     // Lexical kind only: keep the independently established or unknown owner.
@@ -11891,7 +11897,8 @@ test "French heading aliases retain exact spelling and etymology section boundar
     const a = arena.allocator();
     try std.testing.expectEqualStrings("Adjective", partOfSpeech("Adjectif").?);
     try std.testing.expectEqualStrings("Noun", partOfSpeech("Nom commun").?);
-    for ([_][]const u8{ "adjectif", "Adjectifs", "Adjectif?", "Adjectif 0", "Adjectif 2", "Nom propre", "Nom commun?", "Nom commun 2", "Nom  commun", "Nom commun " }) |title| {
+    try std.testing.expectEqualStrings("Proper noun", partOfSpeech("Nom propre").?);
+    for ([_][]const u8{ "adjectif", "Adjectifs", "Adjectif?", "Adjectif 0", "Adjectif 2", "Nom Propre", "Nom propre?", "Nom propre 2", "Nom  propre", "Nom commun?", "Nom commun 2", "Nom  commun", "Nom commun " }) |title| {
         errdefer std.debug.print("unexpected French heading match: {s}\n", .{title});
         try std.testing.expect(partOfSpeech(title) == null);
     }
@@ -15542,4 +15549,105 @@ test "Spanish domain sense requires its owned top level grammar and adjacent par
     blocks[1].depth = 2;
     try std.testing.expect(spanishDefinitionPart(section, "Central Nahuatl", "nhn", "eswiktionary") == null);
     try std.testing.expect(partOfSpeech("Sustantivo") == null and partOfSpeech("Símbolo") == null);
+}
+
+test "exact French nominal phrase heading retains independent owners and rejects near labels" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Noun", partOfSpeech("Locution nominale") orelse return error.TestUnexpectedResult);
+    for ([_][]const u8{ "locution nominale", "Locution nominales", "Locution nominale?", "Locution nominale 2", "Locution  nominale", " Locution nominale", "Locution nominale ", "Locution verbale", "Locution" }) |label|
+        try std.testing.expect(partOfSpeech(label) == null);
+    const Section = struct { title: []const u8, level: u8, blocks: []const wiki.Block = &.{} };
+    const definitions = [_]wiki.Block{.{ .kind = .definition, .list_path = "#", .spans = &.{.{ .text = "authored sense" }} }};
+    const sections = [_]Section{
+        .{ .title = "French-looking label is not owner authority", .level = 2 },
+        .{ .title = "Locution nominale", .level = 3, .blocks = &definitions },
+    };
+    const owned = try buildOwned(a, &sections, "Independent supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), owned.lexemes.len);
+    try std.testing.expectEqualStrings("Independent supplied owner", owned.lexemes[0].language);
+    try std.testing.expectEqualStrings("Noun", owned.lexemes[0].kind);
+    try std.testing.expectEqual(@as(usize, 0), owned.lexemes[0].definitions[0].block);
+    const unknown = try buildUnclassified(a, &sections);
+    try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+    const ambiguous = [_]Section{.{ .title = "Locution nominale", .level = 2, .blocks = &definitions }};
+    try std.testing.expectEqual(@as(usize, 0), (try buildUnclassified(a, &ambiguous)).lexemes.len);
+}
+
+test "actual French poids lourd organizes seven senses and eight quotations with complete Stored codec parity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const encoder = @import("blob_encoder");
+    const T = encoder.presentation_types;
+    const codec = encoder.presentation_codec;
+    const captured = @embedFile("testdata/fr-poids-lourd-organization/reader.json");
+    const raw = @embedFile("testdata/fr-poids-lourd-organization/raw.wikitext");
+    const expanded = @embedFile("testdata/fr-poids-lourd-organization/expanded.wikitext");
+    inline for (.{
+        .{ captured, "1aa0e5e2596c61ca26355b5bc5c93a2442f9f64ec6f691fc2488e737a2e4e176" },
+        .{ raw, "eeb637706d9dce1793971a83c8a6f7c3f96c9a40bfd4d3bdb3f012be61ecf9ce" },
+        .{ expanded, "afddb6423f2738ad176d5f285ae29dec85f28296fbb4bcc6e3d280783e193fbe" },
+    }) |fixture| {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(fixture[0], &digest, .{});
+        try std.testing.expectEqualStrings(fixture[1], &std.fmt.bytesToHex(digest, .lower));
+    }
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, raw, "=== {{S|nom|fr}} ==="));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "<span class=\"titredef\" id=\"fr-nom-1\">Locution nominale</span>"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, expanded, "[[Catégorie:Locutions nominales en français]]"));
+    const parsed = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, captured, .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.entries.len);
+    const before = parsed.value.entries[0];
+    try std.testing.expectEqualStrings("poids lourd", before.title);
+    try std.testing.expectEqualStrings("français", before.language.?);
+    try std.testing.expectEqualStrings("fr", before.language_code);
+    try std.testing.expectEqual(@as(usize, 0), before.organization.lexemes.len);
+    try std.testing.expectEqual(@as(usize, 11), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 7), before.media.len);
+    const sections = try RetainedNounSemanticProjection.sections(a, before.sections);
+    try std.testing.expectEqualStrings("Locution nominale", sections[3].title);
+    try std.testing.expectEqual(@as(u8, 3), sections[3].level);
+    const layout = try buildOwned(a, sections, before.language.?);
+    const typed = try std.json.parseFromSlice(T.Layout, a, try std.json.Stringify.valueAlloc(a, layout, .{}), .{});
+    const expected: T.Layout = .{ .lexemes = &.{.{
+        .language = "français", .kind = "Noun", .section = 3, .etymology = 2,
+        .definitions = &.{
+            .{ .block = 3, .quotations = &.{ 4, 5 } },
+            .{ .block = 6 },
+            .{ .block = 7 },
+            .{ .block = 8, .parent = 2, .quotations = &.{9} },
+            .{ .block = 10, .quotations = &.{ 11, 12 } },
+            .{ .block = 13, .quotations = &.{ 14, 15 } },
+            .{ .block = 16, .quotations = &.{17} },
+        },
+        .introduction = &.{ 0, 1, 2 }, .related_sections = &.{ 4, 5, 6, 7, 8 },
+    }}, .other_sections = &.{ 0, 1, 2, 9, 10 } };
+    try std.testing.expectEqualDeep(expected, typed.value);
+    // Complete projection and both codec round trips preserve every body,
+    // caption, action, table, media record and style, including known fallbacks.
+    const projected_bytes = try codec.encodeBuildAlloc(a, try RetainedNounSemanticProjection.spans(a, before.display_title), sections,
+        before.organization, before.references, before.media);
+    const projected = try codec.decodeAlloc(a, projected_bytes, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, projected);
+    var after: T.Stored = .{ .entry = before };
+    after.entry.organization = typed.value;
+    const encoded = try codec.encodeAlloc(a, after);
+    const decoded = try codec.decodeAlloc(a, encoded, before.title, before.kind, .{ .heading = before.language.?, .code = before.language_code });
+    try std.testing.expectEqualDeep(after, decoded);
+    try std.testing.expectEqualSlices(u8, encoded, try codec.encodeAlloc(a, decoded));
+    var restored = decoded;
+    restored.entry.organization = before.organization;
+    try std.testing.expectEqualDeep(T.Stored{ .entry = before }, restored);
+    try std.testing.expectEqualSlices(u8, try codec.encodeAlloc(a, .{ .entry = before }), try codec.encodeAlloc(a, restored));
+    const independent = try buildOwned(a, sections, "Independent supplied owner");
+    try std.testing.expectEqual(@as(usize, 1), independent.lexemes.len);
+    try std.testing.expectEqualStrings("Independent supplied owner", independent.lexemes[0].language);
+    const unknown = try buildUnclassified(a, sections);
+    try std.testing.expectEqual(@as(usize, 1), unknown.lexemes.len);
+    try std.testing.expectEqualStrings("", unknown.lexemes[0].language);
+    try std.testing.expectEqualDeep(layout.lexemes[0].definitions, independent.lexemes[0].definitions);
+    try std.testing.expectEqualDeep(layout.lexemes[0].definitions, unknown.lexemes[0].definitions);
 }

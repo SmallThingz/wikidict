@@ -1,0 +1,92 @@
+{{voir|poids-lourd}}
+== {{langue|fr}} ==
+=== {{S|étymologie}} ===
+: {{siècle|lang=fr|?}} {{cf|lang=fr|poids|lourd}}
+
+=== {{S|nom|fr}} ===
+{{fr-rég|pwa luʁ}}
+[[Image:Kenworth_W900_semi_in_red.jpg|thumb|Un '''poids lourd''' américain. (1)]]
+[[Image:Batista with World Heavyweight Championship.jpg|thumb|Champion du monde '''poids lourd'''. (2)]]
+'''poids lourd''' {{pron|pwa luʁ|fr}} {{m}}
+# [[véhicule|Véhicule]] [[automobile]] de plus de 3,5 tonnes, conçu pour le transport de marchandises ; [[camion]].
+#* {{exemple | lang=fr
+ | L’État a choisi le dossier Cofiroute et son tunnel de dix kilomètres à deux niveaux de circulation superposés réservé aux seuls véhicules légers : les '''poids lourds''' n’emprunteront pas l'ouvrage, ils auront le leur.
+ | source=Denis Lemarié, ''Chroniques de Versailles : Janvier à juillet 2005'', Publibook, 2005, page 181}}
+#* {{exemple | lang=fr
+ | Hier, aux alentours de 18 heures, un accident s’est produit sur l’autoroute A63 au niveau de Labouheyre, dans les Landes entre une voiture et un '''poids lourd'''.
+ | source=journal ''Sud-Ouest'', édition ''Charente-Maritime / Charente'', 20 août 2022, page 7}}
+# {{lexique|sports de combat|fr}} Catégorie pour les athlètes plus [[lourd]]s que la [[moyenne]].
+# {{par extension}} {{sportifs|fr}} [[athlète|Athlète]] faisant partie de cette [[catégorie]].
+## {{lexique|boxe|fr}} Boxeur pesant plus de 90,719 kg.
+##* {{exemple|lang=fr|A son volant, un balaise en livrée de grande maison corrigeait son faciès de '''poids lourd''', qui eût pu inquiéter, par une impassibilité du meilleur style.|source={{w|Albert Simonin}}, ''Hotu soit qui mal y pense'', Gallimard, 1971, page 13}}
+# {{figuré|fr}} {{par extension|fr}} Personne importante dans une organisation.
+#* {{exemple | lang=fr
+ | [Titre] Les '''poids lourds''' du gouvernement présents à la rentrée des députés LRM
+ | source={{Lien web |auteur=Alexandre Lemarié |url=https://www.lemonde.fr/politique/article/2018/08/31/les-poids-lourds-du-gouvernement-presents-a-la-rentree-des-deputes-lrm_5348726_823448.html |titre=Les poids lourds du gouvernement présents à la rentrée des députés LRM |éditeur=Le Monde |en ligne le=31 août 2018}}}}
+#* {{exemple | lang=fr
+ | Si certains '''poids lourds''' républicains, dont le chef des sénateurs Mitch McConnell, ont fini par admettre la victoire de Joe Biden, le président sortant peut encore compter sur le soutien indéfectible de dizaines de parlementaires.
+ | source=AFP, ''Nancy Pelosi réélue présidente de la Chambre des représentants'', radio-canada.ca, 3 janvier 2021}}
+# {{figuré|fr}} {{par extension|fr}} Entreprise ou entité parmi les plus grandes de sa catégorie.
+#* {{exemple | lang=fr
+ | Un '''poids lourd''' du web a manifesté son intention de construire une plateforme logistique dans la ville d’Eure-et-Loir.
+ | source={{Lien web |auteur=C.C. |url=https://www.bfmtv.com/economie/chartres-la-ville-qui-a-ferme-la-porte-a-un-geant-du-e-commerce-et-ses-2000-emplois-a-la-cle-1562770.html |titre=Chartres, la ville qui a fermé la porte à un géant du e-commerce et ses 2000 emplois à la clé |site=BFMTV.com |éditeur=NextInteractive |en ligne le=9 novembre 2018}}}}
+#* {{exemple | lang=fr
+ | Cet entretien s’est tenu quelques semaines après le webinaire organisé par le Medef international le 20 avril dernier, durant lequel les '''poids lourds''' du tissu économique français avaient réaffirmé leur soutien aux projets français dans le pays le plus peuplé d’Asie centrale.
+ | source=Hadrien Canter, ''[https://www.novastan.org/fr/ouzbekistan/les-relations-franco-ouzbekes-relancees-par-un-appel-entre-les-deux-gouvernements/ Les relations franco-ouzbèkes relancées par un appel entre les deux gouvernements]'', novastan.org, 18 mai 2020}}
+# {{figuré|fr}} Chose, personne ou expérience qui assombrit la vie, la rend plus difficile.
+#* {{exemple | lang=fr
+ | Que nous le voulions ou non, tous ceux que nous côtoyons […] ''entrent dans notre vie'' plus ou moins profondément. S’ils ne sont pas au point de départ de la relation, acceptés tels qu’ils sont, il deviennent en nous eux aussi, des « '''poids lourds''' » et même des parasites qui dans notre effort de rejet mobilisent une partie importante de nos énergies.
+ | source={{w|Michel Quoist}}, ''Construire l’homme'', Éditions de l'atelier, Paris, 1997, page 56}}
+
+==== {{S|variantes orthographiques}} ====
+* [[PL]]
+* [[poids-lourd]]
+
+==== {{S|dérivés}} ====
+* [[mi-lourd]] (2)
+
+==== {{S|traductions}} ====
+{{trad-début|Véhicule de plus de 3,5 tonnes}}
+* {{T|de}} : {{trad+|de|LKW|m}}, {{trad+|de|Lastkraftwagen|m}}, {{trad+|de|Schwerlaster|m}}, {{trad-|de|Fernlastzug|m}}
+* {{T|en}} : {{trad+|en|HGV}}, {{trad+|en|heavy goods vehicle}}
+* {{T|ca}} : {{trad+|ca|camió|m}}
+* {{T|oc}} : {{trad+|oc|camion}}
+* {{T|pl}} : {{trad+|pl|ciężarówka}}
+* {{T|ru}} : {{trad+|ru|грузовой автомобиль|tr=gruzovoï avtomobiľ}}
+* {{T|se}} : {{trad|se|guorbmebiila}}
+* {{T|cs}} : {{trad+|cs|náklaďák}}
+{{trad-fin}}
+
+{{trad-début|Catégorie pour les athlètes}}
+* {{T|de}} : {{trad+|de|Schwergewicht|n}}
+* {{T|en}} : {{trad+|en|heavyweight}}
+* {{T|ca}} : {{trad-|ca|pes pesant}}
+* {{T|fi}} : {{trad+|fi|raskassarja}}
+* {{T|sv}} : {{trad+|sv|tungvikt}}
+{{trad-fin}}
+
+{{trad-début|Athlète faisant partie de cette catégorie}}
+* {{T|de}} : {{trad+|de|Gewichtheben|n}}
+* {{T|en}} : {{trad+|en|heavyweight}}
+{{trad-fin}}
+
+==== {{S|hyponymes}} ====
+: ''Véhicule'' :
+* [[camion]]
+* [[train double]]
+* [[véhicule articulé]]
+
+==== {{S|vocabulaire}} ====
+{{boxe anglaise}}
+
+=== {{S|prononciation}} ===
+* {{pron|pwa luʁ|fr}}
+** {{écouter|lang=fr||ɛ̃ pwa luʁ|audio=Fr-poids-lourd.ogg}}
+** {{écouter|lang=fr|France (Île-de-France)|pwa luʁ|audio=Fr-Paris--poids lourd.ogg}}
+* {{écouter|Lyon (France)||lang=fr|audio=LL-Q150 (fra)-WikiLucas00-poids lourd.wav}}
+* {{écouter|Somain (France)||lang=fr|audio=LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-poids lourd.wav}}
+
+=== {{S|voir aussi}} ===
+* {{WP}}
+
+[[Catégorie:Véhicules en français]]
