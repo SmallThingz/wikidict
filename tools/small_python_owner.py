@@ -3,8 +3,10 @@
 Source authentication streams each distinct stable object once per independent
 pre/post pass, with a separate fd/path check for every bound path.
 For a large inventory, set source_refs_ref to input_ref and keep the first two
-command source_refs in the config. start.json retains the complete list and
-the two validation reports are gzip-compressed JSON in this mode.
+command source_refs in the config. This compresses the two validation reports.
+Callers that resolve compact start receipts can also set compact_start=True.
+The start receipt then identifies the authenticated command, its first two
+source guards, and the count and SHA-256 of the complete ordered source list.
 """
 import gzip
 import hashlib
@@ -80,6 +82,9 @@ def inherited_child_nice(config):
 
 def selected_source_refs(config, plan):
     bootstrap = config['source_refs']
+    compact_start = config.get('compact_start', False)
+    if type(compact_start) is not bool or (compact_start and 'source_refs_ref' not in config):
+        raise ValueError('compact_start requires a boolean and an authenticated source list when enabled')
     if 'source_refs_ref' not in config:
         return bootstrap
     if config['source_refs_ref'] != config['input_ref']:
@@ -182,12 +187,15 @@ def run(config):
     sample = host.sample()
     fields = Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()
     start = dict(owner=dict(pid=os.getpid(), birth=int(fields[19])), started_unix=time.time(), sample=sample, policy=policy, input_authority=config['input_ref'], source_refs=refs, scope=plan['scope'], cap_bytes=profile['memory_bytes'], cpus=profile['cpus'], wall_seconds=profile['wall_seconds'], cpu_seconds=profile['cpu_seconds'])
+    encoded_refs = json.dumps(refs, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+    summary = dict(source_ref_count=len(refs), source_refs_sha256=hashlib.sha256(encoded_refs).hexdigest())
+    if config.get('compact_start', False):
+        start.update(source_refs=refs[:2], source_refs_ref=config['source_refs_ref'], **summary)
     with (runtime / 'start.json').open('x') as stream:
         json.dump(start, stream, indent=2, sort_keys=True)
         stream.write('\n')
-    encoded_refs = json.dumps(refs, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
     console = {key: value for key, value in start.items() if key != 'source_refs'}
-    console.update(source_ref_count=len(refs), source_refs_sha256=hashlib.sha256(encoded_refs).hexdigest(), source_receipt=str(runtime / 'start.json'))
+    console.update(summary, source_receipt=str(runtime / 'start.json'))
     print('CHECK', json.dumps(console), flush=True)
     supervised_started = time.monotonic()
     watchdog_options = {'max_open_files': profile['max_open_files']} if 'max_open_files' in profile else {}

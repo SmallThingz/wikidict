@@ -230,6 +230,10 @@ class SourceValidationTests(unittest.TestCase):
             owner.selected_source_refs(dict(config, source_refs_ref=dict(self.bound, bytes=0)), plan)
         with self.assertRaisesRegex(ValueError, 'bootstrap guards differ'):
             owner.selected_source_refs(dict(config, source_refs=guards[::-1]), plan)
+        with self.assertRaisesRegex(ValueError, 'compact_start'):
+            owner.selected_source_refs(dict(input_ref=self.bound, source_refs=guards, compact_start=True), plan)
+        with self.assertRaisesRegex(ValueError, 'compact_start'):
+            owner.selected_source_refs(dict(config, compact_start='true'), plan)
 
     def test_direct_receipts_keep_all_refs_console_is_compact_and_post_pass_fresh(self):
         from types import SimpleNamespace
@@ -277,7 +281,7 @@ class SourceValidationTests(unittest.TestCase):
 
 
 class DirectCliWatchdogTests(unittest.TestCase):
-    def exercise(self, expected_exit):
+    def exercise(self, expected_exit, *, compact_start=False):
         import os
         import sys
         selected = D / 'small_python_owner.py'
@@ -316,6 +320,8 @@ sys.exit({expected_exit})
             config = dict(input_ref=ref(command), output_root=str(output), source_refs=[ref(resources), ref(guardian)], child_nice=max(0, os.getpriority(os.PRIO_PROCESS, 0)), direct_cli=True, profile=dict(memory_bytes=memory, reserve_bytes=1024**3, cpu_seconds=120, wall_seconds=60, max_tasks=32, disk_floor_bytes=1024**2, cpus=[min(os.sched_getaffinity(0))]))
             if expected_exit == 0:
                 config['source_refs_ref'] = config['input_ref']
+                if compact_start:
+                    config['compact_start'] = True
                 hard = owner.resource.getrlimit(owner.resource.RLIMIT_NOFILE)[1]
                 config['profile']['max_open_files'] = 8192 if hard == owner.resource.RLIM_INFINITY else min(8192, hard)
             self.assertEqual(expected_exit, direct.run(config))
@@ -337,7 +343,17 @@ sys.exit({expected_exit})
             if expected_exit == 0:
                 self.assertEqual(config['profile']['max_open_files'], report['max_open_files'])
                 runtime = output / 'direct-runtime01'
-                self.assertEqual(plan['source_refs'], json.loads((runtime / 'start.json').read_text())['source_refs'])
+                start = json.loads((runtime / 'start.json').read_text())
+                if compact_start:
+                    self.assertEqual(config['input_ref'], start['source_refs_ref'])
+                    self.assertEqual(config['input_ref'], start['input_authority'])
+                    self.assertEqual(plan['source_refs'][:2], start['source_refs'])
+                    encoded = json.dumps(plan['source_refs'], sort_keys=True, separators=(',', ':')).encode()
+                    self.assertEqual(len(plan['source_refs']), start['source_ref_count'])
+                    self.assertEqual(hashlib.sha256(encoded).hexdigest(), start['source_refs_sha256'])
+                else:
+                    self.assertEqual(plan['source_refs'], start['source_refs'])
+                    self.assertNotIn('source_refs_ref', start)
                 for phase in ('before', 'after'):
                     with gzip.open(runtime / f'source-validation-{phase}01.json.gz', 'rt') as stream:
                         checked = json.load(stream)
@@ -346,6 +362,9 @@ sys.exit({expected_exit})
 
     def test_actual_direct_cli_preserves_one_use_proof_and_success(self):
         self.exercise(0)
+
+    def test_actual_direct_cli_compact_start_binds_the_complete_command(self):
+        self.exercise(0, compact_start=True)
 
     def test_actual_direct_cli_preserves_one_use_proof_and_nonzero(self):
         self.exercise(23)
