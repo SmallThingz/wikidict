@@ -490,11 +490,11 @@ fn printTestOutput(name: []const u8, res: ChildResult) void {
 
     if (res.stdout.len > 0) {
         std.debug.print(" | out: ", .{});
-        printSingleLine(res.stdout, if (res.status == .fail or res.status == .crash) 2000 else 200);
+        printSingleLine(res.stdout, res.status == .fail or res.status == .crash);
     }
     if (res.stderr.len > 0) {
         std.debug.print(" | err: ", .{});
-        printSingleLine(res.stderr, if (res.status == .fail or res.status == .crash) 2000 else 200);
+        printSingleLine(res.stderr, res.status == .fail or res.status == .crash);
     }
 
     switch (res.term) {
@@ -512,22 +512,36 @@ fn printTestOutput(name: []const u8, res: ChildResult) void {
     std.debug.print("\n", .{});
 }
 
-fn printSingleLine(bytes: []const u8, max_len: usize) void {
-    var written: usize = 0;
-    for (bytes) |c| {
-        if (written >= max_len) break;
-        switch (c) {
-            '\n', '\r', '\t' => {
-                std.debug.print(" ", .{});
-                written += 1;
-            },
-            else => {
-                std.debug.print("{c}", .{c});
-                written += 1;
-            },
+fn printSingleLine(bytes: []const u8, failure: bool) void {
+    const limit: usize = if (failure) 2000 else 200;
+    var buffer: [2003]u8 = undefined;
+    var head_len = @min(bytes.len, limit);
+    var tail_start = bytes.len;
+    const clipped = bytes.len > limit;
+    if (clipped) {
+        if (failure) {
+            head_len = limit / 2;
+            tail_start = bytes.len - (limit - head_len);
+            while (tail_start < bytes.len and (bytes[tail_start] & 0xc0) == 0x80) tail_start += 1;
+        }
+        while (head_len > 0 and (bytes[head_len] & 0xc0) == 0x80) head_len -= 1;
+    }
+    @memcpy(buffer[0..head_len], bytes[0..head_len]);
+    var end = head_len;
+    if (clipped) {
+        @memcpy(buffer[end..][0..3], "...");
+        end += 3;
+        const tail = bytes[tail_start..];
+        @memcpy(buffer[end..][0..tail.len], tail);
+        end += tail.len;
+    }
+    for (buffer[0..end]) |*byte| {
+        switch (byte.*) {
+            '\n', '\r', '\t' => byte.* = ' ',
+            else => {},
         }
     }
-    if (bytes.len > max_len) std.debug.print("...", .{});
+    std.debug.print("{s}", .{buffer[0..end]});
 }
 
 fn runSingleTest(name: []const u8, seed: ?u32) void {
