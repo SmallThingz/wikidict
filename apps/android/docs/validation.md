@@ -1,5 +1,68 @@
 # Android validation
 
+## Current inline-table bottom alignment — 2026-11-21
+
+The qualified production source is commit
+`5c26f9c0c512d3678c3f7d10c5a185ca49a83cd7`. Its
+[commit/source bridge][bridge161-current] binds the ten changed files to the
+982-file canonical inventory. Inline tables now have a separate bottom-alignment
+value: the intact grid shares the parent line's bottom with its pronunciation
+marker. The decoder requires the corresponding wide-header flag and an actual
+inline-table payload; existing inline-box alignment remains separate.
+
+[Host161][host161-current] passed **16 fresh focused JVM checks** with no failures,
+skips or carry, including both new bottom-alignment checks and the affected
+top/cell controls. Main, unit and instrumentation Kotlin compilation and
+instrumentation Java compilation executed. The new pronunciation-marker device
+control was compiled only.
+
+The ordinary unfiltered `testDebugUnitTest` target then
+[passed all 1,217 current cases][host162-current] across 155 reports: **zero
+failures, skips or carried cases**. These comprise 1,215 correctness cases and
+two benchmark-named controls, without a performance claim. Main and unit Kotlin
+compilation reused up-to-date outputs; the test task executed. The independent
+closure verified exact source and protected artifacts, absent owned processes
+and free locks.
+
+The [subsequent lint/package continuation][canonical163-current] completed debug
+lint and ordinary unsigned release/vital tasks, reusing that full-suite result
+without repeating JVM or instrumentation tests. Lint reported **zero errors,
+37 warnings and five hints**, with no locations on lines changed by this commit.
+Release Kotlin compilation, R8 and packaging ran; resource optimization reused
+its up-to-date output. The [saved artifact audit][audit163-current] verifies the
+new [retained APK][apk163-current]:
+
+- Minimum API **31** (Android 12), target API **37**, package
+  `app.smallthingz.dict`, version **0.4.0 / code 4**.
+- **10,963,937 bytes**, unchanged in size from the prior verified APK, with changed
+  `classes.dex`; SHA-256
+  `f2063bd3b8b1df0151f23381fd4d9991d2b8dcbdc391f09c4c837680d8428020`.
+- Four ABIs: `arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64`. Native libraries,
+  fonts and licence payloads match the prior package. The separate table
+  alignment class and line-geometry method are present in the release evidence.
+- **Unsigned**. No signing, installation, device command or publication occurred.
+
+The existing HOME Gradle, build and project caches were reused. Before replacing
+mutable release outputs, the same worker preserved the five prior class/mapping
+evidence files with verified hashes; the prior APK and receipts remain retained.
+Both actual invocations and their independent closures returned zero. The
+[normal-entry-point review][entrypoints163-current] also confirms that import and
+record loading use the ordinary binary decoder; it is source evidence, not a
+genuine ET dictionary or rendered-device acceptance result.
+
+The physical-device access hold recorded below remains unchanged. No later
+access clearance has been established; pixels, touch, selection and accessibility
+remain unverified on the current physical Android build. The following sections
+retain their historical qualification scopes.
+
+[bridge161-current]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/et-bottom-alignment01/canonical-commit-bridge16101.json
+[host161-current]: /home/a/.tmp/wikidict-android-host161-run01/saved-result-peer-reader01.json
+[host162-current]: /home/a/.tmp/wikidict-android-host162-run01/saved-result-peer-reader01.json
+[canonical163-current]: /home/a/.tmp/wikidict-android-canonical163-run01/completion01.json
+[audit163-current]: /home/a/.tmp/wikidict-android-canonical163-run01/saved-result-peer-reader01.json
+[apk163-current]: /home/a/.tmp/wikidict-android-canonical163-run01/retained/app-release-unsigned.apk
+[entrypoints163-current]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/et-bottom-alignment01/entrypoints-sdk-source-review01.json
+
 ## Pegasus level-pitch regression — 2026-11-21
 
 The retained Pegasus pronunciation already uses the native strict-interior
@@ -13,18 +76,18 @@ skips or carry. Main Kotlin compilation was up to date; unit Kotlin compilation
 and the test task executed. Its independent closure verified the source,
 protected artifacts, absent owned processes and free locks.
 
-The inventory now declares 1,215 JVM tests. This focused run is not a new full
-1,215-case result. The full 1,214-case result and lint/unsigned APK below remain
-the evidence for the unchanged production source; packaging and instrumentation
+The inventory then declared 1,215 JVM tests. This focused run was not a new full
+1,215-case result. The full 1,214-case result and lint/unsigned APK below provided
+the evidence for the then-unchanged production source; packaging and instrumentation
 were not repeated. This test establishes projection and branch-selection
 behavior, not rendered pixels, touch or accessibility. The physical-device access
 hold below remains unchanged.
 
 [host160-current]: /home/a/.tmp/wikidict-android-host160-run01/saved-result-peer-reader01.json
 
-## Current table-border integration — 2026-11-20
+## Historical table-border integration — 2026-11-20
 
-The qualified Android production source is commit
+The qualified Android production source at this boundary was commit
 `b8ac8c2d47ec3f369cafb407d0dd6f6849c1f476`. Its [canonical application][application157]
 and [commit bridge][bridge157] bind the 17 integrated files: 12 main, four JVM-test
 and one instrumentation-test files, including seven new files. The canonical
