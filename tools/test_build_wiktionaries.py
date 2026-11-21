@@ -7759,6 +7759,17 @@ class FigureTupleReplayReuseTests(unittest.TestCase):
                     b._validated_auxiliary_state({name:path},self.fixture.wiki,self.fixture.date)
                 replay.assert_not_called()
 
+    def test_declared_figure_files_missing_before_journal_or_payload_replay(self):
+        missing = (self.figures.INVENTORY, self.figures.COMPLETE)
+        for name in missing:
+            (self.args.output / name).unlink()
+        with patch.object(b, '_figure_replay_identity', side_effect=AssertionError('started payload discovery')), \
+             patch.object(self.figures, 'verify_tuple', side_effect=AssertionError('started semantic replay')):
+            with self.assertRaises(FileNotFoundError) as failure:
+                self.validate()
+        for name in missing:
+            self.assertIn(name, str(failure.exception))
+
     def test_auxiliary_preflight_does_not_authorize_later_manifest_or_content_changes(self):
         path,selection=self.preflight_namespace()
         paths=dict(self.paths,**{'namespace-registry':path})

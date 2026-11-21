@@ -1642,6 +1642,20 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
             return True
         active.add(directory)
         members = tuple(sorted(directory.iterdir()))
+        if deferred_capture is not None and directory == Path(root):
+            # Reject missing members of a selected complete capture before reading
+            # payloads. Only the full replay below can authenticate these files.
+            manifest = helper.decode(helper.small(directory / helper.MANIFEST))
+            if isinstance(manifest, dict) and isinstance(manifest.get('artifacts'), dict):
+                # Compare top-level names without opening paths from the manifest.
+                required = {name.partition('/')[0] for name in manifest['artifacts']}
+                required.add(helper.COMPLETE)
+                missing = sorted(required.difference(path.name for path in members))
+                if missing:
+                    preview = ', '.join(missing[:8])
+                    if len(missing) > 8:
+                        preview += f' (+{len(missing) - 8} more)'
+                    raise FileNotFoundError(f'Missing Figure capture members in {directory}: {preview}')
         directories[directory] = (directory.stat().st_dev, directory.stat().st_ino, members,
                                   _figure_replay_identity(directory, directory=True))
         if any(path.is_dir() and not path.is_symlink() for path in members):
