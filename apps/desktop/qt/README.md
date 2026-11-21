@@ -1486,3 +1486,65 @@ behavior.
 This is a reviewed source projection with scoped private-binary qualification.
 The canonical binary was not rebuilt; no whole-suite or global acceptance is
 claimed.
+
+## VI container source projection
+
+The Portuguese barracuda container retains its authored 60em width and 100%
+maximum width through the existing native width allocator. Numeric margins stay
+outside that width and unsupported positioning combinations still fail.
+
+The Spanish record's left-floating, actionless image retains its authored
+40-pixel height and unknown width. The paired native capability accepts this
+specific shape without inventing centering, an image link or an asset ratio.
+The image handler supplies an available intrinsic width or its ordinary offline
+placeholder. Existing linked-image and relative-position branches remain intact.
+
+The three installed-decoder response fixtures are exact PT, ES and English
+captures from the closed ordinary FFI run. Canonical tests locate those files
+only when the explicit fixture environment variables are absent. The private
+render tests retain their older fixture FFI; this does not claim that they
+execute the installed decoder in process. One existing native slot and two
+existing App slots cover source geometry, RTL default alignment, complete image
+pixels, full body and authored actions, width changes and explicit refusals.
+
+The projection includes the exact earlier absolute/relative/intrinsic image
+prerequisites needed by these existing private controls, including ownership
+validation and MainWindow context propagation. Unrelated Thaana registration
+remains excluded. The existing private relative-image slots are added to the
+canonical test classes; private MOC inputs and admitted test bytes are unchanged.
+
+The focused native image method passed after correcting its test point to the
+actual first glyph. App qualification retains the unchanged Portuguese width
+and compact-history passes, and freshly executes the relative-image method.
+The latter covers genuine Spanish content, LTR/RTL inherited direction, Ready
+image geometry, exact actions and negative recovery. Test fixtures now open the
+ordinary Reader before committing a response and use document-format
+transactions; the original refusals and all failed attempts remain preserved.
+
+The private package passed installed runtime and core checks with 179 files and
+13 symlinks. Its existing CMake probe and native core were retained.
+
+The closed ordinary installed-app session reused the seven genuine page blobs
+and owned library. Portuguese and Spanish barracuda now show their 653- and
+869-character readings at 1000x700 and 640x600, replacing the prior composition
+refusals. Sampled pronunciation, definitions and references remain legible while
+scrolling, without observed overlap or horizontal clipping.
+
+A real Return on Portuguese barracudas showed explicit missing-entry feedback;
+the visible Show reading pane control and real Space restored the original
+reading and scroll. At compact width, real Alt+Left and Alt+Right restored
+Portuguese and Spanish respectively in the visible Reading pane with focus and
+scroll retained. Ctrl+Home subsequently moved to the document top. No external
+media link was activated. Normal Quit closed the owned session; the selected
+source and library files, 179 installed files and 13 symlinks stayed unchanged.
+
+The initial mislabeled Portuguese capture actually showed Dutch and is excluded.
+Only Portuguese and Spanish receive new rendering acceptance; the earlier five
+language observations remain historical. No same-language different-word
+history, restart, high-DPI, exact pixel-fidelity or full graph claim is made.
+
+The exact scope and limitations are recorded in the linked manifest evidence.
+Prior Afar, library, ET and accessibility evidence remains historical. This is
+a reviewed source projection with scoped private-binary qualification. The
+canonical binary was not rebuilt; no whole-suite or corpus-wide GUI acceptance
+is claimed.

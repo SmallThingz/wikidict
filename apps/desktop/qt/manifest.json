@@ -5,8 +5,8 @@
   "patches": [
     {
       "file": "0001-logical-flow-renderer.patch",
-      "sha256": "fd18eb95752838799e212b35ece4b6fa156218329afc84d7ee1281c9f503f3b1",
-      "bytes": 1160727,
+      "sha256": "b5a6be6dea8e781b4268ed010e0828868f4467af73df05f26dc3012a9eb51de7",
+      "bytes": 1198710,
       "files": [
         {
           "path": "src/gui/accessible/qaccessible.cpp",
@@ -54,8 +54,8 @@
           "path": "src/gui/text/qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "26c75b9708bcfca3f2ffb387e59e648d816c689453644f91eff36e373de5adc7",
-          "qualified_sha256": "48de0aa50043e5a72ed97f0b69528f9f102eba621e9f22bd191e3730ef41fd61",
-          "bytes": 868228
+          "qualified_sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d",
+          "bytes": 905703
         },
         {
           "path": "src/gui/text/qtextdocumentlayout_p.h",
@@ -208,8 +208,8 @@
     },
     {
       "file": "0002-layout-regressions.patch",
-      "sha256": "b001f1b6f95058db0ad5d23844bdd099a001dfce28689a62b118b69918bc4c3d",
-      "bytes": 1482325,
+      "sha256": "ef4a7a2f574185ce40a19a2f4baf745a8c3853cb0ecc97a647fda15e01a703c4",
+      "bytes": 1525055,
       "files": [
         {
           "path": "tests/auto/gui/text/qtextdocumentlayout/CMakeLists.txt",
@@ -222,8 +222,8 @@
           "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
           "new_file": false,
           "upstream_sha256": "aeca9826b762034d580c7024cb22641c6f9eafc04501a0099ca57af8d0770d14",
-          "qualified_sha256": "a6333e3e4c26f4034f38fbbfa53a3cd009ce0e3201fbcdce1e5fcabc49c2520d",
-          "bytes": 1483903
+          "qualified_sha256": "f7fb9b7045b3b96c459ce13823dd8a37cd3f8a1991ea64abaff396e8dfc7a23b",
+          "bytes": 1526185
         }
       ]
     },
@@ -7229,6 +7229,1401 @@
         ]
       },
       "canonical_source_applied_role": "Intended maintained postimage; actual application is recorded separately."
+    },
+    "vi_containers": {
+      "status": "Reviewed canonical source projection with scoped private native, App, package and ordinary GUI qualification.",
+      "canonical_base_commit": "5232f18155dd03bbdff3fdb0ae5c0c690f6f9a5e",
+      "product_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/product-preparation01.json",
+        "bytes": 2554,
+        "sha256": "efecc445ea70d57ac727d5b5cdd8b48d1627bd9fe2af2bdc78bd24b5a5e20e16"
+      },
+      "controls_preparation": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/preparation01.json",
+        "bytes": 8828,
+        "sha256": "47e3b32ba9317f5441e80e19b08b2afe1ab65c1f143a24854e3df545565e914f"
+      },
+      "source_transaction": {
+        "path": "/home/a/wikidict-vi-container-source01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 5213,
+        "sha256": "509f23f100a76e6aad4e36dde2248bd7dee131d1bd6c97b841bf71639e0c300b"
+      },
+      "source_transaction_result": {
+        "bytes": 200364,
+        "path": "/home/a/wikidict-vi-container-source01/transaction/transaction-result01.json",
+        "sha256": "f3c41127920580bef3af42141d34b4c65db2ce0f5c950ea6309b178d14f16aac"
+      },
+      "current_source_inventory": {
+        "path": "/home/a/wikidict-vi-container-source01/transaction/source-inventory01.json",
+        "bytes": 109668,
+        "sha256": "dedc5ae539f329d57f596890ae0a7e7a435e6d2658638b0d3b9bbd2565b46864"
+      },
+      "canonical_source_bridge": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-source-bridge01.json",
+        "bytes": 5560,
+        "sha256": "288127356c1007f6aa84e04bf52adb47d663d83d965db6d2c8e7cc8994289820"
+      },
+      "current_installed_decode": {
+        "path": "/home/a/wikidict-vi-installed-ffi01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 2758,
+        "sha256": "135620ab75f427dc02a0efd6c23523bb42e59e57ca1f80c3deae2f3c8d70bd72"
+      },
+      "current_decode_comparison": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/installed-decode-comparison01.json",
+        "bytes": 4533,
+        "sha256": "af9b9ace8e78a62bd5ed530290209532c00b3108cfaea637070ae33367ba7da2"
+      },
+      "fixture_sources": {
+        "pt": {
+          "path": "/home/a/wikidict-vi-installed-ffi01/responses01/entry-00.json",
+          "bytes": 75835,
+          "sha256": "a58963dda8a22d4930aefed03b4f618630421e56b52a2114f0abd55511634c88"
+        },
+        "en": {
+          "path": "/home/a/wikidict-vi-installed-ffi01/responses01/entry-02.json",
+          "bytes": 77316,
+          "sha256": "4b175cf8211c007c7ca94356afbc74838946aa9182ded3c4af674227c8175cf3"
+        },
+        "es": {
+          "path": "/home/a/wikidict-vi-installed-ffi01/responses01/entry-03.json",
+          "bytes": 68297,
+          "sha256": "bb443bf2c091ca3f40e1eace775f565ce4d476d4a26199a97f00d9f21a581608"
+        }
+      },
+      "fixture_locators": [
+        {
+          "method": "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+          "environment": "WIKIDICT_VI_PT_JSON",
+          "fixture": "tests/fixtures/vi-barracuda-pt-installed-decoder.json",
+          "private_expression": "QFile fixture(qEnvironmentVariable(\"WIKIDICT_VI_PT_JSON\"));",
+          "canonical_expression": "QFile fixture(qEnvironmentVariableIsSet(\"WIKIDICT_VI_PT_JSON\")\n                ? qEnvironmentVariable(\"WIKIDICT_VI_PT_JSON\")\n                : QFINDTESTDATA(\"fixtures/vi-barracuda-pt-installed-decoder.json\"));",
+          "only_when_environment_absent": true
+        },
+        {
+          "method": "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+          "environment": "WIKIDICT_VI_EN_JSON",
+          "fixture": "tests/fixtures/vi-barracuda-en-installed-decoder.json",
+          "private_expression": "QFile goodFixture(qEnvironmentVariable(\"WIKIDICT_VI_EN_JSON\"));",
+          "canonical_expression": "QFile goodFixture(qEnvironmentVariableIsSet(\"WIKIDICT_VI_EN_JSON\")\n                ? qEnvironmentVariable(\"WIKIDICT_VI_EN_JSON\")\n                : QFINDTESTDATA(\"fixtures/vi-barracuda-en-installed-decoder.json\"));",
+          "only_when_environment_absent": true
+        },
+        {
+          "method": "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+          "environment": "WIKIDICT_VI_ES_JSON",
+          "fixture": "tests/fixtures/vi-barracuda-es-installed-decoder.json",
+          "private_expression": "QFile fixture(qEnvironmentVariable(\"WIKIDICT_VI_ES_JSON\"));",
+          "canonical_expression": "QFile fixture(qEnvironmentVariableIsSet(\"WIKIDICT_VI_ES_JSON\")\n                ? qEnvironmentVariable(\"WIKIDICT_VI_ES_JSON\")\n                : QFINDTESTDATA(\"fixtures/vi-barracuda-es-installed-decoder.json\"));",
+          "only_when_environment_absent": true
+        }
+      ],
+      "prior_gui_failure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/vi-barracuda-normal-desktop-ui01/UI_RESULT01.json",
+        "bytes": 2646,
+        "sha256": "8615d008fe72a65a241a02bd69e1300019112ed450ac50477ae8fc7369644565"
+      },
+      "prior_gui_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/vi-barracuda-normal-desktop-ui01/independent-closure01.json",
+        "bytes": 1531,
+        "sha256": "420b2ee2c84f3b71a8a27e22d0d864a5c7427db08b2a10da9895bb04bfe791c1"
+      },
+      "current_native_methods": [
+        "relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels"
+      ],
+      "current_app_methods": [
+        "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions"
+      ],
+      "prior_scopes_historical_only": true,
+      "native_qualification": {
+        "path": "/home/a/wikidict-vi-container-native02/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 32389,
+        "sha256": "f73a787e9187e2da5b12ae6a6013a1eb12387b69da7036f034730aa94c68a6f1"
+      },
+      "app_qualification": {
+        "path": "/home/a/wikidict-vi-container-app07/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 149134,
+        "sha256": "960e6d1c23ecb916dc0232491f0461aa6070b654fff4aaa2a6aa565733fe1b27"
+      },
+      "package_qualification": {
+        "path": "/home/a/wikidict-vi-container-install01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 253510,
+        "sha256": "58dfe0a83ad478e818f756db91d9e2472f4c94101d5689f0166958a55bcd59b2"
+      },
+      "genuine_gui_qualification": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/vi-repaired-history-normal-desktop-ui01/UI_RESULT01.json",
+        "bytes": 17082,
+        "sha256": "030e41864988fcb0e06b19ec94b1c56671db939dd9f40af11683521dd14793a7"
+      },
+      "canonical_source_applied": true,
+      "canonical_binary_rebuilt": false,
+      "source_projection": {
+        "products": [
+          {
+            "role": "app",
+            "relative": "src/FlowConstruction.hpp",
+            "private_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/eu-number-table-layout-private01/qt/postimages/apps/desktop/src/FlowConstruction.hpp",
+              "bytes": 139874,
+              "sha256": "d73194a0ea5b3c4143574e3f81da68f87b499829ebff9261ad114ed34dc68520"
+            },
+            "preserved_before": {
+              "path": "/home/a/wikidict-vi-container-source01/transaction/app-header.before.hpp",
+              "bytes": 139874,
+              "sha256": "d73194a0ea5b3c4143574e3f81da68f87b499829ebff9261ad114ed34dc68520"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/posts01/app/FlowConstruction.hpp",
+              "bytes": 141030,
+              "sha256": "b3e5d88546d0200fe06a41ef60e622ec02c96fe34f8c7831b97c751577e5efbc"
+            },
+            "patch": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-product01.patch",
+              "bytes": 8657,
+              "sha256": "be3cdc9df9f78175d788b6ab7b185e4c09eb80e5d84a813997a5bfa4e938ee67"
+            },
+            "canonical_before_sha256": "d73194a0ea5b3c4143574e3f81da68f87b499829ebff9261ad114ed34dc68520",
+            "canonical_after_sha256": "b3e5d88546d0200fe06a41ef60e622ec02c96fe34f8c7831b97c751577e5efbc",
+            "unique_context_hunks": [
+              {
+                "private_line": 367,
+                "canonical_line": 367,
+                "before_sha256": "cc6dcc9da8e6309ad9209a87d8acde68ffaeaddd260abc50d580a7733713fea7",
+                "after_sha256": "01f6db5056ddcb84d34f3a414cb64eaae3993e22c0fe64562672644b1d927290"
+              },
+              {
+                "private_line": 387,
+                "canonical_line": 387,
+                "before_sha256": "87cd8afc30ee8cf1a698cfc418d2322bfe182dbbf3595a1c1ccc9b684471f66e",
+                "after_sha256": "4ee5b3b7ffd4473754ac9cb5beba569fe21a49c8cc20193d38d96eb85fef6708"
+              },
+              {
+                "private_line": 397,
+                "canonical_line": 396,
+                "before_sha256": "73347951744dae0f5b0e86552384acfefcd85917e754f997802edc77c5136b18",
+                "after_sha256": "9f91b3472305379ef3308f033ea41027aaa24b9644d7fba7eff3f3c1627cf057"
+              },
+              {
+                "private_line": 500,
+                "canonical_line": 506,
+                "before_sha256": "c27bbb01765a195e78997059a42a00d7195dd34a884c12facf38a28b467375ee",
+                "after_sha256": "d9df7be00b46273cbd05140465e2ba4c97957c2128cb6fef850a20b504e9e6a6"
+              },
+              {
+                "private_line": 512,
+                "canonical_line": 522,
+                "before_sha256": "72d4c8795120114e566aa956a66b7d0264b7bd95ee9752268c1db92510f309b7",
+                "after_sha256": "3bad07f1502c03dcfae3ba844532191658e27f8f84197b1274349f986611ab33"
+              },
+              {
+                "private_line": 525,
+                "canonical_line": 535,
+                "before_sha256": "0f7746c91acf6378bbca55e9a64c04e15a4c8a4f581363b2d91476be968590d2",
+                "after_sha256": "b142a49e3649fec9966e95affe5cb2b2c0facf529df54cc1707709a66ae93fe1"
+              },
+              {
+                "private_line": 579,
+                "canonical_line": 589,
+                "before_sha256": "9126de2a865855c5f013e36168bc3f6f4942bd44426665701bf6cc3bab3edb05",
+                "after_sha256": "2887e255a094b0a6f0632dc3e08a2b8548fd5b7d9170e1ecef137c4f7148c14e"
+              },
+              {
+                "private_line": 616,
+                "canonical_line": 626,
+                "before_sha256": "0709c2011847b818d196b4b4497a34dfea4b8b8db2bcef1e4f27bb15e8068cdd",
+                "after_sha256": "1340d13f5c0fc826a90fbb2182001bedfdfbacdf8c57fd040f2c406cac4bef61"
+              },
+              {
+                "private_line": 1364,
+                "canonical_line": 1374,
+                "before_sha256": "a44c044e032de7e9d17f268fe09f75565a4936ee889a3c71890aff0d7f9a73f4",
+                "after_sha256": "e9cddaf566972b066f7549d7d46b70e76a7f95a8ce4ebfec1ab325457abfe47d"
+              }
+            ],
+            "whole_inverse_exact": true,
+            "unrelated_canonical_bytes_preserved": true
+          },
+          {
+            "role": "native",
+            "relative": "src/gui/text/qtextdocumentlayout.cpp",
+            "private_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/posts01/native/qtextdocumentlayout.cpp",
+              "bytes": 904577,
+              "sha256": "686b6559114ebeac62bf4c8c759041758420891182a8234137c70d9739889c12"
+            },
+            "preserved_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/posts01/native/qtextdocumentlayout.cpp",
+              "bytes": 904577,
+              "sha256": "686b6559114ebeac62bf4c8c759041758420891182a8234137c70d9739889c12"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/posts01/native/qtextdocumentlayout.cpp",
+              "bytes": 905703,
+              "sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d"
+            },
+            "patch": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/native-product01.patch",
+              "bytes": 7829,
+              "sha256": "83678f5a3abf9bc3274c8d984025a718b3a3da580e9004caa0090bb94b02c113"
+            },
+            "canonical_before_sha256": "686b6559114ebeac62bf4c8c759041758420891182a8234137c70d9739889c12",
+            "canonical_after_sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d",
+            "unique_context_hunks": [
+              {
+                "private_line": 13216,
+                "canonical_line": 13216,
+                "before_sha256": "d25cbb178641e931a20ccb732bd4fc767dc8e02830892884332dd779f4b94d54",
+                "after_sha256": "433f84b292a60701e1860f468cf8d9cfa1ae82fea88f8c09d7ff628f9d676fc3"
+              },
+              {
+                "private_line": 13238,
+                "canonical_line": 13242,
+                "before_sha256": "0d20716007c4c5673eb03f689ceee80fa6911fd02987970881e9d848a08f1ad4",
+                "after_sha256": "dff49e22b9e762e3af455dca7c45676395b32520383f2b1239ecb189860d7677"
+              },
+              {
+                "private_line": 13255,
+                "canonical_line": 13260,
+                "before_sha256": "4ad27a9c99062865c73b239481d6db6834a13426ad5f22259e9db7e7409fe638",
+                "after_sha256": "0aefb3de26f8e0e334a0c61e0612b69e9bd0e4a43e0c72ff775dc95ef7f59c52"
+              },
+              {
+                "private_line": 13277,
+                "canonical_line": 13283,
+                "before_sha256": "400817c77598a7fcda7b2ff2d09d66569544c37e4c71138e8b14e80de21bc584",
+                "after_sha256": "79a8cbac67a3118681beb650899c71398a41d191fac902c61a3102a3189cea21"
+              },
+              {
+                "private_line": 14403,
+                "canonical_line": 14417,
+                "before_sha256": "6b92c15bc5b3bbd3e1df97a970f97ffcc2e3fadad7fee52aee579bedbe2530a4",
+                "after_sha256": "0ae7d55b8f27d0c19f1a77e754e56c34c9b7b0aee960b88235775b63fc66667b"
+              }
+            ],
+            "whole_inverse_exact": true,
+            "unrelated_canonical_bytes_preserved": true
+          }
+        ],
+        "methods": [
+          {
+            "role": "native",
+            "method": "relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods01/native/relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels.before.cpp",
+              "bytes": 28896,
+              "sha256": "c192f5498a32ca62f5ca4ef8b5ad0ef4ca390fe32f27c2e494a6aa486386905b"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods02/native/neighbor.after.cpp",
+              "bytes": 42280,
+              "sha256": "df9ea63fa155e1477932febfd8232406ab439a1e0e00eb49a931b99df3944da4"
+            },
+            "canonical_after_sha256": "df9ea63fa155e1477932febfd8232406ab439a1e0e00eb49a931b99df3944da4",
+            "canonical_before_method_exact": true,
+            "fixture_locator_projection_only": false
+          },
+          {
+            "role": "app",
+            "method": "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods01/app/plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions.before.cpp",
+              "bytes": 6609,
+              "sha256": "f0655a12450d95b80e4870869d4ffccfdf4d2d9c4ea563e4f0f46b1e826a4d02"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction03/methods/0.after.cpp",
+              "bytes": 20450,
+              "sha256": "99bf43c9925441e76f0472fb6ac1184a4135f4d9479c2019f0fa27d5f0d6234a"
+            },
+            "canonical_after_sha256": "5aa1f652250b5a06d5e97198af02aa88aceba6a5619d48217878f2157e7f8565",
+            "canonical_before_method_exact": true,
+            "fixture_locator_projection_only": true
+          },
+          {
+            "role": "app",
+            "method": "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods01/app/relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions.before.cpp",
+              "bytes": 66970,
+              "sha256": "c244af0d58fc514ac85a84745068d856c70fb9f2fb93932c54cfc92c34eb24c6"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction06/methods/1.after.cpp",
+              "bytes": 94025,
+              "sha256": "20eeee96dca72840eba4c15ff8a96e4736efd43d58f2db6a6e2193857f58462c"
+            },
+            "canonical_after_sha256": "e8d958e97ef03e662b78b7ab95002e502e30dcaf9105d8a45afb10c33b977651",
+            "canonical_before_method_exact": true,
+            "fixture_locator_projection_only": true
+          },
+          {
+            "role": "app",
+            "method": "keyboardBackRestoresReaderLinkContext",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/test.before.cpp",
+              "bytes": 6794,
+              "sha256": "3effd4ef477c4c5d20b5935832f14a0ce30ef3945ecdbff6735f58027ab96333"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/test.after.cpp",
+              "bytes": 11283,
+              "sha256": "8412f92f024584e5641600949fca5720cff8665c989dd1d52ebf5ebb53a38924"
+            },
+            "canonical_after_sha256": "8412f92f024584e5641600949fca5720cff8665c989dd1d52ebf5ebb53a38924",
+            "canonical_before_method_exact": true,
+            "fixture_locator_projection_only": false
+          }
+        ],
+        "native": [
+          {
+            "path": "src/gui/text/qtextdocumentlayout.cpp",
+            "patch": "0001-logical-flow-renderer.patch",
+            "before_sha256": "48de0aa50043e5a72ed97f0b69528f9f102eba621e9f22bd191e3730ef41fd61",
+            "after_sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d",
+            "bytes": 905703,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/native-postimages/src/gui/text/qtextdocumentlayout.cpp",
+              "bytes": 905703,
+              "sha256": "f92347e818a2547341b9f9dd3bdbb88d86f0a17fb934cd818084a5d1b29cf32d"
+            },
+            "forward_reverse_exact": true
+          },
+          {
+            "path": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+            "patch": "0002-layout-regressions.patch",
+            "before_sha256": "a6333e3e4c26f4034f38fbbfa53a3cd009ce0e3201fbcdce1e5fcabc49c2520d",
+            "after_sha256": "f7fb9b7045b3b96c459ce13823dd8a37cd3f8a1991ea64abaff396e8dfc7a23b",
+            "bytes": 1526185,
+            "private_postimage": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration02/native-postimages/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+              "bytes": 1526185,
+              "sha256": "f7fb9b7045b3b96c459ce13823dd8a37cd3f8a1991ea64abaff396e8dfc7a23b"
+            },
+            "forward_reverse_exact": true
+          }
+        ],
+        "patches": [
+          {
+            "file": "0001-logical-flow-renderer.patch",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/apps/desktop/qt/0001-logical-flow-renderer.patch",
+              "bytes": 1160727,
+              "sha256": "fd18eb95752838799e212b35ece4b6fa156218329afc84d7ee1281c9f503f3b1"
+            },
+            "changed_sections": [
+              "src/gui/text/qtextdocumentlayout.cpp"
+            ],
+            "other_sections_byte_exact": true
+          },
+          {
+            "file": "0002-layout-regressions.patch",
+            "before": {
+              "path": "/mnt/downloads/dev/wikidict/apps/desktop/qt/0002-layout-regressions.patch",
+              "bytes": 1482325,
+              "sha256": "b001f1b6f95058db0ad5d23844bdd099a001dfce28689a62b118b69918bc4c3d"
+            },
+            "changed_sections": [
+              "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp"
+            ],
+            "other_sections_byte_exact": true
+          }
+        ],
+        "history_navigation": [
+          {
+            "role": "product",
+            "path": "/mnt/downloads/dev/wikidict/apps/desktop/src/MainWindow.cpp",
+            "canonical_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/postimages/apps/desktop/src/MainWindow.cpp",
+              "bytes": 499085,
+              "sha256": "3f05ae9079d73c17fca5adacb21ec0efe08363aea58168971675789a3a78df5d"
+            },
+            "canonical_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration03/postimages/apps/desktop/src/MainWindow.cpp",
+              "bytes": 499543,
+              "sha256": "e4388725dd54b2d62f37795b9a84b7e374bb6eb758e575c34767c4b13afb34a2"
+            },
+            "private_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/product/MainWindow.cpp",
+              "bytes": 499843,
+              "sha256": "d82996829de3cc24993bb4e4216cb1cabe05c093cc40fb91176b6924cc453f5b"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/posts01/product/MainWindow.cpp",
+              "bytes": 500301,
+              "sha256": "f8832486888a8285327ea0c6023afa2ab145e03b713fa65a6dc5fc5c013e3543"
+            },
+            "methods": [
+              {
+                "method": "loadDataset",
+                "before": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/loadDataset.before.cpp",
+                  "bytes": 22957,
+                  "sha256": "85b09dff904e5aa1e89dfd382cc9a6a6c0ef0a2336971951ad7ff931ed559484"
+                },
+                "after": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/loadDataset.after.cpp",
+                  "bytes": 23187,
+                  "sha256": "b0233c2391ec9e61679d7245f3aed67c30f656a095b002ae30c21f1197c9ec46"
+                }
+              },
+              {
+                "method": "navigate",
+                "before": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/navigate.before.cpp",
+                  "bytes": 1670,
+                  "sha256": "16aafe065edd3e9f09c09fa377f88585067cea27d86b75fa73ea1c11d5c26f21"
+                },
+                "after": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/navigate.after.cpp",
+                  "bytes": 1898,
+                  "sha256": "077122afcf9316eb414b009ca19f5d125c84991ebc165c1a8b1be91e0758fd25"
+                }
+              }
+            ],
+            "whole_canonical_tu_inverse_exact": true,
+            "whole_private_tu_inverse_exact": true,
+            "unrelated_bytes_preserved": true
+          },
+          {
+            "role": "test",
+            "path": "/mnt/downloads/dev/wikidict/apps/desktop/tests/MainWindowTest.cpp",
+            "canonical_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/postimages/apps/desktop/tests/MainWindowTest.cpp",
+              "bytes": 2923942,
+              "sha256": "39d1652468367230f23a3da056953a42d2f97193523593ee6b4cc47bb4fd8126"
+            },
+            "canonical_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration03/postimages/apps/desktop/tests/MainWindowTest.cpp",
+              "bytes": 2928431,
+              "sha256": "6b1bdc94c8d2fb38d9352e4087bbe038435b5cc930cd1ce6a73d682d20cbadc6"
+            },
+            "private_before": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/posts01/tests-app/MainWindowTest.cpp",
+              "bytes": 2963197,
+              "sha256": "51a045b89c76c95d60d5e8fd426e3eb4b69e56810446f549f267a7d3563fe536"
+            },
+            "private_after": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/posts01/tests/MainWindowTest.cpp",
+              "bytes": 2967686,
+              "sha256": "37fb3e7e056963742f1b25c173b833931a4151662ff64c33a768f96dbde983e5"
+            },
+            "methods": [
+              {
+                "method": "keyboardBackRestoresReaderLinkContext",
+                "before": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/test.before.cpp",
+                  "bytes": 6794,
+                  "sha256": "3effd4ef477c4c5d20b5935832f14a0ce30ef3945ecdbff6735f58027ab96333"
+                },
+                "after": {
+                  "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/test.after.cpp",
+                  "bytes": 11283,
+                  "sha256": "8412f92f024584e5641600949fca5720cff8665c989dd1d52ebf5ebb53a38924"
+                }
+              }
+            ],
+            "whole_canonical_tu_inverse_exact": true,
+            "whole_private_tu_inverse_exact": true,
+            "unrelated_bytes_preserved": true
+          }
+        ],
+        "app_test_correction": {
+          "preparation": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction06/preparation01.json",
+            "bytes": 63695,
+            "sha256": "25f8110ac87bda819317edf0dbb8c2bb97dcbd794ffe2530479d8d096382066d"
+          },
+          "methods": [
+            {
+              "method": "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+              "before": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration08/methods/plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions.before.cpp",
+                "bytes": 20600,
+                "sha256": "5aa1f652250b5a06d5e97198af02aa88aceba6a5619d48217878f2157e7f8565"
+              },
+              "after": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration08/methods/plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions.after.cpp",
+                "bytes": 20600,
+                "sha256": "5aa1f652250b5a06d5e97198af02aa88aceba6a5619d48217878f2157e7f8565"
+              },
+              "private_before": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction03/methods/0.after.cpp",
+                "bytes": 20450,
+                "sha256": "99bf43c9925441e76f0472fb6ac1184a4135f4d9479c2019f0fa27d5f0d6234a"
+              },
+              "private_after": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction03/methods/0.after.cpp",
+                "bytes": 20450,
+                "sha256": "99bf43c9925441e76f0472fb6ac1184a4135f4d9479c2019f0fa27d5f0d6234a"
+              },
+              "fixture_locator_projection_only": true
+            },
+            {
+              "method": "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+              "before": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration08/methods/relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions.before.cpp",
+                "bytes": 92719,
+                "sha256": "80cac1ebb089712ad70b267c0d6236bb6ae31dd59712933da4129376fb0ea046"
+              },
+              "after": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration08/methods/relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions.after.cpp",
+                "bytes": 94325,
+                "sha256": "e8d958e97ef03e662b78b7ab95002e502e30dcaf9105d8a45afb10c33b977651"
+              },
+              "private_before": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction05/methods/1.after.cpp",
+                "bytes": 92419,
+                "sha256": "98bc03a23715a50b653bf942abbbce3cfd378d162f115922cf79b2ff432df4fa"
+              },
+              "private_after": {
+                "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction06/methods/1.after.cpp",
+                "bytes": 94025,
+                "sha256": "20eeee96dca72840eba4c15ff8a96e4736efd43d58f2db6a6e2193857f58462c"
+              },
+              "fixture_locator_projection_only": true
+            }
+          ],
+          "source_cause": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction02/source-cause01.json",
+            "bytes": 3519,
+            "sha256": "89381a021248ff941b279a55ffc8572d2d39f53aa58e9a57ee715d561762657b"
+          },
+          "prior_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app01/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 83736,
+            "sha256": "8a0b282afda6214ab2f18bad183c615eca852e87bbdd430967a28894949ee9ca"
+          },
+          "second_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app02/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 102409,
+            "sha256": "5859119c458f9513f2a11193bf5fa190b4cbe9a4547bc8fb9125cd4ac4852eee"
+          },
+          "geometry_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app03/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 105438,
+            "sha256": "9ccdbc04a268dfee9fcbee19513bd4817aeedf6ed5d8ea1e2f25eaaa8eca2479"
+          },
+          "retained_history_evidence": {
+            "closure": {
+              "path": "/home/a/wikidict-vi-container-app03/qualification01/direct-runtime01/independent-closure01.json",
+              "bytes": 105438,
+              "sha256": "9ccdbc04a268dfee9fcbee19513bd4817aeedf6ed5d8ea1e2f25eaaa8eca2479"
+            },
+            "xml": {
+              "bytes": 44980,
+              "path": "/home/a/wikidict-vi-container-app03/tests.xml",
+              "sha256": "95dc9fb3dc34e341497c13063d906a0dfd47950ac5161ba9f50625a9f743eca4"
+            },
+            "method": "keyboardBackRestoresReaderLinkContext",
+            "method_body": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/methods01/test.after.cpp",
+              "bytes": 11283,
+              "sha256": "8412f92f024584e5641600949fca5720cff8665c989dd1d52ebf5ebb53a38924"
+            },
+            "frames": [
+              {
+                "bytes": 27827,
+                "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-cross-back-640.png",
+                "sha256": "eef7bee4805e925d7f1e80002d405d56028338d32bea85650b474d70bc0fc006"
+              },
+              {
+                "bytes": 29176,
+                "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-cross-forward-640.png",
+                "sha256": "0bca78ad61228c1b61836310fb26bd2293fb5ba217a27b008ef2375c27365a0f"
+              },
+              {
+                "bytes": 27827,
+                "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-same-back-640.png",
+                "sha256": "eef7bee4805e925d7f1e80002d405d56028338d32bea85650b474d70bc0fc006"
+              },
+              {
+                "bytes": 27058,
+                "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-same-forward-640.png",
+                "sha256": "c5929371a59886cc75387815348364b0bd2fdf265b000052533dec8f6e092d1c"
+              }
+            ],
+            "product_archive": {
+              "bytes": 11186534,
+              "path": "/home/a/wikidict-vi-container-app01/lib/libwikidict-product.a",
+              "sha256": "afe92f17e029925545d6720879debbd044d6ebb9dac302585e800d3a71f6ad69"
+            }
+          },
+          "zero_caret_source_cause": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction04/source-cause01.json",
+            "bytes": 1196,
+            "sha256": "a1de54bf9a1c8fe5eb547fdc0610c525b2462ab5c849ffa0fc8a3c5d5b43085f"
+          },
+          "zero_caret_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app04/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 119458,
+            "sha256": "561fe2991c7ca75f1e09a92289e798725b1c05217796868f9f9870111117e9f8"
+          },
+          "retained_pt_evidence": {
+            "closure": {
+              "path": "/home/a/wikidict-vi-container-app04/qualification01/direct-runtime01/independent-closure01.json",
+              "bytes": 119458,
+              "sha256": "561fe2991c7ca75f1e09a92289e798725b1c05217796868f9f9870111117e9f8"
+            },
+            "xml": {
+              "bytes": 52031,
+              "path": "/home/a/wikidict-vi-container-app04/tests.xml",
+              "sha256": "c5b9250fa4f18fab85a897492ac86188bca7797f3ab8d36bc62cd84750b7adf3"
+            },
+            "method": "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+            "method_body": {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction03/methods/0.after.cpp",
+              "bytes": 20450,
+              "sha256": "99bf43c9925441e76f0472fb6ac1184a4135f4d9479c2019f0fa27d5f0d6234a"
+            },
+            "frames": [
+              {
+                "bytes": 52077,
+                "path": "/home/a/wikidict-vi-container-app04/frames/vi-pt-width-cap-640.png",
+                "sha256": "c6e4b490d3cacdf8acabef25eee0b4c88a910bd8fc7e0fcf23ef488f89ab6203"
+              },
+              {
+                "bytes": 65363,
+                "path": "/home/a/wikidict-vi-container-app04/frames/vi-pt-width-cap-900.png",
+                "sha256": "7d116ee01338fcdbcd4506f3334910e42efa6ee8ba0e844bbb31797b35c39d80"
+              }
+            ],
+            "product_archive": {
+              "bytes": 11186534,
+              "path": "/home/a/wikidict-vi-container-app01/lib/libwikidict-product.a",
+              "sha256": "afe92f17e029925545d6720879debbd044d6ebb9dac302585e800d3a71f6ad69"
+            }
+          },
+          "hit_region_source_cause": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction05/source-cause01.json",
+            "bytes": 1306,
+            "sha256": "2d4a349991527b90b0289a43885771bb06290d1e7a21fb0e6e911e649a4ec4a4"
+          },
+          "hit_region_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app05/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 124739,
+            "sha256": "84a5902f8f036569f0374c82637d5dc75309c69d51a8aaf59b1e32da5b2b04d1"
+          },
+          "direction_source_cause": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/app-test-correction06/source-cause01.json",
+            "bytes": 1596,
+            "sha256": "277915b49573cc5b492a30de8ae2eaab94987c7b19fc371d491278ee79d35726"
+          },
+          "direction_failed_attempt": {
+            "path": "/home/a/wikidict-vi-container-app06/qualification01/direct-runtime01/independent-closure01.json",
+            "bytes": 131561,
+            "sha256": "1f2353ae6489501c6181e762663d93fb5135226a8c1fa286ab397187b780d3b2"
+          },
+          "test_invocation_pending": false
+        }
+      },
+      "unknown_image_width_not_inferred": true,
+      "new_wire": false,
+      "native_headers_changed": false,
+      "paid_prerequisite_projection": [
+        {
+          "role": "app",
+          "relative": "src/FlowConstruction.hpp",
+          "paid_source": {
+            "path": "/home/a/wikidict-vi-container-source01/transaction/app-header.before.hpp",
+            "bytes": 139874,
+            "sha256": "d73194a0ea5b3c4143574e3f81da68f87b499829ebff9261ad114ed34dc68520"
+          },
+          "canonical_before_sha256": "2250a59235a836291a3ef143e10f875abff84d61f674ef69fb8c9c676ecf4917",
+          "canonical_after_prerequisites_sha256": "d73194a0ea5b3c4143574e3f81da68f87b499829ebff9261ad114ed34dc68520",
+          "selected_hunks": [
+            {
+              "canonical_line": 51,
+              "paid_line": 51,
+              "before_sha256": "d1352b039a0f628b7acd740f1faf89879efdffbb7993d443678dc24d886e0603",
+              "after_sha256": "2e9f7b1acc63686b0405014ca5983da4c6acc4c487c4c1c397a20d3a08aede84"
+            },
+            {
+              "canonical_line": 90,
+              "paid_line": 91,
+              "before_sha256": "f285a236c95470ec4d4ffc380d60b630e2af4b5a21426988ebca829fff8b038d",
+              "after_sha256": "7004f8bdf80b0626a188a90d98e4feae035f1b0a79a501175350cef228694d56"
+            },
+            {
+              "canonical_line": 184,
+              "paid_line": 189,
+              "before_sha256": "138cb77ec7b45fe66d6aade2fe36415b4af5bee14dc14d19565b9025def993b2",
+              "after_sha256": "11eb8591e952dbee3bdc278579a30116572862b2f0abb511418e2092991d41e0"
+            },
+            {
+              "canonical_line": 289,
+              "paid_line": 306,
+              "before_sha256": "92a9b081beb24f276c52bf40b737644b340c00513649ee6f97783ada9eb033bc",
+              "after_sha256": "78ed0a59e05c6fdbe01dcb1983dc981d5e9841d8a3900673817f2a937233f1dd"
+            },
+            {
+              "canonical_line": 325,
+              "paid_line": 366,
+              "before_sha256": "e86ba6f5cdff33c8fe19eadc1b434c60f46501f677b131b2583d6851e2f5dcdc",
+              "after_sha256": "7e4542ea8f43c3ad7c53ceb3fdfb704c61cfa97082b3cd03165aea67aa5aeeb2"
+            },
+            {
+              "canonical_line": 362,
+              "paid_line": 540,
+              "before_sha256": "a73d46e33f0c29308758c97192bf95d58534f3327aaa873ca9190159b8c7d224",
+              "after_sha256": "8aafc7c6db48504ed5342c419702ff2ce781888ea0538fe1f9d5fd55147c2514"
+            },
+            {
+              "canonical_line": 379,
+              "paid_line": 571,
+              "before_sha256": "4e224b2b5c5f91e5b55917a22a69845dd0e75be7b570c11a1697d85e0b67d423",
+              "after_sha256": "8264f5c87b4f709d4082cd7528bd5c414cb26d4f06018294dd2e26a166f6844c"
+            },
+            {
+              "canonical_line": 418,
+              "paid_line": 615,
+              "before_sha256": "b39a792033c685eb4349f4466ae15c3b83618674aa2613ce16654f21539ab883",
+              "after_sha256": "100ed96381f1a3e39709e081fac9f92bb30c20e293609cb4145748473086434a"
+            },
+            {
+              "canonical_line": 477,
+              "paid_line": 681,
+              "before_sha256": "6de602436242729dc65a5395be6d1a4e1a1206eb1e75967bfc64feb3cf945c4f",
+              "after_sha256": "6b3677aca7402b639a607de0dea46f15e478ce5582d55e411ddc8f41b839062d"
+            },
+            {
+              "canonical_line": 1030,
+              "paid_line": 1234,
+              "before_sha256": "f6c6868b1534fc44b90023b115c7b38c8d4e8c997e19094facd7c38632378b73",
+              "after_sha256": "6fa7ff65e0f9d61a42fc53d5175ad0615bef12b994ba31473b068b7ea09ad680"
+            },
+            {
+              "canonical_line": 1128,
+              "paid_line": 1361,
+              "before_sha256": "33ed8e3fbfe6838103c5265e2c057e28cd34fe39df24b42cbb15c4a9a017d934",
+              "after_sha256": "c1e08dcb5313e57cf2a166fb0ce5f37236243269369bda0ccb3001ae61b24b26"
+            },
+            {
+              "canonical_line": 1185,
+              "paid_line": 1424,
+              "before_sha256": "a1de208c77a314b65a8c57d92c2599fe62734b815b66be43e9c2fd93f4beb8c7",
+              "after_sha256": "c00bfd96f89117d32526b8e9df008bd5800eb96587e3cd4196465088fdedc8d3"
+            }
+          ],
+          "excluded_hunks": [],
+          "projection_patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/prerequisite-patches/src/FlowConstruction.hpp.patch",
+            "bytes": 28921,
+            "sha256": "ef75cdf17c9f7d175cd046740bec308a2357e8ce06b9d8d7cc6000e614f8c73d"
+          },
+          "forward_reverse_exact": true,
+          "equals_paid_source": true,
+          "historical_source_candidates": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container01/app-source01/candidate03/preparation03.json",
+              "bytes": 7013,
+              "sha256": "2dc3cafa506c40ed4c757f528a18a0497f84706e96e198c7f1a7d1ddc040e34f"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container-fr01/relative-float-image01/app04/preparation04.json",
+              "bytes": 5977,
+              "sha256": "53dd978cb7872d154c1b7fa109307b22230dfb61048252d402520d09f5e2be34"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/preparation04.json",
+              "bytes": 14428,
+              "sha256": "6dbb6c7a6ca9f59b386d355d10447c906a16fbe64477716c6f3054c9b96e23f3"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/compile-correction01/preparation01.json",
+              "bytes": 8183,
+              "sha256": "6a6d3e2510195de0da4d882cfbf3e686210eb699940100b8c949ea028ccda71c"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/intrinsic-minimum01/preparation02.json",
+              "bytes": 14115,
+              "sha256": "bfa452615d8fe09ea3fa000a9a5cf2e5b28eaf47a573b9572be7f0be71006962"
+            }
+          ]
+        },
+        {
+          "role": "native",
+          "relative": "src/gui/text/qtextdocumentlayout.cpp",
+          "paid_source": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/posts01/native/qtextdocumentlayout.cpp",
+            "bytes": 904577,
+            "sha256": "686b6559114ebeac62bf4c8c759041758420891182a8234137c70d9739889c12"
+          },
+          "canonical_before_sha256": "48de0aa50043e5a72ed97f0b69528f9f102eba621e9f22bd191e3730ef41fd61",
+          "canonical_after_prerequisites_sha256": "686b6559114ebeac62bf4c8c759041758420891182a8234137c70d9739889c12",
+          "selected_hunks": [
+            {
+              "canonical_line": 46,
+              "paid_line": 46,
+              "before_sha256": "e05ec44a9fc1f58a6649baf3d43aec14ef72f24e3b81230dfa8c38e2752ab94a",
+              "after_sha256": "e02a2fbd4882bedd2b0861cd7b56d4b8a71d5162a59b091d7b11b570020256c3"
+            },
+            {
+              "canonical_line": 118,
+              "paid_line": 119,
+              "before_sha256": "0ed0edba756e59b9e028fac1b9edd7439538dd311d805b8b30930368658cba7e",
+              "after_sha256": "eb71bb1b1b32775943494521054a9e1d92d48c14fc8625525b1f52a6ea3b096c"
+            },
+            {
+              "canonical_line": 1633,
+              "paid_line": 1636,
+              "before_sha256": "78f7819d89d6cb63ba1348917c301a5fa756b5a352140df6338cef9fb4696861",
+              "after_sha256": "8e8b6436e04e93723d57d3b92c929d3aa97289df7867e21021fc0e6bbd57d279"
+            },
+            {
+              "canonical_line": 1738,
+              "paid_line": 1801,
+              "before_sha256": "8d9915fcfd54798ed45eff3866ea13af4b3e01bd5c495df274f6c2b7b6f6294f",
+              "after_sha256": "8365f052ce975b4984d67dcd9a3168d714fdbbd1fcfd29f5bb7a738892d42c11"
+            },
+            {
+              "canonical_line": 1823,
+              "paid_line": 1887,
+              "before_sha256": "319e47f585daf43a1631ff1be7dd49e65e3188b88dfe6180726f2000dc1709ca",
+              "after_sha256": "b54558df5ee24d5710cf72d846392531abba7ac538adf1958e36f4146a38c735"
+            },
+            {
+              "canonical_line": 4433,
+              "paid_line": 4500,
+              "before_sha256": "5d7311b545c03d8dc10d8235e2e0e1a17d9f25b535b9b8fed79f63a75f877df7",
+              "after_sha256": "49a770b843b0ee37ddd994bd289a4147e0eb059d3cecef1abe77e6faa5a5b421"
+            },
+            {
+              "canonical_line": 8919,
+              "paid_line": 8986,
+              "before_sha256": "7b9a22b033229ea55d524a4c273ec0986c975bad6b47855d21862cfab773645e",
+              "after_sha256": "f43a363af3fd6498d898b046a85dbf9bc11ee160da03316ed64db03558906192"
+            },
+            {
+              "canonical_line": 9225,
+              "paid_line": 9302,
+              "before_sha256": "af892168cc05c47810dc340ca9037e83de727846011e9a4035bb217549b827ae",
+              "after_sha256": "a0902415d6c08e05b309082b78e2b9640ebcf921c58cbe6e85fdf9df5fadba11"
+            },
+            {
+              "canonical_line": 9281,
+              "paid_line": 9358,
+              "before_sha256": "00710ec410596b2cfc139672857c93b9bc8f6bd330f3e947f4d77fd7d6b7dc99",
+              "after_sha256": "90bcb0897de6dbc3850512d320aedc714d15e9a892da78a8238dc73fb89e4667"
+            },
+            {
+              "canonical_line": 9391,
+              "paid_line": 9468,
+              "before_sha256": "bf4605ebd56d9e242b5de7b04d99cd1f1a45c19aa1c28db26d72ef2b899c6ca2",
+              "after_sha256": "4078605ccf0a0e7e9bdb17a75e84cd7407d76ed945c61f885c8b9d23383c438d"
+            },
+            {
+              "canonical_line": 9623,
+              "paid_line": 9704,
+              "before_sha256": "6be291d8c1ed85678e0f8e0a8a8817307649ecdb8e6a417a56e0861aa605fb3d",
+              "after_sha256": "1d196b412c18600d6bed81a8dd0a5c850b7fe189421b40e836093c40766ade6a"
+            },
+            {
+              "canonical_line": 9955,
+              "paid_line": 10036,
+              "before_sha256": "f1f8cc8d7242c47ed026cb3d48f79d29e431517ab70d14501bf00939c21dac52",
+              "after_sha256": "11a8e5e6ebd82f37296a91c2bf11337af5c220900c9bf07414837a704b678595"
+            },
+            {
+              "canonical_line": 11385,
+              "paid_line": 11474,
+              "before_sha256": "b428472bee40409ee04237e58aacf499a266a1945c40527b0a44a2d4e0486f4f",
+              "after_sha256": "66090e77d6219d445ef0e526fd2b9d0b5aef133bf1027b96f95ca98a80ce6010"
+            },
+            {
+              "canonical_line": 11893,
+              "paid_line": 11982,
+              "before_sha256": "66745101799095e6412534df80dce25b3e4d3df26e0613f5845dfc8abeec9b84",
+              "after_sha256": "7831827600f71d31f3e2b28ec0bf89e862f619991b53c0c6504f7e95f5f2c01e"
+            },
+            {
+              "canonical_line": 13015,
+              "paid_line": 13104,
+              "before_sha256": "4da99dbbd584b34098716c3606635a37c12001f8f66167fdc0f96f8fd41aa76a",
+              "after_sha256": "65a58831b053d6d7c833f1541a54dd5beb32b78ae7f35025f7fd3f7ecc6eaa87"
+            },
+            {
+              "canonical_line": 13022,
+              "paid_line": 13458,
+              "before_sha256": "fb697f4084acc8324e6a0f1b441281f855b9781d9385060ae2306e666be11367",
+              "after_sha256": "5fb62ec8593e19208f4e5bfd361858828342347ff18b26f2f950427f4b8d5f4f"
+            },
+            {
+              "canonical_line": 13033,
+              "paid_line": 13495,
+              "before_sha256": "d261376b9792a0d97c3e7b4b14d1eef5ba4e9687392d41c47f1705447415e253",
+              "after_sha256": "6503418cd966428c0ddb188175018008e73fd95fe713eac82e716807ed5f7bfa"
+            },
+            {
+              "canonical_line": 13043,
+              "paid_line": 13505,
+              "before_sha256": "207af4b639204232c0145b9e76e959f4be0564cc7b1383004c6c32980aea59eb",
+              "after_sha256": "f0021d3cb8cb4b13e5876e7c41da8ef9be9f1c5673b371a7f79cc08fa0a99f71"
+            },
+            {
+              "canonical_line": 13063,
+              "paid_line": 13526,
+              "before_sha256": "9dc0f8b9c66738731f8167ae2160cb127da23da2c3dc8f2a863f0f837bade882",
+              "after_sha256": "26202bae20f5d4ab26080ab84b96d0aefab47ed6a538ed593c35c905c6cdeb29"
+            },
+            {
+              "canonical_line": 13307,
+              "paid_line": 13772,
+              "before_sha256": "752ca0e76ae0bf178e8cd82bb7b3c80750a77c3f8bca8a80f365dbf1ba15cc42",
+              "after_sha256": "94deebd7e65d5552e620f7cef98cb7ea7c99672424408a9e6e2fa1c523ea5adb"
+            },
+            {
+              "canonical_line": 13385,
+              "paid_line": 13853,
+              "before_sha256": "ddf4911378bbadc0f4bf32ce06fd1b2a8ceb91439be30c8fde4178fc5baf7bc1",
+              "after_sha256": "014d8f3ef56b599fab86d5e217087c8c08dfbff9371b24c29fa614346b703daf"
+            },
+            {
+              "canonical_line": 13602,
+              "paid_line": 14088,
+              "before_sha256": "ff9b77b36db8b0c239babe1d6719ceb75617164aecc082116e8200be5e691ced",
+              "after_sha256": "12282deefe32b30b2ad8e36515e0705893faa07962de29f56541111171c53e11"
+            },
+            {
+              "canonical_line": 13696,
+              "paid_line": 14182,
+              "before_sha256": "2e6e082dad155e2e8d2484c70bdf5c19a159fde6e8681999765429f1d7c3ba5c",
+              "after_sha256": "849268be2e7247a00a12805bb9c432b02434792ca206f2c8c50fbc4633b5bdec"
+            },
+            {
+              "canonical_line": 13913,
+              "paid_line": 14399,
+              "before_sha256": "7565757d66f89c2597717adcfd9356bb2ef43648a135fa097f46ec862586ff91",
+              "after_sha256": "62d007c1345f83aa1f9561ccec4a21e284f9d25d4e2941f166881df32f69e076"
+            },
+            {
+              "canonical_line": 14046,
+              "paid_line": 14536,
+              "before_sha256": "1591811138f093b6b3fe40c9723652cad8b32ca4dd0e28b71d3bc2524e76e15b",
+              "after_sha256": "02c57e72b941c92cb6834554ec1ab1257a7609b065f1083dcd8d67d4b23d159a"
+            },
+            {
+              "canonical_line": 14057,
+              "paid_line": 14547,
+              "before_sha256": "0f1252fe7d4bb06a87245eb352337ca3174af490866a19385fd3b52dae9e46c9",
+              "after_sha256": "90fce654af38c80df8b86ae2618118e8852a1d3800fd9228493f765f6e80fcb6"
+            },
+            {
+              "canonical_line": 14224,
+              "paid_line": 14715,
+              "before_sha256": "a40432a47395bcc05c1ec9158853e7b206da72fa76b45cb11da06318297a0fd3",
+              "after_sha256": "fa577bd8d00e78d80092e4b85228e3d689ac37486dff3b1e57abcd2afe6329e7"
+            },
+            {
+              "canonical_line": 14379,
+              "paid_line": 14871,
+              "before_sha256": "5f0f8bac628973e0be372c35dc3c2e120f9b11905917b0eea384472dd7575bcf",
+              "after_sha256": "96b42854662f6cc1344b89ac488dd18fc1b10d69847a5f351452d1e7b75195b1"
+            }
+          ],
+          "excluded_hunks": [],
+          "projection_patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/prerequisite-patches/src/gui/text/qtextdocumentlayout.cpp.patch",
+            "bytes": 53126,
+            "sha256": "8767f069ddd113302f2a6b517c92fbb9e0cda2a07a4aa6aa19488a0a10551967"
+          },
+          "forward_reverse_exact": true,
+          "equals_paid_source": true,
+          "historical_source_candidates": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container01/app-source01/candidate03/preparation03.json",
+              "bytes": 7013,
+              "sha256": "2dc3cafa506c40ed4c757f528a18a0497f84706e96e198c7f1a7d1ddc040e34f"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container-fr01/relative-float-image01/app04/preparation04.json",
+              "bytes": 5977,
+              "sha256": "53dd978cb7872d154c1b7fa109307b22230dfb61048252d402520d09f5e2be34"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/preparation04.json",
+              "bytes": 14428,
+              "sha256": "6dbb6c7a6ca9f59b386d355d10447c906a16fbe64477716c6f3054c9b96e23f3"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/compile-correction01/preparation01.json",
+              "bytes": 8183,
+              "sha256": "6a6d3e2510195de0da4d882cfbf3e686210eb699940100b8c949ea028ccda71c"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/intrinsic-minimum01/preparation02.json",
+              "bytes": 14115,
+              "sha256": "bfa452615d8fe09ea3fa000a9a5cf2e5b28eaf47a573b9572be7f0be71006962"
+            }
+          ]
+        },
+        {
+          "role": "app",
+          "relative": "src/CompiledContent.hpp",
+          "paid_source": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/eu-number-table-layout-private01/qt/postimages/apps/desktop/src/CompiledContent.hpp",
+            "bytes": 70786,
+            "sha256": "c7d93ebe41ab254cd25a833a7407e7034f4d18d8674bda5336fd6e10cc87606a"
+          },
+          "canonical_before_sha256": "c6f16c70f93ed50cf95b93df15562b69a76dbab01703c7de00985aca333e8775",
+          "canonical_after_prerequisites_sha256": "c7d93ebe41ab254cd25a833a7407e7034f4d18d8674bda5336fd6e10cc87606a",
+          "selected_hunks": [
+            {
+              "canonical_line": 555,
+              "paid_line": 555,
+              "before_sha256": "0c975d91ec818df051b2a249e6cbfbd3b062972f57e7280b4fb3452a34ce7bf5",
+              "after_sha256": "6c782b5d09fcb30a8cb7b29b3bce25366cab256dd241aaaa631041214d0bc4c7"
+            },
+            {
+              "canonical_line": 606,
+              "paid_line": 606,
+              "before_sha256": "3329a00923bebd777a996356d1c49c7ea920acea21e2e04f78e34149875a9ec3",
+              "after_sha256": "d2df8a31e07a300508c16fdb9a8f5c6145094695e5803f50766ef9d9cdf3e25d"
+            },
+            {
+              "canonical_line": 629,
+              "paid_line": 630,
+              "before_sha256": "dc476d7fb80ddbe85c7739fda8fb7f40a0651829e9aec19df90983030323acc8",
+              "after_sha256": "49169317f0d3d4d8aa42de5f8efa94a43ef302f6ea38bbb50fc534a4d338976f"
+            },
+            {
+              "canonical_line": 656,
+              "paid_line": 658,
+              "before_sha256": "5216c33d8504ed782a4308f08a9ceb78397949e44ef831def684468679725bcd",
+              "after_sha256": "88d1ce5fb3ff1361d6e68c60213ecf2366f3a516b378c663f400b8e9139e9d4e"
+            }
+          ],
+          "excluded_hunks": [],
+          "projection_patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/prerequisite-patches/src/CompiledContent.hpp.patch",
+            "bytes": 6123,
+            "sha256": "b2f5ac50bd2d648a35d3a513dfbf4762b5949e1458b4e652f9971a16764484f8"
+          },
+          "forward_reverse_exact": true,
+          "equals_paid_source": true,
+          "historical_source_candidates": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container01/app-source01/candidate03/preparation03.json",
+              "bytes": 7013,
+              "sha256": "2dc3cafa506c40ed4c757f528a18a0497f84706e96e198c7f1a7d1ddc040e34f"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container-fr01/relative-float-image01/app04/preparation04.json",
+              "bytes": 5977,
+              "sha256": "53dd978cb7872d154c1b7fa109307b22230dfb61048252d402520d09f5e2be34"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/preparation04.json",
+              "bytes": 14428,
+              "sha256": "6dbb6c7a6ca9f59b386d355d10447c906a16fbe64477716c6f3054c9b96e23f3"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/compile-correction01/preparation01.json",
+              "bytes": 8183,
+              "sha256": "6a6d3e2510195de0da4d882cfbf3e686210eb699940100b8c949ea028ccda71c"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/intrinsic-minimum01/preparation02.json",
+              "bytes": 14115,
+              "sha256": "bfa452615d8fe09ea3fa000a9a5cf2e5b28eaf47a573b9572be7f0be71006962"
+            }
+          ]
+        },
+        {
+          "role": "app",
+          "relative": "src/MainWindow.cpp",
+          "paid_source": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/et-table-bottom01/empty-release01/posts01/product/MainWindow.cpp",
+            "bytes": 499843,
+            "sha256": "d82996829de3cc24993bb4e4216cb1cabe05c093cc40fb91176b6924cc453f5b"
+          },
+          "canonical_before_sha256": "6c851502dce6fb7526b3e94ad9732f30502976d2cf3a70335a432c634dc9eaab",
+          "canonical_after_prerequisites_sha256": "3f05ae9079d73c17fca5adacb21ec0efe08363aea58168971675789a3a78df5d",
+          "selected_hunks": [
+            {
+              "canonical_line": 6479,
+              "paid_line": 6494,
+              "before_sha256": "6cb8ff391361a5d907f4441c58fc9777c5c34c0d959ff1bb22dd4c5e4fcdddcb",
+              "after_sha256": "347562bb90447ee80185fbf5f28ceb4b9e4e7b84b0e0bf3a0a53a9f79973fec0"
+            },
+            {
+              "canonical_line": 6582,
+              "paid_line": 6597,
+              "before_sha256": "a61303a1edf6ca99c7ec02a2b57d947c366c51215be283c0a9bbf5872b568946",
+              "after_sha256": "300a70b7f028be694218f842a912ee0fdbe938a7765f325c6bf7c351ae95606a"
+            },
+            {
+              "canonical_line": 6677,
+              "paid_line": 6711,
+              "before_sha256": "e3172db11049872f2da65dd10e7507bdf1fcf0b8ece3581fbfe3773f2c8de372",
+              "after_sha256": "32fe25ccaf783e830f52d7899767852e761f837a6bb5d9036a26a9c47c4e99de"
+            }
+          ],
+          "excluded_hunks": [
+            {
+              "old_line": 3233,
+              "reason": "Unrelated private Thaana registration remains excluded."
+            },
+            {
+              "old_line": 3287,
+              "reason": "Unrelated private Thaana registration remains excluded."
+            }
+          ],
+          "projection_patch": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/canonical-integration01/prerequisite-patches/src/MainWindow.cpp.patch",
+            "bytes": 4648,
+            "sha256": "e54b200e32c7ff4cb9e8e47a73035c9e50c8ee6612aed43eceed9c2a6ee2aaee"
+          },
+          "forward_reverse_exact": true,
+          "equals_paid_source": false,
+          "historical_source_candidates": [
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container01/app-source01/candidate03/preparation03.json",
+              "bytes": 7013,
+              "sha256": "2dc3cafa506c40ed4c757f528a18a0497f84706e96e198c7f1a7d1ddc040e34f"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/absolute-container-fr01/relative-float-image01/app04/preparation04.json",
+              "bytes": 5977,
+              "sha256": "53dd978cb7872d154c1b7fa109307b22230dfb61048252d402520d09f5e2be34"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/preparation04.json",
+              "bytes": 14428,
+              "sha256": "6dbb6c7a6ca9f59b386d355d10447c906a16fbe64477716c6f3054c9b96e23f3"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/compile-correction01/preparation01.json",
+              "bytes": 8183,
+              "sha256": "6a6d3e2510195de0da4d882cfbf3e686210eb699940100b8c949ea028ccda71c"
+            },
+            {
+              "path": "/mnt/downloads/dev/wikidict/.tmp/renderer-core-oct28/mg-tope115-private01/qt-common-scope01/pt-intrinsic-image-float01/intrinsic-minimum01/preparation02.json",
+              "bytes": 14115,
+              "sha256": "bfa452615d8fe09ea3fa000a9a5cf2e5b28eaf47a573b9572be7f0be71006962"
+            }
+          ]
+        }
+      ],
+      "canonical_slot_projection": [
+        {
+          "role": "native",
+          "relative": "tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp",
+          "method": "relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels",
+          "paid_existing_body": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods01/native/relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels.before.cpp",
+            "bytes": 28896,
+            "sha256": "c192f5498a32ca62f5ca4ef8b5ad0ef4ca390fe32f27c2e494a6aa486386905b"
+          },
+          "anchor": "    void figureCaptionPlainContainerRequiresCurrentOwnedAncestry()",
+          "new_canonical_slot": true,
+          "private_declarations_changed": false
+        },
+        {
+          "role": "app",
+          "relative": "tests/MainWindowTest.cpp",
+          "method": "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+          "paid_existing_body": {
+            "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/methods01/app/relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions.before.cpp",
+            "bytes": 66970,
+            "sha256": "c244af0d58fc514ac85a84745068d856c70fb9f2fb93932c54cfc92c34eb24c6"
+          },
+          "anchor": "    void relativeAutoContainerKeepsSourceGeometryAndBeatsRealTableInput() {",
+          "new_canonical_slot": true,
+          "private_declarations_changed": false
+        }
+      ],
+      "prior_native_method_evidence": {
+        "qualification": {
+          "path": "/home/a/wikidict-native212-controls01/runtime01/direct-runtime01/independent-closure01.json",
+          "bytes": 23247,
+          "sha256": "ab58ed8a55f13e8cbc47e602029de7adab425e7c88b46f678a2ad7ca403a88c4"
+        },
+        "binding": {
+          "bytes": 24345,
+          "path": "/home/a/wikidict-native212-controls01/binding01.json",
+          "sha256": "1f81730d969d2d0eccb623fe99c740560f9e26187669a9e08234d63f9e902553"
+        },
+        "test_source": {
+          "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/test-observation-correction01/posts01/tst_qtextdocumentlayout.cpp",
+          "bytes": 1511159,
+          "sha256": "56b4013c1966a6087e5523edc1964f6d43cf88b454e172103fa4a68772e6cc80"
+        },
+        "method": "relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels",
+        "whole_method_body_equal": true,
+        "current_execution": false
+      },
+      "prior_app_product_authority": {
+        "path": "/home/a/wikidict-empty-release-app01/qualification01/direct-runtime01/independent-closure01.json",
+        "bytes": 70191,
+        "sha256": "c3b8fea2e41d865744e11c7b14cfb3bfb8dd9b6e48a019471231f5fa1a22723e"
+      },
+      "new_vi_controls_qualification_pending": false,
+      "native_test_source_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container01/native-neighbor-preparation01.json",
+        "bytes": 4459,
+        "sha256": "5ba39be45dc8a8558890042ace045efcda069be09770867866a66836bbe88d01"
+      },
+      "prior_native_failed_qualification": {
+        "path": "/home/a/wikidict-vi-container-native01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 59422,
+        "sha256": "febbfbaa0c2b3583551f3ada73717ff902f6d263b7547748b333f0ad9f0cf69c"
+      },
+      "neighbor_observation": {
+        "path": "/home/a/wikidict-vi-container-observation01/runtime01/direct-runtime01/independent-closure01.json",
+        "bytes": 8089,
+        "sha256": "0a1293d9536421efd254b6e59a77b96a57043dc8870957d8f1b08f24ee83f27c"
+      },
+      "native_test_correction_scope": "Source-index-0 glyph ink point replaces RTL caret midpoint; exact href/source hit and pixel/geometry assertions remain. The corrected native method passed; the original failed run and observation remain separate.",
+      "app_history_navigation_correction": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/compact-history01/preparation01.json",
+        "bytes": 5912,
+        "sha256": "b3e54f3763f3442c51d0cdc0552e56991df9eab1555696d2d3e8f7ca280a6cf5"
+      },
+      "history_navigation_qualification_pending": false,
+      "history_navigation_scope": "Compact Reading-origin Back/Forward preserves Reading intent across synchronous and asynchronous history navigation. The unchanged focused App pass is retained from App03; genuine normal UI observations are limited to the linked report. Explicit Search, wide and direct restore behavior remain.",
+      "genuine_gui_closure": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/vi-repaired-history-normal-desktop-ui01/independent-closure01.json",
+        "bytes": 1351,
+        "sha256": "d64ed2dcf2cf827d636929cdadcdaf2d875cbb45219d9a81651dfd7ee26a946e"
+      },
+      "genuine_gui_scope": {
+        "languages": [
+          "Portuguese",
+          "Spanish"
+        ],
+        "title": "barracuda",
+        "widths": [
+          1000,
+          640
+        ],
+        "reading_characters": {
+          "pt": 653,
+          "es": 869
+        },
+        "missing_target": "barracudas",
+        "missing_recovery": "Native outer Show reading pane focused then real Space restores visible Portuguese Reading and scroll.",
+        "history": "At compact width real Alt+Left restores visible Portuguese and Alt+Right restores visible Spanish, native Reading focus and scroll retained; Ctrl+Home then visibly restores document top.",
+        "no_all_seven_claim": true
+      },
+      "genuine_gui_review": {
+        "path": "/mnt/downloads/dev/wikidict/.tmp/mg-nested-pitch-qt01/vi-container-repair01/genuine-gui-parent-review01.json",
+        "bytes": 6115,
+        "sha256": "b718593743e47c9ba8ae0b7eedf2d296aff94c26cd2184bc2856c06f32a938cf"
+      },
+      "retained_app_methods": [
+        "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+        "keyboardBackRestoresReaderLinkContext"
+      ],
+      "qualified_app_methods": [
+        "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+        "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+        "keyboardBackRestoresReaderLinkContext"
+      ],
+      "canonical_application_receipt": null,
+      "canonical_application_state_note": "Intended maintained postimage; application is earned only by the subsequent exact application receipt. This preparation does not mutate maintained sources.",
+      "app_execution_scope": {
+        "current": [
+          "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions"
+        ],
+        "retained": [
+          "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+          "keyboardBackRestoresReaderLinkContext"
+        ],
+        "qualified": [
+          "plainContainerBaseAutoMarginsKeepNativeBoxSourceAndActions",
+          "relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions",
+          "keyboardBackRestoresReaderLinkContext"
+        ],
+        "current_frames": [
+          {
+            "path": "/home/a/wikidict-vi-container-app07/frames/vi-es-height-float-900.png",
+            "bytes": 52317,
+            "sha256": "5908c44903a37d08d02cbd2d8871d21069c41088a572bc7a9e8e64f2823322b4"
+          },
+          {
+            "path": "/home/a/wikidict-vi-container-app07/frames/vi-es-height-float-640.png",
+            "bytes": 50925,
+            "sha256": "437f2907ed890f9d8e96060415efd4617e389db8dfb913e14fced62cd3318da7"
+          }
+        ],
+        "retained_frames": [
+          {
+            "bytes": 52077,
+            "path": "/home/a/wikidict-vi-container-app04/frames/vi-pt-width-cap-640.png",
+            "sha256": "c6e4b490d3cacdf8acabef25eee0b4c88a910bd8fc7e0fcf23ef488f89ab6203"
+          },
+          {
+            "bytes": 65363,
+            "path": "/home/a/wikidict-vi-container-app04/frames/vi-pt-width-cap-900.png",
+            "sha256": "7d116ee01338fcdbcd4506f3334910e42efa6ee8ba0e844bbb31797b35c39d80"
+          },
+          {
+            "bytes": 27827,
+            "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-cross-back-640.png",
+            "sha256": "eef7bee4805e925d7f1e80002d405d56028338d32bea85650b474d70bc0fc006"
+          },
+          {
+            "bytes": 29176,
+            "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-cross-forward-640.png",
+            "sha256": "0bca78ad61228c1b61836310fb26bd2293fb5ba217a27b008ef2375c27365a0f"
+          },
+          {
+            "bytes": 27827,
+            "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-same-back-640.png",
+            "sha256": "eef7bee4805e925d7f1e80002d405d56028338d32bea85650b474d70bc0fc006"
+          },
+          {
+            "bytes": 27058,
+            "path": "/home/a/wikidict-vi-container-app03/frames/compact-history-same-forward-640.png",
+            "sha256": "c5929371a59886cc75387815348364b0bd2fdf265b000052533dec8f6e092d1c"
+          }
+        ],
+        "selected_compile_count": 1,
+        "retained_object_count": 21,
+        "product_archive_rebuilt": false,
+        "gui_link_executed": true,
+        "prior_scopes_historical_only": true
+      },
+      "preserved_app_attempts": [
+        {
+          "path": "/home/a/wikidict-vi-container-app01/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 83736,
+          "sha256": "8a0b282afda6214ab2f18bad183c615eca852e87bbdd430967a28894949ee9ca"
+        },
+        {
+          "path": "/home/a/wikidict-vi-container-app02/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 102409,
+          "sha256": "5859119c458f9513f2a11193bf5fa190b4cbe9a4547bc8fb9125cd4ac4852eee"
+        },
+        {
+          "path": "/home/a/wikidict-vi-container-app03/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 105438,
+          "sha256": "9ccdbc04a268dfee9fcbee19513bd4817aeedf6ed5d8ea1e2f25eaaa8eca2479"
+        },
+        {
+          "path": "/home/a/wikidict-vi-container-app04/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 119458,
+          "sha256": "561fe2991c7ca75f1e09a92289e798725b1c05217796868f9f9870111117e9f8"
+        },
+        {
+          "path": "/home/a/wikidict-vi-container-app05/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 124739,
+          "sha256": "84a5902f8f036569f0374c82637d5dc75309c69d51a8aaf59b1e32da5b2b04d1"
+        },
+        {
+          "path": "/home/a/wikidict-vi-container-app06/qualification01/direct-runtime01/independent-closure01.json",
+          "bytes": 131561,
+          "sha256": "1f2353ae6489501c6181e762663d93fb5135226a8c1fa286ab397187b780d3b2"
+        }
+      ],
+      "qualification_limits": [
+        "Only PT and ES receive new rendered acceptance; the original five successful language flows remain historical scope.",
+        "No current Entry-data JSON export or full graph equivalence asserted.",
+        "Historical Reader04 transport697b has saved child0/all7 but outer terminal UNKNOWN/reapedfalse; this GUI does not restamp it.",
+        "No same-language different-word Back/Forward, restart, high-DPI or numerical pixel-fidelity claim.",
+        "Original source/producer semantic limitations remain unchanged.",
+        "No online artwork or external-media activation was qualified.",
+        "Canonical binary and full suite were not rebuilt; private scoped native/App/package and actual installed GUI evidence are distinct.",
+        "The parent image viewer showed only a top strip for es-compact-body-frame despite its 640x600 PNG metadata; parent visual acceptance instead uses the independently viewed full history-forward frame and verified compact/wide frames."
+      ]
     }
   },
   "packaged_distribution_source_equivalence": false,

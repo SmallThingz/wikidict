@@ -9421,6 +9421,154 @@ private slots:
         for (int i = 0; i < 12 && href() != "https://example.test/auto/0"; ++i) QTest::keyClick(window.reading_, Qt::Key_Tab);
         QCOMPARE(href(), QStringLiteral("https://example.test/auto/0")); QTest::keyClick(window.reading_, Qt::Key_Return);
         QTRY_COMPARE(receiver.opened, QList<QUrl>{QUrl("https://example.test/auto/0")}); QCOMPARE(doc->toRawText(), raw);
+        // A numeric width with max-width needs the same allocator even without
+        // authored auto margins. Neither percentage is resolved at import time.
+        {
+            const QJsonObject boundedStyle{{"width", QJsonObject{{"length", length(60, "em")}}},
+                {"max_width", QJsonObject{{"length", length(100, "percent")}}}};
+            const QJsonObject bounded{{"kind", "container"}, {"spans", QJsonArray{}},
+                {"container", QJsonObject{{"style", boundedStyle}, {"blocks", QJsonArray{paragraph}}}}};
+            const auto imported = FlowConstruction::plainContainerFormat(bounded, 20, false);
+            const auto policy = imported.property(FlowConstruction::containerAutoMarginsProperty).toMap();
+            QCOMPARE(policy.value("autos").toList(), QVariantList({false, false, false, false}));
+            QCOMPARE(policy.value("width").toMap(), QVariantMap({{"unit", "fixed"}, {"value", 1200.0}}));
+            QCOMPARE(policy.value("max_width").toMap(), QVariantMap({{"unit", "percent"}, {"value", 100.0}}));
+            QVERIFY(imported.property(FlowConstruction::containerMarginsProperty).toMap().value("auto_width").toBool());
+            QVERIFY(composeReadingBlocks(window, QJsonArray{bounded}));
+            auto *document = window.reading_->document();
+            QVERIFY(window.editDocumentFormats(window.reading_, [&] { document->setDocumentMargin(0); }));
+            auto *native = document->documentLayout(); auto current = document->find("Link0"); QVERIFY(!current.isNull());
+            const QPointer<QTextFrame> owner = current.currentFrame(); QVERIFY(owner); QCOMPARE(owner->parentFrame(), document->rootFrame());
+            const QString original = document->toRawText();
+            const auto usedPolicy = owner->frameFormat().property(FlowConstruction::containerAutoMarginsProperty).toMap();
+            const qreal requested = usedPolicy.value("width").toMap().value("value").toDouble();
+            const qreal density = native->paintDevice() ? native->paintDevice()->logicalDpiY() / QFontMetricsF(QFont()).fontDpi() : 1;
+            QRectF initial;
+            for (int viewport : {1600, 350, 1600}) {
+                document->setTextWidth(viewport); native->documentSize();
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto rect = native->frameBoundingRect(owner);
+                QVERIFY(qAbs(rect.width() - qMin(qreal(viewport), requested * density)) < .1);
+                QVERIFY(qAbs(rect.left()) < .1);
+                QCOMPARE(document->toRawText(), original);
+                QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), bounded);
+                if (initial.isNull()) initial = rect; else if (viewport == 1600) QCOMPARE(rect, initial);
+            }
+            for (qreal left : {15.0, -10.0}) {
+                auto numericStyle = boundedStyle;
+                numericStyle.insert("margins", QJsonObject{{"top", length(0)}, {"right", length(25)}, {"bottom", length(0)}, {"left", length(left)}});
+                auto numericSource = bounded; auto content = numericSource.value("container").toObject(); content.insert("style", numericStyle); numericSource.insert("container", content);
+                QVERIFY(composeReadingBlocks(window, QJsonArray{numericSource}));
+                document = window.reading_->document();
+            QVERIFY(window.editDocumentFormats(window.reading_, [&] { document->setDocumentMargin(0); }));
+            document->setTextWidth(350); native = document->documentLayout(); native->documentSize();
+                const auto text = document->find("Link0"); QVERIFY(!text.isNull()); const auto frame = text.currentFrame();
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                const auto rect = native->frameBoundingRect(frame);
+                // A percentage max-width uses the containing content width;
+                // numeric margins remain outside that width, including overflow.
+                QVERIFY(qAbs(rect.width() - 350) < .1); QVERIFY(qAbs(rect.left() - left * density) < .1);
+                const auto margins = frame->frameFormat().property(FlowConstruction::containerMarginsProperty).toMap().value("edges").toList();
+                QCOMPARE(margins, QVariantList({0.0, 25.0, 0.0, left}));
+                QCOMPARE(text.charFormat().anchorHref(), QStringLiteral("https://example.test/auto/0"));
+            }
+            for (const auto key : {"float_side", "positioning", "columns"}) {
+                auto invalidStyle = boundedStyle;
+                if (QString::fromLatin1(key) == "float_side") invalidStyle.insert(key, "left");
+                if (QString::fromLatin1(key) == "positioning") invalidStyle.insert(key, "relative_auto");
+                if (QString::fromLatin1(key) == "columns") invalidStyle.insert(key, QJsonObject{{"count", 2}, {"gap", length(10)}});
+                auto invalid = bounded; auto owned = invalid.value("container").toObject(); owned.insert("style", invalidStyle); invalid.insert("container", owned);
+                QVERIFY_EXCEPTION_THROWN(FlowConstruction::plainContainerFormat(invalid, 20, false), std::exception);
+            }
+        }
+        // Exact current installed FFI output, independently captured from the
+        // same genuine imported blob. No response field is rewritten here.
+        {
+            QSettings().setValue("media/allowImages", false);
+            MainWindow window{fixture_}; window.resize(900, 700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+            QFile fixture(qEnvironmentVariableIsSet("WIKIDICT_VI_PT_JSON")
+                ? qEnvironmentVariable("WIKIDICT_VI_PT_JSON")
+                : QFINDTESTDATA("fixtures/vi-barracuda-pt-installed-decoder.json")); QVERIFY(fixture.open(QIODevice::ReadOnly));
+            const QByteArray payload = fixture.readAll(); const auto response = QJsonDocument::fromJson(payload); QVERIFY(response.isObject());
+            const auto entry = response.object().value("entries").toArray().first().toObject(); QCOMPARE(entry.value("language_code").toString(), QStringLiteral("pt"));
+            const auto sections = entry.value("sections").toArray();
+            const auto original = sections.at(2).toObject().value("blocks").toArray().at(1).toObject();
+            const auto content = original.value("container").toObject(); const auto style = content.value("style").toObject();
+            QCOMPARE(style.value("width").toObject().value("length").toObject(), QJsonObject({{"unit", "em"}, {"value", 60}}));
+            QCOMPARE(style.value("max_width").toObject().value("length").toObject(), QJsonObject({{"unit", "percent"}, {"value", 100}}));
+            QVERIFY(!CompiledContent::present(style.value("margin_values")));
+            QList<QPair<QString, QString>> expectedActions;
+            for (const auto &child : content.value("blocks").toArray()) for (const auto &value : child.toObject().value("spans").toArray()) {
+                const auto span = value.toObject(); const auto kind = span.value("kind").toString();
+                if (kind != "link" && kind != "external_link") continue;
+                const auto target = span.value("target").toString();
+                const auto href = kind == "link" ? QStringLiteral("dict:") + QString::fromLatin1(QUrl::toPercentEncoding(target)) : QUrl(target).toString(QUrl::FullyEncoded);
+                expectedActions.append({span.value("text").toString() + span.value("trail").toString(), href});
+            }
+            QCOMPARE(expectedActions.size(), 8);
+            for (qreal points : {12.0, 18.0}) for (int width : {900, 640, 900}) {
+                window.resize(width, 700); window.readingPointSize_ = points; QCoreApplication::processEvents();
+                QVERIFY(window.renderResponse(payload, false)); window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+                auto *document = window.reading_->document(); auto *native = document->documentLayout(); native->documentSize();
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                QTextCursor first = document->find(QStringLiteral("Brasil")); QVERIFY(!first.isNull()); auto *owner = first.currentFrame(); QVERIFY(owner);
+                QCOMPARE(QJsonDocument::fromJson(owner->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), original);
+                const auto policy = owner->frameFormat().property(FlowConstruction::containerAutoMarginsProperty).toMap();
+                QCOMPARE(policy.value("autos").toList(), QVariantList({false, false, false, false}));
+                QCOMPARE(policy.value("max_width").toMap(), QVariantMap({{"unit", "percent"}, {"value", 100.0}}));
+                const auto rect = native->frameBoundingRect(owner); QVERIFY(rect.width() > 0);
+                QVERIFY(rect.width() <= native->frameBoundingRect(owner->parentFrame()).width() + .1);
+                window.reading_->setTextCursor(first); window.reading_->ensureCursorVisible();
+                const QString beforeQueryDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (points == 12 && !beforeQueryDirectory.isEmpty()) { QVERIFY(QDir().mkpath(beforeQueryDirectory)); QVERIFY(window.reading_->grab().save(QDir(beforeQueryDirectory).filePath(QStringLiteral("vi-pt-width-cap-%1.png").arg(width)))); }
+                QList<QPair<QString, QString>> actualActions; int previousEnd = -1;
+                for (auto block = document->begin(); block.isValid(); block = block.next()) {
+                    QTextCursor inBlock(block); if (inBlock.currentFrame() != owner) continue;
+                    for (auto it = block.begin(); !it.atEnd(); ++it) {
+                        const auto fragment = it.fragment(); const auto format = fragment.charFormat();
+                        if (!format.isAnchor()) { previousEnd = -1; continue; }
+                        const QString href = format.anchorHref();
+                        if (!actualActions.isEmpty() && previousEnd == fragment.position() && actualActions.last().second == href)
+                            actualActions.last().first += fragment.text();
+                        else actualActions.append({fragment.text(), href});
+                        previousEnd = fragment.position() + fragment.length();
+                        const auto a = LogicalFlow::position(document, fragment.position()); const auto b = LogicalFlow::position(document, fragment.position() + 1);
+                        QVERIFY(a.status != LogicalFlow::Status::Refused); QCOMPARE(b.status, a.status);
+                        QPointF hit;
+                        if (a.status == LogicalFlow::Status::Handled) {
+                            const auto one = a.values.value("cursorRect").toRectF(); const auto two = b.values.value("cursorRect").toRectF();
+                            QVERIFY(one.height() > 0 && two.height() > 0);
+                            hit = QPointF((one.left() + two.left()) / 2, one.center().y());
+                        } else {
+                            const int local = fragment.position() - block.position();
+                            const auto line = block.layout()->lineForTextPosition(local); QVERIFY(line.isValid());
+                            const qreal leading = line.cursorToX(local, QTextLine::Leading), trailing = line.cursorToX(local, QTextLine::Trailing);
+                            QVERIFY(qAbs(trailing - leading) > 0);
+                            hit = native->blockBoundingRect(block).topLeft() + QPointF((leading + trailing) / 2, line.y() + line.height() / 2);
+                        }
+                        qInfo() << "VI_PT_ACTION_POINT" << points << width << fragment.position() << int(a.status) << hit;
+                        QCOMPARE(native->anchorAt(hit), href);
+                        const int source = native->hitTest(hit, Qt::ExactHit); QVERIFY(source >= fragment.position() && source < fragment.position() + fragment.length());
+                    }
+                }
+                QCOMPARE(actualActions, expectedActions);
+                const QString rendered = document->toPlainText().simplified();
+                std::function<void(const QJsonObject &)> verifyBody = [&](const QJsonObject &block) {
+                    QString text; for (const auto &v : block.value("spans").toArray()) { const auto s = v.toObject(); text += s.value("text").toString() + s.value("trail").toString(); }
+                    if (!text.simplified().isEmpty()) QVERIFY2(rendered.contains(text.simplified()), qPrintable(text));
+                    for (const auto &child : block.value("container").toObject().value("blocks").toArray()) verifyBody(child.toObject());
+                };
+                for (const auto &section : sections) for (const auto &block : section.toObject().value("blocks").toArray()) verifyBody(block.toObject());
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+                QVERIFY(accessible->textInterface()->text(0, accessible->textInterface()->characterCount()).contains(QStringLiteral("Brasil")));
+                window.reading_->setTextCursor(first); window.reading_->ensureCursorVisible();
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (points == 12 && !directory.isEmpty()) { QVERIFY(QDir().mkpath(directory)); QVERIFY(window.reading_->grab().save(QDir(directory).filePath(QStringLiteral("vi-pt-width-cap-%1.png").arg(width)))); }
+                QCOMPARE(window.currentEntry_, entry);
+            }
+        }
+
     }
 
     void plainContainerBaseAutoMarginsRefuseUnknownAndKeepNumericPolicy() {
@@ -9724,6 +9872,1317 @@ private slots:
             }
         }
     }
+    void relativeFloatImageKeepsAutoGeometryAndAbsoluteLabelActions() {
+        const auto checkpoint = [](const char *stage) { qInfo().noquote() << "VI_RELATIVE_BOUNDARY" << stage; };
+        // A projected position may expose only a caret. These owners contain a
+        // single native image, whose used source line remains the image oracle.
+        const auto intrinsicImagePoint = [](QTextDocument *document, const QTextCursor &image, qreal expectedWidth) -> std::optional<QPointF> {
+            if (image.document() != document || image.selectionEnd() - image.selectionStart() != 1
+                || image.selectedText() != QString(QChar::ObjectReplacementCharacter)
+                || !image.charFormat().isImageFormat() || !qIsFinite(expectedWidth) || expectedWidth <= 0) return std::nullopt;
+            auto *native = document->documentLayout();
+            const auto position = LogicalFlow::position(document, image.selectionStart());
+            qInfo() << "VI_INTRINSIC_IMAGE_QUERY" << image.selectionStart() << int(position.status)
+                << position.values.contains("characterRect") << position.values.value("characterRect");
+            if (position.status == LogicalFlow::Status::Refused) return std::nullopt;
+            if (position.values.contains("characterRect")) {
+                const auto rect = position.values.value("characterRect").toRectF();
+                if (!qIsFinite(rect.x()) || !qIsFinite(rect.y()) || !qIsFinite(rect.width())
+                    || !qIsFinite(rect.height()) || rect.width() < 0 || rect.height() <= 0) return std::nullopt;
+                if (rect.width() > 0) {
+                    if (qAbs(rect.width() - expectedWidth) > .1) return std::nullopt;
+                    return rect.center();
+                }
+                // TabOrObject positions may expose a zero-width projected caret
+                // cell. This single native image still has its used source line.
+                qInfo() << "VI_INTRINSIC_ZERO_CARET_SOURCE_LINE" << rect;
+
+            }
+            const auto block = image.block();
+            if (!block.isValid() || !block.layout()) return std::nullopt;
+            const int local = image.selectionStart() - block.position();
+            const auto line = block.layout()->lineForTextPosition(local);
+            if (!line.isValid()) {
+                // Logical-flow painting supersedes the storage block layout.
+                // Measure its source-mapped native action region independently;
+                // this is not a claim about the image's painted ink.
+                const QRectF frame = native->frameBoundingRect(image.currentFrame());
+                const QRectF caret = position.values.value("characterRect", position.values.value("cursorRect")).toRectF();
+                qInfo() << "VI_INTRINSIC_PROJECTED_QUERY" << position.values << frame;
+                if (!qIsFinite(frame.x()) || !qIsFinite(frame.y()) || !qIsFinite(frame.width())
+                    || !qIsFinite(frame.height()) || frame.height() <= 0
+                    || qAbs(frame.width() - expectedWidth) > .1 || !qIsFinite(caret.center().y())
+                    || caret.height() <= 0 || caret.center().y() < frame.top() || caret.center().y() > frame.bottom()) return std::nullopt;
+                constexpr qreal step = .125;
+                const qreal left = frame.left() - 2;
+                const int samples = qCeil((frame.width() + 4) / step);
+                if (samples < 3 || samples > 8192) return std::nullopt;
+                int first = -1, last = -1, runs = 0; bool previousHit = false;
+                for (int index = 0; index < samples; ++index) {
+                    const QPointF point(left + (index + .5) * step, caret.center().y());
+                    const bool hit = native->hitTest(point, Qt::ExactHit) == image.selectionStart();
+                    if (hit) { if (!previousHit) ++runs; if (first < 0) first = index; last = index; }
+                    previousHit = hit;
+                }
+                const qreal measuredWidth = first >= 0 ? (last - first + 1) * step : 0;
+                const QPointF measured(left + (first + last + 1) * step / 2, caret.center().y());
+                qInfo() << "VI_INTRINSIC_NATIVE_ACTION_REGION" << first << last << runs << samples
+                    << measuredWidth << expectedWidth << measured;
+                if (runs != 1 || first <= 0 || last >= samples - 1 || qAbs(measuredWidth - expectedWidth) > step) return std::nullopt;
+                return measured;
+            }
+            const qreal leading = line.cursorToX(local, QTextLine::Leading), trailing = line.cursorToX(local, QTextLine::Trailing);
+            const auto point = native->blockBoundingRect(block).topLeft() + QPointF((leading + trailing) / 2, line.y() + line.height() / 2);
+            qInfo() << "VI_INTRINSIC_IMAGE_SOURCE_LINE" << block.position() << local << leading << trailing << expectedWidth << point;
+            if (qAbs(qAbs(trailing - leading) - expectedWidth) > .1 || line.height() <= 0) return std::nullopt;
+            return point;
+        };
+        checkpoint("settings-disable-before");
+        QSettings().setValue("media/allowImages", false);
+        checkpoint("settings-disable-after");
+        checkpoint("window-create-before");
+        MainWindow window{fixture_}; window.resize(960, 720); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
+        checkpoint("window-ready");
+        const auto length = [](qreal value, const QString &unit = QStringLiteral("px")) { return QJsonObject{{"unit", unit}, {"value", value}}; };
+        const auto paragraph = [](const QString &text) { return QJsonObject{{"kind", "paragraph"}, {"spans", QJsonArray{QJsonObject{{"kind", "text"}, {"text", text}}}}}; };
+        const auto box = [](const QJsonObject &style, const QJsonArray &blocks) { return QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
+            {"container", QJsonObject{{"style", style}, {"blocks", blocks}}}}; };
+        // This non-square local bitmap is a controlled resource, not Paume.jpg.
+        const QJsonObject image{{"file", "Controlled relative float.png"}, {"width_px", 240}, {"height_px", QJsonValue::Null},
+            {"vertical_align", "middle"}, {"border", false}, {"alt", "Controlled non-square image"}};
+        const QJsonObject imageSpan{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""}, {"image", image},
+            {"language", "fr"}, {"italic", true}, {"foreground", "#315a78"}};
+        const QJsonObject imageParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{imageSpan}}};
+        const QJsonObject margins{{"top", length(0)}, {"right", length(.5, "em")}, {"bottom", length(.5, "em")}, {"left", length(0)}};
+        const QJsonObject floated = box(QJsonObject{{"float_side", "left"}, {"clear", "left"}, {"width", QJsonValue::Null},
+            {"height", QJsonValue::Null}, {"margins", margins}}, QJsonArray{imageParagraph});
+        QJsonArray labels;
+        for (int index = 0; index < 5; ++index) {
+            QJsonObject span{{"kind", index == 4 ? "text" : "external_link"}, {"text", QStringLiteral("Image label %1").arg(index)}, {"bold", index == 4}};
+            if (index != 4) span.insert("target", QStringLiteral("https://example.test/float-label-%1").arg(index));
+            const QJsonObject labelParagraph{{"kind", "paragraph"}, {"spans", QJsonArray{span}}};
+            labels.append(box(QJsonObject{{"absolute_position", QJsonObject{{"left", length(25)}, {"top", length(12 + index * 26)}}},
+                {"width", QJsonObject{{"length", length(index % 2 ? 160 : 120)}}}, {"height", length(20)},
+                {"owner_font", QJsonObject{{"font_scale", 18}, {"font_scale_basis", "css_px"}, {"font_normalized", true}}},
+                {"line_height", QJsonObject{{"length", length(20)}}}, {"text_align", index % 2 ? "right" : "center"}}, QJsonArray{labelParagraph}));
+        }
+        const auto source = [&](bool withLabels, bool inTable) {
+            QJsonArray children{paragraph("Before image"), floated, paragraph("Beside image")};
+            if (withLabels) for (const auto &label : labels) children.append(label);
+            const auto owner = box(QJsonObject{{"positioning", "relative_auto"}, {"text_wrap", "nowrap"}}, children);
+            const QJsonArray body{owner, paragraph("Following real image flow")};
+            if (!inTable) return body;
+            return QJsonArray{QJsonObject{{"kind", "table"}, {"spans", QJsonArray{}}, {"table", QJsonObject{
+                {"style", QJsonObject{{"float_side", "right"}, {"clear", "right"}}},
+                {"geometry", QJsonObject{{"border", 0}, {"cell_padding", 0}, {"cell_spacing", 0}}},
+                {"rows", QJsonArray{QJsonObject{{"cells", QJsonArray{QJsonObject{{"spans", QJsonArray{}}, {"blocks", body}}}}}}}}}}, paragraph("Outside real table")};
+        };
+        const auto imageCursor = [](QTextDocument *document) {
+            QTextCursor result;
+            for (auto block = document->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it) {
+                const auto fragment = it.fragment(); if (!fragment.isValid() || !fragment.charFormat().isImageFormat()) continue;
+                if (QUrl(fragment.charFormat().toImageFormat().name()).scheme() != SemanticHtml::inlineImageScheme) continue;
+                if (!result.isNull()) return QTextCursor();
+                result = QTextCursor(document); result.setPosition(fragment.position()); result.setPosition(fragment.position() + fragment.length(), QTextCursor::KeepAnchor);
+            }
+            return result;
+        };
+        const auto ready = [&] {
+            auto *document = window.reading_->document(); auto cursor = imageCursor(document);
+            if (cursor.isNull() || cursor.selectedText() != QString(QChar::ObjectReplacementCharacter)) return false;
+            return window.editDocumentFormats(window.reading_, [&] {
+                auto format = cursor.charFormat().toImageFormat();
+                SemanticHtml::imageDimensions(format, image, document, QSizeF(400, 240));
+                format.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Ready));
+                QImage pixels(400, 240, QImage::Format_ARGB32_Premultiplied); pixels.fill(QColor("#dbdfeb"));
+                document->addResource(QTextDocument::ImageResource, QUrl(format.name()), pixels); cursor.setCharFormat(format);
+            });
+        };
+        ExternalUrlReceiver receiver; QDesktopServices::setUrlHandler("https", &receiver, "capture");
+        const auto restore = qScopeGuard([] { QDesktopServices::unsetUrlHandler("https"); });
+        QSet<int> capturedWidths;
+        for (const qreal points : {12.0, 18.0}) for (const bool inTable : {false, true}) for (const int width : {960, 640, 960}) {
+            const auto context = QStringLiteral("points=%1 table=%2 width=%3").arg(points).arg(inTable).arg(width).toUtf8();
+            qInfo().noquote() << "VI_RELATIVE_CASE" << context;
+            checkpoint("controlled-resize-before");
+            window.resize(width, 720); window.readingPointSize_ = points; QCoreApplication::processEvents();
+            checkpoint("controlled-resize-after");
+            checkpoint("controlled-plain-compose-before");
+            QVERIFY2(composeReadingBlocks(window, source(false, inTable)), context.constData());
+            checkpoint("controlled-plain-compose-after"); QVERIFY(ready());
+            checkpoint("controlled-plain-ready-after");
+            window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+            auto *document = window.reading_->document(); auto *layout = document->documentLayout(); layout->documentSize();
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            auto beforeCursor = imageCursor(document); QVERIFY(!beforeCursor.isNull()); auto *beforeFloat = beforeCursor.currentFrame();
+            auto *beforeOwner = beforeFloat->parentFrame(); QVERIFY(beforeOwner);
+            const auto ownerBefore = layout->frameBoundingRect(beforeOwner); const auto floatBefore = layout->frameBoundingRect(beforeFloat);
+            const auto besideBefore = LogicalFlow::position(document, document->find("Beside image").selectionStart()).values.value("characterRect").toRectF();
+            const auto afterBefore = LogicalFlow::position(document, document->find("Following real image flow").selectionStart()).values.value("characterRect").toRectF();
+            checkpoint("controlled-labels-compose-before");
+            QVERIFY2(composeReadingBlocks(window, source(true, inTable)), context.constData());
+            checkpoint("controlled-labels-compose-after"); QVERIFY(ready());
+            checkpoint("controlled-labels-ready-after");
+            document = window.reading_->document(); layout = document->documentLayout(); layout->documentSize();
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            auto cursor = imageCursor(document); QVERIFY(!cursor.isNull()); auto *floating = cursor.currentFrame(); auto *owner = floating->parentFrame();
+            const auto format = floating->frameFormat(); const auto imageFormat = cursor.charFormat().toImageFormat();
+            QCOMPARE(format.width().type(), QTextLength::VariableLength); QCOMPARE(format.width().rawValue(), 0.0);
+            QCOMPARE(format.height().type(), QTextLength::VariableLength); QCOMPARE(format.height().rawValue(), 0.0);
+            QCOMPARE(format.position(), QTextFrameFormat::FloatLeft); QCOMPARE(format.intProperty(FlowConstruction::containerClearProperty), 1);
+            QCOMPARE(format.property(FlowConstruction::containerFixedFloatProperty).toMap().value("capability").toString(), QStringLiteral("wikidict.relative-float-image/1"));
+            QVERIFY(!format.hasProperty(FlowConstruction::containerMarginsProperty)); QVERIFY(!format.hasProperty(FlowConstruction::containerAutoMarginsProperty));
+            QCOMPARE(QJsonDocument::fromJson(format.property(FlowConstruction::containerSourceProperty).toByteArray()).object(), floated);
+            QCOMPARE(SemanticHtml::inlineImageData(QUrl(imageFormat.name())), image); QCOMPARE(imageFormat.width(), 240.0); QCOMPARE(imageFormat.height(), 144.0);
+            QVERIFY(!imageFormat.isAnchor()); QVERIFY(!imageFormat.hasProperty(SemanticHtml::figureImageProperty));
+            QCOMPARE(imageFormat.stringProperty(SemanticHtml::inlineImageAlignmentProperty), QStringLiteral("middle"));
+            const auto ownerAfter = layout->frameBoundingRect(owner); const auto floatAfter = layout->frameBoundingRect(floating);
+            const auto rectText = [](const QRectF &rect) { return QStringLiteral("[%1,%2 %3x%4]")
+                .arg(rect.x(), 0, 'g', 12).arg(rect.y(), 0, 'g', 12).arg(rect.width(), 0, 'g', 12).arg(rect.height(), 0, 'g', 12); };
+            const auto geometryContext = QStringLiteral("%1 ownerBefore=%2 ownerAfter=%3 floatBefore=%4 floatAfter=%5")
+                .arg(QString::fromUtf8(context), rectText(ownerBefore), rectText(ownerAfter), rectText(floatBefore), rectText(floatAfter));
+            QVERIFY2(ownerAfter.size() == ownerBefore.size(), qPrintable(geometryContext));
+            QVERIFY2(floatAfter.size() == floatBefore.size(), qPrintable(geometryContext));
+            QVERIFY2(floatAfter.topLeft() - ownerAfter.topLeft() == floatBefore.topLeft() - ownerBefore.topLeft(), qPrintable(geometryContext));
+            const auto besideAfter = LogicalFlow::position(document, document->find("Beside image").selectionStart()).values.value("characterRect").toRectF();
+            const auto afterAfter = LogicalFlow::position(document, document->find("Following real image flow").selectionStart()).values.value("characterRect").toRectF();
+            const auto flowContext = geometryContext + QStringLiteral(" besideBefore=%1 besideAfter=%2 followingBefore=%3 followingAfter=%4")
+                .arg(rectText(besideBefore), rectText(besideAfter), rectText(afterBefore), rectText(afterAfter));
+            QVERIFY2(besideAfter.topLeft() - ownerAfter.topLeft() == besideBefore.topLeft() - ownerBefore.topLeft(), qPrintable(flowContext));
+            QVERIFY2(afterAfter.topLeft() - ownerAfter.topLeft() == afterBefore.topLeft() - ownerBefore.topLeft(), qPrintable(flowContext));
+            QVERIFY2(besideAfter.left() >= floatAfter.right() - .1 || besideAfter.top() >= floatAfter.bottom() - .1, qPrintable(flowContext));
+            QVERIFY2(afterAfter.left() >= floatAfter.right() - .1 || afterAfter.top() >= floatAfter.bottom() - .1, qPrintable(flowContext));
+            // A normal relative owner keeps its in-flow height; position:relative
+            // does not establish a BFC or make it enclose an overflowing float.
+            const auto ownerFormat = owner->frameFormat();
+            QCOMPARE(ownerFormat.stringProperty(FlowConstruction::containerPolicyProperty), QStringLiteral("wikidict.plain-container/1"));
+            QCOMPARE(ownerFormat.stringProperty(FlowConstruction::containerPositioningProperty), QStringLiteral("wikidict.relative-auto/1"));
+            QCOMPARE(ownerFormat.position(), QTextFrameFormat::InFlow);
+            QVERIFY(!ownerFormat.hasProperty(FlowConstruction::containerColumnsProperty));
+            QVERIFY(!ownerFormat.hasProperty(FlowConstruction::containerScrollportProperty));
+            // Independently lay out the same resolved ordinary image paragraph.
+            // Keep its actual typography/margins, but give it fresh object custody
+            // and no Container, float, absolute child, or logical-flow owner.
+            checkpoint("controlled-stock-before");
+            QTextDocument stock; stock.setDocumentMargin(0); stock.setDefaultFont(document->defaultFont());
+            stock.setDefaultTextOption(document->defaultTextOption()); stock.documentLayout()->setPaintDevice(layout->paintDevice());
+            new InlineVectorImages(stock.documentLayout());
+            stock.addResource(QTextDocument::ImageResource, QUrl(imageFormat.name()), document->resource(QTextDocument::ImageResource, QUrl(imageFormat.name())));
+            QTextCursor stockCursor(&stock); auto paragraphFormat = cursor.blockFormat(); paragraphFormat.clearProperty(QTextFormat::ObjectIndex);
+            QVERIFY(cursor.block().isVisible()); QCOMPARE(cursor.block().text(), QString(QChar::ObjectReplacementCharacter));
+            QVERIFY2(paragraphFormat.lineHeightType() != QTextBlockFormat::FixedHeight || paragraphFormat.lineHeight() != 0, qPrintable(flowContext));
+            stockCursor.setBlockFormat(paragraphFormat); stockCursor.setBlockCharFormat(cursor.blockCharFormat());
+            auto stockImage = imageFormat; stockImage.clearProperty(QTextFormat::ObjectIndex);
+            stockCursor.insertImage(stockImage, QTextFrameFormat::InFlow);
+            const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
+            const qreal density = layout->paintDevice() ? layout->paintDevice()->logicalDpiY() / defaultDpi : 1;
+            const qreal sourceHalfEm = .5 * points * defaultDpi / 72.0;
+            stock.setTextWidth(400 * density);
+            const qreal expectedFloatHeight = stock.size().height() + sourceHalfEm * density;
+            const auto heightContext = flowContext + QStringLiteral(" stockHeight=%1 margin=%2 density=%3 expectedFloatHeight=%4 actualFloatHeight=%5 blockMargins=%6,%7 lineHeight=%8/%9")
+                .arg(stock.size().height()).arg(sourceHalfEm).arg(density).arg(expectedFloatHeight).arg(floatAfter.height())
+                .arg(paragraphFormat.topMargin()).arg(paragraphFormat.bottomMargin()).arg(paragraphFormat.lineHeight()).arg(paragraphFormat.lineHeightType());
+            QCOMPARE(stock.documentLayout()->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+            QVERIFY2(qAbs(format.bottomMargin() - sourceHalfEm) < .0001, qPrintable(heightContext));
+            QVERIFY2(qAbs(floatAfter.height() - expectedFloatHeight) < .1, qPrintable(heightContext));
+            QVERIFY2(qAbs(floatAfter.height() - floatAfter.width()) > 20 * density, qPrintable(heightContext));
+
+            checkpoint("controlled-stock-after-ax-before");
+            auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+            for (int index = 0; index < 5; ++index) {
+                const QString label = QStringLiteral("Image label %1").arg(index); auto selected = document->find(label); QVERIFY(!selected.isNull());
+                const auto positioned = selected.currentFrame()->frameFormat().property(FlowConstruction::containerAbsoluteProperty).toMap();
+                QCOMPARE(positioned.value("containing").toInt(), owner->objectIndex());
+                QCOMPARE(selected.charFormat().fontWeight(), int(index == 4 ? QFont::Bold : QFont::Normal));
+                const auto mapped = LogicalFlow::position(document, selected.selectionStart()); QCOMPARE(mapped.status, LogicalFlow::Status::Handled);
+                QCOMPARE(mapped.values.value("lineCount").metaType().id(), QMetaType::Int); QCOMPARE(mapped.values.value("lineCount").toInt(), 1);
+                const QRectF rect = mapped.values.value("characterRect").toRectF(); QVERIFY(!rect.isEmpty());
+                for (const auto *key : {"lineNaturalLeft", "lineNaturalRight", "lineNaturalWidth", "lineAdvance", "lineWidth"})
+                    QCOMPARE(mapped.values.value(QLatin1String(key)).metaType().id(), QMetaType::Double);
+                const QRectF labelBox = layout->frameBoundingRect(selected.currentFrame());
+                const qreal naturalLeft = mapped.values.value("lineNaturalLeft").toDouble(), naturalRight = mapped.values.value("lineNaturalRight").toDouble();
+                const qreal naturalWidth = mapped.values.value("lineNaturalWidth").toDouble();
+                // Reader text zoom scales authored CSS-pixel fonts independently
+                // of the fixed geometry. CSS Text 3 section 6.1 start-aligns
+                // overlong content; center/right distribution applies when it fits.
+                const qreal expectedFontPoints = 18 * (points / 12.0) * 72.0 / defaultDpi;
+                const bool overflow = naturalWidth > labelBox.width();
+                QCOMPARE(mapped.values.value("resolvedDirection").metaType().id(), QMetaType::Int);
+                const int resolvedDirection = mapped.values.value("resolvedDirection").toInt();
+                QCOMPARE(resolvedDirection, int(Qt::LeftToRight)); // Assert the native resolved direction of this controlled fixture.
+                const qreal actualAlignment = overflow ? naturalLeft : index % 2 ? naturalRight : (naturalLeft + naturalRight) / 2;
+                const qreal expectedAlignment = overflow ? labelBox.left() : index % 2 ? labelBox.right() : labelBox.center().x();
+                const auto labelContext = flowContext + QStringLiteral(" label=%1 align=%2 frame=%3 natural=[%4,%5] naturalWidth=%6 advance=%7 available=%8 actual=%9 expected=%10")
+                    .arg(index).arg(index % 2 ? "right" : "center").arg(rectText(labelBox)).arg(naturalLeft).arg(naturalRight)
+                    .arg(mapped.values.value("lineNaturalWidth").toDouble()).arg(mapped.values.value("lineAdvance").toDouble())
+                    .arg(mapped.values.value("lineWidth").toDouble()).arg(actualAlignment).arg(expectedAlignment)
+                    + QStringLiteral(" overflow=%1 fontPoints=%2 expectedFontPoints=%3 resolvedDirection=%4").arg(overflow).arg(selected.charFormat().fontPointSize()).arg(expectedFontPoints).arg(resolvedDirection);
+                QVERIFY2(qAbs(selected.charFormat().fontPointSize() - expectedFontPoints) < .0001, qPrintable(labelContext));
+                QVERIFY2(qAbs(labelBox.width() - (index % 2 ? 160 : 120) * density) < .1, qPrintable(labelContext));
+                QVERIFY2(qAbs(naturalRight - naturalLeft - naturalWidth) < .1, qPrintable(labelContext));
+                QVERIFY2(qAbs(actualAlignment - expectedAlignment) < .1, qPrintable(labelContext));
+                if (overflow) {
+                    QVERIFY2(naturalRight > labelBox.right(), qPrintable(labelContext));
+                    QVERIFY2(qAbs(naturalRight - (labelBox.left() + naturalWidth)) < .1, qPrintable(labelContext));
+                }
+                if (points == 12 && !inTable && !capturedWidths.contains(width)) qInfo().noquote() << "CONTROLLED_RELATIVE_FLOAT_LABEL" << labelContext;
+                const QPointF offset = window.reading_->viewport()->mapToGlobal(QPoint())
+                    - QPointF(window.reading_->horizontalScrollBar()->value(), window.reading_->verticalScrollBar()->value());
+                QCOMPARE(accessible->textInterface()->characterRect(selected.selectionStart()), rect.translated(offset).toAlignedRect());
+                QCOMPARE(accessible->textInterface()->text(selected.selectionStart(), selected.selectionEnd()), label);
+                if (index != 4) QCOMPARE(layout->anchorAt(rect.center()), QStringLiteral("https://example.test/float-label-%1").arg(index));
+            }
+            QCOMPARE(window.currentEntry_.value("sections").toArray().first().toObject().value("blocks").toArray(), source(true, inTable));
+            checkpoint("controlled-ax-after-focus-before");
+            auto *browser = window.reading_; window.activateWindow(); browser->setFocus(); QTRY_VERIFY(browser->hasFocus());
+            QTest::keyClick(browser, Qt::Key_Home, Qt::ControlModifier); bool focused = false;
+            for (int attempt = 0; attempt < 8 && !focused; ++attempt) {
+                qInfo() << "VI_RELATIVE_TAB" << attempt << "before";
+                QTest::keyClick(browser, Qt::Key_Tab); auto selected = browser->textCursor();
+                qInfo() << "VI_RELATIVE_TAB" << attempt << "after";
+                if (selected.hasSelection()) { const int start = selected.selectionStart(); selected.setPosition(start); selected.setPosition(start + 1, QTextCursor::KeepAnchor);
+                    focused = selected.charFormat().anchorHref() == "https://example.test/float-label-0"; }
+            }
+            QVERIFY(focused); checkpoint("controlled-focus-after");
+            if (points == 12 && !inTable && !capturedWidths.contains(width)) {
+                const auto directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!directory.isEmpty()) {
+                    checkpoint("controlled-frame-mkdir-before");
+                    QVERIFY(QDir().mkpath(directory)); QCoreApplication::processEvents();
+                    checkpoint("controlled-frame-mkdir-after");
+                    const QString name = QStringLiteral("controlled-relative-float-image-window-%1.png").arg(width);
+                    checkpoint("controlled-frame-save-before");
+                    QVERIFY(window.reading_->grab().save(QDir(directory).filePath(name)));
+                    checkpoint("controlled-frame-save-after");
+                    qInfo().noquote() << "CONTROLLED_RELATIVE_FLOAT_FRAME" << name << context
+                        << "readingWidget" << window.reading_->size() << "viewport" << window.reading_->viewport()->size()
+                        << "source=controlled400x240 image240x144,relative_auto,nowrap,Before/float/Beside,fiveAbsoluteLabels";
+                    capturedWidths.insert(width);
+                }
+            }
+            checkpoint("controlled-return-before");
+            QTest::keyClick(browser, Qt::Key_Return);
+            checkpoint("controlled-return-after");
+            QTRY_VERIFY(!receiver.opened.isEmpty()); QCOMPARE(receiver.opened.last(), QUrl("https://example.test/float-label-0"));
+            checkpoint("controlled-receiver-observed-settings-before");
+            QVERIFY(!QSettings().value("media/allowImages").toBool());
+            checkpoint("controlled-settings-after-iteration-end");
+        }
+        checkpoint("controlled-loop-complete");
+        // Genuine ordinary Reader response, retained byte-for-byte. This is
+        // direct composition coverage, not another FFI lookup or logo-byte claim.
+        {
+            const QByteArray genuineResponse =
+            "{\n"
+            "  \"schema\": \"dict.results.v1\",\n"
+            "  \"operation\": \"lookup\",\n"
+            "  \"query\": \"Absolution\",\n"
+            "  \"kind\": \"language\",\n"
+            "  \"language\": \"Alemão\",\n"
+            "  \"match_mode\": \"exact-utf8\",\n"
+            "  \"record_count\": 1,\n"
+            "  \"total_matches\": 1,\n"
+            "  \"offset\": 0,\n"
+            "  \"has_more\": false,\n"
+            "  \"matches\": [],\n"
+            "  \"entries\": [\n"
+            "    {\n"
+            "      \"organization\": {\n"
+            "        \"lexemes\": [\n"
+            "          {\n"
+            "            \"language\": \"Alemão\",\n"
+            "            \"kind\": \"Noun\",\n"
+            "            \"section\": 2,\n"
+            "            \"etymology\": null,\n"
+            "            \"definitions\": [\n"
+            "              {\n"
+            "                \"block\": 1,\n"
+            "                \"parent\": null,\n"
+            "                \"examples\": [],\n"
+            "                \"quotations\": [],\n"
+            "                \"notes\": [],\n"
+            "                \"form\": null\n"
+            "              }\n"
+            "            ],\n"
+            "            \"introduction\": [\n"
+            "              0\n"
+            "            ],\n"
+            "            \"other_blocks\": [],\n"
+            "            \"related_sections\": []\n"
+            "          }\n"
+            "        ],\n"
+            "        \"other_sections\": [\n"
+            "          0,\n"
+            "          1\n"
+            "        ]\n"
+            "      },\n"
+            "      \"title\": \"Absolution\",\n"
+            "      \"display_title\": [],\n"
+            "      \"kind\": \"language\",\n"
+            "      \"language\": \"Alemão\",\n"
+            "      \"language_code\": \"de\",\n"
+            "      \"sections\": [\n"
+            "        {\n"
+            "          \"level\": 2,\n"
+            "          \"title\": \"Alemão\",\n"
+            "          \"anchor\": \"\",\n"
+            "          \"anchor_fallback\": \"\",\n"
+            "          \"blocks\": [\n"
+            "            {\n"
+            "              \"kind\": \"container\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null,\n"
+            "              \"container\": {\n"
+            "                \"blocks\": [\n"
+            "                  {\n"
+            "                    \"kind\": \"paragraph\",\n"
+            "                    \"depth\": 0,\n"
+            "                    \"spans\": [\n"
+            "                      {\n"
+            "                        \"kind\": \"link\",\n"
+            "                        \"text\": \"\",\n"
+            "                        \"target\": \"File:Wikipedia-logo-v2.svg\",\n"
+            "                        \"trail\": \"\",\n"
+            "                        \"language\": \"\",\n"
+            "                        \"classes\": \"wikidict-media wikidict-media-file-57696b6970656469612d6c6f676f2d76322e737667 noprint wp-box\",\n"
+            "                        \"direction\": \"\",\n"
+            "                        \"explanation\": \"\",\n"
+            "                        \"tooltip\": null,\n"
+            "                        \"foreground\": null,\n"
+            "                        \"font_scale\": 0.8999999761581421,\n"
+            "                        \"font_scale_basis\": \"normal_body\",\n"
+            "                        \"image\": {\n"
+            "                          \"file\": \"Wikipedia-logo-v2.svg\",\n"
+            "                          \"width_px\": 35,\n"
+            "                          \"alt\": \"Wikipédia\",\n"
+            "                          \"tooltip\": \"Wikipédia\"\n"
+            "                        },\n"
+            "                        \"bold\": false,\n"
+            "                        \"italic\": false,\n"
+            "                        \"code\": false,\n"
+            "                        \"small\": false,\n"
+            "                        \"superscript\": false,\n"
+            "                        \"subscript\": false,\n"
+            "                        \"strike\": false,\n"
+            "                        \"underline\": false,\n"
+            "                        \"role\": \"normal\"\n"
+            "                      }\n"
+            "                    ],\n"
+            "                    \"feature\": null,\n"
+            "                    \"list_path\": \"\",\n"
+            "                    \"number\": \"\",\n"
+            "                    \"level\": 0,\n"
+            "                    \"anchor\": \"\",\n"
+            "                    \"anchor_fallback\": \"\",\n"
+            "                    \"table\": null,\n"
+            "                    \"text_align\": \"center\"\n"
+            "                  }\n"
+            "                ],\n"
+            "                \"style\": {\n"
+            "                  \"float_side\": \"left\",\n"
+            "                  \"owner_font_scale\": 0.8999999761581421\n"
+            "                }\n"
+            "              }\n"
+            "            },\n"
+            "            {\n"
+            "              \"kind\": \"paragraph\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"A \",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"external_link\",\n"
+            "                  \"text\": \"Wikipédia\",\n"
+            "                  \"target\": \"https://pt.wikipedia.org/wiki/\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box extiw\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \" em \",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"link\",\n"
+            "                  \"text\": \"alemão\",\n"
+            "                  \"target\": \"alemão\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \" possui o\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"line_break\",\n"
+            "                  \"text\": \"\\n\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"artigo \",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"external_link\",\n"
+            "                  \"text\": \"Absolution\",\n"
+            "                  \"target\": \"https://pt.wikipedia.org/wiki/de:Absolution\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box extiw\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"font_scale\": 0.8999999761581421,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": true,\n"
+            "                  \"italic\": true,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null,\n"
+            "              \"text_align\": \"center\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"kind\": \"paragraph\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"Não utilize esta predefinição; use a predefinição \",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": \"#808080\",\n"
+            "                  \"font_scale\": 0.6299999952316284,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"{\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": \"#808080\",\n"
+            "                  \"font_scale\": 0.6299999952316284,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": true,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"{\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": \"#808080\",\n"
+            "                  \"font_scale\": 0.6299999952316284,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": true,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"link\",\n"
+            "                  \"text\": \"interwiki\",\n"
+            "                  \"target\": \"Predefinição:interwiki\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": \"#808080\",\n"
+            "                  \"font_scale\": 0.6299999952316284,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": true,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"}}\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"noprint wp-box\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": \"#808080\",\n"
+            "                  \"font_scale\": 0.6299999952316284,\n"
+            "                  \"font_scale_basis\": \"normal_body\",\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": true,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null,\n"
+            "              \"text_align\": \"center\"\n"
+            "            },\n"
+            "            {\n"
+            "              \"kind\": \"paragraph\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"Não confundir com \",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": true,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"link\",\n"
+            "                  \"text\": \"absolution\",\n"
+            "                  \"target\": \"absolution\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": true,\n"
+            "                  \"italic\": true,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \".\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": true,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null,\n"
+            "              \"style\": {\n"
+            "                \"margins\": {\n"
+            "                  \"top\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  },\n"
+            "                  \"right\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  },\n"
+            "                  \"bottom\": {\n"
+            "                    \"unit\": \"em\",\n"
+            "                    \"value\": 0.5\n"
+            "                  },\n"
+            "                  \"left\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  }\n"
+            "                },\n"
+            "                \"padding\": {\n"
+            "                  \"top\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  },\n"
+            "                  \"right\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  },\n"
+            "                  \"bottom\": {\n"
+            "                    \"unit\": \"px\",\n"
+            "                    \"value\": 0\n"
+            "                  },\n"
+            "                  \"left\": {\n"
+            "                    \"unit\": \"em\",\n"
+            "                    \"value\": 1.600000023841858\n"
+            "                  }\n"
+            "                }\n"
+            "              }\n"
+            "            }\n"
+            "          ]\n"
+            "        },\n"
+            "        {\n"
+            "          \"level\": 1,\n"
+            "          \"title\": \"Alemão\",\n"
+            "          \"anchor\": \"Alemão\",\n"
+            "          \"anchor_fallback\": \"Alem.C3.A3o\",\n"
+            "          \"blocks\": [\n"
+            "            {\n"
+            "              \"kind\": \"heading\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"link\",\n"
+            "                  \"text\": \"Alemão\",\n"
+            "                  \"target\": \"alemão#Português\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"Português\",\n"
+            "                  \"classes\": \"cabecalhoIdioma lnklng\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 1,\n"
+            "              \"anchor\": \"Alemão\",\n"
+            "              \"anchor_fallback\": \"Alem.C3.A3o\",\n"
+            "              \"table\": null\n"
+            "            }\n"
+            "          ]\n"
+            "        },\n"
+            "        {\n"
+            "          \"level\": 2,\n"
+            "          \"title\": \"Substantivo\",\n"
+            "          \"anchor\": \"Substantivo\",\n"
+            "          \"anchor_fallback\": \"\",\n"
+            "          \"blocks\": [\n"
+            "            {\n"
+            "              \"kind\": \"paragraph\",\n"
+            "              \"depth\": 0,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \"Absolution\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": true,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"\",\n"
+            "              \"number\": \"\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null\n"
+            "            },\n"
+            "            {\n"
+            "              \"kind\": \"definition\",\n"
+            "              \"depth\": 1,\n"
+            "              \"spans\": [\n"
+            "                {\n"
+            "                  \"kind\": \"link\",\n"
+            "                  \"text\": \"absolvição\",\n"
+            "                  \"target\": \"absolvição\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                },\n"
+            "                {\n"
+            "                  \"kind\": \"text\",\n"
+            "                  \"text\": \" (dos pecados)\",\n"
+            "                  \"target\": \"\",\n"
+            "                  \"trail\": \"\",\n"
+            "                  \"language\": \"\",\n"
+            "                  \"classes\": \"\",\n"
+            "                  \"direction\": \"\",\n"
+            "                  \"explanation\": \"\",\n"
+            "                  \"tooltip\": null,\n"
+            "                  \"foreground\": null,\n"
+            "                  \"bold\": false,\n"
+            "                  \"italic\": false,\n"
+            "                  \"code\": false,\n"
+            "                  \"small\": false,\n"
+            "                  \"superscript\": false,\n"
+            "                  \"subscript\": false,\n"
+            "                  \"strike\": false,\n"
+            "                  \"underline\": false,\n"
+            "                  \"role\": \"normal\"\n"
+            "                }\n"
+            "              ],\n"
+            "              \"feature\": null,\n"
+            "              \"list_path\": \"#\",\n"
+            "              \"number\": \"1\",\n"
+            "              \"level\": 0,\n"
+            "              \"anchor\": \"\",\n"
+            "              \"anchor_fallback\": \"\",\n"
+            "              \"table\": null\n"
+            "            }\n"
+            "          ]\n"
+            "        }\n"
+            "      ],\n"
+            "      \"preamble_spans\": [],\n"
+            "      \"references\": [],\n"
+            "      \"media\": [\n"
+            "        {\n"
+            "          \"file\": \"Wikipedia-logo-v2.svg\",\n"
+            "          \"kind\": \"image\",\n"
+            "          \"caption\": \"Wikipédia\"\n"
+            "        }\n"
+            "      ],\n"
+            "      \"redirect\": null,\n"
+            "      \"alias\": null\n"
+            "    }\n"
+            "  ]\n"
+            "}\n";
+            checkpoint("historical-genuine-parse-before");
+            const auto response = QJsonDocument::fromJson(genuineResponse);
+            QVERIFY(response.isObject()); const auto entry = response.object().value("entries").toArray().first().toObject();
+            const auto originalFloat = entry.value("sections").toArray().first().toObject().value("blocks").toArray().first().toObject();
+            const auto owned = originalFloat.value("container").toObject();
+            const auto originalImage = owned.value("blocks").toArray().first().toObject().value("spans").toArray().first().toObject().value("image").toObject();
+            const qreal ratio = owned.value("style").toObject().value("owner_font_scale").toDouble();
+            QCOMPARE(ratio, 0.8999999761581421);
+            const QString href = QStringLiteral("media-source:") + QString::fromLatin1(QUrl::toPercentEncoding(QStringLiteral("File:Wikipedia-logo-v2.svg")));
+            for (qreal points : {12.0, 18.0}) for (int width : {640, 900}) {
+                qInfo() << "VI_RELATIVE_HISTORICAL_CASE" << points << width;
+                checkpoint("historical-genuine-resize-before");
+                window.resize(width, width == 640 ? 600 : 700); window.readingPointSize_ = points; QCoreApplication::processEvents();
+                checkpoint("historical-genuine-render-before");
+                QVERIFY(window.renderResponse(genuineResponse, false));
+                checkpoint("historical-genuine-render-after"); window.readingPaneAction_->trigger();
+                QTRY_VERIFY(window.reading_->isVisible());
+                auto *document = window.reading_->document(); auto *layout = document->documentLayout();
+                layout->documentSize(); QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                QVERIFY(document->toPlainText().contains(QString::fromUtf8("absolvição (dos pecados)")));
+                auto selected = imageCursor(document); QVERIFY(!selected.isNull());
+                const auto imageFormat = selected.charFormat().toImageFormat(); auto *floating = selected.currentFrame();
+                const auto format = floating->frameFormat();
+                QCOMPARE(QJsonDocument::fromJson(format.property(FlowConstruction::containerSourceProperty).toByteArray()).object(), originalFloat);
+                QCOMPARE(format.property(FlowConstruction::containerFixedFloatProperty).toMap().value("capability").toString(), QStringLiteral("wikidict.intrinsic-float-image/1"));
+                QCOMPARE(format.width().type(), QTextLength::VariableLength); QCOMPARE(format.width().rawValue(), 0.0);
+                QCOMPARE(format.height().type(), QTextLength::VariableLength); QCOMPARE(format.intProperty(FlowConstruction::containerClearProperty), 0);
+                QCOMPARE(SemanticHtml::inlineImageData(QUrl(imageFormat.name())), originalImage);
+                QCOMPARE(imageFormat.width(), 35.0); QCOMPARE(imageFormat.height(), 35.0); // Offline placeholder, not the original asset ratio.
+                QCOMPARE(imageFormat.anchorHref(), href);
+                QCOMPARE(selected.blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::Alignment(Qt::AlignHCenter));
+                const auto diagnostic = QStringLiteral("intrinsic PT points=%1 width=%2 ownerScale=%3 actualFont=%4")
+                    .arg(points).arg(width).arg(ratio, 0, 'g', 17).arg(imageFormat.fontPointSize(), 0, 'g', 17);
+                QVERIFY2(qAbs(imageFormat.fontPointSize() - points * ratio) < .001, qPrintable(diagnostic));
+                const qreal defaultDpi = QFontMetricsF(QFont()).fontDpi();
+                const qreal density = layout->paintDevice() ? layout->paintDevice()->logicalDpiY() / defaultDpi : 1;
+                const auto floatBox = layout->frameBoundingRect(floating);
+                QVERIFY2(qAbs(floatBox.width() - 35 * density) < .1, qPrintable(diagnostic));
+                const auto beforeQueryDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (!beforeQueryDirectory.isEmpty()) { QVERIFY(QDir().mkpath(beforeQueryDirectory)); QVERIFY(window.reading_->grab().save(QDir(beforeQueryDirectory).filePath(QStringLiteral("diagnostic-intrinsic-source-%1-%2.png").arg(points).arg(width)))); }
+                const auto imagePoint = intrinsicImagePoint(document, selected, 35 * density); QVERIFY2(imagePoint.has_value(), qPrintable(diagnostic));
+                QCOMPARE(layout->hitTest(*imagePoint, Qt::ExactHit), selected.selectionStart());
+                QCOMPARE(layout->anchorAt(*imagePoint), href);
+                QVERIFY2(qAbs(imagePoint->x() - floatBox.center().x()) < .1, qPrintable(diagnostic));
+                QTRY_VERIFY(imageCursor(document).charFormat().intProperty(SemanticHtml::inlineImageStateProperty) == int(MediaPanel::InlineImageState::Disabled));
+                QTRY_VERIFY(window.reading_->accessibleDescription().contains(QString::fromUtf8("Wikipédia")));
+                QVERIFY(window.reading_->accessibleDescription().contains(QStringLiteral("Online images are disabled.")));
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+                QCOMPARE(accessible->textInterface()->text(selected.selectionStart(), selected.selectionEnd()), QString(QChar::ObjectReplacementCharacter));
+                window.activateWindow(); window.reading_->setFocus(); QTRY_VERIFY(window.reading_->hasFocus());
+                QTest::keyClick(window.reading_, Qt::Key_Home, Qt::ControlModifier); bool focused = false;
+                for (int attempt = 0; attempt != 20 && !focused; ++attempt) {
+                    QTest::keyClick(window.reading_, Qt::Key_Tab); const auto cursor = window.reading_->textCursor();
+                    focused = cursor.hasSelection() && cursor.selectedText() == QString(QChar::ObjectReplacementCharacter) && cursor.charFormat().anchorHref() == href;
+                }
+                QVERIFY2(focused, qPrintable(diagnostic));
+                const auto directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (points == 12 && !directory.isEmpty()) {
+                    QVERIFY(QDir().mkpath(directory));
+                    const auto name = QStringLiteral("genuine-pt-intrinsic-placeholder-%1.png").arg(width);
+                    QVERIFY(window.reading_->grab().save(QDir(directory).filePath(name)));
+                    qInfo().noquote() << "GENUINE_PT_COMPOSITION_PLACEHOLDER" << name << diagnostic << "originalAssetBytes=false";
+                }
+                QCOMPARE(window.currentEntry_, entry); QVERIFY(!QSettings().value("media/allowImages").toBool());
+            }
+            // Variant controls keep the genuine input immutable and exercise the
+            // initial supported domain independently of the real record.
+            const auto changedBlock = [&](QJsonObject style, QJsonObject paragraph) {
+                auto block = originalFloat; auto container = owned; container.insert("style", style);
+                container.insert("blocks", QJsonArray{paragraph}); block.insert("container", container); return block;
+            };
+            const auto style = owned.value("style").toObject(); const auto para = owned.value("blocks").toArray().first().toObject();
+            QVERIFY(composeReadingBlocks(window, QJsonArray{originalFloat}));
+            auto explicitNone = style; explicitNone.insert("clear", "none");
+            QVERIFY(composeReadingBlocks(window, QJsonArray{changedBlock(explicitNone, para)}));
+            checkpoint("historical-genuine-variants-before");
+            for (int mutation = 0; mutation != 6; ++mutation) {
+                qInfo() << "VI_RELATIVE_HISTORICAL_MUTATION" << mutation;
+                auto badStyle = style; auto badParagraph = para;
+                if (mutation == 0) badStyle.insert("clear", "both");
+                if (mutation == 1) badStyle.insert("margins", QJsonObject{{"top", length(1)}, {"right", length(0)}, {"bottom", length(0)}, {"left", length(0)}});
+                if (mutation == 2) badParagraph.insert("text_align", "right");
+                if (mutation >= 3) {
+                    auto spans = para.value("spans").toArray(); auto span = spans.first().toObject();
+                    if (mutation == 3) span.insert("target", "File:Different.svg");
+                    if (mutation == 4) span.insert("text", "Preserve this text");
+                    spans[0] = span;
+                    if (mutation == 5) spans.append(QJsonObject{{"kind", "text"}, {"text", "Second child"}});
+                    badParagraph.insert("spans", spans);
+                }
+                QVERIFY(!composeReadingBlocks(window, QJsonArray{changedBlock(badStyle, badParagraph)}));
+                QVERIFY(composeReadingBlocks(window, QJsonArray{originalFloat}));
+            }
+            QPointer<QAbstractTextDocumentLayout> layout = window.reading_->document()->documentLayout();
+            QVERIFY(layout); const auto capability = layout->property("_wikidictIntrinsicFloatImageCapability");
+            qInfo() << "VI_RELATIVE_CAPABILITY" << "intrinsic-before" << static_cast<const void *>(layout.data());
+            layout->setProperty("_wikidictIntrinsicFloatImageCapability", QVariant());
+            QVERIFY(!composeReadingBlocks(window, QJsonArray{originalFloat}));
+            qInfo() << "VI_RELATIVE_CAPABILITY" << "intrinsic-after-refusal" << static_cast<const void *>(layout.data())
+                << "current" << static_cast<const void *>(window.reading_->document()->documentLayout());
+            QVERIFY2(layout, "Intrinsic-image layout was destroyed during expected refusal");
+            layout->setProperty("_wikidictIntrinsicFloatImageCapability", capability);
+            checkpoint("historical-genuine-recovery-before");
+            QVERIFY(window.renderResponse(genuineResponse, false)); QCOMPARE(window.currentEntry_, entry);
+            checkpoint("historical-genuine-recovery-after");
+        }
+        // Genuine installed ES decode: the image is actionless and only its
+        // height is authored. Its neighboring prose owns the actual links.
+        {
+            checkpoint("installed-es-fixture-before");
+            QFile fixture(qEnvironmentVariableIsSet("WIKIDICT_VI_ES_JSON")
+                ? qEnvironmentVariable("WIKIDICT_VI_ES_JSON")
+                : QFINDTESTDATA("fixtures/vi-barracuda-es-installed-decoder.json")); QVERIFY(fixture.open(QIODevice::ReadOnly));
+            const QByteArray payload = fixture.readAll(); const auto response = QJsonDocument::fromJson(payload); QVERIFY(response.isObject());
+            const auto entry = response.object().value("entries").toArray().first().toObject(); QCOMPARE(entry.value("language_code").toString(), QStringLiteral("es"));
+            const auto original = entry.value("sections").toArray().first().toObject().value("blocks").toArray().first().toObject();
+            const auto children = original.value("container").toObject().value("blocks").toArray(); QCOMPARE(children.size(), 2);
+            const auto imageOwner = children.first().toObject(); const auto sourceContainer = imageOwner.value("container").toObject();
+            const auto sourceParagraph = sourceContainer.value("blocks").toArray().first().toObject();
+            const auto sourceSpan = sourceParagraph.value("spans").toArray().first().toObject(); const auto sourceImage = sourceSpan.value("image").toObject();
+            QCOMPARE(sourceContainer.value("style").toObject(), QJsonObject({{"float_side", "left"}}));
+            QCOMPARE(sourceSpan.value("kind").toString(), QStringLiteral("text")); QVERIFY(sourceSpan.value("target").toString().isEmpty());
+            QCOMPARE(sourceImage.value("height_px").toInt(), 40); QVERIFY(!CompiledContent::present(sourceImage.value("width_px")));
+            QVERIFY(!CompiledContent::present(sourceParagraph.value("text_align"))); QCOMPARE(sourceImage.value("alt").toString(), QString());
+            const QList<QPair<QString, QString>> expectedActions{{QStringLiteral("Wikipedia"), QStringLiteral("dict:Wikipedia")},
+                {QStringLiteral("barracuda"), QStringLiteral("https://vi.wikipedia.org/wiki/es:barracuda")}};
+            for (qreal points : {12.0, 18.0}) for (int width : {900, 640, 900}) {
+                qInfo() << "VI_RELATIVE_ES_CASE" << points << width;
+                checkpoint("installed-es-resize-before");
+                window.resize(width, 700); window.readingPointSize_ = points; QCoreApplication::processEvents();
+                checkpoint("installed-es-render-before");
+                QVERIFY(window.renderResponse(payload, false)); checkpoint("installed-es-render-after"); window.readingPaneAction_->trigger(); QTRY_VERIFY(window.reading_->isVisible());
+                auto *document = window.reading_->document(); auto *native = document->documentLayout(); native->documentSize();
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0);
+                QCOMPARE(window.currentEntry_, entry); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), response);
+                auto image = imageCursor(document); QVERIFY(!image.isNull()); QCOMPARE(image.selectedText(), QString(QChar::ObjectReplacementCharacter));
+                const auto imageFormat = image.charFormat().toImageFormat(); auto *floating = image.currentFrame(); auto *outer = floating->parentFrame(); QVERIFY(outer);
+                QCOMPARE(QJsonDocument::fromJson(floating->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), imageOwner);
+                QCOMPARE(QJsonDocument::fromJson(outer->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), original);
+                QCOMPARE(SemanticHtml::inlineImageData(QUrl(imageFormat.name())), sourceImage);
+                QCOMPARE(imageFormat.height(), 40.0); QCOMPARE(imageFormat.width(), 40.0); // Offline square, not an assertion about the original SVG ratio.
+                QVERIFY(!imageFormat.isAnchor()); QVERIFY(imageFormat.anchorHref().isEmpty());
+                QCOMPARE(image.blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::Alignment(Qt::AlignLeft));
+                QCOMPARE(floating->frameFormat().width().type(), QTextLength::VariableLength);
+                const qreal density = native->paintDevice() ? native->paintDevice()->logicalDpiY() / QFontMetricsF(QFont()).fontDpi() : 1;
+                QVERIFY(qAbs(native->frameBoundingRect(floating).width() - qRound(40 * density)) < .1);
+                window.reading_->setTextCursor(image); window.reading_->ensureCursorVisible();
+                const QString beforeQueryDirectory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (points == 12 && !beforeQueryDirectory.isEmpty()) { QVERIFY(QDir().mkpath(beforeQueryDirectory)); QVERIFY(window.reading_->grab().save(QDir(beforeQueryDirectory).filePath(QStringLiteral("vi-es-height-float-%1.png").arg(width)))); }
+                const auto imagePoint = intrinsicImagePoint(document, image, qRound(40 * density)); QVERIFY(imagePoint.has_value());
+                QCOMPARE(native->hitTest(*imagePoint, Qt::ExactHit), image.selectionStart()); QVERIFY(native->anchorAt(*imagePoint).isEmpty());
+                QTRY_COMPARE(imageCursor(document).charFormat().intProperty(SemanticHtml::inlineImageStateProperty), int(MediaPanel::InlineImageState::Disabled));
+                QList<QPair<QString, QString>> actualActions; int previousEnd = -1;
+                for (auto block = document->begin(); block.isValid(); block = block.next()) {
+                    QTextCursor inBlock(block); auto *owner = inBlock.currentFrame(); while (owner && owner != outer) owner = owner->parentFrame();
+                    if (owner != outer) continue;
+                    for (auto it = block.begin(); !it.atEnd(); ++it) {
+                        const auto fragment = it.fragment(); const auto format = fragment.charFormat();
+                        if (!format.isAnchor()) { previousEnd = -1; continue; }
+                        const auto href = format.anchorHref();
+                        if (!actualActions.isEmpty() && previousEnd == fragment.position() && actualActions.last().second == href) actualActions.last().first += fragment.text();
+                        else actualActions.append({fragment.text(), href});
+                        previousEnd = fragment.position() + fragment.length();
+                        const auto first = LogicalFlow::position(document, fragment.position()); const auto next = LogicalFlow::position(document, fragment.position() + 1);
+                        QVERIFY(first.status != LogicalFlow::Status::Refused); QCOMPARE(next.status, first.status);
+                        QPointF point;
+                        if (first.status == LogicalFlow::Status::Handled) {
+                            const auto a = first.values.value("cursorRect").toRectF(); const auto b = next.values.value("cursorRect").toRectF();
+                            QVERIFY(a.height() > 0 && b.height() > 0); point = QPointF((a.left() + b.left()) / 2, a.center().y());
+                        } else {
+                            const int local = fragment.position() - block.position();
+                            const auto line = block.layout()->lineForTextPosition(local); QVERIFY(line.isValid());
+                            const qreal leading = line.cursorToX(local, QTextLine::Leading), trailing = line.cursorToX(local, QTextLine::Trailing);
+                            QVERIFY(qAbs(trailing - leading) > 0);
+                            point = native->blockBoundingRect(block).topLeft() + QPointF((leading + trailing) / 2, line.y() + line.height() / 2);
+                        }
+                        qInfo() << "VI_ES_ACTION_POINT" << points << width << fragment.position() << int(first.status) << point;
+                        QCOMPARE(native->anchorAt(point), href);
+                        const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= fragment.position() && hit < fragment.position() + fragment.length());
+                    }
+                }
+                QCOMPARE(actualActions, expectedActions);
+                const auto rightSource = children.at(1).toObject(); const auto innerSource = rightSource.value("container").toObject().value("blocks").toArray().at(1).toObject();
+                auto wikipedia = document->find(QStringLiteral("Wikipedia")); QVERIFY(!wikipedia.isNull());
+                QCOMPARE(QJsonDocument::fromJson(wikipedia.currentFrame()->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), rightSource);
+                QCOMPARE(wikipedia.currentFrame()->frameFormat().leftMargin(), 60.0);
+                QTextCursor linked(document); for (auto block = document->begin(); block.isValid(); block = block.next()) for (auto it = block.begin(); !it.atEnd(); ++it)
+                    if (it.fragment().charFormat().anchorHref() == expectedActions.at(1).second) { linked.setPosition(it.fragment().position()); linked.setPosition(it.fragment().position() + it.fragment().length(), QTextCursor::KeepAnchor); }
+                QVERIFY(linked.hasSelection());
+                QCOMPARE(QJsonDocument::fromJson(linked.currentFrame()->frameFormat().property(FlowConstruction::containerSourceProperty).toByteArray()).object(), innerSource);
+                QCOMPARE(linked.currentFrame()->frameFormat().leftMargin(), 10.0);
+                const QString rendered = document->toPlainText().simplified();
+                std::function<void(const QJsonObject &)> verifyBody = [&](const QJsonObject &block) {
+                    QString text; for (const auto &v : block.value("spans").toArray()) { const auto s = v.toObject(); text += s.value("text").toString() + s.value("trail").toString(); }
+                    if (!text.simplified().isEmpty()) QVERIFY2(rendered.contains(text.simplified()), qPrintable(text));
+                    for (const auto &child : block.value("container").toObject().value("blocks").toArray()) verifyBody(child.toObject());
+                };
+                for (const auto &section : entry.value("sections").toArray()) for (const auto &block : section.toObject().value("blocks").toArray()) verifyBody(block.toObject());
+                auto *accessible = QAccessible::queryAccessibleInterface(window.reading_); QVERIFY(accessible && accessible->textInterface());
+                QCOMPARE(accessible->textInterface()->text(image.selectionStart(), image.selectionEnd()), QString(QChar::ObjectReplacementCharacter));
+                QVERIFY(window.reading_->accessibleDescription().contains(QStringLiteral("Online images are disabled.")));
+                window.reading_->setTextCursor(image); window.reading_->ensureCursorVisible();
+                QVERIFY(window.reading_->viewport()->rect().contains(window.reading_->cursorRect(image).center()));
+                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+                if (points == 12 && !directory.isEmpty()) { QVERIFY(QDir().mkpath(directory)); QVERIFY(window.reading_->grab().save(QDir(directory).filePath(QStringLiteral("vi-es-height-float-%1.png").arg(width)))); }
+                QCOMPARE(window.currentEntry_, entry);
+            }
+            // Controlled variants retain default paragraph alignment under an RTL
+            // parent. Source height, image geometry, hit testing and action absence
+            // stay independent of the neighbor's real external action.
+            for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
+                qInfo() << "VI_RELATIVE_ES_DIRECTION" << int(direction) << "compose-before";
+                QVERIFY(composeReadingBlocks(window, QJsonArray{original}, direction));
+                checkpoint("installed-es-direction-compose-after");
+                auto *document = window.reading_->document(); auto *native = document->documentLayout(); native->documentSize();
+                auto image = imageCursor(document); QVERIFY(!image.isNull()); const auto disabled = image.charFormat().toImageFormat();
+                QCOMPARE(image.blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::Alignment(Qt::AlignLeft));
+                // No direction is authored on this paragraph: Auto inherits the
+                // selected document direction in both storage and projected flow.
+                QCOMPARE(image.blockFormat().layoutDirection(), Qt::LayoutDirectionAuto);
+                QCOMPARE(document->defaultTextOption().textDirection(), direction);
+                QCOMPARE(image.block().textDirection(), direction);
+                const auto inheritedDirection = LogicalFlow::position(document, image.selectionStart());
+                QVERIFY(inheritedDirection.status != LogicalFlow::Status::Refused);
+                qInfo() << "VI_INTRINSIC_EFFECTIVE_DIRECTION" << int(direction) << inheritedDirection.values;
+                if (inheritedDirection.status == LogicalFlow::Status::Handled) {
+                    QCOMPARE(inheritedDirection.values.value("resolvedDirection").metaType().id(), QMetaType::Int);
+                    QCOMPARE(inheritedDirection.values.value("resolvedDirection").toInt(), int(direction));
+                }
+                QCOMPARE(disabled.height(), 40.0); QVERIFY(!disabled.isAnchor());
+                const QString raw = document->toRawText(); const QJsonObject originalEntry = window.currentEntry_;
+                QVERIFY(window.editDocumentFormats(window.reading_, [&] {
+                    auto format = image.charFormat().toImageFormat();
+                    SemanticHtml::imageDimensions(format, sourceImage, document, QSizeF(80, 40), true);
+                    format.setProperty(SemanticHtml::inlineImageStateProperty, int(MediaPanel::InlineImageState::Ready));
+                    QImage controlled(80, 40, QImage::Format_ARGB32_Premultiplied); controlled.fill(QColor("#3b9871"));
+                    document->addResource(QTextDocument::ImageResource, QUrl(format.name()), controlled); image.setCharFormat(format);
+                }));
+                native->documentSize(); auto readyImage = imageCursor(document); QCOMPARE(readyImage.charFormat().toImageFormat().width(), 80.0); QCOMPARE(readyImage.charFormat().toImageFormat().height(), 40.0);
+                QCOMPARE(document->defaultTextOption().textDirection(), direction);
+                QCOMPARE(readyImage.block().textDirection(), direction);
+                const auto readyDirection = LogicalFlow::position(document, readyImage.selectionStart());
+                QVERIFY(readyDirection.status != LogicalFlow::Status::Refused);
+                if (readyDirection.status == LogicalFlow::Status::Handled) {
+                    QCOMPARE(readyDirection.values.value("resolvedDirection").metaType().id(), QMetaType::Int);
+                    QCOMPARE(readyDirection.values.value("resolvedDirection").toInt(), int(direction));
+                }
+                QCOMPARE(native->property("_wikidictParagraphBoxLayoutError").toInt(), 0); QVERIFY(!readyImage.charFormat().isAnchor());
+                const qreal density = native->paintDevice() ? native->paintDevice()->logicalDpiY() / QFontMetricsF(QFont()).fontDpi() : 1;
+                const auto imagePoint = intrinsicImagePoint(document, readyImage, qRound(80 * density)); QVERIFY(imagePoint.has_value());
+                QCOMPARE(native->hitTest(*imagePoint, Qt::ExactHit), readyImage.selectionStart()); QVERIFY(native->anchorAt(*imagePoint).isEmpty());
+                QCOMPARE(document->toRawText(), raw); QCOMPARE(window.currentEntry_, originalEntry);
+            }
+            const auto changed = [&](const QJsonObject &paragraph) { auto block = imageOwner; auto container = sourceContainer; container.insert("blocks", QJsonArray{paragraph}); block.insert("container", container); return block; };
+            checkpoint("installed-es-variants-before");
+            for (int mutation = 0; mutation != 5; ++mutation) {
+                qInfo() << "VI_RELATIVE_ES_MUTATION" << mutation;
+                auto paragraph = sourceParagraph; auto span = sourceSpan; auto image = sourceImage;
+                if (mutation == 0) paragraph.insert("text_align", "center");
+                if (mutation == 1) { span.insert("kind", "link"); span.insert("target", "File:Wikipedia-logo-v2.svg"); }
+                if (mutation == 2) span.insert("text", "Do not discard source text");
+                if (mutation == 3) { image.insert("width_px", 40); span.insert("image", image); }
+                if (mutation == 4) { image.insert("height_px", -1); span.insert("image", image); }
+                paragraph.insert("spans", QJsonArray{span}); QVERIFY(!composeReadingBlocks(window, QJsonArray{changed(paragraph)}));
+                QVERIFY(composeReadingBlocks(window, QJsonArray{imageOwner}));
+            }
+            QPointer<QAbstractTextDocumentLayout> native = window.reading_->document()->documentLayout();
+            QVERIFY(native); const auto capability = native->property("_wikidictIntrinsicFloatHeightImageCapability");
+            qInfo() << "VI_RELATIVE_CAPABILITY" << "height-before" << static_cast<const void *>(native.data());
+            native->setProperty("_wikidictIntrinsicFloatHeightImageCapability", QVariant()); QVERIFY(!composeReadingBlocks(window, QJsonArray{imageOwner}));
+            qInfo() << "VI_RELATIVE_CAPABILITY" << "height-after-refusal" << static_cast<const void *>(native.data())
+                << "current" << static_cast<const void *>(window.reading_->document()->documentLayout());
+            QVERIFY2(native, "Height-image layout was destroyed during expected refusal");
+            native->setProperty("_wikidictIntrinsicFloatHeightImageCapability", capability);
+            checkpoint("installed-es-recovery-before");
+            QVERIFY(window.renderResponse(payload, false)); QCOMPARE(window.currentEntry_, entry);
+            checkpoint("installed-es-recovery-after");
+            checkpoint("installed-en-fixture-before");
+            QFile goodFixture(qEnvironmentVariableIsSet("WIKIDICT_VI_EN_JSON")
+                ? qEnvironmentVariable("WIKIDICT_VI_EN_JSON")
+                : QFINDTESTDATA("fixtures/vi-barracuda-en-installed-decoder.json")); QVERIFY(goodFixture.open(QIODevice::ReadOnly));
+            const QByteArray goodPayload = goodFixture.readAll(); const auto goodResponse = QJsonDocument::fromJson(goodPayload); QVERIFY(goodResponse.isObject());
+            QCOMPARE(goodResponse.object().value("entries").toArray().first().toObject().value("language_code").toString(), QStringLiteral("en"));
+            checkpoint("installed-en-render-before");
+            QVERIFY(window.renderResponse(goodPayload, false)); checkpoint("installed-en-render-after"); QCOMPARE(QJsonDocument::fromJson(window.currentJson_), goodResponse);
+            QVERIFY(window.reading_->document()->toPlainText().contains(QStringLiteral("barracuda")));
+            checkpoint("installed-es-final-render-before");
+            QVERIFY(window.renderResponse(payload, false)); QCOMPARE(window.currentEntry_, entry);
+            checkpoint("installed-es-final-render-after");
+        }
+        checkpoint("method-end-before-destruction");
+
+    }
+
     void relativeAutoContainerKeepsSourceGeometryAndBeatsRealTableInput() {
         MainWindow window{QString()}; window.resize(760, 700); window.show(); QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         const qreal dpi = QFontMetricsF(QFont()).fontDpi(); window.readingPointSize_ = 20 * 72 / dpi;
@@ -29024,7 +30483,7 @@ private slots:
         QFile edition(root + QStringLiteral("/.desktop-edition")); QVERIFY(edition.open(QIODevice::WriteOnly));
         QCOMPARE(edition.write("enwiktionary-20261001\n"), qint64(22)); edition.close();
         QSettings().setValue(QStringLiteral("reader/language"), QStringLiteral("Greek"));
-        MainWindow window(root, QStringLiteral("source")); window.show(); window.activateWindow();
+        MainWindow window(root, QStringLiteral("source")); window.resize(1000, 700); window.show(); window.activateWindow();
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("source"));
         const auto key = [&](Qt::Key value, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
@@ -29073,6 +30532,64 @@ private slots:
         QTRY_VERIFY(window.reading_->hasFocus());
         QVERIFY(key(Qt::Key_Left, Qt::AltModifier)); QTRY_COMPARE(title(window), QStringLiteral("source"));
         QTRY_VERIFY(window.search_->hasFocus());
+
+        // Compact history carries the current Reading intent, independently of
+        // the destination's saved Search focus. Exercise both owners and keys.
+        window.resize(640, 640); QTRY_VERIFY(window.compactNavigation_);
+        const auto revealReading = [&] {
+            auto *button = window.compactToolbar_->widgetForAction(window.readingPaneAction_);
+            button->setFocus();
+            QTest::keyClick(button, Qt::Key_Space);
+        };
+        for (bool crossOwner : {false, true}) for (bool forwardFirst : {false, true}) {
+            window.loadDataset(root, QStringLiteral("Greek"), QStringLiteral("language"), true, QStringLiteral("source"));
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_ && window.api_->language() == QStringLiteral("Greek"), 30000);
+            QTRY_COMPARE(title(window), QStringLiteral("source"));
+            const QJsonObject sourceEntry = window.currentEntry_;
+            const QString sourceText = window.reading_->document()->toRawText();
+            window.focusSearch(); QTRY_VERIFY(window.search_->hasFocus());
+            const QString target = crossOwner ? QStringLiteral("fallback") : QStringLiteral("same");
+            if (crossOwner) window.loadDataset(root, QStringLiteral("Unclassified"), QStringLiteral("language"), false, target);
+            else QVERIFY(window.openWord(target));
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000); QTRY_COMPARE(title(window), target);
+            const QJsonObject targetEntry = window.currentEntry_;
+            const QString targetText = window.reading_->document()->toRawText();
+            QCOMPARE(window.visits_.size(), 2); QVERIFY(!window.visits_.first().readerFocused);
+            if (forwardFirst) {
+                // Explicit Search navigation keeps its existing saved-focus policy.
+                window.focusSearch(); QTRY_VERIFY(window.search_->hasFocus());
+                QVERIFY(key(Qt::Key_Left, Qt::AltModifier));
+                QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000); QTRY_COMPARE(window.currentEntry_, sourceEntry);
+                QTRY_VERIFY(window.searchPane_->isVisible() && window.search_->hasFocus());
+                QVERIFY(!window.readerContent_->isVisible()); QVERIFY(!window.visits_.last().readerFocused);
+                QCOMPARE(window.reading_->document()->toRawText(), sourceText);
+            }
+            revealReading(); QTRY_VERIFY(window.reading_->hasFocus() && window.readerContent_->isVisible());
+            QVERIFY(key(forwardFirst ? Qt::Key_Right : Qt::Key_Left, Qt::AltModifier));
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+            QTRY_COMPARE(window.currentEntry_, forwardFirst ? targetEntry : sourceEntry);
+            QTRY_VERIFY(window.readerContent_->isVisible() && window.reading_->hasFocus());
+            QVERIFY(!window.searchPane_->isVisible()); QVERIFY(!window.compactSearchPane_);
+            QVERIFY(window.readingPaneAction_->isChecked()); QVERIFY(!window.searchPaneAction_->isChecked());
+            QCOMPARE(window.reading_->document()->toRawText(), forwardFirst ? targetText : sourceText);
+            const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if (!directory.isEmpty()) {
+                QVERIFY(QDir().mkpath(directory));
+                QVERIFY(window.grab().save(QDir(directory).filePath(QStringLiteral("compact-history-%1-%2-640.png")
+                    .arg(crossOwner ? "cross" : "same").arg(forwardFirst ? "forward" : "back"))));
+            }
+            QVERIFY(key(forwardFirst ? Qt::Key_Left : Qt::Key_Right, Qt::AltModifier));
+            QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
+            QTRY_COMPARE(window.currentEntry_, forwardFirst ? sourceEntry : targetEntry);
+            QTRY_VERIFY(window.readerContent_->isVisible() && window.reading_->hasFocus());
+            QCOMPARE(window.reading_->document()->toRawText(), forwardFirst ? sourceText : targetText);
+            // Direct restoration remains independent of explicit navigation intent.
+            MainWindow::Visit direct = window.visits_.at(window.visitIndex_); direct.readerFocused = false;
+            QVERIFY(window.restoreVisitReading(direct));
+            QTRY_VERIFY(window.searchPane_->isVisible() && window.search_->hasFocus());
+            QVERIFY(!window.readerContent_->isVisible());
+            QCOMPARE(window.currentEntry_, forwardFirst ? sourceEntry : targetEntry);
+        }
     }
 
     void exactSearchPreservesExplicitSelection_data() {

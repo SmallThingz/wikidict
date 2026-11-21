@@ -555,7 +555,7 @@ inline QJsonObject containerOwnerFont(const QJsonObject &style) {
     require(font.value("font_normalized").toBool() && font.value("font_scale").isDouble()
         && (font.value("font_scale_basis") == QStringLiteral("normal_body")
             || font.value("font_scale_basis") == QStringLiteral("css_px")));
-    require(!present(style.value("positioning")));
+    require(!present(style.value("positioning")) || style.value("positioning") == QStringLiteral("relative_auto"));
     if (present(style.value("owner_font_scale")))
         require(font.value("font_scale_basis") == QStringLiteral("normal_body")
             && font.value("font_scale") == style.value("owner_font_scale"));
@@ -606,7 +606,8 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
         QStringLiteral("width"), QStringLiteral("float_side"), QStringLiteral("clear"), QStringLiteral("max_width"),
         QStringLiteral("box_sizing"), QStringLiteral("layout"), QStringLiteral("align_items"), QStringLiteral("flex_item"),
         QStringLiteral("background"), QStringLiteral("border"), QStringLiteral("line_height"),
-        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family"), QStringLiteral("owner_font")});
+        QStringLiteral("text_align"), QStringLiteral("screen_max_width"), QStringLiteral("owner_font_scale"), QStringLiteral("height"), QStringLiteral("columns"), QStringLiteral("positioning"), QStringLiteral("min_height"), QStringLiteral("margin_values"), QStringLiteral("overflow"), QStringLiteral("font_family"), QStringLiteral("owner_font"),
+        QStringLiteral("absolute_position"), QStringLiteral("text_wrap")});
     const auto enumeration = [](const QJsonObject &owner, const QString &key, const QStringList &choices) {
         const auto field = owner.value(key);
         if (present(field)) require(field.isString() && choices.contains(field.toString()));
@@ -629,6 +630,7 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
     enumeration(style, QStringLiteral("align_items"), {QStringLiteral("stretch"), QStringLiteral("start"), QStringLiteral("center"), QStringLiteral("end")});
     enumeration(style, QStringLiteral("flex_item"), {QStringLiteral("none")});
     enumeration(style, QStringLiteral("text_align"), {QStringLiteral("left"), QStringLiteral("center"), QStringLiteral("right")});
+    enumeration(style, QStringLiteral("text_wrap"), {QStringLiteral("normal"), QStringLiteral("nowrap")});
     require(!present(style.value(QStringLiteral("align_items"))) || style.value(QStringLiteral("layout")) == QStringLiteral("flex_row"));
     if (present(style.value(QStringLiteral("background")))) containerColor(style.value(QStringLiteral("background")));
     if (present(style.value(QStringLiteral("border")))) {
@@ -656,6 +658,38 @@ inline QJsonObject containerStyle(const QJsonValue &value) {
     }
     if (present(style.value(QStringLiteral("positioning"))))
         require(style.value(QStringLiteral("positioning")) == QStringLiteral("relative_auto"));
+    if (present(style.value(QStringLiteral("absolute_position")))) {
+        const auto absolute = containerObject(style.value(QStringLiteral("absolute_position")),
+            {QStringLiteral("left"), QStringLiteral("top")}, {QStringLiteral("left"), QStringLiteral("top")});
+        for (const auto &key : {QStringLiteral("left"), QStringLiteral("top")}) {
+            const auto length = containerObject(absolute.value(key), {QStringLiteral("unit"), QStringLiteral("value")},
+                {QStringLiteral("unit"), QStringLiteral("value")});
+            const auto number = length.value(QStringLiteral("value"));
+            require((length.value(QStringLiteral("unit")) == QStringLiteral("px")
+                || length.value(QStringLiteral("unit")) == QStringLiteral("em"))
+                && number.isDouble() && std::isfinite(number.toDouble())
+                && std::abs(number.toDouble()) <= std::numeric_limits<float>::max());
+        }
+        for (const auto key : {"positioning", "float_side", "clear", "columns", "layout", "align_items", "flex_item",
+                              "max_width", "min_height", "screen_max_width", "overflow"})
+            require(!present(style.value(QLatin1String(key))));
+        const auto width = style.value(QStringLiteral("width")).toObject();
+        require(width.size() == 1 && width.contains(QStringLiteral("length"))
+            && width.value(QStringLiteral("length")).toObject().value(QStringLiteral("unit")) != QStringLiteral("percent")
+            && present(style.value(QStringLiteral("height"))));
+        for (const auto key : {"padding", "margins"}) if (present(style.value(QLatin1String(key))))
+            for (const auto &edge : style.value(QLatin1String(key)).toObject())
+                require(edge.toObject().value(QStringLiteral("value")).toDouble() == 0);
+        if (present(style.value(QStringLiteral("margin_values"))))
+            for (const auto &edge : style.value(QStringLiteral("margin_values")).toObject()) {
+                const auto tagged = edge.toObject();
+                require(tagged.size() == 1 && tagged.contains(QStringLiteral("length"))
+                    && tagged.value(QStringLiteral("length")).toObject().value(QStringLiteral("value")).toDouble() == 0);
+            }
+        require(!present(style.value(QStringLiteral("border"))) || style.value(QStringLiteral("border")).toObject().contains(QStringLiteral("none")));
+        require(!present(style.value(QStringLiteral("background"))) || style.value(QStringLiteral("background")).toObject().contains(QStringLiteral("transparent")));
+        require(!present(style.value(QStringLiteral("box_sizing"))) || style.value(QStringLiteral("box_sizing")) == QStringLiteral("content_box"));
+    }
     if (present(style.value(QStringLiteral("columns")))) {
         const auto columns = containerObject(style.value(QStringLiteral("columns")),
             {QStringLiteral("count"), QStringLiteral("gap")}, {QStringLiteral("count"), QStringLiteral("gap")});

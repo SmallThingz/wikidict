@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,15340 @@
+@@ -3,24 +3,15788 @@
  
  
  #include <QTest>
@@ -6107,6 +6107,454 @@
 +            }
 +            QCOMPARE(document.toRawText(), raw);
 +        }
++    }
++
++    void relativeFloatImageKeepsIntrinsicAutoBoxMarginsAndAbsoluteLabels()
++    {
++        constexpr int plain = QTextFormat::UserProperty + 0x57e0, fixedFloat = QTextFormat::UserProperty + 0x57ec;
++        constexpr int absolute = QTextFormat::UserProperty + 0x5861, wrap = QTextFormat::UserProperty + 0x5862;
++        const QJsonObject image{{"file", "Controlled-nonsquare.png"}, {"width_px", 240}, {"height_px", QJsonValue(QJsonValue::Null)}, {"vertical_align", "middle"}};
++        const QString imageName = QStringLiteral("wikidict-inline-image:") + QString::fromLatin1(QJsonDocument(image).toJson(QJsonDocument::Compact)
++            .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
++        const QJsonObject span{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""}, {"image", image}};
++        const QJsonObject paragraph{{"kind", "paragraph"}, {"spans", QJsonArray{span}}};
++        const auto source = [](QJsonObject style, QJsonArray blocks = {}) {
++            return QJsonDocument(QJsonObject{{"kind", "container"}, {"spans", QJsonArray{}},
++                {"container", QJsonObject{{"style", style}, {"blocks", blocks}}}}).toJson(QJsonDocument::Compact);
++        };
++        for (int dpi : {96, 144}) for (bool cell : {false, true}) for (bool intermediary : {false, true}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool framedImage : {false, true}) {
++            const qreal scale = qreal(dpi) / 96;
++            QImage device(1800, 900, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            QImage resource(320, 160, QImage::Format_ARGB32_Premultiplied); resource.fill(QColor("#4d728c"));
++            QTextDocument document; document.setLayoutEnabled(false); document.setDocumentMargin(0);
++            QFont font(QStringLiteral("DejaVu Sans")); font.setPointSizeF(13.5); document.setDefaultFont(font);
++            auto option = document.defaultTextOption(); option.setTextDirection(direction); document.setDefaultTextOption(option);
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native); native->setPaintDevice(&device);
++            QCOMPARE(native->property("_wikidictRelativeFloatImageCapability").toString(), QStringLiteral("wikidict.relative-float-image/1"));
++            document.addResource(QTextDocument::ImageResource, QUrl(imageName), resource);
++            QTextFrameFormat ordinary; ordinary.setMargin(0); ordinary.setBorder(0); ordinary.setPadding(0); ordinary.setWidth(400);
++            ordinary.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); ordinary.setProperty(plain + 1, 0);
++            QTextCursor cursor(&document); QTextTable *outer = nullptr;
++            if (cell) {
++                QTextTableFormat table; table.setWidth(440); table.setMargin(0); table.setBorder(0); table.setCellSpacing(0); table.setCellPadding(6);
++                table.setPosition(QTextFrameFormat::FloatRight); outer = cursor.insertTable(1, 1, table); cursor = outer->cellAt(0, 0).firstCursorPosition();
++            }
++            auto relativeFormat = ordinary; relativeFormat.setProperty(plain + 6, QStringLiteral("wikidict.relative-auto/1"));
++            relativeFormat.setProperty(wrap, QStringLiteral("nowrap")); relativeFormat.setProperty(plain + 2, source({{"positioning", "relative_auto"}, {"text_wrap", "nowrap"}}));
++            auto *relative = cursor.insertFrame(relativeFormat);
++            if (intermediary) {
++                auto middle = ordinary; middle.setWidth(QTextLength(QTextLength::VariableLength, 0));
++                middle.setProperty(plain + 2, source(QJsonObject{}));
++                cursor.insertFrame(middle);
++            }
++            auto floatFormat = ordinary; floatFormat.setWidth(QTextLength(QTextLength::VariableLength, 0)); floatFormat.setHeight(QTextLength(QTextLength::VariableLength, 0));
++            floatFormat.setPosition(QTextFrameFormat::FloatLeft); floatFormat.setProperty(plain + 1, 1);
++            floatFormat.setRightMargin(8); floatFormat.setBottomMargin(8);
++            floatFormat.setProperty(fixedFloat, QVariantMap{{"capability", QStringLiteral("wikidict.relative-float-image/1")}, {"em", 16.0}});
++            const QJsonObject zero{{"unit", "em"}, {"value", 0}}, half{{"unit", "em"}, {"value", .5}};
++            const QJsonObject floatStyle{{"width", QJsonValue(QJsonValue::Null)}, {"height", QJsonValue(QJsonValue::Null)},
++                {"float_side", "left"}, {"clear", "left"}, {"margins", QJsonObject{{"top", zero}, {"right", half}, {"bottom", half}, {"left", zero}}}};
++            floatFormat.setProperty(plain + 2, source(floatStyle, QJsonArray{paragraph}));
++            auto *floating = cursor.insertFrame(floatFormat);
++            QTextImageFormat object; object.setName(imageName); object.setWidth(240); object.setProperty(QTextFormat::UserProperty + 0x5811, QStringLiteral("middle"));
++            const int imagePosition = cursor.position();
++            if (framedImage) cursor.insertImage(object, QTextFrameFormat::InFlow);
++            else cursor.insertImage(object);
++            // QTextCursor::charFormat deliberately removes ObjectIndex. Read
++            // the stored occurrence, as the native validator itself does.
++            QTextFragment imageOccurrence;
++            const auto occurrenceBlock = document.findBlock(imagePosition);
++            for (auto it = occurrenceBlock.begin(); !it.atEnd(); ++it) {
++                const auto fragment = it.fragment();
++                if (fragment.isValid() && fragment.position() == imagePosition) imageOccurrence = fragment;
++            }
++            QVERIFY(imageOccurrence.isValid());
++            QCOMPARE(imageOccurrence.position(), imagePosition);
++            QCOMPARE(imageOccurrence.length(), 1);
++            QVERIFY(imageOccurrence.charFormat().isImageFormat());
++            const auto attachedObject = imageOccurrence.charFormat().toImageFormat();
++            QCOMPARE(floating->childFrames().size(), framedImage ? 1 : 0);
++            QTextFrame *imageFrame = framedImage ? floating->childFrames().first() : nullptr;
++            if (imageFrame) {
++                QCOMPARE(document.object(attachedObject.objectIndex()), static_cast<QTextObject *>(imageFrame));
++                QCOMPARE(imageFrame->firstPosition(), imagePosition + 1);
++                QCOMPARE(imageFrame->lastPosition(), imagePosition);
++            }
++            cursor.setPosition(relative->lastPosition() + 1); cursor.insertText(QStringLiteral("Following flow beside the image then below it ").repeated(16));
++            const QTextBlock following = cursor.block();
++            const auto layout = [&](qreal width) {
++                document.setLayoutEnabled(false); document.setTextWidth(width * scale);
++                for (auto block = document.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++                document.setLayoutEnabled(true); native->documentSize(); return native->wikidictParagraphBoxLayoutError() == 0;
++            };
++            const auto context = [&](const char *stage, qreal width) {
++                return QStringLiteral("stage=%1 dpi=%2 cell=%3 direction=%4 width=%5 error=%6 intermediary=%7 framedImage=%8")
++                    .arg(QLatin1String(stage)).arg(dpi).arg(cell).arg(int(direction)).arg(width).arg(native->wikidictParagraphBoxLayoutError()).arg(intermediary).arg(framedImage);
++            };
++            QTextDocument stock; stock.setDocumentMargin(0); stock.setDefaultFont(font); stock.setDefaultTextOption(option);
++            stock.documentLayout()->setPaintDevice(&device); stock.addResource(QTextDocument::ImageResource, QUrl(imageName), resource);
++            QTextCursor stockCursor(&stock);
++            if (framedImage) stockCursor.insertImage(object, QTextFrameFormat::InFlow);
++            else stockCursor.insertImage(object);
++            stock.setTextWidth(400 * scale); const QSizeF stockSize = stock.size();
++            const QList<qreal> widths{900, 640, 900}; struct Baseline { QRectF owner, image, following, table; };
++            QList<Baseline> baselines;
++            for (qreal width : widths) {
++                QVERIFY2(layout(width), qPrintable(context("without-labels", width)));
++                const QRectF box = native->frameBoundingRect(floating); const auto imageBlock = floating->firstCursorPosition().block();
++                QCOMPARE(imageBlock.layout()->lineCount(), 1); const auto line = imageBlock.layout()->lineAt(0);
++                QVERIFY2(qAbs(box.width() - (line.naturalTextWidth() + 8 * scale)) < .05, qPrintable(context("intrinsic-width", width)));
++                QVERIFY(box.width() < native->frameBoundingRect(relative).width());
++                QVERIFY2(qAbs(box.height() - (stockSize.height() + 8 * scale)) < .05, qPrintable(context("ordinary-image-autoheight", width)));
++                QVERIFY(qAbs(box.height() - box.width()) > 20 * scale); // Non-square resource; no invented square wrapper.
++                QCOMPARE(floating->frameFormat().width().type(), QTextLength::VariableLength);
++                QCOMPARE(floating->frameFormat().height().type(), QTextLength::VariableLength);
++                baselines.append({native->frameBoundingRect(relative), box, native->blockBoundingRect(following), outer ? native->frameBoundingRect(outer) : QRectF()});
++            }
++            document.setLayoutEnabled(false); QList<QTextFrame *> labels;
++            for (int index = 0; index != 5; ++index) {
++                cursor = relative->lastCursorPosition(); auto format = ordinary; format.setWidth(120); format.setHeight(20);
++                const double left = 20.0 + index * 30, top = 12.0 + index * 18;
++                format.setProperty(plain + 2, source({{"width", QJsonObject{{"length", QJsonObject{{"unit", "px"}, {"value", 120}}}}},
++                    {"height", QJsonObject{{"unit", "px"}, {"value", 20}}},
++                    {"absolute_position", QJsonObject{{"left", QJsonObject{{"unit", "px"}, {"value", left}}}, {"top", QJsonObject{{"unit", "px"}, {"value", top}}}}}}));
++                auto *label = cursor.insertFrame(format); auto bound = label->frameFormat();
++                bound.setProperty(absolute, QVariantMap{{"capability", QStringLiteral("wikidict.container-absolute/1")}, {"owner", label->objectIndex()},
++                    {"containing", relative->objectIndex()}, {"em", 16.0}, {"left", left}, {"top", top}}); label->setFrameFormat(bound);
++                QTextCharFormat text; if (index < 4) { text.setAnchor(true); text.setAnchorHref(QStringLiteral("dict:Overlay%1").arg(index)); }
++                else text.setFontWeight(QFont::Bold);
++                cursor.insertText(QStringLiteral("Overlay %1").arg(index), text); labels.append(label);
++            }
++            const QString raw = document.toRawText();
++            for (int variant = 0; variant != widths.size(); ++variant) {
++                const qreal width = widths[variant]; QVERIFY2(layout(width), qPrintable(context("with-labels", width)));
++                qInfo().noquote() << context("same-width-geometry", width);
++                QCOMPARE(native->frameBoundingRect(relative), baselines[variant].owner);
++                QCOMPARE(native->frameBoundingRect(floating), baselines[variant].image);
++                QCOMPARE(native->blockBoundingRect(following), baselines[variant].following);
++                if (outer) QCOMPARE(native->frameBoundingRect(outer), baselines[variant].table);
++                for (int index = 0; index != labels.size(); ++index) {
++                    const auto block = labels[index]->firstCursorPosition().block(); const auto line = block.layout()->lineAt(0);
++                    const QPointF point = native->blockBoundingRect(block).topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                    const int hit = native->hitTest(point, Qt::ExactHit); QVERIFY(hit >= block.position() && hit < block.position() + block.length() - 1);
++                    QCOMPARE(native->anchorAt(point), index < 4 ? QStringLiteral("dict:Overlay%1").arg(index) : QString());
++                }
++                QTextCursor selected(&document); selected.setPosition(imagePosition); selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                QCOMPARE(selected.selectedText(), QString(QChar::ObjectReplacementCharacter)); QVERIFY(!selected.charFormat().isAnchor());
++                QCOMPARE(document.toRawText(), raw);
++            }
++            // The actual native resource ratio changes; auto height must follow
++            // the ordinary image line, not a cached 240px wrapper height.
++            const qreal priorHeight = native->frameBoundingRect(floating).height();
++            QImage changed(320, 80, resource.format()); changed.fill(QColor("#628f43"));
++            document.addResource(QTextDocument::ImageResource, QUrl(imageName), changed); document.markContentsDirty(imagePosition, 1);
++            stock.addResource(QTextDocument::ImageResource, QUrl(imageName), changed); stock.markContentsDirty(0, 1);
++            QVERIFY2(layout(640), qPrintable(context("new-resource-ratio", 640)));
++            QVERIFY(native->frameBoundingRect(floating).height() < priorHeight);
++            QVERIFY(qAbs(native->frameBoundingRect(floating).height() - (stock.size().height() + 8 * scale)) < .05);
++            QCOMPARE(document.toRawText(), raw);
++            const auto validFormat = floating->frameFormat();
++            auto invalid = validFormat; invalid.setWidth(240); document.setLayoutEnabled(false); floating->setFrameFormat(invalid);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); floating->setFrameFormat(validFormat); QVERIFY(layout(640));
++            invalid = validFormat; invalid.setRightMargin(9); document.setLayoutEnabled(false); floating->setFrameFormat(invalid);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); floating->setFrameFormat(validFormat); QVERIFY(layout(640));
++            QTextCursor imageCursor(&document); imageCursor.setPosition(imagePosition); imageCursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++            // A source URL is not authority for a forged used width. Normal
++            // maximum-clamped images are also outside this explicit subset.
++            auto forgedWidth = attachedObject; forgedWidth.setWidth(239);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(forgedWidth);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(attachedObject); QVERIFY(layout(640));
++            auto forgedHeight = attachedObject; forgedHeight.setHeight(-1);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(forgedHeight);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(attachedObject); QVERIFY(layout(640));
++            auto linked = imageCursor.charFormat(); linked.setAnchor(true); linked.setAnchorHref(QStringLiteral("dict:ForgedImage")); imageCursor.setCharFormat(linked);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(attachedObject); QVERIFY(layout(640));
++            auto mapped = attachedObject; mapped.setProperty(QTextFormat::UserProperty + 0x57b3, QVariantMap{});
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(mapped);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++            document.setLayoutEnabled(false); imageCursor.setCharFormat(attachedObject); QVERIFY(layout(640));
++            if (imageFrame) {
++                const auto validImageFrame = imageFrame->frameFormat();
++                auto foreignPolicy = validImageFrame; foreignPolicy.setPosition(QTextFrameFormat::FloatLeft);
++                document.setLayoutEnabled(false); imageFrame->setFrameFormat(foreignPolicy);
++                QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                document.setLayoutEnabled(false); imageFrame->setFrameFormat(validImageFrame); QVERIFY(layout(640));
++                foreignPolicy = validImageFrame; foreignPolicy.setPadding(1);
++                document.setLayoutEnabled(false); imageFrame->setFrameFormat(foreignPolicy);
++                QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++                document.setLayoutEnabled(false); imageFrame->setFrameFormat(validImageFrame); QVERIFY(layout(640));
++                QCOMPARE(document.toRawText(), raw);
++            }
++            // A second actual auto-width image float has clear:left. Its outer
++            // margin box starts below the first outer box, including bottom margin.
++            document.setLayoutEnabled(false); cursor = relative->lastCursorPosition();
++            auto *secondFloat = cursor.insertFrame(floatFormat);
++            if (framedImage) cursor.insertImage(object, QTextFrameFormat::InFlow);
++            else cursor.insertImage(object);
++            QVERIFY2(layout(640), qPrintable(context("second-clear-left", 640)));
++            const auto firstOuter = native->frameBoundingRect(floating);
++            const auto secondOuter = native->frameBoundingRect(secondFloat);
++            QVERIFY2(secondOuter.top() >= firstOuter.bottom() - .05, qPrintable(context("clear-margin-area", 640)));
++            QVERIFY(qAbs(secondOuter.width() - firstOuter.width()) < .05);
++            QVERIFY(qAbs(secondOuter.height() - firstOuter.height()) < .05);
++            // A structural child is not the imported image-object frame, even
++            // when it is empty and has an ordinary InFlow format.
++            document.setLayoutEnabled(false); cursor = floating->lastCursorPosition();
++            auto *foreign = cursor.insertFrame(QTextFrameFormat{});
++            QVERIFY(foreign && foreign->parentFrame() == floating);
++            QVERIFY(!layout(640)); QCOMPARE(native->wikidictParagraphBoxLayoutError(), 1);
++        }
++        // Ordinary auto-width image float: no relative owner and no authored clear.
++        // The bitmap is controlled test data; it is not the Wikipedia asset.
++        {
++            const QJsonObject intrinsicImage{{"file", "Controlled-intrinsic.png"}, {"width_px", 35}, {"alt", "Controlled image"}};
++            const QString resourceName = QStringLiteral("wikidict-inline-image:") + QString::fromLatin1(
++                QJsonDocument(intrinsicImage).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
++            const QString target = QStringLiteral("File:Controlled-intrinsic.png");
++            const QString href = QStringLiteral("media-source:") + QString::fromLatin1(QUrl::toPercentEncoding(target));
++            const QJsonObject intrinsicSpan{{"kind", "link"}, {"text", ""}, {"target", target}, {"trail", ""}, {"image", intrinsicImage},
++                {"font_scale", 0.8999999761581421}, {"font_scale_basis", "normal_body"}};
++            const QJsonObject intrinsicParagraph{{"kind", "paragraph"}, {"depth", 0}, {"list_path", ""},
++                {"text_align", "center"}, {"spans", QJsonArray{intrinsicSpan}}};
++            for (int dpi : {96, 144}) for (bool explicitNone : {false, true}) {
++                const qreal density = qreal(dpi) / 96;
++                QImage device(1500, 900, QImage::Format_ARGB32_Premultiplied);
++                device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++                QTextDocument document; document.setLayoutEnabled(false); document.setDocumentMargin(0);
++                QFont font(QStringLiteral("DejaVu Sans")); font.setPointSizeF(12 * 0.8999999761581421); document.setDefaultFont(font);
++                auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native); native->setPaintDevice(&device);
++                QCOMPARE(native->property("_wikidictIntrinsicFloatImageCapability").toString(), QStringLiteral("wikidict.intrinsic-float-image/1"));
++                QImage pixels(70, 40, QImage::Format_ARGB32_Premultiplied); pixels.fill(QColor("#4d728c"));
++                document.addResource(QTextDocument::ImageResource, QUrl(resourceName), pixels);
++                QJsonObject style{{"float_side", "left"}, {"owner_font_scale", 0.8999999761581421}};
++                if (explicitNone) style.insert("clear", "none");
++                QTextFrameFormat format; format.setMargin(0); format.setPadding(0); format.setBorder(0);
++                format.setPosition(QTextFrameFormat::FloatLeft); format.setWidth(QTextLength(QTextLength::VariableLength, 0));
++                format.setHeight(QTextLength(QTextLength::VariableLength, 0));
++                format.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); format.setProperty(plain + 1, 0);
++                format.setProperty(plain + 2, source(style, QJsonArray{intrinsicParagraph}));
++                format.setProperty(fixedFloat, QVariantMap{{"capability", QStringLiteral("wikidict.intrinsic-float-image/1")}, {"em", 16.0}});
++                QTextCursor cursor(&document); auto *floating = cursor.insertFrame(format);
++                QTextBlockFormat centered; centered.setAlignment(Qt::AlignHCenter); cursor.setBlockFormat(centered);
++                QTextImageFormat object; object.setName(resourceName); object.setWidth(35); object.setAnchor(true); object.setAnchorHref(href);
++                const int imagePosition = cursor.position(); cursor.insertImage(object);
++                cursor.setPosition(floating->lastPosition() + 1); cursor.setBlockFormat(QTextBlockFormat{});
++                cursor.insertText(QStringLiteral("Adjacent ordinary prose flows beside the image and continues below it. ").repeated(4));
++                const auto following = cursor.block(); const QString raw = document.toRawText();
++                const auto layout = [&](qreal width) {
++                    document.setLayoutEnabled(false); document.setTextWidth(width * density);
++                    for (auto block = document.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++                    document.setLayoutEnabled(true); native->documentSize(); return native->wikidictParagraphBoxLayoutError() == 0;
++                };
++                const auto context = [&](const char *stage, qreal width) { return QStringLiteral("intrinsic stage=%1 dpi=%2 clearNone=%3 width=%4 error=%5")
++                    .arg(QLatin1String(stage)).arg(dpi).arg(explicitNone).arg(width).arg(native->wikidictParagraphBoxLayoutError()); };
++                QTextDocument stock; stock.setDocumentMargin(0); stock.setDefaultFont(font); stock.documentLayout()->setPaintDevice(&device);
++                stock.addResource(QTextDocument::ImageResource, QUrl(resourceName), pixels); QTextCursor independent(&stock);
++                independent.setBlockFormat(centered); independent.insertImage(object); stock.setTextWidth(35 * density);
++                const QSizeF stockSize = stock.size();
++                QCOMPARE(stock.begin().layout()->lineCount(), 1);
++                const qreal nativeImageWidth = stock.begin().layout()->lineAt(0).naturalTextWidth();
++                // QTextImageHandler scales its QSize to the paint-device DPI;
++                // 35 CSS px rounds to 53 device px at 144 DPI.
++                QCOMPARE(nativeImageWidth, qreal(qRound(35 * density)));
++                QRectF first;
++                for (qreal width : {900.0, 640.0, 24.0, 900.0}) {
++                    QVERIFY2(layout(width), qPrintable(context("layout", width)));
++                    const auto box = native->frameBoundingRect(floating); const auto block = document.findBlock(imagePosition);
++                    QCOMPARE(block.layout()->lineCount(), 1); const auto line = block.layout()->lineAt(0);
++                    const QString geometry = context("intrinsic-width", width)
++                        + QStringLiteral(" actual=%1 expected=%2 line=%3 minimum=%4 preferred=%5")
++                            .arg(box.width()).arg(nativeImageWidth).arg(line.naturalTextWidth())
++                            .arg(block.layout()->minimumWidth()).arg(block.layout()->maximumWidth());
++                    QVERIFY2(qAbs(box.width() - nativeImageWidth) < .1, qPrintable(geometry));
++                    QVERIFY2(qAbs(box.height() - stockSize.height()) < .1, qPrintable(context("ordinary-height", width)));
++                    QVERIFY2(qAbs(line.naturalTextWidth() - nativeImageWidth) < .1, qPrintable(geometry));
++                    const auto blockBox = native->blockBoundingRect(block);
++                    const QPointF point = blockBox.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                    QVERIFY2(qAbs(point.x() - box.center().x()) < .1, qPrintable(context("center", width)));
++                    QCOMPARE(native->anchorAt(point), href); QCOMPARE(native->hitTest(point, Qt::ExactHit), imagePosition);
++                    const QPointF outside(box.right() + 2, point.y()); QVERIFY(native->anchorAt(outside) != href);
++                    const auto nextLine = following.layout()->lineAt(0); const auto nextBox = native->blockBoundingRect(following);
++                    const QPointF next = nextBox.topLeft() + QPointF(nextLine.x(), nextLine.y());
++                    QVERIFY2(next.x() >= box.right() - .1 || next.y() >= box.bottom() - .1, qPrintable(context("flow-exclusion", width)));
++                    QTextCursor selected(&document); selected.setPosition(imagePosition); selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                    QCOMPARE(selected.selectedText(), QString(QChar::ObjectReplacementCharacter)); QCOMPARE(selected.charFormat().anchorHref(), href);
++                    QCOMPARE(floating->frameFormat().width().type(), QTextLength::VariableLength);
++                    if (width == 24) QVERIFY(box.width() > document.textWidth());
++                    QCOMPARE(floating->frameFormat().intProperty(plain + 1), 0); QCOMPARE(document.toRawText(), raw);
++                    if (width == 900) { if (first.isNull()) first = box; else QCOMPARE(box, first); }
++                }
++                const auto valid = floating->frameFormat();
++                for (int mutation = 0; mutation != 4; ++mutation) {
++                    auto bad = valid;
++                    if (mutation == 0) bad.setWidth(35); // Source auto must not become an authored width.
++                    if (mutation == 1) bad.setRightMargin(1);
++                    if (mutation == 2) bad.setProperty(plain + 1, 1);
++                    if (mutation == 3) { auto changed = style; changed.insert("clear", "both"); bad.setProperty(plain + 2, source(changed, QJsonArray{intrinsicParagraph})); }
++                    document.setLayoutEnabled(false); floating->setFrameFormat(bad); QVERIFY(!layout(640));
++                    document.setLayoutEnabled(false); floating->setFrameFormat(valid); QVERIFY(layout(640));
++                }
++                QTextCursor selected(&document); selected.setPosition(imagePosition); selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                const auto goodObject = selected.charFormat();
++                auto forged = goodObject; forged.setAnchorHref(QStringLiteral("dict:Different"));
++                document.setLayoutEnabled(false); selected.setCharFormat(forged); QVERIFY(!layout(640));
++                document.setLayoutEnabled(false); selected.setCharFormat(goodObject); QVERIFY(layout(640));
++                auto wrongWidth = goodObject.toImageFormat(); wrongWidth.setWidth(34);
++                document.setLayoutEnabled(false); selected.setCharFormat(wrongWidth); QVERIFY(!layout(640));
++                document.setLayoutEnabled(false); selected.setCharFormat(goodObject); QVERIFY(layout(640));
++                // Two clear:none floats share the same row when their real widths fit.
++                document.setLayoutEnabled(false); cursor.setPosition(floating->lastPosition() + 1);
++                auto *second = cursor.insertFrame(format); cursor.setBlockFormat(centered); cursor.insertImage(object);
++                QVERIFY(layout(640)); const auto one = native->frameBoundingRect(floating), two = native->frameBoundingRect(second);
++                QVERIFY(qAbs(one.top() - two.top()) < .1); QVERIFY(two.left() >= one.right() - .1);
++                QCOMPARE(two.size(), one.size());
++            }
++        }
++        // Height-authored, actionless image float: the other axis belongs to the
++        // ordinary image handler, including its current offline placeholder.
++        for (int dpi : {96, 144}) for (auto direction : {Qt::LeftToRight, Qt::RightToLeft}) for (bool framedImage : {false, true}) for (int imageState = 0; imageState != 3; ++imageState) {
++            const qreal density = qreal(dpi) / 96;
++            QImage device(1600, 1000, QImage::Format_ARGB32_Premultiplied);
++            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
++            const QJsonObject authoredImage{{"file", "Controlled-height.png"}, {"height_px", 40}, {"alt", ""}};
++            const QJsonObject authoredSpan{{"kind", "text"}, {"text", ""}, {"target", ""}, {"trail", ""}, {"image", authoredImage}};
++            const QJsonObject authoredParagraph{{"kind", "paragraph"}, {"depth", 0}, {"list_path", ""}, {"spans", QJsonArray{authoredSpan}}};
++            const QJsonObject authoredStyle{{"float_side", "left"}};
++            const QString name = QStringLiteral("wikidict-inline-image:") + QString::fromLatin1(
++                QJsonDocument(authoredImage).toJson(QJsonDocument::Compact).toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
++            const QSize resourceSize = imageState == 0 ? QSize(80, 40) : imageState == 1 ? QSize(40, 80) : QSize(40, 40);
++            QImage resource(resourceSize, QImage::Format_ARGB32_Premultiplied); const QColor ink("#3b9871"); resource.fill(ink);
++            QTextDocument document; document.setLayoutEnabled(false); document.setDocumentMargin(0);
++            QFont font(QStringLiteral("DejaVu Sans")); font.setPointSizeF(12); document.setDefaultFont(font);
++            auto option = document.defaultTextOption(); option.setTextDirection(direction); document.setDefaultTextOption(option);
++            auto *native = qobject_cast<QTextDocumentLayout *>(document.documentLayout()); QVERIFY(native); native->setPaintDevice(&device);
++            QCOMPARE(native->property("_wikidictIntrinsicFloatHeightImageCapability").toString(), QStringLiteral("wikidict.intrinsic-float-height-image/1"));
++            document.addResource(QTextDocument::ImageResource, QUrl(name), resource);
++            QTextFrameFormat format; format.setMargin(0); format.setPadding(0); format.setBorder(0);
++            format.setPosition(QTextFrameFormat::FloatLeft); format.setWidth(QTextLength(QTextLength::VariableLength, 0));
++            format.setHeight(QTextLength(QTextLength::VariableLength, 0));
++            format.setProperty(plain, QStringLiteral("wikidict.plain-container/1")); format.setProperty(plain + 1, 0);
++            format.setProperty(plain + 2, source(authoredStyle, QJsonArray{authoredParagraph}));
++            format.setProperty(fixedFloat, QVariantMap{{"capability", QStringLiteral("wikidict.intrinsic-float-image/1")}, {"em", 16.0}});
++            QTextCursor cursor(&document); auto *floating = cursor.insertFrame(format); cursor.setBlockFormat(QTextBlockFormat{});
++            QTextImageFormat object; object.setName(name); object.setHeight(40);
++            if (imageState) object.setWidth(imageState == 1 ? 20 : 40);
++            const int position = cursor.position();
++            if (framedImage) cursor.insertImage(object, QTextFrameFormat::InFlow); else cursor.insertImage(object);
++            cursor.setPosition(floating->lastPosition() + 1); cursor.setBlockFormat(QTextBlockFormat{});
++            QTextCharFormat link; link.setAnchor(true); link.setAnchorHref(QStringLiteral("https://example.test/neighbor"));
++            const int neighborStart = cursor.position(); cursor.insertText(QStringLiteral("Neighbor"), link);
++            cursor.insertText(QStringLiteral(" ordinary prose continues alongside the image and then below it. ").repeated(5), QTextCharFormat{});
++            const QTextBlock neighbor = cursor.block(); const QString raw = document.toRawText();
++            QTextDocument stock; stock.setDocumentMargin(0); stock.setDefaultFont(font); stock.documentLayout()->setPaintDevice(&device);
++            stock.setDefaultTextOption(option);
++            stock.addResource(QTextDocument::ImageResource, QUrl(name), resource); QTextCursor ordinary(&stock); ordinary.insertImage(object); stock.setTextWidth(1000);
++            stock.documentLayout()->documentSize(); const auto stockLine = stock.begin().layout()->lineAt(0);
++            const qreal expectedWidth = stockLine.naturalTextWidth();
++            QCOMPARE(expectedWidth, qreal(qRound((imageState == 0 ? 80 : imageState == 1 ? 20 : 40) * density)));
++            const auto relayout = [&](qreal width) {
++                document.setLayoutEnabled(false); document.setTextWidth(width * density);
++                for (auto block = document.begin(); block.isValid(); block = block.next()) if (block.length() == 1) block.setVisible(false);
++                document.setLayoutEnabled(true); native->documentSize(); return native->wikidictParagraphBoxLayoutError() == 0;
++            };
++            QRectF first; int phase = 0;
++            for (qreal width : {900.0, 640.0, 24.0, 900.0}) {
++                const QString context = QStringLiteral("height-float dpi=%1 framed=%2 state=%3 width=%4 phase=%5 direction=%6")
++                    .arg(dpi).arg(framedImage).arg(imageState).arg(width).arg(phase).arg(int(direction));
++                QVERIFY2(relayout(width), qPrintable(context));
++                const auto box = native->frameBoundingRect(floating); const auto block = document.findBlock(position);
++                QCOMPARE(block.layout()->lineCount(), 1); const auto line = block.layout()->lineAt(0);
++                QVERIFY2(qAbs(box.width() - expectedWidth) < .1, qPrintable(context));
++                QVERIFY2(qAbs(line.naturalTextWidth() - expectedWidth) < .1, qPrintable(context));
++                QVERIFY2(qAbs(box.height() - stock.size().height()) < .1, qPrintable(context));
++                QCOMPARE(block.blockFormat().alignment() & Qt::AlignHorizontal_Mask, Qt::Alignment(Qt::AlignLeft));
++                const auto blockBox = native->blockBoundingRect(block);
++                const QPointF point = blockBox.topLeft() + QPointF((line.cursorToX(0) + line.cursorToX(1)) / 2, line.y() + line.height() / 2);
++                QCOMPARE(native->hitTest(point, Qt::ExactHit), position); QVERIFY(native->anchorAt(point).isEmpty());
++                const auto next = neighbor.layout()->lineAt(0); const auto nextBox = native->blockBoundingRect(neighbor);
++                const QPointF neighborOrigin = nextBox.topLeft() + QPointF(next.x(), next.y());
++                QVERIFY2(neighborOrigin.x() >= box.right() - .1 || neighborOrigin.y() >= box.bottom() - .1, qPrintable(context));
++                // RTL caret edges include the trailing-space convention; select
++                // the actual first source glyph's ink, as painted by this line.
++                const auto neighborRuns = next.glyphRuns(0, 1, QTextLayout::RetrieveGlyphIndexes
++                    | QTextLayout::RetrieveGlyphPositions | QTextLayout::RetrieveStringIndexes);
++                QRectF neighborInk; int neighborGlyphs = 0; bool neighborSourceValid = true;
++                for (const auto &run : neighborRuns) {
++                    const auto indexes = run.glyphIndexes(); const auto positions = run.positions(); const auto sources = run.stringIndexes();
++                    if (indexes.size() != positions.size() || indexes.size() != sources.size()) { neighborSourceValid = false; continue; }
++                    for (qsizetype i = 0; i < indexes.size(); ++i) {
++                        neighborSourceValid = neighborSourceValid && sources.at(i) == 0;
++                        const QRectF ink = run.rawFont().boundingRect(indexes.at(i)).translated(positions.at(i));
++                        neighborInk = neighborInk.isEmpty() ? ink : neighborInk.united(ink); ++neighborGlyphs;
++                    }
++                }
++                const QPointF neighborPoint = nextBox.topLeft() + neighborInk.center();
++                const QPointF caretPoint = nextBox.topLeft() + QPointF((next.cursorToX(0) + next.cursorToX(1)) / 2, next.y() + next.height() / 2);
++                const QString neighborHref = native->anchorAt(neighborPoint);
++                const int neighborHit = native->hitTest(neighborPoint, Qt::ExactHit);
++                QTextCursor selected(&document); selected.setPosition(position); selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++                QCOMPARE(selected.selectedText(), QString(QChar::ObjectReplacementCharacter)); QVERIFY(!selected.charFormat().isAnchor());
++                QCOMPARE(selected.charFormat().toImageFormat().height(), 40.0);
++                QCOMPARE(floating->frameFormat().property(plain + 2).toByteArray(), source(authoredStyle, QJsonArray{authoredParagraph}));
++                QCOMPARE(document.toRawText(), raw);
++                QImage painted(device.size(), QImage::Format_ARGB32_Premultiplied); painted.fill(Qt::white);
++                painted.setDotsPerMeterX(device.dotsPerMeterX()); painted.setDotsPerMeterY(device.dotsPerMeterY());
++                QPainter painter(&painted); native->draw(&painter, QAbstractTextDocumentLayout::PaintContext{}); painter.end();
++                int inkPixels = 0;
++                for (int y = 0; y < painted.height(); ++y) for (int x = 0; x < painted.width(); ++x)
++                    if (painted.pixelColor(x, y) == ink) ++inkPixels;
++                const int expectedPixels = qRound(expectedWidth) * qRound(40 * density);
++                const QString directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                const bool neighborMismatch = !neighborSourceValid || neighborGlyphs != 1 || neighborInk.isEmpty()
++                    || neighborHref != QStringLiteral("https://example.test/neighbor") || neighborHit != neighborStart;
++                if (!directory.isEmpty() && ((!framedImage && imageState == 0 && (phase == 0 || phase == 2))
++                    || (!framedImage && direction == Qt::RightToLeft && imageState == 1 && phase == 1)
++                    || neighborMismatch || inkPixels != expectedPixels)) {
++                    QVERIFY(QDir().mkpath(directory));
++                    QVERIFY(painted.save(QDir(directory).filePath(QStringLiteral("height-float-%1-%2-%3-%4-%5.png").arg(dpi).arg(framedImage).arg(imageState).arg(phase).arg(int(direction)))));
++                }
++                qInfo().noquote() << context << "box" << box << "painted" << inkPixels << "expected" << expectedPixels
++                    << "neighborBox" << nextBox << "lineRect" << next.naturalTextRect() << "glyphInk" << neighborInk
++                    << "glyphs" << neighborGlyphs << "sourceZero" << neighborSourceValid << "caretPoint" << caretPoint
++                    << "neighborPoint" << neighborPoint << "href" << neighborHref << "hit" << neighborHit << "expectedHit" << neighborStart;
++                QVERIFY2(neighborSourceValid, qPrintable(context)); QCOMPARE(neighborGlyphs, 1); QVERIFY2(!neighborInk.isEmpty(), qPrintable(context));
++                QCOMPARE(neighborHref, QStringLiteral("https://example.test/neighbor"));
++                QCOMPARE(neighborHit, neighborStart);
++                QCOMPARE(inkPixels, expectedPixels);
++                if (phase == 0) first = box; else if (phase == 3) QCOMPARE(box, first);
++                if (width == 24 && expectedWidth > 24 * density) QVERIFY(box.width() > document.textWidth());
++                ++phase;
++            }
++            QTextCursor selected(&document); selected.setPosition(position); selected.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
++            const auto good = selected.charFormat();
++            for (int mutation = 0; mutation != 4; ++mutation) {
++                auto bad = good;
++                if (mutation == 0) { bad.setAnchor(true); bad.setAnchorHref(QStringLiteral("dict:Invented")); }
++                if (mutation == 1) bad.setProperty(QTextFormat::ImageHeight, 39.0);
++                if (mutation == 2) bad.setProperty(QTextFormat::ImageWidth, -1.0);
++                if (mutation == 3) bad.setProperty(QTextFormat::UserProperty + 0x57b3, QVariantMap{});
++                document.setLayoutEnabled(false); selected.setCharFormat(bad); QVERIFY(!relayout(640));
++                document.setLayoutEnabled(false); selected.setCharFormat(good); QVERIFY(relayout(640));
++            }
++            const auto valid = floating->frameFormat();
++            for (int mutation = 0; mutation != 4; ++mutation) {
++                auto paragraph = authoredParagraph; auto span = authoredSpan; auto image = authoredImage;
++                if (mutation == 0) paragraph.insert("text_align", "center");
++                if (mutation == 1) span.insert("target", "File:Invented.png");
++                if (mutation == 2) { image.insert("width_px", 40); span.insert("image", image); }
++                if (mutation == 3) span.insert("text", "Do not discard source text");
++                paragraph.insert("spans", QJsonArray{span}); auto bad = valid; bad.setProperty(plain + 2, source(authoredStyle, QJsonArray{paragraph}));
++                document.setLayoutEnabled(false); floating->setFrameFormat(bad); QVERIFY(!relayout(640));
++                document.setLayoutEnabled(false); floating->setFrameFormat(valid); QVERIFY(relayout(640));
++            }
++        }
++
 +    }
 +
 +    void figureCaptionPlainContainerRequiresCurrentOwnedAncestry()
@@ -15363,7 +15811,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15964,3334 @@
+@@ -648,5 +16412,3334 @@
      }
  }
  

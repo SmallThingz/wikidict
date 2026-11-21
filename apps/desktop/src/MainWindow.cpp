@@ -3344,6 +3344,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
     const auto cancelled = std::make_shared<std::atomic_bool>(false);
     cancelLoad_ = cancelled;
     const unsigned serial = ++loadSerial_;
+    const bool keepHistoryReading = restoreVisit >= 0 && compactNavigation_ && !compactSearchPane_;
     saveVisit();
     const QString previousSearchStatus = resultStatus_->text();
     const bool searchWasPending = searchTimer_->isActive();
@@ -3351,11 +3352,11 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
     setLoading(true);
     resultStatus_->setText(QStringLiteral("Opening dictionaries and preparing search..."));
     auto *watcher = new QFutureWatcher<std::shared_ptr<LoadedDataset>>(this);
-    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending] {
+    connect(watcher, &QFutureWatcher<std::shared_ptr<LoadedDataset>>::finished, this, [this, watcher, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending, keepHistoryReading] {
         const auto loaded = watcher->result();
         watcher->deleteLater();
         if (serial != loadSerial_ || cancelled->load()) return;
-        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending] {
+        auto publish = [this, loaded, cancelled, serial, root, resetVisits, word, restoreVisit, fragment, requireExactWord, previousSearchStatus, searchWasPending, keepHistoryReading] {
             if (serial != loadSerial_ || cancelled->load()) return;
             if (!loaded->missingWord.isEmpty()) {
                 // A fallback miss must not replace a readable current owner or entry.
@@ -3504,7 +3505,8 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
             refreshSearch();
             if (restoreVisit >= 0 && restoreVisit < visits_.size()) {
                 try {
-                    const Visit visit = visits_[restoreVisit];
+                    Visit visit = visits_[restoreVisit];
+                    if (keepHistoryReading) visit.readerFocused = true;
                     if (renderResponse(api_->lookup(word), false, std::nullopt, true) && !currentEntry_.isEmpty()) {
                         search_->setText(word);
                         refreshSearch();
@@ -3516,7 +3518,7 @@ void MainWindow::loadDataset(const QString &root, const QString &language, const
                 } catch (const std::exception &error) { resultStatus_->setText(QString::fromUtf8(error.what())); }
             } else if (!word.isEmpty()) openWord(word, fragment);
             const bool restoredReader = restoreVisit >= 0 && restoreVisit < visits_.size()
-                && visits_[restoreVisit].readerFocused && !currentEntry_.isEmpty();
+                && (keepHistoryReading || visits_[restoreVisit].readerFocused) && !currentEntry_.isEmpty();
             const bool compactWordOpened = compactNavigation_ && restoreVisit < 0 && !word.isEmpty();
             if ((restoredReader || fragment || requireExactWord || compactWordOpened) && !currentEntry_.isEmpty()) {
                 showCompactPane(false);
@@ -5845,7 +5847,10 @@ void MainWindow::navigate(int direction) {
     const int index = visitIndex_ + ((currentEntry_.isEmpty() || readingUncommitted_) && direction < 0 ? 0 : direction);
     if (!api_ || loading_ || index < 0 || index >= visits_.size()) return;
     saveVisit();
-    const Visit visit = visits_[index];
+    Visit visit = visits_[index];
+    // Explicit compact history from Reading keeps the revisited entry visible,
+    // even when that destination was originally left with Search focused.
+    if (compactNavigation_ && !compactSearchPane_) visit.readerFocused = true;
     if (visit.language != api_->language() || visit.kind != api_->kind()) {
         loadDataset(api_->root(), visit.language, visit.kind, false, visit.title, index);
         return;
@@ -6479,7 +6484,7 @@ QString MainWindow::tableHtml(const QJsonObject &table, int depth, int tableDept
             if (context.tableAuthoredInk.isValid() && cellOwnerInk != context.tableAuthoredInk && currentColorBorder(cellStyle))
                 throw DictApiError("unsupported authored cell owner contrast");
             const auto cellLine = SemanticHtml::cellLineHeight(cellStyle.value(QStringLiteral("line_height")), readingPointSize_, reading_->document());
-            auto cellContext = context;
+            auto cellContext = context; cellContext.relativeContainingBlock = false;
             cellContext.tableOwnerInk = cellOwnerInk;
             rowOwnerInks.append(cellOwnerInk.isValid() ? QJsonValue(cellOwnerInk.name()) : QJsonValue(QJsonValue::Null));
             cellContext.ordinaryCellContainers = !SemanticHtml::present(tableStyle.value(QStringLiteral("float_side")))
@@ -6582,11 +6587,30 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         || CompiledContent::present(block.value(QStringLiteral("container")))) {
         const auto owned = CompiledContent::containerBlock(block);
         const bool columns = CompiledContent::present(owned.value(QStringLiteral("style")).toObject().value(QStringLiteral("columns")));
-        const bool positioned = CompiledContent::present(owned.value(QStringLiteral("style")).toObject().value(QStringLiteral("positioning")));
+        const auto positioningStyle = owned.value(QStringLiteral("style")).toObject();
+        const bool positioned = CompiledContent::present(positioningStyle.value(QStringLiteral("positioning")));
+        const bool absolute = CompiledContent::present(positioningStyle.value(QStringLiteral("absolute_position")));
+        const bool absoluteExtension = FlowConstruction::absoluteContainerExtension(owned);
+        const bool relativeImage = !FlowConstruction::relativeFloatImageSource(owned).isEmpty();
+        if ((relativeImage || FlowConstruction::hasRelativeFloatImageDescendant(owned))
+            && reading_->document()->documentLayout()->property("_wikidictRelativeFloatImageCapability").toString()
+                != QStringLiteral("wikidict.relative-float-image/1"))
+            throw DictApiError("compiled relative float image is not available");
+        if (relativeImage && !context.relativeContainingBlock)
+            throw DictApiError("compiled float image has no represented relative owner");
+        if (absoluteExtension && reading_->document()->documentLayout()->property("_wikidictContainerAbsoluteCapability").toString()
+                != QStringLiteral("wikidict.container-absolute/1"))
+            throw DictApiError("compiled Container absolute positioning is not available");
+        if (CompiledContent::present(positioningStyle.value(QStringLiteral("text_wrap")))
+            && reading_->document()->documentLayout()->property("_wikidictContainerTextWrapCapability").toString()
+                != QStringLiteral("wikidict.container-text-wrap/1"))
+            throw DictApiError("compiled Container text wrap is not available");
+        if (absolute && !context.relativeContainingBlock)
+            throw DictApiError("compiled absolute Container has no represented relative owner");
         const auto cellFloatCapability = reading_->document()->documentLayout()->property("_wikidictContainerFixedFloatCapability");
         const bool ordinaryCell = context.ordinaryCellContainers && cellFloatCapability.metaType().id() == QMetaType::QString
             && cellFloatCapability.toString() == QStringLiteral("wikidict.container-fixed-float/1");
-        if (tableDepth != 1 && !columns && !positioned && !context.computedCellTraits && !ordinaryCell)
+        if (tableDepth != 1 && !columns && !positioned && !absolute && !context.relativeContainingBlock && !context.computedCellTraits && !ordinaryCell)
             throw DictApiError("compiled Container inside table layout is not available");
         if (positioned && reading_->document()->documentLayout()->property("_wikidictContainerPositioningCapability").toString()
                 != QStringLiteral("wikidict.relative-auto/1"))
@@ -6677,6 +6701,8 @@ QString MainWindow::blockHtml(const QJsonObject &block, const QString &cellBackg
         FlowConstruction::Rendered rendered;
         const auto children = owned.value(QStringLiteral("blocks")).toArray();
         auto childContext = context; childContext.flexItem = inputs.layout == QStringLiteral("flex_row");
+        if (absolute) childContext.relativeContainingBlock = false;
+        else if (positioned) childContext.relativeContainingBlock = true;
         for (qsizetype index = 0; index < children.size(); ++index) {
             auto child = childContext;
             if (context.referenceStage == 0) child.referenceStage = 1;
