@@ -17,7 +17,7 @@ class AttemptIndexTests(unittest.TestCase):
             root = Path(directory)
             workspace = root / 'workspace'
             (workspace / 'receipts').mkdir(parents=True)
-            run = root / 'external' / 'runtime01'
+            run = root / 'external' / 'source-scratch' / 'whole02-runtime'
             closed = run / 'direct-runtime01'
             closed.mkdir(parents=True)
 
@@ -41,19 +41,32 @@ class AttemptIndexTests(unittest.TestCase):
             diagnostics = b'build diagnostic\n' * 32768
             stderr = record(run / 'tests.stderr', diagnostics)
 
-            def freeze(extra=(), watchdog_code=0):
+            def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False, cleanup=True):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
+                if selected_catalog:
+                    selection = record(root / 'selection.json', dict(python_tooling=command.pop('current_python_catalog')))
+                    command.update(selection=selection, source_refs=[builder, selection, catalog_ref])
                 command_ref = record(root / 'command.json', command)
+                start = dict(input_authority=command_ref, source_refs=command['source_refs'])
+                if selected_catalog:
+                    refs = command['source_refs']
+                    encoded = json.dumps(refs, sort_keys=True, separators=(',', ':')).encode()
+                    start.update(source_refs=refs[:2], source_refs_ref=command_ref, source_ref_count=len(refs),
+                                 source_refs_sha256=hashlib.sha256(encoded).hexdigest())
                 result = dict(argv=command['argv'], cwd=str(workspace), environment={},
-                              returncode=0, elapsed_seconds=3, stdout=stdout, stderr=stderr)
+                              returncode=exit_code, elapsed_seconds=3, stdout=stdout, stderr=stderr)
                 closure = dict(source_after=True, source_lease_released=True, allocation_released=True,
                     local_proc_absent=True, ps_absent=True, host_namespace_identity_absent=True,
-                    terminal=0, reaped=True, closed_unix=1,
-                    start=record(closed / 'start.json', dict(input_authority=command_ref, source_refs=[builder])),
-                    owner_result=record(closed / 'owner-result.json', dict(returncode=0, source_after=True)),
-                    watchdog=record(closed / 'watchdog.json', dict(child_exit_status=watchdog_code)),
+                    terminal=exit_code, reaped=True, closed_unix=1,
+                    start=record(closed / 'start.json', start),
+                    owner_result=record(closed / 'owner-result.json', dict(returncode=exit_code, source_after=True)),
+                    watchdog=record(closed / 'watchdog.json', dict(child_exit_status=watchdog_code,
+                        cleanup_complete=cleanup, guardian_exit_status=0, termination_reason='child_exit')),
                     result=record(run / 'result01.json', result))
+                if detached:
+                    closure.update(terminal=None, reaped=False, original_rd_terminal_known=False,
+                        original_rd_reaped=False, original_rd_terminal=None, rd_receipt_gap='terminal unavailable', errors=[])
                 path = closed / 'independent-closure01.json'
                 record(path, closure)
                 return path
@@ -90,6 +103,34 @@ class AttemptIndexTests(unittest.TestCase):
             refused = subprocess.run(command, cwd=workspace, capture_output=True)
             self.assertNotEqual(refused.returncode, 0)
             self.assertEqual((index.read_bytes(), index.stat().st_ino), before)
+
+            from index_corpus_attempts import read_execution
+            base = workspace / 'receipts'
+            freeze(selected_catalog=True)
+            self.assertEqual(read_execution(base, path, guardian=True)['closure_join'], 'reaped')
+            closure = json.loads(path.read_bytes())
+            start = json.loads((closed / 'start.json').read_bytes())
+            closure['start'] = record(closed / 'start.json', dict(start, source_ref_count=2))
+            record(path, closure)
+            with self.assertRaisesRegex(ValueError, 'Guardian source list differs'):
+                read_execution(base, path, guardian=True)
+            freeze(selected_catalog=True)
+            (root / 'selection.json').write_text('{}')
+            with self.assertRaises(ValueError):
+                read_execution(base, path, guardian=True)
+            freeze(detached=True)
+            with self.assertRaisesRegex(ValueError, 'Incomplete guardian closure'):
+                read_execution(base, path, guardian=True)
+            stdout = record(run / 'tests.stdout', b'')
+            freeze(detached=True, exit_code=1, watchdog_code=1, selected_catalog=True)
+            row = read_execution(base, path, guardian=True)
+            self.assertEqual(row['command_exit'], 1)
+            self.assertEqual(row['closure_join'], 'original-terminal-unknown')
+            self.assertEqual(row['production_status'], 'no-terminal-production-clock')
+            for watchdog_code, cleanup in [(0, True), (1, False)]:
+                freeze(detached=True, exit_code=1, watchdog_code=watchdog_code, cleanup=cleanup)
+                with self.assertRaisesRegex(ValueError, 'Incomplete guardian closure'):
+                    read_execution(base, path, guardian=True)
 
     def test_numbered_retries_and_unstarted_production_are_counted_once(self):
         with tempfile.TemporaryDirectory() as directory:

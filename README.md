@@ -555,6 +555,12 @@ command checks every numbered execution in that directory against its original
 result and stdout. Omit `--add` to check all retained attempts. Include
 `--retry-times RETRY_TIMES.tsv` to refresh the existing edition totals from the
 same index. Both TSV files must be in the same directory.
+For a direct build recorded outside the driver, `--add-guardian-closure` takes
+its closure path and checks the command, source inventory, build catalog and
+watchdog result. The `closure_join` column keeps a failed child's witnessed exit
+distinct from the enclosing session's join. `original-terminal-unknown` means
+the outer session lost its terminal and independent checks verified the failed
+child's exit and cleanup.
 The [per-edition retry times](data/corpus-campaign-current01/local-edition-retry-times.tsv)
 combine the historical timings and later attempts, counting each recorded build
 once. A logged failure during snapshot selection has command time and never

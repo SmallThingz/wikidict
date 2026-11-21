@@ -29,12 +29,11 @@ def attempt_key(base, path):
     # Keep the published legacy keys. Other owners retain receipts in their
     # own directories, so give those an explicit workspace-relative identity.
     relative = path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path
-    if (len(relative.parts) < 4 or Path(*relative.parts[-2:]) != CLOSURE
-            or not re.fullmatch(r'runtime[0-9]{2,}', relative.parts[-3])):
+    if len(relative.parts) < 4 or Path(*relative.parts[-2:]) != CLOSURE:
         raise ValueError(f'Invalid attempt closure: {path}')
     if path.is_relative_to(base):
         local = path.relative_to(base)
-        if len(local.parts) != 4:
+        if len(local.parts) != 4 or not re.fullmatch(r'runtime[0-9]{2,}', local.parts[1]):
             raise ValueError(f'Invalid attempt closure: {path}')
         family, run = local.parts[:2]
         return family if run == 'runtime01' else f'{family}/{run}'
@@ -59,17 +58,34 @@ def guardian_whole(path, closure, result):
     owner = sibling('owner_result', 'owner-result.json')
     watchdog = sibling('watchdog', 'watchdog.json')
     code = result['returncode']
+    joined = closure.get('terminal') == code and closure.get('reaped') is True
+    # A failed payload can have an independently witnessed exit even when the
+    # enclosing RD session lost its terminal. Keep that distinction in the TSV.
+    failed_child_only = (type(code) is int and code != 0 and closure.get('reaped') is False
+                         and closure.get('terminal') is None and closure.get('original_rd_terminal_known') is False
+                         and closure.get('original_rd_reaped') is False and closure.get('original_rd_terminal') is None
+                         and bool(closure.get('rd_receipt_gap')) and closure.get('errors') == []
+                         and watchdog.get('cleanup_complete') is True and watchdog.get('guardian_exit_status') == 0
+                         and watchdog.get('termination_reason') == 'child_exit')
     if (any(closure.get(k) is not True for k in (
             'source_after', 'source_lease_released', 'allocation_released',
             'local_proc_absent', 'ps_absent', 'host_namespace_identity_absent'))
             or owner.get('source_after') is not True
             or owner['returncode'] != code or watchdog['child_exit_status'] != code
-            or closure.get('terminal') != code or not closure.get('reaped')):
+            or not (joined or failed_child_only)):
         raise ValueError(f'Incomplete guardian closure: {path}')
     command = json.loads(checked(start['input_authority']))
+    refs = command['source_refs']
+    if 'source_refs_ref' in start:
+        encoded = json.dumps(refs, sort_keys=True, separators=(',', ':')).encode()
+        if (start['source_refs_ref'] != start['input_authority'] or len(refs) < 2
+                or start['source_refs'] != refs[:2] or start.get('source_ref_count') != len(refs)
+                or start.get('source_refs_sha256') != hashlib.sha256(encoded).hexdigest()):
+            raise ValueError(f'Guardian source list differs: {path}')
+    elif refs != start['source_refs']:
+        raise ValueError(f'Guardian source list differs: {path}')
     if (command['argv'] != result['argv'] or command['cwd'] != result['cwd']
             or command['env'] != result['environment']
-            or command['source_refs'] != start['source_refs']
             or Path(command['qualification_root']).resolve(strict=True) != path.parents[1]):
         raise ValueError(f'Guardian command differs: {path}')
     argv = result['argv']
@@ -79,7 +95,13 @@ def guardian_whole(path, closure, result):
             raise ValueError(f'Expected one {name}: {path}')
         return argv[argv.index(name) + 1]
 
-    catalog = json.loads(checked(command['current_python_catalog']))
+    catalog_ref = command.get('current_python_catalog')
+    if catalog_ref is None:
+        selection = command['selection']
+        if selection not in command['source_refs']:
+            raise ValueError(f'Edition selection was not guarded: {path}')
+        catalog_ref = json.loads(checked(selection))['python_tooling']
+    catalog = json.loads(checked(catalog_ref))
     if json.loads(option('--python-tooling-json')) != catalog:
         raise ValueError(f'Python catalog differs: {path}')
     builder = catalog['modules']['build_wiktionaries']
@@ -119,6 +141,7 @@ def guardian_whole(path, closure, result):
             raise ValueError(stderr['path'])
     return {**closure, 'whole_edition_selected': True, 'page_limit': None,
             'presentation_audit_limit': None, 'edition_output': str(output),
+            'failed_child_only': failed_child_only,
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
 
 
@@ -139,7 +162,8 @@ def read_execution(base, path, guardian=False):
     argv = result['argv']
     if '--wikis' in argv and argv[argv.index('--wikis') + 1] != edition:
         raise ValueError(f'Edition differs in {path}')
-    if closure['command_returncode'] != result['returncode'] or not closure['reaped']:
+    child_only = guardian and closure['failed_child_only']
+    if closure['command_returncode'] != result['returncode'] or not (closure['reaped'] or child_only):
         raise ValueError(f'Command closure differs in {path}')
     # Hash the full stream while keeping bounded evidence for the two clocks.
     stdout = result['stdout']
@@ -181,7 +205,8 @@ def read_execution(base, path, guardian=False):
                 production_seconds=f"{end['seconds']:.3f}" if end else '',
                 command_seconds=f"{result['elapsed_seconds']:.3f}", closed_unix=closure['closed_unix'],
                 stdout_sha256=stdout['sha256'], closure_sha256=hashlib.sha256(data).hexdigest(),
-                closure_path=str(path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path))
+                closure_path=str(path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path),
+                closure_join='original-terminal-unknown' if child_only else 'reaped')
 
 
 def refresh_retry_times(path, attempts):
@@ -226,9 +251,14 @@ def refresh_retry_times(path, attempts):
 
 def merge_rows(out, base, rows, retry_times=None):
     previous = {}
+    migrated = False
     if out.exists():
         with out.open(newline='') as stream:
             for row in csv.DictReader(stream, delimiter='\t'):
+                if 'closure_join' not in row:
+                    # The previous schema admitted only reaped closures.
+                    row['closure_join'] = 'reaped'
+                    migrated = True
                 name = row['attempt']
                 if name in previous or name != attempt_key(base, Path.cwd() / row['closure_path']):
                     raise ValueError(f'Ambiguous existing attempt {name}')
@@ -250,7 +280,7 @@ def merge_rows(out, base, rows, retry_times=None):
             reclassified = True
     rows = [*previous.values(), *additions]
     retry_rows = refresh_retry_times(retry_times, rows) if retry_times else None
-    if additions or reclassified:
+    if additions or reclassified or migrated:
         write_rows(out, rows)
     if retry_rows:
         write_rows(retry_times, retry_rows)
