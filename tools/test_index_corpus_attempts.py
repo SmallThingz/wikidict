@@ -65,7 +65,7 @@ class AttemptIndexTests(unittest.TestCase):
 
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
                        input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
-                       snapshot=None, guard_snapshot=True, bootstrap_copy=None):
+                       snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
@@ -74,6 +74,8 @@ class AttemptIndexTests(unittest.TestCase):
                 if input_selection:
                     command.pop('current_python_catalog')
                     inputs = dict(snapshots={'language-registry': snapshot}) if snapshot else dict(manifest=selected_manifest or manifest)
+                    if snapshot_context:
+                        inputs.update(snapshot_context)
                     selection = record(root / 'inputs.json', inputs)
                     command.update(input_step='ordinary_whole', input_selection=selection,
                                    source_refs=[builder, selection, manifest])
@@ -86,7 +88,7 @@ class AttemptIndexTests(unittest.TestCase):
                         command['source_refs'].append(selector)
                     if bootstrap_copy:
                         guarded, selected = bootstrap_copy
-                        modules = {**catalog['modules'], 'build_resource_limits': selected}
+                        modules = {**catalog['modules'], Path(selected['path']).stem: selected}
                         command['argv'][command['argv'].index('--python-tooling-json') + 1] = json.dumps({**catalog, 'modules': modules})
                         command['source_refs'].insert(0, guarded)
                 command_ref = record(root / 'command.json', command)
@@ -160,6 +162,31 @@ class AttemptIndexTests(unittest.TestCase):
             flags = ('--exact-snapshot-selection', '--language-registry-snapshot', snapshot['path'])
             freeze(flags, input_selection=True, snapshot=snapshot)
             self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            context = dict(edition='blkwiktionary', date='20261001', normal_resolution_validated=True)
+            freeze(flags, input_selection=True, snapshot=snapshot, snapshot_context=context)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            for changed in (dict(edition='enwiktionary'), dict(date='20260901'),
+                            dict(normal_resolution_validated=1), dict(unrecognized=True)):
+                freeze(flags, input_selection=True, snapshot=snapshot, snapshot_context={**context, **changed})
+                with self.assertRaises(ValueError):
+                    read_execution(base, path, guardian=True)
+            disk = record(root / 'build_disk_limits.py', b'disk helper')
+            key = hashlib.sha256(disk['path'].encode()).hexdigest()[:16]
+            alias = run.parent / 'guarded-source-aliases01' / f'source-{key}.py'
+            alias.parent.mkdir()
+            alias.symlink_to(disk['path'])
+            freeze(flags, input_selection=True, snapshot=snapshot, snapshot_context=context,
+                   bootstrap_copy=(dict(disk, path=str(alias)), disk))
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            alias.unlink()
+            alias.write_bytes(b'disk helper')
+            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                read_execution(base, path, guardian=True)
+            alias.unlink()
+            other = record(root / 'other.py', b'disk helper')
+            alias.symlink_to(other['path'])
+            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                read_execution(base, path, guardian=True)
             for options, guarded in [(flags, False), (flags[:-1] + ('different.tsv',), True),
                                      (flags + flags[1:], True), (flags[:1], True)]:
                 freeze(options, input_selection=True, snapshot=snapshot, guard_snapshot=guarded)

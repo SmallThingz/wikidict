@@ -121,6 +121,7 @@ def guardian_whole(path, closure, result):
     catalog = json.loads(option('--python-tooling-json'))
     manifest_path = Path(option('--input-manifest'))
     manifest_hash = option('--input-manifest-sha256')
+    dated_snapshots = None
     catalog_ref = command.get('current_python_catalog')
     if catalog_ref is None and 'selection' in command:
         selection = command['selection']
@@ -140,7 +141,10 @@ def guardian_whole(path, closure, result):
         inputs = json.loads(checked(selection))
         if 'manifest' in inputs and command.get('input_step') == 'ordinary_whole':
             manifest_ref = inputs['manifest']
-        elif set(inputs) == {'snapshots'} and argv.count('--exact-snapshot-selection') == 1:
+        elif (set(inputs) in ({'snapshots'}, {'snapshots', 'edition', 'date', 'normal_resolution_validated'})
+              and argv.count('--exact-snapshot-selection') == 1):
+            if 'edition' in inputs:
+                dated_snapshots = inputs
             snapshots = inputs['snapshots']
             flags = [arg for arg in argv if arg.startswith('--') and arg.split('=', 1)[0].endswith('-snapshot')]
             if (not isinstance(snapshots, dict) or not snapshots
@@ -162,6 +166,17 @@ def guardian_whole(path, closure, result):
         for name, ref in [('selector', catalog['selector']), *catalog['modules'].items()]:
             if (ref['path'], ref['bytes'], ref['sha256']) in guarded:
                 continue
+            # A build can select a different disk helper from its watchdog.
+            # Its retained alias records the original catalog path in both the
+            # link target and the filename. A separate copy is insufficient.
+            if name == 'build_disk_limits':
+                key = hashlib.sha256(os.fsencode(ref['path'])).hexdigest()[:16]
+                alias = path.parents[2] / 'guarded-source-aliases01' / f'source-{key}.py'
+                if ((str(alias), ref['bytes'], ref['sha256']) in guarded
+                        and alias.is_symlink() and os.readlink(alias) == ref['path']):
+                    checked(ref)
+                    if os.readlink(alias) == ref['path']:
+                        continue
             # Some failed invocations selected a private Python catalog and ran
             # the watchdog from a separate installation of the same two modules.
             # Count the command only when both original payloads still verify.
@@ -197,7 +212,11 @@ def guardian_whole(path, closure, result):
     dates = {item['date'] for item in manifest['files'] if item['wiki'] == edition}
     if len(dates) != 1:
         raise ValueError(f'Ambiguous input date: {path}')
-    output = Path(option('--output')) / edition / dates.pop()
+    date = dates.pop()
+    if dated_snapshots is not None and (dated_snapshots['edition'] != edition or dated_snapshots['date'] != date
+                                        or dated_snapshots['normal_resolution_validated'] is not True):
+        raise ValueError(f'Dated snapshot selection differs from the whole-edition input: {path}')
+    output = Path(option('--output')) / edition / date
     # Diagnostics can span an entire edition. Verify the stream without
     # retaining it alongside the parsed source and tool records.
     stderr = result['stderr']
