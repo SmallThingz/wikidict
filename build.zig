@@ -1762,6 +1762,7 @@ const tools_partitions = [_]ToolsPartition{
         "blob_build.test.RenderLimit ",
         "blob_build.test.SIMPLE ",
         "blob_build.test.SL ",
+        "blob_build.test.SS ",
         "blob_build.test.Samoan ",
         "blob_build.test.TE ",
         "blob_build.test.TN ",
@@ -1903,7 +1904,10 @@ fn validateToolsTestSource(a: std.mem.Allocator, source: [:0]const u8, namespace
                     break :name try std.fmt.allocPrint(a, "{s}.test.{s}", .{ namespace, decoded });
                 };
                 if ((try names.getOrPut(a, name)).found_existing) return error.DuplicateToolsTestName;
-                _ = try toolsPartitionForName(name);
+                _ = toolsPartitionForName(name) catch |err| {
+                    std.debug.print("unassigned or overlapping Tools test: {s} ({s})\n", .{ name, @errorName(err) });
+                    return err;
+                };
                 count += 1;
             },
             else => {},
