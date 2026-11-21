@@ -10049,6 +10049,20 @@ pub const Profile = struct {
         return result;
     }
 
+    // A known content language does not reset styles inherited from omitted
+    // outer subjects. Keep their absence proof separate from LTR/RTL invariance.
+    pub fn figureOuterLanguageEffectsUnchanged(self: *const Profile, outer_languages: ?[]const []const u8) bool {
+        for (self.figure_rules) |rule| if (rule.selector.language_range) |range| {
+            var absent = rule.figure_language_baseline_only;
+            if (outer_languages) |languages| {
+                absent = languages.len != 0;
+                for (languages) |language| absent = absent and languageValueRefutes(range, language);
+            }
+            if (!absent) return false;
+        };
+        return true;
+    }
+
     // Closing content ancestry must not introduce an uncomputed inherited
     // cascade. Direct generated-Figure rules are resolved separately below.
     pub fn contentParentEffectsUnchanged(self: *const Profile, original: ?*const TextElement, projected: *const TextElement) bool {

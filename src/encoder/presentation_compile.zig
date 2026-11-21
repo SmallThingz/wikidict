@@ -11081,7 +11081,13 @@ pub const Renderer = struct {
             self.inline_source_domain = previous.domain;
             self.inline_table_boundaries = previous.table;
         }
+        // A Figure owns its caption's computed style. Keep earlier page
+        // fallbacks, but do not let one hide a fresh unresolved caption effect.
+        const previous_unresolved_style = self.fallbacks.unresolved_table_style;
+        self.fallbacks.unresolved_table_style = false;
+        defer self.fallbacks.unresolved_table_style = self.fallbacks.unresolved_table_style or previous_unresolved_style;
         const spans = try self.cellSpansWithLanguageDirection(input, capture.style, output, null);
+        if (self.fallbacks.unresolved_table_style) return self.figureUnavailableAt("caption_style", input, 0, 0);
         if (output.*) |blocks| {
             var catalog: std.ArrayList(Span) = .empty;
             errdefer catalog.deinit(self.a);
@@ -14818,7 +14824,15 @@ pub const Renderer = struct {
         // The proof covers only this newly generated, no-inline-style root.
         // Copied authored ancestors below keep the original context profile.
         const root_profile: ?*const table_style_profile.Profile = if (motion_root_profile) |value| value else self.context.table_styles;
-        if (root_profile) |profile| if (!profile.contentParentEffectsUnchanged(null, root)) return self.figureUnavailable();
+        if (root_profile) |profile| {
+            // A legacy page-language row does not carry computed outer fonts.
+            // Direction invariance cannot discharge their inherited effects.
+            // The separately authenticated source-root path keeps its own proof.
+            if (root_language == null) if (self.figurePageLanguageContext()) |page| {
+                if (!profile.figureOuterLanguageEffectsUnchanged(page.outer_languages)) return self.figureUnavailable();
+            };
+            if (!profile.contentParentEffectsUnchanged(null, root)) return self.figureUnavailable();
+        }
         var parent: *const table_style_profile.TextElement = root;
         while (count != 0) {
             count -= 1;
@@ -89481,7 +89495,16 @@ test "page selected language keeps bare caption source body actions styles and c
     try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = caption }, try a.dupe(u8, caption)));
     for ([_][]const u8{ "<span lang=ru>Caption</span>", "<span lang=''>Caption</span>", "<span class=x>Caption</span>", "<span><ref>note</ref></span>", "<span>bad</b>" }) |value|
         try std.testing.expect(!Renderer.figureCaptionClassless(.{ .bytes = value }, value));
-    for (0..7) |case| {
+    // Bare-language direction invariance does not grant inherited-font absence.
+    try std.testing.expectEqual(table_style_profile.Profile.FigureRootDirectionUse.independent,
+        profile.figureRootDirectionUseWithLanguage(null, "", null, "ru", true, null));
+    try std.testing.expect(profile.figureOuterLanguageEffectsUnchanged(&.{ "ru", "fr" }));
+    try std.testing.expect(!profile.figureOuterLanguageEffectsUnchanged(null));
+    try std.testing.expect(!profile.figureOuterLanguageEffectsUnchanged(&.{}));
+    try std.testing.expect(!profile.figureOuterLanguageEffectsUnchanged(&.{ "cu", "ru" }));
+    try std.testing.expect(!profile.figureOuterLanguageEffectsUnchanged(&.{ "", "ru" }));
+    for (0..9) |case| {
+        errdefer std.debug.print("page Figure outer language refusal case={d}\n", .{case});
         var rejected_sizing = sizing;
         var title: []const u8 = "page";
         var root: ContentRoot = .parser_output;
@@ -89493,6 +89516,8 @@ test "page selected language keeps bare caption source body actions styles and c
             4 => root = .unknown,
             5 => rejected_sizing.page_language.?.outer_languages = null,
             6 => rejected_sizing.page_language.?.outer_languages = &.{ "cu", "ru" },
+            7 => rejected_sizing.page_language.?.outer_languages = &.{},
+            8 => rejected_sizing.page_language.?.outer_languages = &.{ "", "ru" },
             else => unreachable,
         }
         var rejected: Renderer = .{ .a = a, .content_root = root, .context = .{ .title = title, .namespace_catalog = &ns, .figure_sizing = rejected_sizing, .table_styles = &profile } };
@@ -96089,12 +96114,44 @@ test "authored Figure inventory refuses opaque remote duplicate and tainted inpu
     }) |source| try std.testing.expect(Renderer.figureCaptionAuthoredSpan(.{ .bytes = source }, source) == null);
     var ns = try FigureProducerTest.namespaces(a, false); defer ns.deinit();
     var bare_language = try table_style_profile.parseAlloc(a, ":lang(pal){font-family:serif;font-size:110%}"); defer bare_language.deinit();
+    var plain = try table_style_profile.parseAlloc(a, ""); defer plain.deinit();
     var sizing = FigureProducerTest.sizing_source;
     sizing.page_language = .{ .namespace_sha256 = ns.source_sha256, .title = "page", .language = "en", .direction = "ltr", .outer_languages = &.{ "en", "en" } };
     for ([_][]const u8{ "ja", "pal", "" }) |language| {
+        errdefer std.debug.print("authored Figure caption language={s}\n", .{language});
         const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|<span class='Jpan' lang='{s}'>tea</span>]]", .{language});
         var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .table_styles = &bare_language, .figure_sizing = sizing } };
-        try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        if (std.mem.eql(u8, language, "ja")) {
+            // Neither the observed en ancestors nor this ja caption can match
+            // the bare pal rule. The former direction refusal was not an effect.
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = sizing } };
+            const blocks = try renderer.renderBody(source);
+            try CenteredImageTest.equivalent(a, &renderer, blocks, &reference, try reference.renderBody(source));
+            try std.testing.expect(!renderer.fallbacks.any() and !reference.fallbacks.any());
+            const figure = try FigureProducerTest.find(blocks);
+            try std.testing.expectEqual(presentation_types.FigureFormat.thumbnail, figure.format);
+            try std.testing.expectEqualStrings("tea", try plainText(a, figure.caption));
+            try std.testing.expectEqualStrings("Map.svg", figure.content.image.span.image.?.file);
+            try std.testing.expectEqual(@as(?u32, 400), figure.content.image.span.image.?.width_px);
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+        } else {
+            try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        }
+    }
+    // An earlier page fallback neither rejects a resolved caption nor masks
+    // a new unresolved caption. Both successful and failed captures retain it.
+    for ([_][]const u8{ "ja", "pal", "" }) |language| {
+        const source = try std.fmt.allocPrint(a, "[[File:Map.svg|thumb|400px|<span class='Jpan' lang='{s}'>tea</span>]]", .{language});
+        var renderer: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .table_styles = &bare_language, .figure_sizing = sizing } };
+        renderer.fallbacks.unresolved_table_style = true;
+        if (std.mem.eql(u8, language, "ja")) {
+            var reference: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .title = "page", .namespace_catalog = &ns, .table_styles = &plain, .figure_sizing = sizing } };
+            reference.fallbacks.unresolved_table_style = true;
+            const blocks = try renderer.renderBody(source);
+            try CenteredImageTest.equivalent(a, &renderer, blocks, &reference, try reference.renderBody(source));
+            try FigureProducerTest.roundtrip(a, &renderer, blocks);
+        } else try std.testing.expectError(error.UncompiledPresentation, renderer.renderBody(source));
+        try std.testing.expect(renderer.fallbacks.unresolved_table_style);
     }
     var matching_class = try table_style_profile.parseAlloc(a, ".Avst:lang(pal){font-variant-ligatures:normal}"); defer matching_class.deinit();
     var matched: Renderer = .{ .a = a, .content_root = .parser_output, .context = .{ .namespace_catalog = &ns, .table_styles = &matching_class, .figure_sizing = sizing } };
