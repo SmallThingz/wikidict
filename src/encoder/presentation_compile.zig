@@ -26913,8 +26913,19 @@ pub const Renderer = struct {
     }
 
     fn rejectedMicrodataSource(tracked: MissingText, at: usize, tag: syntax.Tag) bool {
-        if (tracked.unknown or at >= tag.end or tag.end > tracked.bytes.len or
-            (microdataRequiredAttributes(tag) orelse return false)) return false;
+        if (microdataRequiredAttributes(tag) orelse return false) return false;
+        return trackedMicrodataToken(tracked, at, tag);
+    }
+
+    // Sanitizer validates the attributes of closing tokens too. A bare
+    // </link> has neither itemprop nor href, and its angles remain visible.
+    fn rejectedBareLinkClose(tracked: MissingText, at: usize, tag: syntax.Tag) bool {
+        if (!tag.closing or !tag.is("link") or tracked.lost_missing_range or !trackedMicrodataToken(tracked, at, tag)) return false;
+        return std.ascii.eqlIgnoreCase(tracked.bytes[at..tag.end], "</link>");
+    }
+
+    fn trackedMicrodataToken(tracked: MissingText, at: usize, tag: syntax.Tag) bool {
+        if (tracked.unknown or at >= tag.end or tag.end > tracked.bytes.len) return false;
         const original = syntax.tagAt(tracked.bytes, at) orelse return false;
         if (original.end != tag.end or original.name.ptr != tag.name.ptr or original.name.len != tag.name.len or
             original.attrs.ptr != tag.attrs.ptr or original.attrs.len != tag.attrs.len) return false;
@@ -27105,7 +27116,7 @@ pub const Renderer = struct {
                     literal_end = tag.end;
                     self.fallbacks.literal_markup = true;
                 }
-                if (at >= template_end and rejectedMicrodataSource(tracked, at, tag)) {
+                if (at >= template_end and (rejectedMicrodataSource(tracked, at, tag) or rejectedBareLinkClose(tracked, at, tag))) {
                     literal_end = tag.end;
                     self.fallbacks.literal_markup = true;
                 }
@@ -90176,6 +90187,37 @@ test "microdata required attributes distinguish presence empty minimized case an
     const document = @import("presentation_document.zig");
     var unknown_report: document.Fallbacks = .{};
     try std.testing.expectError(error.UncompiledPresentation, document.compileReportedAlloc(a, "unknown meta property", .supplemental, null, "", unknown_property, null, &unknown_report));
+}
+
+test "Amharic gettext list comment retains a literal DocBook link close and normal inline actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const document = @import("presentation_document.zig");
+    const codec = @import("blob_encoder").presentation_codec;
+    // Original gnome glossary, p2017/r20735, line 1225. Ordinary list parsing
+    // and the following independently authored action remain active.
+    const line = "# . \"A software license developed by the Free Software Foundation. In short, it allows anyone to use, copy, distribute, or sell the software, in original or modified form, as long as you distribute the program's source code along with the binaries, and you dis GPL plays an extremely important role in the free software movement; almost all of GNU project software, as well as <link linkend='linux'>Linux</link> kernel, is distributed under GPL. For a detailed discussion of history, ideas and philosophy related to\"";
+    const suffix = "\n# ''[[Target|next]]''";
+    const source = line ++ suffix;
+    const reference = try std.mem.replaceOwned(u8, a, source, "<link linkend='linux'>Linux</link>", "&lt;link linkend='linux'&gt;Linux&lt;/link&gt;");
+    var report: document.Fallbacks = .{};
+    var reference_report: document.Fallbacks = .{};
+    const actual = try document.compileReportedAlloc(a, "gnome glossary", .supplemental, null, "", source, null, &report);
+    const expected = try document.compileReportedAlloc(a, "gnome glossary", .supplemental, null, "", reference, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    try std.testing.expect(report.literal_markup);
+    const stored = try codec.decodeAlloc(a, actual, "gnome glossary", .supplemental, null);
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, stored));
+    const bare = "</link>";
+    const tag = syntax.tagAt(bare, 0).?;
+    try std.testing.expect(Renderer.rejectedBareLinkClose(.untracked(bare), 0, tag));
+    var missing = MissingText.untracked(bare);
+    missing.ranges = &.{.{ .start = 1, .end = 2, .occurrence = 1 }};
+    try std.testing.expect(!Renderer.rejectedBareLinkClose(missing, 0, tag));
+    for ([_][]const u8{ "</link href=x>", "</meta>", "<link itemprop=x href=y>" }) |other| {
+        try std.testing.expect(!Renderer.rejectedBareLinkClose(.untracked(other), 0, syntax.tagAt(other, 0).?));
+    }
 }
 
 test "invalid microdata angle proof retains tainted foreign incomplete and valid metadata domains" {
