@@ -17,23 +17,28 @@ add_library(wikidict-product STATIC
     InlineAudioControls.hpp
 )
 add_library(wikidict-gui SHARED main.cpp)
-# One unchanged source asset is shared by native consumers. Each executable
-# embeds it once; wikidict-product itself contains no font resource copy.
+# Link the resource objects directly so each consumer registers its fonts, even
+# when no C++ translation unit explicitly references the generated initializers.
+add_library(wikidict-fonts OBJECT)
+set_target_properties(wikidict-fonts PROPERTIES POSITION_INDEPENDENT_CODE ON
+    CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES AUTOMOC OFF AUTOUIC OFF)
+target_link_libraries(wikidict-fonts PRIVATE Qt6::Core)
+target_sources(wikidict-gui PRIVATE $<TARGET_OBJECTS:wikidict-fonts>)
 set(WIKIDICT_SHARED_FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/fonts")
-qt_add_resources(wikidict-gui supplementary_han_font PREFIX "/fonts"
+qt_add_resources(wikidict-fonts supplementary_han_font PREFIX "/fonts"
     BASE "${WIKIDICT_SHARED_FONT_DIR}"
     FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
           "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
-qt_add_resources(wikidict-gui reader_font PREFIX "/fonts"
+qt_add_resources(wikidict-fonts reader_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
 
-qt_add_resources(wikidict-gui kana_font PREFIX "/fonts"
+qt_add_resources(wikidict-fonts kana_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"
           "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt")
 
-qt_add_resources(wikidict-gui egyptian_font PREFIX "/fonts"
+qt_add_resources(wikidict-fonts egyptian_font PREFIX "/fonts"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
 
@@ -153,27 +158,12 @@ if(BUILD_TESTING)
         set_property(SOURCE ../tests/MainWindowTest.cpp ../tests/MainWindowInlineActionTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
-    qt_add_resources(dict-qt-tests test_supplementary_han_font PREFIX "/fonts"
-        BASE "${WIKIDICT_SHARED_FONT_DIR}"
-        FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
-              "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
-
-    qt_add_resources(dict-qt-tests test_kana_font PREFIX "/fonts"
-        BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
-        FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"
-              "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt")
-
-    qt_add_resources(dict-qt-tests test_egyptian_font PREFIX "/fonts"
-        BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
-        FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
+    target_sources(dict-qt-tests PRIVATE $<TARGET_OBJECTS:wikidict-fonts>)
 
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
     target_include_directories(dict-qt-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${WIKIDICT_CORE}/src/ffi")
     target_link_libraries(dict-qt-tests PRIVATE wikidict-product Qt6::Widgets Qt6::GuiPrivate Qt6::Test Qt6::Concurrent Qt6::Network Qt6::Multimedia Qt6::Svg "${DICT_FFI_LIBRARY}")
-    qt_add_resources(dict-qt-tests test_reader_font PREFIX "/fonts"
-        BASE "${CMAKE_CURRENT_SOURCE_DIR}/../web"
-        FILES "${CMAKE_CURRENT_SOURCE_DIR}/../web/reader.ttf")
     add_test(NAME native-reader-ux COMMAND dict-qt-tests)
     set_tests_properties(native-reader-ux PROPERTIES
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
