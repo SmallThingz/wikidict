@@ -4,6 +4,7 @@ import csv
 from collections import defaultdict
 from decimal import Decimal
 import fcntl
+from functools import cache, partial
 import hashlib
 import json
 import math
@@ -391,14 +392,17 @@ def main():
         parser.error('Expected an attempt directory name')
     families = ([base / name for name in set(args.add or [])]
                 if args.add or args.add_closure or args.add_guardian_closure else base.iterdir())
+    # A named family and an explicit closure can select the same build log.
+    # Guardian selection still authenticates its additional command evidence.
+    read_normal = cache(partial(read_execution, base))
     rows = []
     for family in families:
-        found = [read_execution(base, path) for path in family.glob('runtime[0-9]*/' + str(CLOSURE))]
+        found = [read_normal(path) for path in family.glob('runtime[0-9]*/' + str(CLOSURE))]
         if args.add and not any(found):
             raise ValueError(f'No closed full-edition run in {family}')
         rows.extend(row for row in found if row is not None)
     for path in sorted({path.resolve(strict=True) for path in args.add_closure}):
-        row = read_execution(base, path)
+        row = read_normal(path)
         if row is None:
             raise ValueError(f'Not a closed full-edition run: {path}')
         rows.append(row)

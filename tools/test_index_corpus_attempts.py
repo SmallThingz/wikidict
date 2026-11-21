@@ -1,4 +1,5 @@
 import csv
+from contextlib import chdir
 import hashlib
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name('index_corpus_attempts.py').resolve()
@@ -338,6 +340,15 @@ class AttemptIndexTests(unittest.TestCase):
                 'path:owner-b/example/runtime01'})
             self.assertTrue(all(r['production_seconds'] == '' for r in rows))
             before = index.read_bytes(), index.stat().st_ino
+            # The same explicitly named run can also belong to the selected family.
+            # Authenticate its real log once and preserve the existing output inode.
+            import index_corpus_attempts as indexer
+            overlap = [str(SCRIPT), '--receipts', str(root / 'receipts'), '--output', str(index),
+                       '--add', 'example', '--add-closure', str(legacy)]
+            with chdir(root), patch.object(sys, 'argv', overlap), patch.object(indexer, 'read_execution', wraps=indexer.read_execution) as read:
+                indexer.main()
+            read.assert_called_once_with(root / 'receipts', legacy)
+            self.assertEqual((index.read_bytes(), index.stat().st_ino), before)
             subprocess.run([*command, *selected], cwd=root, capture_output=True, check=True)
             self.assertEqual((index.read_bytes(), index.stat().st_ino), before)
             # Explicit selection must not silently broaden into a legacy scan.
