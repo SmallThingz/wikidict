@@ -5517,7 +5517,8 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
             path = selected['output'] / 'retained-native-roles.json'
             fields = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
             identity = tuple(getattr(path.stat(), field) for field in fields)
-            second = controller.ordinary_command_record(**selected)
+            with mock.patch.object(controller.os, 'fsync', side_effect=AssertionError('retry wrote a file')):
+                second = controller.ordinary_command_record(**selected)
             self.assertEqual(first, second)
             self.assertEqual(tuple(getattr(path.stat(), field) for field in fields), identity)
             self.assertEqual(selected, original)
@@ -5532,6 +5533,23 @@ class OrdinaryCommandRecordTests(unittest.TestCase):
             print('ORDINARY_ROLE_ARGV ' + json.dumps(dict(logical_max_bytes=849801,
                 physical_argc=len(first['argv']),
                 physical_max_argument_bytes=max(len(os.fsencode(v)) for v in first['argv']))))
+
+    def test_concurrent_role_file_creation_returns_one_verified_file(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            argv = self.large_selected(folder)['argv']
+            start = Barrier(4)
+            def compact():
+                start.wait(timeout=5)
+                return controller.compact_role_argv(argv, folder)
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                calls = [pool.submit(compact) for _ in range(4)]
+                results = [call.result(timeout=10) for call in calls]
+            self.assertTrue(all(result == results[0] for result in results))
+            self.assertEqual(controller.logical_role_argv(results[0]), argv)
+            self.assertEqual([p.name for p in folder.iterdir()], ['retained-native-roles.json'])
 
     def test_direct_large_record_rejects_changed_file_and_conflicting_retry(self):
         with tempfile.TemporaryDirectory() as tmp:

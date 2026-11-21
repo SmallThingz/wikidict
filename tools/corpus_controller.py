@@ -2078,8 +2078,7 @@ def compact_role_argv(argv, folder):
     require(folder.is_absolute() and folder.resolve() == folder,
             'Unsafe retained native role directory')
     name = 'retained-native-roles.json'
-    temporary = name + '.' + uuid.uuid4().hex + '.part'
-    created = False
+    temporary = None
     raw = value.encode('utf-8')
     require(0 < len(raw) <= 64 * 1024**2, 'Retained native role metadata exceeds bound')
     folder.mkdir(mode=0o700, exist_ok=True)
@@ -2088,23 +2087,30 @@ def compact_role_argv(argv, folder):
         owned = os.fstat(directory)
         require(owned.st_uid == os.geteuid() and not owned.st_mode & 0o022,
                 'Unsafe retained native role directory ownership')
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                     0o600, dir_fd=directory)
-        created = True
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
+        read_flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        # Serialize publication in this attempt directory so a concurrent opener
+        # never sees the temporary second link. Existing bytes only need a read.
+        fcntl.flock(directory, fcntl.LOCK_EX)
         try:
-            # Publish complete bytes once; a retry or concurrent constructor
-            # must authenticate the existing file instead of replacing it.
-            os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory,
-                    follow_symlinks=False)
-        except FileExistsError:
-            pass
-        os.unlink(temporary, dir_fd=directory)
-        created = False
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+            fd = os.open(name, read_flags, dir_fd=directory)
+        except FileNotFoundError:
+            candidate = name + '.' + uuid.uuid4().hex + '.part'
+            writer = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+            temporary = candidate
+            with os.fdopen(writer, 'wb') as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, name, src_dir_fd=directory, dst_dir_fd=directory,
+                        follow_symlinks=False)
+            except FileExistsError:
+                pass
+            os.unlink(temporary, dir_fd=directory)
+            temporary = None
+            fd = os.open(name, read_flags, dir_fd=directory)
+        fcntl.flock(directory, fcntl.LOCK_UN)
         with os.fdopen(fd, 'rb') as stream:
             before = os.fstat(stream.fileno())
             require(stat.S_ISREG(before.st_mode) and before.st_uid == os.geteuid()
@@ -2124,7 +2130,7 @@ def compact_role_argv(argv, folder):
                 and folder.resolve() == folder, 'Retained native role directory changed')
         reference = dict(path=str(folder / name), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
     finally:
-        if created:
+        if temporary is not None:
             os.unlink(temporary, dir_fd=directory)
         os.close(directory)
     return [*argv[:index], '--retained-native-roles-ref', json.dumps(reference), *argv[index + 2:]]
