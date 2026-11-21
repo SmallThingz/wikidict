@@ -109,7 +109,7 @@ def text_fields(value, path='entry'):
         for key, child in value.items():
             if key in ('text', 'caption', 'title', 'trail') and isinstance(child, str):
                 yield path + '.' + key, child
-            elif isinstance(child, (dict, list)):
+            elif child and isinstance(child, (dict, list)):
                 yield from text_fields(child, path + '.' + key)
     elif isinstance(value, list):
         if value and all(isinstance(span, dict) and 'text' in span and 'kind' in span for span in value):
@@ -130,7 +130,7 @@ def text_fields(value, path='entry'):
                 yield path, ''.join(parts)
             return
         for index, child in enumerate(value):
-            if isinstance(child, (dict, list)):
+            if child and isinstance(child, (dict, list)):
                 yield from text_fields(child, f'{path}[{index}]')
 
 
@@ -185,11 +185,11 @@ def attribute_fields(value, path='entry'):
         if value.get('kind') in ('link', 'external_link'):
             yield from destination_fields(value, path, 'link', 'external_link')
         for key, child in value.items():
-            if isinstance(child, (dict, list)):
+            if child and isinstance(child, (dict, list)):
                 yield from attribute_fields(child, path + '.' + key)
     elif isinstance(value, list):
         for index, child in enumerate(value):
-            if isinstance(child, (dict, list)):
+            if child and isinstance(child, (dict, list)):
                 yield from attribute_fields(child, f'{path}[{index}]')
 
 
