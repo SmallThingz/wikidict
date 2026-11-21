@@ -1608,6 +1608,7 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
     evidence = helper.evidence
     files, directories, initial = set(), {}, {}
     active, visited, closed_prefixes = set(), set(), set()
+    complete_manifests = set()
 
     def capture(directory):
         directory = Path(directory)
@@ -1761,7 +1762,10 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                 if not capture(Path(source['path'])):
                     return False
             elif kind == 'complete-stream':
-                path = Path(source['path'])
+                locator = source['path']
+                if locator in complete_manifests:
+                    continue
+                path = Path(locator)
                 if (not path.is_absolute() or path.resolve() != path or
                         path.name != helper.MANIFEST or path.is_symlink()):
                     raise ValueError('Unsafe complete Figure cache authority')
@@ -1775,6 +1779,9 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
                 # batch reference before any result enters this local cache.
                 if not capture(path.parent):
                     return False
+                # Later batches share the captured path and its final identity
+                # checks. Semantic replay still checks each batch's own record.
+                complete_manifests.add(locator)
             elif kind == 'closed-prefix':
                 if not closed_prefix(source['path']):
                     return False

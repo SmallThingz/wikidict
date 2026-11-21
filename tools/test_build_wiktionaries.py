@@ -7829,6 +7829,37 @@ class CompleteParentTupleReplayTests(unittest.TestCase):
         self.assertIn(str(self.observation), guard[1])
         self.assertEqual(sum(Path(call.args[0]) == self.args.sql[0] for call in fingerprint.call_args_list), 1)
 
+    def test_repeated_batch_references_share_the_bound_parent_locator(self):
+        journal = self.args.output / self.figures.FILE_REQUESTS
+        original = journal.read_bytes()
+        lines = original.splitlines(keepends=True)
+        row = next(line for line in lines[1:] if self.figures.decode(line)['kind'] == 'complete-stream')
+        parent_manifest = Path(self.figures.decode(row)['path'])
+        resolve = Path.resolve
+
+        def measure():
+            resolutions = []
+            def counted(path, *args, **kwargs):
+                if path == parent_manifest:
+                    resolutions.append(path)
+                return resolve(path, *args, **kwargs)
+            with patch.object(Path, 'resolve', counted):
+                guard = b.figure_tuple_guard(self.figures, self.args.output)
+            self.assertIn(str(parent_manifest), guard[1])
+            return len(resolutions), set(guard[1]), set(guard[2])
+
+        try:
+            baseline = measure()
+            header = self.figures.decode(lines[0])
+            header['batches'] += 12
+            journal.write_bytes(self.figures.stream_encoded(header) + b''.join(lines[1:]) + row * 12)
+            self.assertEqual(measure(), baseline)
+            # Duplicated rows still violate the ordinary capture manifest.
+            with self.assertRaises(ValueError):
+                self.validate()
+        finally:
+            journal.write_bytes(original)
+
     def test_cached_parent_members_bytes_inode_sql_and_external_observation_must_stay_exact(self):
         retained = json.loads(self.observation.read_text())
         artifact = self.observation.parent/next(iter(retained['artifacts']))
