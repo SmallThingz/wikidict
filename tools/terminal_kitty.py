@@ -40,6 +40,7 @@ class Screen:
         self._screen = _native_screen()(None, lines, columns, 1000,
                                         self.cell_width, self.cell_height)
         self._cells = None
+        self._display = None
 
     @property
     def cursor(self):
@@ -54,6 +55,7 @@ class Screen:
         # This Screen has no child thread or competing parser-buffer writer.
         self._screen.restore_scrollback(data)
         self._cells = None
+        self._display = None
 
     def cell_rows(self):
         if self._cells is not None:
@@ -61,29 +63,48 @@ class Screen:
         rows = []
         for row in range(self.lines):
             cells = []
-            for cell in self._screen.cpu_cells(row):
+            line = self._screen.line(row)
+            for column, cell in enumerate(self._screen.cpu_cells(row)):
                 geometry = cell['mcd']
                 continuation = bool(geometry and (cell['x'] or cell['y']))
                 width = geometry['width'] * geometry['scale'] if geometry else 1
-                cells.append(dict(text='' if continuation else cell['text'] or ' ',
-                                  width=0 if continuation else width,
-                                  continuation=continuation))
+                projected = dict(text='' if continuation else cell['text'] or ' ',
+                                 width=0 if continuation else width,
+                                 continuation=continuation)
+                style = line.cursor_from(column)
+                if style.bold:
+                    projected['bold'] = True
+                if style.italic:
+                    projected['italic'] = True
+                if style.decoration:
+                    projected['underline'] = style.decoration
+                cells.append(projected)
             rows.append(cells)
         self._cells = rows
         return rows
 
     @property
     def display(self):
-        return [''.join(cell['text'] for cell in row) for row in self.cell_rows()]
+        if self._display is None:
+            if self._cells is not None:
+                self._display = [''.join(cell['text'] for cell in row) for row in self._cells]
+            else:
+                # Polling needs only text. Read native styles when a snapshot asks for cells.
+                self._display = [''.join(cell['text'] or ' ' for cell in self._screen.cpu_cells(row)
+                                         if not (cell['mcd'] and (cell['x'] or cell['y'])))
+                                 for row in range(self.lines)]
+        return self._display.copy()
 
     def resize(self, *, lines, columns):
         self._screen.resize(lines, columns)
         self.lines, self.columns = lines, columns
         self._cells = None
+        self._display = None
 
     def close(self):
         self._screen = None
         self._cells = None
+        self._display = None
 
 
 class Stream:

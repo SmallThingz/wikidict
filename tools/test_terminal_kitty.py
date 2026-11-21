@@ -49,6 +49,26 @@ class KittyProjectionTests(unittest.TestCase):
         self.assertEqual('END', screen.display[23][39:42])
         self.assertEqual((42, 23), (screen.cursor.x, screen.cursor.y))
 
+    def test_native_styles_and_wide_cells_survive_text_projection(self):
+        screen = self.screen(12, 2)
+        screen.feed('\x1b[1;3;4m猫A \x1b[0mB\x1b[4:2mU\x1b[0m')
+        display = screen.display
+        display[0] = 'caller-owned list'
+        self.assertEqual(screen.display[0], '猫A BU' + ' ' * 6)
+        row = screen.cell_rows()[0]
+        for column in (0, 2, 3):
+            self.assertTrue(row[column]['bold'])
+            self.assertTrue(row[column]['italic'])
+            self.assertEqual(row[column]['underline'], 1)
+        self.assertEqual(row[0]['width'], 2)
+        self.assertTrue(row[1]['continuation'])
+        self.assertFalse(any(key in row[4] for key in ('bold', 'italic', 'underline')))
+        self.assertEqual(row[5]['underline'], 2)
+        self.assertEqual(screen.display[0], ''.join(cell['text'] for cell in row))
+        screen.feed('\r\x1b[2KERASED')
+        self.assertEqual(screen.display[0], 'ERASED' + ' ' * 6)
+        self.assertNotIn('underline', screen.cell_rows()[0][0])
+
     def test_genuine_shan_witness_stays_inside_reading_pane(self):
         screen = self.screen()
         witness = 'တူဝ်ထိသၢမ် ၼႂ်းတူဝ်မႄႈလိၵ်ႈတႆး သိပ်းၵဝ်ႈတူဝ်၊ ဢၢၼ်ႇ ဝႃႈ ငႃႉ။'
