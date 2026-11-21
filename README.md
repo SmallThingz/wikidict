@@ -258,6 +258,12 @@ conditions so contention is not mistaken for a performance regression.
 - The builder compresses dictionary blobs with XZ preset `-0` and 1 MiB blocks.
   It decodes each compressed file and compares it with the original bytes.
 
+Use `--compress-shards` to limit temporary disk use during a corpus build. The
+controller verifies and compresses each completed shard before asking for the
+next. For ordinary builds with two or more consecutive missing shards at the
+end, a Writer that supports the shard protocol stays open and reuses its loaded
+inputs. On resume, the controller rechecks existing shards before reusing them.
+
 Language blobs merge with two workers, each streaming an independent heading
 into a private file before renaming it. With four compression threads available,
 large blobs use two concurrent XZ encoders with two threads and a 2 GiB encoder
