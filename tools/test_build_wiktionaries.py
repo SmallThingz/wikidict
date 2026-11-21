@@ -8705,7 +8705,10 @@ class RetainedNativeRoleTests(unittest.TestCase):
     def test_normal_role_json_parser_and_ordinary_route_refusals(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);roles,compiler=self.fixture(root);raw=json.dumps(roles)
-            selected=b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
+            with patch.object(b, 'sha256_file', wraps=b.sha256_file) as hash_file:
+                selected=b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
+                self.assertEqual(selected.bind_input(compiler)['sha256'], selected.zig_sha256)
+                self.assertEqual(hash_file.call_args_list.count(call(compiler)), 1)
             self.assertEqual(selected.provenance(),roles)
             self.assertIsNone(b.parse_retained_native_roles(None,str(compiler),sharded=False,edition_count=2,jobs=2))
             for sharded,count,jobs in ((False,1,1),(True,2,1),(True,1,2)):
@@ -8714,6 +8717,12 @@ class RetainedNativeRoleTests(unittest.TestCase):
             with patch.dict(os.environ,{'WIKIDICT_PREPARED_SOURCE_ATTEMPT':'{}'}):
                 with self.assertRaisesRegex(ValueError,'ordinary compressed edition'):
                     b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
+
+            compiler.write_bytes(b'changed compiler')
+            with self.assertRaisesRegex(ValueError, 'identity changed'):
+                selected.bind_input(compiler)
+            with self.assertRaisesRegex(ValueError, 'compiler differs'):
+                b.parse_retained_native_roles(raw,str(compiler),sharded=True,edition_count=1,jobs=1)
 
     def test_selected_sharded_route_forwards_real_roles_and_flag_before_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

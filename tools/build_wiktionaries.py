@@ -6073,7 +6073,7 @@ class RetainedNativeToolRoles:
     exact closed initial generation retains those authenticated source facts
     without rereading unused compiler payloads; execution dependencies stay guarded.
     """
-    def __init__(self, roles, *, zig_sha256):
+    def __init__(self, roles, *, zig_sha256=None, compiler_path=None):
         import copy
         if set(roles) != set(RETAINED_NATIVE_ROLE_NAMES):
             raise ValueError('Incomplete retained native tool roles')
@@ -6091,6 +6091,10 @@ class RetainedNativeToolRoles:
         if self.closed_whole_execution is not None and any(value is not None for value in (self.initial_sealed_generation,self.sealed_expander_recovery,self.writer_figure_transition)):
             raise ValueError('Closed whole execution requires its own selection')
         self.tools, self.inputs, self.input_identities, self.directories = {}, {}, {}, {}
+        if (zig_sha256 is None) == (compiler_path is None):
+            raise ValueError('Select one retained compiler identity')
+        if compiler_path is not None:
+            zig_sha256 = self.bind_input(compiler_path)['sha256']
         self.zig_sha256 = zig_sha256
         self.compilation_payloads = {}
         self.closed_native_origin=(self.closed_whole_origin() if self.closed_whole_execution is not None else
@@ -9052,7 +9056,7 @@ def parse_retained_native_roles(value, zig, *, sharded, edition_count, jobs, ref
             raise ValueError('Prepared retained custody requires explicit closed execution selection')
     compiler=shutil.which(zig)
     if compiler is None:raise ValueError('Zig compiler executable is unavailable')
-    return RetainedNativeToolRoles(roles,zig_sha256=sha256_file(Path(compiler).resolve(strict=True)))
+    return RetainedNativeToolRoles(roles, compiler_path=Path(compiler).resolve(strict=True))
 
 
 def main():
