@@ -552,11 +552,15 @@ To update the attempt log, run `python3 tools/index_corpus_attempts.py
 --receipts DRIVER_DIR --output ATTEMPTS.tsv --add ATTEMPT_DIR` from the checkout
 root. Supply the attempt directory name relative to the retained driver. The
 command checks every numbered execution in that directory against its original
-result and stdout. Omit `--add` to check all retained attempts.
+result and stdout. Omit `--add` to check all retained attempts. Include
+`--retry-times RETRY_TIMES.tsv` to refresh the existing edition totals from the
+same index. Both TSV files must be in the same directory.
 The [per-edition retry times](data/corpus-campaign-current01/local-edition-retry-times.tsv)
 combine the historical timings and later attempts, counting each recorded build
-once. The table identifies unknown durations and leaves the rate blank when
-there is no selected output or the recorded times are incomplete.
+once. A logged failure during snapshot selection has command time and never
+starts edition production. An empty log or an interrupted production clock
+leaves the production duration unknown. The rate stays blank when a production
+duration or selected output is missing.
 
 The native verifier checks the selected directory.
 

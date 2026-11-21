@@ -100,11 +100,11 @@ class AttemptIndexTests(unittest.TestCase):
                 path.write_bytes(data)
                 return dict(path=str(path), bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
 
-            def run_receipt(number, elapsed=None, partial=False):
+            def run_receipt(number, elapsed=None, partial=False, events=()):
                 run = base / f'runtime{number:02}'
                 closed = run / 'direct-runtime01'
                 closed.mkdir(parents=True)
-                log = b''
+                log = b''.join(b'BUILD_PHASE ' + json.dumps(event).encode() + b'\n' for event in events)
                 if elapsed is not None:
                     phase = dict(edition='enwiktionary', date='20261001', phase='edition_build')
                     for event in [dict(event='start'), dict(event='end', seconds=elapsed, status='failure')]:
@@ -136,6 +136,54 @@ class AttemptIndexTests(unittest.TestCase):
             self.assertNotEqual(damaged.returncode, 0)
             self.assertIn(b'Build log differs', damaged.stderr)
             self.assertEqual(before.st_ino, index.stat().st_ino)
+
+            preflight = dict(edition='enwiktionary', date='20261001', phase='selected_snapshot_resolution', scope='pre_edition')
+            failed = [{**preflight, 'event': 'start'}, {**preflight, 'event': 'end', 'status': 'failure'}]
+            started = dict(edition='enwiktionary', date='20261001', phase='edition_build', event='start')
+            for n, events in enumerate((failed, failed + [started], failed[1:],
+                                        [{**event, 'date': '20260101'} for event in failed]), start=4):
+                run_receipt(n, events=events)
+            for n in range(4, 8):
+                command.extend(['--add-closure', str(base / f'runtime{n:02}/direct-runtime01/independent-closure01.json')])
+            subprocess.run(command, cwd=root, capture_output=True, check=True)
+            with index.open() as stream:
+                extra = list(csv.DictReader(stream, delimiter='\t'))[2:]
+            self.assertEqual([r['production_status'] for r in extra],
+                             ['failed-before-production'] + ['no-terminal-production-clock'] * 3)
+            self.assertTrue(all(r['production_seconds'] == '' and r['command_seconds'] == '10.000' for r in extra))
+            # Refresh only the classification of the authenticated legacy row.
+            current = index.read_bytes()
+            index.write_bytes(current.replace(b'failed-before-production', b'no-terminal-production-clock'))
+            subprocess.run(command, cwd=root, capture_output=True, check=True)
+            self.assertEqual(index.read_bytes(), current)
+
+    def test_retry_rate_distinguishes_a_proven_preflight_failure_from_an_unknown_clock(self):
+        from index_corpus_attempts import refresh_retry_times
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'times.tsv'
+            original = dict(edition='etwiktionary', selected_status='built', known_seconds_through_351='4.000',
+                            unknown_durations_through_351='0', recovered_additional_success_seconds='0.000',
+                            selected_input_xml_pages='15', later_measured_successes='0', later_measured_failures='0',
+                            later_unclocked_invocations='0', later_measured_production_seconds='0.000',
+                            total_known_attempt_seconds='4.000', selected_pages_per_recorded_attempt_second='3.750')
+            with path.open('w', newline='') as stream:
+                writer = csv.DictWriter(stream, fieldnames=original, delimiter='\t')
+                writer.writeheader()
+                writer.writerow(original)
+
+            def attempt(status, seconds=''):
+                return dict(edition='etwiktionary', production_status=status, production_seconds=seconds)
+            records = [attempt('success', '0.600'), attempt('failure', '0.400'), attempt('failed-before-production')]
+            fresh, = refresh_retry_times(path, records)
+            self.assertEqual(fresh['selected_pages_per_recorded_attempt_second'], '3.000')
+            self.assertEqual(fresh['later_unclocked_invocations'], '1')
+            self.assertEqual(fresh['later_measured_failures'], '1')
+            self.assertEqual(fresh['total_known_attempt_seconds'], '5.000')
+            uncertain, = refresh_retry_times(path, [*records, attempt('no-terminal-production-clock')])
+            self.assertEqual(uncertain['selected_pages_per_recorded_attempt_second'], '')
+            self.assertEqual(uncertain['total_known_attempt_seconds'], '5.000')
+            self.assertIsNone(refresh_retry_times(path, []))
 
     def test_explicit_owner_paths_keep_legacy_keys_and_distinguish_same_names(self):
         with tempfile.TemporaryDirectory() as directory:

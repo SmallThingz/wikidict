@@ -1,6 +1,8 @@
 """Index physically closed full-edition invocations from the retained native driver."""
 import argparse
 import csv
+from collections import defaultdict
+from decimal import Decimal
 import fcntl
 import hashlib
 import json
@@ -139,13 +141,19 @@ def read_execution(base, path, guardian=False):
         raise ValueError(f'Edition differs in {path}')
     if closure['command_returncode'] != result['returncode'] or not closure['reaped']:
         raise ValueError(f'Command closure differs in {path}')
-    # Hash the full stream, retaining only the two records that clock this edition.
+    # Hash the full stream while keeping bounded evidence for the two clocks.
     stdout = result['stdout']
     digest = hashlib.sha256()
     phases = []
+    preflight_events = []
+    last_phase = None
     with Path(stdout['path']).open('rb') as stream:
         for line in _hashed_phase_lines(stream, digest, 1024 * 1024):
             phase = json.loads(line.removeprefix('BUILD_PHASE '))
+            last_phase = phase
+            if phase['phase'] == 'selected_snapshot_resolution' and len(preflight_events) < 3:
+                same_edition = (phase.get('edition'), phase.get('date')) == (edition, output.name)
+                preflight_events.append(phase['event'] if same_edition and phase.get('scope') == 'pre_edition' else None)
             if phase['phase'] == 'edition_build':
                 if (phase['edition'], phase['date']) != (edition, output.name) or len(phases) == 2:
                     raise ValueError(f'Unexpected edition phase in {path}')
@@ -161,16 +169,62 @@ def read_execution(base, path, guardian=False):
                 or end['status'] not in ('success', 'failure')
                 or (end['status'] == 'success') != bool(closure['ordinary_producer_passed'])):
         raise ValueError(f'Production outcome differs in {path}')
+    # The builder resolves snapshots before entering edition_build. An empty log
+    # or an interrupted build still leaves its production time unknown.
+    failed_before_build = (not phases and not closure['ordinary_producer_passed'] and preflight_events == ['start', 'end']
+                           and last_phase['phase'] == 'selected_snapshot_resolution'
+                           and last_phase.get('status') == 'failure' and result['returncode'] != 0)
+    status = end['status'] if end else 'no-terminal-production-clock'
     return dict(edition=edition, attempt=attempt_key(base, path),
                 command_exit=result['returncode'], ordinary_build_passed=bool(closure['ordinary_producer_passed']),
-                production_status=end['status'] if end else 'no-terminal-production-clock',
+                production_status='failed-before-production' if failed_before_build else status,
                 production_seconds=f"{end['seconds']:.3f}" if end else '',
                 command_seconds=f"{result['elapsed_seconds']:.3f}", closed_unix=closure['closed_unix'],
                 stdout_sha256=stdout['sha256'], closure_sha256=hashlib.sha256(data).hexdigest(),
                 closure_path=str(path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path))
 
 
-def merge_rows(out, base, rows):
+def refresh_retry_times(path, attempts):
+    # Keep the historical and selected-output columns from the existing edition
+    # inventory. Recompute later attempts from the index, including failures.
+    groups = defaultdict(list)
+    for attempt in attempts:
+        groups[attempt['edition']].append(attempt)
+    with path.open(newline='') as stream:
+        editions = list(csv.DictReader(stream, delimiter='\t'))
+    names = {row['edition'] for row in editions}
+    if len(names) != len(editions) or groups.keys() - names:
+        raise ValueError(f'Edition inventory differs: {path}')
+    changed = False
+    for row in editions:
+        records = groups[row['edition']]
+        clocked = [r for r in records if r['production_seconds']]
+        statuses = [r['production_status'] for r in records]
+        for record in records:
+            status = record['production_status']
+            if status not in ('success', 'failure', 'failed-before-production', 'no-terminal-production-clock'):
+                raise ValueError(f'Unknown production status: {status}')
+            if (status in ('success', 'failure')) != bool(record['production_seconds']):
+                raise ValueError(f"Invalid production clock for {row['edition']}")
+        later = sum((Decimal(r['production_seconds']) for r in clocked), Decimal(0))
+        total = later + Decimal(row['known_seconds_through_351']) + Decimal(row['recovered_additional_success_seconds'])
+        rate = ''
+        if (row['selected_status'] in ('built', 'empty') and row['selected_input_xml_pages'] and total > 0
+                and int(row['unknown_durations_through_351']) == 0
+                and 'no-terminal-production-clock' not in statuses):
+            rate = f"{Decimal(row['selected_input_xml_pages']) / total:.3f}"
+        updated = dict(later_measured_successes=str(statuses.count('success')),
+                       later_measured_failures=str(statuses.count('failure')),
+                       later_unclocked_invocations=str(len(records) - len(clocked)),
+                       later_measured_production_seconds=f'{later:.3f}', total_known_attempt_seconds=f'{total:.3f}',
+                       selected_pages_per_recorded_attempt_second=rate)
+        if any(row[key] != value for key, value in updated.items()):
+            row.update(updated)
+            changed = True
+    return editions if changed else None
+
+
+def merge_rows(out, base, rows, retry_times=None):
     previous = {}
     if out.exists():
         with out.open(newline='') as stream:
@@ -180,15 +234,30 @@ def merge_rows(out, base, rows):
                     raise ValueError(f'Ambiguous existing attempt {name}')
                 previous[name] = row
     additions = []
+    reclassified = False
     for row in rows:
         saved = previous.get(row['attempt'])
         if saved is None:
             additions.append(row)
-        elif saved != {key: str(value) for key, value in row.items()}:
-            raise ValueError(f"Existing attempt differs: {row['attempt']}")
-    if not additions:
-        return 0
+        else:
+            checked_row = {key: str(value) for key, value in row.items()}
+            if saved == checked_row:
+                continue
+            if (row['production_status'] != 'failed-before-production'
+                    or saved != {**checked_row, 'production_status': 'no-terminal-production-clock'}):
+                raise ValueError(f"Existing attempt differs: {row['attempt']}")
+            previous[row['attempt']] = checked_row
+            reclassified = True
     rows = [*previous.values(), *additions]
+    retry_rows = refresh_retry_times(retry_times, rows) if retry_times else None
+    if additions or reclassified:
+        write_rows(out, rows)
+    if retry_rows:
+        write_rows(retry_times, retry_rows)
+    return len(additions)
+
+
+def write_rows(out, rows):
     with tempfile.NamedTemporaryFile(mode='w', dir=out.parent, newline='', delete=False) as stream:
         try:
             writer = csv.DictWriter(stream, fieldnames=rows[0].keys(), delimiter='\t', lineterminator='\n')
@@ -199,19 +268,22 @@ def merge_rows(out, base, rows):
             os.replace(stream.name, out)
         finally:
             Path(stream.name).unlink(missing_ok=True)
-    return len(additions)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--receipts', type=Path, required=True, help='Directory of attempts under the working directory')
     parser.add_argument('--output', type=Path, required=True, help='New or existing TSV index')
+    parser.add_argument('--retry-times', type=Path, help='Refresh the existing per-edition retry timing TSV alongside the index')
     parser.add_argument('--add', metavar='ATTEMPT', nargs='+', help='Read only the named attempt directories')
     parser.add_argument('--add-closure', type=Path, action='append', default=[],
                         help='Also read this exact whole-edition owner closure; no directory scan')
     parser.add_argument('--add-guardian-closure', type=Path, action='append', default=[],
                         help='Read an exact generic guardian closure and authenticate its direct whole-build command')
     args = parser.parse_args()
+    if args.retry_times and (args.retry_times.resolve() == args.output.resolve()
+                             or args.retry_times.resolve().parent != args.output.resolve().parent):
+        parser.error('Retry times and the attempt index must be distinct files in the same directory')
     base = args.receipts.resolve(strict=True)
     if args.add and any(Path(name).name != name or name in ('', '.', '..') for name in args.add):
         parser.error('Expected an attempt directory name')
@@ -242,7 +314,7 @@ def main():
     directory = os.open(args.output.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         fcntl.flock(directory, fcntl.LOCK_EX)
-        added = merge_rows(args.output, base, rows)
+        added = merge_rows(args.output, base, rows, args.retry_times)
     finally:
         os.close(directory)
     print(f'{added} new full-edition invocations')
