@@ -150,15 +150,28 @@ fn parseLine(a: std.mem.Allocator, text: []const u8, line: usize) !Definition {
     if (rest[0] == '[') {
         const end = std.mem.indexOfScalar(u8, rest, ']') orelse return error.InvalidGadgetDefinition;
         var options = std.mem.splitScalar(u8, rest[1..end], '|');
-        var keys: std.ArrayList([]const u8) = .empty;
+        const SeenOption = struct { key: []const u8, value: ?[]const u8 };
+        var keys: std.ArrayList(SeenOption) = .empty;
         while (options.next()) |raw| {
             const option = trim(raw);
             if (option.len == 0) continue;
             const equal = std.mem.indexOfScalar(u8, option, '=');
             const key = trim(if (equal) |pos| option[0..pos] else option);
             const value: ?[]const u8 = if (equal) |pos| trim(option[pos + 1 ..]) else null;
-            if (!identifier(key) or member(keys.items, key)) return error.InvalidGadgetDefinition;
-            try keys.append(a, key);
+            if (!identifier(key)) return error.InvalidGadgetDefinition;
+            var repeated = false;
+            for (keys.items) |seen| {
+                if (!std.mem.eql(u8, seen.key, key)) continue;
+                // The retained IT definition repeats rights=delete. Repeating
+                // the same validated value is inert; conflicting values and
+                // repeated valueless flags remain outside this supported case.
+                if (value == null or seen.value == null or !std.mem.eql(u8, value.?, seen.value.?))
+                    return error.InvalidGadgetDefinition;
+                repeated = true;
+                break;
+            }
+            if (repeated) continue;
+            try keys.append(a, .{ .key = key, .value = value });
             if (std.mem.eql(u8, key, "default")) {
                 if (value != null) return error.InvalidGadgetDefinition;
                 enabled = true;
@@ -443,4 +456,58 @@ fn gadgetCommentAllocationCheck(backing: std.mem.Allocator) !void {
 
 test "gadget comment normalization propagates allocation failures without losing source ownership" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, gadgetCommentAllocationCheck, .{});
+}
+
+
+test "retained IT repeated gadget right preserves its exact default stylesheet selection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const source = @embedFile("testdata/it-default-gadgets/Gadgets-definition.wikitext");
+    try std.testing.expectEqual(@as(usize, 2845), source.len);
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    try std.testing.expectEqualStrings("77b50bf40124fe4d675340d852846000ccbbd1bf6733ae3b953fefb2815ddabc", &hex);
+    const selected = try selectAlloc(a, source, .{});
+    try std.testing.expectEqual(@as(usize, 1), selected.len);
+    try std.testing.expectEqualStrings("IndiceOrizzontale", selected[0].name);
+    try std.testing.expectEqual(@as(usize, 1), selected[0].pages.len);
+    try std.testing.expectEqualStrings("IndiceOrizzontale.css", selected[0].pages[0]);
+    try std.testing.expect(!selected[0].unknown_applicability);
+    try std.testing.expectEqual(@as(usize, 0), (try selectAlloc(a, source, .{ .disable_defaults = true })).len);
+    try std.testing.expectEqual(@as(usize, 0), (try selectAlloc(a, source, .{ .disabled = &.{"IndiceOrizzontale"} })).len);
+}
+
+test "identical valued gadget options preserve conditional CSS peers and source order" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const base = "* Scope[default|rights=delete|namespaces=0]|scope.css\n" ++
+        "* Parent[default|peers=Peer]|parent.js\n* Peer[hidden|type=styles]|peer.css\n";
+    const repeated = "* Scope[default|rights=delete|namespaces=0|rights = delete|namespaces=0]|scope.css\n" ++
+        "* Parent[default|peers=Peer|peers=Peer]|parent.js\n* Peer[hidden|type=styles|type=styles]|peer.css\n";
+    const expected = try selectAlloc(a, base, .{});
+    const actual = try selectAlloc(a, repeated, .{});
+    try std.testing.expectEqualDeep(expected, actual);
+    try std.testing.expectEqual(@as(usize, 2), actual.len);
+    try std.testing.expectEqualStrings("Peer", actual[0].name);
+    try std.testing.expect(!actual[0].unknown_applicability);
+    try std.testing.expectEqualStrings("Scope", actual[1].name);
+    try std.testing.expect(actual[1].unknown_applicability);
+}
+
+test "gadget repeated values retain conflicting valueless and malformed refusals" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{
+        "* A[default|rights=delete|rights=read]|a.css",
+        "* A[default|rights=read|rights=delete]|a.css",
+        "* A[default|type=styles|type=general]|a.css",
+        "* A[default|peers=A|peers=B]|a.js",
+        "* A[default|rights=delete|rights]|a.css",
+        "* A[default|rights|rights=delete]|a.css",
+        "* A[default|default]|a.css",
+        "* A[default|rights=|rights=]|a.css",
+        "* A[default|supportsUrlLoad=bad|supportsUrlLoad=bad]|a.css",
+        "* A[default|type=unknown|type=unknown]|a.css",
+    }) |source| try std.testing.expectError(error.InvalidGadgetDefinition, selectAlloc(a, source, .{}));
 }

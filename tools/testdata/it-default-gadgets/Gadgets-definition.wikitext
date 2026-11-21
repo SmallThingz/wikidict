@@ -1,0 +1,60 @@
+* LegacyScriptsNewNode[hidden]|LegacyScriptsNewNode.js
+* CartellaConLinguette[default|hidden]|CartellaConLinguette.js
+
+== Navigazione ==
+* Navpopup| Navpopup.js | Navpopup.css
+* dictionaryLookupHover| dictionaryLookupHover.js
+
+== Editing ==
+* Wiked | Wiked.js
+* HyphenationCoverter [dependencies=mediawiki.util]|HyphenationCoverter.js
+
+== Ricerca ==
+* RicercaExtra | RicercaExtra.js
+* CIDR | CIDR.js
+* ISOlang[dependencies=mediawiki.util]|ISOlang.js
+
+<!-- == Patrolling ==
+* RevertTool | Revert.js
+* NewPages | NewPages.js
+* RecentChangePatrol | RecentChangePatrol.js
+ -->
+
+== Interfaccia ==
+* dropdown-menus[dependencies=mediawiki.api,mediawiki.util,mediawiki.Title,user.options|peers=dropdown-menus-pagestyles]|dropdown-menus.js|dropdown-menus-pagestyles.css
+* tabsnew-plus | tabsnew-plus.js
+* autolink |autolink.js
+* HideCentralNotice | HideCentralNotice.css
+* AllPagesRedirect | AllPagesRedirect.css
+* RcColor | RcColor.css
+* Pagineprotette | pagineprotette.css
+* BannerNotifiche[dependencies=mediawiki.util]|BannerNotifiche.js
+* HiddenCat[default]|HiddenCat.js
+* IndiceOrizzontale[default]|IndiceOrizzontale.css
+* TabbedLanguages[top|dependencies=mediawiki.cookie,mediawiki.util,ext.gadget.LegacyScriptsNewNode|type=general]|TabbedLanguages.js|TabbedLanguages.css
+
+== Altro ==
+* spostamento[rights=move] | Spostamento.js
+* spostamentoMinuscolo[rights=move] | SpostamentoMinuscolo.js
+* linkRossiNoModifica[default] | LinkRossiNoModifica.js
+
+== Cronologia ==
+* DeluxeHistory | Objects.js | DeluxeHistory.js | DeluxeHistory.css
+* CronoAvanzata | CronoAvanzataBase.js | CronoAvanzata.js
+<!-- * HideDuplicateContribs | HideDuplicateContribs.js -->
+
+== Gruppi ==
+* canctxt [rights=delete] | cancTxt.js/Criteri.js | cancTxt.js
+* recuperaPagina [rights=undelete] | recuperaPagina.js
+* RollbackSummary [rights=rollback|dependencies=mediawiki.util]|RollbackSummary.js
+<!-- * AjaxMassRB [rights=rollback|dependencies=mediawiki.util]|AjaxMassRB.js -->
+* DelRevLinkDx [rights=deleterevision] | DelRevLinkDx.css
+* RollbackNascosti [rights=markbotedits|dependencies=mediawiki.util]|RollbackNascosti.js
+* MassDelete [rights=delete|dependencies=mediawiki.api, mediawiki.Title]|MassDelete.js/Criteri.js|MassDelete.js
+
+== Testing ==
+*CategoriaLingue[dependencies=mediawiki.util]|CategoriaLingue.js
+*FormeFlesse[dependencies=oojs-ui-widgets,mediawiki.util,mediawiki.api]|FormeFlesseCommon.js|FormeFlesseTraduzioni.js|FormeFlesse.js
+*FormeFlesse2[dependencies=oojs-ui-widgets,mediawiki.util,mediawiki.api|rights=delete]|FormeFlesseCommon.js |FormeFlesseTraduzioni.js|FormeFlesse2.js
+*AvvCatSpecializzate[rights=delete|dependencies=mediawiki.api|rights=delete] |AvvCatSpecializzate.js
+*FormeFlesseMultilingua[dependencies=oojs-ui-widgets,mediawiki.util,mediawiki.api] |FormeFlesseCommon.js|FormeFlesseCommon.css|FormeFlesseTraduzioni.js|FormeFlesseMultilingua.js
