@@ -1,6 +1,60 @@
 # Android validation
 
-## Current table-cell positioned scopes and inline image maps — 2026-11-21
+## Current full host and unsigned package qualification — 2026-11-21
+
+The integrated Android source at `da4e671e` passed the ordinary unfiltered
+[Host167 JVM suite][host167-current]: **1,234 fresh passes**, with zero failures,
+skips or carried tests. This comprises 1,232 correctness tests and two
+benchmark-named controls; it makes no throughput claim. The test task executed
+while main and unit Kotlin compilation stayed up to date. The existing sixteen
+focused results remain retained separately. The [saved audit][audit167-current]
+and [physical closure][physical167-current] authenticate the current 993-file
+source inventory, exact source aliases, protected artifacts, absent owned
+processes and the free build lock. The run took 186.430 seconds with sampled peak
+PSS of 966,464,512 bytes.
+
+The subsequent [canonical168 qualification][package168-current] ran ordinary
+debug lint and unsigned release assembly using the same HOME Gradle caches,
+project cache and build outputs. It repeated no JVM or instrumentation tests and
+performed no native compilation. Debug lint completed with **zero errors or
+fatal findings, 37 warnings and 5 hints**. No reported lint location intersects
+the cumulative changed lines since the prior packaged source, `5c26f9c0`.
+Release Kotlin compilation emitted 70 warning lines and no errors. Release
+compilation, R8 optimization, resource optimization, vital lint and assembly
+completed successfully. The complete invocation took 2,364.529 seconds with
+sampled peak PSS of 2,733,929,472 bytes under the unchanged 3 GiB allocation.
+
+The retained [unsigned APK][apk168-current] is **11,013,089 bytes**, 49,152 bytes
+larger than canonical163. Its SHA-256 is
+`454c99ecd35bd137f05928496d5bd9241a6a8283b87b7ec12e1feb183b344840`.
+It retains minimum API **31 (Android 12)** and target API **37**, with
+`arm64-v8a`, `armeabi-v7a`, `x86` and `x86_64` native libraries. The native,
+font and license payloads match the prior package. The [package audit][audit168-current]
+verifies unsigned status, package contents, current compiler inputs and dependency
+identities, and the new table-scope and inline-image-map contributions in the R8
+mapping. Twenty-five earlier APK/metadata keepers remain protected; six prior
+release class/mapping files were preserved before replacement, alongside the
+five older preserved files. The successful package completion also records the
+selected independent closer's process-absence and free-lock checks.
+
+These are host and unsigned-package results. They do not establish phone pixels,
+touch, scrolling, selection, accessibility or installed acceptance. Historical
+installed62 evidence does not cover the current bytes. Genuine physical tests
+still require permitted device access, coordinated custody and a compatible
+authorized signed installation. The recorded pre-ADB `EACCES` dependency and
+signing, installation and publication holds remain unchanged; no phone probe was
+performed. The retained Setswana producer output still flattened the positioned
+wrapper, so this qualification also does not establish that genuine wire-to-view
+path.
+
+[host167-current]: /home/a/.tmp/wikidict-android-host167-run01/completion01.json
+[audit167-current]: /home/a/.tmp/wikidict-android-host167-run01/saved-result-peer-reader01.json
+[physical167-current]: /home/a/.tmp/wikidict-android-host167-run01/runtime-physical-closure01.json
+[package168-current]: /home/a/.tmp/wikidict-android-canonical168-run01/completion01.json
+[audit168-current]: /home/a/.tmp/wikidict-android-canonical168-run01/saved-result-peer-reader01.json
+[apk168-current]: /home/a/.tmp/wikidict-android-canonical168-run01/retained/app-release-unsigned.apk
+
+## Previous scoped table-cell and inline-image-map qualification — 2026-11-21
 
 The native table path now carries supported positioned scopes through cell
 measurement, clipping and input ownership. The qualified shape uses the existing
@@ -39,9 +93,10 @@ history reset was performed.
 
 These checks do not establish genuine positioned-wrapper interoperability:
 the retained Setswana producer output still flattened that wrapper. Host controls
-cover the explicit native scope contract and image-map sizing/actions. There is
-no new full 1,234-case suite, lint, APK, device pixel, touch, scroll, hover,
-selection or accessibility result. Historical installed62 evidence and the prior
+cover the explicit native scope contract and image-map sizing/actions. Those
+scoped runs did not include the later full suite, lint or APK qualification above,
+or device pixel, touch, scroll, hover, selection or accessibility tests.
+Historical installed62 evidence and the prior
 unsigned canonical163 APK do not qualify these new production bytes. Physical
 coverage still requires permitted access, coordinated custody and a compatible
 authorized signed installation. The recorded pre-ADB `EACCES` dependency and
