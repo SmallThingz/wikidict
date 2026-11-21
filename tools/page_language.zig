@@ -920,8 +920,8 @@ test "Figure GETs keep main-namespace scope when page language accepts supplemen
         try row.object.put(a, "styles", .null);
         const figure = try std.json.parseFromValue(direct_source_get.Context(?bool), a, row.*, .{});
         if (language.value.page.namespace == 0) {
-            const result = try direct_source_get.validateTransport(a, &ns, figure.value);
-            try std.testing.expectEqualStrings(accepted.url, result.url);
+            const document_url: []const u8 = try direct_source_get.validateTransport(a, &ns, figure.value);
+            try std.testing.expectEqualStrings(accepted.url, document_url);
         } else {
             try std.testing.expectEqual(@as(i32, 118), language.value.page.namespace);
             try std.testing.expectError(invalid, direct_source_get.validateTransport(a, &ns, figure.value));

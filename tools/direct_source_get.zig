@@ -112,9 +112,9 @@ fn directDocumentUrl(a: A, ns: *const namespaces.Registry, record: anytype, url:
     }
 }
 const Transport = struct { url: []const u8, observation: prefix_parser.Observation };
-pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
+pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) ![]const u8 {
     if (record.page.namespace != 0) return invalid;
-    return validateDocumentTransport(a, ns, record);
+    return (try validateDocumentTransport(a, ns, record)).url;
 }
 
 pub fn validatePageLanguageTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
