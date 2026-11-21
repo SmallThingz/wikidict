@@ -1037,6 +1037,7 @@ const raw_stream_schema = "wikidict.figure-sizing-raw.stream.v1";
 pub const stream_header_limit = 2 * 1024 * 1024;
 const stream_fact_limit = 64 * 1024;
 const stream_batch_limit = 16 * 1024 * 1024;
+const raw_batch_retained_limit = 4 * 1024 * 1024;
 
 const StreamHeader = struct {
     schema: []const u8,
@@ -1322,6 +1323,7 @@ const TiffCompanion = struct {
 };
 
 const ArrayBatches = struct {
+    scratch_reset_mode: std.heap.ArenaAllocator.ResetMode = .free_all,
     items: []const RawFileBatch,
     count: usize,
     cursor: usize = 0,
@@ -1375,6 +1377,7 @@ fn rawStreamRecordValue(a: A, bytes: []const u8, encoded_permitted: bool) !Value
 }
 
 const StreamBatches = struct {
+    scratch_reset_mode: std.heap.ArenaAllocator.ResetMode = .free_all,
     input: *StreamInput,
     backing: A,
     count: usize,
@@ -1702,7 +1705,8 @@ pub const Registry = struct {
         var batches: StreamBatches = .{ .input = raw, .backing = backing, .count = count,
             .base_count = std.math.cast(usize, header.base_batches) orelse return invalid, .raw_sha256 = header.raw_sha256,
             .allow_tiff_companion = parsed_header.contract or equal(header.generator_sha256, file_generator_sha256),
-            .encoded_records = parsed_header.encoded_records };
+            .encoded_records = parsed_header.encoded_records,
+            .scratch_reset_mode = switch (reset_mode) { .free_all => .free_all, else => .{ .retain_with_limit = raw_batch_retained_limit } } };
         return validateFileFacts(&arena, .{ .schema = "wikidict.figure-sizing-files.v1", .wiki = header.wiki,
             .content_language = header.content_language, .core_revision = header.core_revision,
             .namespace_registry_sha256 = header.namespace_registry_sha256, .raw_sha256 = header.raw_sha256,
@@ -1808,12 +1812,15 @@ pub const Registry = struct {
         var authorities: std.StringHashMapUnmanaged(Record) = .empty;
         var missing_files: std.StringHashMapUnmanaged(void) = .empty;
         var observing = false;
+        var scratch = std.heap.ArenaAllocator.init(arena.child_allocator);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
         for (0..batches.count) |batch_index| {
             location.* = .{ .stage = "batch", .batch = batch_index };
 
-            var scratch = std.heap.ArenaAllocator.init(arena.child_allocator);
-            defer scratch.deinit();
-            const temp = scratch.allocator();
+            // All borrowed batch values end here; exceptional high-water
+            // allocations are released before replaying the next batch.
+            _ = scratch.reset(batches.scratch_reset_mode);
             const batch = try batches.next(temp);
             if (batch.requests.len == 0 or batch.requests.len > 50) return invalid;
             const jpeg_supplement = batch.jpeg_metadata_only != null;
@@ -2073,6 +2080,7 @@ pub const Registry = struct {
                 if (observed_files.count() != used_requests.count()) return invalid;
             }
         }
+        _ = scratch.reset(.free_all);
         location.* = .{ .stage = "coverage" };
         try batches.finish();
         if (seen_count != facts.count() or declared_heights.count() != height_occurrences.count()) return invalid;
