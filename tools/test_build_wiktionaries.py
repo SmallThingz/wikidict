@@ -6788,10 +6788,17 @@ class PreparedSourceCallerTests(unittest.TestCase):
                 if len(ticks) == 4:
                     os.replace(ready, f.launch)
                 self.assertLessEqual(len(ticks), 4)
-            with patch.object(b.time, 'sleep', side_effect=advance), \
-                    patch.object(b, 'prepared_metadata_ref', wraps=b.prepared_metadata_ref) as reads:
+            reads = []
+            original = Path.open
+            def observe(path, *args, **kwargs):
+                if path == f.launch and args == ('rb',):
+                    reads.append(len(ticks))
+                return original(path, *args, **kwargs)
+            with patch.object(b.time, 'sleep', side_effect=advance), patch.object(Path, 'open', observe):
                 generation = b.PreparedSourceRequest.await_authorization(request, f.generation_ref)
-            self.assertEqual([call(f.launch), call(f.launch)], reads.call_args_list)
+            # Read each observed version once. Reauthenticate the authorized
+            # version when it is passed into the parent-generation validator.
+            self.assertEqual([1, 4, 4], reads)
             self.assertEqual(f.identity, generation.identity)
 
     def test_parent_authorization_binds_original_attempt_configuration_and_generation(self):

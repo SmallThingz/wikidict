@@ -38,23 +38,33 @@ def sha256_file(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def prepared_metadata(reference):
-    """Read one caller-selected immutable metadata descriptor with bracketing."""
-    path=Path(reference['path'])
-    if (not path.is_absolute() or any(p.is_symlink() for p in (path,*path.parents))
-            or not path.is_file() or path.stat().st_uid!=os.geteuid()):
+def _read_prepared_metadata(path, expected=None):
+    """Read the JSON and its content descriptor from the same file opening."""
+    if not path.is_absolute() or any(p.is_symlink() for p in (path, *path.parents)):
         raise ValueError('Unsafe prepared authorization metadata')
-    before=path.stat()
-    if not 0<before.st_size<=64*1024*1024:
+    if expected is not None and not path.is_file():
+        raise ValueError('Unsafe prepared authorization metadata')
+    before = path.stat()
+    if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid():
+        raise ValueError('Unsafe prepared authorization metadata')
+    if not 0 < before.st_size <= 64 * 1024 * 1024:
         raise ValueError('Prepared metadata exceeds the existing seal bound')
-    raw=path.read_bytes()
-    after=path.stat()
-    fields=('st_dev','st_ino','st_mode','st_size','st_mtime_ns','st_ctime_ns')
-    if (any(getattr(before,k)!=getattr(after,k) for k in fields)
-            or set(reference)!={'path','bytes','sha256'}
-            or len(raw)!=reference['bytes'] or hashlib.sha256(raw).hexdigest()!=reference['sha256']):
+    with path.open('rb') as source:
+        raw = source.read(before.st_size + 1)
+        opened = os.fstat(source.fileno())
+    after = path.stat()
+    fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+    if len(raw) != before.st_size or any(getattr(before, k) != getattr(info, k) for info in (opened, after) for k in fields):
         raise ValueError('Prepared metadata changed during authentication')
-    return json.loads(raw)
+    observed = dict(path=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    if expected is not None and (set(expected) != set(observed) or expected['bytes'] != len(raw)
+                                 or expected['sha256'] != observed['sha256']):
+        raise ValueError('Prepared metadata changed during authentication')
+    return observed, json.loads(raw)
+
+
+def prepared_metadata(reference):
+    return _read_prepared_metadata(Path(reference['path']), reference)[1]
 
 
 class PreparedSourceGeneration:
@@ -358,11 +368,7 @@ def prepared_watchdog_options(options):
 
 
 def prepared_metadata_ref(path):
-    path=Path(path)
-    before=path.stat()
-    value=dict(path=str(path.absolute()),bytes=before.st_size,sha256=sha256_file(path))
-    prepared_metadata(value)
-    return value
+    return _read_prepared_metadata(Path(path).absolute())[0]
 
 
 def _publish_prepared_metadata_no_replace(temporary,path):
@@ -492,8 +498,7 @@ class PreparedSourceRequest:
                 # pending decision. Every changed receipt still takes the authenticated path.
                 stamp = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
                 if stamp != pending_stamp:
-                    launch_ref=prepared_metadata_ref(launch_path)
-                    launch=prepared_metadata(launch_ref)
+                    launch_ref, launch = _read_prepared_metadata(launch_path.absolute())
                     auth=launch.get('prepared_source_authorization')
                     if auth is not None:
                         if auth.get('generation')!=reference:
@@ -583,7 +588,7 @@ class PreparedSourceRequest:
             workspace_state=read_build_envelope(workspace/'state.json'),python=python,tools=bound_tools,
             seal_sha256=seal_reference['sha256'],seal_archive=archive_ref,
             prepared_by_start=self.reference,
-            tracked_process=prepared_metadata(prepared_metadata_ref(self.folder/'launch.json'))['identity'])
+            tracked_process=_read_prepared_metadata((self.folder / 'launch.json').absolute())[1]['identity'])
         if cfg.get('python_tooling') is not None:record['python_tooling']=cfg['python_tooling']
         if retained is not None:
             record['retained_dispatch']=retained.prepared_dispatch()
