@@ -1312,6 +1312,9 @@ def auxiliary_capture_helper(name, path):
         return prepare_behavior_switches
     if name=='magic-words':
         record=read_small_json(path.with_name(auxiliary_manifest_filename(name)))
+        if isinstance(record,dict) and type(record.get('version')) is int and record['version']==11:
+            import prepare_magic_words_raw
+            return prepare_magic_words_raw
         if isinstance(record,dict) and type(record.get('version')) is int and record['version']==10:
             import prepare_magic_words_file_page
             return prepare_magic_words_file_page

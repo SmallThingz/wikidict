@@ -1,0 +1,22 @@
+{
+  "artifacts": {
+    "magic-words.raw.json": "8eefd6743d2ec7479b95889f4db395ab86b0a55cad576b02b6f2c5feb7eaa0a1",
+    "magic-words.request.json": "356436b07907b1c0a8a6a4abbd578b0b9c2559fa0122c0fd60e5c074bc6fb710",
+    "magic-words.tsv": "353e899bf7dcaf9e8d02deee4567672d345605c18d1d7fee43b4e6e6c42138f0",
+    "namespace-capture.complete.json": "4256826536b8eb517b13764857fbfa9806cd7e5d67694ccf088a5157b36bad78",
+    "namespace-siteinfo.raw.json": "4d2608ae932db77b644e6000d62371ad6068cbc828329a540d43169a8fbce04b"
+  },
+  "canonical_words": 21,
+  "content_language": "ml",
+  "date": "20261001",
+  "generator_sha256": "b268af6c645731a103014cb5a631d50de186a6d1921cbf495063ac5ee2514b21",
+  "output_bytes": 2329,
+  "output_sha256": "353e899bf7dcaf9e8d02deee4567672d345605c18d1d7fee43b4e6e6c42138f0",
+  "raw_sha256": "8eefd6743d2ec7479b95889f4db395ab86b0a55cad576b02b6f2c5feb7eaa0a1",
+  "retrieved_utc": "2026-10-05T07:00:10.212659+00:00",
+  "rows": 48,
+  "source_url": "https://ml.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cmagicwords&format=json&formatversion=2&maxlag=5",
+  "temporal_scope": "current-at-retrieval",
+  "version": 1,
+  "wiki": "mlwiktionary"
+}

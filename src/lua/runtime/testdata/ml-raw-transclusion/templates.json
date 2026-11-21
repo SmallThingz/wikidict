@@ -1,0 +1,67 @@
+{
+  "ഫലകം:catlangname": {
+    "id": "67761",
+    "revision": "165202",
+    "text": "<includeonly><!--\n\n-->{{#switch:{{NAMESPACE}}<!--\n\n-->|=[[Category:{{langname|{{{1}}}}} {{{2}}}|{{#if:{{{sort|}}}|{{{sort}}}|{{PAGENAME}}}}]]<!--\n\n-->|Template={{#ifeq:{{SUBPAGENAME}}|doc||[[Category:{{langname|{{{1}}}}} {{{2}}}|{{#if:{{{sort|}}}|{{{sort}}}|{{PAGENAME}}}}]]}}<!--\n\n-->}}<!--\n\n--></includeonly><!--\n\n--><noinclude>{{temp|catlangname|xx|qwertys}}{{documentation}}</noinclude>"
+  },
+  "ഫലകം:Xyzy": {
+    "id": "8621",
+    "revision": "45618",
+    "text": "{{#switch:{{{lang|{{{face|}}}}}}|ar|fa|ur|xcl|hy|be|bg|mk|ru|uk|cu|sa|hi|got|el|grc|he|yi|arc|ja|ko|ta|te|th={{{{#switch:{{{lang}}}\n|ar=Arab|fa=fa-Arab|ur=ur-Arab\n|xcl|hy=Armn|be|bg|mk|ru|uk=Cyrl|cu=Cyrs|sa|hi=Deva|got=Goth|el=Grek|grc=polytonic\n|he|yi|arc=Hebr|ja=Jpan|ko=Kore|ta=Taml|te=Telu|th=Thai}}|1={{{1}}}|face={{{face|}}}|lang={{{lang}}}}}\n|bold|ital|head|term=<{{#switch:{{{face}}}|bold|head=b|ital=i|term=span class=\"mention-Latn\"}}>{{{1}}}</{{#switch:{{{face}}}|bold|head=b|ital=i|term=span}}>\n|={{{1}}}\n|#default=<{{#switch:{{{face|}}}|bold|head=b|ital=i|term=span class=\"mention-Latn\"|span}} lang=\"{{{lang|}}}\" xml:lang=\"{{{lang|}}}\">{{{1}}}</{{#switch:{{{face|}}}|bold|head=b|ital=i|span}}>}}<noinclude>\n\nDefault script template, {{seeTalk}}</noinclude>"
+  },
+  "ഫലകം:langnamex": {
+    "id": "112441",
+    "revision": "342567",
+    "text": "{{{{#ifeq:{{{1}}}|{{lc:{{{1}}}}}|languagex|langnamex/name}}|{{{1}}}}}<noinclude>{{documentation}}</noinclude>"
+  },
+  "ഫലകം:en": {
+    "id": "1672",
+    "revision": "196699",
+    "text": "ഇംഗ്ലീഷ്<noinclude>[[വിഭാഗം:ഭാഷാ ഫലകങ്ങൾ|en]]</noinclude>"
+  },
+  "ഫലകം:language": {
+    "id": "4044",
+    "revision": "196741",
+    "text": "<noinclude>കൂടുതൽ വിവരങ്ങൾക്ക് ദയവായി [[{{TALKSPACE}}:{{BASEPAGENAME}}|സംവാദം താൾ]] കാണുക.\n\n</noinclude><includeonly>{{{{#if:{{isValidPageName|{{{{{1}}}|l=}}}}||}}{{{1}}}|l=}}</includeonly>"
+  },
+  "ഫലകം:languagex": {
+    "id": "112442",
+    "revision": "342568",
+    "text": "<includeonly>{{#if:{{{1|}}}|{{{{langprefix|{{{1}}}}}{{{1}}}}}}}</includeonly><noinclude>{{rfd}}{{documentation}}</noinclude>"
+  },
+  "ഫലകം:langname": {
+    "id": "6235",
+    "revision": "45120",
+    "text": "{{{{#ifeq:{{{1}}}|{{lc:{{{1}}}}}|language|#if:1}}|{{{1}}}}}"
+  },
+  "ഫലകം:isValidPageName": {
+    "id": "5677",
+    "revision": "342566",
+    "text": "{{#ifeq:{{{1}}}|-||{{#ifeq:[[:പ്രത്യേകം:Whatlinkshere/{{{1}}}]]|{{raw:പ്രത്യേകം:Whatlinkshere/{{{1}}}}}|valid}}}}"
+  },
+  "ഫലകം:langprefix": {
+    "id": "112443",
+    "revision": "342569",
+    "text": "<includeonly>{{#switch:{{{1|}}}</includeonly><!--\n-->|aav-pro|afa-pro|alg-pro|ath-pro|aus-cww-pro|aus-pam-pro|azc-pro|azc-nah-pro|bat-pro|ber-pro|bnt-pro|cau-nec-pro|ccs-pro|cel-pro|cel-bry-pro|cmc-pro|dra-pro|esx-pro|esx-esk-pro|esx-inu-pro|euq-pro|fiu-pro|fiu-fin-pro|fiu-fpr-pro|fiu-ugr-pro|gem-pro|grk-pro|hyx-pro|iir-pro|inc-pro|ine-pro|ine-ana-pro|ine-bsl-pro|ira-pro|itc-pro|jpx-pro|map-ata-pro|map-pro|mkh-pro|mkh-vie-pro|phi-pro|poz-pro|poz-mly-pro|poz-oce-pro|poz-pol-pro|poz-swa-pro|pqe-pro|pqe-pol-pro|qfa-cka-pro|qfa-kor-pro|qfa-yen-pro|sem-pro|sit-pro|sla-pro|sqj-pro|syd-pro|tai-pro|tai-swe-pro|trk-pro|urj-pro|xgn-pro=proto:<!--\n-->|art-elo|art-lap|art-man|art-mun|art-nav|art-neo|art-top|art-una|ldn|lfn|qya|sjn|tlh=conl:<!--\n-->|#default=<!--\n--><includeonly>}}</includeonly><noinclude>{{documentation}}</noinclude>"
+  },
+  "ഫലകം:en-noun": {
+    "id": "4012",
+    "revision": "408500",
+    "text": "{{catlangname|en|നാമങ്ങൾ|{{{sort|}}}}}<span class=\"infl-inline\">{{\n  #switch:{{{1}}}<!-- check if plural is unattested or unknown -->\n  |?='''{{pagename|{{{head|{{{sg|}}}}}}}}''' {{#ifeq:{{NAMESPACE}}||[[Category:English nouns with unknown or uncertain plurals]]}}\n  |!='''{{pagename|{{{head|{{{sg|}}}}}}}}''' (''plural not attested''){{#ifeq:{{NAMESPACE}}||[[Category:English nouns with unattested plurals]]}}\n  |#DEFAULT={{\n  #if:{{{pluralOnly|}}}\n    |\n    |'''{{pagename|{{{head|{{{sg|}}}}}}}}''' (\n  }}{{\n  #if:{{isValidPageName|{{{1|-}}}1}}\n    |{{\n    #ifeq:{{{1}}}|-<!-- begin checks for mixed countability -->\n      |{{\n      #if:{{{3|}}}{{{2|}}}{{{pl|}}}\n        |''usually [[Appendix:Glossary#uncountable|എണ്ണാനാവില്ല]];''&nbsp;\n        |''[[Appendix:Glossary#uncountable|എണ്ണാനാവില്ല]]''\n      }}\n      |{{\n      #ifeq:{{{3|{{{2|}}}}}}|-\n        |''[[Appendix:Glossary#countable|എണ്ണാനാവും]] and [[Appendix:Glossary#uncountable|എണ്ണാനാവില്ല]];''&nbsp;\n      }}\n    }}{{\n    #ifeq:{{{3|}}}{{#if:{{{2|-}}}|{{{2|-}}}|-}}{{#if:{{{1|}}}|{{{1}}}}}{{{pl|}}}|--<!-- check whether strictly uncountable -->\n      |\n      |''ബഹുവചനം''&nbsp;{{\n      #if:{{{pl|}}}\n        |<span class=\"form-of plural-form-of lang-en\">{{\n        #if:{{isValidPageName|{{{pl}}}}}\n          |'''{{makelink|en|{{{pl}}}}}'''\n          |{{{pl}}} \n        }}</span>\n        |<span class=\"form-of plural-form-of lang-en\">'''{{makelink|en|{{\n        #switch:{{{ {{#ifeq:{{{1}}}|-|2|1}}|s}}}<!-- compose plural -->\n          |s\n          |es={{pagename}}{{{ {{#ifeq:{{{1}}}|-|2|1}}|s}}}\n          |{{#switch:-\n            |{{{1}}}={{{2}}}\n            |{{{2}}}={{{1|}}}\n            |{{{1|}}}{{{2|}}}\n          }} \n        }}}}'''</span>\n      }}{{\n      #if:{{{pl2|}}}\n        |&nbsp;''or'' <span class=\"form-of plural-form-of lang-en\">{{\n        #if:{{isValidPageName|{{{pl2}}}}}\n          |'''{{makelink|en|{{{pl2}}}}}'''\n          |{{{pl2}}} \n        }}</span>{{\n        #if:{{{pl3|}}}\n          |&nbsp;''or'' <span class=\"form-of plural-form-of lang-en\">{{\n        #if:{{isValidPageName|{{{pl3}}}}}\n          |'''[[{{{pl3}}}]]'''\n          |{{{pl3}}} \n        }}</span>\n        }} \n      }} \n    }}\n    |{{{1}}} \n  }}{{\n  #if:{{{pluralOnly|}}}<!-- close parenthesis opened far above -->\n    |\n    |)\n  }}\n}}</span><noinclude>\n----\n{{seeTalk}}\n[[വർഗ്ഗം:ഇംഗ്ലീഷ് വാക്കുകളുടെ തരം സൂചിപ്പിക്കുന്ന ഫലകങ്ങൾ|നാമം]]\n</noinclude>"
+  },
+  "ഫലകം:en-adj": {
+    "id": "4018",
+    "revision": "408536",
+    "text": "<noinclude>\nകൂടുതൽ വിവരങ്ങൾക്ക് ദയവായി [[{{TALKPAGENAME}}|സംവാദം താൾ]] കാണുക.\n\n[[വർഗ്ഗം:ഇംഗ്ലീഷ് വാക്കുകളുടെ തരം സൂചിപ്പിക്കുന്ന ഫലകങ്ങൾ|നാമവിശേഷണം]]\n----\n</noinclude><span class=\"infl-inline\">'''{{{pos|{{PAGENAME}}}}}''' (<!--\n\n// wikilink the comparative and comparability tags\n-->{{#ifeq:{{{1}}}|-|<!--\n  -->''[[താരതമ്യം]] സാധ്യമല്ല''|<!--\n\n  --> ''[[ആപേക്ഷികം]]'' <!--\n  // If the comparative argument lacks wiki markup:\n  -->{{#if:{{isValidPageName|{{{1|-}}}1}}|'''<!--\n    -->{{#switch:{{{1|more}}}<!--\n      -->|more=more {{PAGENAME}}<!--\n      -->|er=[[{{PAGENAME}}er]]<!--\n      -->|[[{{{1}}}{{#switch:{{{2}}}|er=er|ier=ier|r=r}}]]<!--\n    -->}}<!--\n    -->{{#ifeq:{{{2|}}}|more|''' ''or'' '''more {{PAGENAME}}}}<!--\n    -->{{#ifeq:{{{3|}}}|more|''' ''or'' '''more {{PAGENAME}}}}<!--\n    -->'''<!--\n  // Else the 1st parameter is the marked up comparative\n  -->|{{{1}}}<!--\n  -->}}<!--\n\n  -->, ''[[അത്യുത്തമം]]'' <!--\n  // If the superlative argument lacks wiki markup:\n  -->{{#if:{{isValidPageName|{{{2|-}}}1}}|'''<!--\n    -->{{#switch:{{{1|more}}}<!--\n      -->|more=most {{PAGENAME}}<!--\n      -->|er=[[{{PAGENAME}}est]]<!--\n      -->|{{#if:{{{2|}}}|[[{{#switch:{{{2}}}|er={{{1}}}est|ier={{{1}}}iest|r={{{1}}}st|{{{2}}}}}]]|most {{PAGENAME}}}}<!--\n    -->}}<!--\n    -->{{#ifeq:{{{2|}}}|more|''' ''or'' '''most {{PAGENAME}}}}<!--\n    -->{{#ifeq:{{{3|}}}|more|''' ''or'' '''most {{PAGENAME}}}}<!--\n    -->'''<!--\n  // Else the 2nd parameter is the marked up superlative\n  -->|{{{2}}}<!--\n  -->}}<!--\n\n-->}})</span>\n<includeonly>[[വർഗ്ഗം:ഇംഗ്ലീഷ് നാമവിശേഷണങ്ങൾ]]</includeonly>"
+  },
+  "ഫലകം:pagename": {
+    "id": "67763",
+    "revision": "165204",
+    "text": "{{#switch:{{NAMESPACE}}<!--\n\n-->|={{#if:{{{1|}}}|{{{1}}}|{{PAGENAME}}}}<!--\n\n-->|Appendix={{#if:{{{1|}}}|{{{1}}}|{{SUBPAGENAME}}}}<!--\n\n-->|Template=(example)<!--\n\n-->|#default={{#if:{{{1|}}}|{{{1}}}|{{PAGENAME}}}}<!--\n\n-->}}<!--\n\n--><noinclude>{{documentation}}</noinclude>"
+  },
+  "ഫലകം:makelink": {
+    "id": "78906",
+    "revision": "201571",
+    "text": "<includeonly><!--\n\n-->{{#switch:{{NAMESPACE}}<!--\n\n-->|Appendix=<!--\n\n   -->{{{{#if:{{{sc|}}}|{{{sc}}}|{{langscript|{{{1}}}}}}}<!--\n      -->|{{#if:{{isValidPageName|{{{2}}}}}|[[Appendix:{{#titleparts:{{PAGENAME}}|1}}/{{{2}}}#{{langnamex|{{{1}}}}}|{{#if:{{{3|}}}|{{{3}}}|{{{2}}}}}]]|{{{2}}}}}<!--\n\n-->}}<!--\n\n-->|#default=<!--\n   -->{{Xyzy|lang={{{1|en}}}|sc={{{sc|}}}|<!--\n      -->{{#if:{{{testraw|}}}<!--\n         -->|{{#if:{{isValidPageName|{{{2}}}}}|[[{{{2}}}#{{langnamex|{{{1|en}}}}}|{{#if:{{{3|}}}|{{{3}}}|{{{2}}}}}]]|{{#if:{{{3|}}}|{{{3}}}|{{{2}}}}}}}<!--\n         -->|[[{{{2}}}#{{langnamex|{{{1|en}}}}}|{{#if:{{{3|}}}|{{{3}}}|{{{2}}}}}]]<!--\n      -->}}<!--\n   -->}}<!--\n\n-->}}<!--\n\n--></includeonly><!--\n\n--><noinclude>{{documentation}}</noinclude>"
+  }
+}

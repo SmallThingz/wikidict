@@ -1686,6 +1686,11 @@ pub const Expander = struct {
         return originResult(origins.read(bytes));
     }
     fn expandParserHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!?dependency.Text {
+        if (try self.expandVariableHeadTracked(head, raw_args)) |value| return value;
+        return self.expandFunctionHeadTracked(head, raw_args, params, host_title, depth);
+    }
+
+    fn expandVariableHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8) anyerror!?dependency.Text {
         if (raw_args.len == 0) {
             if (try self.resolveTitleMagic(head, .variable)) |name| {
                 if (try self.statisticsMagic(name, "")) |value| return dependency.Text.transformed(value);
@@ -1697,6 +1702,10 @@ pub const Expander = struct {
             }
         }
         if (try self.magicWord(head)) |value| return dependency.Text.transformed(value);
+        return null;
+    }
+
+    fn expandFunctionHeadTracked(self: *Expander, head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!?dependency.Text {
         if (preprocess.findTopParserColonWithConversion(head, self.provider.language_conversion_enabled orelse false)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             if (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) |name| {
@@ -1731,7 +1740,7 @@ pub const Expander = struct {
         }
         // All other parser/Lua transformations retain their existing bytes.
         // They cannot acquire output provenance through equality with an input.
-        if (try self.expandParserHead(head, raw_args, params, host_title, depth)) |value|
+        if (try self.expandFunctionHead(head, raw_args, params, host_title, depth)) |value|
             return dependency.Text.transformed(value);
         return null;
     }
@@ -1746,6 +1755,11 @@ pub const Expander = struct {
         var raw_head = stripSubstPrefix(parts.items[0]);
         if (raw_head.len == 0)
             return dependency.Text.untracked(try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content}));
+        if ((try self.rawTransclusionTarget(raw_head)) != null) {
+            const expanded_raw = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+            if (try self.expandVariableHeadTracked(expanded_raw, parts.items[1..])) |value| return value;
+            return self.expandRawConstruct(true, content, expanded_raw, parts.items[1..], params, host_title, depth);
+        }
         if (try self.expandParserHeadTracked(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         if (raw_head[0] == '#') {
             self.unsupported_parser_function = true;
@@ -1774,6 +1788,10 @@ pub const Expander = struct {
         if (title.len == 0)
             return dependency.Text.transformed(try self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, false));
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
+            if ((try self.rawTransclusionTarget(title)) != null) {
+                if (try self.expandVariableHeadTracked(title, parts.items[1..])) |value| return value;
+                return self.expandRawConstruct(true, content, title, parts.items[1..], params, host_title, depth);
+            }
             if (try self.expandParserHeadTracked(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
         if (title.len != 0 and title[0] == '#') {
@@ -3557,6 +3575,11 @@ pub const Expander = struct {
         host_title: []const u8,
         depth: usize,
     ) anyerror!?[]const u8 {
+        if (try self.expandVariableHead(head, raw_args)) |value| return value;
+        return self.expandFunctionHead(head, raw_args, params, host_title, depth);
+    }
+
+    fn expandVariableHead(self: *Expander, head: []const u8, raw_args: []const []const u8) anyerror!?[]const u8 {
         // Variables without a colon only take precedence over templates when
         // no pipe arguments were supplied (Parser::braceSubstitution).
         if (raw_args.len == 0) {
@@ -3567,6 +3590,17 @@ pub const Expander = struct {
         }
         if (try self.magicWord(head)) |value| return value;
 
+        return null;
+    }
+
+    fn expandFunctionHead(
+        self: *Expander,
+        head: []const u8,
+        raw_args: []const []const u8,
+        params: *rt.Table,
+        host_title: []const u8,
+        depth: usize,
+    ) anyerror!?[]const u8 {
         if (preprocess.findTopParserColonWithConversion(head, self.provider.language_conversion_enabled orelse false)) |colon| {
             const raw_name = std.mem.trim(u8, head[0..colon.index], " \t\r\n");
             const name = (try self.resolveParserFunction(try self.parserFunctionLookupName(raw_name))) orelse return null;
@@ -3667,6 +3701,58 @@ pub const Expander = struct {
         return null;
     }
 
+    // Parser::braceSubstitution removes one captured RAW prefix after variables
+    // and before function/title dispatch. A raw name is not a bare variable.
+    // The modifier neither supplies missing pages nor permits remote fetching.
+    fn rawTransclusionTarget(self: *Expander, head: []const u8) !?[]const u8 {
+        const colon = preprocess.findTopParserColonWithConversion(head, self.provider.language_conversion_enabled orelse false) orelse return null;
+        const prefix = head[0 .. colon.index + colon.len];
+        if (self.provider.resolve_title_magic) |resolve| {
+            const id = (try resolve(self.provider.ctx, prefix, .transclusion_modifier)) orelse return null;
+            if (!std.mem.eql(u8, id, "raw")) return null;
+        } else if (!std.ascii.eqlIgnoreCase(prefix, "raw:")) return null;
+        return head[colon.index + colon.len ..];
+    }
+
+    fn expandRawConstruct(self: *Expander, comptime tracked: bool, content: []const u8, expanded_head: []const u8, raw_args: []const []const u8, params: *rt.Table, host_title: []const u8, depth: usize) anyerror!(if (tracked) dependency.Text else []const u8) {
+        const raw_target = (try self.rawTransclusionTarget(expanded_head)) orelse return error.RawTransclusionPrefixChanged;
+        const target = std.mem.trim(u8, raw_target, " \t\r\n");
+        // This is deliberately a single prefix removal: raw:raw:Name names the
+        // template raw:Name, and raw:Template:raw:Name retains the same title.
+        if (tracked) {
+            if (try self.expandFunctionHeadTracked(target, raw_args, params, host_title, depth)) |value| return value;
+        } else {
+            if (try self.expandFunctionHead(target, raw_args, params, host_title, depth)) |value| return value;
+        }
+        if (target.len == 0 or target[0] == '#') {
+            const unknown_function = target.len != 0;
+            if (unknown_function) self.unsupported_parser_function = true;
+            const value = try self.emptyComputedTransclusion(expanded_head, raw_args, params, host_title, depth, unknown_function);
+            return if (tracked) dependency.Text.transformed(value) else value;
+        }
+        if (invalidTransclusionTitle(target)) {
+            const value = if (invalidTransclusionNeedsProtection(target) or literalComputedColonTitleWithConversion(content, target, raw_args.len + 1, self.provider.language_conversion_enabled orelse false))
+                try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content})
+            else
+                try std.fmt.allocPrint(self.runtime.allocator, "{{{{{s}}}}}", .{content});
+            return if (tracked) dependency.Text.untracked(value) else value;
+        }
+        const local = switch (try self.classifyInterwikiTransclusion(target)) {
+            .normal => target,
+            .current_wiki => |name| name,
+            .literal => {
+                const value = try std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+                return if (tracked) dependency.Text.untracked(value) else value;
+            },
+            .external => return error.ExternalInterwikiTransclusionUnsupported,
+        };
+        const args = try self.buildTemplateArgs(raw_args, params, host_title, depth + 1);
+        return if (tracked)
+            self.expandTemplateWithUsageRecoveryTracked(local, null, args, raw_args, host_title, depth + 1)
+        else
+            self.expandTemplateWithUsageRecovery(local, null, args, raw_args, host_title, depth + 1);
+    }
+
     fn stripSubstPrefix(raw: []const u8) []const u8 {
         const head = std.mem.trim(u8, raw, " \t\r\n");
         if (head.len >= 10 and std.ascii.eqlIgnoreCase(head[0..10], "safesubst:"))
@@ -3756,6 +3842,11 @@ pub const Expander = struct {
         var raw_head = stripSubstPrefix(parts.items[0]);
         if (raw_head.len == 0)
             return std.fmt.allocPrint(self.runtime.allocator, "<nowiki>{{{{{s}}}}}</nowiki>", .{content});
+        if ((try self.rawTransclusionTarget(raw_head)) != null) {
+            const expanded_raw = try self.expandWikitext(raw_head, params, host_title, depth + 1);
+            if (try self.expandVariableHead(expanded_raw, parts.items[1..])) |value| return value;
+            return self.expandRawConstruct(false, content, expanded_raw, parts.items[1..], params, host_title, depth);
+        }
         if (try self.expandParserHead(raw_head, parts.items[1..], params, host_title, depth)) |value| return value;
         if (raw_head[0] == '#') {
             self.unsupported_parser_function = true;
@@ -3784,6 +3875,10 @@ pub const Expander = struct {
         if (title.len == 0)
             return self.emptyComputedTransclusion(expanded_head, parts.items[1..], params, host_title, depth, false);
         if (title.len != 0 and !std.mem.eql(u8, title, raw_head)) {
+            if ((try self.rawTransclusionTarget(title)) != null) {
+                if (try self.expandVariableHead(title, parts.items[1..])) |value| return value;
+                return self.expandRawConstruct(false, content, title, parts.items[1..], params, host_title, depth);
+            }
             if (try self.expandParserHead(title, parts.items[1..], params, host_title, depth)) |value| return value;
         }
         if (title.len != 0 and title[0] == '#') {
@@ -11077,4 +11172,147 @@ test "original Lithuanian translation header keeps literal closing braces inside
     try std.testing.expectEqualStrings("[[Target|<nowiki>{{</nowiki>name}}]]", try expander.expandFragment("actual", "{{#if:yes|[[Target|<nowiki>{{</nowiki>name}}]]|no}}", 1_791_731_560));
     try std.testing.expectEqualStrings("[[Target|actual}}]]", try expander.expandFragment("actual", "{{#if:yes|[[Target|{{PAGENAME}}}}]]|no}}", 1_791_731_560));
     try std.testing.expectEqualStrings("-{T", try expander.expandFragment("actual", "{{#if:yes|-{T|ku-latn:{{PAGENAME}};ku-arab:مال}-|no}}", 1_791_731_560));
+}
+
+const MalayalamRawTransclusionFixture = struct {
+    const aliases = rt.namespace_registry.magic_words;
+    templates: std.json.Value,
+    words: *const aliases.Registry,
+    reference_valid_names: bool = false,
+    missing_lookups: std.ArrayList([]const u8) = .empty,
+
+    fn get(raw: ?*anyopaque, a: std.mem.Allocator, title: []const u8) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        // Independent reference branch for the fixed safe-name calls in the
+        // two retained-template cases. This is not a production provider grant.
+        if (self.reference_valid_names and std.mem.eql(u8, title, "ഫലകം:isValidPageName")) return "valid";
+        if (self.templates.object.get(title)) |row| return row.object.get("text").?.string;
+        if (std.mem.eql(u8, title, "ഫലകം:PAGENAME")) return "template-pagename";
+        if (std.mem.eql(u8, title, "ഫലകം:raw:Probe")) return "literal-raw-title";
+        if (std.mem.eql(u8, title, "raw:Probe")) return "main-raw-title";
+        if (std.mem.eql(u8, title, "ഫലകം:Probe")) return "{{{1|default}}}";
+        try self.missing_lookups.append(a, try a.dupe(u8, title));
+        return null;
+    }
+    fn exists(_: ?*anyopaque, _: []const u8) !bool { return false; }
+    fn resolve(raw: ?*anyopaque, name: []const u8, form: aliases.Form) !?[]const u8 {
+        const self: *@This() = @ptrCast(@alignCast(raw.?));
+        return self.words.resolve(name, form);
+    }
+    fn parser(raw: ?*anyopaque, name: []const u8) !?[]const u8 { return resolve(raw, name, .parser_function); }
+    fn provider(self: *@This()) Provider {
+        return .{ .ctx = self, .get = get, .exists = exists, .resolve_title_magic = resolve,
+            .resolve_parser_function = parser, .interwiki_map = TestProvider.interwikiMap };
+    }
+    fn missing(expander: *Expander, a: std.mem.Allocator, output: []const u8, expected: []const u8) !void {
+        var phase = try dependency.decode(a, expander.missing_dependency_metadata.?, output, "");
+        defer phase.deinit();
+        try std.testing.expectEqual(@as(usize, 1), phase.occurrences().len);
+        try std.testing.expectEqualStrings(expected, phase.occurrences()[0].title);
+    }
+};
+
+test "retained Malayalam A-battery and adjective expand through captured raw Special validation" {
+    const F = MalayalamRawTransclusionFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    var ns = try rt.namespace_registry.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/namespace-registry.tsv")); defer ns.deinit();
+    var words = try F.aliases.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/magic-words.tsv"), ns.wiki, ns.dump_date, ns.content_language); defer words.deinit();
+    var before = try F.aliases.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/magic-words-before.tsv"), ns.wiki, ns.dump_date, ns.content_language); defer before.deinit();
+    var templates = try std.json.parseFromSlice(std.json.Value, a, @embedFile("testdata/ml-raw-transclusion/templates.json"), .{}); defer templates.deinit();
+    var source: F = .{ .templates = templates.value, .words = &words };
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit();
+    runtime.namespace_catalog = &ns;
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = source.provider(), .install_scribunto = installTestInvoke };
+    const raw_page = @embedFile("testdata/ml-raw-transclusion/A-battery.wikitext");
+    // Same original raw page + full original template bodies; old alias input
+    // retains the actual erroneous unresolved parameter rather than hiding it.
+    source.words = &before;
+    const old = try a.dupe(u8, try expander.expandFragment("A-battery", raw_page, null));
+    try std.testing.expect(std.mem.indexOf(u8, old, "{{{1}}}") != null);
+    source.words = &words;
+    const actual = try a.dupe(u8, try expander.expandFragment("A-battery", raw_page, null));
+    try std.testing.expect(std.mem.indexOf(u8, actual, "{{{") == null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, "[[A-batterys#ഇംഗ്ലീഷ്|A-batterys]]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, actual, " വൈദ്യുതിസംഭരണപേടക൦") != null);
+    try std.testing.expect(std.mem.startsWith(u8, actual, "==ഇംഗ്ലീഷ്==\n===നാമം===\n"));
+    source.reference_valid_names = true;
+    const expected = try expander.expandFragment("A-battery", raw_page, null);
+    try std.testing.expectEqualStrings(expected, actual);
+    source.reference_valid_names = false;
+    const adjective = try a.dupe(u8, try expander.expandFragment("bright", "{{en-adj}}", null));
+    try std.testing.expect(std.mem.indexOf(u8, adjective, "more bright") != null);
+    try std.testing.expect(std.mem.indexOf(u8, adjective, "most bright") != null);
+    try std.testing.expect(std.mem.indexOf(u8, adjective, "{{{") == null);
+    source.reference_valid_names = true;
+    try std.testing.expectEqualStrings(try expander.expandFragment("bright", "{{en-adj}}", null), adjective);
+    source.reference_valid_names = false;
+    try std.testing.expectEqualStrings("valid|valid||", try expander.expandFragment("Page", "{{isValidPageName|word}}|{{isValidPageName|-1}}|{{isValidPageName|-}}|{{isValidPageName|[bad]}}", null));
+}
+
+test "raw transclusion keeps namespace invalid target missing and interwiki boundaries" {
+    const F = MalayalamRawTransclusionFixture;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var ns = try rt.namespace_registry.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/namespace-registry.tsv")); defer ns.deinit();
+    var words = try F.aliases.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/magic-words.tsv"), ns.wiki, ns.dump_date, ns.content_language); defer words.deinit();
+    var templates = try std.json.parseFromSlice(std.json.Value, a, @embedFile("testdata/ml-raw-transclusion/templates.json"), .{}); defer templates.deinit();
+    var source: F = .{ .templates = templates.value, .words = &words };
+    var runtime = try rt.Context.init(a, 24); defer runtime.deinit(); runtime.namespace_catalog = &ns;
+    try rt.bindGlobalTable(&runtime, null, 0); try stdlib.install(&runtime);
+    var expander: Expander = .{ .runtime = &runtime, .env_slot = 0, .string_slot = 18, .mw_slot = 23, .provider = source.provider(), .install_scribunto = installTestInvoke };
+    try std.testing.expectEqualStrings("x|y|z|q|template-pagename|literal-raw-title|literal-raw-title|main-raw-title|Man", try expander.expandFragment("Page",
+        "{{raw:Probe|x}}|{{അസംസ്കൃതം:Probe|y}}|{{RaW:Probe|z}}|{{{{{modifier|raw:}}}Probe|q}}|{{raw:PAGENAME}}|{{raw:raw:Probe}}|{{ഫലകം:raw:Probe}}|{{:raw:Probe}}|{{raw:ucfirst:man}}", null));
+    var collision = try F.aliases.Registry.init(a, @embedFile("testdata/ml-raw-transclusion/magic-words.tsv") ++
+        "pagename\t1\traw:PAGENAME\nucfirst\t0\traw:\n", ns.wiki, ns.dump_date, ns.content_language); defer collision.deinit();
+    source.words = &collision;
+    try std.testing.expectEqualStrings("Page|Page|template-pagename|PAYLOAD", try expander.expandFragment("Page",
+        "{{raw:PAGENAME}}|{{raw:{{{target|PAGENAME}}}}}|{{raw:PAGENAME|ignored}}|{{raw:Probe|PAYLOAD}}", null));
+    // Parser-function bodies use the untracked expansion path for the operand.
+    try std.testing.expectEqualStrings("YES", try expander.expandFragment("Page", "{{#ifeq:{{raw:{{{target|PAGENAME}}}}}|Page|YES|NO}}", null));
+    source.words = &words;
+    const special = try expander.expandFragment("Page", "{{raw:പ്രത്യേകം:Whatlinkshere/word}}", null);
+    try std.testing.expectEqualStrings("[[:പ്രത്യേകം:Whatlinkshere/word]]", special);
+    // Special remains unavailable to the existing offline page provider. Keep
+    // that attribution; recognizing RAW supplies no remote Special contents.
+    try F.missing(&expander, a, special, "പ്രത്യേകം:Whatlinkshere/word");
+    const missing = try expander.expandFragment("Page", "{{raw:Absent}}", null);
+    try std.testing.expectEqualStrings("[[:ഫലകം:Absent]]", missing);
+    try F.missing(&expander, a, missing, "ഫലകം:Absent");
+    const before_invalid = source.missing_lookups.items.len;
+    const invalid = try expander.expandFragment("Page", "{{raw:പ്രത്യേകം:Whatlinkshere/[bad]}}", null);
+    try std.testing.expectEqualStrings("<nowiki>{{raw:പ്രത്യേകം:Whatlinkshere/[bad]}}</nowiki>", invalid);
+    try std.testing.expectEqual(before_invalid, source.missing_lookups.items.len);
+    try std.testing.expect(expander.missing_dependency_metadata == null);
+    try std.testing.expectEqualStrings("<nowiki>{{</nowiki>raw:<nowiki>}}</nowiki>", try expander.expandFragment("Page", "{{raw:}}", null));
+    const wrong = try expander.expandFragment("Page", "{{rawish:Absent}}", null);
+    try F.missing(&expander, a, wrong, "ഫലകം:rawish:Absent");
+    // Raw never enables external content retrieval. The existing map's exact
+    // transcludable/nontranscludable contracts apply after modifier removal.
+    try std.testing.expectError(error.ExternalInterwikiTransclusionUnsupported, expander.expandFragment("Page", "{{raw:remote:Page}}", null));
+    try std.testing.expectEqualStrings("<nowiki>{{raw:w:Page}}</nowiki>", try expander.expandFragment("Page", "{{raw:w:Page}}", null));
+    try std.testing.expectEqualStrings("LOCAL", try expander.expandFragment("Page", "{{raw:self:Probe|LOCAL}}", null));
+    const args = try runtime.newTable();
+    try std.testing.expectError(error.UnsupportedParserFunction, Expander.hostFrameParserFunction(&expander, a, "raw", args));
+}
+
+test "captured RAW aliases remain a separate bounded transclusion domain" {
+    const Registry = rt.namespace_registry.magic_words.Registry;
+    const parser_header = rt.namespace_registry.magic_words.parser_header;
+    const base = parser_header ++ "\n# wiki\tmlwiktionary\n# dump-date\t20261001\n# content-language\tml\n";
+    var registry = try Registry.init(std.testing.allocator, base ++
+        "raw\t0\tഅസംസ്കൃതം:\nraw\t0\tRAW:\nraw\t1\tExact：\npagename\t1\tPAGENAME\nucfirst\t0\tRAW:\n", "mlwiktionary", "20261001", "ml");
+    defer registry.deinit();
+    try std.testing.expectEqualStrings("raw", registry.resolve("RaW:", .transclusion_modifier).?);
+    try std.testing.expectEqualStrings("raw", registry.resolve("അസംസ്കൃതം:", .transclusion_modifier).?);
+    try std.testing.expectEqualStrings("raw", registry.resolve("Exact：", .transclusion_modifier).?);
+    try std.testing.expect(registry.resolve("exact：", .transclusion_modifier) == null);
+    try std.testing.expect(registry.resolve("raw", .transclusion_modifier) == null);
+    try std.testing.expect(registry.resolve("raw:", .variable) == null);
+    try std.testing.expect(registry.resolve("raw:", .parser_function) == null);
+    try std.testing.expectEqualStrings("ucfirst", registry.resolve("raw", .parser_function).?);
+    try std.testing.expect(registry.resolve("അസംസ്കൃതം", .parser_function) == null);
+    try std.testing.expect(registry.resolve("RAW:", .raw_suffix) == null);
+    inline for (.{ "raw\t0\tRAW\n", "raw\t0\t:\n", "raw\t0\traw:extra:\n", "raw\t0\traw：extra:\n" }) |bad|
+        try std.testing.expectError(error.InvalidMagicWordsSnapshot, Registry.init(std.testing.allocator, base ++ bad, "mlwiktionary", "20261001", "ml"));
 }

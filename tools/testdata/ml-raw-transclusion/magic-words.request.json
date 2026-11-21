@@ -1,0 +1,9 @@
+{
+  "raw_bytes": 32920,
+  "raw_sha256": "8eefd6743d2ec7479b95889f4db395ab86b0a55cad576b02b6f2c5feb7eaa0a1",
+  "response_url": "https://ml.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cmagicwords&format=json&formatversion=2&maxlag=5",
+  "retrieved_utc": "2026-10-05T07:00:10.212659+00:00",
+  "source_url": "https://ml.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cmagicwords&format=json&formatversion=2&maxlag=5",
+  "started_utc": "2026-10-05T07:00:07.622753+00:00",
+  "status": 200
+}

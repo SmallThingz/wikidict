@@ -1,0 +1,153 @@
+{
+  "wiki": "mlwiktionary",
+  "date": "20261001",
+  "retrieved_utc": "2026-10-04T18:21:13.690762+00:00",
+  "siteinfo_source_url": "https://ml.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cnamespaces%7Cnamespacealiases%7Cinterwikimap&format=json&formatversion=2",
+  "siteinfo_temporal_scope": "current at retrieval, compared against dated XML; not historical API state",
+  "source_xml": {
+    "wiki": "mlwiktionary",
+    "date": "20261001",
+    "name": "mlwiktionary-20261001-pages-meta-current.xml.bz2",
+    "url": "https://dumps.wikimedia.org/mlwiktionary/20261001/mlwiktionary-20261001-pages-meta-current.xml.bz2",
+    "size": 14044665,
+    "sha1": "cc5e5dddfee6947c3210c3392e6e97e05c0ad10b"
+  },
+  "dump_namespace_inventory": [
+    {
+      "id": -2,
+      "name": "മീഡിയ",
+      "case": "case-sensitive"
+    },
+    {
+      "id": -1,
+      "name": "പ്രത്യേകം",
+      "case": "first-letter"
+    },
+    {
+      "id": 0,
+      "name": "",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 1,
+      "name": "സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 2,
+      "name": "ഉപയോക്താവ്",
+      "case": "first-letter"
+    },
+    {
+      "id": 3,
+      "name": "ഉപയോക്താവിന്റെ സംവാദം",
+      "case": "first-letter"
+    },
+    {
+      "id": 4,
+      "name": "വിക്കിനിഘണ്ടു",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 5,
+      "name": "വിക്കിനിഘണ്ടു സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 6,
+      "name": "പ്രമാണം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 7,
+      "name": "പ്രമാണത്തിന്റെ സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 8,
+      "name": "മീഡിയവിക്കി",
+      "case": "first-letter"
+    },
+    {
+      "id": 9,
+      "name": "മീഡിയവിക്കി സംവാദം",
+      "case": "first-letter"
+    },
+    {
+      "id": 10,
+      "name": "ഫലകം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 11,
+      "name": "ഫലകത്തിന്റെ സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 12,
+      "name": "സഹായം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 13,
+      "name": "സഹായത്തിന്റെ സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 14,
+      "name": "വർഗ്ഗം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 15,
+      "name": "വർഗ്ഗത്തിന്റെ സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 710,
+      "name": "TimedText",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 711,
+      "name": "TimedText talk",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 828,
+      "name": "ഘടകം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 829,
+      "name": "ഘടകത്തിന്റെ സംവാദം",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 1728,
+      "name": "Event",
+      "case": "case-sensitive"
+    },
+    {
+      "id": 1729,
+      "name": "Event talk",
+      "case": "case-sensitive"
+    }
+  ],
+  "namespace_mismatches": [],
+  "page_table_files": [
+    {
+      "wiki": "mlwiktionary",
+      "date": "20261001",
+      "name": "mlwiktionary-20261001-page.sql.gz",
+      "url": "https://dumps.wikimedia.org/mlwiktionary/20261001/mlwiktionary-20261001-page.sql.gz",
+      "size": 3681782,
+      "sha1": "aab32a00ad8b7d82eee5f281fa00694b5970b33d"
+    }
+  ],
+  "artifacts": {
+    "dump-siteinfo.xml": "fd9154456e65ec69317ae3f636c3d317d25b876af27c4482655b4255e173b4a9",
+    "namespace-siteinfo.raw.json": "4d2608ae932db77b644e6000d62371ad6068cbc828329a540d43169a8fbce04b",
+    "pagetable-dumpstatus.raw.json": "a3df6f2716820f4389f4da87c1c65ef717dfabbdfd7cd142b36caf8034ab3f35"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "artifacts": {
+    "magic-words.int-source.manifest.json": "4f576356fb030e21af4dffcce93e8bd5d872f016b2dbc362a5d856c2ffd2401f",
+    "magic-words.int-source.tsv": "842bc729098c29f08b14910463a4ac0acd6123fbaa78a956fe8ab4a8429b4397",
+    "magic-words.language-source.manifest.json": "c8653d8fc1c3cdada205ea4502aec2f447de6de4cd0dd1ac13a8157963b524c1",
+    "magic-words.language-source.tsv": "d9905a6365bf217a009e4278994f4765cb7aea64649a5bfaad7baf586900d023",
+    "magic-words.lst-source.manifest.json": "63e610749ba7513edcdd1654c0aeb9b6d372ba58c0053fcb27476ba591981534",
+    "magic-words.lst-source.tsv": "5a5b27e703c7d29a132b2c581115af3b6a88ded2d06b7bdbdbfeeb66ee649117",
+    "magic-words.raw.json": "8eefd6743d2ec7479b95889f4db395ab86b0a55cad576b02b6f2c5feb7eaa0a1",
+    "magic-words.request.json": "356436b07907b1c0a8a6a4abbd578b0b9c2559fa0122c0fd60e5c074bc6fb710",
+    "magic-words.source.manifest.json": "f10ce89cd9a980502a993dfd29d1f62274cdb2fc84fafa0c1b2a55f68147ceaa",
+    "magic-words.source.tsv": "353e899bf7dcaf9e8d02deee4567672d345605c18d1d7fee43b4e6e6c42138f0",
+    "magic-words.tsv": "f934ef3ee4bb581e39c3bb566619606602d0bfdcd232718ed9de9e67afc82bbd",
+    "namespace-capture.complete.json": "4256826536b8eb517b13764857fbfa9806cd7e5d67694ccf088a5157b36bad78",
+    "namespace-siteinfo.raw.json": "4d2608ae932db77b644e6000d62371ad6068cbc828329a540d43169a8fbce04b"
+  },
+  "canonical_words": 64,
+  "content_language": "ml",
+  "date": "20261001",
+  "dependency_sha256": {
+    "prepare_magic_words.py": "9ba059831575307b2b9cd51f1fea3094808de9b46d8172cd8304b9cd780496a0",
+    "prepare_magic_words_int.py": "c95883dfcc0d9a796f80ad721255da46903d5137ff90d40eb33463a925e71ea0",
+    "prepare_magic_words_language.py": "da7b83092268130b4ff733ff6e6ea4b18aac9f3a3be24fb6c55b056db7be8127",
+    "prepare_magic_words_lst.py": "0d40c69cd5508ba105b2b84b12508aa22b5a4975787eeeda4dc1d51dde1ea66a"
+  },
+  "derived_utc": "2026-10-18T01:38:24.697640+00:00",
+  "generator_sha256": "10b2ada03838fdc65b7e2131f0fb6f9581dec18b05f1febcbb40dbd12320e652",
+  "output_bytes": 5540,
+  "output_sha256": "f934ef3ee4bb581e39c3bb566619606602d0bfdcd232718ed9de9e67afc82bbd",
+  "profile": "title-parser-and-statistics-v1",
+  "raw_sha256": "8eefd6743d2ec7479b95889f4db395ab86b0a55cad576b02b6f2c5feb7eaa0a1",
+  "retrieved_utc": "2026-10-05T07:00:10.212659+00:00",
+  "rows": 138,
+  "source_capture": {
+    "manifest_sha256": "63e610749ba7513edcdd1654c0aeb9b6d372ba58c0053fcb27476ba591981534",
+    "output_sha256": "5a5b27e703c7d29a132b2c581115af3b6a88ded2d06b7bdbdbfeeb66ee649117",
+    "profile": "title-and-parser-functions-lst-v1"
+  },
+  "source_url": "https://ml.wiktionary.org/w/api.php?action=query&meta=siteinfo&siprop=general%7Cmagicwords&format=json&formatversion=2&maxlag=5",
+  "temporal_scope": "current-at-retrieval",
+  "version": 6,
+  "wiki": "mlwiktionary"
+}

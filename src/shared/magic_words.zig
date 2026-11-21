@@ -5,7 +5,7 @@ const lower = @import("unicode_lower");
 pub const header = "# wikidict-magic-words-v1";
 pub const parser_header = "# wikidict-magic-words-v2";
 pub const max_bytes = 1024 * 1024;
-pub const Form = enum { variable, parser_function, category_option, raw_suffix };
+pub const Form = enum { variable, parser_function, category_option, raw_suffix, transclusion_modifier };
 
 // MediaWiki 1.47.0-wmf.22 registers bare variables and parser functions in
 // different orders. Within each case map, later registrations replace earlier
@@ -27,6 +27,7 @@ pub const statistics_ids = [_][]const u8{
 };
 pub const category_option_ids = [_][]const u8{ "pagesincategory_all", "pagesincategory_pages", "pagesincategory_subcats", "pagesincategory_files" };
 pub const raw_suffix_ids = [_][]const u8{"rawsuffix"};
+pub const transclusion_modifier_ids = [_][]const u8{"raw"};
 const variable_ids = statistics_ids ++ title_ids;
 // Filtered supported hooks in CoreParserFunctions::registerFunctions order;
 // option tokens have their own domains and never enter this callable order.
@@ -69,6 +70,7 @@ fn priority(id: []const u8, form: Form) usize {
         .parser_function => &function_ids,
         .category_option => &category_option_ids,
         .raw_suffix => &raw_suffix_ids,
+        .transclusion_modifier => &transclusion_modifier_ids,
     };
     for (ids, 0..) |candidate, rank| if (std.mem.eql(u8, id, candidate)) return rank;
     unreachable;
@@ -79,6 +81,7 @@ const Winners = struct {
     parser_function: ?[]const u8 = null,
     category_option: ?[]const u8 = null,
     raw_suffix: ?[]const u8 = null,
+    transclusion_modifier: ?[]const u8 = null,
 
     fn include(self: *Winners, id: []const u8, form: Form) void {
         const winner = switch (form) {
@@ -86,6 +89,7 @@ const Winners = struct {
             .parser_function => &self.parser_function,
             .category_option => &self.category_option,
             .raw_suffix => &self.raw_suffix,
+            .transclusion_modifier => &self.transclusion_modifier,
         };
         if (winner.* == null or priority(id, form) > priority(winner.*.?, form)) winner.* = id;
     }
@@ -96,6 +100,7 @@ const Winners = struct {
             .parser_function => functionHead(self.parser_function orelse return null),
             .category_option => self.category_option,
             .raw_suffix => self.raw_suffix,
+            .transclusion_modifier => self.transclusion_modifier,
         };
     }
 };
@@ -116,6 +121,7 @@ fn canonicalId(raw: []const u8, expanded: bool) ?[]const u8 {
         for (function_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
         for (category_option_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
         for (raw_suffix_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
+        for (transclusion_modifier_ids) |id| if (std.mem.eql(u8, raw, id)) return id;
     }
     return null;
 }
@@ -180,6 +186,17 @@ pub const Registry = struct {
             if (std.mem.eql(u8, id, "rawsuffix")) {
                 raw_suffix_available = true;
                 try addAlias(a_owned, map, key, id, .raw_suffix);
+                continue;
+            }
+            if (std.mem.eql(u8, id, "raw")) {
+                // This profile admits complete colon-terminated modifier aliases;
+                // retain the delimiter and keep them out of callable/variable maps.
+                const ascii_colon = std.mem.indexOfScalar(u8, alias, ':');
+                const wide_colon = std.mem.indexOf(u8, alias, "：");
+                const colon = if (ascii_colon) |i| (if (wide_colon) |j| @min(i, j) else i) else wide_colon orelse return error.InvalidMagicWordsSnapshot;
+                const width: usize = if (alias[colon] == ':') 1 else "：".len;
+                if (colon == 0 or colon + width != alias.len) return error.InvalidMagicWordsSnapshot;
+                try addAlias(a_owned, map, key, id, .transclusion_modifier);
                 continue;
             }
             // Parser::setFunctionHook adds a hash before removing one trailing
