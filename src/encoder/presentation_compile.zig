@@ -16267,7 +16267,8 @@ pub const Renderer = struct {
 
     fn mediaOptionMode(file: []const u8, gallery_mode: bool) @import("namespace_registry").image_options.Mode {
         const ext = std.fs.path.extension(file);
-        const timed = media_types.kind(file) == .audio or oneOf(ext, &.{ ".webm", ".ogv", ".mp4" });
+        // MIDI is a nominal timed reference; it does not enter the playable media catalogue.
+        const timed = media_types.kind(file) == .audio or oneOf(ext, &.{ ".mid", ".midi", ".webm", ".ogv", ".mp4" });
         if (gallery_mode) return if (timed) .timed_gallery else .gallery;
         if (std.ascii.eqlIgnoreCase(ext, ".pdf")) return .pdf;
         if (std.ascii.eqlIgnoreCase(ext, ".djvu") or std.ascii.eqlIgnoreCase(ext, ".djv")) return .djvu;
@@ -128612,4 +128613,102 @@ test "ordinary thumbnail rechecks source root receipt after sizing and final med
         }
         try std.testing.expectEqual(@as(usize, 1), probe.sizing_calls);
     }
+}
+
+
+test "native German Opus and MIDI file references preserve original framed captions actions and codec" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const ns = @import("namespace_registry");
+    var namespaces = try ns.Registry.init(a, ns.german_test_fixture); defer namespaces.deinit();
+    // Exact ordinary DE05 namespace/image-option package and six captured tokens.
+    const image_options_source = "# wikidict-image-options-v1\n# wiki\tdewiktionary\n# dump-date\t20261001\n# content-language\tde\n# namespace-registry-sha256\tc83026f854b69c0e7157a2c8ef850d4a803c3f2155d2affdd3eac692235e70b8\n# behavior-switches-sha256\t0a53d3a6b1a8ca79c5c26aa0a8b43b37a30b692357352010695387ef22af53e9\nimg_left\t1\t\"links\"\nimg_left\t1\t\"left\"\nimg_right\t1\t\"rechts\"\nimg_right\t1\t\"right\"\nimg_center\t1\t\"zentriert\"\nimg_center\t1\t\"center\"\nimg_center\t1\t\"centre\"\nimg_none\t1\t\"ohne\"\nimg_none\t1\t\"none\"\nimg_baseline\t1\t\"grundlinie\"\nimg_baseline\t1\t\"baseline\"\nimg_sub\t1\t\"tief\"\nimg_sub\t1\t\"tiefgestellt\"\nimg_sub\t1\t\"sub\"\nimg_super\t1\t\"hoch\"\nimg_super\t1\t\"hochgestellt\"\nimg_super\t1\t\"super\"\nimg_super\t1\t\"sup\"\nimg_top\t1\t\"oben\"\nimg_top\t1\t\"top\"\nimg_text_top\t1\t\"text-oben\"\nimg_text_top\t1\t\"text-top\"\nimg_middle\t1\t\"mitte\"\nimg_middle\t1\t\"middle\"\nimg_bottom\t1\t\"unten\"\nimg_bottom\t1\t\"bottom\"\nimg_text_bottom\t1\t\"text-unten\"\nimg_text_bottom\t1\t\"text-bottom\"\nimg_thumbnail\t1\t\"mini\"\nimg_thumbnail\t1\t\"miniatur\"\nimg_thumbnail\t1\t\"thumb\"\nimg_thumbnail\t1\t\"thumbnail\"\nimg_framed\t1\t\"gerahmt\"\nimg_framed\t1\t\"frame\"\nimg_framed\t1\t\"framed\"\nimg_framed\t1\t\"enframed\"\nimg_frameless\t1\t\"rahmenlos\"\nimg_frameless\t1\t\"frameless\"\nimg_border\t1\t\"rand\"\nimg_border\t1\t\"border\"\nimg_manualthumb\t1\t\"mini=$1\"\nimg_manualthumb\t1\t\"miniatur=$1\"\nimg_manualthumb\t1\t\"thumbnail=$1\"\nimg_manualthumb\t1\t\"thumb=$1\"\nimg_upright\t1\t\"hochkant\"\nimg_upright\t1\t\"hochkant=$1\"\nimg_upright\t1\t\"hochkant $1\"\nimg_upright\t1\t\"hochkant_$1\"\nimg_upright\t1\t\"upright\"\nimg_upright\t1\t\"upright=$1\"\nimg_upright\t1\t\"upright $1\"\nimg_link\t1\t\"verweis=$1\"\nimg_link\t1\t\"link=$1\"\nimg_alt\t1\t\"alternativtext=$1\"\nimg_alt\t1\t\"alt=$1\"\nimg_class\t1\t\"klasse=$1\"\nimg_class\t1\t\"class=$1\"\nimg_width\t1\t\"$1px\"\nimg_page\t1\t\"seite=$1\"\nimg_page\t1\t\"seite $1\"\nimg_page\t1\t\"seite_$1\"\nimg_page\t1\t\"page=$1\"\nimg_page\t1\t\"page $1\"\nimg_lang\t1\t\"sprache=$1\"\nimg_lang\t1\t\"lang=$1\"\nimg_lossy\t1\t\"lossy=$1\"\ntimedmedia_thumbtime\t0\t\"thumbtime=$1\"\ntimedmedia_starttime\t0\t\"start=$1\"\ntimedmedia_endtime\t0\t\"end=$1\"\ntimedmedia_disablecontrols\t0\t\"disablecontrols=$1\"\ntimedmedia_loop\t0\t\"loop\"\ntimedmedia_muted\t0\t\"muted\"\n";
+    const behavior_digest: [32]u8 = .{ 0x0a, 0x53, 0xd3, 0xa6, 0xb1, 0xa8, 0xca, 0x79, 0xc5, 0xc2, 0x6a, 0xa0, 0xa8, 0xb4, 0x3b, 0x37, 0xa3, 0x0b, 0x69, 0x23, 0x57, 0x35, 0x20, 0x10, 0x69, 0x53, 0x87, 0xef, 0x22, 0xaf, 0x53, 0xe9 };
+    var options = try ns.image_options.Registry.init(a, image_options_source, namespaces.wiki,
+        namespaces.dump_date, namespaces.content_language, namespaces.source_sha256, behavior_digest);
+    defer options.deinit();
+    const cases = [_]struct { title: []const u8, source: []const u8, file: []const u8,
+        text: []const u8, italic: []const u8, nested: bool, catalogued: bool }{
+        .{ .title = "Weihnachtslied", .source = "[[Datei:Jingle Bells (120bpm) (Kevin MacLeod) (ISRC USUAN1100187).opus|thumb|center|220px|[1] Beispiel für ein ''Weihnachtslied''\n]]", .file = "Jingle Bells (120bpm) (Kevin MacLeod) (ISRC USUAN1100187).opus", .text = "[1] Beispiel für ein Weihnachtslied", .italic = "Weihnachtslied", .nested = false, .catalogued = true },
+        .{ .title = "Volkslied", .source = "[[Datei:Alle Vögel sind schon da.mid|thumb|center|220px|[1] „Alle Vögel sind schon da“ als [[Beispiel]] für ''Volksmusik''\n]]", .file = "Alle Vögel sind schon da.mid", .text = "[1] „Alle Vögel sind schon da“ als Beispiel für Volksmusik", .italic = "Volksmusik", .nested = true, .catalogued = false },
+        .{ .title = "Kunstlied", .source = "[[Datei:Komm, lieber Mai, und mache (Mozart).mid|thumb|center|220px|[1] „Komm, lieber Mai, und mache“ ist ein ''Kunstlied''\n]]", .file = "Komm, lieber Mai, und mache (Mozart).mid", .text = "[1] „Komm, lieber Mai, und mache“ ist ein Kunstlied", .italic = "Kunstlied", .nested = false, .catalogued = false },
+        .{ .title = "Schlaflied", .source = "[[Datei:Guten Abend, gut Nacht.mid|thumb|center|220px|[1] „Guten Abend, gut’ Nacht“ ist ein weitbekanntes ''Schlaflied''\n]]", .file = "Guten Abend, gut Nacht.mid", .text = "[1] „Guten Abend, gut’ Nacht“ ist ein weitbekanntes Schlaflied", .italic = "Schlaflied", .nested = false, .catalogued = false },
+        .{ .title = "Wiegenlied", .source = "[[Datei:Guten Abend, gut Nacht.mid|thumb|center|220px|[1] „Guten Abend, gut’ Nacht“ ist ein weitbekanntes ''Wiegenlied''\n]]", .file = "Guten Abend, gut Nacht.mid", .text = "[1] „Guten Abend, gut’ Nacht“ ist ein weitbekanntes Wiegenlied", .italic = "Wiegenlied", .nested = false, .catalogued = false },
+        .{ .title = "Kinderlied", .source = "[[Datei:Alle Vögel sind schon da.mid|thumb|center|220px|[1] „Alle Vögel sind schon da“ ist ein bekanntes ''Kinderlied''\n]]", .file = "Alle Vögel sind schon da.mid", .text = "[1] „Alle Vögel sind schon da“ ist ein bekanntes Kinderlied", .italic = "Kinderlied", .nested = false, .catalogued = false },
+    };
+    for (cases) |case| {
+        errdefer std.debug.print("nominal audio source title={s} file={s}\n", .{case.title,case.file});
+        var renderer: Renderer = .{ .a = a, .context = .{ .title = case.title,
+            .namespace_catalog = &namespaces, .image_options = &options } };
+        try std.testing.expect(renderer.context.figure_sizing == null);
+        const blocks = try renderer.renderBody(case.source);
+        try std.testing.expectEqual(@as(usize, 0), try FigureProducerTest.countFigures(blocks));
+        const spans = try FigureProducerTest.bodySpans(a, blocks);
+        try std.testing.expectEqualStrings(case.text, try plainText(a, spans));
+        const target = try std.fmt.allocPrint(a, "File:{s}", .{case.file});
+        var italic: std.ArrayList(u8) = .empty;
+        var file_actions: usize = 0;
+        var nested_actions: usize = 0;
+        for (spans) |span| {
+            try std.testing.expect(span.image == null and span.pending_figure == null);
+            try std.testing.expect(span.kind == .link);
+            if (std.mem.eql(u8, span.target, "Beispiel")) {
+                try std.testing.expect(case.nested);
+                try std.testing.expectEqualStrings("Beispiel", span.text);
+                nested_actions += 1;
+            } else {
+                try std.testing.expectEqualStrings(target, span.target);
+                file_actions += 1;
+            }
+            if (span.flags.italic) try italic.appendSlice(a, span.text);
+        }
+        try std.testing.expect(file_actions > 0);
+        try std.testing.expectEqual(@as(usize, if (case.nested) 1 else 0), nested_actions);
+        try std.testing.expectEqualStrings(case.italic, italic.items);
+        try std.testing.expect(!renderer.fallbacks.any());
+        try std.testing.expectEqual(@as(usize, if (case.catalogued) 1 else 0), renderer.media.items.len);
+        if (case.catalogued) {
+            try std.testing.expectEqual(media_types.Kind.audio, renderer.media.items[0].kind);
+            try std.testing.expectEqualStrings(case.file, renderer.media.items[0].file);
+            try std.testing.expectEqualStrings(case.text, renderer.media.items[0].caption);
+        }
+        try FigureProducerTest.roundtrip(a, &renderer, blocks);
+    }
+}
+
+test "nominal MIDI timed options keep reference actions separate from audio playback admission" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    for ([_][]const u8{ "Score.mid", "Score.MID", "Score.midi", "Score.MiDi", "Voice.opus", "Voice.OPUS" }) |file| {
+        try std.testing.expectEqual(@import("namespace_registry").image_options.Mode.timed, Renderer.mediaOptionMode(file, false));
+        var renderer: Renderer = .{ .a = a, .context = .{} };
+        const input = try std.fmt.allocPrint(a, "[[File:{s}|frame|''Caption'' [[Details]]]]", .{file});
+        const spans = try renderer.parseSpans(input, .{});
+        try std.testing.expectEqualStrings("Caption Details", try plainText(a, spans));
+        try std.testing.expectEqualStrings(try std.fmt.allocPrint(a, "File:{s}", .{file}), spans[0].target);
+        try std.testing.expect(spans[0].flags.italic);
+        try std.testing.expectEqualStrings("Details", spans[spans.len-1].target);
+        const admitted = media_types.kind(file) == .audio;
+        try std.testing.expectEqual(@as(usize, if (admitted) 1 else 0), renderer.media.items.len);
+        try std.testing.expect(!renderer.fallbacks.any());
+        var unframed: Renderer = .{ .a = a, .context = .{} };
+        const hidden = try unframed.parseSpans(try std.fmt.allocPrint(a, "[[File:{s}|''Hidden caption'']]", .{file}), .{});
+        try std.testing.expectEqualStrings(file, try plainText(a, hidden));
+        for (hidden) |span| {
+            try std.testing.expectEqualStrings("Hidden caption", span.explanation);
+            try std.testing.expect(!span.flags.italic);
+        }
+    }
+    try std.testing.expectEqual(@import("namespace_registry").image_options.Mode.image, Renderer.mediaOptionMode("Score.mid.exe", false));
+    try std.testing.expectEqual(@import("namespace_registry").image_options.Mode.image, Renderer.mediaOptionMode("Picture.png", false));
+    try std.testing.expectEqual(@import("namespace_registry").image_options.Mode.svg, Renderer.mediaOptionMode("Picture.svg", false));
+    try std.testing.expectEqual(@import("namespace_registry").image_options.Mode.pdf, Renderer.mediaOptionMode("Document.pdf", false));
+    var image: Renderer = .{ .a = a, .context = .{} };
+    try std.testing.expectError(error.UncompiledPresentation, image.renderBody("[[File:Picture.png|thumb|Caption]]"));
+    var gallery: Renderer = .{ .a = a, .context = .{} };
+    const gallery_spans = try gallery.parseSpans("<gallery>Voice.opus|''Gallery caption''</gallery>", .{});
+    try std.testing.expectEqualStrings("Gallery caption", try plainText(a, gallery_spans));
+    try std.testing.expectEqual(@as(usize, 1), gallery.media.items.len);
+    try std.testing.expectEqual(media_types.Kind.audio, gallery.media.items[0].kind);
+    // MIDI gallery support is unchanged; this control claims ordinary File references only.
 }

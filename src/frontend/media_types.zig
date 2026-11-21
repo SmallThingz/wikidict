@@ -4,7 +4,7 @@ pub const Media = struct { file: []const u8, kind: Kind, caption: []const u8, da
 pub fn kind(file: []const u8) ?Kind {
     const extension = std.fs.path.extension(file);
     for ([_][]const u8{ ".jpg", ".jpeg", ".png", ".gif", ".webp" }) |s| if (std.ascii.eqlIgnoreCase(extension, s)) return .image;
-    for ([_][]const u8{ ".ogg", ".oga", ".wav", ".mp3", ".flac" }) |s| if (std.ascii.eqlIgnoreCase(extension, s)) return .audio;
+    for ([_][]const u8{ ".ogg", ".oga", ".opus", ".wav", ".mp3", ".flac" }) |s| if (std.ascii.eqlIgnoreCase(extension, s)) return .audio;
     return null;
 }
 // Source file references may name SVG or TIFF rendered through the existing
@@ -54,4 +54,24 @@ test "TIFF remote references do not admit original TIFF bytes for inline export"
     try std.testing.expect(mime("II\x2a\x00original TIFF") == null);
     try std.testing.expect(mime("MM\x00\x2aoriginal TIFF") == null);
     try std.testing.expect(referencedKind("Archive.tiff.exe") == null);
+}
+
+
+test "Opus references reuse Ogg byte admission while MIDI remains reference only" {
+    for ([_][]const u8{ "Voice.opus", "Voice.OPUS" }) |file| {
+        try std.testing.expectEqual(Kind.audio, kind(file).?);
+        try std.testing.expectEqual(Kind.audio, referencedKind(file).?);
+    }
+    try std.testing.expectEqualStrings("audio/ogg", mime("OggS existing container").?);
+    try std.testing.expect(mime("OpusHead not an Ogg container") == null);
+    for ([_][]const u8{ "Score.mid", "Score.MIDI", "Voice.opus.exe" }) |file| {
+        try std.testing.expect(kind(file) == null);
+        try std.testing.expect(referencedKind(file) == null);
+    }
+    try std.testing.expect(mime("MThd\x00\x00\x00\x06\x00\x01\x00\x01\x00\x60") == null);
+    try std.testing.expect(kind("Picture.svg") == null);
+    try std.testing.expectEqual(Kind.image, referencedKind("Picture.svg").?);
+    try std.testing.expectEqual(Kind.image, referencedKind("Picture.TIFF").?);
+    try std.testing.expect(mime("<svg onload='alert(1)'>") == null);
+    try std.testing.expectEqualStrings("image/png", mime("\x89PNG\r\n\x1a\n").?);
 }
