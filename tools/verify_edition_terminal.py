@@ -49,11 +49,12 @@ def screen_projection(name):
 class VerifiedSeed:
     identity: tuple
     digest: str
-    snapshot: BinaryIO
+    snapshot: BinaryIO | None
     source: BinaryIO  # Keep the original inode allocated until the group ends.
 
     def close(self):
-        self.snapshot.close()
+        if self.snapshot is not None:
+            self.snapshot.close()
         self.source.close()
 
 
@@ -88,7 +89,7 @@ class PublicationSeeds:
             require(original.resolve() == original and binary_identity(original.lstat()) == identity,
                     f'Publication member changed before staging: {original}')
             seed = self.members.get(original)
-            if seed and (seed.identity != identity or seed.digest != expected['sha256']):
+            if seed and (seed.snapshot is None or seed.identity != identity or seed.digest != expected['sha256']):
                 self.members.pop(original).close()
                 seed = None
             if not clone_file(seed.snapshot if seed else source, out):
@@ -120,9 +121,34 @@ class PublicationSeeds:
             return True
 
 
-def copy_publication(source, destination, expected_digest=None, *, expected_status='built', seeds=None):
+def verify_diagnostic(original, expected, seeds):
+    # The terminal opens dictionary blobs and catalog metadata. Keep the large
+    # producer diagnostic in its publication while checking every manifest byte.
+    with original.open('rb') as stream:
+        state = os.fstat(stream.fileno())
+        identity = binary_identity(state)
+        require(binary_identity(original.lstat()) == identity and state.st_size == expected['size'],
+                f'Publication member differs: {original}')
+        cached = seeds.members.get(original) if seeds is not None else None
+        if cached is None or cached.identity != identity or cached.digest != expected['sha256']:
+            require(hashlib.file_digest(stream, 'sha256').hexdigest() == expected['sha256'],
+                    f'Publication member differs: {original}')
+            if cached is not None:
+                seeds.members.pop(original).close()
+            cached = None
+        require(binary_identity(os.fstat(stream.fileno())) == identity == binary_identity(original.lstat()),
+                f'Publication member changed during verification: {original}')
+        if seeds is not None and cached is None and len(seeds.members) < 32:
+            try:
+                pinned = os.fdopen(os.dup(stream.fileno()), 'rb')
+            except OSError:
+                return  # The next case can hash the source again.
+            seeds.members[original] = VerifiedSeed(identity, expected['sha256'], None, pinned)
+
+
+def copy_publication(source, destination, expected_digest=None, *, expected_status='built', seeds=None, reader_stage=False):
     manifest_path = source / 'complete.json'
-    manifest_identity = binary_identity(manifest_path.lstat()) if seeds is not None else None
+    manifest_identity = binary_identity(manifest_path.lstat())
     raw = manifest_path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     require(expected_digest is None or digest == expected_digest, 'Selected edition manifest has changed')
@@ -135,16 +161,19 @@ def copy_publication(source, destination, expected_digest=None, *, expected_stat
     if seeds is not None and seeds.root != source:
         seeds.close()
         seeds.root = source
-    copy_members(source, destination, members, seeds=seeds)
+    diagnostic = manifest.get('fallback_report') if reader_stage else None
+    if diagnostic not in ('fallback-pages.jsonl', 'fallback-pages.jsonl.gz'):
+        diagnostic = None
+    copy_members(source, destination, members, seeds=seeds, diagnostic=diagnostic)
     if seeds is not None:
         seeds.check_sources()
-        require(manifest_path.read_bytes() == raw and binary_identity(manifest_path.lstat()) == manifest_identity,
-                'Selected edition manifest has changed')
+    require(manifest_path.read_bytes() == raw and binary_identity(manifest_path.lstat()) == manifest_identity,
+            'Selected edition manifest has changed')
     (destination / 'complete.json').write_bytes(raw)
     return digest
 
 
-def copy_members(source, destination, members, *, seeds=None):
+def copy_members(source, destination, members, *, seeds=None, diagnostic=None):
     require('languages.tsv' in members, 'Missing language catalog')
     destination.mkdir(mode=0o700)
     copied = {}
@@ -155,6 +184,9 @@ def copy_members(source, destination, members, *, seeds=None):
                 f'Invalid publication member {name!r}')
         original = source / rel
         require(original.resolve() == original and original.is_file(), f'Invalid file {name!r}')
+        if name == diagnostic:
+            verify_diagnostic(original, expected, seeds)
+            continue
         target = destination / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         # Hashing small members is cheaper than retaining their file handles.
@@ -560,7 +592,7 @@ def run_case(binary, stamp, binary_digest, source, language, entry, witness, exp
             if indexed_page:
                 result['indexed_page'] = copy_indexed_page(source, root)
             else:
-                result['complete_sha256'] = copy_publication(source, root, expected_digest, seeds=seeds)
+                result['complete_sha256'] = copy_publication(source, root, expected_digest, seeds=seeds, reader_stage=True)
             require(binary_identity(binary.stat()) == stamp, 'Reader executable changed before launch')
             started = time.monotonic()
             reader = reader_type(binary, root, 90, 30, out / 'screens', 45, started + 45,

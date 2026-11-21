@@ -273,6 +273,39 @@ class EditionTerminalTests(unittest.TestCase):
             with self.assertRaisesRegex(CheckFailure, 'member differs'):
                 copy_publication(source, parent / 'bad')
 
+    def test_terminal_authenticates_producer_report_without_staging_it(self):
+        for name in ('fallback-pages.jsonl', 'fallback-pages.jsonl.gz'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                parent = Path(tmp)
+                source = parent / 'publication'
+                source.mkdir()
+                original = b'{"namespace":0,"title":"word","reasons":["missing_template"]}\n'
+                if name.endswith('.gz'):
+                    original = gzip.compress(original, mtime=0)
+                members = {'languages.tsv': b'heading\nEnglish\n', name: original}
+                for key, data in members.items():
+                    (source / key).write_bytes(data)
+                manifest = {'status': 'built', 'edition': 'enwiktionary', 'date': '20261001', 'fallback_report': name,
+                            'publication_files': {k: {'size': len(v), 'sha256': hashlib.sha256(v).hexdigest()}
+                                                  for k, v in members.items()}}
+                (source / 'complete.json').write_text(json.dumps(manifest))
+                seeds = PublicationSeeds()
+                self.addCleanup(seeds.close)
+                with patch('verify_edition_terminal.os.dup', side_effect=OSError('no spare file descriptors')):
+                    copy_publication(source, parent / 'uncached', seeds=seeds, reader_stage=True)
+                    self.assertFalse(seeds.members)
+                for index, retained in enumerate((None, seeds, seeds)):
+                    stage = parent / f'stage-{index}'
+                    copy_publication(source, stage, seeds=retained, reader_stage=True)
+                    self.assertEqual({entry.name for entry in stage.iterdir()}, {'languages.tsv', 'complete.json'})
+                    self.assertEqual((stage / 'complete.json').read_bytes(), (source / 'complete.json').read_bytes())
+                copy_publication(source, parent / 'complete-copy')
+                self.assertEqual((parent / 'complete-copy' / name).read_bytes(), original)
+                (source / name).write_bytes(b'X' + original[1:])
+                for index, retained in enumerate((None, seeds)):
+                    with self.assertRaisesRegex(CheckFailure, 'member differs'):
+                        copy_publication(source, parent / f'changed-{index}', seeds=retained, reader_stage=True)
+
     def test_authenticated_seed_rechecks_source_and_keeps_each_case_writable(self):
         def copy_fd(source, target):
             target.write(os.pread(source.fileno(), os.fstat(source.fileno()).st_size, 0))
