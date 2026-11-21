@@ -9128,6 +9128,7 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
         original_verify = figure.verify
         original_provider = figure.verify_provider_stream
         original_source = figure.replay_source
+        original_inventory = figure.inventory_document
         records = {}
         seen = []
         class Records(list):
@@ -9139,8 +9140,15 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
         def source(root, *values, **options):
             if Path(root) in records:
                 self.assertIsNone(records[Path(root)]())
-                seen.append(Path(root))
             return original_source(root, *values, **options)
+        def inventory(path):
+            # Both fused HTTP and nested-parent replay read the plan after
+            # verifying the provider and releasing its projection records.
+            root = Path(path).parent
+            if Path(path).name == figure.PLAN and root in records:
+                self.assertIsNone(records[root]())
+                seen.append(root)
+            return original_inventory(path)
         def verify(root, *values, **options):
             if Path(root) == args.output and options.get('require_complete') is False:
                 self.assertNotIn('document', sys._getframe(1).f_locals)
@@ -9153,6 +9161,7 @@ class IncompleteCaptureCompletionTests(unittest.TestCase):
             return original_verify(root, *values, **options)
         with patch.object(figure, 'verify_provider_stream', new=provider), \
                 patch.object(figure, 'replay_source', new=source), \
+                patch.object(figure, 'inventory_document', new=inventory), \
                 patch.object(figure, 'verify', new=verify):
             manifest = builder.capture_figure_files(args, transport=self.offline)
         self.assertIn(parent, seen)

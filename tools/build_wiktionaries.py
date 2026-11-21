@@ -12,7 +12,7 @@ try:
 except ImportError:
     zstd = None
 import concurrent.futures
-from collections import defaultdict, deque
+from collections import defaultdict, deque, namedtuple
 from contextlib import contextmanager, ExitStack
 import fcntl
 from functools import lru_cache
@@ -611,13 +611,14 @@ class PreparedSourceRequest:
             if verdict is not None:
                 record['figure_validation']=verdict
                 # Keep fitting legacy proofs unchanged; factor only overflow.
-                if len(json.dumps(record,sort_keys=True).encode())+1>64*1024*1024:
+                # ASCII JSON has one byte per character, plus the file's newline.
+                if len(json.dumps(record,sort_keys=True,ensure_ascii=True))+1>64*1024*1024:
                     compact=_prepared_figure_verdict_wire(verdict)
                     if compact is verdict:
                         del record['figure_validation']
                     else:
                         record['figure_validation']=compact
-                        if len(json.dumps(record,sort_keys=True).encode())+1>64*1024*1024:
+                        if len(json.dumps(record,sort_keys=True,ensure_ascii=True))+1>64*1024*1024:
                             del record['figure_validation']
         # This is a request, not authority. The parent validates these bindings
         # and original source before authorizing, then the child reopens them.
@@ -1876,6 +1877,50 @@ def figure_tuple_guard(helper, root, *, authenticated=None, deferred_capture=Non
 
 
 
+_SharedFigureRows = namedtuple('_SharedFigureRows', ('template', 'outputs'))
+
+
+def _encode_cached_figure_result(result):
+    """Keep one JSON row when the verified roles share a manifest and inventory."""
+    def encode(value):
+        return json.dumps(value, sort_keys=True, separators=(',', ':'))
+
+    first = next(iter(result.values()), None)
+    if len(result) < 2 or not isinstance(first, (list, tuple)) or len(first) != 2:
+        return encode(result)
+    manifest, inventory = first
+    if type(manifest) is not dict or type(inventory) is not dict:
+        return encode(result)
+    missing = object()
+    outputs = {}
+    for role, pair in result.items():
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            return encode(result)
+        row, files = pair
+        # The normal verifier makes shallow row copies. Identity also keeps
+        # unusual values such as false and 0 from being merged by equality.
+        if (type(role) is not str or type(row) is not dict or type(files) is not dict or
+                type(row.get('output_sha256')) is not str or len(row) != len(manifest) or
+                any(type(k) is not str or manifest.get(k, missing) is not v
+                    for k, v in row.items() if k != 'output_sha256') or
+                len(files) != len(inventory) or any(type(k) is not str or inventory.get(k, missing) is not v
+                    for k, v in files.items())):
+            return encode(result)
+        outputs[role] = row['output_sha256']
+    return _SharedFigureRows(encode(first), tuple(sorted(outputs.items())))
+
+
+def _decode_cached_figure_result(value):
+    if isinstance(value, str):
+        return json.loads(value)
+    result = {}
+    for role, output in value.outputs:
+        row = json.loads(value.template)
+        row[0]['output_sha256'] = output
+        result[role] = row
+    return result
+
+
 def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_paths=None):
     """Reuse only this interpreter's completed replay under fresh identity guards."""
     key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
@@ -1896,7 +1941,7 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
                     previous[2]['inventory'].clear()
                     _FIGURE_TUPLE_REPLAYS[key] = previous[:2]
             raise ValueError('Figure replay inputs or helper changed after validation')
-        result = json.loads(previous[1])
+        result = _decode_cached_figure_result(previous[1])
         record = next(iter(result.values()))[0]
         if ((edition is not None and record['wiki'] != edition) or
                 (date is not None and record['date'] != date)):
@@ -1960,7 +2005,7 @@ def verified_figure_tuple(helper, paths, edition=None, date=None, *, parent_path
         if guard != after:
             raise ValueError('Figure replay inputs changed during validation')
         if guard is not None:
-            entry = (guard, json.dumps(result, sort_keys=True, separators=(',', ':')))
+            entry = (guard, _encode_cached_figure_result(result))
             if proofs is not None and parent_paths is None:
                 entry += (proofs,)
             # A worker can claim the completed context immediately after its
@@ -2093,11 +2138,11 @@ def prepared_figure_verdict(cfg):
     edition,paths,key=selected
     with _FIGURE_TUPLE_REPLAY_LOCK:
         prior=_FIGURE_TUPLE_REPLAYS.get(key)
-    if prior is None or not isinstance(prior[1],str):return None
+    if prior is None or not isinstance(prior[1],(str,_SharedFigureRows)):return None
     import prepare_figure_metadata as helper
     guard=figure_tuple_guard(helper,next(iter(paths.values())).parent,authenticated=prior[0])
     if guard is None or guard!=prior[0]:return None
-    result=json.loads(prior[1])
+    result=_decode_cached_figure_result(prior[1])
     if (set(result)!=set(paths) or any(row[0].get('wiki')!=edition or row[0].get('date')!=cfg['date']
                                      for row in result.values())):return None
     version=3 if any('sha1' not in identity for _,identity in guard[1].values()) else 2
@@ -2182,7 +2227,7 @@ def capture_figure_files(args, transport=None, sleep=time.sleep, *, target_contr
             if figure_tuple_guard(helper, root, authenticated=guard) != guard:
                 raise ValueError('Figure capture inputs changed during tuple validation')
             key = tuple(sorted((role, str(Path(path).absolute())) for role, path in paths.items()))
-            completed = (key, guard, json.dumps(result, sort_keys=True, separators=(',', ':')))
+            completed = (key, guard, _encode_cached_figure_result(result))
 
     options = {} if target_contract is None else {'target_contract': target_contract}
     manifest = helper.capture_files(args, transport=transport, sleep=sleep,

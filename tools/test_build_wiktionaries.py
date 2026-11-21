@@ -7797,6 +7797,28 @@ class FigureTupleReplayReuseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'edition/date'):
                 b.validated_figure_tuple(self.paths, 'enwiktionary', self.fixture.date)
 
+    def test_replay_cache_shares_serialized_rows_but_not_caller_owned_values(self):
+        first = self.validate()
+        cached = next(iter(b._FIGURE_TUPLE_REPLAYS.values()))[1]
+        self.assertIsInstance(cached, b._SharedFigureRows)
+        self.assertLess(len(cached.template), len(json.dumps(first)) // 2)
+        decoded = b._decode_cached_figure_result(cached)
+        self.assertEqual(decoded, json.loads(json.dumps(first)))
+        a, other = list(decoded.values())[:2]
+        a[0]['artifacts'].clear()
+        a[1].clear()
+        self.assertTrue(other[0]['artifacts'] and other[1])
+        self.assertEqual(self.validate(), first)
+
+    def test_distinct_figure_metadata_keeps_original_json_encoding(self):
+        for manifest_value, inventory_value in ((False, 'x'), (0, False)):
+            first = ({'number': 0, 'output_sha256': 'a'}, {'file': 'x'})
+            other = ({'number': manifest_value, 'output_sha256': 'b'}, {'file': inventory_value})
+            result = {'a': first, 'b': other}
+            encoded = b._encode_cached_figure_result(result)
+            self.assertIsInstance(encoded, str)
+            self.assertEqual(encoded, json.dumps(result, sort_keys=True, separators=(',', ':')))
+
     def test_figure_replay_reuse_refuses_artifact_mutation_truncation_and_membership(self):
         for mode in ('changed', 'truncated', 'extra'):
             with self.subTest(mode=mode):
