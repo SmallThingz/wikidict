@@ -236,7 +236,8 @@ class AliasDeviceTest {
                     assertEquals("",c.getString(2));assertEquals("Word",c.getString(3));assertEquals("language",c.getString(4))
                     assertFalse(c.moveToNext())
                 }
-                assertEquals(3,next.readableDatabase.version)
+                assertEquals(4,next.readableDatabase.version)
+                assertTrue(readEmptyEditions(next.readableDatabase).isEmpty())
             } finally {
                 next.close()
             }

@@ -318,6 +318,7 @@ class LibraryStore private constructor(private val context: Context) {
     private val operations = LibraryOperationOwner(mutex, downloadLock)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     var dictionaries by mutableStateOf<List<DictionaryInfo>>(emptyList()); private set
+    var emptyEditions by mutableStateOf<List<EmptyEditionInfo>>(emptyList()); private set
     var busy by mutableStateOf<String?>(null); private set
     var progress by mutableFloatStateOf(0f); private set
     var transferDetail by mutableStateOf<String?>(null); private set
@@ -343,8 +344,11 @@ class LibraryStore private constructor(private val context: Context) {
         }
         if (opened) resumeDownload()
     } }
-    private suspend fun refresh() = publishLibrarySnapshot(helper.readableDatabase) { values ->
-        dictionaries = values; revision++
+    private suspend fun refresh() {
+        val empty = readEmptyEditions(helper.readableDatabase)
+        publishLibrarySnapshot(helper.readableDatabase) { values ->
+            dictionaries = values; emptyEditions = empty; revision++
+        }
     }
     fun addSource(url: String) {
         val uri = URI(url.trim()); require((BuildConfig.DEBUG && uri.toString() == Catalog.DEBUG_FIXTURE) ||
@@ -584,6 +588,32 @@ class LibraryStore private constructor(private val context: Context) {
             install(temp, hash, name())
         } finally { temp.delete() }
     }
+    fun importEdition(tree: Uri) = operation("Reading edition folder") {
+        val edition = coroutineScope {
+            val job = currentCoroutineContext()
+            val access = SafReleaseAccess(context.contentResolver, tree) { job.ensureActive() }
+            val reader = async(Dispatchers.IO) { CompletedEmptyEdition.read(access.open(), tree.toString()) }
+            var failure: Throwable? = null
+            try { reader.await() } catch (error: Throwable) { failure = error; throw error }
+            finally {
+                // Close owned provider streams before coroutineScope waits for the cancelled reader.
+                withContext(NonCancellable + Dispatchers.IO) {
+                    try { access.close() } catch (error: Throwable) {
+                        val original = failure
+                        if (original == null) throw error else original.addSuppressed(error)
+                    } finally { reader.cancelAndJoin() }
+                }
+            }
+        }
+        mutateEmptyEditions(helper.writableDatabase, ::refresh) {
+            registerEmptyEdition(helper.writableDatabase, edition)
+        }
+    }
+    fun removeEmptyEdition(edition: String) = operation("Removing edition summary") {
+        mutateEmptyEditions(helper.writableDatabase, ::refresh) {
+            helper.writableDatabase.delete("empty_editions", "edition=?", arrayOf(edition))
+        }
+    }
     private suspend fun install(temp: File, hash: String, filename: String) {
         val db = helper.writableDatabase
         val edition = dictionaryEdition(filename)
@@ -646,6 +676,7 @@ class LibraryStore private constructor(private val context: Context) {
                 require(!collision) { "Redirect collides with a definition in this edition" }
             }
             }
+            if (edition.isNotEmpty()) db.delete("empty_editions", "edition=?", arrayOf(edition))
             db.setTransactionSuccessful()
         } catch (e: Throwable) {
             failure = e

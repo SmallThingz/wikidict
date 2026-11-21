@@ -1,6 +1,63 @@
 # Android validation
 
-## Current non-atomic inline-box bottom alignment — 2026-11-21
+## Current completed-empty edition import and selection — 2026-11-21
+
+The Library's normal **Import** menu now offers **Dictionary file** and
+**Completed-empty edition folder**. A validated completed-empty edition becomes
+a selectable library item with a summary, rather than an opening failure or
+generic missing-dictionary guidance. For the authenticated Afar release, the
+summary says **No published dictionaries** and **101 source pages processed.
+This release contains no word entries to browse.** Processed pages are not
+presented as a word count.
+
+Folder selection uses the ordinary Storage Access Framework. The bounded
+completion-metadata validator checks the edition/date identity, strict marker
+types and counts, exact empty language catalogue, absence of unfinished markers
+and blobs, and a stable directory snapshot. It checks the latest dated release
+without falling back from a damaged or incomplete newer release. Ordinary empty
+folders and corrupt releases are refused. Existing dictionary-file import,
+blob browsing and persisted SAF data remain separate; removing a summary removes
+only its local metadata. Database version 4 preserves existing dictionary and
+word tables. Gson 2.11.0 parses bounded release metadata, not dictionary JSON.
+
+The [canonical application][application165-current] contains sixteen qualified
+source/test/build files, including six new files, and projects the canonical
+inventory from 985 to 991 files. The [saved combined audit][audit165-current]
+joins **16 fresh JVM passes** from the [preceding run][partial165-current]: seven
+new validator checks and nine maintained blob, navigation and failure-state
+controls, with zero failures or skips. The main and unit inputs are byte- and
+path-identical across the continuation, so these tests were not repeated.
+
+The [successful continuation][host165-current] reused up-to-date main Kotlin
+output and executed instrumentation Kotlin and Java compilation. It invoked
+**zero JVM tests**. Its compiler emitted 239 warning lines and no errors. Both
+merged manifests retain minimum API **31** (Android 12) and target API **37**.
+The [independent physical closure][physical165-current] verified exact source and
+protected artifacts, absent owned processes and free locks. This final run took
+445.494 seconds with sampled peak PSS of 2,098,710,528 bytes.
+
+Earlier failed attempts remain recorded. In particular, the run that earned the
+sixteen JVM passes failed instrumentation compilation on a test-only SQLite
+overload mismatch; the continuation changes that argument from `File` to its
+path string. Dependency observations now use the selected compiler role:
+annotations 2.27.0 for main/unit and the existing Espresso-selected 2.30.0 for
+instrumentation. Optional diagnostic collection cannot abort compiler tasks;
+the required dependency identities are checked after normal task execution.
+
+Three new and five maintained device contexts **compiled only**. SQLite
+migration, SAF picker interaction, Compose selection/back/removal and rendered
+phone behavior were not device-executed. The current inventory declares 1,229
+JVM cases; no current full-suite, lint or APK result is claimed. The historical
+1,217-case suite and retained unsigned APK below qualify the preceding source.
+The pre-ADB access hold and signing, installation and publication holds remain.
+
+[application165-current]: ../../../.tmp/renderer-core-oct28/de-mai-ancestor-dag01/android-pending-y01/aa-empty-edition01/canonical-application01.json
+[host165-current]: /home/a/.tmp/wikidict-android-host165-run05/completion01.json
+[audit165-current]: /home/a/.tmp/wikidict-android-host165-run05/saved-result-peer-reader01.json
+[partial165-current]: /home/a/.tmp/wikidict-android-host165-run04/saved-partial-result-peer-reader01.json
+[physical165-current]: /home/a/.tmp/wikidict-android-host165-run05/runtime-physical-closure01.json
+
+## Previous non-atomic inline-box bottom alignment — 2026-11-21
 
 The [canonical application][application164-current] binds twelve source/test
 files to the reviewed private postimages: nine main files, two JVM-test files and

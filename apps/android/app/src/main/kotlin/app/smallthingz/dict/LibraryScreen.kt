@@ -2,6 +2,7 @@ package app.smallthingz.dict
 
 import android.text.format.Formatter
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -14,9 +15,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: ()->Unit) {
+fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true,
+    onImportEdition: (() -> Unit)? = null, onSelectEmpty: (EmptyEditionInfo) -> Unit = {}, onImport: ()->Unit) {
     val context = LocalContext.current
     var add by remember { mutableStateOf(false) }
+    var importMenu by remember { mutableStateOf(false) }
+    var removeEmpty by remember { mutableStateOf<String?>(null) }
     var address by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var remove by remember { mutableStateOf<String?>(null) }
@@ -27,7 +31,18 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
     LazyColumn(Modifier.fillMaxSize(),contentPadding=PaddingValues(12.dp),verticalArrangement=Arrangement.spacedBy(10.dp)) {
         item { Row(verticalAlignment=Alignment.CenterVertically) {
             Text("Dictionaries",Modifier.weight(1f),style=MaterialTheme.typography.headlineMedium)
-            IconButton(onClick=onImport,enabled=library.busy==null) { Icon(Icons.Outlined.FolderOpen,"Import wikblb") }
+            Box {
+                IconButton(onClick={ if (onImportEdition == null) onImport() else importMenu=true },enabled=library.busy==null) {
+                    Icon(Icons.Outlined.FolderOpen,if (onImportEdition == null) "Import wikblb" else "Import")
+                }
+                DropdownMenu(expanded=importMenu,onDismissRequest={importMenu=false}) {
+                    DropdownMenuItem(text={Text("Dictionary file")},onClick={importMenu=false;onImport()})
+                    DropdownMenuItem(text={Column {
+                        Text("Completed-empty edition folder")
+                        Text("Newest dated release, e.g. inside aawiktionary",style=MaterialTheme.typography.bodySmall)
+                    }},onClick={importMenu=false;onImportEdition?.invoke()})
+                }
+            }
             IconButton(onClick={library.refreshCatalogs()},enabled=library.sources.isNotEmpty()&&library.busy==null) { Icon(Icons.Outlined.Refresh,"Refresh catalogues") }
         } }
         (library.busy ?: if (library.hasRetainedDownload) "Download needs attention" else null)?.let { label ->
@@ -45,7 +60,7 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
         }
         library.initializationError?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
         library.error?.let { error -> item { Text(error,color=MaterialTheme.colorScheme.error,style=MaterialTheme.typography.bodyMedium) } }
-        if(library.dictionaries.isNotEmpty()) item { Text("On this device",style=MaterialTheme.typography.titleLarge) }
+        if(library.dictionaries.isNotEmpty() || library.emptyEditions.isNotEmpty()) item { Text("On this device",style=MaterialTheme.typography.titleLarge) }
         items(library.dictionaries,key={it.id}) { dictionary ->
             Column {
                 Row(verticalAlignment=Alignment.CenterVertically) {
@@ -58,9 +73,28 @@ fun LibraryScreen(library: LibraryStore, autoRefresh: Boolean = true, onImport: 
                 } }
             }
         }
+        items(library.emptyEditions,key={"empty:${it.edition}"}) { edition ->
+            Column {
+                Row(verticalAlignment=Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f).clickable { onSelectEmpty(edition) }.padding(vertical=8.dp)) {
+                        Text(sourceLabel(edition.edition),style=MaterialTheme.typography.titleMedium)
+                        Text("Completed release · No published dictionaries",style=MaterialTheme.typography.bodyMedium)
+                        Text("${edition.sourcePages} source pages processed",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick={removeEmpty=edition.edition},enabled=library.busy==null) {
+                        Icon(Icons.Outlined.DeleteOutline,"Remove summary for ${sourceLabel(edition.edition)}")
+                    }
+                }
+                androidx.compose.animation.AnimatedVisibility(removeEmpty==edition.edition) { Row(verticalAlignment=Alignment.CenterVertically) {
+                    Text("Remove saved summary? The source folder is kept.",Modifier.weight(1f),style=MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick={removeEmpty=null}){Text("Keep")}
+                    TextButton(onClick={library.removeEmptyEdition(edition.edition);removeEmpty=null}){Text("Remove")}
+                } }
+            }
+        }
         item { Text("Available",style=MaterialTheme.typography.titleLarge) }
         if (library.catalog.isEmpty() && library.busy == null) item {
-            Text("No downloads listed. Add a catalogue or import a file.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (onImportEdition == null) "No downloads listed. Add a catalogue or import a file." else "No downloads listed. Add a catalogue or import a dictionary file or completed-empty edition.",style=MaterialTheme.typography.bodyMedium,color=MaterialTheme.colorScheme.onSurfaceVariant)
         }
         items(library.catalog,key={it.url}) { item -> Row(verticalAlignment=Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) { Text(item.label,style=MaterialTheme.typography.titleMedium);item.bytes?.let {Text(Formatter.formatShortFileSize(context, it),style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)} }

@@ -24,13 +24,14 @@ internal fun searchPrefixUpperBound(prefix: String): String? {
 }
 
 /** Keep old installations intact; unscoped dictionaries never gain guessed redirect associations. */
-internal class LibraryDatabase(context: Context, name: String = "library.db") : SQLiteOpenHelper(context, name, null, 3) {
+internal class LibraryDatabase(context: Context, name: String = "library.db") : SQLiteOpenHelper(context, name, null, 4) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE dictionaries(id TEXT PRIMARY KEY,language TEXT,code TEXT,kind TEXT,count INTEGER,bytes INTEGER,edition TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE TABLE words(dictionary TEXT,title TEXT,normalized TEXT,payload INTEGER,length INTEGER,record_key TEXT NOT NULL,source_kind TEXT NOT NULL)")
         db.execSQL("CREATE INDEX word_lookup ON words(normalized,title)")
         db.execSQL("CREATE INDEX word_dictionary ON words(dictionary)")
         finishSchema(db)
+        createEmptyEditionSchema(db)
     }
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
@@ -41,6 +42,7 @@ internal class LibraryDatabase(context: Context, name: String = "library.db") : 
             finishSchema(db)
         }
         if (oldVersion < 3) rekeySearch(db)
+        if (oldVersion < 4) createEmptyEditionSchema(db)
     }
     private fun rekeySearch(db: SQLiteDatabase) {
         // SQLiteOpenHelper encloses the upgrade and version change in one transaction.

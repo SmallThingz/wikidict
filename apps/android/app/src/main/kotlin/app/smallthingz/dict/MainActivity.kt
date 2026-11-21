@@ -69,6 +69,19 @@ class ReaderStartup internal constructor(
         drainImports()
     }
 
+    internal fun importEdition(uri: Uri) {
+        // Keep only the read grant the user selected; never release another import's grant.
+        try { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        catch (_: SecurityException) { /* Some providers offer only the current read grant. */ }
+        importNavigationSequence++
+        savedState["importNavigationSequence"] = importNavigationSequence
+        savedState["importNavigationRequest"] = importNavigationSequence
+        importNavigationRequest = importNavigationSequence
+        val pending = savedState.get<ArrayList<Uri>>("pendingEditionImports").orEmpty()
+        savedState["pendingEditionImports"] = ArrayList(pending + uri)
+        drainImports()
+    }
+
     internal fun consumeImportNavigation(request: Long) {
         if (request != importNavigationRequest) return
         savedState["importNavigationRequest"] = 0L
@@ -79,13 +92,19 @@ class ReaderStartup internal constructor(
         val library = stores?.library ?: return
         while (true) {
             val pending = savedState.get<ArrayList<Uri>>("pendingImports").orEmpty()
-            val uri = pending.firstOrNull() ?: return
+            val uri = pending.firstOrNull() ?: break
             savedState["pendingImports"] = ArrayList(pending.drop(1))
             library.importFile(name = {
                 resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                     if (c.moveToFirst()) c.getString(0).orEmpty() else ""
                 }.orEmpty()
             }) { requireNotNull(resolver.openInputStream(uri)) { "Cannot open dictionary" } }
+        }
+        while (true) {
+            val pending = savedState.get<ArrayList<Uri>>("pendingEditionImports").orEmpty()
+            val uri = pending.firstOrNull() ?: return
+            savedState["pendingEditionImports"] = ArrayList(pending.drop(1))
+            library.importEdition(uri)
         }
     }
 }
@@ -95,6 +114,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val picker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { startup.import(it) } }
+        val editionPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let { startup.importEdition(it) } }
         startup = ViewModelProvider(this)[ReaderStartup::class.java]
         setContent {
             val stores = startup.stores
@@ -103,6 +123,7 @@ class MainActivity : ComponentActivity() {
                     DictApp(stores.library, stores.learning,
                         importNavigationRequest = startup.importNavigationRequest,
                         onImportNavigationHandled = startup::consumeImportNavigation,
+                        onImportEdition = { editionPicker.launch(null) },
                     ) { picker.launch(arrayOf("application/octet-stream", "application/x-wikblb", "*/*")) }
                 } else {
                     Surface(Modifier.fillMaxSize()) {

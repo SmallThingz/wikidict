@@ -128,11 +128,14 @@ internal fun EntryLinkChoiceDialog(state: EntryLinkChoiceState) {
 @Composable
 fun DictApp(library: LibraryStore, learning: LearningStore,
     importNavigationRequest: Long = 0L, onImportNavigationHandled: (Long) -> Unit = {},
+    onImportEdition: (() -> Unit)? = null,
     onImport: () -> Unit) {
     var screen by rememberSaveable { mutableStateOf(AppScreen.Dictionary) }
     val learnState = rememberSaveableStateHolder()
     var importLibraryVisit by rememberSaveable { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
+    var selectedEmptyId by rememberSaveable { mutableStateOf<String?>(null) }
+    val selectedEmpty = library.emptyEditions.firstOrNull { it.edition == selectedEmptyId }
     var dockHidden by remember { mutableStateOf(false) }
     var searching by rememberSaveable { mutableStateOf(false) }
     val owner = checkNotNull(LocalView.current.findViewTreeViewModelStoreOwner())
@@ -150,6 +153,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     fun showEntry(hit: WordHit, entry: Entry, target: EntryLink, returning: Boolean) {
+        selectedEmptyId = null
         selected = entry
         val fragment = if (returning) "" else if (target.hasFragment) target.fragment
             else entry.redirect?.takeIf { it.followed }?.fragment.orEmpty()
@@ -224,11 +228,19 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
         }
     }
     fun open(hit: WordHit) { navigation.open(hit) }
+    fun openEmpty(edition: EmptyEditionInfo) {
+        navigation.interrupt {
+            selectedEmptyId = edition.edition
+            searching = false; query = ""; screen = AppScreen.Dictionary
+            importLibraryVisit = false; dockHidden = false; keyboard?.hide()
+        }
+    }
     LaunchedEffect(library, library.revision) {
         linkChoiceState.cancelIfStale()
         // Revision zero is the initial database load, not a completed empty library.
         if (library.revision == 0) return@LaunchedEffect
         navigation.libraryChanged()
+        if (selectedEmptyId != null && library.emptyEditions.none { it.edition == selectedEmptyId }) selectedEmptyId = null
         if (selected?.isInstalled { id -> library.dictionaries.any { it.id == id } } == false) {
             selected = null; anchorRequest = null
         }
@@ -236,7 +248,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             navigation.cancel()
             selected = null; anchorRequest = null
             // Keep the empty Library presentation at the Dictionary root.
-        } else if (selected == null && screen == AppScreen.Dictionary && !searching) navigation.openInitialIfIdle()
+        } else if (selectedEmptyId == null && selected == null && screen == AppScreen.Dictionary && !searching) navigation.openInitialIfIdle()
     }
     fun openWord(word: SavedWord) { navigation.openSaved(word) }
     fun randomWord() { navigation.openRandom() }
@@ -248,7 +260,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             keyboard?.hide()
         }
         // A recreated search/screen retains its intent, but the decoded entry is not saveable.
-        if (screen == AppScreen.Dictionary && !searching && selected == null &&
+        if (screen == AppScreen.Dictionary && !searching && selectedEmptyId == null && selected == null &&
             library.revision > 0 && library.dictionaries.isNotEmpty()) navigation.openInitial()
     }
     LaunchedEffect(importNavigationRequest) {
@@ -261,8 +273,11 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             onImportNavigationHandled(importNavigationRequest)
         }
     }
-    androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary || visits.canGoBack) {
-        if (searching || screen != AppScreen.Dictionary)
+    androidx.activity.compose.BackHandler(searching || screen != AppScreen.Dictionary || selectedEmptyId != null || visits.canGoBack) {
+        if (!searching && screen == AppScreen.Dictionary && selectedEmptyId != null) {
+            selectedEmptyId = null
+            returnTo(AppScreen.Library)
+        } else if (searching || screen != AppScreen.Dictionary)
             returnTo(if (screen == AppScreen.Library) AppScreen.Settings else AppScreen.Dictionary)
         else navigation.goBack()
     }
@@ -297,7 +312,7 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
         }
         }
     }) { padding ->
-        val reading = screen == AppScreen.Dictionary && !searching && selected != null
+        val reading = screen == AppScreen.Dictionary && !searching && selectedEmptyId == null && selected != null
         // The dock overlays reading content; its animation never changes the viewport.
         val contentPadding = if (reading) PaddingValues(
             top = padding.calculateTopPadding(),
@@ -307,10 +322,13 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
             androidx.compose.animation.Crossfade(screen, animationSpec = androidx.compose.animation.core.tween(140), label = "page") { destination ->
                 when(destination) {
                     AppScreen.Library -> LibraryScreen(library,
-                        autoRefresh = !importLibraryVisit && importNavigationRequest == 0L, onImport = onImport)
+                        autoRefresh = !importLibraryVisit && importNavigationRequest == 0L,
+                        onImportEdition = onImportEdition, onSelectEmpty = ::openEmpty, onImport = onImport)
                     AppScreen.Dictionary -> {
                         if (searching) {
                             SearchResults(query, library.revision, { library.search(it) }, ::open)
+                        } else if (selectedEmpty != null) {
+                            EmptyEditionSummary(selectedEmpty) { selectedEmptyId = null; returnTo(AppScreen.Library) }
                         } else selected?.let { entry ->
                             CompositionLocalProvider(LocalUriHandler provides readerUri, LocalMissingLinkVisits provides session.missingLinkVisits) {
                                 EntryView(entry, learning.isBookmarked(entry), { learning.toggleBookmark(entry) }, readingState = visits.currentId?.takeIf { visits.entryKey == entry.key }?.let {
@@ -321,7 +339,8 @@ fun DictApp(library: LibraryStore, learning: LearningStore,
                                         { scope.launch { snackbar.showSnackbar("The source edition for this link is unavailable.") } })
                                 })
                             }
-                        } ?: LibraryScreen(library, autoRefresh = importNavigationRequest == 0L, onImport = onImport)
+                        } ?: LibraryScreen(library, autoRefresh = importNavigationRequest == 0L,
+                            onImportEdition = onImportEdition, onSelectEmpty = ::openEmpty, onImport = onImport)
                     }
                     AppScreen.Saved -> SavedScreen(learning, false, ::openWord)
                     AppScreen.History -> SavedScreen(learning, true, ::openWord)

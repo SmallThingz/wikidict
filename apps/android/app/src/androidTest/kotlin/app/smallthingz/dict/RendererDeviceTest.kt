@@ -5382,7 +5382,7 @@ class RendererDeviceTest {
                     compose.onAllNodesWithTag("entry-scroll").fetchSemanticsNodes().isEmpty()
             }
             compose.onNodeWithText("Dictionaries").assertIsDisplayed()
-            compose.onNodeWithContentDescription("Import wikblb").assertIsEnabled()
+            compose.onNodeWithContentDescription("Import").assertIsEnabled()
 
             // Install an owned Activity-level parent before the new real DictApp
             // callback. It records root fallthrough without finishing the test Activity.

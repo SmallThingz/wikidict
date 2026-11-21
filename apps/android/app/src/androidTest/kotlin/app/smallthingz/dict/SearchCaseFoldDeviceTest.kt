@@ -409,10 +409,11 @@ class SearchCaseFoldDeviceTest {
                 val upgraded = LibraryDatabase(context, name)
                 try {
                     val db = upgraded.writableDatabase
-                    assertEquals(3, db.version)
+                    assertEquals(4, db.version)
                     assertEquals(before, rows(db))
                     assertEquals(dictionariesBefore, dictionaryRows(db))
-                    assertEquals(schemaBefore, schema(db))
+                    assertEquals(schemaBefore, schema(db) - "empty_editions")
+                    assertTrue(readEmptyEditions(db).isEmpty())
                     val folded = titles.mapIndexed { index, title ->
                         (index * 3L + 5) to (expectedKeys[title] ?: title.lowercase(Locale.ROOT))
                     }.toMap()
