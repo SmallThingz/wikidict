@@ -9,6 +9,8 @@
 #include <QScopeGuard>
 #include <algorithm>
 #include <QDir>
+#include <QDateTime>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
@@ -311,7 +313,9 @@ void checkReplacementPreservesUserState(const QString &source, const QString &ro
     auto *import = control<QPushButton>(dialog, "importDictionary");
     require(QTest::qWaitFor([&] { return !progress->isVisible() && installed->topLevelItemCount() == 1; }, 15000),
             "replacement library initial listing settles");
-    const auto replace = [&](const QString &path, bool accept) {
+    const auto replace = [&](const QString &path, bool accept, qint64 installedWords, qint64 installedBytes,
+                             qint64 incomingWords, int width, const QString &caseName) {
+        dialog.resize(width, 600);
         bool answered = false;
         QTimer responder;
         QObject::connect(&responder, &QTimer::timeout, &dialog, [&] {
@@ -319,6 +323,29 @@ void checkReplacementPreservesUserState(const QString &source, const QString &ro
                 auto *box = qobject_cast<QMessageBox *>(widget);
                 if (!box || !box->isVisible() || box->windowTitle() != QStringLiteral("Replace dictionary?")) continue;
                 require(box->defaultButton() == box->button(QMessageBox::No), "replacement defaults to No");
+                require(box->escapeButton() == box->button(QMessageBox::No), "replacement Escape keeps installed dictionary");
+                require(box->textFormat() == Qt::PlainText, "replacement names cannot become rich text");
+                const auto expectedMetrics = [](qint64 words, qint64 bytes) {
+                    return (words < 0 ? QStringLiteral("Word count unknown")
+                        : QStringLiteral("%1 %2").arg(QLocale().toString(words), words == 1 ? QStringLiteral("word") : QStringLiteral("words")))
+                        + QStringLiteral(", ") + (bytes <= 0 ? QStringLiteral("Size unknown") : LibraryStorage::formatBytes(bytes));
+                };
+                require(box->text() == QStringLiteral("Replace the installed %1 dictionary?").arg(initial.first().heading),
+                        "confirmation retains validated dictionary identity");
+                const QString detail = box->informativeText();
+                require(detail.contains(QStringLiteral("Installed: ") + expectedMetrics(installedWords, installedBytes)),
+                        "confirmation identifies installed size and trustworthy count or unknown");
+                require(detail.contains(QStringLiteral("Incoming: ") + expectedMetrics(incomingWords, QFileInfo(path).size())),
+                        "confirmation identifies validated incoming size and count");
+                require(detail.contains(QStringLiteral("File: ") + QFileInfo(path).fileName()),
+                        "confirmation displays incoming filename without inferring an edition");
+                require(detail.contains(QStringLiteral("To keep both dictionaries, choose No, then choose another dictionary folder")),
+                        "confirmation explains the existing preserve-both folder route");
+                require(detail.contains(QStringLiteral("Saved words and learning progress will remain.")),
+                        "confirmation preserves learning-state explanation");
+                require(QDir().mkpath(QStringLiteral(".tmp/ui-screenshots")), "replacement frame directory");
+                require(box->grab().save(QStringLiteral(".tmp/ui-screenshots/library-replacement-%1-%2.png").arg(caseName).arg(width)),
+                        "save actual replacement confirmation before answering");
                 answered = true;
                 responder.stop();
                 if (accept) QTest::mouseClick(box->button(QMessageBox::Yes), Qt::LeftButton);
@@ -337,12 +364,47 @@ void checkReplacementPreservesUserState(const QString &source, const QString &ro
                 "replacement retires staging");
         assertUserState();
     };
-    replace(source, false);
+    replace(source, false, initial.first().words, original.size(), initial.first().words, 900, QStringLiteral("known"));
+    replace(source, false, initial.first().words, original.size(), initial.first().words, 640, QStringLiteral("known"));
     require(!dialog.libraryChanged(), "declining replacement does not request reader reload");
     require(control<QLabel>(dialog, "libraryStatus")->text() == QStringLiteral("Import cancelled. The installed dictionary is unchanged."),
             "declining replacement reports unchanged installation");
     require(read(initial.first().path) == original && read(manifest) == originalManifest && read(languages) == originalLanguages,
             "default-No preserves exact installed payload and manifests");
+    const auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile file(path); require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write private replacement control");
+    };
+    write(manifest, QByteArrayLiteral("{}"));
+    replace(source, false, -1, original.size(), initial.first().words, 640, QStringLiteral("unknown-count"));
+    require(read(initial.first().path) == original && read(manifest) == QByteArrayLiteral("{}"),
+            "unknown metadata cancellation preserves payload and metadata");
+    write(manifest, originalManifest);
+    // A valid row for another identity must not supply this collision's metrics.
+    LibraryStorage::Dictionary unrelated = initial.first(); unrelated.heading = QStringLiteral("Other dictionary");
+    const QString unrelatedPath = LibraryStorage::dictionaryPath(root, unrelated);
+    write(unrelatedPath, QByteArrayLiteral("unrelated private bytes"));
+    write(languages, QByteArrayLiteral("heading\nOther dictionary\n"));
+    replace(source, false, -1, -1, initial.first().words, 640, QStringLiteral("wrong-identity"));
+    require(read(initial.first().path) == original && read(unrelatedPath) == QByteArrayLiteral("unrelated private bytes"),
+            "wrong identity is neither borrowed nor replaced after No");
+    require(QFile::remove(unrelatedPath), "remove private unrelated row fixture");
+    write(languages, QByteArrayLiteral("invalid language metadata\n"));
+    replace(source, false, -1, -1, initial.first().words, 640, QStringLiteral("unreadable-metadata"));
+    require(read(initial.first().path) == original && read(languages) == QByteArrayLiteral("invalid language metadata\n"),
+            "metadata lookup failure still offers safe cancellation of valid incoming file");
+    write(languages, originalLanguages);
+    const QDateTime modified = QFileInfo(initial.first().path).lastModified();
+    write(initial.first().path, {});
+    replace(source, false, -1, -1, initial.first().words, 640, QStringLiteral("unknown-size"));
+    require(read(initial.first().path).isEmpty(), "unknown-size cancellation leaves the private installed file unchanged");
+    write(initial.first().path, original);
+    QFile restored(initial.first().path); require(restored.open(QIODevice::ReadWrite), "restore private payload timestamp");
+    require(restored.setFileTime(modified, QFileDevice::FileModificationTime), "restore metadata validity after private size fixture");
+    restored.close();
+    const QString literalSource = QDir(QFileInfo(replacementSource).absolutePath()).filePath(QStringLiteral("<incoming>&.wikblb"));
+    write(literalSource, original);
+    replace(literalSource, false, initial.first().words, original.size(), initial.first().words, 640, QStringLiteral("literal-name"));
+    require(QFile::remove(literalSource), "remove private literal-name fixture");
     // Distinct valid one-entry English dictionary, confined to this private library.
     QByteArray replacement("WIKBLB08", 8);
     replacement.append(char(1)); replacement.append("en", 2); replacement.append(char(0));
@@ -353,7 +415,7 @@ void checkReplacementPreservesUserState(const QString &source, const QString &ro
     QFile file(replacementSource);
     require(file.open(QIODevice::WriteOnly) && file.write(replacement) == replacement.size(), "write private replacement fixture");
     file.close();
-    replace(replacementSource, true);
+    replace(replacementSource, true, initial.first().words, original.size(), 1, 640, QStringLiteral("accept"));
     const auto updated = LibraryStorage::installed(root);
     require(dialog.libraryChanged() && updated.size() == 1 && updated.first().words == 1,
             "accepted replacement requests reload and refreshes metadata without duplicates");
@@ -432,6 +494,14 @@ int main(int argc, char **argv) {
             bytes.append(char(32)); bytes.append("DPR2", 4); bytes.append(QByteArray(28, '\0'));
             QFile file(source);
             require(file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size(), "write framed UI fixture");
+        }
+        if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QStringLiteral("--replacement-confirmation")) {
+            diagnosticStage = "replacement confirmation and user-state preservation";
+            QSettings().setValue(QStringLiteral("library/catalogSources"), QStringList{});
+            checkReplacementPreservesUserState(source, temp.filePath(QStringLiteral("replacement-library")),
+                                              temp.filePath(QStringLiteral("replacement-English.wikblb")));
+            std::cout << "Library UI: replacement identity, known/unknown metrics, safe No, folder guidance and preserved user state passed\n";
+            return EXIT_SUCCESS;
         }
         if (argc > 2 && QString::fromLocal8Bit(argv[2]) == QStringLiteral("--pending-catalogue-import")) {
             diagnosticStage = "local import during pending catalogue";

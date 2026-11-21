@@ -15370,6 +15370,68 @@ private slots:
         QTRY_COMPARE(receiver.opened.size(), 1); QCOMPARE(receiver.opened.first(), QUrl("https://example.test/inline-licence"));
         QCOMPARE(network.urls.size(), 3); verify(20.0);
         permission->setChecked(false); QTRY_VERIFY(state(MediaPanel::InlineImageState::Disabled)); verify(20.0);
+        auto bottomStyle=table.value("style").toObject();bottomStyle["vertical_align"]=QStringLiteral("bottom");
+        // A new entry retires the old media card, including its learned intrinsic
+        // size. This disabled-image bottom fixture authors its own 20px axes;
+        // the original top fixture above still checks intrinsic 1 -> 20 learning.
+        auto bottomImage=image;bottomImage["width_px"]=20;bottomImage["height_px"]=20;
+        auto bottomPicture=picture;bottomPicture["image"]=bottomImage;
+        auto bottomTable=table;bottomTable["style"]=bottomStyle;
+        auto bottomRows=bottomTable.value("rows").toArray();auto bottomRow=bottomRows.first().toObject();
+        auto bottomCells=bottomRow.value("cells").toArray();auto bottomImageCell=bottomCells.first().toObject();
+        bottomImageCell["spans"]=QJsonArray{bottomPicture};bottomCells[0]=bottomImageCell;
+        bottomRow["cells"]=bottomCells;bottomRows[0]=bottomRow;bottomTable["rows"]=bottomRows;
+        auto bottomBlock=block;bottomBlock["table"]=bottomTable;
+        auto bottomSection=entry.value("sections").toArray().first().toObject();bottomSection["blocks"]=QJsonArray{bottomBlock,following};
+        auto bottomEntry=entry;bottomEntry["sections"]=QJsonArray{bottomSection};
+        QVERIFY(window.renderResponse(QJsonDocument(QJsonObject{{"entries",QJsonArray{bottomEntry}}}).toJson(),false));
+        QVERIFY(window.jumpToSection(0));QTRY_VERIFY(state(MediaPanel::InlineImageState::Disabled));
+        const auto bottomRaw=window.reading_->document()->toRawText();QCOMPARE(bottomRaw,raw);
+        int bottomPhase = 0;
+        for(int width:{900,640,900}){
+            window.resize(width,760);QCoreApplication::processEvents();auto *doc=window.reading_->document();
+            auto *layout=doc->documentLayout();layout->documentSize();
+            QCOMPARE(layout->property("_wikidictParagraphBoxLayoutError").toInt(),0);
+            QCOMPARE(layout->property("_wikidictInlineTableBottomCapability").toString(),QStringLiteral("wikidict.inline-table-bottom/1"));
+            const auto cursor=imageCursor();QVERIFY(!cursor.isNull());auto *actual=cursor.currentTable();QVERIFY(actual);
+            QCOMPARE(actual->format().intProperty(SemanticHtml::tableVerticalAlignProperty),3);
+            QCOMPARE(actual->rows(),1);QCOMPARE(actual->columns(),3);
+            const auto geometry=LogicalFlow::position(doc,actual->firstPosition()-1);QCOMPARE(geometry.status,LogicalFlow::Status::Handled);
+            const auto box=geometry.values.value("objectRect").toRectF();QVERIFY(box.isValid());
+            const qreal top=geometry.values.value("layoutY").toDouble()+geometry.values.value("lineY").toDouble();
+            const qreal used=geometry.values.value("lineHeight").toDouble();
+            QVERIFY2(qAbs(box.bottom()-top-used)<.08,qPrintable(QString("bottom width=%1 top=%2 used=%3 boxBottom=%4").arg(width).arg(top).arg(used).arg(box.bottom())));
+            const auto owner=doc->findBlock(actual->firstPosition()-1);QVERIFY(owner.textList());QCOMPARE(owner.textList()->count(),1);
+            const auto link=doc->find("Licence terms"),sound=doc->find("Listen to pronunciation");QVERIFY(!link.isNull()&&!sound.isNull());
+            QCOMPARE(link.currentTable(),actual);QCOMPARE(sound.currentTable(),actual);
+            QCOMPARE(link.charFormat().anchorHref(),QStringLiteral("https://example.test/inline-licence"));
+            QCOMPARE(sound.charFormat().anchorHref(),"dict:"+QString::fromLatin1(QUrl::toPercentEncoding("File:"+audioFile)));
+            const auto lines=paintedBlockLines(doc,link.block());QVERIFY(!lines.isEmpty());const auto point=lines.first().center();
+            QCOMPARE(layout->anchorAt(point),link.charFormat().anchorHref());
+            const int hit=layout->hitTest(point,Qt::ExactHit);QVERIFY(hit>=link.selectionStart()&&hit<=link.selectionEnd());
+            QCOMPARE(cursor.charFormat().toImageFormat().width(),20.0);QCOMPARE(cursor.charFormat().toImageFormat().height(),20.0);
+            QCOMPARE(SemanticHtml::inlineImageData(QUrl(cursor.charFormat().toImageFormat().name())),bottomImage);
+            QVERIFY(!image.contains("width_px")&&!image.contains("height_px"));
+            QCOMPARE(doc->toRawText(),bottomRaw);QCOMPARE(window.currentEntry_,bottomEntry);QCOMPARE(network.urls.size(),3);
+            const auto tail=doc->find("Following audio row");QVERIFY(!tail.isNull());QVERIFY(layout->blockBoundingRect(tail.block()).top()+.08>=box.bottom());
+            const auto heading=doc->find("Pronunciation");QVERIFY(!heading.isNull());
+            const auto headingLines=paintedBlockLines(doc,heading.block());QVERIFY(!headingLines.isEmpty());
+            QVERIFY(headingLines.last().bottom()<=box.top()+.08);
+            const auto tailLines=paintedBlockLines(doc,tail.block());QVERIFY(!tailLines.isEmpty());
+            QTextCursor ownerCursor(doc);ownerCursor.setPosition(actual->firstPosition()-1);
+            const auto sourceCaret=geometry.values.value("cursorRect").toRectF();QVERIFY(sourceCaret.isValid());
+            const QPointF offset=QRectF(window.reading_->cursorRect(ownerCursor)).topLeft()-sourceCaret.topLeft();
+            const QRectF viewport(window.reading_->viewport()->rect());
+            QVERIFY2(viewport.contains(box.translated(offset)),qPrintable(QString("bottom table outside viewport width=%1 table=(%2,%3,%4,%5) offset=(%6,%7)")
+                .arg(width).arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height()).arg(offset.x()).arg(offset.y())));
+            QVERIFY(viewport.contains(tailLines.first().translated(offset)));
+            QCOMPARE(cursor.charFormat().intProperty(SemanticHtml::inlineImageStateProperty),int(MediaPanel::InlineImageState::Disabled));
+            qInfo().noquote()<<QString("bottom App width=%1 phase=%2 tableBottom=%3 lineBottom=%4 followingTop=%5 disabledImage=20x20")
+                .arg(width).arg(bottomPhase).arg(box.bottom()).arg(top+used).arg(tailLines.first().top());
+            const auto directory=qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
+            if(!directory.isEmpty()){QVERIFY(QDir().mkpath(directory));QVERIFY(window.grab().save(QDir(directory).filePath(QStringLiteral("et-bottom-app-%1-%2.png").arg(width).arg(bottomPhase))));}
+            ++bottomPhase;
+        }
     }
 
     void typedInlineTableImagesRequireExactCatalogueAndNativePair() {
@@ -15415,12 +15477,20 @@ private slots:
             QVERIFY_EXCEPTION_THROWN(validate(bad, QJsonArray{item}), std::runtime_error);
         }
         for (const auto &bad : {QJsonObject{{"vertical_align", "top"}}, QJsonObject{{"display", "table"}, {"vertical_align", "top"}},
-                 QJsonObject{{"display", "inline_block"}, {"vertical_align", "bottom"}}})
+                 QJsonObject{{"display", "inline_block"}, {"vertical_align", "unknown"}},
+                 QJsonObject{{"vertical_align", "bottom"}}, QJsonObject{{"display", "table"}, {"vertical_align", "bottom"}}})
             QVERIFY_EXCEPTION_THROWN(validate(span, QJsonArray{item}, bad), std::runtime_error);
         QTextDocument old; old.documentLayout()->setProperty("_wikidictInlineTableImageTopCapability", QVariant());
         QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&old, validate(span, QJsonArray{item})), std::runtime_error);
         const auto imageOnly = QJsonObject{{"display", "inline_block"}, {"vertical_align", "middle"}};
         QVERIFY_EXCEPTION_THROWN(SemanticHtml::setHtml(&old, validate(span, QJsonArray{item}, imageOnly)), std::runtime_error);
+        const QJsonObject bottom{{"display","inline_block"},{"vertical_align","bottom"}};
+        QVERIFY(!validate(span,QJsonArray{item},bottom).isEmpty());
+        QTextDocument noBottom;noBottom.documentLayout()->setProperty("_wikidictInlineTableBottomCapability",QVariant());
+        QString bottomError;
+        try{SemanticHtml::setHtml(&noBottom,validate(span,QJsonArray{item},bottom));}
+        catch(const std::runtime_error &error){bottomError=QString::fromUtf8(error.what());}
+        QCOMPARE(bottomError,QStringLiteral("missing paired inline table bottom layout"));
     }
 
     void typedInlineTableRetainsOriginLineHeightAndRealCells() {
@@ -34163,6 +34233,71 @@ private slots:
         QCOMPARE(activated.size(), 1); QCOMPARE(activated.at(0).at(0).toUrl(), QUrl("dict:dog"));
         QTRY_VERIFY_WITH_TIMEOUT(!window.loading_, 30000);
         QTRY_COMPARE(title(window), QStringLiteral("dog"));
+
+
+        // An unlabeled file link names the file, not its internal transport URL.
+        // Authored alternatives and coalesced text still take precedence.
+        QVERIFY(QObject::disconnect(browser, SIGNAL(anchorClicked(QUrl)), &window, nullptr));
+        const QString mediaHref = QStringLiteral("media-source:File%3ADoughnuts%20cz.jpg");
+        const QString unicodeHref = QStringLiteral("media-source:File%3A%C3%89toile%20%231.svg");
+        const QString ordinaryHref = QStringLiteral("https://example.test/unlabeled%20target");
+        const QString unicodeName = QString::fromUtf8("\xc3\x89toile #1.svg");
+        const QString mediaHtml = QStringLiteral(
+            "<p><a href='media-source:File%3ADoughnuts%20cz.jpg'><img src='accessible-local-image' width='24' height='24'></a></p>"
+            "<p><a href='media-source:File%3A%C3%89toile%20%231.svg'><img src='accessible-local-image' width='24' height='24'></a></p>"
+            "<p><a href='media-source:File%3ADoughnuts%20cz.jpg'><img src='accessible-local-image' width='24' height='24' alt='Authored image alternative'></a></p>"
+            "<p><a href='media-source:File%3ADoughnuts%20cz.jpg'><img src='accessible-local-image' width='24' height='24'><b>Authored</b> linked text</a></p>"
+            "<p><a href='https://example.test/unlabeled%20target'><img src='accessible-local-image' width='24' height='24'></a></p>");
+        QVERIFY(replaceStockReading(window, mediaHtml));
+        browser->document()->addResource(QTextDocument::ImageResource, QUrl("accessible-local-image"), image);
+        const QString mediaRaw = browser->document()->toRawText();
+        const int mediaRevision = browser->document()->revision();
+        const QString object(QChar::ObjectReplacementCharacter);
+        const QMap<QString, QString> targets{{QStringLiteral("Doughnuts cz.jpg"), mediaHref},
+            {unicodeName, unicodeHref}, {QStringLiteral("Authored image alternative"), mediaHref},
+            {QStringLiteral("Authored linked text"), mediaHref}, {ordinaryHref, ordinaryHref}};
+        for (int width : {900, 640}) {
+            window.resize(width, 700); QApplication::processEvents();
+            current = links(); QCOMPARE(current.keys(), targets.keys());
+            QVERIFY(!current.contains(mediaHref)); QVERIFY(!current.contains(unicodeHref));
+            for (auto it = targets.cbegin(); it != targets.cend(); ++it) {
+                auto *child = current.value(it.key()); QVERIFY(child && child->isValid());
+                auto *link = child->hyperlinkInterface(); QVERIFY(link);
+                auto *action = child->actionInterface(); QVERIFY(action);
+                QCOMPARE(child->text(QAccessible::Name), it.key()); QCOMPARE(link->anchor(), it.key());
+                QCOMPARE(child->text(QAccessible::Value), it.value());
+                QCOMPARE(child->text(QAccessible::Description), it.value());
+                QCOMPARE(link->anchorTarget(), it.value());
+                const int first = link->startIndex(), last = link->endIndex();
+                QVERIFY(first >= 0 && last > first && last < browser->document()->characterCount());
+                QTextCursor source(browser->document()); source.setPosition(first);
+                source.setPosition(last, QTextCursor::KeepAnchor);
+                const QString expectedSource = it.key() == QStringLiteral("Authored linked text")
+                    ? object + QStringLiteral("Authored linked text") : object;
+                QCOMPARE(source.selectedText(), expectedSource);
+                for (int position = first; position < last; ++position) {
+                    QTextCursor character(browser->document()); character.setPosition(position);
+                    character.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor);
+                    QCOMPARE(character.charFormat().anchorHref(), it.value());
+                }
+                QVERIFY(action->actionNames().contains(QAccessibleActionInterface::pressAction()));
+                QVERIFY(action->actionNames().contains(QAccessibleActionInterface::setFocusAction()));
+                action->doAction(QAccessibleActionInterface::setFocusAction());
+                QTRY_VERIFY(browser->hasFocus()); QCOMPARE(reader->focusChild(), child);
+                QCOMPARE(browser->textCursor().selectionStart(), first);
+                QCOMPARE(browser->textCursor().selectionEnd(), last);
+                const QRect bounds = child->rect(); QVERIFY(!bounds.isEmpty());
+                const QRect viewport(browser->viewport()->mapToGlobal(QPoint()), browser->viewport()->size());
+                QVERIFY(viewport.contains(bounds));
+                const QRect character = reader->textInterface()->characterRect(first); QVERIFY(!character.isEmpty());
+                QCOMPARE(reader->childAt(character.center().x(), character.center().y()), child);
+                const int activations = activated.size(); action->doAction(QAccessibleActionInterface::pressAction());
+                QCOMPARE(activated.size(), activations + 1);
+                QCOMPARE(activated.last().at(0).toUrl(), QUrl(it.value()));
+            }
+            QCOMPARE(browser->document()->toRawText(), mediaRaw);
+            QCOMPARE(browser->document()->revision(), mediaRevision);
+        }
     }
 
     void readerAccessibilityPreservesTextStylesSelectionAndGraphemeCoordinates() {

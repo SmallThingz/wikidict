@@ -395,20 +395,63 @@ void LibraryDialog::startImport(const QString &file, const QByteArray &hash, qin
     stopCatalogRefresh();
     setBusy(true, QStringLiteral("Preparing dictionary"));
     auto prepared = std::make_shared<std::shared_ptr<LibraryStorage::PreparedImport>>();
+    auto installed = std::make_shared<QList<LibraryStorage::Dictionary>>();
+    auto installedRoot = std::make_shared<QString>();
+    const QString incomingName = QFileInfo(sourceName.isEmpty() ? file : sourceName).fileName();
     const QString root = root_;
     const auto progress = progressCallback();
-    runWorker([this, root, file, hash, bytes, prepared, progress, sourceName] {
+    runWorker([this, root, file, hash, bytes, prepared, installed, installedRoot, progress, sourceName] {
         *prepared = LibraryStorage::prepareImport(root, file, hash, bytes, cancelled_, progress, sourceName);
-    }, [this, prepared, root](const QString &error) {
+        if (LibraryStorage::containsDictionary(root, (*prepared)->dictionary)) {
+            // Existing metadata is optional context, never a condition for
+            // validating the incoming file or borrowing another row's counts.
+            try {
+                *installed = LibraryStorage::installed(root);
+                *installedRoot = QFileInfo(root).canonicalFilePath();
+            } catch (const std::exception &) {
+                installed->clear();
+            }
+        }
+    }, [this, prepared, installed, installedRoot, root, incomingName](const QString &error) {
         if (!error.isEmpty()) { finishOperation(error, error != QStringLiteral("Cancelled")); return; }
         if (cancelled_.load()) { finishOperation(QStringLiteral("Cancelled")); return; }
         const auto &dictionary = (*prepared)->dictionary;
-        if (LibraryStorage::containsDictionary(root, dictionary)
-            && QMessageBox::question(this, QStringLiteral("Replace dictionary?"),
-                QStringLiteral("Replace the installed %1 dictionary with this file? Saved words and learning progress will remain.")
-                    .arg(dictionary.heading), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
-            finishOperation(QStringLiteral("Import cancelled. The installed dictionary is unchanged."));
-            return;
+        if (LibraryStorage::containsDictionary(root, dictionary)) {
+            const auto metrics = [](const LibraryStorage::Dictionary *value) {
+                const QString words = !value || value->words < 0 ? QStringLiteral("Word count unknown")
+                    : QStringLiteral("%1 %2").arg(QLocale().toString(value->words),
+                        value->words == 1 ? QStringLiteral("word") : QStringLiteral("words"));
+                const QString size = !value || value->bytes <= 0 ? QStringLiteral("Size unknown")
+                    : LibraryStorage::formatBytes(value->bytes);
+                return words + QStringLiteral(", ") + size;
+            };
+            const LibraryStorage::Dictionary *previous = nullptr;
+            const QString target = QDir::cleanPath(LibraryStorage::dictionaryPath(root, dictionary));
+            if (!installedRoot->isEmpty() && *installedRoot == QFileInfo(root).canonicalFilePath()) {
+                for (const auto &candidate : *installed) {
+                    const QFileInfo info(candidate.path);
+                    const QString path = QDir::cleanPath(info.absoluteFilePath());
+                    if (candidate.kind != dictionary.kind || candidate.heading != dictionary.heading
+                        || (path != target && path != target + QStringLiteral(".xz"))
+                        || !info.isFile() || info.isSymLink() || info.size() != candidate.bytes) continue;
+                    if (previous) { previous = nullptr; break; }
+                    previous = &candidate;
+                }
+            }
+            QMessageBox confirmation(QMessageBox::Question, QStringLiteral("Replace dictionary?"),
+                QStringLiteral("Replace the installed %1 dictionary?").arg(dictionary.heading),
+                QMessageBox::Yes | QMessageBox::No, this);
+            confirmation.setTextFormat(Qt::PlainText);
+            confirmation.setInformativeText(QStringLiteral("Installed: %1\nIncoming: %2\nFile: %3\n\n"
+                "Saved words and learning progress will remain.\n"
+                "To keep both dictionaries, choose No, then choose another dictionary folder and import this file there.")
+                .arg(metrics(previous), metrics(&dictionary), incomingName.isEmpty() ? QStringLiteral("Name unavailable") : incomingName));
+            confirmation.setDefaultButton(QMessageBox::No);
+            confirmation.setEscapeButton(QMessageBox::No);
+            if (confirmation.exec() != QMessageBox::Yes) {
+                finishOperation(QStringLiteral("Import cancelled. The installed dictionary is unchanged."));
+                return;
+            }
         }
         status_->setText(QStringLiteral("Finishing installation"));
         cancelButton_->setEnabled(false);

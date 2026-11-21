@@ -1368,3 +1368,75 @@ not repeated, and no source-exact numeric pixel geometry or full-corpus claim is
 made. Earlier partial and failed runs retain their original outcomes. The native,
 App, package and scoped genuine GUI evidence support this reviewed source
 projection. No canonical binary was rebuilt.
+
+## ET table bottom source projection
+
+Table-only bottom alignment uses Qt AlignBottom and the actual used line. Top,
+middle and baseline stay distinct. Table ordinal 3 uses DPRa 0x200000; figure,
+cell and isolated-table producer boundaries remain unchanged. RTL cell cursor
+and hit coordinates use the guarded painted origin shared with top alignment.
+
+Native coverage is one current Strut/List/Image method plus two exact prior ET
+passes: 96 full authored-image masks and 48 frames. The signed RTL capture moves
+paint and its independent mask together, retaining document geometry, hit and
+neighbor checks. Native raster evidence alone does not qualify a GUI viewport.
+App coverage is one current image/table control plus two actual catalogue/pair
+and accessibility passes. Its bottom image-off fixture authors 20x20 explicitly;
+the original top fixture still learns intrinsic 1-to-20 within one media card.
+Earlier nine App and 23 native methods remain historical. No full-suite replay.
+
+The media-source accessible-name fallback decodes only an unlabeled filename;
+authored labels, target, range, actions and geometry remain unchanged. The new
+private package joins the qualified application and matching CLI/FFI/header.
+Its corrected continuation carried the successful CMake probes after the old
+checker-path failure. App fixture failure, preclaim bootstrap mismatch and the
+metadata constructor's UNKNOWN transport terminal remain distinct records.
+
+The closed normal GUI flow showed genuine ET Albania's audio table between
+Hääldus and Kohanimi at 640 and 1000, with labels, links and following definition
+visible and no observed crop/overlap. This is source-bound visual acceptance,
+not numeric baseline equivalence. FR kobliha exposed Doughnuts cz.jpg as the
+readable image-link name at both widths; compact native focus and real Tab were
+observed. No external image/audio/source link was activated. The offline frame
+had an encoded empty alt and no caption; that does not establish decorative
+intent or qualify the producer's original absent-alt conversion. NA/SS source
+ownership disagreements and the first NA submit's UNKNOWN cause remain open.
+All 12 process identities closed, and 179 files plus 13 symlinks stayed unchanged.
+
+## Replacement confirmation source projection
+
+The LibraryDialog prompt compares validated incoming metrics with fresh
+identity-matched installed metrics. Unknown or unreadable metadata stays
+explicitly unknown. The incoming filename is plain text and does not infer an
+edition. No remains the default and Escape response; choosing another dictionary
+folder preserves both dictionaries. The single-root commit and saved learning
+state are unchanged.
+
+The existing focused replacement control passed known and unknown metadata,
+wrong identity, literal filename, safe No and accepted replacement state
+preservation, with eight modal frames at 900/640. Two affected files were
+compiled; 14 paid object operands and the existing MOC object were retained.
+The archive, standalone test and GUI were linked. The prior three ET/AX controls
+and native qualification remain their separate earned evidence, without replay.
+The new private package retained the qualified Qt/core roles and completed
+CMake probe observations; it did not rerun those probes.
+
+The closed genuine flow showed installed 520 words/46.4 KiB and incoming
+52 words/5.7 KiB, the complete source basename and preserve-both guidance at
+1000x700 and 640x600, without observed clipping. No was the default. Real Space
+at wide size and Escape at compact size canceled the prompts, preserving the
+exact installed NA file and 72-character Wasser reading. Normal search/Return
+opened SiSwati sawubona; keyboard missing-target navigation and Alt+Left returned
+to Wasser. No replacement was accepted in that genuine flow, and no external
+media link was activated. All 12 process identities closed and the 179 package
+files plus 13 symlinks stayed unchanged.
+
+A separate genuine Afar empty-publication issue remains: its Library uses
+ordinary empty-folder import/download guidance, and a warm switch reports an
+opening failure while correctly preserving the active Wasser reader. The source
+publication is valid and empty. A shared validated empty-release fact and
+truthful warm/cold wording are a separate correction; this milestone neither
+implements that correction nor grants cold-start or global acceptance.
+
+This is a reviewed source projection with scoped private-binary qualification.
+The canonical binary was not rebuilt.

@@ -477,11 +477,12 @@ inline void validateInlineTableDomain(const QJsonObject &table, int tableDepth, 
     const auto style = table.value(QStringLiteral("style")).toObject();
     const auto alignment = style.value(QStringLiteral("vertical_align"));
     if (present(alignment) && (!alignment.isString()
-        || !QStringList{"baseline", "middle", "top"}.contains(alignment.toString())))
+        || !QStringList{"baseline", "middle", "top", "bottom"}.contains(alignment.toString())))
         throw std::runtime_error("invalid inline table alignment");
     if (!tableDisplay(style)) {
-        if (style.value(QStringLiteral("vertical_align")) == QStringLiteral("top"))
-            throw std::runtime_error("top alignment requires an inline table");
+        if (style.value(QStringLiteral("vertical_align")) == QStringLiteral("top")
+            || style.value(QStringLiteral("vertical_align")) == QStringLiteral("bottom"))
+            throw std::runtime_error("top/bottom alignment requires an inline table");
         return;
     }
     const auto array = [](const QJsonValue &value) {
@@ -2303,10 +2304,13 @@ inline void normalizeTables(QTextDocument *document, const QVector<TableInfo> &r
             format.setProperty(tableDisplayProperty, tableDisplay(style));
             if (present(style.value(QStringLiteral("vertical_align")))) {
                 const auto value = style.value(QStringLiteral("vertical_align"));
-                const int alignment = QStringList{"baseline", "middle", "top"}.indexOf(value.toString());
+                const int alignment = QStringList{"baseline", "middle", "top", "bottom"}.indexOf(value.toString());
                 if (!value.isString() || alignment < 0) throw std::runtime_error("invalid inline table alignment");
-                if (alignment == 2 && format.intProperty(tableDisplayProperty) == 0)
-                    throw std::runtime_error("top alignment requires an inline table");
+                if (alignment >= 2 && format.intProperty(tableDisplayProperty) == 0)
+                    throw std::runtime_error("top/bottom alignment requires an inline table");
+                if (alignment == 3
+                    && native->property("_wikidictInlineTableBottomCapability") != QVariant(QStringLiteral("wikidict.inline-table-bottom/1")))
+                    throw std::runtime_error("missing paired inline table bottom layout");
                 format.setProperty(tableVerticalAlignProperty, alignment);
             }
             if (present(style.value(QStringLiteral("line_height"))))

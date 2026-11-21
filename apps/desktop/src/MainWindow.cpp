@@ -2003,7 +2003,14 @@ void ReadingBrowser::syncAccessibleLinks() {
             previousOwner = owner;
         }
     }
-    for (auto *link : accessibleLinks) if (link->name.isEmpty()) link->name = link->href;
+    for (auto *link : accessibleLinks) if (link->name.isEmpty()) {
+        const QUrl target(link->href);
+        if (target.scheme() == QStringLiteral("media-source")) {
+            link->name = target.path(QUrl::FullyDecoded);
+            if (link->name.startsWith(QStringLiteral("File:"))) link->name.remove(0, 5);
+        }
+        if (link->name.isEmpty()) link->name = link->href;
+    }
     std::stable_sort(accessibleLinks.begin(), accessibleLinks.end(), [](const auto *a, const auto *b) {
         return a->start < b->start;
     });

@@ -22,7 +22,7 @@
 +endif()
 --- a/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
 +++ b/tests/auto/gui/text/qtextdocumentlayout/tst_qtextdocumentlayout.cpp
-@@ -3,24 +3,15255 @@
+@@ -3,24 +3,15340 @@
  
  
  #include <QTest>
@@ -11044,7 +11044,8 @@
 +        constexpr int alignProperty = QTextFormat::UserProperty + 0x57d7;
 +        constexpr int heightProperty = QTextFormat::UserProperty + 0x57d8;
 +        constexpr int typographyProperty = QTextFormat::UserProperty + 0x57e4;
-+        for (int dpi : {96, 144}) for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft}) {
++        for (int dpi : {96, 144}) for (const auto direction : {Qt::LeftToRight, Qt::RightToLeft})
++            for (int edgeAlignment : {2, 3}) for (bool tallerSibling : {false, true}) {
 +            QImage device(1500, 1000, QImage::Format_ARGB32_Premultiplied);
 +            device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
 +            QTextDocument doc; doc.setLayoutEnabled(false); doc.documentLayout()->setPaintDevice(&device);
@@ -11069,14 +11070,16 @@
 +                format.setProperty(displayProperty, 2); format.setProperty(alignProperty, align);
 +                return cursor.insertTable(1, 1, format);
 +            };
-+            auto *topTable = insert(2); QVERIFY(topTable);
++            auto *topTable = insert(edgeAlignment); QVERIFY(topTable);
 +            QTextCharFormat topAction; topAction.setAnchor(true); topAction.setAnchorHref("dict:top");
-+            cursor.insertText("Top", topAction); cursor.insertBlock(); cursor.insertText("Second", topAction);
++            cursor.insertText("Top", topAction);
++            if (!tallerSibling) { cursor.insertBlock(); cursor.insertText("Second", topAction); }
 +            cursor = topTable->lastCursorPosition(); cursor.movePosition(QTextCursor::NextBlock);
 +            const int gapFirst = cursor.position(); cursor.insertText(" gap ", action); const int gapLast = cursor.position();
 +            auto *baselineTable = insert(0); QVERIFY(baselineTable);
 +            QTextCharFormat baselineAction; baselineAction.setAnchor(true); baselineAction.setAnchorHref("dict:baseline");
 +            cursor.insertText("Baseline", baselineAction); const auto baselineBlock = cursor.block();
++            if (tallerSibling) { cursor.insertBlock(); cursor.insertText("Taller sibling", baselineAction); }
 +            cursor = baselineTable->lastCursorPosition(); cursor.movePosition(QTextCursor::NextBlock);
 +            const int suffixFirst = cursor.position(); cursor.insertText(" tail", action); const int last = cursor.position();
 +            cursor.insertBlock(); cursor.insertText("Following"); const auto following = cursor.block();
@@ -11118,7 +11121,15 @@
 +                    const qreal ascent = position.value("lineAscent").toDouble();
 +                    const qreal used = position.value("lineHeight").toDouble();
 +                    const auto topBox = layout->tableBoundingRect(topTable), baselineBox = layout->tableBoundingRect(baselineTable);
-+                    QVERIFY(qAbs(topBox.top() - y) < .08);
++                    const QByteArray edgeContext=QStringLiteral("dpi=%1 direction=%2 align=%3 tallerSibling=%4 policy=%5 requested=%6 width=%7 y=%8 used=%9 tableTop=%10 tableBottom=%11 siblingHeight=%12")
++                        .arg(dpi).arg(int(direction)).arg(edgeAlignment).arg(tallerSibling).arg(policy).arg(requested).arg(width)
++                        .arg(y).arg(used).arg(topBox.top()).arg(topBox.bottom()).arg(baselineBox.height()).toUtf8();
++                    if (edgeAlignment == 2) { QVERIFY(qAbs(topBox.top() - y) < .08); }
++                    else {
++                        QVERIFY2(qAbs(topBox.bottom() - y - used) < .08,edgeContext.constData());
++                        if (used > topBox.height() + 1) QVERIFY2(topBox.top() > y + .5,edgeContext.constData());
++                        qInfo().noquote() << edgeContext;
++                    }
 +                    const auto cellLine = baselineBlock.layout()->lineAt(0);
 +                    const qreal baseline = layout->blockBoundingRect(baselineBlock).top() + cellLine.y() + cellLine.ascent();
 +                    const qreal externalAscent = baseline - baselineBox.top();
@@ -11174,7 +11185,7 @@
 +        constexpr int alignProperty = QTextFormat::UserProperty + 0x57d7;
 +        for (int dpi : {96, 144}) for (int kind : {1, 2})
 +            for (Qt::LayoutDirection direction : {Qt::LeftToRight, Qt::RightToLeft}) for (int imageHeight : {4, 120})
-+                for (bool mixed : {false, true}) {
++                for (bool mixed : {false, true}) for (int edgeAlignment : {2, 3}) {
 +                QImage device(1400, 1000, QImage::Format_ARGB32_Premultiplied);
 +                device.setDotsPerMeterX(qRound(dpi / .0254)); device.setDotsPerMeterY(qRound(dpi / .0254));
 +                QTextDocument doc; doc.setLayoutEnabled(false); doc.documentLayout()->setPaintDevice(&device);
@@ -11192,7 +11203,7 @@
 +                    "</tr></table>").arg(imageHeight).arg(licenceText));
 +                auto *table = qobject_cast<QTextTable *>(doc.rootFrame()->childFrames().value(0)); QVERIFY(table);
 +                auto format = table->format(); format.setProperty(ownerProperty, QStringLiteral("wikidict.table-box/1"));
-+                format.setProperty(displayProperty, kind); format.setProperty(alignProperty, 2);
++                format.setProperty(displayProperty, kind); format.setProperty(alignProperty, edgeAlignment);
 +                format.setTopMargin(3); format.setBottomMargin(5); table->setFormat(format);
 +                QTextCursor marker(&doc); marker.setPosition(table->firstPosition() - 1);
 +                QTextListFormat listFormat; listFormat.setStyle(QTextListFormat::ListDisc); listFormat.setIndent(1);
@@ -11202,6 +11213,7 @@
 +                const auto following = tail.block();
 +                auto *layout = qobject_cast<QTextDocumentLayout *>(doc.documentLayout()); QVERIFY(layout);
 +                QCOMPARE(layout->property("_wikidictInlineTableImageTopCapability").toString(), QStringLiteral("wikidict.inline-table-image-top/1"));
++                QCOMPARE(layout->property("_wikidictInlineTableBottomCapability").toString(), QStringLiteral("wikidict.inline-table-bottom/1"));
 +                const QVariantMap flow{{"first", table->firstPosition() - 1}, {"last", table->lastPosition() + 1},
 +                    {"direction", int(direction)}, {"joins", QVariantList{}}, {"parts", QVariantList{
 +                        QVariantMap{{"kind", "frame"}, {"object", table->objectIndex()}}}}};
@@ -11209,7 +11221,7 @@
 +                const QString raw = doc.toRawText(); QTextCursor selection(&doc); selection.select(QTextCursor::Document);
 +                const QString selected = selection.selectedText();
 +                doc.setLayoutEnabled(true);
-+                QRectF firstBox; QImage firstPixels;
++                QRectF firstBox; QImage firstPixels; int phase = 0;
 +                for (int width : {900, 230, 900}) {
 +                    doc.setTextWidth(width); layout->documentSize();
 +                    QCOMPARE(layout->wikidictParagraphBoxLayoutError(), 0);
@@ -11218,7 +11230,10 @@
 +                    const auto box = layout->tableBoundingRect(table);
 +                    const qreal top = position.value("layoutY").toDouble() + position.value("lineY").toDouble();
 +                    const qreal height = position.value("lineHeight").toDouble();
-+                    QVERIFY(qAbs(box.top() - top) < .08);
++                    if (edgeAlignment == 2) { QVERIFY(qAbs(box.top() - top) < .08); }
++                    else QVERIFY2(qAbs(box.bottom() - top - height) < .08,
++                        qPrintable(QString("bottom dpi=%1 kind=%2 direction=%3 image=%4 mixed=%5 width=%6 top=%7 used=%8 boxBottom=%9")
++                            .arg(dpi).arg(kind).arg(int(direction)).arg(imageHeight).arg(mixed).arg(width).arg(top).arg(height).arg(box.bottom())));
 +                    QVERIFY(height + .08 >= box.height());
 +                    const QFontMetricsF metrics(font, &device);
 +                    QVERIFY(height + 1 >= metrics.height());
@@ -11236,27 +11251,92 @@
 +                    QVERIFY(hit >= licence.selectionStart() && hit <= licence.selectionEnd());
 +                    QCOMPARE(layout->anchorAt(point), QStringLiteral("licence"));
 +                    QCOMPARE(doc.toRawText(), raw); QCOMPARE(selection.selectedText(), selected);
-+                    int imageCount = 0; QTextImageFormat image;
++                    int imageCount = 0; QTextImageFormat image; QTextBlock imageBlock; int imagePosition = -1;
 +                    for (auto block = doc.begin(); block.isValid(); block = block.next())
 +                        for (auto it = block.begin(); !it.atEnd(); ++it) if (it.fragment().charFormat().isImageFormat()) {
 +                            ++imageCount; image = it.fragment().charFormat().toImageFormat();
++                            imageBlock = block; imagePosition = it.fragment().position();
 +                        }
 +                    QCOMPARE(imageCount, 1); QCOMPARE(image.width(), 64.0); QCOMPARE(image.height(), qreal(imageHeight));
-+                    QImage pixels(device.size(), device.format()); pixels.fill(Qt::white);
++                    // Isolated RTL tables retain signed document coordinates. Capture
++                    // the same signed origin exposed by the ordinary widget scroll range.
++                    const int captureOriginX = edgeAlignment == 3 ? qFloor(qMin(qreal(0), box.left())) : 0;
++                    QImage pixels(QSize(device.width() - captureOriginX, device.height()), device.format()); pixels.fill(Qt::white);
 +                    pixels.setDotsPerMeterX(device.dotsPerMeterX()); pixels.setDotsPerMeterY(device.dotsPerMeterY());
-+                    QPainter painter(&pixels); doc.drawContents(&painter); painter.end();
++                    QPainter painter(&pixels); if (edgeAlignment == 3) painter.translate(-captureOriginX, 0);
++                    doc.drawContents(&painter); painter.end();
 +                    int green = 0; for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x)
 +                        if (pixels.pixelColor(x, y) == QColor("#20c060")) ++green;
-+                    QVERIFY(green > 0);
++                    if (edgeAlignment == 2) QVERIFY(green > 0);
++                    if (edgeAlignment == 3) {
++                        // QTextImageHandler scales the authored QSize by this device/default-DPI ratio.
++                        const qreal imageScale = qreal(device.logicalDpiY()) / qreal(qt_defaultDpi());
++                        const QSize expectedSize = QSize(64, imageHeight) * imageScale;
++                        QCOMPARE(image.verticalAlignment(), QTextCharFormat::AlignNormal);
++                        QVERIFY(imageBlock.isValid() && imagePosition >= 0);
++                        const auto imageLine = imageBlock.layout()->lineForTextPosition(imagePosition - imageBlock.position());
++                        QVERIFY(imageLine.isValid());
++                        const auto imageOrigin = layout->blockBoundingRect(imageBlock).topLeft();
++                        const qreal imageLeft = imageLine.cursorToX(imagePosition - imageBlock.position());
++                        const qreal imageRight = imageLine.cursorToX(imagePosition - imageBlock.position() + 1);
++                        QVERIFY(qAbs(qAbs(imageRight - imageLeft) - expectedSize.width()) < .08);
++                        const QRectF expectedRect(imageOrigin + QPointF(qMin(imageLeft, imageRight),
++                            imageLine.y() + imageLine.ascent() - expectedSize.height()), QSizeF(expectedSize));
++                        const QRectF canvasInDocument = QRectF(pixels.rect()).translated(captureOriginX, 0);
++                        QImage expected(pixels.size(), pixels.format()); expected.fill(Qt::white);
++                        expected.setDotsPerMeterX(device.dotsPerMeterX()); expected.setDotsPerMeterY(device.dotsPerMeterY());
++                        { QPainter reference(&expected); reference.translate(-captureOriginX, 0);
++                            reference.drawImage(expectedRect, resource, resource.rect()); }
++                        int expectedGreen = 0, mismatches = 0;
++                        for (int y = 0; y < pixels.height(); ++y) for (int x = 0; x < pixels.width(); ++x) {
++                            const bool wanted = expected.pixelColor(x, y) == QColor("#20c060");
++                            const bool actual = pixels.pixelColor(x, y) == QColor("#20c060");
++                            expectedGreen += wanted;
++                            mismatches += wanted != actual;
++                        }
++                        const QString coverage = QStringLiteral("bottom dpi=%1 defaultDpi=%2 scale=%3 kind=%4 direction=%5 image=%6 mixed=%7 width=%8 phase=%9 rect=(%10,%11,%12,%13) actual=%14 expected=%15 mismatches=%16")
++                            .arg(dpi).arg(qt_defaultDpi()).arg(imageScale).arg(kind).arg(int(direction)).arg(imageHeight).arg(mixed)
++                            .arg(width).arg(phase).arg(expectedRect.x()).arg(expectedRect.y()).arg(expectedRect.width()).arg(expectedRect.height())
++                            .arg(green).arg(expectedGreen).arg(mismatches);
++                        const QString capture = QStringLiteral(" captureOriginX=%1 canvas=(%2,%3,%4,%5) table=(%6,%7,%8,%9)")
++                            .arg(captureOriginX).arg(canvasInDocument.x()).arg(canvasInDocument.y()).arg(canvasInDocument.width()).arg(canvasInDocument.height())
++                            .arg(box.x()).arg(box.y()).arg(box.width()).arg(box.height());
++                        qInfo().noquote() << coverage + capture;
++                        const bool invalidCapture = !canvasInDocument.contains(expectedRect) || !box.contains(expectedRect)
++                            || expectedGreen != expectedSize.width() * expectedSize.height() || green != expectedGreen || mismatches != 0;
++                        // Persist signed-canvas and mask evidence before every strict
++                        // containment/coverage assertion, including an unexpected vector.
++                        const bool savedLtr = kind == 2 && direction == Qt::LeftToRight && !mixed;
++                        const bool savedRtl = kind == 1 && direction == Qt::RightToLeft && !mixed;
++                        if (savedLtr || savedRtl || invalidCapture) {
++                            const auto directory = qEnvironmentVariable("WIKIDICT_CONTAINER_FRAME_DIR");
++                            if (!directory.isEmpty()) {
++                                QVERIFY(QDir().mkpath(directory));
++                                const auto stem = savedLtr
++                                    ? QStringLiteral("et-bottom-%1-%2-%3-%4").arg(dpi).arg(imageHeight).arg(width).arg(phase)
++                                    : savedRtl ? QStringLiteral("et-bottom-rtl-%1-%2-%3-%4").arg(dpi).arg(imageHeight).arg(width).arg(phase)
++                                    : QStringLiteral("et-bottom-failure-%1-%2-%3-%4-%5-%6-%7").arg(dpi).arg(kind).arg(int(direction)).arg(imageHeight).arg(mixed).arg(width).arg(phase);
++                                QVERIFY(pixels.save(QDir(directory).filePath(stem + QStringLiteral("-actual.png"))));
++                                QVERIFY(expected.save(QDir(directory).filePath(stem + QStringLiteral("-mask.png"))));
++                            }
++                        }
++                        QVERIFY(green > 0);
++                        QVERIFY2(canvasInDocument.contains(expectedRect), qPrintable(coverage + capture));
++                        QVERIFY(box.contains(expectedRect));
++                        QCOMPARE(expectedGreen, expectedSize.width() * expectedSize.height());
++                        QVERIFY2(green == expectedGreen, qPrintable(coverage));
++                        QVERIFY2(mismatches == 0, qPrintable(coverage));
++                    }
 +                    if (firstBox.isNull()) { firstBox = box; firstPixels = pixels; }
 +                    else if (width == 900) { QCOMPARE(box, firstBox); QCOMPARE(pixels, firstPixels); }
++                    ++phase;
 +                }
-+                // A typed top frame cannot silently become a block Table or an
++                // A typed top/bottom frame cannot silently become a block Table or an
 +                // unknown alignment. Every malformed edit is genuinely retained.
 +                for (bool invalidDisplay : {false, true}) {
 +                    doc.setLayoutEnabled(false); auto bad = format;
 +                    if (invalidDisplay) bad.setProperty(displayProperty, 0);
-+                    else bad.setProperty(alignProperty, 3);
++                    else bad.setProperty(alignProperty, 4);
 +                    table->setFormat(bad); QCOMPARE(table->format(), bad);
 +                    QVERIFY(layout->wikidictSetLogicalFlows({flow})); doc.setLayoutEnabled(true); layout->documentSize();
 +                    QVERIFY(layout->wikidictParagraphBoxLayoutError() != 0);
@@ -11273,7 +11353,7 @@
 +        constexpr int display = QTextFormat::UserProperty + 0x57d6;
 +        constexpr int alignment = QTextFormat::UserProperty + 0x57d7;
 +        constexpr int lineHeight = QTextFormat::UserProperty + 0x57d8;
-+        for (int kind : {1, 2}) for (int align : {0, 1}) {
++        for (int kind : {1, 2}) for (int align : {0, 1, 2, 3}) {
 +            QTextDocument doc; doc.setLayoutEnabled(false);
 +            QFont font; font.setPointSizeF(12); doc.setDefaultFont(font); doc.setDocumentMargin(4);
 +            doc.setHtml(QStringLiteral("<table border='1' cellspacing='0' cellpadding='0'>"
@@ -11309,7 +11389,7 @@
 +                if (align == 1) {
 +                    const QFontMetricsF metrics(font, layout->paintDevice());
 +                    QVERIFY(qAbs(box.center().y() - (baseline - metrics.xHeight() / 2)) < 0.08);
-+                } else {
++                } else if (align == 0) {
 +                    qreal actualBaseline = -1;
 +                    for (int column = 0; column < table->columns(); ++column) {
 +                        const auto cell = table->cellAt(0, column);
@@ -11318,6 +11398,11 @@
 +                        actualBaseline = qMax(actualBaseline, layout->blockBoundingRect(block).top() + line.y() + line.ascent());
 +                    }
 +                    QVERIFY(qAbs(baseline - actualBaseline) < 0.08);
++                } else {
++                    const qreal top=geometry.value("layoutY").toDouble()+geometry.value("lineY").toDouble();
++                    const qreal used=geometry.value("lineHeight").toDouble();
++                    if (align == 2) QVERIFY(qAbs(box.top()-top)<.08);
++                    else QVERIFY(qAbs(box.bottom()-top-used)<.08);
 +                }
 +                const auto first = table->cellAt(0, 0).firstCursorPosition().block();
 +                const auto second = first.next(); QVERIFY(second.isValid());
@@ -15278,7 +15363,7 @@
      void init();
      void cleanup();
      void cleanupTestCase();
-@@ -648,5 +15879,3334 @@
+@@ -648,5 +15964,3334 @@
      }
  }
  
