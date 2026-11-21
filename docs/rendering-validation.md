@@ -41,9 +41,10 @@ syntax and expansion failures. The builder also records
 `unsupported_parser_function` and specific operational failures such as
 `expansion_error:Timeout` or `expansion_error:expand:ErrorName`. When finalizing
 or reopening an edition, the builder rejects timeouts, out-of-memory errors,
-infrastructure failures, and expansion failures named `FileMetadataSnapshotMissing`
-or `InterfaceMessageSnapshotMissing`. For either missing-input error, the diagnostic
-names the affected title. Supply the required snapshot and rebuild the edition.
+infrastructure failures, and expansion failures caused by missing file metadata,
+interface messages or language names (`FileMetadataSnapshotMissing`,
+`InterfaceMessageSnapshotMissing`, `LanguageNameSnapshotMissing`). The diagnostic
+names the affected title. Supply a snapshot covering that lookup and rebuild the edition.
 Other recorded rendering defects remain available for comparison with the source.
 
 ## MediaWiki recovery oracle

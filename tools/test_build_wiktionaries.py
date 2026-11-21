@@ -446,6 +446,9 @@ class PresentationRetryPolicyTests(unittest.TestCase):
     def test_missing_file_metadata_stops_once_only_with_bound_typed_evidence(self):
         self.exercise_missing_build_input('FileMetadataSnapshotMissing')
 
+    def test_missing_language_name_stops_once_only_with_bound_typed_evidence(self):
+        self.exercise_missing_build_input('LanguageNameSnapshotMissing')
+
     def test_matching_presentation_failure_stops_and_preserves(self):
         self.exercise('deterministic')
 
@@ -4221,7 +4224,7 @@ class ExpansionDeadlineTests(unittest.TestCase):
                 self.assertFalse((root / 'final').exists())
 
     def test_missing_expansion_inputs_cannot_be_published_from_saved_reports(self):
-        for source in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing'):
+        for source in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing'):
             for prefix in ('expansion_error:', 'expansion_error:expand:'):
                 with self.subTest(source=source, prefix=prefix), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
@@ -6684,25 +6687,25 @@ class PresentationContinuationTests(PreparedToolsFixture):
 
 
     def test_missing_inputs_attach_one_selected_diagnostic_without_reclassifying_production(self):
-        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+        for error_name in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing'):
             for budget in (1,99):
                 with self.subTest(error=error_name,budget=budget):
                     self.exercise('complete',budget,input_error=error_name)
 
     def test_missing_inputs_continue_shards_only_after_one_complete_bounded_audit(self):
-        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+        for error_name in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing'):
             with self.subTest(error=error_name):
                 self.exercise('complete',99,input_error=error_name,continue_failed_shards=True)
 
     def test_missing_input_audit_old_writer_and_operational_failures_keep_first_failure(self):
-        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+        for error_name in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing'):
             for mode in ('old-input-stop','signal','source-change','tool-change'):
                 for continued in (False,True):
                     with self.subTest(error=error_name,mode=mode,continued=continued):
                         self.exercise(mode,99,input_error=error_name,continue_failed_shards=continued)
 
     def test_missing_inputs_require_explicit_audit_and_safe_joined_retention(self):
-        for error_name in ('FileMetadataSnapshotMissing','InterfaceMessageSnapshotMissing'):
+        for error_name in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing'):
             with self.subTest(error=error_name,selected=False):
                 self.exercise('complete',None,input_error=error_name)
             for mode in ('production-signal','retention-io','retention-ownership'):

@@ -695,6 +695,9 @@ def shard_page_options(value):
 
 SHARD_RETRIES = 3
 SHARD_STATE_VERSION = 3
+MISSING_EXPANSION_INPUT_ERRORS = (
+    'FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing', 'LanguageNameSnapshotMissing',
+)
 AUXILIARY_SNAPSHOT_NAMES = (
     'stylesheet-imports', 'site-info', 'site-statistics-format', 'category-statistics-format', 'commons-data', 'category-stats', 'interface-messages', 'category-tree',
     'wikibase-sitelinks', 'wikibase-entity-text', 'wikibase-entities',
@@ -7343,7 +7346,7 @@ def matching_build_failure(path, invocation_id, invocation_args, start, limit):
         if (row.get('failure_class'),row.get('error_name')) == ('deterministic-presentation','UncompiledPresentation'):
             pass
         elif (row.get('failure_class') == 'deterministic-build-input' and row.get('error_name') in
-              ('InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing')):
+              MISSING_EXPANSION_INPUT_ERRORS):
             worker=row.get('worker');source=row.get('source')
             if (not isinstance(worker,dict) or worker.get('stage')!='expand'
                     or worker.get('error_name')!=row['error_name']
@@ -7516,7 +7519,7 @@ def build_shard_with_retries(tool, native_args, shard, evidence_root, edition, d
             check_identity()
             matched_failure = matching_build_failure(receipt, invocation_id, invocation_args, start, limit)
             deterministic = matched_failure is not None
-            missing_input = deterministic and matched_failure[0] in ('InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing')
+            missing_input = deterministic and matched_failure[0] in MISSING_EXPANSION_INPUT_ERRORS
             write_failure_evidence(evidence / 'classification.json', dict(
                 deterministic_presentation=deterministic and not missing_input,
                 deterministic_build_input=missing_input))
@@ -7947,7 +7950,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
             except (DeterministicPresentationFailure, DeterministicBuildInputFailure) as failure:
                 if presentation_audit_pages is not None and failure.presentation_continuation_safe and failure.error_name in (
                         'UncompiledPresentation','UncompiledTemplate','InvalidPreContext','InvalidHeadingProjection',
-                        'InterfaceMessageSnapshotMissing','FileMetadataSnapshotMissing'):
+                        *MISSING_EXPANSION_INPUT_ERRORS):
                     def check_audit_inputs():
                         if generation is not None:generation.require_unchanged()
                         check_shard_inputs()
@@ -8215,7 +8218,7 @@ def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
                     raise ValueError(f'Operational expansion {kind} at {path}:{line_number}; rebuild this output')
                 if len(parts) == 3 and parts[1] != 'expand':
                     raise ValueError(f'Infrastructure expansion failure at {path}:{line_number}; rebuild this output')
-                if len(parts) in (2, 3) and parts[-1] in ('FileMetadataSnapshotMissing', 'InterfaceMessageSnapshotMissing'):
+                if len(parts) in (2, 3) and parts[-1] in MISSING_EXPANSION_INPUT_ERRORS:
                     raise ValueError(f'Missing expansion input {parts[-1]} for {title!r} at {path}:{line_number}; rebuild with the required snapshot')
             titles = titles_by_namespace[namespace]
             if title in titles:
