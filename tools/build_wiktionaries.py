@@ -8199,23 +8199,27 @@ def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
     titles_by_namespace = defaultdict(set)
     with open_fallback_report(path, 'rt') as lines:
         for line_number, line in enumerate(lines, 1):
-            if not line.strip():
-                raise ValueError(f'Blank fallback report record at {path}:{line_number}')
             try:
                 record = json.loads(line)
             except json.JSONDecodeError as error:
+                if not line.strip():
+                    raise ValueError(f'Blank fallback report record at {path}:{line_number}') from None
                 raise ValueError(f'Invalid fallback report JSON at {path}:{line_number}: {error.msg}') from None
-            namespace = record.get('namespace') if isinstance(record, dict) else None
-            title = record.get('title') if isinstance(record, dict) else None
-            reasons = record.get('reasons') if isinstance(record, dict) else None
+            if not isinstance(record, dict):
+                raise ValueError(f'Invalid fallback page identity at {path}:{line_number}')
+            namespace = record.get('namespace')
+            title = record.get('title')
             if type(namespace) is not int or namespace < 0 or not isinstance(title, str):
                 raise ValueError(f'Invalid fallback page identity at {path}:{line_number}')
-            if not isinstance(reasons, list) or not reasons or any(not isinstance(reason, str) or not reason for reason in reasons):
+            reasons = record.get('reasons')
+            if not isinstance(reasons, list) or not reasons:
                 raise ValueError(f'Invalid fallback reasons at {path}:{line_number}')
-            if len(set(reasons)) != len(reasons):
-                raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
             for reason in reasons:
-                if not reason.startswith('expansion_error:'):
+                if not isinstance(reason, str) or not reason:
+                    raise ValueError(f'Invalid fallback reasons at {path}:{line_number}')
+                previous = reasons_seen.get(reason, 0)
+                reasons_seen[reason] = previous + 1
+                if previous or not reason.startswith('expansion_error:'):
                     continue
                 parts = reason.split(':')
                 if len(parts) in (2, 3) and parts[-1] in ('Timeout', 'OutOfMemory'):
@@ -8225,12 +8229,12 @@ def validate_fallback_report(path, namespace_counts=None, reason_counts=None):
                     raise ValueError(f'Infrastructure expansion failure at {path}:{line_number}; rebuild this output')
                 if len(parts) in (2, 3) and parts[-1] in MISSING_EXPANSION_INPUT_ERRORS:
                     raise ValueError(f'Missing expansion input {parts[-1]} for {title!r} at {path}:{line_number}; rebuild with the required snapshot')
+            if len(reasons) > 1 and len(set(reasons)) != len(reasons):
+                raise ValueError(f'Duplicate fallback reason at {path}:{line_number}')
             titles = titles_by_namespace[namespace]
             if title in titles:
                 raise ValueError(f'Duplicate fallback page at {path}:{line_number}: {namespace}:{title}')
             titles.add(title)
-            for reason in reasons:
-                reasons_seen[reason] = reasons_seen.get(reason, 0) + 1
     if namespace_counts is not None:
         # Commit the output only after the complete report is valid.
         namespace_counts.clear()
