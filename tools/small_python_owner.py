@@ -192,6 +192,7 @@ def run(config):
     supervised_started = time.monotonic()
     watchdog_options = {'max_open_files': profile['max_open_files']} if 'max_open_files' in profile else {}
     code = limits.supervise_watchdog(argv=child, report_path=runtime / 'watchdog.json', wall_seconds=profile['wall_seconds'], memory_limit_bytes=profile['memory_bytes'], address_space_limit_bytes='unlimited', max_tasks=profile['max_tasks'], max_cpus=len(set(profile['cpus'])), disk_paths=[runtime], disk_floor_bytes=profile['disk_floor_bytes'], host_observation=host, child_nice=child_nice, **watchdog_options)
+    supervised_finished = time.monotonic()
     after = authenticate_sources(refs)
     authenticate(config['input_ref'], capture=False)
     save_source_check(runtime, 'source-validation-after01.json', after, compact)
@@ -203,7 +204,8 @@ def run(config):
         with (output / 'result01.json').open('x') as stream:
             json.dump(dict(returncode=code, argv=plan['argv'], cwd=plan['cwd'], environment=plan['env'],
                            temporary_directory=str(absolute_path(plan['env'].get('TMPDIR', str(output / 'tmp')))),
-                           measurement_scope=plan['scope'], elapsed_seconds=time.monotonic() - supervised_started,
+                           measurement_scope=plan['scope'], elapsed_seconds=supervised_finished - supervised_started,
+                           postcheck_seconds=time.monotonic() - supervised_finished,
                            elapsed_scope='direct CLI and watchdog join', stdout=streams['stdout'], stderr=streams['stderr']), stream, indent=2)
             stream.write('\n')
     with (runtime / 'owner-result.json').open('x') as stream:

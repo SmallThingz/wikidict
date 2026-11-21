@@ -240,11 +240,30 @@ class SourceValidationTests(unittest.TestCase):
         plan = dict(qualification_root=str(output), cwd=str(self.root), argv=['/usr/bin/python3'], env={}, scope='unit', source_refs=refs)
         command.write_text(json.dumps(plan))
         config = dict(input_ref=ref(command), output_root=str(output), source_refs=refs, child_nice=max(0, os.getpriority(os.PRIO_PROCESS, 0)), profile=dict(memory_bytes=1, reserve_bytes=1, cpu_seconds=120, wall_seconds=300, max_tasks=64, disk_floor_bytes=1, cpus=[0]))
-        limits = SimpleNamespace(__file__=str(self.path), HostMemoryObservation=lambda policy: SimpleNamespace(sample=lambda: {}), supervise_watchdog=mock.Mock(return_value=0))
+        config['direct_cli'] = True
+        clock = [10.0]
+
+        def supervise(**kwargs):
+            (output / 'tests.stdout').touch()
+            (output / 'tests.stderr').touch()
+            clock[0] += 5.0
+            return 0
+
+        authenticate_sources = owner.authenticate_sources
+        def check_sources(refs):
+            clock[0] += 7.0
+            return authenticate_sources(refs)
+
+        limits = SimpleNamespace(__file__=str(self.path), HostMemoryObservation=lambda policy: SimpleNamespace(sample=lambda: {}), supervise_watchdog=supervise)
         guardian = SimpleNamespace(__file__=str(self.path))
         console = io.StringIO()
         with mock.patch.dict('sys.modules', {'build_resource_limits': limits, 'build_watchdog_guardian': guardian}), mock.patch('sys.path', list(__import__('sys').path)), mock.patch.object(owner.os, 'sched_setaffinity'), mock.patch.object(owner.resource, 'setrlimit'), contextlib.redirect_stdout(console):
-            self.assertEqual(0, owner.run(config))
+            with mock.patch.object(owner.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    mock.patch.object(owner, 'authenticate_sources', side_effect=check_sources):
+                self.assertEqual(0, owner.run(config))
+        result = json.loads((output / 'result01.json').read_text())
+        self.assertEqual(result['elapsed_seconds'], 5.0)
+        self.assertEqual(result['postcheck_seconds'], 7.0)
         runtime = output / 'direct-runtime01'
         self.assertEqual(refs, json.loads((runtime / 'start.json').read_text())['source_refs'])
         compact = json.loads(console.getvalue().split('CHECK ', 1)[1])
