@@ -7920,7 +7920,7 @@ class CompleteParentTupleReplayTests(unittest.TestCase):
 
 
 class ExactSnapshotSelectionTests(unittest.TestCase):
-    def invoke(self, mutation=None, *, exact=True, explicit_interwiki=False, failure=False):
+    def invoke(self, mutation=None, *, exact=True, explicit_interwiki=False, failure=False, missing_inputs=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); key = ('enwiktionary', '20260901')
             name = 'enwiktionary-20260901-pages-meta-current.xml.bz2'
@@ -7953,7 +7953,13 @@ class ExactSnapshotSelectionTests(unittest.TestCase):
             with patch.object(sys, 'argv', argv), patch.object(b, 'safe_worker_budget', return_value=4), \
                  patch.object(b, 'resolve_edition_snapshot_options', side_effect=resolve) as resolver, \
                  patch.object(b, 'build_groups', side_effect=build) as groups, \
-                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+                if missing_inputs:
+                    with self.assertRaises(SystemExit): b.main()
+                    self.assertIn('Selection omits sealed inputs: ' + missing_inputs, errors.getvalue())
+                    resolver.assert_not_called()
+                    groups.assert_not_called()
+                    return
                 refused = exact and mutation is not None and not (mutation == 'interwiki' and explicit_interwiki)
                 if refused or failure:
                     with self.assertRaises(SystemExit): b.main()
@@ -7968,6 +7974,17 @@ class ExactSnapshotSelectionTests(unittest.TestCase):
 
     def test_selected_producer_resolves_once_and_builds_only_exact_paths(self):
         self.invoke()
+
+    def test_exact_sealed_inputs_checked_before_resolving_figure_data(self):
+        providers = {'category-stats.tsv': [10, 'a'*64], 'wikibase-page-links.tsv': [20, 'b'*64],
+                     'file-metadata.tsv': None, 'wikibase-sitelinks.tsv': [282, 'c'*64]}
+        roles = SimpleNamespace(initial_sealed_generation={'path': 'selection.json'},
+                                closed_native_origin={'identity': {'providers': providers}})
+        with patch.object(b, 'parse_retained_native_roles', return_value=roles):
+            self.invoke(missing_inputs='wikibase-sitelinks.tsv')
+            self.invoke(exact=False)  # Discovery may supply the missing selection.
+            providers['wikibase-sitelinks.tsv'] = None
+            self.invoke()
 
     def test_changed_role_path_edition_date_and_implicit_interwiki_refuse_before_build(self):
         for mutation in ('extra', 'missing', 'path', 'date', 'edition', 'interwiki'):
@@ -15169,6 +15186,27 @@ class InitialSealedRestoredIndexTests(unittest.TestCase):
 
 
 class InitialSealedRegistryRoleTests(unittest.TestCase):
+    def test_final_seal_check_identifies_missing_extra_and_changed_inputs(self):
+        factory = InitialSealedGenerationTests()
+        cases = {'omitted': 'Selection omits sealed input: wikibase-sitelinks.tsv',
+                 'extra': 'Selected input is absent from the seal: wikibase-sitelinks.tsv',
+                 'dump': 'Selected dump digest differs from the seal'}
+        for case, message in cases.items():
+            with self.subTest(case=case), tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
+                f = factory.fixture(Path(tmp))
+                if case == 'omitted':
+                    f.seal['identity']['providers']['wikibase-sitelinks.tsv'] = [282, '4'*64]
+                elif case == 'extra':
+                    f.aux['wikibase-sitelinks'] = '4'*64
+                else:
+                    f.seal['identity']['verified_input'][0] = '5'*64
+                factory.reseal_graph(f)
+                with factory.contexts(f)[0], factory.contexts(f)[1], factory.contexts(f)[2]:
+                    with self.assertRaises(ValueError) as failure:
+                        factory.adopt(f)
+                self.assertEqual(str(failure.exception), message)
+                self.assertFalse((f.destination/'state.json').exists())
+
     def test_distinct_namespace_and_language_roles_adopt_without_relabeling(self):
         factory=InitialSealedGenerationTests()
         with tempfile.TemporaryDirectory(dir=b.PROJECT/'.tmp') as tmp:
@@ -15207,13 +15245,13 @@ class InitialSealedRegistryRoleTests(unittest.TestCase):
                 elif mode=='missing-language':del f.aux['language-registry']
                 elif mode=='selected-language':
                     f.aux['language-registry']='9'*64;f.expected['registry_sha256']='9'*64
-                    message='Initial sealed snapshot or dump inputs differ'
+                    message='Selected input digest differs from the seal: language-registry.tsv'
                 elif mode=='interwiki':
                     f.expected['interwiki_map_sha256']='9'*64;f.identity['interwiki_map_sha256']='9'*64
                 else:
                     name='namespace-registry.tsv' if mode=='namespace-provider' else 'language-registry.tsv'
                     f.seal['identity']['providers'][name][1]='9'*64
-                    factory.reseal_graph(f);message='Initial sealed snapshot or dump inputs differ'
+                    factory.reseal_graph(f);message=f'Selected input digest differs from the seal: {name}'
                 with factory.contexts(f)[0],factory.contexts(f)[1],factory.contexts(f)[2]:
                     with self.assertRaisesRegex(ValueError,'^'+message+'$'):factory.adopt(f)
                 self.assertFalse((f.destination/'state.json').exists())

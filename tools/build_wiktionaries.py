@@ -2716,6 +2716,21 @@ def resolve_edition_snapshot_options(manifest, groups, downloads, overrides=None
     return result
 
 
+def preflight_exact_sealed_selection(snapshots, retained_roles):
+    if retained_roles is None or retained_roles.initial_sealed_generation is None:
+        return
+    providers = retained_roles.closed_native_origin['identity']['providers']
+    # Page links come from the closed preparation plan. Other named auxiliary
+    # inputs present in the worker seal must be supplied by an exact selection.
+    missing = []
+    for role in AUXILIARY_SNAPSHOT_NAMES:
+        filename = auxiliary_snapshot_filename(role)
+        if role != 'wikibase-page-links' and role not in snapshots and providers.get(filename) is not None:
+            missing.append(filename)
+    if missing:
+        raise ValueError('Selection omits sealed inputs: ' + ', '.join(sorted(missing)))
+
+
 def require_exact_snapshot_selection(resolved, groups, snapshots, interwiki_snapshot=None):
     """Check the producer's fully validated result against the caller's selection."""
     if not isinstance(resolved, dict) or set(resolved) != set(groups):
@@ -5615,11 +5630,17 @@ def adopt_initial_sealed_workspace(workspace, expected, now_unix, build_identity
                       'wikibase-page-links.tsv': plan['page_links']['sha256'],
                       'page-redirects.tsv': plan['page_redirects']['sha256']})
     snapshots.update(initial_page_language_providers(plan,expected,build_identity,auxiliary_snapshots,providers,native_roles))
-    if (any(value is not None and value[1] != snapshots.get(name) for name, value in providers.items())
-            or any(name not in providers or providers[name] is None or providers[name][1] != value
-                   for name, value in snapshots.items())
-            or seal['identity']['verified_input'][0] != plan['dump']['sha256']):
-        raise ValueError('Initial sealed snapshot or dump inputs differ')
+    for name in sorted(providers.keys() | snapshots.keys()):
+        sealed = providers.get(name)
+        if sealed is None:
+            if name in snapshots:
+                raise ValueError(f'Selected input is absent from the seal: {name}')
+        elif name not in snapshots:
+            raise ValueError(f'Selection omits sealed input: {name}')
+        elif sealed[1] != snapshots[name]:
+            raise ValueError(f'Selected input digest differs from the seal: {name}')
+    if seal['identity']['verified_input'][0] != plan['dump']['sha256']:
+        raise ValueError('Selected dump digest differs from the seal')
     # This existing validator authenticates native mode/toolchain/ABI provenance,
     # source/index/sidecars and physical asset inventory without rehashing payloads.
     if (os.path.lexists(root / '.incomplete')
@@ -9405,6 +9426,8 @@ def main():
             raise ValueError('--compact-phase-provenance requires --retained-native-roles-ref')
         retained_roles=parse_retained_native_roles(a.retained_native_roles_json,a.zig, reference=a.retained_native_roles_ref,
             sharded=a.compress_shards,edition_count=len(groups),jobs=a.jobs)
+        if a.exact_snapshot_selection:
+            preflight_exact_sealed_selection(auxiliary, retained_roles)
         if a.compact_phase_provenance:
             retained_roles.phase_provenance_reference = json.loads(a.retained_native_roles_ref)
     except (ValueError,OSError,KeyError,TypeError) as error:p.error(str(error))
