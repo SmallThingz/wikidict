@@ -114,7 +114,7 @@ def guardian_whole(path, closure, result):
     argv = result['argv']
 
     def option(name):
-        if argv.count(name) != 1 or argv.index(name) + 1 == len(argv):
+        if argv.count(name) != 1 or argv.index(name) + 1 == len(argv) or any(arg.startswith(name + '=') for arg in argv):
             raise ValueError(f'Expected one {name}: {path}')
         return argv[argv.index(name) + 1]
 
@@ -122,6 +122,7 @@ def guardian_whole(path, closure, result):
     manifest_path = Path(option('--input-manifest'))
     manifest_hash = option('--input-manifest-sha256')
     dated_snapshots = None
+    deferred_preflight = False
     catalog_ref = command.get('current_python_catalog')
     if catalog_ref is None and 'selection' in command:
         selection = command['selection']
@@ -139,9 +140,12 @@ def guardian_whole(path, closure, result):
                 or not any(all(ref.get(key) == value for key, value in selection.items()) for ref in refs)):
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
         inputs = json.loads(checked(selection))
+        dated_fields = {'snapshots', 'edition', 'date', 'normal_resolution_validated'}
+        deferred_fields = dated_fields | {'indexed_pages', 'shard_pages', 'original_input_selection',
+                                          'input_validation_deferred_to_normal_whole'}
         if 'manifest' in inputs and command.get('input_step') == 'ordinary_whole':
             manifest_ref = inputs['manifest']
-        elif (set(inputs) in ({'snapshots'}, {'snapshots', 'edition', 'date', 'normal_resolution_validated'})
+        elif (set(inputs) in ({'snapshots'}, dated_fields, deferred_fields)
               and argv.count('--exact-snapshot-selection') == 1):
             if 'edition' in inputs:
                 dated_snapshots = inputs
@@ -156,6 +160,26 @@ def guardian_whole(path, closure, result):
             if len(matches) != 1:
                 raise ValueError(f'Expected one guarded input manifest: {path}')
             manifest_ref = matches[0]
+            if set(inputs) == deferred_fields:
+                original = inputs['original_input_selection']
+                if original not in refs:
+                    raise ValueError(f'Unguarded deferred input selection: {path}')
+                plan = json.loads(checked(original))
+                if (not isinstance(plan, dict) or inputs['input_validation_deferred_to_normal_whole'] is not True
+                        or inputs['normal_resolution_validated'] is not False
+                        or plan.get('normal_input_validation_pending') is not True or plan.get('manifest') != manifest_ref
+                        or not isinstance(plan.get('snapshots'), dict) or 'interwiki-map' not in snapshots
+                        or plan.get('interwiki') != snapshots['interwiki-map']
+                        or plan['snapshots'] != {k: v for k, v in snapshots.items() if k != 'interwiki-map'}):
+                    raise ValueError(f'Deferred whole-edition plan differs: {path}')
+                for field in ('indexed_pages', 'shard_pages', 'presentation_audit_pages'):
+                    if type(plan.get(field)) is not int or plan[field] <= 0:
+                        raise ValueError(f'Deferred whole-edition plan differs: {path}')
+                if (any(type(inputs[key]) is not int or inputs[key] != plan[key] for key in ('indexed_pages', 'shard_pages'))
+                        or str(plan['shard_pages']) != option('--shard-pages')
+                        or str(plan['presentation_audit_pages']) != option('--presentation-audit-pages')):
+                    raise ValueError(f'Deferred whole-edition plan differs: {path}')
+                deferred_preflight = True
         else:
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
         if (manifest_ref not in refs or manifest_ref['path'] != str(manifest_path)
@@ -171,7 +195,10 @@ def guardian_whole(path, closure, result):
             # link target and the filename. A separate copy is insufficient.
             if name == 'build_disk_limits':
                 key = hashlib.sha256(os.fsencode(ref['path'])).hexdigest()[:16]
-                alias = path.parents[2] / 'guarded-source-aliases01' / f'source-{key}.py'
+                # Retried builds can reuse the original exact selection and
+                # its pinned alias without copying the package to each attempt.
+                alias_root = Path(selection['path']).parent if deferred_preflight else path.parents[2]
+                alias = alias_root / 'guarded-source-aliases01' / f'source-{key}.py'
                 if ((str(alias), ref['bytes'], ref['sha256']) in guarded
                         and alias.is_symlink() and os.readlink(alias) == ref['path']):
                     checked(ref)
@@ -195,8 +222,10 @@ def guardian_whole(path, closure, result):
             or not any(all(ref.get(k) == builder[k] for k in ('path', 'bytes', 'sha256'))
                        for ref in command['source_refs'])):
         raise ValueError(f'Not a direct selected Builder: {path}')
-    forbidden = ('--limit-pages', '--page-limit', '--presentation-audit-limit', '--presentation-audit-pages',
+    forbidden = ('--limit-pages', '--page-limit', '--presentation-audit-limit',
                  '--expander-only', '--prepare-only', '--indexed-page-outputs')
+    if not deferred_preflight:
+        forbidden += ('--presentation-audit-pages',)
     if any(arg.split('=', 1)[0] in forbidden for arg in argv):
         raise ValueError(f'Partial build cannot be indexed as whole: {path}')
     edition = option('--wikis')
@@ -214,7 +243,7 @@ def guardian_whole(path, closure, result):
         raise ValueError(f'Ambiguous input date: {path}')
     date = dates.pop()
     if dated_snapshots is not None and (dated_snapshots['edition'] != edition or dated_snapshots['date'] != date
-                                        or dated_snapshots['normal_resolution_validated'] is not True):
+                                        or (not deferred_preflight and dated_snapshots['normal_resolution_validated'] is not True)):
         raise ValueError(f'Dated snapshot selection differs from the whole-edition input: {path}')
     output = Path(option('--output')) / edition / date
     # Diagnostics can span an entire edition. Verify the stream without
@@ -232,7 +261,7 @@ def guardian_whole(path, closure, result):
     return {**closure, 'whole_edition_selected': True, 'page_limit': None,
             'presentation_audit_limit': None, 'edition_output': str(output),
             'failed_builder_import': diagnostic is not None and failed_builder_import(diagnostic, builder, catalog['modules']),
-            'failed_child_only': failed_child_only,
+            'failed_child_only': failed_child_only, 'deferred_preflight': deferred_preflight,
             'command_returncode': code, 'ordinary_producer_passed': code == 0}
 
 
@@ -290,6 +319,8 @@ def read_execution(base, path, guardian=False):
                         and last_phase.get('status') == 'failure')
     failed_before_build = (not phases and not closure['ordinary_producer_passed'] and result['returncode'] != 0
                            and (preflight_failed or (guardian and closure['failed_builder_import'])))
+    if guardian and closure['deferred_preflight'] and (phases or not preflight_failed or result['returncode'] == 0):
+        raise ValueError(f'Deferred validation lacks a failed pre-production snapshot check: {path}')
     status = end['status'] if end else 'no-terminal-production-clock'
     return dict(edition=edition, attempt=attempt_key(base, path),
                 command_exit=result['returncode'], ordinary_build_passed=bool(closure['ordinary_producer_passed']),

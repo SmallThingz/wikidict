@@ -65,7 +65,7 @@ class AttemptIndexTests(unittest.TestCase):
 
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
                        input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
-                       snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None):
+                       snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None, extra_refs=()):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
@@ -91,6 +91,7 @@ class AttemptIndexTests(unittest.TestCase):
                         modules = {**catalog['modules'], Path(selected['path']).stem: selected}
                         command['argv'][command['argv'].index('--python-tooling-json') + 1] = json.dumps({**catalog, 'modules': modules})
                         command['source_refs'].insert(0, guarded)
+                command['source_refs'].extend(extra_refs)
                 command_ref = record(root / 'command.json', command)
                 start = dict(input_authority=command_ref, source_refs=command['source_refs'])
                 if selected_catalog:
@@ -192,6 +193,29 @@ class AttemptIndexTests(unittest.TestCase):
                 freeze(options, input_selection=True, snapshot=snapshot, guard_snapshot=guarded)
                 with self.assertRaisesRegex(ValueError, 'Guarded snapshots differ'):
                     read_execution(base, path, guardian=True)
+            interwiki = record(root / 'interwiki.tsv', b'interwiki')
+            plan = dict(manifest=manifest, snapshots={'language-registry': snapshot}, interwiki=interwiki,
+                        indexed_pages=4000, shard_pages=200, presentation_audit_pages=50, normal_input_validation_pending=True)
+            original = record(root / 'whole-inputs.json', plan)
+            deferred = dict(context, normal_resolution_validated=False, input_validation_deferred_to_normal_whole=True,
+                            original_input_selection=original, indexed_pages=4000, shard_pages=200,
+                            snapshots={**plan['snapshots'], 'interwiki-map': interwiki})
+            options = (*flags, '--interwiki-map-snapshot', interwiki['path'], '--shard-pages', '200', '--presentation-audit-pages', '50')
+            auth = dict(input_selection=True, snapshot=snapshot, snapshot_context=deferred, extra_refs=[original, interwiki])
+            freeze(options, **auth)
+            with self.assertRaisesRegex(ValueError, 'lacks a failed pre-production'):
+                read_execution(base, path, guardian=True)
+            preflight = dict(edition='blkwiktionary', date='20261001', phase='selected_snapshot_resolution', scope='pre_edition')
+            stdout = record(run / 'tests.stdout', b''.join(b'BUILD_PHASE ' + json.dumps({**preflight, **event}).encode() + b'\n'
+                            for event in [dict(event='start'), dict(event='end', status='failure')]))
+            freeze(options, **auth, exit_code=2, watchdog_code=2, detached=True)
+            row = read_execution(base, path, guardian=True)
+            self.assertEqual((row['production_status'], row['production_seconds'], row['closure_join']),
+                             ('failed-before-production', '', 'original-terminal-unknown'))
+            freeze((*options[:-1], '51'), **auth, exit_code=2, watchdog_code=2)
+            with self.assertRaisesRegex(ValueError, 'Deferred whole-edition plan differs'):
+                read_execution(base, path, guardian=True)
+            stdout = record(run / 'tests.stdout', log)
             freeze(selected_catalog=True)
             self.assertEqual(read_execution(base, path, guardian=True)['closure_join'], 'reaped')
             closure = json.loads(path.read_bytes())
