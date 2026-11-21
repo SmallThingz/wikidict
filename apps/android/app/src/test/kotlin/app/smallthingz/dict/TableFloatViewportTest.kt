@@ -61,7 +61,7 @@ class TableFloatViewportTest {
         for (style in listOf<TableStyle?>(null, base.copy(floatSide = null), base.copy(floatSide = TableFloatSide.Left),
             base.copy(margins = null), base.copy(width = StyleWidth(StyleWidthUnit.Percent, 70f)),
             base.copy(padding = margins), base.copy(display = TableDisplay.Table),
-            base.copy(verticalAlign = InlineBoxVerticalAlign.Middle), base.copy(lineHeight = ComputedLineHeight(1f)),
+            base.copy(verticalAlign = TableVerticalAlign.Middle), base.copy(lineHeight = ComputedLineHeight(1f)),
             base.copy(margins = null, marginValues = ContainerMargins(ContainerMargin.Length(px(0f)),
                 ContainerMargin.Auto, ContainerMargin.Length(px(0f)), ContainerMargin.Auto),
                 containingDirection = TableContainingDirection.Ltr))) {

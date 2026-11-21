@@ -19,7 +19,7 @@ object BlobDecoder {
         val ownerGeometry = magicVersion == 89 || extendedFeatures
         val ownerGeometryFlags = if (cellForegroundHeader) r.u32().also {
             // Retain the implemented lower-word union; held Figure capabilities stay unknown.
-            require(it and 0x1f0000L != 0L && it and 0x1ff3ffL == it &&
+            require(it and 0x3f0000L != 0L && it and 0x3ff3ffL == it &&
                 (it and 0xa0000L == 0L || it and 4L != 0L) &&
                 (it and 32768L == 0L || it and 16384L != 0L && it and 1L != 0L)) {
                 "Invalid wide presentation feature flags"
@@ -38,6 +38,7 @@ object BlobDecoder {
         r.rubyAnnotationMargins = ownerGeometryFlags and 0x40000 != 0
         r.intrinsicLinesLayouts = ownerGeometryFlags and 0x80000 != 0
         r.resolvedStyleBorders = ownerGeometryFlags and 0x100000 != 0
+        r.tableBottomAlignment = ownerGeometryFlags and 0x200000 != 0
         r.positionedContainers = positionedContainers
         r.tableMinimumWidths = ownerGeometryFlags and 512 != 0
         r.columnLayouts = ownerGeometryFlags and 4096 != 0
@@ -211,6 +212,7 @@ object BlobDecoder {
         require(r.rubyAnnotationMargins == r.hasRubyAnnotationMargins) { "Ruby annotation margins feature does not match payload" }
         require(r.intrinsicLinesLayouts == r.hasIntrinsicLinesLayout) { "Intrinsic inline lines feature does not match payload" }
         require(r.resolvedStyleBorders == r.hasResolvedStyleBorder) { "Resolved style border feature does not match payload" }
+        require(r.tableBottomAlignment == r.hasTableBottomAlignment) { "Table bottom alignment feature does not match payload" }
         require(!r.buffer.hasRemaining()) { "Trailing presentation data" }
         val entry = Entry(title, display, kind, language, code, styledSections, navigationReferences, preamble, media,
             etymologySections = etymologySections.toSet(), organization = organization.takeIf { r.containers },
@@ -246,6 +248,8 @@ object BlobDecoder {
         var hasIntrinsicLinesLayout = false
         var resolvedStyleBorders = false
         var hasResolvedStyleBorder = false
+        var tableBottomAlignment = false
+        var hasTableBottomAlignment = false
         var positionedContainers = false
         var hasPositionedContainers = false
         var tableMinimumWidths = false
@@ -1313,8 +1317,12 @@ object BlobDecoder {
             val display = if (extension and 1 != 0)
                 TableDisplay.entries.getOrNull(byte()) ?: error("Unknown table display") else null
             val align = if (extension and 2 != 0)
-                InlineBoxVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline table alignment") else null
-            require(containerFonts || align != InlineBoxVerticalAlign.Top) { "Inline table top alignment requires M" }
+                TableVerticalAlign.entries.getOrNull(byte()) ?: error("Unknown inline table alignment") else null
+            require(containerFonts || align != TableVerticalAlign.Top) { "Inline table top alignment requires M" }
+            if (align == TableVerticalAlign.Bottom) {
+                require(tableBottomAlignment) { "Inline table bottom alignment requires its DPRa capability" }
+                hasTableBottomAlignment = true
+            }
             val lineHeight = if (extension and 4 != 0) {
                 val value = buffer.float
                 val basis = when (byte()) {

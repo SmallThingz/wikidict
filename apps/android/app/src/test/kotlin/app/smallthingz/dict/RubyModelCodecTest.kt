@@ -7763,6 +7763,24 @@ class RubyModelCodecTest {
         assertEquals("Cell target", plain.target)
     }
 
+    @Test fun bottomTableAlignmentRequiresItsWideHeaderAndAnActualInlineTable() {
+        val table = Table(emptyList(), listOf(listOf(Cell(listOf(text("Helifail (Ameerika)")), false, 1, 1))),
+            style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = TableVerticalAlign.Bottom))
+        fun document(value: Table, version: Char, flags: Int): ByteArray {
+            val wire = Wire(version, flags).apply { paragraphOverride = { positionedBlock(Block("table", 0, emptyList(), table = value)) } }
+            return wire.document(emptyList(), Sink.Body)
+        }
+        val bytes = document(table, 'a', 0x200000)
+        assertArrayEquals(byteArrayOf(68, 80, 82, 97, 0, 0, 32, 0), bytes.copyOf(8))
+        assertEquals(table, read(bytes).sections.single().blocks.single().table)
+        reject("Missing table feature", changed32(bytes, 4, 0x40000))
+        reject("Unused ruby feature", changed32(bytes, 4, 0x240000))
+        reject("Old format with bottom", document(table, 'M', 0))
+        val top = table.copy(style = table.style!!.copy(verticalAlign = TableVerticalAlign.Top))
+        reject("Unused table feature", document(top, 'a', 0x200000))
+        assertEquals(top, read(document(top, 'M', 0)).sections.single().blocks.single().table)
+    }
+
     @Test fun resolvedBordersRejectMalformedFieldsCapabilitiesAndIndependentHighFeatureDebt() {
         val original = resolvedBorderTable(resolvedBorderMixed(), null)
         val wire = Wire('a', 0x100000).apply { paragraphOverride = { positionedBlock(resolvedBorderBlock(original), "strictResolved") } }

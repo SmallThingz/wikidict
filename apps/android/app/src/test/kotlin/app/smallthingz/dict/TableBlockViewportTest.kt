@@ -42,7 +42,7 @@ class TableBlockViewportTest {
             box.copy(marginValues = null, containingDirection = null),
             box.copy(margins = zeroEdges, marginValues = null, containingDirection = null),
             box.copy(floatSide = TableFloatSide.Left), box.copy(display = TableDisplay.Table),
-            box.copy(verticalAlign = InlineBoxVerticalAlign.Middle), box.copy(collapse = TableCollapse.Collapse),
+            box.copy(verticalAlign = TableVerticalAlign.Middle), box.copy(collapse = TableCollapse.Collapse),
             box.copy(lineHeight = ComputedLineHeight(1f)))
         for (style in invalid) assertThrows(IllegalArgumentException::class.java) { original.copy(boxStyle = style) }
         for (number in listOf(-1f, Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY)) {
@@ -60,7 +60,7 @@ class TableBlockViewportTest {
             grid.copy(width = StyleWidth(StyleWidthUnit.Px, 0f)), grid.copy(margins = zeroEdges),
             grid.copy(marginValues = margins, containingDirection = TableContainingDirection.Ltr),
             grid.copy(floatSide = TableFloatSide.Right), grid.copy(clear = FigureClear.None),
-            grid.copy(display = TableDisplay.Table), grid.copy(verticalAlign = InlineBoxVerticalAlign.Middle))
+            grid.copy(display = TableDisplay.Table), grid.copy(verticalAlign = TableVerticalAlign.Middle))
         for (style in invalid) assertThrows(IllegalArgumentException::class.java) { original.copy(gridStyle = style) }
     }
 

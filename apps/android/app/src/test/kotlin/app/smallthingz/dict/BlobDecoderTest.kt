@@ -187,7 +187,7 @@ class BlobDecoderTest {
         value.display?.let { fields["display"] = when (it) {
             TableDisplay.Table -> "table"; TableDisplay.InlineBlock -> "inline_block"; TableDisplay.InlineTable -> "inline_table"
         } }
-        value.verticalAlign?.let { fields["vertical_align"] = if (it == InlineBoxVerticalAlign.Middle) "middle" else "baseline" }
+        value.verticalAlign?.let { fields["vertical_align"] = it.name.lowercase() }
         value.lineHeight?.let { fields["line_height"] = linkedMapOf("value" to it.value,
             "font_scale_basis" to if (it.fontScaleBasis == FontScaleBasis.NormalBody) "normal_body" else "context") }
     }
@@ -352,7 +352,7 @@ class BlobDecoderTest {
     @Test fun kProjectionRetainsTableFlowComputedBasisAndImageThemeWithoutInventingAbsentFields() {
         val plain = TableStyle(collapse = TableCollapse.Collapse)
         assertEquals(mapOf("collapse" to "collapse"), producerTableStyle(plain))
-        val styled = plain.copy(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+        val styled = plain.copy(display = TableDisplay.InlineBlock, verticalAlign = TableVerticalAlign.Middle,
             lineHeight = ComputedLineHeight(1f))
         assertEquals(mapOf("collapse" to "collapse", "display" to "inline_block", "vertical_align" to "middle",
             "line_height" to mapOf("value" to 1f, "font_scale_basis" to "context")), producerTableStyle(styled))
@@ -360,7 +360,7 @@ class BlobDecoderTest {
             producerTableStyle(styled.copy(lineHeight = ComputedLineHeight(.8f, FontScaleBasis.NormalBody)))["line_height"])
         assertEquals("table", producerTableStyle(plain.copy(display = TableDisplay.Table))["display"])
         assertEquals("inline_table", producerTableStyle(plain.copy(display = TableDisplay.InlineTable))["display"])
-        assertEquals("baseline", producerTableStyle(plain.copy(verticalAlign = InlineBoxVerticalAlign.Baseline))["vertical_align"])
+        assertEquals("baseline", producerTableStyle(plain.copy(verticalAlign = TableVerticalAlign.Baseline))["vertical_align"])
         val image = InlineImage("Map.png")
         fun projected(value: InlineImage) = producerSpan(Span("text", "", image = value))["image"] as Map<*, *>
         assertEquals(mapOf("file" to "Map.png"), projected(image))

@@ -104,7 +104,7 @@ class InlineTableWidthDesignTest {
 class InlineTableDomainDesignTest {
     private fun table(spans: List<Span> = listOf(Span("text", "Label"))) = Table(emptyList(),
         listOf(listOf(Cell(spans, false, 1, 1))), style = TableStyle(display = TableDisplay.InlineBlock,
-            verticalAlign = InlineBoxVerticalAlign.Middle, lineHeight = ComputedLineHeight(1f)))
+            verticalAlign = TableVerticalAlign.Middle, lineHeight = ComputedLineHeight(1f)))
     private fun block(table: Table) = Block("list_item", 1, emptyList(), listPath = "*", table = table)
     private fun entry(table: Table, media: List<Media> = emptyList(), references: List<Reference> = emptyList()) =
         Entry("table", emptyList(), "article", "English", "en", listOf(Section(1, "Body", listOf(block(table)))),
@@ -288,7 +288,7 @@ class InlineTableImageTopTest {
         val audio = Span("link", "Listen", "File:Voice.ogg", classes = "wikidict-media")
         val value = Table(emptyList(), listOf(listOf(Cell(listOf(imageSpan, Span("text", "Label")), false, 1, 1),
             Cell(listOf(audio), false, 1, 1))), style = TableStyle(display = TableDisplay.InlineBlock,
-                verticalAlign = InlineBoxVerticalAlign.Top))
+                verticalAlign = TableVerticalAlign.Top))
         return Entry("word", emptyList(), "language", "English", "en", listOf(Section(2, "Body",
             listOf(Block("list_item", 1, emptyList(), listPath = "*", table = value)))), emptyList(), media = media)
     }
@@ -299,7 +299,7 @@ class InlineTableImageTopTest {
         val bytes = fixture(image = true, align = 2)
         val decoded = read(bytes)
         val value = table(decoded)
-        assertEquals(InlineBoxVerticalAlign.Top, value.style!!.verticalAlign)
+        assertEquals(TableVerticalAlign.Top, value.style!!.verticalAlign)
         assertEquals("*", decoded.sections.single().blocks.single().listPath)
         assertEquals(InlineImage("Speaker.svg", 32, 20, "", "Speaker", border = true),
             value.rows.single().single().spans.single().image)
@@ -375,20 +375,38 @@ class InlineTableImageTopTest {
 
     @Test fun externalTopUsesWholeTableBoxAndParentStrutWithoutMovingMarkerBaseline() {
         for (display in listOf(null, TableDisplay.Table)) assertThrows(IllegalArgumentException::class.java) {
-            TableStyle(display = display, verticalAlign = InlineBoxVerticalAlign.Top)
+            TableStyle(display = display, verticalAlign = TableVerticalAlign.Top)
         }
         assertEquals(InlineTableLinePixels(60, 15, 0, 0), inlineTableLinePixels(20, 15f, 60, 58f,
-            InlineBoxVerticalAlign.Top, 20, 15))
+            TableVerticalAlign.Top, 20, 15))
         assertEquals(InlineTableLinePixels(20, 15, 0, 0), inlineTableLinePixels(20, 15f, 5, 4f,
-            InlineBoxVerticalAlign.Top, 20, 15))
+            TableVerticalAlign.Top, 20, 15))
         assertEquals(InlineTableLinePixels(63, 58, 0, 43), inlineTableLinePixels(20, 15f, 60, 58f,
-            InlineBoxVerticalAlign.Baseline, 20, 15))
+            TableVerticalAlign.Baseline, 20, 15))
         assertEquals(InlineTableLinePixels(60, 32, 0, 17), inlineTableLinePixels(20, 15f, 60, 32f,
-            InlineBoxVerticalAlign.Middle, 20, 15))
+            TableVerticalAlign.Middle, 20, 15))
         assertEquals(InlineTableLinePixels(23, 18, 0, 0), inlineTableLinePixels(20, 15f, 5, 4f,
-            InlineBoxVerticalAlign.Top, 22, 18))
+            TableVerticalAlign.Top, 22, 18))
         assertEquals(InlineTableLinePixels(0, 0, 0, 0), inlineTableLinePixels(0, 0f, 0, 0f,
-            InlineBoxVerticalAlign.Top))
+            TableVerticalAlign.Top))
+    }
+
+    @Test fun bottomAlignedTableSharesTheLineBottomWithTheParentAndItsMarker() {
+        for (display in listOf(null, TableDisplay.Table)) assertThrows(IllegalArgumentException::class.java) {
+            TableStyle(display = display, verticalAlign = TableVerticalAlign.Bottom)
+        }
+        assertEquals(InlineTableLinePixels(20, 15, 15, 0),
+            inlineTableLinePixels(20, 15f, 5, 4f, TableVerticalAlign.Bottom, 20, 15))
+        assertEquals(InlineTableLinePixels(60, 55, 0, 40),
+            inlineTableLinePixels(20, 15f, 60, 0f, TableVerticalAlign.Bottom, 20, 15))
+        // The list marker descends farther than the parent strut.
+        assertEquals(InlineTableLinePixels(41, 15, 36, 11),
+            inlineTableLinePixels(20, 15f, 5, 4f, TableVerticalAlign.Bottom, 30, 4))
+        // A marker above the strut moves the line origin as well.
+        assertEquals(InlineTableLinePixels(23, 18, 18, 0),
+            inlineTableLinePixels(20, 15f, 5, 4f, TableVerticalAlign.Bottom, 22, 18))
+        assertEquals(InlineTableLinePixels(0, 0, 0, 0),
+            inlineTableLinePixels(0, 0f, 0, 0f, TableVerticalAlign.Bottom))
     }
 
     @Test fun mPreferredCellWidthPrecedesMinimumAndTopWithoutGrantingPrivateFields() {

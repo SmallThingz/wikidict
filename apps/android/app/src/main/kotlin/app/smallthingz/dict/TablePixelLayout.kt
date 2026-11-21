@@ -443,13 +443,11 @@ internal fun inlineTableMetrics(natural: TableRenderMetrics, grid: TableGrid, mi
 
 internal data class InlineTableLinePixels(val height: Int, val baseline: Int, val tableTop: Int, val markerTop: Int)
 
-/** One atomic table and the existing list marker share the parent's strut.
- * Top alignment includes the complete table margin box and minimizes the line
- * height. If the table is taller, keep the strut at the top of that line; CSS
- * does not prescribe a unique baseline in that case (CSS 2.2 section 10.8).
+/** The strut and the baseline-aligned list marker define the ordinary line.
+ * A line-edge-aligned table grows that line away from the edge it shares.
  */
 internal fun inlineTableLinePixels(strutHeight: Int, strutBaseline: Float, tableHeight: Int,
-    tableBaseline: Float, align: InlineBoxVerticalAlign?, markerHeight: Int? = null,
+    tableBaseline: Float, align: TableVerticalAlign?, markerHeight: Int? = null,
     markerBaseline: Int = 0): InlineTableLinePixels {
     val limit = Int.MAX_VALUE / 8
     require(strutHeight in 0..limit && tableHeight in 0..limit &&
@@ -458,11 +456,14 @@ internal fun inlineTableLinePixels(strutHeight: Int, strutBaseline: Float, table
         kotlin.math.abs(strutBaseline) <= limit && kotlin.math.abs(tableBaseline) <= limit)
     val markerTop = kotlin.math.round(strutBaseline - markerBaseline).toInt()
     val ordinaryTop = minOf(0, if (markerHeight == null) 0 else markerTop)
-    val gridTop = if (align == InlineBoxVerticalAlign.Top) ordinaryTop
-        else kotlin.math.round(strutBaseline - tableBaseline).toInt()
+    val ordinaryBottom = maxOf(strutHeight, if (markerHeight == null) 0 else markerTop + markerHeight)
+    val gridTop = when (align) {
+        TableVerticalAlign.Top -> ordinaryTop
+        TableVerticalAlign.Bottom -> ordinaryBottom - tableHeight
+        else -> kotlin.math.round(strutBaseline - tableBaseline).toInt()
+    }
     val top = minOf(ordinaryTop, gridTop)
-    val bottom = maxOf(strutHeight, gridTop + tableHeight,
-        if (markerHeight == null) 0 else markerTop + markerHeight)
+    val bottom = maxOf(ordinaryBottom, gridTop + tableHeight)
     return InlineTableLinePixels(bottom - top, kotlin.math.round(strutBaseline - top).toInt(),
         gridTop - top, markerTop - top)
 }

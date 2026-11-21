@@ -1096,7 +1096,8 @@ private fun InlineTableLine(block: Block, onLink: (EntryLink) -> Unit, path: Str
         val grid = measurables.last().measure(loose.copy(maxWidth = available))
         val baseline = strut.firstBaseline
         val gridBaseline = when (table.style?.verticalAlign) {
-            InlineBoxVerticalAlign.Middle -> grid.height / 2f + xHeight / 2f
+            TableVerticalAlign.Middle -> grid.height / 2f + xHeight / 2f
+            TableVerticalAlign.Top, TableVerticalAlign.Bottom -> 0f
             else -> {
                 val line = if (table.style?.display == TableDisplay.InlineTable)
                     grid[androidx.compose.ui.layout.FirstBaseline] else grid[androidx.compose.ui.layout.LastBaseline]

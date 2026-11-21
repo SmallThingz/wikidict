@@ -1894,7 +1894,7 @@ class RendererDeviceTest {
         val inline = Table(emptyList(), listOf(listOf(
             Cell(listOf(Span("text", "เสียง:")), false, 1, 1),
             Cell(listOf(audio), false, 1, 1), Cell(listOf(details), false, 1, 1))),
-            style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+            style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = TableVerticalAlign.Middle,
                 lineHeight = ComputedLineHeight(1f), collapse = TableCollapse.Collapse, margins = edges))
         val entry = Entry("Inline table", emptyList(), "language", "English", "en",
             listOf(Section(2, "", listOf(Block("table", 0, emptyList(), table = floated),
@@ -1992,7 +1992,7 @@ class RendererDeviceTest {
             val table = Table(emptyList(), listOf(listOf(
                 Cell(listOf(Span("text", "Audio:")), false, 1, 1),
                 Cell(listOf(Span("link", "Listen", "File:Atomic.wav", classes = "wikidict-media")), false, 1, 1))),
-                style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Middle,
+                style = TableStyle(display = TableDisplay.InlineBlock, verticalAlign = TableVerticalAlign.Middle,
                     lineHeight = ComputedLineHeight(1f)))
             val richCell = Table(emptyList(), listOf(listOf(Cell(emptyList(), false, 1, 1,
                 blocks = listOf(Block("table", 0, emptyList(), table = floatTable),
@@ -2109,6 +2109,54 @@ class RendererDeviceTest {
         }
     }
 
+    @Test fun pronunciationListMarkerMovesToTheBottomOfTheIntactGrid() {
+        val align = mutableStateOf(TableVerticalAlign.Top)
+        val width = mutableStateOf(560)
+        val file = "en-us-Albania.ogg"
+        val row = listOf(Cell(listOf(Span("text", "Helifail (Ameerika)")), false, 1, 1),
+            Cell(listOf(Span("link", file, "File:$file", classes = "wikidict-media")), false, 1, 2),
+            Cell(listOf(Span("link", "fail", "Image:$file", fontScale = .8f,
+                fontScaleBasis = FontScaleBasis.NormalBody)), false, 1, 1))
+        val settings = AppSettings(allowImages = false, allowAudio = false, collapseOtherSections = false, collapseDetails = false)
+        try {
+            compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    DictTheme("light") {
+                        val grid = Table(emptyList(), listOf(row), style = TableStyle(display = TableDisplay.InlineBlock,
+                            verticalAlign = align.value, lineHeight = ComputedLineHeight(1f), collapse = TableCollapse.Collapse))
+                        val block = Block("list_item", 1, emptyList(), listPath = "*", table = grid)
+                        val entry = Entry("Albania", emptyList(), "language", "inglise", "en",
+                            listOf(Section(2, "Hääldus", listOf(block))), emptyList(), media = listOf(Media(file, "audio", file)))
+                        Box(Modifier.width(width.value.dp).height(600.dp)) { EntryView(entry, false, {}, onLink = {}, settings = settings) }
+                    }
+                }
+            } }
+            val threeColumns = SemanticsMatcher("Pronunciation table") {
+                it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag)?.startsWith("compiled-table-grid") == true &&
+                    it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.CollectionInfo)?.columnCount == 3
+            }
+            fun grid() = compose.onNode(threeColumns, useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            fun marker() = compose.onNodeWithText(blockPrefix(Block("list_item", 1, emptyList(), listPath = "*")),
+                useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            for (viewport in listOf(560, 300)) {
+                compose.runOnIdle { align.value = TableVerticalAlign.Top; width.value = viewport }
+                compose.waitForIdle()
+                val topGrid = grid()
+                val topMarker = marker()
+                compose.runOnIdle { align.value = TableVerticalAlign.Bottom }
+                compose.waitForIdle()
+                val bottomGrid = grid()
+                val bottomMarker = marker()
+                assertEquals(topGrid.width, bottomGrid.width, 1f)
+                assertEquals(topGrid.height, bottomGrid.height, 1f)
+                assertTrue("The table must be taller than the marker to distinguish its two line edges", topGrid.height > topMarker.height + 8f)
+                assertTrue("The bottom-aligned marker must move down relative to the grid",
+                    bottomMarker.top - bottomGrid.top > topMarker.top - topGrid.top + 4f)
+                assertTrue("The marker remains inside the grid's line", bottomMarker.bottom <= bottomGrid.bottom + 1f)
+            }
+        } finally { compose.activityRule.scenario.onActivity { it.setContent {} } }
+    }
+
     @Test fun inlineImageTopTableRemeasuresLoadedIntrinsicAndKeepsOneAudioOwner(): Unit = runBlocking {
         // Controlled resources exercise the existing reader path, not a live Commons availability claim.
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -2166,7 +2214,7 @@ class RendererDeviceTest {
                 Cell(listOf(image, Span("text", " Hoa Ky")), false, 1, 1),
                 Cell(listOf(Span("link", "Listen", "File:Inline top.wav", classes = "wikidict-media")), false, 1, 1))),
                 geometry = TableGeometry(cellSpacing = 0, cellPadding = 0), style = TableStyle(
-                    display = TableDisplay.InlineBlock, verticalAlign = InlineBoxVerticalAlign.Top,
+                    display = TableDisplay.InlineBlock, verticalAlign = TableVerticalAlign.Top,
                     margins = StyleEdges(zero, zero, zero, zero), border = StyleBorder.None))
             val block = Block("list_item", 1, emptyList(), listPath = "*", table = table)
             val entry = Entry("Image and audio", emptyList(), "language", "English", "en",

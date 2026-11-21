@@ -1046,6 +1046,7 @@ enum class TableFloatSide { Left, Right }
 enum class TableDisplay { Table, InlineBlock, InlineTable }
 enum class TableContainingDirection { Ltr, Rtl }
 enum class InlineBoxVerticalAlign { Baseline, Middle, Top }
+enum class TableVerticalAlign { Baseline, Middle, Top, Bottom }
 enum class CellVerticalAlign { Top, Middle }
 /** Computed once at the table origin; a cell font change does not rescale it. */
 data class ComputedLineHeight(val value: Float, val fontScaleBasis: FontScaleBasis = FontScaleBasis.Context) {
@@ -1070,7 +1071,7 @@ data class TableCornerRadii(val topLeft: StyleLength, val topRight: StyleLength,
 data class TableStyle(val background: String? = null, val border: StyleBorder? = null,
     val collapse: TableCollapse? = null, val margins: StyleEdges? = null, val floatSide: TableFloatSide? = null,
     val width: StyleWidth? = null, val padding: StyleEdges? = null, val clear: FigureClear? = null,
-    val display: TableDisplay? = null, val verticalAlign: InlineBoxVerticalAlign? = null,
+    val display: TableDisplay? = null, val verticalAlign: TableVerticalAlign? = null,
     val lineHeight: ComputedLineHeight? = null, val marginValues: ContainerMargins? = null,
     val containingDirection: TableContainingDirection? = null, val cornerRadii: TableCornerRadii? = null,
     val minWidth: StyleWidth? = null) {
@@ -1085,7 +1086,9 @@ data class TableStyle(val background: String? = null, val border: StyleBorder? =
             numericCornerDirection && containingDirection != null) { "Table automatic margins require containing direction" }
         marginValues?.let(::validateTableAutoMargins)
         require(!isInline || floatSide == null) { "Inline table cannot also float" }
-        require(verticalAlign != InlineBoxVerticalAlign.Top || isInline) { "Top alignment requires an inline table" }
+        require(isInline || (verticalAlign != TableVerticalAlign.Top && verticalAlign != TableVerticalAlign.Bottom)) {
+            "Line-edge alignment requires an inline table"
+        }
         require(background == null || Regex("#[0-9a-f]{6}").matches(background)) { "Invalid table background RGB" }
         require(cornerRadii == null || !isInline && (border == StyleBorder.None || border is StyleBorder.Solid) &&
             collapse != TableCollapse.Collapse) { "Table corners require explicit uniform separate-border paint" }
