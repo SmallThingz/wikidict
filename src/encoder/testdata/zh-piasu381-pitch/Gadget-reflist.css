@@ -1,0 +1,53 @@
+.reflist ol.references {
+	list-style-type: var( --reflist-list-style, decimal );
+	font-size: var( --reflist-font-size, inherit );
+}
+
+.reflist {
+	column-count: var( --reflist-column-count, auto );
+	column-width: var( --reflist-column-width, auto );
+}
+
+.reflist.nobacklinks .mw-cite-backlink,
+.reflist.nobacklinks li > a {
+	display: none;
+}
+
+.reflist:has( ol.references > li:nth-child( 11 ) ) {
+	--reflist-column-width: 30em;
+}
+
+.vector-feature-limited-width-clientpref-1 .reflist:has( ol.references > li:nth-child( 11 ) ),
+.skin-minerva .reflist:has( ol.references > li:nth-child( 11 ) ) {
+	--reflist-column-width: 27em;
+}
+
+.reflist.has-columns ol.references,
+.reflist:has( ol.references > li:nth-child( 11 ) ) ol.references {
+	margin-top: 0;
+}
+
+.reflist.has-columns ol.references > li,
+.reflist:has( ol.references > li:nth-child( 11 ) ) ol.references > li {
+	break-inside: avoid;
+}
+
+.reflist ol.references .mw-subreference-list > li::marker {
+	content: counter( mw-ref-details-parent, var( --reflist-marker-style, decimal ) ) '.' counter( mw-ref-details-child, decimal ) '. ';
+}
+
+.reflist.no-sub-markers ol.references .mw-subreference-list > li::marker {
+	content: none;
+}
+
+/* stylelint-disable-next-line selector-type-no-unknown */
+_::-webkit-full-page-media,
+.reflist ol.references > li > ol.mw-subreference-list > li::before {
+	content: counter( mw-ref-details-parent, var( --reflist-marker-style, decimal ) ) '.' counter( mw-ref-details-child, decimal ) '.\00a0';
+}
+
+/* stylelint-disable-next-line selector-type-no-unknown */
+_::-webkit-full-page-media,
+.reflist.no-sub-markers ol.references > li > ol.mw-subreference-list > li::before {
+	content: none;
+}

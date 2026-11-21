@@ -5111,6 +5111,24 @@ fn observeSourceElements(sizing: ?presentation_document.FigureSizingSource, sour
         observed.source.ptr == source.ptr and observed.source.len == source.len;
 }
 
+fn bindOwnerNativeSourceClasses(source: []const u8, proof: ?*const presentation_document.NativeSourceClassProof,
+    fragment: *presentation_document.SourceFragment) void
+{
+    const range = if (fragment.parser_output_range) |value| value else return;
+    fragment.parser_output_range.?.native_source_class_proof = null;
+    const held = proof orelse return;
+    const prepared = fragment.missing orelse MissingText.untracked(fragment.source);
+    if (source.ptr != held.source.bytes.ptr or source.len != held.source.bytes.len or
+        range.page.ptr != source.ptr or range.page.len != source.len or fragment.original_start != range.start or
+        range.start > source.len or fragment.source.len > source.len - range.start or
+        fragment.source.ptr != source[range.start..].ptr or prepared.bytes.ptr != range.prepared.ptr or
+        prepared.bytes.len != range.prepared.len or fragment.pre.initial_block_pre or
+        fragment.pre.initial.len != 0 or fragment.pre.trailing.len != 0) return;
+    const current: @import("presentation_compile.zig").NativeSourceClassRange = .{ .proof = held, .start = range.start, .prepared = prepared };
+    if (!presentation_document.nativeSourceClassRangeCurrent(current, prepared, held.profile)) return;
+    fragment.parser_output_range.?.native_source_class_proof = held;
+}
+
 fn bindOwnerTextClassTransition(source: []const u8, original: []const u8, numbered: []const u8, transition: ?presentation_document.ClassScopeSourceTransition, fragment: *presentation_document.SourceFragment) void {
     const proof = if (fragment.parser_output_range) |*value| value else return;
     if (proof.original_page != null) return;
@@ -5809,6 +5827,11 @@ fn processMain(
     const source_missing = try presentation_document.preparePageTocSourceWithMissingAlloc(page_allocator, body_source.missing orelse MissingText.transformedFrom(numbered.missing, body_source.source), codes.behavior_switches);
     const source = source_missing.bytes;
     defer if (source.ptr != body_source.source.ptr) page_allocator.free(source);
+    // Only this complete final native page may issue a source class inventory.
+    // Language-owner concatenation and Renderer fragment APIs cannot do so.
+    const native_source_class_proof = if (codes.table_styles) |profile|
+        try presentation_document.nativeSourceClassProofAlloc(page_allocator, source_missing, profile) else null;
+    defer if (native_source_class_proof) |proof| proof.deinit(page_allocator);
     stats.main_pages += 1;
 
     if (fallbacks.expansion_error and source.len == 0) {
@@ -6601,7 +6624,7 @@ fn processMain(
         unchangedTableSourceProjection(codes.figure_sizing, raw_missing, source_missing, &direct_table_copy) else null;
     const final_source_projection: ?*const presentation_document.SourceElementProjection =
         if (numbered.source_element_projection) |*proof| proof else if (direct_table_projection) |*proof| proof else null;
-    const needs_source_fragments = final_source_projection != null or pre_observation.scopes.len != 0 or
+    const needs_source_fragments = native_source_class_proof != null or final_source_projection != null or pre_observation.scopes.len != 0 or
         (if (codes.figure_sizing) |sizing| sizing.text_class_scope != null or sizing.resolve_image_map_no_link_fn != null else false) or
         (codes.table_styles != null and (heading_observation.page_root_wiki_table_openings.len != 0 or heading_observation.page_top_level_wiki_table_openings.len != 0));
     const quote_cuts: PageQuoteCuts = if (needs_source_fragments)
@@ -6699,6 +6722,7 @@ fn processMain(
         }
         if (codes.figure_sizing != null or codes.table_styles != null or local_targets_selected) for (fragments) |*fragment| {
             bindOwnerRootTableSource(source, source_raw, heading_observation, fragment);
+            bindOwnerNativeSourceClasses(source, native_source_class_proof, fragment);
             bindOwnerTextClassTransition(source, source_raw, numbered.source, numbered.class_scope_transition, fragment);
             bindOwnerSourceElements(source, source_raw, final_source_projection, fragment);
         };
@@ -23881,6 +23905,53 @@ test "source banner partition keeps a physical preamble unowned only after prote
     try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tainted, &raw, &rendered, true));
     codes.source_banner_fn = null;
     try std.testing.expect(!sourceBannerPartitionWithPrelude(codes, raw_source, tracked, &raw, &rendered, true));
+}
+
+
+test "Writer native source class custody discharges absent ancestor without observed page authority" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    const title = "native source class owner";
+    const source = "==English==\n<div style='position:relative;white-space:nowrap;overflow:visible'>" ++
+        "<div style='position:absolute;left:20px;top:30px;width:120px;height:20px;line-height:20px;font-size:18px;text-align:center'>[[Kept|body]]</div></div>";
+    var entries: [2]blobs.presentation_types.Entry = undefined;
+    for ([_][]const u8{ "", ".mw-geshi div{font-family:monospace!important}" }, 0..) |css, arm| {
+        var styles = try @import("table_style_profile.zig").parseForTargetAlloc(a, css, .screen); defer styles.deinit();
+        var codes = TestLanguages.codes(); codes.table_styles = &styles;
+        const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/native-class-{d}", .{ tmp.sub_path, arm });
+        var writer = try Writer.init(std.testing.io, a, root); defer writer.deinit();
+        writer.language_codes = codes; writer.stats.pages_seen += 1;
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, source, source, null);
+        const stats = try writer.finish(codes);
+        try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+        entries[arm] = (try LeadingRegionFixture.entry(a, root, "English", title)) orelse return error.TestUnexpectedResult;
+    }
+    try std.testing.expectEqualDeep(entries[0], entries[1]);
+    const Check = struct {
+        fn walk(allocator: std.mem.Allocator, values: []const blobs.presentation_types.Block, text: *std.ArrayList(u8), actions: *usize, containers: *usize) anyerror!void {
+            for (values) |value| {
+                if (value.container) |container| {
+                    containers.* += 1;
+                    try walk(allocator, container.blocks, text, actions, containers);
+                } else {
+                    try std.testing.expect(value.table == null and value.figure == null and value.flow == null);
+                    for (value.spans) |span| {
+                        try text.appendSlice(allocator, span.text); try text.appendSlice(allocator, span.trail);
+                        if (span.target.len != 0) {
+                            actions.* += 1;
+                            try std.testing.expectEqualStrings("Kept", span.target);
+                            try std.testing.expectEqualStrings("body", span.text);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    var text: std.ArrayList(u8) = .empty; var actions: usize = 0; var containers: usize = 0;
+    for (entries[1].sections) |section| try Check.walk(a, section.blocks, &text, &actions, &containers);
+    try std.testing.expectEqualStrings("body", text.items);
+    try std.testing.expectEqual(@as(usize, 1), actions);
+    try std.testing.expectEqual(@as(usize, 2), containers);
 }
 
 const SsBoldBannerFixture = struct {

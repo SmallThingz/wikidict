@@ -75,6 +75,8 @@ pub const SourceParentCapsule = struct {
     document_url: []const u8,
     styles: DirectStyles,
     response_sha256: [64]u8,
+    namespace_sha256: [32]u8,
+    root_language: []const u8,
     body_skin_responsive: ?bool,
 };
 const Prefix = struct {
@@ -443,7 +445,8 @@ pub const Registry = struct {
             const capsule = try a.create(SourceParentCapsule);
             capsule.* = .{ .page = owned, .prefix = prefix, .response = html, .document_url = try a.dupe(u8, url),
                 .styles = .{ .responses = bodies, .receipt = try a.dupe(u8, record.styles.receipt) },
-                .response_sha256 = digest(html), .body_skin_responsive = observed.body_skin_responsive };
+                .response_sha256 = digest(html), .namespace_sha256 = ns.source_sha256,
+                .root_language = observed.root_language, .body_skin_responsive = observed.body_skin_responsive };
             entry.* = .{ .page = owned, .capsule = capsule };
         }
         return .{ .arena = arena, .entries = entries, .direct_entries = direct_entries,

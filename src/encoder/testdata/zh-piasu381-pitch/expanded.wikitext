@@ -1,0 +1,13 @@
+==日语==
+
+===词源===
+*来自<span class="etyl">[[w:英语|英語]][[Category:派生自英語的日語詞|ひあす'']]</span> <i class="Latn mention" lang="en">-{[[:piercing#英語|-{piercing}-]]}-</i>，自<i class="Latn mention" lang="en">-{[[:pierce#英語|-{pierce}-]]}-</i>。
+
+===读音===
+* 
+<ul><li><span class="usage-label-accent"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[w:東京方言|東京]]</span><span class="ib-brac label-brac">)</span></span> <span lang="ja" class="Jpan"><span style="border-top:1px solid;position:relative;padding:1px;">ピ<span style="position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;"></span></span>アス</span> <span class="Latn"><samp>[píꜜàsù]</samp></span> ([[頭高型]] – [1])</li><li>[[Wiktionary:國際音標|國際音標]]<sup>([[Appendix:日語發音|幫助]])</sup>:&#32;<span class="IPA nowrap">[pʲia̠sɨ]</span>[[Category:有國際音標的日語詞|ひあす'']]</li></ul>[[Category:音高重音為頭高型（東京）的日語詞|ひあす'']][[Category:有國際音標且帶有音高重音的日語詞|ひあす'']]
+
+===名词===
+[[Category:日語片假名|ヒアス'']]<span class="headword-line"><strong class="Jpan headword" lang="ja">-{ピアス}-</strong> [[Wiktionary:日語轉寫|•]] (<span class="tr" dir="ltr">-{<span class="Latn" lang="ja">-{[[:piasu#日語|-{piasu}-]]}-</span>}-</span>)&nbsp;<i></i></span>[[Category:日語詞元|ひあす'']][[Category:日語名詞|ひあす'']][[Category:有詞條的頁面|ピアス]][[Category:有1個詞條的頁面|ピアス]]
+
+# [[耳环]]，[[耳坠]]

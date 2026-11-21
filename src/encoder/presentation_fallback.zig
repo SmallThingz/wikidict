@@ -6,6 +6,7 @@ pub const Report = struct {
     unsupported_element: bool = false,
     unrepresented_image_map: bool = false,
     unrepresented_figure: bool = false,
+    unrepresented_inline_geometry: bool = false,
     render_limit: bool = false,
     template_presentation: bool = false,
     missing_template: bool = false,

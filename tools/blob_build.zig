@@ -3154,12 +3154,26 @@ const ExpansionSlot = struct {
                             };
                     }
                 }
+                if (languages.lookupSourceRootLanguage(self.job.page_id, self.job.revision_id, page_namespace,
+                    self.job.title, self.job.source, expanded.source,
+                    .{ .source_core_revision = self.page_language_core, .normal_no_target = true, .interface_message = false })) |root| {
+                    if (codes.figure_sizing) |*sizing| if (codes.table_styles) |styles| {
+                        const ns = codes.namespace_catalog orelse { self.compile_failure = error.InvalidNamespace; return; };
+                        if (!std.mem.eql(u8, &root.namespace_sha256, &ns.source_sha256)) {
+                            self.compile_failure = error.InvalidPageLanguageSource; return;
+                        }
+                        sizing.table_containing_direction = figure_page_observations.bindSourceRootLanguageAlloc(self.arena.allocator(),
+                            expanded.source, ns, self.job.title, root.root_language, styles, sizing.table_containing_direction) catch |err| {
+                                self.compile_failure = err; return;
+                            };
+                    };
+                }
             }
         }
         // Install source-token attributes only after the final same-page Book
         // and direct-parent capabilities have been selected. No parent or
         // geometry authority is created by the ordinary title-index provider.
-        if (codes.figure_sizing) |*sizing| if (sizing.table_containing_direction) |*direction| {
+        if (codes.figure_sizing) |*sizing| if (sizing.table_containing_direction) |*direction| if (!direction.root_language_only) {
             if (!direction.intrinsic_viewport and !direction.prefix_viewport) if (self.source_anchor_provider) |provider| {
                 if (direction.source.ptr != expanded.source.ptr or direction.source.len != expanded.source.len or direction.anchors != null) {
                     self.compile_failure = error.InvalidSourceLinkBinding;

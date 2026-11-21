@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	iowiktionary
+# dump-date	20261001
+# content-language	io
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Specala	Special	first-letter	0	0	0		compile_only	virtual_namespace	Speciala
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Debato	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+2	Uzanto	User	first-letter	1	0	0		compile_only	standard_build_input	Uzantino	Uzulo	Vikipediisto
+3	Uzanto Debato	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Uzanta diskuto	Uzantino Debato	Uzula diskuto	Vikipediista diskuto
+4	Wikivortaro	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT	Wiktionary
+5	Wikivortaro Debato	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wikivortaro diskuto	Wiktionary talk
+6	Arkivo	File	case-sensitive	0	0	0		compile_only	standard_build_input	Image	Imajo
+7	Arkivo Debato	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Dosiera diskuto	Image talk	Imajo Debato
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input	MediaVikio
+9	MediaWiki Debato	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaVikia diskuto	MediaWiki diskuto
+10	Shablono	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Modelo
+11	Shablono Debato	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Modelo Debato	Ŝablona diskuto
+12	Helpo	Help	case-sensitive	1	0	0		compile_only	standard_build_input
+13	Helpo Debato	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Helpa diskuto
+14	Kategorio	Category	case-sensitive	0	0	0		compile_only	standard_build_input
+15	Kategorio Debato	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Kategoria diskuto
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modulo	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Modulo-Diskuto	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace

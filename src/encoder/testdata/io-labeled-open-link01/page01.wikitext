@@ -1,0 +1,357 @@
+==[[Ido]]==
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*Semantiko: [[Kategorio:Idala sufixi|a]] [[Kategorio:Idala sufixi inverse|a]]
+: (1) La ''-a'' esas la dezinenco, gramatikala finalo, qua igas '''adjektivi'''. 
+: (2) Anke multa '''geografiala nomi''' finas per ''-a'' konservante la Latina formo historiala. Tala vorti esas '''substantivi''', ne adjektivi. 
+*Exemplaro: → [[Special:QuoLigasHike/.a|hike]] (e la geografiala nomi → [[:Kategorio:Geografiala nomi|hike]]).
+===[[Wikivortaro:Fonto-lingui|Fonto-lingui]]===
+{| border=0 
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Angliana]]: [[adjectival]] [[ending]]
+*[[Franciana]]: [[finale]] [[de]] [[l']][[adjectif]]
+*[[Germaniana]]: [[Eigenschaftswort]]
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hispaniana]]: [[sufijo]] para formar el [[adjetivo]]
+*[[Italiana]]: [[
+*[[Rusiana]]: [[
+|}
+|}
+|}
+|}
+===<sup><small>Altra lingui</small></sup> A===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Afrikansa]]: 
+*[[Albaniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Arabiana]]: 
+*[[Armeniana]]: 
+*[[Asturiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> B===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Baskiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Bosniana]]: 
+*[[Bulgariana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> C===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Chekiana]]: 
+*[[Chiniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Chuvashiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> D===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Daniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> E===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Erzya-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Esperanto]]: 
+*[[Estoniana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> F===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Finlandana]]: [[adjektiivi]]n [[pääte]]; [[maantieteellinen|maantieteellisissä]] [[nimi|nimissä]] [[substantiivi]]n [[pääte]].
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> G===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Galisiana]]: 
+*[[Georgiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Grekiana]]:
+|}
+|}
+===<sup><small>Altra lingui</small></sup> H===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hebrea]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hungariana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> I===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Indoneziana]]: 
+*[[Interlingua]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Islandana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> J===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Japoniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> K===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Kataluniana]]: 
+*[[Komi-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Koreana]]: 
+*[[Kroatiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> L===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Laponiana]]: 
+*[[Latina]]: 
+*[[Latviana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Lituaniana]]: 
+*[[Luxemburgiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> M===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Mari-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Moksha-linguo]]: 
+*[[Mongoliana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> N===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Nederlandana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Norvegiana]] ([[bm]]): 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> O===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Ocitaniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> P===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Persiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Poloniana]]: 
+*[[Portugalana]]: [[final]] [[do]] [[adjetivo]]
+|}
+|}
+===<sup><small>Altra lingui</small></sup> Q===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Quechua-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> R===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Rumaniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> S===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Slovakiana]]: 
+*[[Sloveniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Suediana]]: 
+*[[Swahilia]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> T===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Tagaloga]]: 
+*[[Tatar-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Turkiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> U===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Udmurtiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Ukrainana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> V===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Vietnamana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Volapük]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> W===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Walsana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> X===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Xhosa-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> Y===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> Z===
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Zulu-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}

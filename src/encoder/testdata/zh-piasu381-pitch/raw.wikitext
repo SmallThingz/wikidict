@@ -1,0 +1,12 @@
+==日语==
+
+===词源===
+*来自{{der|ja|en|piercing}}，自{{mention|en|pierce}}。
+
+===读音===
+* {{ja-pron|acc=1}}
+
+===名词===
+{{ja-noun}}
+
+# [[耳环]]，[[耳坠]]

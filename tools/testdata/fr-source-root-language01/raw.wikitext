@@ -1,0 +1,22 @@
+== {{langue|cs}} ==
+=== {{S|étymologie}} ===
+: Étymologie obscure ; peut-être{{R|DÉT}} apparenté à ''{{lien|kobyla|cs}}'' (« jument ») avec le sens de « crotte de cheval », par analogie de forme ; voir le sens culinaire de ''{{lien|crottin|fr}}''.
+
+=== {{S|nom|cs}} ===
+{{cs-décl-nom-f-ha|rad=kobli}}
+[[Image:Doughnuts cz.jpg|thumb]]
+'''kobliha''' {{pron|kɔblɪɦa|cs}} {{f}}
+# {{pâtisseries|cs}} [[beignet#fr|Beignet]] tchèque.
+#* {{exemple|lang=cs|Sklenice džusu může podle druhu obsahovat stejné množství cukru jako tři a půl '''koblihy'''.}}
+
+==== {{S|synonymes}} ====
+* {{lien|koblížek|cs}}
+
+=== {{S|prononciation}} ===
+* {{écouter|Brno-venkov (Tchéquie)||lang=cs|audio=LL-Q9056 (ces)-Ghost4Man-kobliha.wav}}
+
+=== {{S|voir aussi}} ===
+* {{WP|lang=cs}}
+
+=== {{S|références}} ===
+{{Références}}

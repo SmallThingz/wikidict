@@ -9,7 +9,7 @@ const NormalContext = language.NormalContext;
 // every projected parent has been released; no mmap or local Registry pointer
 // is retained by a published source-parent capability.
 pub const Registry = struct {
-    const DirectEntry = struct { capsule: *const language.SourceParentCapsule, parent: *const table_direction.SourceParentTextPage };
+    const DirectEntry = struct { capsule: *const language.SourceParentCapsule, parent: ?*const table_direction.SourceParentTextPage };
     metadata: language.Registry,
     backing: A,
     projection: ?*std.heap.ArenaAllocator = null,
@@ -35,12 +35,14 @@ pub const Registry = struct {
         const entries = try a.alloc(DirectEntry, metadata.direct_entries.len);
         for (metadata.direct_entries, entries) |entry, *destination| {
             const capsule = entry.capsule;
-            const parent = table_direction.sourceParentTextPageAlloc(a, ns, capsule.prefix, capsule.response,
+            // A language-only capsule does not claim any served stylesheet or parent CSS.
+            const parent = if (capsule.styles.responses.len == 0 and capsule.styles.receipt.len == 0) null else
+                table_direction.sourceParentTextPageAlloc(a, ns, capsule.prefix, capsule.response,
                 @intCast(capsule.response.len), &capsule.response_sha256, capsule.page.id, capsule.page.revision,
                 capsule.document_url, .{ .responses = capsule.styles.responses, .receipt = capsule.styles.receipt }) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory, else => return invalid,
                 };
-            if (parent.body_skin_responsive != capsule.body_skin_responsive) return invalid;
+            if (parent) |selected| if (selected.body_skin_responsive != capsule.body_skin_responsive) return invalid;
             destination.* = .{ .capsule = capsule, .parent = parent };
         }
         return .{ .metadata = metadata, .backing = backing, .projection = projection,
@@ -56,6 +58,16 @@ pub const Registry = struct {
     }
     pub fn capturedSourceMatches(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8, raw: []const u8, expanded: []const u8) bool {
         return self.metadata.capturedSourceMatches(page_id, revision_id, ns, title, raw, expanded);
+    }
+    // Same direct-record identity checks, without converting a rendered root
+    // observation into API page-language metadata or requiring served CSS.
+    // Existing style-bearing parent records keep their original consumer path.
+    pub fn lookupSourceRootLanguage(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8,
+        raw: []const u8, expanded: []const u8, normal: NormalContext) ?*const language.SourceParentCapsule
+    {
+        const capsule = self.metadata.lookupSourceCapsule(page_id, revision_id, ns, title, raw, expanded, normal) orelse return null;
+        if (capsule.styles.responses.len != 0 or capsule.styles.receipt.len != 0) return null;
+        return capsule;
     }
     pub fn lookupSourceParent(self: *const Registry, page_id: u64, revision_id: u64, ns: i32, title: []const u8,
         raw: []const u8, expanded: []const u8, normal: NormalContext) ?*const table_direction.SourceParentTextPage
@@ -226,4 +238,91 @@ test "writer source projection propagates initial allocation failure and consume
     const metadata = try language.Registry.init(a, DirectGetFixture.packet, "", null, &ns);
     var failing = std.testing.FailingAllocator.init(a, .{ .fail_index = 0 });
     try std.testing.expectError(error.OutOfMemory, Registry.materialize(failing.allocator(), metadata, &ns));
+}
+
+
+const FrSourceRootLanguageControl = struct {
+    const normal: NormalContext = .{ .normal_no_target = true, .interface_message = false };
+    fn packet(a: A) ![]const u8 { return a.dupe(u8, @embedFile("testdata/fr-source-root-language01/page-language.json")); }
+    fn raw(a: A) ![]const u8 { return a.dupe(u8, @embedFile("testdata/fr-source-root-language01/raw.wikitext")); }
+    fn expanded(a: A) ![]const u8 { return a.dupe(u8, @embedFile("testdata/fr-source-root-language01/expanded.wikitext")); }
+};
+
+test "direct GET root language retains genuine FR source identity without API language or parent CSS" {
+    const a = std.testing.allocator;
+    const F = FrSourceRootLanguageControl;
+    var ns = try namespaces.Registry.init(a, namespaces.french_test_fixture); defer ns.deinit();
+    const raw_bytes = try F.raw(a); defer a.free(raw_bytes);
+    const expanded_bytes = try F.expanded(a); defer a.free(expanded_bytes);
+    const packet_bytes = try F.packet(a);
+    var registry = Registry.init(a, packet_bytes, "", null, &ns) catch |err| { a.free(packet_bytes); return err; };
+    defer registry.deinit();
+    a.free(packet_bytes);
+    try std.testing.expect(registry.core_revision == null and registry.entries.len == 0);
+    try std.testing.expectEqual(@as(usize, 1), registry.direct_entries.len);
+    try std.testing.expect(registry.direct_entries[0].parent == null);
+    try std.testing.expect(registry.lookup(1500057, 39726739, 0, "kobliha", raw_bytes, F.normal) == null);
+    try std.testing.expect(!registry.capturedSourceMatches(1500057, 39726739, 0, "kobliha", raw_bytes, expanded_bytes));
+    try std.testing.expect(registry.lookupSourceParent(1500057, 39726739, 0, "kobliha", raw_bytes, expanded_bytes, F.normal) == null);
+    const root = registry.lookupSourceRootLanguage(1500057, 39726739, 0, "kobliha", raw_bytes, expanded_bytes, F.normal) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fr", root.root_language);
+    try std.testing.expectEqualSlices(u8, &ns.source_sha256, &root.namespace_sha256);
+    try std.testing.expectEqual(@as(usize, 75417), root.response.len);
+    try std.testing.expect(matches(root.response, "756047a0b48e44d272a26a20b8531607eab00b27ff6f35960bfd6b3ff554e96d"));
+    try std.testing.expectEqual(@as(usize, 42694), root.prefix.len);
+    try std.testing.expect(std.mem.startsWith(u8, root.response, root.prefix));
+    try std.testing.expect(root.styles.responses.len == 0 and root.styles.receipt.len == 0);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500058, 39726739, 0, "kobliha", raw_bytes, expanded_bytes, F.normal) == null);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726740, 0, "kobliha", raw_bytes, expanded_bytes, F.normal) == null);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726739, 1, "kobliha", raw_bytes, expanded_bytes, F.normal) == null);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726739, 0, "違う", raw_bytes, expanded_bytes, F.normal) == null);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726739, 0, "kobliha", "changed raw", expanded_bytes, F.normal) == null);
+    try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726739, 0, "kobliha", raw_bytes, "changed expansion", F.normal) == null);
+    for (0..5) |which| {
+        var wrong = F.normal;
+        switch (which) {
+            0 => wrong.normal_no_target = false,
+            1 => wrong.interface_message = true,
+            2 => wrong.interface_message = null,
+            3 => wrong.target_language_override = "fr",
+            4 => wrong.variant_override = "fr",
+            else => unreachable,
+        }
+        try std.testing.expect(registry.lookupSourceRootLanguage(1500057, 39726739, 0, "kobliha", raw_bytes, expanded_bytes, wrong) == null);
+    }
+    var parent_ns = try namespaces.Registry.init(a, DirectGetFixture.namespace_bytes); defer parent_ns.deinit();
+    var parent_registry = try Registry.init(a, DirectGetFixture.packet, "", null, &parent_ns); defer parent_registry.deinit();
+    const parent_page = DirectGetFixture.pages[0];
+    try std.testing.expect(parent_registry.lookupSourceParent(parent_page[0], parent_page[1], 0, parent_page[2], parent_page[3], parent_page[4], DirectGetFixture.normal) != null);
+    try std.testing.expect(parent_registry.lookupSourceRootLanguage(parent_page[0], parent_page[1], 0, parent_page[2], parent_page[3], parent_page[4], DirectGetFixture.normal) == null);
+}
+
+test "language-only direct GET still rejects stale transport namespace and partial stylesheet authority" {
+    const a = std.testing.allocator;
+    const F = FrSourceRootLanguageControl;
+    var ns = try namespaces.Registry.init(a, namespaces.french_test_fixture); defer ns.deinit();
+    const packet_bytes = try F.packet(a); defer a.free(packet_bytes);
+    for (0..7) |which| {
+        var arena = std.heap.ArenaAllocator.init(a); defer arena.deinit(); const t = arena.allocator();
+        var packet_value = try parseLimited(t, packet_bytes, max_index_bytes);
+        const record = &packet_value.object.getPtr("direct_get_contexts").?.array.items[0];
+        switch (which) {
+            0 => try packet_value.object.put(t, "namespace_registry_sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" }),
+            1 => try record.object.getPtr("page").?.object.put(t, "revision", .{ .integer = 39726740 }),
+            2 => try record.object.put(t, "response", .{ .string = "changed complete HTML" }),
+            3 => try record.object.put(t, "prefix", .{ .string = "<html lang=fr>" }),
+            4 => try record.object.getPtr("styles").?.object.put(t, "receipt", .{ .string = "{}" }),
+            5 => try record.object.getPtr("styles").?.object.getPtr("responses").?.array.append(.{ .string = "div{color:red}" }),
+            6 => {
+                var receipt = try parse(t, try str(record.*, "receipt"));
+                try receipt.object.getPtr("sources").?.array.items[0].object.put(t, "sha256", .{ .string = "0000000000000000000000000000000000000000000000000000000000000000" });
+                try record.object.put(t, "receipt", .{ .string = try std.json.Stringify.valueAlloc(t, receipt, .{}) });
+            },
+            else => unreachable,
+        }
+        const changed = try std.json.Stringify.valueAlloc(t, packet_value, .{});
+        try std.testing.expectError(invalid, Registry.init(a, changed, "", null, &ns));
+    }
+    try std.testing.expectError(invalid, Registry.init(a, packet_bytes, "unclaimed API payload", null, &ns));
+    try std.testing.expectError(invalid, Registry.init(a, packet_bytes, "", "unclaimed API prefix", &ns));
 }

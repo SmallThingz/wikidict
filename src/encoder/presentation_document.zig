@@ -45,7 +45,11 @@ pub const bodyQuoteCutSeedsWithContextAlloc = compiler.bodyQuoteCutSeedsWithCont
 pub const linkQuoteCutSeedsWithContextAlloc = compiler.linkQuoteCutSeedsWithContextAlloc;
 pub const bodyQuoteCutSeedsAlloc = compiler.bodyQuoteCutSeedsAlloc;
 pub const linkQuoteCutSeedsAlloc = compiler.linkQuoteCutSeedsAlloc;
+pub const NativeSourceClassProof = compiler.NativeSourceClassProof;
+pub const nativeSourceClassProofAlloc = compiler.nativeSourceClassProofAlloc;
+pub const nativeSourceClassRangeCurrent = compiler.nativeSourceClassRangeCurrent;
 pub const ParserOutputRange = struct {
+    native_source_class_proof: ?*const NativeSourceClassProof = null,
     // Original full expansion, retained only by the normal exact-byte binder.
     // This is independent of prepared owner/page coordinates and root proofs.
     original_page: ?[]const u8 = null,
@@ -695,7 +699,7 @@ fn validateSpansFlat(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !v
     // Only explicitly generated diagnostic spans may receive boundary spaces.
     // Authored text and protected/entity provenance are never rewritten here.
     try compiler.separateGeneratedDiagnosticBoundaries(a, @constCast(spans));
-    for (spans) |span| if (span.ruby != null or span.inline_padding_group != null) return validateRubyParsedRuns(a, spans, report);
+    for (spans) |span| if (span.ruby != null or span.inline_padding_group != null or types.spanHasInlineBoxGroup(span)) return validateRubyParsedRuns(a, spans, report);
     var parsed: std.ArrayList(u8) = .empty;
     defer parsed.deinit(a);
     var run_start: usize = 0;
@@ -710,6 +714,15 @@ fn validateSpansFlat(a: A, spans: []const compiler.Span, report: ?*Fallbacks) !v
 }
 
 fn validateSpans(a: A, values: []const compiler.Span, report: ?*Fallbacks) !void {
+    return validateSpansIn(a, values, report, false);
+}
+// Mandatory at publication; semantic visitors do not certify native geometry.
+fn validatePublishedSpans(a: A, values: []const compiler.Span, report: ?*Fallbacks) !void {
+    return validateSpansIn(a, values, report, true);
+}
+fn validateSpansIn(a: A, values: []const compiler.Span, report: ?*Fallbacks,
+    comptime require_native_inline_boxes: bool) !void
+{
     const Context = struct {
         allocator: A,
         report: ?*Fallbacks,
@@ -718,7 +731,7 @@ fn validateSpans(a: A, values: []const compiler.Span, report: ?*Fallbacks) !void
         }
     };
     var context: Context = .{ .allocator = a, .report = report };
-    var walk: CompilerWalk = .{};
+    var walk: CompilerWalk = .{ .require_native_inline_boxes = require_native_inline_boxes };
     try walk.spans(&context, values);
 }
 fn displayTitleFormattingOnly(values: []const compiler.Span) !bool {
@@ -818,6 +831,8 @@ const Work = struct {
 // One authoritative cell branch, one shared collection budget and table depth
 // for each document pass. Cell headings remain Blocks throughout these visits.
 const CompilerWalk = struct {
+    // Semantic traversal alone does not certify native geometry.
+    require_native_inline_boxes: bool = false,
     remaining: usize = 1 << 20,
     content_depth: usize = 0,
     typed_bidi_depth: usize = 0,
@@ -830,13 +845,42 @@ const CompilerWalk = struct {
     fn spans(self: *CompilerWalk, context: anytype, values: []const compiler.Span) anyerror!void {
         return self.spansIn(context, values, .ordinary);
     }
+    fn inlineBoxSpans(self: *CompilerWalk, context: anytype,
+        group: *const types.InlineBoxGroup(compiler.Span)) anyerror!void
+    {
+        if (!types.inlineBoxHasOverlayContent(group.*))
+            return self.spansIn(context, group.spans, .ordinary);
+        // The shared validator proved ordered child boundaries. Keep source text
+        // interleaved without granting out-of-flow children normal-flow geometry.
+        var at: usize = 0;
+        for (group.overlays) |overlay| if (overlay.content) |content| {
+            const boundary: usize = content.before_child;
+            if (boundary > at) try self.spansIn(context, group.spans[at..boundary], .ordinary);
+            if (self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+            self.content_depth += 1;
+            defer self.content_depth -= 1;
+            try self.spansIn(context, content.spans, .ordinary);
+            at = boundary;
+        };
+        if (at < group.spans.len) try self.spansIn(context, group.spans[at..], .ordinary);
+    }
     fn spansIn(self: *CompilerWalk, context: anytype, values: []const compiler.Span,
-        comptime part: enum { ordinary, gap, body }) anyerror!void
+        comptime part: enum { ordinary, gap, body, owned_flow_run }) anyerror!void
     {
         if (self.typed_bidi_depth != 0) for (values) |span| {
             if (span.captured_bidi_scope != null or span.generated_bidi_boundary) return error.InvalidPresentation;
         };
         try self.take(values.len);
+        var native_obligation = self.require_native_inline_boxes and compiler.hasInlineBoxParagraphObligation(values);
+        // Empty-overlay groups include the static carrier. Their structural
+        // obligation survives copies, with no removable build-only marker.
+        for (values) |span| if (span.inline_box_group) |group| {
+            if (group.overlays.len == 0) native_obligation = true;
+        };
+        if (native_obligation and part != .owned_flow_run) {
+            if (self.typed_bidi_depth != 0 or part != .ordinary) return error.UncompiledPresentation;
+            try compiler.validateInlineBoxParagraph(values);
+        }
         try context.spans(values);
         if (comptime part == .gap) {
             if (!types.validRubyGap(values)) return error.InvalidPresentation;
@@ -849,6 +893,16 @@ const CompilerWalk = struct {
             self.content_depth += 1;
             defer self.content_depth -= 1;
             try self.spansIn(context, group.spans, .body);
+        };
+        for (values) |span| if (span.inline_box_group) |group| {
+            if (part == .gap or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
+            try types.validateInlineBoxGroupTree(span, self.content_depth, self.ruby_depth);
+            // Each overlay owner and its actual body share the document budget.
+            // Inline boxes and overlay bodies do not consume Ruby depth.
+            try self.take(group.overlays.len);
+            self.content_depth += 1;
+            defer self.content_depth -= 1;
+            try self.inlineBoxSpans(context, group);
         };
         for (values) |span| if (span.inline_padding_group) |group| {
             if (part == .gap or self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
@@ -920,6 +974,11 @@ const CompilerWalk = struct {
         } else try self.spans(context, value.caption);
     }
     fn flow(self: *CompilerWalk, context: anytype, parts: []const compiler.FlowPart, table_depth: usize) anyerror!void {
+        return self.flowInBlock(context, parts, table_depth, null);
+    }
+    fn flowInBlock(self: *CompilerWalk, context: anytype, parts: []const compiler.FlowPart,
+        table_depth: usize, owner: ?*const compiler.Block) anyerror!void
+    {
         if (self.content_depth >= types.max_content_depth) return error.InvalidPresentation;
         self.content_depth += 1;
         defer self.content_depth -= 1;
@@ -929,7 +988,11 @@ const CompilerWalk = struct {
             switch (part.kind) {
                 .@"inline" => {
                     if (part.figure != null or part.scope != null) return error.InvalidPresentation;
-                    try self.spans(context, part.spans);
+                    if (compiler.hasInlineBoxParagraphObligation(part.spans)) {
+                        if (self.typed_bidi_depth != 1) return error.UncompiledPresentation;
+                        try compiler.validateInlineBoxFlowRun(owner orelse return error.UncompiledPresentation, part.spans);
+                        try self.spansIn(context, part.spans, .owned_flow_run);
+                    } else try self.spans(context, part.spans);
                 },
                 .figure => {
                     if (part.spans.len != 0 or part.scope != null) return error.InvalidPresentation;
@@ -941,7 +1004,7 @@ const CompilerWalk = struct {
                     if (!types.validBidiScopeHeader(scope)) return error.InvalidPresentation;
                     self.typed_bidi_depth += 1;
                     defer self.typed_bidi_depth -= 1;
-                    try self.flow(context, scope.parts, table_depth);
+                    try self.flowInBlock(context, scope.parts, table_depth, owner);
                 },
             }
         }
@@ -966,7 +1029,7 @@ const CompilerWalk = struct {
             }
             if (block.flow) |parts| {
                 if (block.spans.len != 0) return error.InvalidPresentation;
-                try self.flow(context, parts, table_depth);
+                try self.flowInBlock(context, parts, table_depth, block);
             }
             try self.spans(context, block.spans);
             if (block.table) |child_table| try self.table(context, child_table, table_depth + 1);
@@ -1144,7 +1207,7 @@ const Builder = struct {
         try self.consume(try self.renderer.renderBodyWithMissing(source));
     }
 
-    fn renderFragments(self: *Builder, fragments: []const SourceFragment) !void {
+    fn renderFragments(self: *Builder, fragments: []const SourceFragment, native_host: ?*compiler.NativeArticleHost) !void {
         var rendered: std.ArrayList(compiler.Block) = .empty;
         defer rendered.deinit(self.a);
         for (fragments) |fragment| {
@@ -1152,6 +1215,7 @@ const Builder = struct {
             const previous_root = self.renderer.content_root;
             const previous_tables = self.renderer.root_wiki_table_range;
             const previous_text_scope = self.renderer.bounded_text_class_scope;
+            const previous_native_classes = self.renderer.native_source_class_range;
             const previous_text_source = self.renderer.bounded_text_class_source;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) self.renderer.content_root = .parser_output;
             bindFragmentRootWikiTables(self.renderer, fragment, tracked);
@@ -1159,7 +1223,10 @@ const Builder = struct {
             defer self.renderer.content_root = previous_root;
             defer self.renderer.root_wiki_table_range = previous_tables;
             defer self.renderer.bounded_text_class_scope = previous_text_scope;
+            defer self.renderer.native_source_class_range = previous_native_classes;
             defer self.renderer.bounded_text_class_source = previous_text_source;
+            const native_scope = NativeArticleRenderScope.enter(native_host, tracked, fragment, false);
+            defer native_scope.deinit();
             try rendered.appendSlice(self.a, try self.renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre));
         }
         try self.consume(try rendered.toOwnedSlice(self.a));
@@ -1199,6 +1266,7 @@ fn workAllocWithPoemFragments(a: A, title: []const u8, language: []const u8, sou
 // Only a builder-issued range from the observed complete page can retain this
 // root. Equal copied bytes, inherited wrappers and unknown fragments decline.
 fn bindWholeTextClassScope(renderer: *compiler.Renderer, source: MissingText) void {
+    renderer.native_source_class_range = null;
     renderer.local_link_binding = null;
     renderer.figure_class_source_binding = null;
     renderer.observed_image_map_source = null;
@@ -1228,7 +1296,19 @@ fn bindFragmentObservedImageMapSource(renderer: *compiler.Renderer, fragment: So
     renderer.observed_image_map_source = .{ .owner = tracked.bytes, .original = original[range.start..][0..tracked.bytes.len] };
 }
 
+fn bindFragmentNativeSourceClasses(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    renderer.native_source_class_range = null;
+    if (fragmentContentRoot(fragment, tracked) != .parser_output) return;
+    const held = fragment.parser_output_range.?;
+    const proof = held.native_source_class_proof orelse return;
+    if (held.page.ptr != proof.source.bytes.ptr or held.page.len != proof.source.bytes.len) return;
+    const range: compiler.NativeSourceClassRange = .{ .proof = proof, .start = held.start, .prepared = tracked };
+    if (!compiler.nativeSourceClassRangeCurrent(range, tracked, renderer.context.table_styles)) return;
+    renderer.native_source_class_range = range;
+}
+
 fn bindFragmentTextClassScope(renderer: *compiler.Renderer, fragment: SourceFragment, tracked: MissingText) void {
+    bindFragmentNativeSourceClasses(renderer, fragment, tracked);
     bindFragmentObservedImageMapSource(renderer, fragment, tracked);
     bindFragmentSourceElements(renderer, fragment, tracked);
     bindFragmentFigureClassSource(renderer);
@@ -1321,6 +1401,52 @@ fn completeContentFragments(source: MissingText, fragments: []const SourceFragme
     return .parser_output;
 }
 
+const NativeArticleRenderScope = struct {
+    host: ?*compiler.NativeArticleHost = null,
+    previous_source: ?MissingText = null,
+    previous_snapshot: ?[32]u8 = null,
+    previous_fragment: ?compiler.NativeArticleFragment = null,
+    previous_whole_page: bool = false,
+
+    fn enter(host: ?*compiler.NativeArticleHost, tracked: MissingText, fragment: ?SourceFragment, whole_page: bool) @This() {
+        const value = host orelse return .{};
+        const scope: @This() = .{ .host = value, .previous_source = value.active_source, .previous_snapshot = value.active_snapshot,
+            .previous_fragment = value.active_fragment, .previous_whole_page = value.active_whole_page };
+        value.active_source = tracked;
+        value.active_snapshot = compiler.NativeArticleHost.snapshot(tracked);
+        value.active_fragment = null;
+        value.active_whole_page = whole_page and fragment == null and compiler.NativeArticleHost.sameSource(value.source, tracked);
+        if (fragment) |part| if (fragmentContentRoot(part, tracked) == .parser_output) {
+            const proof = part.parser_output_range.?;
+            const starts_page = proof.start == 0 and std.mem.eql(u8, tracked.bytes, part.source) and
+                (if (proof.original_page) |original| std.mem.eql(u8, original, proof.page) else true);
+            value.active_fragment = .{ .page = proof.page, .original_page = proof.original_page,
+                .start = proof.start, .prepared = proof.prepared, .starts_page = starts_page };
+        };
+        return scope;
+    }
+
+    fn deinit(self: @This()) void {
+        const host = self.host orelse return;
+        host.active_source = self.previous_source;
+        host.active_snapshot = self.previous_snapshot;
+        host.active_fragment = self.previous_fragment;
+        host.active_whole_page = self.previous_whole_page;
+    }
+};
+
+fn nativeArticleHostForFinalBody(renderer: *compiler.Renderer, source: MissingText,
+    title: []const u8, language_code: ?[]const u8, final_owner: bool) ?compiler.NativeArticleHost
+{
+    if (!final_owner) return null;
+    // This final worker constructs semantic Entry content. The native reader's
+    // title/navigation chrome is outside that source-CSS tree; source IDs and
+    // headings remain on the ordered Entry body itself. Observers receive none.
+    return .{ .renderer = renderer, .source = source, .title = title, .language_code = language_code orelse "",
+        .external_id_subjects_absent = true, .external_heading_subjects_absent = true,
+        .native_paragraph_css_subjects = true };
+}
+
 const CompleteActionFocus = struct {
     renderer: *compiler.Renderer,
     fn spans(self: *@This(), values: []const compiler.Span) anyerror!void {
@@ -1343,10 +1469,10 @@ fn completeActionFocus(renderer: *compiler.Renderer, work: Work) !void {
 }
 
 fn workAllocWithMissingFragments(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool) !Work {
-    return workAllocWithMissingFragmentsIn(a, title, language, tracked, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root, final_document_body, null, null);
+    return workAllocWithMissingFragmentsIn(a, title, language, tracked, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, figure_sizing, content_root, final_document_body, null, null, false);
 }
 
-fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool, native_body_language: ?[]const u8, source_classified_language: ?[]const u8) !Work {
+fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8, tracked: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, final_document_body: bool, native_body_language: ?[]const u8, source_classified_language: ?[]const u8, native_article_owner: bool) !Work {
     const whole_body = for (fragments) |fragment| {
         if (fragment.whole_body) break true;
     } else false;
@@ -1375,6 +1501,10 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
             .external_links_prepared = reference_context.citations != null,
         },
     };
+    // One final Entry owner, not one receipt per selected source fragment.
+    var native_host = nativeArticleHostForFinalBody(&renderer, tracked, title, native_body_language,
+        native_article_owner and final_document_body);
+    renderer.native_article_host = if (native_host) |*host| host else null;
     renderer.page_reference_definitions = reference_context.items;
     renderer.fallbacks.merge(reference_context.fallbacks);
     renderer.context.content_conversion = try compiler.pageContentConversion(a, tracked.bytes, renderer.context);
@@ -1400,8 +1530,11 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
                 bindFragmentTextClassScope(&renderer, fragment, tracked);
             }
         }
+        const native_scope = NativeArticleRenderScope.enter(if (native_host) |*host_value| host_value else null,
+            tracked, if (fragments.len == 1) fragments[0] else null, fragments.len == 0 and content_root == .parser_output);
+        defer native_scope.deinit();
         try builder.renderWithMissing(tracked);
-    } else try builder.renderFragments(fragments);
+    } else try builder.renderFragments(fragments, if (native_host) |*host_value| host_value else null);
     renderer.traceDocumentBody(.end, tracked, fragments.len, null);
     body_finished = true;
     var result: Work = .{
@@ -1419,10 +1552,10 @@ fn workAllocWithMissingFragmentsIn(a: A, title: []const u8, language: []const u8
 }
 
 fn workWithHeadingOffsetsAlloc(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot) !Work {
-    return workWithHeadingOffsetsAllocIn(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, observe_wiki_scope, observe_structure_only, figure_sizing, content_root, null, null);
+    return workWithHeadingOffsetsAllocIn(a, title, language, source, link_trail, namespace_catalog, behavior_switches, image_options, reference_context, poem_phase, fragments, table_styles, observe_wiki_scope, observe_structure_only, figure_sizing, content_root, null, null, false);
 }
 
-fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, native_body_language: ?[]const u8, source_classified_language: ?[]const u8) !Work {
+fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, source: MissingText, link_trail: ir.LinkTrail, namespace_catalog: ?*const NamespaceRegistry, behavior_switches: ?*const BehaviorRegistry, image_options: ?*const ImageRegistry, reference_context: compiler.ReferenceDefinitions, poem_phase: ?*const PoemPhase, fragments: []const SourceFragment, table_styles: ?*const TableStyleProfile, observe_wiki_scope: bool, observe_structure_only: bool, figure_sizing: ?FigureSizingSource, content_root: compiler.ContentRoot, native_body_language: ?[]const u8, source_classified_language: ?[]const u8, native_article_owner: bool) !Work {
     var html_openings: std.ArrayList(usize) = .empty;
     defer html_openings.deinit(a);
     var root_tables: std.ArrayList(usize) = .empty;
@@ -1438,6 +1571,9 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     var wiki_rule_openings: std.ArrayList(usize) = .empty;
     defer wiki_rule_openings.deinit(a);
     var renderer: compiler.Renderer = .{ .a = a, .native_body_language = native_body_language, .source_classified_language = source_classified_language, .page_source_focus_completion = !observe_structure_only, .content_root = completeContentFragments(source, fragments, content_root), .context = .{ .title = title, .language = if (language.len == 0) "English" else language, .link_trail = link_trail, .namespace_catalog = namespace_catalog, .behavior_switches = behavior_switches, .image_options = image_options, .table_styles = table_styles, .figure_sizing = figure_sizing, .poem_phase = poem_phase } };
+    var native_host = nativeArticleHostForFinalBody(&renderer, source, title, native_body_language,
+        native_article_owner and !observe_structure_only);
+    renderer.native_article_host = if (native_host) |*host| host else null;
     renderer.context.observe_structure_only = observe_structure_only;
     // This function has separate structural-observation and final callers.
     // Only the latter enters the existing opt-in diagnostic lifetime.
@@ -1469,6 +1605,9 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
     errdefer if (!body_finished) renderer.traceDocumentBody(.failure, source, fragments.len, null);
     if (fragments.len == 0) {
         bindWholeTextClassScope(&renderer, source);
+        const native_scope = NativeArticleRenderScope.enter(if (native_host) |*host_value| host_value else null,
+            source, null, content_root == .parser_output);
+        defer native_scope.deinit();
         try builder.consume(try renderer.renderBodyWithHeadingOffsets(source));
     } else {
         var rendered: std.ArrayList(compiler.Block) = .empty;
@@ -1481,6 +1620,7 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
             const previous_root = renderer.content_root;
             const previous_tables = renderer.root_wiki_table_range;
             const previous_text_scope = renderer.bounded_text_class_scope;
+            const previous_native_classes = renderer.native_source_class_range;
             const previous_text_source = renderer.bounded_text_class_source;
             if (fragmentContentRoot(fragment, tracked) == .parser_output) renderer.content_root = .parser_output;
             bindFragmentRootWikiTables(&renderer, fragment, tracked);
@@ -1488,7 +1628,11 @@ fn workWithHeadingOffsetsAllocIn(a: A, title: []const u8, language: []const u8, 
             defer renderer.content_root = previous_root;
             defer renderer.root_wiki_table_range = previous_tables;
             defer renderer.bounded_text_class_scope = previous_text_scope;
+            defer renderer.native_source_class_range = previous_native_classes;
             defer renderer.bounded_text_class_source = previous_text_source;
+            const native_scope = NativeArticleRenderScope.enter(if (native_host) |*host_value| host_value else null,
+                tracked, fragment, false);
+            defer native_scope.deinit();
             const blocks = try renderer.renderBodyWithFragmentPreAndMissing(tracked, fragment.pre);
             var rebase: RebaseHeadingOffsets = .{ .base = owner_at };
             try walk.blocks(&rebase, blocks, 0);
@@ -2006,18 +2150,22 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
         break :current if (defaults.current(title, namespace_catalog)) defaults else null;
     } else null;
     const work = if (heading_observation != null)
-        try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code, if (classified_owner) |owner| owner.code else null)
+        try workWithHeadingOffsetsAllocIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, false, false, figure_sizing, content_root, language_code, if (classified_owner) |owner| owner.code else null, true)
     else
-        try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code, if (classified_owner) |owner| owner.code else null);
+        try workAllocWithMissingFragmentsIn(a, title, language orelse "", source, link_trail, namespace_catalog, behavior_switches, image_options, current_references, poem_phase, fragments, table_styles, figure_sizing, content_root, true, language_code, if (classified_owner) |owner| owner.code else null, true);
     if (fallbacks) |report| {
         report.merge(work.fallbacks);
         report.template_presentation = report.template_presentation or work.rendered_templates != 0;
         report.missing_template = report.missing_template or work.unresolved_templates != 0;
     } else if (work.rendered_templates != 0 or work.unresolved_templates != 0) return error.UncompiledTemplate;
+    // Partial source queries may preserve actions without representing an
+    // authored inline box. Normal compilation never publishes that debt, even
+    // when the caller omitted a diagnostic report.
+    if (work.fallbacks.unrepresented_inline_geometry) return error.UncompiledPresentation;
     const display_spans = early_display orelse try displayTitleSpansAlloc(a, display_title, language orelse "", link_trail, namespace_catalog, behavior_switches, image_options, fallbacks, poem_phase);
-    if (early_display == null) try validateSpans(a, display_spans, fallbacks);
+    try validatePublishedSpans(a, display_spans, fallbacks);
     var validate: ValidateCompilerSpans = .{ .a = a, .fallbacks = fallbacks };
-    var validation_walk: CompilerWalk = .{};
+    var validation_walk: CompilerWalk = .{ .require_native_inline_boxes = true };
     for (@constCast(work.sections)) |*section| {
         if (section.title_spans.len != 0) {
             try validation_walk.spans(&validate, section.title_spans);
@@ -2027,7 +2175,7 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
     }
     try validation_walk.references(&validate, work.references);
     for (work.media_caption_spans, 0..) |caption_spans, index| {
-        try validateSpans(a, caption_spans, fallbacks);
+        try validatePublishedSpans(a, caption_spans, fallbacks);
         @constCast(work.media)[index].caption = try compiler.plainText(a, caption_spans);
     }
     var heading_registry: heading_ids.Registry = .{};
@@ -2128,6 +2276,150 @@ pub fn compileClassifiedWithHeadingAnchorsAndSourceMediaRootAlloc(
     const codec_phase = consume_diagnostics.beginConsumePhase(.codec);
     defer consume_diagnostics.endConsumePhase(codec_phase);
     return codec.encodeBuildAlloc(a, display_spans, work.sections, layout, work.references, work.media);
+}
+
+test "native source classes bind only the issued complete page fragment and no inherited scopes" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const source = "==English==\n<div class='own' style='position:relative'>[[Kept|body]]</div>";
+    const tracked = MissingText.untracked(source);
+    var styles = try @import("table_style_profile.zig").parseForTargetAlloc(a, ".absent div{font-family:monospace!important}", .screen); defer styles.deinit();
+    const proof = (try nativeSourceClassProofAlloc(a, tracked, &styles)) orelse return error.TestUnexpectedResult; defer proof.deinit(a);
+    const copied = MissingText.untracked(try a.dupe(u8, source));
+    const fragment: SourceFragment = .{ .original_start = 0, .source = source, .missing = copied,
+        .parser_output_range = .{ .page = source, .start = 0, .prepared = copied.bytes, .native_source_class_proof = proof } };
+    var renderer: compiler.Renderer = .{ .a = a, .context = .{ .table_styles = &styles }, .content_root = .parser_output };
+    bindFragmentTextClassScope(&renderer, fragment, copied);
+    try std.testing.expect(renderer.native_source_class_range != null);
+    try std.testing.expect(renderer.source_element_binding == null and renderer.bounded_text_class_scope == null);
+    const held = renderer.native_source_class_range.?;
+    try std.testing.expect(nativeSourceClassRangeCurrent(held, copied, &styles));
+    for (0..7) |case_index| {
+        var changed = fragment;
+        var owner = copied;
+        switch (case_index) {
+            0 => changed.parser_output_range.?.native_source_class_proof = null,
+            1 => changed.parser_output_range.?.page = try a.dupe(u8, source),
+            2 => owner = MissingText.untracked(try a.dupe(u8, copied.bytes)),
+            3 => changed.pre.initial_block_pre = true,
+            4 => changed.pre.initial = &.{.{ .body_end = 1, .resume_at = 1, .kind = .formatting }},
+            5 => changed.pre.trailing = &.{.{ .opening_start = 0, .body_start = 1, .kind = .formatting }},
+            else => owner.unknown = true,
+        }
+        bindFragmentTextClassScope(&renderer, changed, owner);
+        try std.testing.expect(renderer.native_source_class_range == null);
+    }
+    bindFragmentTextClassScope(&renderer, fragment, copied);
+    bindWholeTextClassScope(&renderer, tracked);
+    try std.testing.expect(renderer.native_source_class_range == null);
+}
+
+test "native article host binds final owner worker without claiming parser ancestry or clearing Missing" {
+    const owner_body: []const u8 = "first owner fragment\nsecond owner fragment";
+    const missing: MissingText = .{ .bytes = owner_body, .unknown = true,
+        .ranges = &.{.{ .start = 6, .end = 11, .occurrence = 1 }} };
+    var first: compiler.Renderer = .{ .a = std.testing.allocator, .context = .{}, .content_root = .unknown };
+    var second: compiler.Renderer = .{ .a = std.testing.allocator, .context = .{}, .content_root = .parser_output };
+    const held = nativeArticleHostForFinalBody(&first, missing, "article", "hu", true) orelse return error.TestUnexpectedResult;
+    try std.testing.expect(held.renderer == &first and held.renderer != &second);
+    try std.testing.expect(held.external_id_subjects_absent and held.external_heading_subjects_absent);
+    try std.testing.expect(held.native_paragraph_css_subjects);
+    const unissued: compiler.NativeArticleHost = .{ .renderer = &first, .source = missing, .title = "article", .language_code = "hu" };
+    try std.testing.expect(!unissued.external_id_subjects_absent and !unissued.external_heading_subjects_absent);
+    try std.testing.expect(!unissued.native_paragraph_css_subjects);
+    try std.testing.expect(held.source.bytes.ptr == owner_body.ptr and held.source.bytes.len == owner_body.len);
+    try std.testing.expect(held.source.ranges.ptr == missing.ranges.ptr);
+    try std.testing.expectEqualDeep(missing, held.source);
+    try std.testing.expectEqualStrings("article", held.title);
+    try std.testing.expectEqualStrings("hu", held.language_code);
+    try std.testing.expectEqual(compiler.ContentRoot.unknown, first.content_root);
+    try std.testing.expect(first.native_article_host == null and second.native_article_host == null);
+    // An observer cannot obtain the final-owner receipt by setting parser_output.
+    try std.testing.expect(nativeArticleHostForFinalBody(&second, missing, "article", "hu", false) == null);
+    const unknown_language = nativeArticleHostForFinalBody(&first, missing, "article", null, true).?;
+    try std.testing.expectEqualStrings("", unknown_language.language_code);
+    try std.testing.expect(unknown_language.source.unknown and unknown_language.source.ranges.len == 1);
+    // Host binding is independent of any section's prepared slice or DOM index.
+    const another = nativeArticleHostForFinalBody(&second, missing, "other article", "en", true).?;
+    try std.testing.expect(another.renderer == &second and another.renderer != held.renderer);
+    try std.testing.expectEqualStrings("other article", another.title);
+    try std.testing.expectEqualStrings("en", another.language_code);
+}
+
+test "native article active input binds exact Missing metadata and only an authenticated original page prefix" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const page = "first [[Kept|body]]\n==Later==\nlater";
+    const prefix = page[0..std.mem.indexOf(u8, page, "\n==Later==").?];
+    const range = [_]missing_dependency.Range{.{ .start = 0, .end = 1, .occurrence = 1 }};
+    const active: MissingText = .{ .bytes = try a.dupe(u8, prefix), .unknown = true, .ranges = &range };
+    const owner: MissingText = .{ .bytes = try a.dupe(u8, prefix), .unknown = true };
+    var renderer: compiler.Renderer = .{ .a = a, .native_body_language = "en", .content_root = .parser_output,
+        .context = .{ .title = "native host" } };
+    var host = nativeArticleHostForFinalBody(&renderer, owner, "native host", "en", true).?;
+    renderer.native_article_host = &host;
+    const fragment: SourceFragment = .{ .original_start = 0, .source = prefix, .missing = active,
+        .parser_output_range = .{ .page = page, .original_page = page, .start = 0, .prepared = active.bytes } };
+    try std.testing.expect(!host.matchesActive(&renderer, active) and !host.startsPage(&renderer, active));
+    {
+        const scope = NativeArticleRenderScope.enter(&host, active, fragment, false); defer scope.deinit();
+        try std.testing.expect(host.matchesActive(&renderer, active) and host.startsPage(&renderer, active));
+        try std.testing.expect(!compiler.NativeArticleHost.sameSource(host.source, active));
+        try std.testing.expect(host.active_source.?.unknown and host.active_source.?.ranges.ptr == range[0..].ptr);
+        try std.testing.expect(host.active_fragment.?.page.ptr == page.ptr and host.active_fragment.?.start == 0);
+        for (0..5) |mode| {
+            var changed = active;
+            switch (mode) {
+                0 => changed.bytes = try a.dupe(u8, active.bytes),
+                1 => changed.ranges = try a.dupe(missing_dependency.Range, active.ranges),
+                2 => changed.unknown = false,
+                3 => changed.lost_missing_range = true,
+                4 => changed.generated_source = active.bytes,
+                else => unreachable,
+            }
+            try std.testing.expect(!host.matchesActive(&renderer, changed));
+        }
+        var other = renderer;
+        try std.testing.expect(!host.matchesActive(&other, active));
+        renderer.native_body_language = "fr";
+        try std.testing.expect(!host.matchesActive(&renderer, active));
+        renderer.native_body_language = "en";
+        renderer.context.title = "other";
+        try std.testing.expect(!host.matchesActive(&renderer, active));
+        renderer.context.title = "native host";
+        try std.testing.expect(host.matchesActive(&renderer, active));
+    }
+    try std.testing.expect(host.active_source == null and host.active_fragment == null and !host.active_whole_page);
+    for (0..8) |mode| {
+        var changed = fragment;
+        var tracked = active;
+        switch (mode) {
+            0 => { changed.original_start = 1; changed.source = page[1..prefix.len]; changed.parser_output_range.?.start = 1;
+                tracked.bytes = try a.dupe(u8, changed.source); changed.parser_output_range.?.prepared = tracked.bytes; },
+            1 => changed.parser_output_range.?.original_page = "different original page",
+            2 => { tracked.bytes = try a.dupe(u8, active.bytes); @constCast(tracked.bytes)[0] = 'X'; changed.parser_output_range.?.prepared = tracked.bytes; },
+            3 => changed.source = try a.dupe(u8, changed.source),
+            4 => changed.pre.initial_block_pre = true,
+            5 => changed.pre.initial = &.{.{ .body_end = 1, .resume_at = 1, .kind = .formatting }},
+            6 => changed.pre.trailing = &.{.{ .opening_start = 0, .body_start = 1, .kind = .formatting }},
+            7 => changed.parser_output_range.?.prepared = try a.dupe(u8, active.bytes),
+            else => unreachable,
+        }
+        const scope = NativeArticleRenderScope.enter(&host, tracked, changed, false); defer scope.deinit();
+        try std.testing.expect(host.matchesActive(&renderer, tracked));
+        try std.testing.expect(!host.startsPage(&renderer, tracked));
+    }
+    {
+        const outer = NativeArticleRenderScope.enter(&host, owner, null, true); defer outer.deinit();
+        try std.testing.expect(host.startsPage(&renderer, owner));
+        {
+            const inner = NativeArticleRenderScope.enter(&host, active, null, false); defer inner.deinit();
+            try std.testing.expect(host.matchesActive(&renderer, active) and !host.startsPage(&renderer, active));
+        }
+        try std.testing.expect(host.startsPage(&renderer, owner));
+        renderer.content_root = .unknown;
+        try std.testing.expect(!host.startsPage(&renderer, owner));
+        renderer.content_root = .parser_output;
+    }
+    try std.testing.expect(host.active_source == null and host.active_fragment == null and !host.active_whole_page);
 }
 
 test "quoted colon prose survives roundtrip without weakening parsed residual guard" {
@@ -2487,6 +2779,36 @@ test "partially renderable unsupported citation templates still fail publication
     const a = arena.allocator();
     const source = "==English==\n===Noun===\n# {{RQ:Unknown Work|page=17|passage=The '''[[cat]]''' sleeps.}}\n";
     try std.testing.expectError(error.UncompiledTemplate, compileAlloc(a, "cat", .language, "English", "en", source, null));
+}
+
+test "a template help link keeps its literal closing braces inside the action" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const target = "Šablonas:top";
+    const source = "[[" ++ target ++ "|<nowiki>{{</nowiki>trans-top}}]].";
+    const escaped = "[[" ++ target ++ "|<nowiki>{{</nowiki>trans-top<nowiki>}}</nowiki>]].";
+    var report: Fallbacks = .{};
+    var reference_report: Fallbacks = .{};
+    const actual = try compileReportedAlloc(a, "actual", .language, "English", "en", source, null, &report);
+    const expected = try compileReportedAlloc(a, "actual", .language, "English", "en", escaped, null, &reference_report);
+    try std.testing.expectEqualSlices(u8, expected, actual);
+    const saved = try codec.decodeAlloc(a, actual, "actual", .language, .{ .code = "en", .heading = "English" });
+    try std.testing.expectEqualSlices(u8, actual, try codec.encodeAlloc(a, saved));
+    var linked: std.ArrayList(u8) = .empty;
+    var plain: std.ArrayList(u8) = .empty;
+    for (saved.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+        if (span.kind == .link) {
+            try std.testing.expectEqualStrings(target, span.target);
+            try std.testing.expectEqualStrings("", span.trail);
+            try linked.appendSlice(a, span.text);
+        } else {
+            try std.testing.expect(span.kind == .text and span.target.len == 0);
+            try plain.appendSlice(a, span.text);
+        }
+    };
+    try std.testing.expectEqualStrings("{{trans-top}}", linked.items);
+    try std.testing.expectEqualStrings(".", plain.items);
 }
 
 test "template parse limits fail publication instead of preserving executable syntax" {
@@ -16286,4 +16608,240 @@ test "normal TR Document forwards only the validated owner code to foreign Ad no
     }
     try std.testing.expectError(error.InvalidClassifiedLanguage, compileClassifiedWithHeadingAnchorsAlloc(a, title, .language, "Adigece", "ady",
         MissingText.untracked(source), null, .{}, &namespaces, null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = "English", .code = "en" }));
+}
+
+const InlineBoxDocumentWalkTest = struct {
+    fn owner(children: []const compiler.Span, group: *types.InlineBoxGroup(compiler.Span)) compiler.Span {
+        group.* = .{ .padding = types.StyleEdges.all(.{ .unit = .px, .value = 1 }),
+            .border = .{ .top = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 }, .color = .current_color } },
+                .right = .none, .bottom = .none, .left = .none },
+            .overlays = &.{.{ .insets = .{ .top = .{ .unit = .px, .value = 0 },
+                .right = .{ .unit = .px, .value = 0 }, .bottom = .{ .unit = .percent, .value = 67 } },
+                .border = .{ .top = .none, .right = .{ .solid = .{ .width = .{ .unit = .px, .value = 1 },
+                    .color = .current_color } }, .bottom = .none, .left = .none } }}, .spans = children };
+        return .{ .text = "", .language = "ja", .inline_box_group = group };
+    }
+};
+
+const InlineBoxOverlayDocumentTest = struct {
+    const font: types.InlineFontSnapshot = .{ .font_scale = 1, .font_scale_basis = .normal_body,
+        .font_normalized = true, .language = "ja" };
+    fn text(value: []const u8) compiler.Span {
+        return .{ .text = value, .language = "ja", .font_scale = 1, .font_scale_basis = .normal_body };
+    }
+    const Collect = struct {
+        a: A,
+        text: std.ArrayList(u8) = .empty,
+        fn spans(self: *@This(), values: []const compiler.Span) !void {
+            for (values) |span| try self.text.appendSlice(self.a, span.text);
+        }
+    };
+};
+
+test "inline box Document walk preserves ordinary children actions and exact shared budgets" {
+    const children = [_]compiler.Span{ .{ .text = "ず", .language = "ja" },
+        .{ .kind = .link, .text = "れ", .target = "ずれ", .flags = .{ .bold = true }, .language = "ja" } };
+    var group: types.InlineBoxGroup(compiler.Span) = undefined;
+    const owner = InlineBoxDocumentWalkTest.owner(&children, &group);
+    const Count = struct {
+        owners: usize = 0, children: usize = 0, actions: usize = 0,
+        fn spans(self: *@This(), values: []const compiler.Span) !void {
+            for (values) |span| {
+                if (types.spanHasInlineBoxGroup(span)) self.owners += 1 else self.children += 1;
+                if (span.kind == .link) {
+                    self.actions += 1;
+                    try std.testing.expectEqualStrings("ずれ", span.target);
+                    try std.testing.expect(span.flags.bold);
+                }
+            }
+        }
+    };
+    var count: Count = .{};
+    var walk: CompilerWalk = .{ .remaining = 8 };
+    try walk.spans(&count, &.{ owner, owner });
+    try std.testing.expectEqual(@as(usize, 2), count.owners);
+    try std.testing.expectEqual(@as(usize, 4), count.children);
+    try std.testing.expectEqual(@as(usize, 2), count.actions);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    try std.testing.expectEqual(@as(usize, 0), walk.content_depth);
+    try std.testing.expectEqual(@as(usize, 0), walk.ruby_depth);
+    var short: CompilerWalk = .{ .remaining = 7 };
+    try std.testing.expectError(error.InvalidPresentation, short.spans(&count, &.{ owner, owner }));
+    try std.testing.expectEqual(@as(usize, 0), short.content_depth);
+    var limit: CompilerWalk = .{ .content_depth = types.max_content_depth };
+    try std.testing.expectError(error.InvalidPresentation, limit.spans(&count, &.{owner}));
+}
+
+test "inline box Document validation retains child action strictness and parsed run boundaries" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var group: types.InlineBoxGroup(compiler.Span) = undefined;
+    var children = [_]compiler.Span{ .{ .text = "ず" }, .{ .kind = .link, .text = "れ", .target = "ずれ" } };
+    const owner = InlineBoxDocumentWalkTest.owner(&children, &group);
+    try validateSpans(a, &.{owner}, null);
+    try std.testing.expect(!try displayTitleFormattingOnly(&.{owner}));
+    children[1].target = "{{unexpanded-target}}";
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &.{owner}, null));
+    children[1] = .{ .text = "れ" };
+    try validateSpans(a, &.{owner}, null);
+    try std.testing.expect(try displayTitleFormattingOnly(&.{owner}));
+    // An inline box is not a Ruby body: ordinary authored newlines remain valid.
+    children[0].text = "ず\n";
+    try validateSpans(a, &.{owner}, null);
+    // A split parsed token must not evade the existing whole-run check merely
+    // because part of it is enclosed by the typed geometric owner.
+    children[0].text = "{{unexpanded";
+    children[1].text = "-token}}";
+    // Parsed display runs use the same presentation rejection inside and outside a box.
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{owner}, null));
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &children, null));
+    try std.testing.expectEqualStrings("{{unexpanded", children[0].text);
+    try std.testing.expectEqualStrings("-token}}", children[1].text);
+}
+
+test "semantic legacy inline box validity never certifies native publication" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    var children = [_]compiler.Span{
+        .{ .text = "ず\n" },
+        .{ .kind = .link, .text = "れ", .target = "ずれ", .flags = .{ .bold = true } },
+    };
+    var group: types.InlineBoxGroup(compiler.Span) = undefined;
+    const owner = InlineBoxDocumentWalkTest.owner(&children, &group);
+    // The model preserves text, actions and differing child metrics; this is
+    // not a native LTR slice admission or an assertion that it was painted.
+    try validateSpans(a, &.{owner}, null);
+    try std.testing.expectError(error.UncompiledPresentation, validatePublishedSpans(a, &.{owner}, null));
+    try std.testing.expectEqualStrings("ず\n", children[0].text);
+    try std.testing.expect(children[1].flags.bold);
+    try std.testing.expectEqualStrings("ずれ", children[1].target);
+    children[1].target = "{{unexpanded-target}}";
+    try std.testing.expectError(error.UncompiledTemplate, validateSpans(a, &.{owner}, null));
+    // A copied empty-overlay owner remains under the static obligation even
+    // through a semantic visitor; no marker can waive late metric mutation.
+    children[0] = .{ .text = "ず", .language = "ja" };
+    children[1] = .{ .text = "れ", .language = "ja" };
+    group.overlays = &.{};
+    try validateSpans(a, &.{owner}, null);
+    children[1].flags.bold = true;
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{owner}, null));
+    try std.testing.expectError(error.UncompiledPresentation, validatePublishedSpans(a, &.{owner}, null));
+}
+
+test "inline overlay Document visits ordered body once and charges its depth and item budget" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = InlineBoxOverlayDocumentTest;
+    const one: types.InlineBoxOverlayContent(compiler.Span) = .{ .before_child = 1,
+        .owner_font = F.font, .text_align = .right, .spans = &.{F.text("\u{200b}")} };
+    const two: types.InlineBoxOverlayContent(compiler.Span) = .{ .before_child = 1,
+        .owner_font = F.font, .text_align = .left, .spans = &.{F.text("X")} };
+    var group: types.InlineBoxGroup(compiler.Span) = undefined;
+    const owner = InlineBoxDocumentWalkTest.owner(&.{F.text("a"), F.text("b"), F.text("c")}, &group);
+    var overlays = [_]types.InlineBoxOverlayFor(compiler.Span){group.overlays[0], group.overlays[0]};
+    overlays[0].content = &one; overlays[1].content = &two; group.overlays = &overlays;
+    var collect: F.Collect = .{ .a = a };
+    var walk: CompilerWalk = .{ .remaining = 8 };
+    try walk.spans(&collect, &.{owner});
+    try std.testing.expectEqualStrings("a\u{200b}Xbc", collect.text.items);
+    try std.testing.expectEqual(@as(usize, 0), walk.remaining);
+    try std.testing.expectEqual(@as(usize, 0), walk.content_depth);
+    try std.testing.expectEqual(@as(usize, 0), walk.ruby_depth);
+    collect.text.clearRetainingCapacity();
+    var short: CompilerWalk = .{ .remaining = 7 };
+    try std.testing.expectError(error.InvalidPresentation, short.spans(&collect, &.{owner}));
+    try std.testing.expectEqual(@as(usize, 0), short.content_depth);
+    var deepest: CompilerWalk = .{ .content_depth = types.max_content_depth - 2 };
+    try deepest.spans(&collect, &.{owner});
+    try std.testing.expectEqual(types.max_content_depth - 2, deepest.content_depth);
+    var too_deep: CompilerWalk = .{ .content_depth = types.max_content_depth - 1 };
+    try std.testing.expectError(error.InvalidPresentation, too_deep.spans(&collect, &.{owner}));
+    try std.testing.expectEqual(types.max_content_depth - 1, too_deep.content_depth);
+}
+
+test "inline overlay Document keeps split parsed-token rejection and immutable child identity" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator();
+    const F = InlineBoxOverlayDocumentTest;
+    const body: types.InlineBoxOverlayContent(compiler.Span) = .{ .before_child = 1,
+        .owner_font = F.font, .text_align = .left, .spans = &.{F.text("-token}}")} };
+    var group: types.InlineBoxGroup(compiler.Span) = undefined;
+    const owner = InlineBoxDocumentWalkTest.owner(&.{F.text("{{unexpanded")}, &group);
+    var overlay = group.overlays[0]; overlay.content = &body; group.overlays = &.{overlay};
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{owner}, null));
+    try std.testing.expectEqualStrings("{{unexpanded", group.spans[0].text);
+    try std.testing.expectEqualStrings("-token}}", body.spans[0].text);
+    group.spans = &.{F.text("plain")};
+    // Removing the opener leaves a parsed closing delimiter in the child.
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{owner}, null));
+    // Each field alone is valid. Their logical concatenation starts a template.
+    var split_body = body;
+    split_body.spans = &.{F.text("{token")};
+    overlay.content = &split_body;
+    group.overlays = &.{overlay};
+    group.spans = &.{F.text("{")};
+    try compiler.requireCompiledText(group.spans[0].text);
+    try compiler.requireCompiledText(split_body.spans[0].text);
+    try std.testing.expectError(error.UncompiledPresentation, validateSpans(a, &.{owner}, null));
+    group.spans = &.{F.text("plain")};
+    try validateSpans(a, &.{owner}, null);
+    try std.testing.expectEqualStrings("{token", split_body.spans[0].text);
+}
+
+test "compiler inline box ownership clone and Stored codec preserve children overlays and actions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const F = InlineBoxOverlayDocumentTest;
+    var linked = F.text("child");
+    linked.kind = .link;
+    linked.target = "Target";
+    linked.flags.bold = true;
+    const children = [_]compiler.Span{ F.text("before"), linked };
+    const body: types.InlineBoxOverlayContent(compiler.Span) = .{
+        .before_child = 1, .owner_font = F.font, .text_align = .right,
+        .spans = &.{F.text("overlay")},
+    };
+    var original: types.InlineBoxGroup(compiler.Span) = undefined;
+    var spans = [_]compiler.Span{InlineBoxDocumentWalkTest.owner(&children, &original)};
+    var overlay = original.overlays[0];
+    overlay.content = &body;
+    original.overlays = &.{overlay};
+    try compiler.separateGeneratedDiagnosticBoundaries(a, &spans);
+    const cloned = spans[0].inline_box_group.?;
+    try std.testing.expect(cloned != &original and cloned.spans.ptr != original.spans.ptr);
+    try std.testing.expect(cloned.overlays.ptr != original.overlays.ptr);
+    const cloned_body = cloned.overlays[0].content.?;
+    try std.testing.expect(cloned_body != &body and cloned_body.spans.ptr != body.spans.ptr);
+    try std.testing.expectEqualStrings("beforeoverlaychild", try compiler.plainText(a, &spans));
+    try std.testing.expectEqualDeep(original.padding, cloned.padding);
+    try std.testing.expectEqualDeep(original.border, cloned.border);
+    try std.testing.expectEqualDeep(body.owner_font, cloned_body.owner_font);
+    // This checks the existing generic build serializer; semantic conversion
+    // does not confer native publication eligibility on a legacy overlay box.
+    const bytes = try codec.encodeBuildAlloc(a, &spans, @as([]const types.Section, &.{}),
+        types.Layout{}, @as([]const types.Reference, &.{}), @as([]const types.Media, &.{}));
+    const stored = try codec.decodeAlloc(a, bytes, "Entry", .language, .{ .code = "ja", .heading = "Japanese" });
+    try std.testing.expectEqual(@as(usize, 1), stored.entry.display_title.len);
+    const decoded = stored.entry.display_title[0].inline_box_group.?;
+    try std.testing.expectEqualDeep(original.padding, decoded.padding);
+    try std.testing.expectEqualDeep(original.border, decoded.border);
+    try std.testing.expectEqualDeep(original.radius, decoded.radius);
+    try std.testing.expectEqual(@as(usize, 2), decoded.spans.len);
+    try std.testing.expectEqualStrings("before", decoded.spans[0].text);
+    try std.testing.expectEqualStrings("child", decoded.spans[1].text);
+    try std.testing.expectEqual(types.InlineKind.link, decoded.spans[1].kind);
+    try std.testing.expectEqualStrings("Target", decoded.spans[1].target);
+    try std.testing.expect(decoded.spans[1].bold);
+    try std.testing.expectEqual(@as(usize, 1), decoded.overlays.len);
+    try std.testing.expectEqualDeep(overlay.insets, decoded.overlays[0].insets);
+    try std.testing.expectEqualDeep(overlay.border, decoded.overlays[0].border);
+    const decoded_body = decoded.overlays[0].content.?;
+    try std.testing.expectEqualDeep(body.owner_font, decoded_body.owner_font);
+    try std.testing.expectEqual(body.before_child, decoded_body.before_child);
+    try std.testing.expectEqual(body.text_align, decoded_body.text_align);
+    try std.testing.expectEqualDeep(body.line_height, decoded_body.line_height);
+    try std.testing.expectEqual(@as(usize, 1), decoded_body.spans.len);
+    try std.testing.expectEqualStrings("overlay", decoded_body.spans[0].text);
+    try std.testing.expectEqualSlices(u8, bytes, try codec.encodeAlloc(a, stored));
+    @constCast(cloned.spans)[0].text = "changed child";
+    @constCast(cloned_body.spans)[0].text = "changed overlay";
+    try std.testing.expectEqualStrings("before", children[0].text);
+    try std.testing.expectEqualStrings("overlay", body.spans[0].text);
 }

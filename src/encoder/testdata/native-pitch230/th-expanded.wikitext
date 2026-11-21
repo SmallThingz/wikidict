@@ -1,0 +1,57 @@
+== ภาษาญี่ปุ่น ==
+
+=== การออกเสียง ===
+
+<ul><li><span class="usage-label-accent"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[w:ภาษาถิ่นโตเกียว|โตเกียว]]</span><span class="ib-brac label-brac">)</span></span> <span lang="ja" class="Jpan"><span style="border-top:1px solid;position:relative;padding:1px;">タ<span style="position:absolute;top:0;bottom:67%;right:0%;border-right:1px solid;"></span></span>イ</span> <span class="Latn"><samp>[táꜜì]</samp></span> ([[頭高型|อาตามาดากะ]] – [1])</li><li>[[วิกิพจนานุกรม:สัทอักษรสากล|ไอพีเอ]]<sup>([[ภาคผนวก:การออกเสียงภาษาญี่ปุ่น|อธิบาย]])</sup>:&#32;<span class="IPA nowrap">[ta̠i]</span>[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีการออกเสียงไอพีเอ|たい]]</li></ul>[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีสำเนียงสูงต่ำแบบอาตามาดากะ (โตเกียว)|たい]][[หมวดหมู่:ญี่ปุ่น terms with IPA pronunciation with pitch accent|たい]]
+
+=== รากศัพท์ 1 ===
+
+==== คำนาม ====
+[[หมวดหมู่:คาตากานะภาษาญี่ปุ่น|タイ]]<span class="headword-line"><strong class="Jpan headword" lang="ja">タイ</strong> <i>หรือ</i> <strong class="Jpan headword" lang="ja">たい</strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:tai#ภาษาญี่ปุ่น|tai]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|タイ]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|タイ]]</span>)&nbsp;<i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|たい]][[หมวดหมู่:ญี่ปุ่น terms with redundant sortkeys|たい]][[หมวดหมู่:คำนามภาษาญี่ปุ่น|たい]][[หมวดหมู่:หน้าที่มีรายการ|タイ]][[หมวดหมู่:หน้าที่มี 1 รายการ|タイ]]
+
+# <span class="Jpan" lang="ja">[[:鯛#ภาษาญี่ปุ่น|鯛]]</span>: ปลาไท, ปลากระพงแดงญี่ปุ่น ([[sea bream]])
+#: <span lang="ja" class="Jpan e-example">'''タイ'''(<ruby>鯛<rp>(</rp><rt>たい</rt><rp>)</rp></ruby>)は、めでたいの"たい"につながることから、<ruby>縁<rp>(</rp><rt>えん</rt><rp>)</rp></ruby><ruby>起<rp>(</rp><rt>ぎ</rt><rp>)</rp></ruby>のよいものと<ruby>考<rp>(</rp><rt>かんが</rt><rp>)</rp></ruby>えられています。</span><dl><dd><i><span class="e-transliteration tr">'''Tai''' (tai) wa, medetai no "tai" ni tsunagaru koto kara, engi no yoi mono to kangaerareteimasu.</span></i></dd><dd><span class="e-translation">'''Sea bream''' ('''''tai''''') is considered good luck because ''tai'' is the ending of the word ''medetai'' (auspicious).</span></dd></dl>[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีตัวอย่างการใช้|たい]]
+
+===== หมายเหตุการใช้ =====
+* เช่นเดียวกับคำศัพท์หลายคำที่ใช้เรียกสิ่งมีชีวิต คำนี้มักสะกดด้วยอักษร[[คาตากานะ]] โดยเฉพาะในบริบททาง[[ชีววิทยา]] (ซึ่งการใช้คาตากานะเป็นเรื่องปกติ)
+
+=== รากศัพท์ 2 ===
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[วิกิพีเดีย]]ภาษาญี่ปุ่นมีบทความ:<div style="margin-left: 10px;"><b class="Jpan" lang="ja">[[:w&#58;ja&#58;タイ (音楽記号)|タイ (音楽記号)]]</b></div></div><span class="interProject">[[w:ja:タイ (音楽記号)|Wikipedia <sup>ja</sup>]]</span></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase entity snapshot missing entity=Q1860</span></strong>
+
+==== คำนาม ====
+[[หมวดหมู่:คาตากานะภาษาญี่ปุ่น|タイ]]<span class="headword-line"><strong class="Jpan headword" lang="ja">タイ</strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:tai#ภาษาญี่ปุ่น|tai]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|タイ]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|タイ]]</span>)&nbsp;<i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|たい]][[หมวดหมู่:ญี่ปุ่น terms with redundant sortkeys|たい]][[หมวดหมู่:คำนามภาษาญี่ปุ่น|たい]][[หมวดหมู่:หน้าที่มีรายการ|タイ]][[หมวดหมู่:หน้าที่มี 1 รายการ|タイ]]
+
+# <span class='form-of-definition use-with-mention'>รูปสั้นของ <span class='form-of-definition-link'><i class="Jpan mention" lang="ja">[[:ネクタイ#ภาษาญี่ปุ่น|ネクタイ]]</i> <span class="mention-gloss-paren annotation-paren">(</span><span class="mention-tr tr">nekutai</span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">เน็กไท</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span></span></span>[[หมวดหมู่:รูปสั้นภาษาญี่ปุ่น|たい]]
+#: <span lang="ja" class="Jpan e-example"><ruby>私<rp>(</rp><rt>わたし</rt><rp>)</rp></ruby>は、<ruby>朝<rp>(</rp><rt>あさ</rt><rp>)</rp></ruby>、いつも<ruby>出掛<rp>(</rp><rt>でが</rt><rp>)</rp></ruby>けに'''タイ'''を<ruby>締<rp>(</rp><rt>し</rt><rp>)</rp></ruby>める。</span><dl><dd><i><span class="e-transliteration tr">Watashi wa, asa, itsumo degake ni '''tai''' o shimeru.</span></i></dd><dd><span class="e-translation">I always tie a '''tie''' when I leave for work in the morning.</span></dd></dl>[[หมวดหมู่:ศัพท์ภาษาญี่ปุ่นที่มีตัวอย่างการใช้|たい]]
+# <span class="usage-label-sense"><span class="ib-brac label-brac">(</span><span class="ib-content label-content">[[ดนตรี]][[หมวดหมู่:ja:ดนตรี|たい]]</span><span class="ib-brac label-brac">)</span></span> [[เครื่องหมาย]][[โยง]][[เสียง]] (tie)
+
+===== ดูเพิ่ม =====
+* <span class="ib-brac qualifier-brac">(</span><span class="ib-content qualifier-content">music</span><span class="ib-brac qualifier-brac">)</span><span class="ib-colon sense-qualifier-colon">:</span> <span class="Jpan" lang="ja">[[:スラー#ภาษาญี่ปุ่น|スラー]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">surā</span></span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|タイ]]: เครื่องหมายเชื่อมเสียง (slur)
+
+=== รากศัพท์ 3 ===
+
+{| class="wikitable floatright"
+! style="font-weight:normal" | รูปสะกดแบบอื่น
+|-
+| style="text-align:center;font-size:108%" | <span class="Jpan" lang="ja" style="font-size:140%">[[泰#ภาษาญี่ปุ่น|泰]]</span>
+|}
+<div class="interproject-box sister-wikipedia sister-project noprint floatright"><div style="float: left;" class="interproject-box-logo">[[File:Wikipedia-logo-v2.svg|x40px|none|link=|alt=]]</div><div style="margin-left: 60px;">[[วิกิพีเดีย]]ภาษาญี่ปุ่นมีบทความ:<div style="margin-left: 10px;"><b class="Jpan" lang="ja">[[:w&#58;ja&#58;タイ国|タイ国]]</b></div></div><span class="interProject">[[w:ja:タイ国|Wikipedia <sup>ja</sup>]]</span></div><templatestyles src="Module:interproject/style.css"></templatestyles>
+[[ไฟล์:LocationThailand.svg|thumb|right|250px]]
+แรกสุดจาก<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase entity snapshot missing entity=Q9217</span></strong>; ส่วนคันจินั้น<strong class="error"><span class="scribunto-error">Lua error in มอดูล:etymology/templates: Wikibase entity snapshot missing entity=Q7850</span></strong>
+
+==== คำวิสามานยนาม ====
+[[หมวดหมู่:คาตากานะภาษาญี่ปุ่น|タイ]]<span class="headword-line"><strong class="Jpan headword" lang="ja">タイ</strong> (<span class="headword-tr manual-tr tr" dir="ltr"><span class="Latn" lang="ja">[[:Tai#ภาษาญี่ปุ่น|Tai]]</span>[[หมวดหมู่:ญี่ปุ่น links with redundant wikilinks|タイ]][[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|タイ]]</span>)&nbsp;<i></i></span>[[หมวดหมู่:คำหลักภาษาญี่ปุ่น|たい]][[หมวดหมู่:ญี่ปุ่น terms with redundant sortkeys|たい]][[หมวดหมู่:คำวิสามานยนามภาษาญี่ปุ่น|たい]][[หมวดหมู่:หน้าที่มีรายการ|タイ]][[หมวดหมู่:หน้าที่มี 1 รายการ|タイ]]
+
+# <span class="senseid" id="ญี่ปุ่น:_Q869" data-lang="ja" data-id="Q869"><span class="None" lang="en">[[:ไทย#อังกฤษ&#58;&#95;Q869|ไทย]]</span>[[หมวดหมู่:อังกฤษ terms in nonstandard scripts|タイ]] ( [[ประเทศ]] ใน <span class="None" lang="en">[[:เอเชียตะวันออกเฉียงใต้#ภาษาอังกฤษ|เอเชียตะวันออกเฉียงใต้]]</span>[[หมวดหมู่:อังกฤษ terms in nonstandard scripts|タイ]])[[หมวดหมู่:ja:ไทย|たい]][[หมวดหมู่:ja:ไทย|たい]][[หมวดหมู่:ja:ประเทศ|たい]]</span>
+
+===== คำพ้องความ =====
+* <span class="Jpan" lang="ja">[[:タイ国#ภาษาญี่ปุ่น|タイ<ruby>国<rp>(</rp><rt>こく</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Tai-koku</span></span><span class="mention-gloss-paren annotation-paren">)</span>, <span class="Jpan" lang="ja">[[:泰国#ภาษาญี่ปุ่น|<ruby>泰<rp>(</rp><rt>たい</rt><rp>)</rp></ruby><ruby>国<rp>(</rp><rt>こく</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Taikoku</span></span><span class="mention-gloss-paren annotation-paren">)</span>
+
+===== ลูกคำ =====
+* <span class="Jpan" lang="ja">[[:タイ飯#ภาษาญี่ปุ่น|タイ<ruby>飯<rp>(</rp><rt>めし</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">taimeshi</span></span><span class="mention-gloss-paren annotation-paren">)</span>: อาหารไทย
+
+===== ดูเพิ่ม =====
+* <span class="Jpan" lang="ja">[[:シャム#ภาษาญี่ปุ่น|シャム]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Shamu</span></span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">สยาม</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>[[หมวดหมู่:ญี่ปุ่น links with redundant alt parameters|タイ]]
+* <span class="Jpan" lang="ja">[[:タイ人#ภาษาญี่ปุ่น|タイ<ruby>人<rp>(</rp><rt>じん</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Tai-jin</span></span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ชาวไทย</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>
+* <span class="Jpan" lang="ja">[[:タイ語#ภาษาญี่ปุ่น|タイ<ruby>語<rp>(</rp><rt>ご</rt><rp>)</rp></ruby>]]</span> <span class="mention-gloss-paren annotation-paren">(</span><span class="tr"><span class="mention-tr tr">Tai-go</span></span>, <span class="mention-gloss-double-quote">“</span><span class="mention-gloss">ภาษาไทย</span><span class="mention-gloss-double-quote">”</span><span class="mention-gloss-paren annotation-paren">)</span>

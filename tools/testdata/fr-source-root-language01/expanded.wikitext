@@ -1,0 +1,58 @@
+== <span class='sectionlangue' id='cs'>[[tchèque#fr|Tchèque]]</span>[[Catégorie:tchèque]] ==
+=== <span class="titreetym" title="">Étymologie</span> ===
+: Étymologie obscure ; peut-être<ref group="" name="DÉT"><cite style="font-style:normal" class="ouvrage" id="CITEREFRejzek2012">Jiří Rejzek,&#32;''Dictionnaire étymologique tchèque'', Leda, Prague,&#32;2012</cite></ref> apparenté à ''<bdi lang="cs" xml:lang="cs" class="lang-cs">[[kobyla#cs|kobyla]]</bdi>'' (« jument ») avec le sens de « crotte de cheval », par analogie de forme ; voir le sens culinaire de ''<bdi lang="fr" xml:lang="fr" class="lang-fr">[[crottin#fr|crottin]]</bdi>''.
+
+=== <span class="titredef" id="cs-nom-1">Nom commun</span><span id="cs-nom" style="font-size:0;"></span>[[Catégorie:Lemmes en tchèque]][[Catégorie:Noms communs en tchèque]] ===
+
+{|class="wikitable flextable"
+|-
+!scope="col"| Cas<nowiki />
+!scope="col"| Singulier<nowiki />
+!scope="col"| Pluriel
+|-
+!scope="row"| Nominatif<nowiki />
+| [[kobliha#cs-nom|kobli'''ha ''']]<nowiki />
+| [[koblihy#cs-flex-nom|kobli'''hy ''']]
+|-
+!scope="row"| Génitif<nowiki />
+| [[koblihy#cs-flex-nom|kobli'''hy ''']]<nowiki />
+| [[koblih#cs-flex-nom|kobli'''h ''']]
+|-
+!scope="row"| Datif<nowiki />
+| [[koblize#cs-flex-nom|kobli'''ze ''']]<nowiki />
+| [[koblihám#cs-flex-nom|kobli'''hám ''']]
+|-
+!scope="row"| Accusatif<nowiki />
+| [[koblihu#cs-flex-nom|kobli'''hu ''']]<nowiki />
+| [[koblihy#cs-flex-nom|kobli'''hy ''']]<nowiki />
+|-
+!scope="row"| Vocatif<nowiki />
+| [[kobliho#cs-flex-nom|kobli'''ho ''']]<nowiki />
+| [[koblihy#cs-flex-nom|kobli'''hy ''']]<nowiki />
+|-
+!scope="row"| Locatif<nowiki />
+| [[koblize#cs-flex-nom|kobli'''ze ''']]<nowiki />
+| [[koblihách#cs-flex-nom|kobli'''hách ''']]
+|-
+!scope="row"| Instrumental<nowiki />
+| [[koblihou#cs-flex-nom|kobli'''hou ''']]<nowiki />
+| [[koblihami#cs-flex-nom|kobli'''hami ''']]
+|}
+[[Image:Doughnuts cz.jpg|thumb]]
+'''kobliha''' [[Annexe:Prononciation/tchèque|<span class="API" title="Prononciation API">\kɔblɪɦa\</span>]] <span class="ligne-de-forme"  ><i>féminin</i></span>
+# <span class="term" id="cs-pâtisserie"><i>(<span class="texte">Pâtisserie
+</span>)</i></span>[[Catégorie:Pâtisseries en tchèque]] [[beignet#fr|Beignet]] tchèque.
+#* <span class="example"><q><bdi lang="cs" xml:lang="cs" class="lang-cs">''Sklenice džusu může podle druhu obsahovat stejné množství cukru jako tři a půl '''koblihy'''.''</bdi></q></span>
+#*: ''La traduction en français de l’[[Aide:Exemples|exemple]] manque.'' <span class="plainlinks stubedit">([//fr.wiktionary.org/w/index.php?title=kobliha&action=edit Ajouter])</span>[[Catégorie:Exemples en tchèque à traduire]][[Catégorie:Exemples en tchèque]]
+
+==== <span class="titresyno" title="">Synonymes</span> ====
+* <bdi lang="cs" xml:lang="cs" class="lang-cs">[[koblížek#cs|koblížek]]</bdi>
+
+=== <span class="titrepron" title="">Prononciation</span> ===
+* <span class="audio-pronunciation"><span class="audio-region" data-region="Brno-venkov (Tchéquie)">Brno-venkov (Tchéquie)</span>&nbsp;: écouter «&nbsp;<span lang="cs" class="audio-word" data-word="kobliha">kobliha</span>[[Catégorie:Prononciations audio en tchèque]] <span class="audio-ipa" data-ipa=""><span title="Prononciation à préciser">[<small><span class="plainlinks stubedit">[//fr.wiktionary.org/w/index.php?title=kobliha&action=edit Prononciation ?]</span></small>]</span>[[Catégorie:Wiktionnaire:Prononciations phonétiques manquantes en tchèque]]</span>&nbsp;» <span class="audio-file" data-file="LL-Q9056 (ces)-Ghost4Man-kobliha.wav">[[File:LL-Q9056 (ces)-Ghost4Man-kobliha.wav]]</span></span>
+
+=== <span class="titrevoir" title="">Voir aussi</span> ===
+* [[w:cs:kobliha|<span lang="cs" xml:lang="cs" class="lang-cs"><bdi>kobliha</bdi></span>]] sur l’encyclopédie Wikipédia (en tchèque)&nbsp;[[Image:Wikipedia-logo-v2.svg|20px|link=]][[Catégorie:Pages liées à Wikipédia en tchèque]]
+
+=== <span class="titreref" title="">Références</span> ===
+<div class="references-small" style="column-count:1;"><references group=""></references></div>

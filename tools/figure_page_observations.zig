@@ -19848,6 +19848,23 @@ fn sourceParentClosedShape(a: A, html: []const u8, image: syntax.Tag,
     return .{ .map = map, .areas = try areas.toOwnedSlice(a), .caption = caption };
 }
 
+// Direct root language is separate from served CSS and observed parent style.
+pub fn bindSourceRootLanguageAlloc(a: A, source: []const u8, ns: *const namespaces.Registry,
+    title: []const u8, language: []const u8, styles: *const profile.Profile,
+    table: ?compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
+{
+    if (table) |selected| if (selected.source.ptr != source.ptr or selected.source.len != source.len or
+        selected.source_root_language != null) return invalid;
+    const None = struct {
+        fn observe(_: ?*const anyopaque, _: A, _: []const u8, _: usize) A.Error!?compiler.TableContainingDirectionObservation { return null; }
+    };
+    const proof = (try compiler.SourceRootLanguageProof.bind(a, source, ns.source_sha256, title, language, styles)) orelse return invalid;
+    var result = table orelse compiler.TableContainingDirectionSource{
+        .root_language_only = true, .source = source, .context = null, .observe = None.observe };
+    result.source_root_language = proof;
+    return result;
+}
+
 pub fn bindSourceParentTextAlloc(a: A, page: *const SourceParentTextPage, source: []const u8,
     table: ?compiler.TableContainingDirectionSource) !compiler.TableContainingDirectionSource
 {

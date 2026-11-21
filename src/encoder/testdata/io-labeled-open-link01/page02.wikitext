@@ -1,0 +1,425 @@
+==[[Ido]]==
+{| border=1 width=100%
+|-
+|bgcolor="#f9f9f9"|
+{|
+*Semantiko: '''ab''' [[esar|esas]] [[la]] [[sufixo]] [[di]] [[antea]] [[pasinto]]. – [[Special:QuoLigasHike/.ab|La exempli trovesas hike]]. [[Kategorio:Idala sufixi|ab]]  [[Kategorio:Idala sufixi inverse|ba]]<br>
+'''L' aktiva formi''':
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* indikativo prezenta: am[[.as]]
+* indikativo pasinta: am[[.is]]
+* indikativo futura: am[[.os]]
+* indikativo kondicionala: am[[.us]]
+|}
+| width=1% |
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* infinitivo prezenta: [[am]][[.ar]]
+* infinitivo pasinta: am[[.ir]]
+* infinitivo futura: am[[.or]]
+|}
+|}
+
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* antea pasinto: am[[.ab]].is = [[es]].is am[[.int]][[.a]] 
+* antea futuro: am.ab.os = es.os am.int.a
+* antea kondicionalo: am.ab.us = es.us am.int.a
+|}
+| width=1% |
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* imperativo, volitivo: [[fin]][[.ez]]
+* antea volitivo: fin.ab.ez = es.ez fin.int.a
+|}
+|} 
+'''La pasiva formi''':
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* infinitivo prezenta: [[am]][[.es]][[.ar]]
+* infinitivo pasinta: am.es[[.ir]]
+* infinitivo futura: am.es[[.or]]
+|}
+| width=1% |
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* prezenta: (me) am[[.es]][[.as]]
+* pasinta: (me) am.es[[.is]]
+* futura: (me) am.es[[.os]]
+* kondicionala; (me) am.es[[.us]]
+|}
+|}
+
+{| border=0 width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* antea pasinto: am.es[[.ab]].is = [[es]][[.is]] am[[.it]][[.a]]
+* antea futuro: am.es.ab.os = es.os am.it.a
+* antea kondicionalo: am.es.ab.us = es.us am.it.a
+|}
+| width=1% |
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* imperativo, volitivo: [[fin]].es[[.ez]]
+* antea volitivo: fin.es.ab.ez = es.ez fin.it.a
+|}
+|}
+===[[Wikivortaro:Fonto-lingui|Fonto-lingui]]===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Angliana]]: [[suffix]] [[for]] [[short]]er [[version]]s [[of]] [[the]] [[perfect]] [[tense]]s
+*[[Franciana]]: [[suffixe]] des temps secondaires
+*[[Germaniana]]: [[
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hispaniana]]: [[sufijo]] [[de]] [[los]] [[tiempo]]s [[secundario]]s [[en]] [[los]] [[verbo]]s
+*[[Italiana]]: [[suffisso]] dei tempi anteriori
+*[[Rusiana]]: [[суффикс]] [[глагол|глаголов]] [[совершенный|совершенного]] [[вид|вида]]
+|}
+|}
+|}
+|}
+===<sup><small>Altra lingui</small></sup> A===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Afrikansa]]: 
+*[[Albaniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Arabiana]]: 
+*[[Armeniana]]: 
+*[[Asturiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> B===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Baskiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Bosniana]]: 
+*[[Bulgariana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> C===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Chekiana]]: Přípona pro před- časy
+*[[Chiniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Chuvashiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> D===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Daniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> E===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Erzya-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Esperanto]]: 
+*[[Estoniana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> F===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Finlandana]]: [[perfekti]]n [[ja]] [[pluskvamperfekti]]n [[lyhyt]] [[muoto]]
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+
+===<sup><small>Altra lingui</small></sup> G===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Galisiana]]: 
+*[[Georgiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Grekiana]]:
+|}
+|}
+===<sup><small>Altra lingui</small></sup> H===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hebrea]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Hungariana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> I===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Indoneziana]]: 
+*[[Interlingua]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Islandana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> J===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Japoniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> K===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Kataluniana]]: 
+*[[Komi-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Koreana]]: 
+*[[Kroatiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> L===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Laponiana]]: 
+*[[Latina]]: 
+*[[Latviana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Lituaniana]]: 
+*[[Luxemburgiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> M===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Mari-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Moksha-linguo]]: 
+*[[Mongoliana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> N===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Nederlandana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Norvegiana]] ([[bm]]): 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> O===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Ocitaniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> P===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Persiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Poloniana]]: 
+*[[Portugalana]]: Sufixo para tempos secundários, tempos anteriores ao da conjugação.
+|}
+|}
+
+===<sup><small>Altra lingui</small></sup> Q===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Quechua-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> R===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Rumaniana]]: sufix pentru timpuri anterioare
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+
+===<sup><small>Altra lingui</small></sup> S===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Slovakiana]]: 
+*[[Sloveniana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Suediana]]: 
+*[[Swahilia]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> T===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Tagaloga]]: 
+*[[Tatar-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Turkiana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> U===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Udmurtiana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Ukrainana]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> V===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Vietnamana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Volapük]]: 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> W===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Walsana]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> X===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Xhosa-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
+===<sup><small>Altra lingui</small></sup> Y===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*
+|}
+|}
+===<sup><small>Altra lingui</small></sup> Z===
+{| width=100%
+|-
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+*[[Zulu-linguo]]: 
+|}
+|bgcolor="#f9f9f9" valign=top width=48%|
+{|
+* 
+|}
+|}
