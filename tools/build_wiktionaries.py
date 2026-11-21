@@ -1566,6 +1566,10 @@ def release_figure_parent_replays():
 
 
 
+_FIGURE_KERNEL_PATHS = (sys.platform.startswith('linux') and hasattr(os, 'O_PATH') and
+                        os.path.isdir('/proc/self/fd'))
+
+
 def _figure_replay_identity(path, *, directory=False):
     """Bind a lexical name and its resolved object without reading payload bytes."""
     def fields(value):
@@ -1575,8 +1579,28 @@ def _figure_replay_identity(path, *, directory=False):
     kind = stat.S_ISDIR if directory else stat.S_ISREG
     if not kind(lexical.st_mode):
         raise ValueError('Unsafe Figure replay path: ' + str(path))
-    target = path.stat()
-    resolved = str(path.resolve(strict=True))
+    target = None
+    if _FIGURE_KERNEL_PATHS and path.is_absolute():
+        # O_PATH binds metadata without opening the payload. Use the kernel's
+        # name only when it is identical to the caller's absolute spelling.
+        try:
+            fd = os.open(path, os.O_PATH | os.O_NOFOLLOW)
+        except OSError as error:
+            if error.errno not in (errno.EMFILE, errno.ENFILE, errno.ENOSYS, errno.EINVAL, errno.EPERM, errno.EACCES):
+                raise
+        else:
+            try:
+                target = os.fstat(fd)
+                try:
+                    kernel_name = os.readlink(f'/proc/self/fd/{fd}')
+                except OSError:
+                    kernel_name = None
+                resolved = kernel_name if kernel_name == str(path) else str(path.resolve(strict=True))
+            finally:
+                os.close(fd)
+    if target is None:
+        target = path.stat()
+        resolved = str(path.resolve(strict=True))
     if fields(lexical) != fields(target) or fields(path.lstat()) != fields(lexical):
         raise ValueError('Figure replay path changed while checking identity')
     return resolved, fields(lexical), fields(target)

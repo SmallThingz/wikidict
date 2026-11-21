@@ -10315,6 +10315,45 @@ class SnapshotStagingTimingTests(unittest.TestCase):
             self.assertIs(caught.exception,error);release.assert_called_once()
 
 
+class FigurePathIdentityTests(unittest.TestCase):
+    def test_kernel_and_portable_identity_bind_the_same_objects_and_names(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch).resolve()
+            folder = root / 'original'
+            folder.mkdir()
+            member = folder / 'capture'
+            member.write_bytes(b'original')
+            alias = root / 'selected'
+            alias.symlink_to(folder, target_is_directory=True)
+            second = folder / 'other-name'
+            os.link(member, second)
+            for path, directory in ((folder, True), (member, False), (second, False), (alias / member.name, False)):
+                with self.subTest(path=path):
+                    with patch.object(b, '_FIGURE_KERNEL_PATHS', False):
+                        expected = b._figure_replay_identity(path, directory=directory)
+                    self.assertEqual(expected, b._figure_replay_identity(path, directory=directory))
+                    self.assertEqual(expected[0], str(path.resolve(strict=True)))
+            with self.assertRaises(ValueError):
+                b._figure_replay_identity(alias, directory=True)
+            with self.assertRaises(FileNotFoundError):
+                b._figure_replay_identity(folder / 'missing')
+
+    @unittest.skipUnless(getattr(os, 'O_PATH', None) and os.path.isdir('/proc/self/fd'), 'requires Linux descriptor names')
+    def test_canonical_member_uses_its_open_descriptor_and_keeps_portable_fallback(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch).resolve() / 'capture'
+            path.write_bytes(b'original')
+            with patch.object(b, '_FIGURE_KERNEL_PATHS', False):
+                expected = b._figure_replay_identity(path)
+            with patch.object(Path, 'resolve', side_effect=AssertionError('walked canonical ancestors again')):
+                self.assertEqual(expected, b._figure_replay_identity(path))
+            for code in (errno.EACCES, errno.EPERM, errno.EINVAL, errno.ENOSYS, errno.ENFILE, errno.EMFILE):
+                with self.subTest(code=code), patch.object(b.os, 'open', side_effect=OSError(code, 'O_PATH unavailable')):
+                    self.assertEqual(expected, b._figure_replay_identity(path))
+            with patch.object(b.os, 'readlink', side_effect=FileNotFoundError('descriptor view unavailable')):
+                self.assertEqual(expected, b._figure_replay_identity(path))
+
+
 class FigureTupleGuardDigestTests(unittest.TestCase):
     setUp = CompleteParentTupleReplayTests.setUp
     validate = CompleteParentTupleReplayTests.validate
