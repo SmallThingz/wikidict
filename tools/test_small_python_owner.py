@@ -181,6 +181,15 @@ class SourceValidationTests(unittest.TestCase):
         plan = dict(qualification_root=str(output), cwd=str(self.root), argv=['/usr/bin/python3', '-B', '-c', 'pass'], env={}, scope='unit', source_refs=[self.bound])
         command.write_text(json.dumps(plan))
         config = dict(input_ref=ref(command), output_root=str(output), source_refs=[self.bound, self.bound], profile=dict(memory_bytes=1, reserve_bytes=1, cpu_seconds=120, wall_seconds=300, max_tasks=64, disk_floor_bytes=1, cpus=[0]))
+        link = self.root / 'linked-scratch'
+        link.symlink_to(self.root, target_is_directory=True)
+        with mock.patch.object(owner, 'authenticate_sources') as bulk_read:
+            for invalid in ('relative', str(link), str(self.root / 'absent'), str(self.path)):
+                command.write_text(json.dumps(dict(plan, env={'TMPDIR': invalid})))
+                with self.subTest(tmpdir=invalid), self.assertRaises(ValueError):
+                    owner.prepare(dict(config, input_ref=ref(command)))
+            bulk_read.assert_not_called()
+        command.write_text(json.dumps(plan))
         # Invalid launch settings must fail before reading large bound inputs.
         with mock.patch.object(owner, 'authenticate_sources') as bulk_read, \
                 mock.patch.object(owner.os, 'getpriority', return_value=0):
@@ -208,6 +217,7 @@ class SourceValidationTests(unittest.TestCase):
         self.assertEqual(23, stopped.exception.code)
         result = json.loads((output / 'result01.json').read_text())
         self.assertEqual(23, result['returncode'])
+        self.assertEqual(str(output / 'tmp'), result['temporary_directory'])
         self.assertEqual(plan['argv'], result['argv'])
         self.assertEqual(ref(output / 'tests.stdout'), result['stdout'])
 
@@ -262,7 +272,7 @@ class DirectCliWatchdogTests(unittest.TestCase):
             command = output / 'command.json'
             memory = 256 * 1024**2
             code = f"""
-import json, os, resource, sys
+import json, os, resource, sys, tempfile
 sys.path.insert(0, {str(resources.parent)!r})
 import build_resource_limits as limits
 assert limits.inside_watchdog()
@@ -272,6 +282,7 @@ assert os.getppid() == int(os.environ[limits.WATCHDOG_PARENT_PID])
 assert limits.watchdog_physical_memory_limit_bytes() == {memory}
 print(json.dumps(dict(pid=os.getpid(), parent=os.getppid(), session=os.getsid(0),
                       budget=limits.watchdog_physical_memory_limit_bytes(),
+                      scratch=tempfile.gettempdir(),
                       open_files=resource.getrlimit(resource.RLIMIT_NOFILE)[0])))
 print('direct stderr', file=sys.stderr)
 sys.exit({expected_exit})
@@ -279,6 +290,9 @@ sys.exit({expected_exit})
             plan = dict(qualification_root=str(output), cwd=str(root), argv=[sys.executable, '-B', '-c', code], env={}, scope='actual direct-exec one-use watchdog proof fixture', source_refs=[ref(resources), ref(guardian)])
             if expected_exit == 0:
                 plan['source_refs'].append(ref(selected))
+                scratch = output / 'source-scratch'
+                scratch.mkdir(mode=0o700)
+                plan['env']['TMPDIR'] = str(scratch)
             command.write_text(json.dumps(plan))
             config = dict(input_ref=ref(command), output_root=str(output), source_refs=[ref(resources), ref(guardian)], child_nice=max(0, os.getpriority(os.PRIO_PROCESS, 0)), direct_cli=True, profile=dict(memory_bytes=memory, reserve_bytes=1024**3, cpu_seconds=120, wall_seconds=60, max_tasks=32, disk_floor_bytes=1024**2, cpus=[min(os.sched_getaffinity(0))]))
             if expected_exit == 0:
@@ -291,6 +305,9 @@ sys.exit({expected_exit})
             report = json.loads((output / 'direct-runtime01/watchdog.json').read_text())
             proof = json.loads((output / 'tests.stdout').read_text())
             self.assertEqual(expected_exit, result['returncode']); self.assertEqual(expected_exit, owner_result['returncode'])
+            self.assertEqual(plan['env'].get('TMPDIR', str(output / 'tmp')), proof['scratch'])
+            self.assertEqual(proof['scratch'], result['temporary_directory'])
+            self.assertEqual(expected_exit != 0, (output / 'tmp').exists())
             self.assertTrue(owner_result['source_after'])
             self.assertEqual(plan['argv'], result['argv']); self.assertEqual(plan['env'], result['environment'])
             self.assertEqual(ref(output / 'tests.stdout'), result['stdout']); self.assertEqual(ref(output / 'tests.stderr'), result['stderr'])
