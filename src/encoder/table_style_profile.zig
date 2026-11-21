@@ -415,20 +415,20 @@ pub fn resolveInlineTableWithLegacyBorderBasisAlloc(a: std.mem.Allocator, css: [
 }
 fn addCellWidthHint(winners: *Winners, raw: ?[]const u8) void {
     const value = raw orelse return;
-    // Strict finite HTML integer/percentage hints. Other spellings remain
-    // unsupported, never interpreted as CSS or as an attractive minimum.
+    // HTML dimension hints use unsigned decimal lengths or percentages.
+    // Keep other spellings unresolved rather than applying CSS number syntax.
     var parsed: Value = .unsupported;
     if (value.len != 0 and value.len <= 64) {
         const percent = value[value.len - 1] == '%';
         const digits = if (percent) value[0 .. value.len - 1] else value;
-        var valid = digits.len != 0;
-        for (digits) |byte| valid = valid and std.ascii.isDigit(byte);
-        if (valid) {
+        if (digits.len != 0 and std.ascii.isDigit(digits[0]) and
+            std.mem.indexOfAny(u8, digits, "eE") == null and widthNumberSyntax(digits))
+        {
             const number: ?f32 = std.fmt.parseFloat(f32, digits) catch null;
             if (number) |scalar| {
                 // HTML cell dimension hints ignore zero. This does not apply
                 // to a real CSS width:0 winner, which remains present data.
-                if (scalar == 0) return;
+                if (scalar == 0 and widthNumberIsZero(digits)) return;
                 const width: types.StyleWidth = .{ .unit = if (percent) .percent else .px, .value = scalar };
                 if (types.validStyleWidth(width)) parsed = .{ .width_value = width };
             }
@@ -20248,6 +20248,45 @@ test "preferred cell width keeps CSS priority auto and unknown above exact legac
         const expected: f32 = if (std.mem.startsWith(u8, css, "width:48%")) 48 else 80;
         try std.testing.expectEqual(expected, valid_prior.style.?.width.?.value);
     }
+}
+
+test "fractional HTML cell widths preserve spacer geometry and CSS precedence" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var profile = try parseAlloc(a, ".wider{width:49%}");
+    defer profile.deinit();
+
+    const spacer: types.StyleWidth = .{ .unit = .percent, .value = 0.5 };
+    const inline_cell = try resolveInlineCellWithLegacyHintsAlloc(a, null, "top", "0.5%", "");
+    try std.testing.expect(!inline_cell.unresolved and inline_cell.style.?.vertical_align == .top);
+    try std.testing.expectEqualDeep(spacer, inline_cell.style.?.width.?);
+    const ordinary_cell = try profile.resolveCellWithContextAndHints(a, 0, 0, "", .{ .legacy_cell_width = "0.5%" }, false, null, null, "");
+    try std.testing.expect(!ordinary_cell.unresolved);
+    try std.testing.expectEqualDeep(spacer, ordinary_cell.style.?.width.?);
+    const overridden = try profile.resolveCellWithContextAndHints(a, profile.classScope("wider"), 0, "wider", .{ .legacy_cell_width = "0.5%" }, false, null, null, "");
+    try std.testing.expect(!overridden.unresolved);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 49 }, overridden.style.?.width.?);
+
+    const px = try resolveInlineCellWithLegacyHintsAlloc(a, null, null, "01.25", "");
+    try std.testing.expect(!px.unresolved);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .px, .value = 1.25 }, px.style.?.width.?);
+    const zero = try resolveInlineCellWithLegacyHintsAlloc(a, null, null, "0.0%", "");
+    try std.testing.expect(!zero.unresolved and zero.style == null);
+    for ([_][]const u8{ ".5%", "5.%", "1.2.3%", "+0.5%", "-0.5%", "1e2%", "1E-2%", "0.5em" }) |hint| {
+        try std.testing.expect((try resolveInlineCellWithLegacyHintsAlloc(a, null, null, hint, "")).unresolved);
+    }
+}
+
+test "an HTML cell width rounding to zero still participates in the cascade" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const tiny = "0.0000000000000000000000000000000000000000000000001%";
+    const result = try resolveInlineCellWithLegacyHintsAlloc(arena.allocator(), null, null, tiny, "");
+    try std.testing.expect(!result.unresolved);
+    try std.testing.expectEqualDeep(types.StyleWidth{ .unit = .percent, .value = 0 }, result.style.?.width.?);
+    const zero = try resolveInlineCellWithLegacyHintsAlloc(arena.allocator(), null, null, "0.000%", "");
+    try std.testing.expect(!zero.unresolved and zero.style == null);
 }
 
 test "preferred cell width separates HTML zero omission CSS zero percent above100 and minimum" {
