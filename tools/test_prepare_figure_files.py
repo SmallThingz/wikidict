@@ -10358,9 +10358,16 @@ class FigureCanonicalTitleReuseTests(unittest.TestCase):
     def test_positive_canonical_title_reuses_validated_result_and_preserves_missing_normalization(self):
         batches,site,expected=self.normalization_fixture()
         before=copy.deepcopy(batches)
-        result,calls=self.title_call_census(figure,batches,site)
+        requested = []
+        normalize = figure._BatchFileRegistry.file_title
+        def trace_request(registry, title):
+            requested.append(title)
+            return normalize(registry, title)
+        with patch.object(figure._BatchFileRegistry, 'file_title', trace_request):
+            result,calls=self.title_call_census(figure,batches,site)
         self.assertEqual({row['requested_file']:(row['state'],row['canonical_file']) for row in result['records']},expected)
-        self.assertEqual(len(calls),3*6+5*3)
+        self.assertEqual(len(requested),3*6+5*3)
+        self.assertEqual(calls, list(dict.fromkeys(requested)))
         self.assertNotIn('-',calls)
         self.assertEqual(result['base_batches'],1)
         self.assertEqual(result['observed_batches'],0)

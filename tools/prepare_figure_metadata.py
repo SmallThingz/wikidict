@@ -1220,7 +1220,7 @@ def jpeg_unrotated_metadata(info):
         return False
     fields = {}
     for item in value:
-        if (not isinstance(item, dict) or set(item) != {'name', 'value'} or
+        if (not isinstance(item, dict) or len(item) != 2 or 'name' not in item or 'value' not in item or
                 not isinstance(item['name'], str) or item['name'] in fields):
             return False
         fields[item['name']] = item['value']
@@ -1388,10 +1388,12 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                     state='eligible' if eligible else 'tiff_default_page' if default_tiff_page else 'unsupported', file_sha1=row['file_sha1'],
                     file_timestamp=row['file_timestamp'], original_width=row['width'],
                     original_height=row['height'], mime=mime, mediatype=row['mediatype'])
-            facts = file_fact_identity(record)
+            # The projection already retains these eight facts. Later SVG annotations
+            # add separate keys, so the first record can serve every alias comparison.
             previous = (canonical_facts.get(record['canonical_file']) if jpeg_supplement else
-                        canonical_facts.setdefault(record['canonical_file'], facts))
-            if previous != facts:
+                        canonical_facts.setdefault(record['canonical_file'], record))
+            if previous is not record and (previous is None or
+                    file_fact_identity(previous) != file_fact_identity(record)):
                 raise ValueError('Conflicting canonical file facts across Figure batches')
             if jpeg_supplement:
                 canonical = record['canonical_file']
@@ -1447,8 +1449,8 @@ def file_records(batches, namespace_raw, wiki, date, site_raw, *, has_batches, r
                 raise ValueError('SVG occurrence batch has unaccounted identity requests')
     for record in records:
         target = canonical_facts.get(record['requested_file'])
-        facts = file_fact_identity(record)
-        if target is not None and target != facts:
+        if (target is not None and target is not record and
+                file_fact_identity(target) != file_fact_identity(record)):
             raise ValueError('Requested file conflicts with an authenticated canonical alias')
     records.sort(key=lambda row: row['requested_file'].encode('utf-8'))
     return {'wiki': wiki, 'content_language': language, 'core_revision': core,
