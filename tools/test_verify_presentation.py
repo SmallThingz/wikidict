@@ -1,4 +1,5 @@
 import bz2
+import errno
 import gzip
 import json
 import hashlib
@@ -739,6 +740,37 @@ class PresentationDiagnosticTests(unittest.TestCase):
                 audit.write_report(target, result)
                 actual = target.read_bytes()
                 self.assertEqual(gzip.decompress(actual) if name.endswith('.gz') else actual, expected)
+
+    def test_interrupted_report_preserves_previous_file_and_removes_partial_output(self):
+        def interrupted(_):
+            yield '{"records":'
+            raise OSError(errno.ENOSPC, 'disk full')
+
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ('report.json', 'report.json.gz'):
+                path = Path(folder, name)
+                audit.write_report(path, {'records': 42})
+                previous = path.read_bytes()
+                with mock.patch.object(audit, 'report_chunks', interrupted), self.assertRaises(OSError) as caught:
+                    audit.write_report(path, {'records': 50})
+                self.assertEqual(caught.exception.errno, errno.ENOSPC)
+                self.assertEqual(path.read_bytes(), previous)
+                self.assertEqual(list(Path(folder).glob('.audit-report-*')), [])
+
+    def test_report_keeps_existing_symlink_encoding_and_private_mode(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = Path(folder, 'report-data')
+            target.touch(mode=0o600)
+            alias = Path(folder, 'result.json.gz')
+            alias.symlink_to(target.name)
+            audit.write_report(alias, {'records': 42})
+            self.assertTrue(alias.is_symlink())
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(json.loads(gzip.decompress(target.read_bytes())), {'records': 42})
+
+    def test_durable_report_requires_a_file_before_index_cleanup(self):
+        with self.assertRaisesRegex(audit.ScanError, 'regular report file'):
+            audit.write_report(Path(os.devnull), {}, require_regular=True)
 
     def test_diagnostic_spools_preserve_order_counts_and_unicode_at_batch_boundaries(self):
         for codec in (None, audit.zstd):
@@ -1488,7 +1520,7 @@ class DisposableIndexTests(unittest.TestCase):
         with (mock.patch('sys.argv', argv), mock.patch.object(audit, 'scan', side_effect=scan),
               mock.patch('builtins.print') as printed, ExitStack() as resources):
             if report_error:
-                resources.enter_context(mock.patch.object(audit, 'write_checkpoint_report', side_effect=OSError('report failed')))
+                resources.enter_context(mock.patch.object(audit, 'write_report', side_effect=OSError('report failed')))
             code = audit.main()
         self.assertEqual(snapshots[-1], audit.dictionary_snapshot(stage))
         return code, json.loads(report.read_text()), cache, printed

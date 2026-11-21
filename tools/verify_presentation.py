@@ -1039,8 +1039,7 @@ def report_chunks(result):
     yield '\n}\n'
 
 
-def write_report(path, result):
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_report_contents(path, result):
     with ExitStack() as resources:
         stream = resources.enter_context(path.open('wb'))
         if path.suffix == '.gz':
@@ -1050,15 +1049,29 @@ def write_report(path, result):
             stream.write(part.encode('utf-8'))
 
 
-def write_checkpoint_report(path, result):
+def write_report(path, result, *, require_regular=False):
+    """Publish a complete report while keeping the last one readable on write failure."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.audit-report-', dir=path.parent) as directory:
+    try:
+        existing_mode = path.stat().st_mode
+    except FileNotFoundError:
+        existing_mode = None
+    if existing_mode is not None and not stat.S_ISREG(existing_mode):
+        # A caller can also stream a report to a pipe or device.
+        require(not require_regular, 'checkpoint and index cleanup require a regular report file')
+        _write_report_contents(path, result)
+        return
+    destination = path.resolve()
+    with tempfile.TemporaryDirectory(prefix='.audit-report-', dir=destination.parent) as directory:
+        # The requested name selects gzip even when it points to a differently named file.
         pending = Path(directory) / path.name
-        write_report(pending, result)
+        _write_report_contents(pending, result)
         with pending.open('rb') as stream:
+            if existing_mode is not None:
+                os.fchmod(stream.fileno(), existing_mode & 0o777)
             os.fsync(stream.fileno())
-        os.replace(pending, path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        os.replace(pending, destination)
+    fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
     finally:
@@ -1252,7 +1265,7 @@ def run_audit(args, report_files):
     except (OSError, subprocess.SubprocessError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
         result = dict(status='error', scan_complete=False, diagnostic_only=True,
                       semantic_acceptance=False, error=f'{type(error).__name__}: {error}')
-    (write_checkpoint_report if args.checkpoint or args.discard_new_indexes else write_report)(args.report, result)
+    write_report(args.report, result, require_regular=bool(args.checkpoint or args.discard_new_indexes))
     cleanup_failed = False
     if disposable is not None and result.get('scan_complete') and result['status'] != 'error':
         try:
