@@ -46,6 +46,27 @@ def fixture(root):
 
 
 class DirectPageLanguageTests(unittest.TestCase):
+    def test_supplemental_package_preserves_namespaced_identity_and_url(self):
+        data = Path(__file__).with_name('testdata')
+        selected = data / 'controlled-fr-supplemental' / p.SNAPSHOT
+        ns = data / 'fr-table-root' / 'namespace-registry.tsv'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / p.SNAPSHOT
+            source.write_bytes(selected.read_bytes())
+            source.with_name(p.RAW).write_bytes(b'')
+            packed = p.pack_snapshot(source, ns, root/'packed', wiki='frwiktionary', date='20261001')
+            self.assertEqual(packed.read_bytes(), selected.read_bytes())
+            index = json.loads(packed.read_bytes())
+            row = index['direct_get_contexts'][0]
+            title = row['page']['title']
+            self.assertEqual((118, 'Racine:alpha/beta gamma'), (row['page']['namespace'], title))
+            for namespace, name in ((-1, title), (2**31, title), (118, 'word'), (118, ':arabe'), (118, 'Racine:')):
+                with self.subTest(namespace=namespace, name=name):
+                    row['page'].update(namespace=namespace, title=name)
+                    with self.assertRaisesRegex(ValueError, 'identity|namespace prefix'):
+                        p._direct_records(index)
+
     def test_complete_response_package_preserves_every_byte_and_absence(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

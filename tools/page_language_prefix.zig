@@ -156,6 +156,13 @@ pub fn parseAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64) !Obse
 pub fn parseCurrentAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64, title: []const u8) !Observation {
     return parseForPage(a, bytes, page_id, revision_id, title);
 }
+// For a namespaced article, wgPageName contains the prefix and wgTitle does not.
+pub fn parseNamespacedCurrentAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
+    namespace_id: i32, full_title: []const u8, local_title: []const u8) !Observation
+{
+    return parseForSelectedPage(a, bytes, page_id, revision_id, local_title,
+        .{ .namespace_id = namespace_id, .title = full_title });
+}
 // Explicit full-GET selection binds the exact oldid and namespace; the older
 // language APIs keep their main-namespace contract unchanged.
 pub fn parseSelectedOldidAlloc(a: A, bytes: []const u8, page_id: u64, revision_id: u64,
@@ -306,6 +313,30 @@ test "page prefix actual WO prelude retains complete chain and rejects changed s
     try std.testing.expectError(invalid, parseAlloc(a, hidden, 3618, 26533));
 }
 
+
+test "supplemental current prefix checks both titles namespace view and both revisions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const prefix = "<!DOCTYPE html><html lang=fr><head><script>RLCONF={\"wgArticleId\":1501871,\"wgRevisionId\":38791024,\"wgCurRevisionId\":38791024,\"wgNamespaceNumber\":118,\"wgPageName\":\"Racine:arabe/ل_ب_ن\",\"wgTitle\":\"arabe/ل ب ن\",\"wgAction\":\"view\",\"wgIsArticle\":true};</script></head><body><main><div class='mw-parser-output' lang=fr>";
+    const title = "Racine:arabe/ل ب ن";
+    const local = "arabe/ل ب ن";
+    const accepted = try parseNamespacedCurrentAlloc(a, prefix, 1501871, 38791024, 118, title, local);
+    try std.testing.expectEqualStrings("fr", accepted.root_language);
+    for ([_][2][]const u8{
+        .{ "\"wgArticleId\":1501871", "\"wgArticleId\":1501872" },
+        .{ "\"wgRevisionId\":38791024", "\"wgRevisionId\":38791023" },
+        .{ "\"wgCurRevisionId\":38791024", "\"wgCurRevisionId\":38791025" },
+        .{ "\"wgNamespaceNumber\":118", "\"wgNamespaceNumber\":0" },
+        .{ "Racine:arabe/ل_ب_ن", "Other:arabe/ل_ب_ن" },
+        .{ "\"wgTitle\":\"arabe/ل ب ن\"", "\"wgTitle\":\"ل ب ن\"" },
+        .{ "\"view\"", "\"edit\"" },
+        .{ "true", "false" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, prefix, change[0], change[1]);
+        try std.testing.expectError(invalid, parseNamespacedCurrentAlloc(a, altered, 1501871, 38791024, 118, title, local));
+    }
+}
 
 test "current canonical prefix requires exact title page and both revision identities" {
     const a = std.testing.allocator;

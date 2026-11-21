@@ -87,8 +87,8 @@ fn directFlag(v: V, key: []const u8, expected: bool) !void {
     const actual = try field(v, key);
     if (actual != .bool or actual.bool != expected) return invalid;
 }
-pub fn validPage(page: Page) bool {
-    return page.id != 0 and page.revision != 0 and page.namespace == 0 and eq(page.model, "wikitext") and
+fn validPage(page: Page) bool {
+    return page.id != 0 and page.revision != 0 and page.namespace >= 0 and eq(page.model, "wikitext") and
         page.title.len != 0 and std.mem.indexOfAny(u8, page.title, "\x00\r\n\t") == null and
         lowerHash(page.raw_sha256) and lowerHash(page.expanded_sha256 orelse return false);
 }
@@ -111,7 +111,8 @@ fn directDocumentUrl(a: A, ns: *const namespaces.Registry, record: anytype, url:
         if (!eq(url, oldid) and !eq(url, named)) return invalid;
     }
 }
-pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) ![]const u8 {
+const Transport = struct { url: []const u8, observation: prefix_parser.Observation };
+pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) !Transport {
     if (!eq(record.profile, "source-parent-direct-get-v1") or !validPage(record.page) or
         record.response.len == 0 or record.response.len > 2 * 1024 * 1024 or
         record.prefix.len == 0 or record.prefix.len > 512 * 1024 or !std.mem.startsWith(u8, record.response, record.prefix) or
@@ -185,8 +186,19 @@ pub fn validateTransport(a: A, ns: *const namespaces.Registry, record: anytype) 
     // Both URL modes initially require selected revision == retained current
     // revision. historical-oldid names the acquisition URL, not historical
     // rendering equivalence. This uses the held HU parser API explicitly.
-    _ = try prefix_parser.parseCurrentAlloc(a, record.prefix, record.page.id, record.page.revision, record.page.title);
-    return url;
+    const page = record.page;
+    const observation = if (page.namespace == 0)
+        try prefix_parser.parseCurrentAlloc(a, record.prefix, page.id, page.revision, page.title)
+    else observed: {
+        if (record.mode != .@"current-canonical" or record.response_kind != .@"complete-response" or
+            record.styles.responses.len != 0 or record.styles.receipt.len != 0) return invalid;
+        const spec = ns.storedPageSpec(page.title, page.namespace) catch return invalid;
+        const local_title = ns.ofTitle(page.title).text;
+        if (spec.role == .compile_only or local_title.len == 0) return invalid;
+        break :observed try prefix_parser.parseNamespacedCurrentAlloc(a, record.prefix, page.id,
+            page.revision, page.namespace, page.title, local_title);
+    };
+    return .{ .url = url, .observation = observation };
 }
 
 

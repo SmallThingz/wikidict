@@ -184,11 +184,15 @@ def _direct_records(index):
         page = row['page']
         if (not _keys(page, ('id', 'revision', 'namespace', 'title', 'model', 'raw_sha256', 'expanded_sha256')) or
                 not _integer(page['id'], 1) or page['id'] <= previous or page['id'] in used_ids or
-                not _integer(page['revision'], 1) or type(page['namespace']) is not int or page['namespace'] != 0 or
+                not _integer(page['revision'], 1) or not _integer(page['namespace']) or page['namespace'] > 2**31 - 1 or
                 page['model'] != 'wikitext' or not isinstance(page['title'], str) or not page['title'] or
                 any(c in page['title'] for c in '\x00\r\n\t') or page['title'] in used_titles or
                 not _hash_string(page['raw_sha256']) or not _hash_string(page['expanded_sha256'])):
             _fail('invalid exact direct page identity')
+        if page['namespace']:
+            prefix, separator, local_title = page['title'].partition(':')
+            if not (prefix and separator and local_title):
+                _fail('missing namespace prefix or local title')
         previous = page['id']
         used_ids.add(page['id'])
         used_titles.add(page['title'])

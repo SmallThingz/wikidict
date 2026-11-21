@@ -1,0 +1,33 @@
+{
+  "schema": "wikidict.page-language-index.v1",
+  "wiki": "frwiktionary",
+  "core_revision": null,
+  "namespace_registry_sha256": "149f82f16975acebb872c9112d89fdf6bee503752c1f501248becf25ad93f18c",
+  "historical_page_language_proven": false,
+  "source_profile": null,
+  "responses": [],
+  "records": [],
+  "direct_get_contexts": [
+    {
+      "profile": "source-parent-direct-get-v1",
+      "page": {
+        "id": 11,
+        "revision": 12,
+        "namespace": 118,
+        "title": "Racine:alpha/beta gamma",
+        "model": "wikitext",
+        "raw_sha256": "d7439bee24773bcbfa2d0a97947ee36227b10d1022b1a55847e928965bb6bfde",
+        "expanded_sha256": "691661b386fd34d08d9e14f20e3a4dffa5d74f03492e3a7ce8a6e648d25a28a3"
+      },
+      "mode": "current-canonical",
+      "response_kind": "complete-response",
+      "response": "<!DOCTYPE html><html lang=fr><head><script>RLCONF={\"wgArticleId\":11,\"wgRevisionId\":12,\"wgCurRevisionId\":12,\"wgNamespaceNumber\":118,\"wgPageName\":\"Racine:alpha/beta_gamma\",\"wgTitle\":\"alpha/beta gamma\",\"wgAction\":\"view\",\"wgIsArticle\":true};</script></head><body><main><div class='mw-parser-output' lang=fr>controlled</div></main></body></html>",
+      "prefix": "<!DOCTYPE html><html lang=fr><head><script>RLCONF={\"wgArticleId\":11,\"wgRevisionId\":12,\"wgCurRevisionId\":12,\"wgNamespaceNumber\":118,\"wgPageName\":\"Racine:alpha/beta_gamma\",\"wgTitle\":\"alpha/beta gamma\",\"wgAction\":\"view\",\"wgIsArticle\":true};</script></head><body><main><div class='mw-parser-output' lang=fr>",
+      "receipt": "{\"core\":null,\"historical_equality_proven\":false,\"sources\":[{\"accept_encoding\":\"gzip\",\"accepted\":true,\"bytes\":340,\"content_encoding\":\"gzip\",\"encoded\":{\"bytes\":248,\"sha256\":\"e5e95d92369e1f2113fd823d64761d8a00a0bc23f53c7e28c63cad1618f9b9e7\",\"path\":\"controlled.html.gz\"},\"file\":\"controlled.html\",\"final_url\":\"https://fr.wiktionary.org/wiki/Racine:alpha/beta_gamma\",\"headers\":{\"content-encoding\":\"gzip\",\"content-type\":\"text/html; charset=UTF-8\"},\"request_count\":1,\"response_complete\":true,\"retrieved_utc\":\"2000-01-01T00:00:00Z\",\"sha256\":\"f0ac7e94ab47e54982e6b5832d72715f43d3d2e746d5938028280175671f20cf\",\"source_path\":\"controlled fixture\",\"status\":200,\"unknown_response_outcome\":false,\"url\":\"https://fr.wiktionary.org/wiki/Racine:alpha/beta_gamma\",\"user_agent\":\"Wikidict/1.0 (https://github.com/SmallThingz/wikidict)\"}],\"unrequested\":[]}",
+      "styles": {
+        "responses": [],
+        "receipt": ""
+      }
+    }
+  ]
+}

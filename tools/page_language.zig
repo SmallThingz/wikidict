@@ -63,7 +63,6 @@ const Packet = struct {
 };
 const DirectStyles = struct { responses: []const []const u8, receipt: []const u8 };
 pub const DirectGetContext = direct_source_get.Context(DirectStyles);
-const directPageValid = direct_source_get.validPage;
 const canonicalCurrentUrl = direct_source_get.canonicalCurrentUrl;
 const directGetTransport = direct_source_get.validateTransport;
 // This owned capsule is transport evidence only. It has no Profile/Compiler or
@@ -425,13 +424,13 @@ pub const Registry = struct {
         const direct_entries = try a.alloc(DirectEntry, doc.direct_get_contexts.len);
         var previous_direct: u64 = 0;
         for (doc.direct_get_contexts, direct_entries, 0..) |record, *entry, direct_index| {
-            if (!directPageValid(record.page) or record.page.id <= previous_direct) return invalid;
+            if (record.page.id <= previous_direct) return invalid;
             previous_direct = record.page.id;
             for (doc.records) |api| if (api.page.id == record.page.id) return invalid;
             for (doc.direct_get_contexts[0..direct_index]) |previous|
                 if (eq(previous.page.title, record.page.title)) return invalid;
             var temporary = std.heap.ArenaAllocator.init(backing); defer temporary.deinit();
-            const url = directGetTransport(temporary.allocator(), ns, record) catch |err| switch (err) {
+            const transport = directGetTransport(temporary.allocator(), ns, record) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory, else => return invalid,
             };
             const owned: Page = .{ .id = record.page.id, .revision = record.page.revision, .namespace = record.page.namespace,
@@ -441,12 +440,12 @@ pub const Registry = struct {
             for (record.styles.responses, bodies) |body, *copy| copy.* = try a.dupe(u8, body);
             const html = try a.dupe(u8, record.response);
             const prefix = try a.dupe(u8, record.prefix);
-            const observed = try prefix_parser.parseCurrentAlloc(a, prefix, owned.id, owned.revision, owned.title);
             const capsule = try a.create(SourceParentCapsule);
-            capsule.* = .{ .page = owned, .prefix = prefix, .response = html, .document_url = try a.dupe(u8, url),
+            capsule.* = .{ .page = owned, .prefix = prefix, .response = html, .document_url = try a.dupe(u8, transport.url),
                 .styles = .{ .responses = bodies, .receipt = try a.dupe(u8, record.styles.receipt) },
                 .response_sha256 = digest(html), .namespace_sha256 = ns.source_sha256,
-                .root_language = observed.root_language, .body_skin_responsive = observed.body_skin_responsive };
+                .root_language = try a.dupe(u8, transport.observation.root_language),
+                .body_skin_responsive = transport.observation.body_skin_responsive };
             entry.* = .{ .page = owned, .capsule = capsule };
         }
         return .{ .arena = arena, .entries = entries, .direct_entries = direct_entries,
@@ -901,6 +900,47 @@ test "page language controlled index supports two independent contiguous respons
     try std.testing.expect(ControlledIndex.second(&r, Fixture.normal).?.outer_languages == null);
 }
 
+
+test "current supplemental source binds registry full title response and both input hashes" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const t = arena.allocator();
+    var ns = try namespaces.Registry.init(a, namespaces.french_test_fixture);
+    defer ns.deinit();
+    const encoded = @embedFile("testdata/controlled-fr-supplemental/page-language.json");
+    const title = "Racine:alpha/beta gamma";
+    const url = "https://fr.wiktionary.org/wiki/Racine:alpha/beta_gamma";
+    const normal: NormalContext = .{ .normal_no_target = true, .interface_message = false };
+    var registry = try Registry.init(a, encoded, "", null, &ns);
+    defer registry.deinit();
+    const selected = registry.lookupSourceCapsule(11, 12, 118, title, "raw", "expanded", normal) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("fr", selected.root_language);
+    try std.testing.expectEqualStrings(url, selected.document_url);
+    try std.testing.expect(registry.lookupSourceCapsule(11, 12, 0, title, "raw", "expanded", normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(11, 12, 118, title, "different", "expanded", normal) == null);
+    try std.testing.expect(registry.lookupSourceCapsule(11, 12, 118, title, "raw", "different", normal) == null);
+    var packet = try parseLimited(t, encoded, max_index_bytes);
+    const row = &packet.object.getPtr("direct_get_contexts").?.array.items[0];
+    const page = row.object.getPtr("page").?;
+    // Both 100 and 118 exist, but only 118 owns the Racine prefix.
+    try page.object.put(t, "namespace", .{ .integer = 100 });
+    try std.testing.expectError(invalid, Registry.init(a, try std.json.Stringify.valueAlloc(t, packet, .{}), "", null, &ns));
+    try page.object.put(t, "namespace", .{ .integer = 118 });
+    const claim = "\"wgNamespaceNumber\":118";
+    const other = "\"wgNamespaceNumber\":0";
+    const response = try std.mem.replaceOwned(u8, t, try str(row.*, "response"), claim, other);
+    const prefix = try std.mem.replaceOwned(u8, t, try str(row.*, "prefix"), claim, other);
+    try row.object.put(t, "response", .{ .string = response });
+    try row.object.put(t, "prefix", .{ .string = prefix });
+    var receipt = try parse(t, try str(row.*, "receipt"));
+    const source = &receipt.object.getPtr("sources").?.array.items[0];
+    try source.object.put(t, "bytes", .{ .integer = @intCast(response.len) });
+    try source.object.put(t, "sha256", .{ .string = try t.dupe(u8, &digest(response)) });
+    try row.object.put(t, "receipt", .{ .string = try std.json.Stringify.valueAlloc(t, receipt, .{}) });
+    const typed = try std.json.parseFromSlice(DirectGetContext, t, try std.json.Stringify.valueAlloc(t, row.*, .{}), .{ .allocate = .alloc_always });
+    try std.testing.expectError(error.InvalidPageLanguagePrefix, directGetTransport(t, &ns, typed.value));
+}
 
 test "page language ordinary metadata needs no expanded capture and cannot certify one" {
     const a = std.testing.allocator;
