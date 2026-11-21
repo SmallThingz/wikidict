@@ -4493,6 +4493,91 @@ def initial_sealed_writer_phases(row, recipe, closed, source, *, target):
     return selected[-1]['argv'], references
 
 
+def initial_sealed_single_role_start(row, recipe, closed, source, start, native_roles, target):
+    """Read the actual standalone role receipts; do not rewrite a legacy receipt."""
+    role = source.get('normal_single_role')
+    targets = {'writer': ('prepare-captured-writer', 'dict-blob-build'),
+               'verify': ('prepare-blob-verify', 'dict-blob-verify')}
+    if role not in targets or targets[role] != (target, Path(row['artifact']['path']).name):
+        raise ValueError('Standalone role selector differs')
+    identity = initial_sealed_phase_reference
+    config_ref = closed.get('owner_config')
+    config = prepared_metadata(identity(config_ref))
+    refs = recipe.get('source_refs')
+    required_owner = config.get('required_owner')
+    if (not isinstance(refs, list) or len(refs) < 2
+            or identity(config.get('input_ref')) != row['compilation_recipe']
+            or config.get('output_root') != recipe.get('qualification_root')
+            or identity(closed.get('command')) != row['compilation_recipe']
+            or not isinstance(required_owner, dict)
+            or recipe.get('required_owner', required_owner) != required_owner
+            or native_roles.bind_input(Path(required_owner['path'])) != dict(identity(required_owner),
+                mode=required_owner.get('mode', stat.S_IMODE(Path(required_owner['path']).stat().st_mode)))):
+        raise ValueError('Standalone role owner or command differs')
+    if 'source_refs_ref' in start or 'source_refs_ref' in config:
+        encoded = json.dumps(refs, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode()
+        if (identity(config.get('source_refs_ref')) != row['compilation_recipe']
+                or identity(start.get('source_refs_ref')) != row['compilation_recipe']
+                or start.get('source_refs') != refs[:2] or config.get('source_refs') != refs[:2]
+                or start.get('source_ref_count') != len(refs)
+                or start.get('source_refs_sha256') != hashlib.sha256(encoded).hexdigest()):
+            raise ValueError('Standalone compact source authority differs')
+    elif start.get('source_refs') != refs or config.get('source_refs') != refs:
+        raise ValueError('Standalone full source authority differs')
+    if (identity(recipe.get('source_manifest')) != row['compiled_source_authority']
+            or identity(closed.get('source_manifest')) != row['compiled_source_authority']
+            or closed.get('source_projection') != recipe.get('canonical_projection')
+            or closed.get('source_qualification') != recipe.get('qualification')
+            or closed.get(role + '_emission_passed') is not True
+            or closed.get('normal_writer_build_completed' if role == 'writer' else 'canonical_verify_build_completed') is not True):
+        raise ValueError('Standalone emitted role/source authority differs')
+    qualification_refs = []
+    def collect(value):
+        if isinstance(value, dict):
+            if {'path','bytes','sha256'} <= set(value):
+                qualification_refs.append(value)
+            else:
+                for item in value.values(): collect(item)
+        elif isinstance(value, list):
+            for item in value: collect(item)
+    collect(recipe['qualification'])
+    if not qualification_refs:
+        raise ValueError('Standalone qualification references are absent')
+    for reference in (recipe['canonical_projection'], *qualification_refs):
+        prepared_metadata(identity(reference))
+    # Nested qualification ancestry is authenticated by the exact command and
+    # successful closure, but is not necessarily a direct compiler input.
+    if not any(identity(item) == identity(recipe['canonical_projection']) for item in refs):
+        raise ValueError('Standalone projection was not guarded')
+    return refs, [config_ref, required_owner, recipe['canonical_projection'], *qualification_refs]
+
+
+def initial_sealed_single_role_artifact(row, recipe, closed, source, native_roles, prefix):
+    role = source['normal_single_role']
+    artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
+    installed = closed.get('installed_artifacts', {})
+    path = prefix / 'bin' / ('dict-blob-build' if role == 'writer' else 'dict-blob-verify')
+    info = path.lstat()
+    saved = installed.get('stat')
+    current = list(info)
+    if (set(installed) != {role, 'stat', 'aliases'} or installed.get('aliases') != {}
+            or installed.get(role) != artifact or artifact['path'] != str(path)
+            or recipe.get('expected_install') != {role: str(path)}
+            or not isinstance(saved, list) or len(saved) != len(current)
+            or saved[:7] + saved[8:] != current[:7] + current[8:]
+            or row['artifact'].get('mode') != 0o555 or not stat.S_ISREG(info.st_mode)
+            or stat.S_IMODE(info.st_mode) != 0o555 or info.st_nlink != 1
+            or native_roles.bind_input(path) != dict(artifact, mode=0o555)):
+        raise ValueError('Standalone installed artifact or custody differs')
+    environment = recipe['env']
+    if set(environment) - {'ZIG_GLOBAL_CACHE_DIR', 'TMPDIR'}:
+        raise ValueError('Unreviewed standalone role environment')
+    if 'TMPDIR' in environment:
+        expected = Path(recipe['qualification_root']).parent / 'tmp'
+        if environment['TMPDIR'] != str(expected) or not expected.is_absolute() or '..' in expected.parts:
+            raise ValueError('Standalone temporary directory escapes its output')
+
+
 def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-writer'):
     """Join one direct normal Writer install to its original guardian receipts."""
     keys = ('compilation_recipe', 'actual_emission_result', 'qualification_closure',
@@ -4500,10 +4585,13 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     references = [row[key] for key in keys]
     recipe, emitted, closed = [prepared_metadata(ref) for ref in references[:3]]
     source, compiled = [retained_source_manifest(ref) for ref in references[3:]]
+    single_role = 'normal_single_role' in source
     matched_triple = 'matched_role_source_join' in source
+    if single_role and (matched_triple or 'normal_writer_phases' in source):
+        raise ValueError('Ambiguous standalone role family')
     merge_only = target == 'prepare-blob-merge'
     phased_writer = 'normal_writer_phases' in source
-    reference_identity = initial_sealed_phase_reference if phased_writer else lambda value: value
+    reference_identity = initial_sealed_phase_reference if phased_writer or single_role else lambda value: value
     compiled_identity = reference_identity(row['compiled_source_authority'])
     if phased_writer and (merge_only or matched_triple):
         raise ValueError('Phased Writer cannot claim another emission family')
@@ -4536,7 +4624,11 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     start, owner, watchdog = [prepared_metadata(closed[key]) for key in ('start', 'owner_result', 'watchdog')]
     references.extend(closed[key] for key in ('start', 'owner_result', 'watchdog'))
     resolved_refs = start.get('source_refs')
-    if matched_triple or merge_only or phased_writer:
+    if single_role:
+        resolved_refs, single_references = initial_sealed_single_role_start(
+            row, recipe, closed, source, start, native_roles, target)
+        references.extend(single_references)
+    elif matched_triple or merge_only or phased_writer:
         config_ref = closed.get('owner_config')
         if not isinstance(config_ref, dict):
             raise ValueError('Matched triple lacks its normal owner configuration')
@@ -4580,7 +4672,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     receipt = closed.get('rd_terminal_receipt')
     receipt_chunk = receipt.get('chunk') if isinstance(receipt, dict) else None
     valid_receipt_chunk = ((type(receipt_chunk) is int and receipt_chunk > 0)
-                           or (phased_writer and isinstance(receipt_chunk, str)
+                           or ((phased_writer or single_role) and isinstance(receipt_chunk, str)
                                and re.fullmatch(r'chunk-[1-9][0-9]*', receipt_chunk) is not None))
     if ((closed['reaped'] and (not isinstance(receipt, dict)
                               or type(receipt.get('exit_code')) is not int or receipt['exit_code'] != 0
@@ -4603,13 +4695,13 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
         references.extend(phase_references)
     if matched_triple:
         references.extend(initial_sealed_matched_triple(row, native_roles, recipe, closed, source, compiled, target=target))
-    elif target not in ('prepare-captured-writer', 'prepare-blob-merge') or argv[:3] != [row['dependencies']['zig']['path'], 'build', target]:
+    elif target not in (('prepare-captured-writer', 'prepare-blob-verify') if single_role else ('prepare-captured-writer', 'prepare-blob-merge')) or argv[:3] != [row['dependencies']['zig']['path'], 'build', target]:
         raise ValueError('Direct sealed successor requires one Writer target')
     cwd = Path(recipe['cwd'])
     if not cwd.is_absolute() or '..' in cwd.parts:
         raise ValueError('Unsafe direct Writer source root')
     environment = recipe['env']
-    if not phased_writer and set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}:
+    if not phased_writer and not single_role and set(environment) - {'ZIG_GLOBAL_CACHE_DIR'}:
         raise ValueError('Unreviewed direct Writer environment')
     if 'ZIG_GLOBAL_CACHE_DIR' in environment and not Path(environment['ZIG_GLOBAL_CACHE_DIR']).is_absolute():
         raise ValueError('Unsafe direct Writer cache')
@@ -4637,7 +4729,9 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     if not required | {'--prefix', '--summary'} <= seen:
         raise ValueError('Direct Writer required options differ')
     artifact = {key: row['artifact'][key] for key in ('path', 'bytes', 'sha256')}
-    if merge_only or phased_writer:
+    if single_role:
+        initial_sealed_single_role_artifact(row, recipe, closed, source, native_roles, prefix)
+    elif merge_only or phased_writer:
         role_key = 'merge' if merge_only else 'writer'
         path = prefix / 'bin' / ('dict-blob-merge' if merge_only else 'dict-blob-build')
         info = path.lstat()
@@ -4664,7 +4758,7 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
     manifest_ref = row['compiled_source_authority']
     if reference_identity(declared.get(manifest_ref['path'])) != compiled_identity:
         raise ValueError('Direct Writer did not guard its source manifest')
-    entry_point = 'tools/blob_merge.zig' if merge_only else 'tools/blob_verify.zig' if matched_triple and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
+    entry_point = 'tools/blob_merge.zig' if merge_only else 'tools/blob_verify.zig' if (matched_triple or single_role) and target == 'prepare-blob-verify' else 'tools/blob_build.zig'
     if entry_point not in compiled or entry_point not in row['source_paths']:
         raise ValueError('Direct role source does not contain its production entry point')
     resolved_files = source.get('resolved_compiled_source_files', compiled)
@@ -4683,6 +4777,15 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
                 or any(guarded[key] != descriptor[key] for key in ('path', 'bytes', 'sha256'))
                 or guarded.get('mode', descriptor['mode']) != descriptor['mode']):
             raise ValueError('Direct Writer compiled source is not guarded')
+        if single_role:
+            resolved = resolved_files[name]
+            if (not isinstance(resolved, dict) or set(resolved) != set(descriptor)
+                    or any(resolved[key] != descriptor[key] for key in ('bytes','sha256','mode'))):
+                raise ValueError('Standalone historical source descriptor differs')
+            # The successful source-after closure authenticates original full
+            # compiler facts, including guards unrelated to this role. Only the
+            # selected role projection is a current execution dependency.
+            continue
         # This receipt family keeps the canonical role root while compiling a
         # sparse view. Bind the actual command root to every declared member,
         # including aliases, rather than treating the fingerprint flag as proof.
@@ -4696,6 +4799,16 @@ def initial_sealed_direct_writer(row, native_roles, *, target='prepare-captured-
                 or Path(resolved['path']) != Path(descriptor['path']).resolve(strict=True)
                 or not same_source or native_roles.bind_input(Path(resolved['path'])) != resolved):
             raise ValueError('Direct target command source view differs from its guarded regular payload')
+    if single_role:
+        payloads = row.get('source_payload_files', {})
+        if set(payloads) != set(row['source_paths']):
+            raise ValueError('Standalone role payload projection differs')
+        for name, descriptor in payloads.items():
+            expected = compiled.get(name, source.get('interface_only_sources', {}).get(name))
+            if (not isinstance(expected, dict) or set(descriptor) != {'path','bytes','sha256','mode'}
+                    or any(descriptor[key] != expected.get(key) for key in ('bytes','sha256','mode'))
+                    or native_roles.bind_input(Path(descriptor['path'])) != descriptor):
+                raise ValueError('Standalone current source payload differs')
     interface = source.get('interface_only_sources', {})
     if (set(interface) & set(compiled)
             or source.get('interface_only_not_claimed_as_compiler_reads') is not True
@@ -4719,7 +4832,7 @@ def initial_sealed_target_emission(row, native_roles, *, target, full_graph=Fals
     recipe, emitted, closed = [prepared_metadata(reference) for reference in references[:3]]
     source = retained_source_manifest(row['source'])
     if 'argv' in recipe and 'actual_normal_command' in source:
-        allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if 'matched_role_source_join' in source else ('prepare-captured-writer', 'prepare-blob-merge')
+        allowed_targets = ('prepare-captured-writer', 'prepare-blob-verify') if ('matched_role_source_join' in source or 'normal_single_role' in source) else ('prepare-captured-writer', 'prepare-blob-merge')
         if target not in allowed_targets or full_graph:
             raise ValueError('Direct guardian successor has an unrelated target')
         return initial_sealed_direct_writer(row, native_roles, target=target)
@@ -4939,7 +5052,8 @@ def initial_sealed_blob_successor(original, native_roles):
             or recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-captured-writer']
             or ('phases' in recipe and recipe.get('argv', [])[:2] == ['/bin/sh', '-ec'])))
         verify_only = (name == 'dict-blob-verify' and (
-            (len(commands) == 1 and 'prepare-blob-verify' in commands[0].get('argv', []))
+            recipe.get('argv', [])[:3] == [after['dependencies']['zig']['path'], 'build', 'prepare-blob-verify']
+            or (len(commands) == 1 and 'prepare-blob-verify' in commands[0].get('argv', []))
             or recipe.get('argv', [])[2:5] == ['prepare-captured-writer', 'cli', 'prepare-blob-verify']))
         merge_only = (name == 'dict-blob-merge' and recipe.get('argv', [])[:3] ==
                       [after['dependencies']['zig']['path'], 'build', 'prepare-blob-merge'])
