@@ -56,6 +56,15 @@ def absent_page(title, *, description_exists=False):
 
 
 class RegistryTest(unittest.TestCase):
+    def test_exact_alias_and_second_pass_unicode_prefix(self):
+        raw = registry_bytes().replace(b'\tImage\n', '\tImage\tÉ\n'.encode())
+        registry = metadata.Registry(raw, WIKI, DATE)
+        for prefix in ('É', 'E\u200e\u0301', ' IMAGE '):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(registry.file_title(prefix + ':x.svg'), 'ملف:x.svg')
+        with self.assertRaises(ValueError):
+            registry.file_title('é:x.svg')
+
     def test_media_file_and_pinned_aliases_share_native_file_key(self):
         registry = metadata.Registry(registry_bytes(), WIKI, DATE)
         for title in ('Media:Ru-акула.ogg', 'ميديا:Ru-акула.ogg',

@@ -145,6 +145,7 @@ class Registry:
         self.case_lib.u8_totitle.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
         self.case_lib.u8_totitle.restype = ctypes.c_void_p
         self.specs, self.aliases = {}, {}
+        self.exact_aliases = {}
         for line in lines:
             if not line or line.startswith('#'):
                 continue
@@ -164,6 +165,7 @@ class Registry:
                 if key in self.aliases and self.aliases[key] != ns:
                     raise ValueError('Conflicting file/media namespace alias')
                 self.aliases[key] = ns
+                self.exact_aliases[alias] = ns
         if set(self.specs) != {-2, 6}:
             raise ValueError('File and Media namespace definitions are required')
 
@@ -219,7 +221,11 @@ class Registry:
         if title.startswith(':'):
             title = title[1:].strip(' ')
         prefix, separator, body = title.partition(':')
-        ns = self.aliases.get(self.alias_key(self.spacing(prefix)))
+        # The registry has already normalized these exact spellings. Other
+        # forms still need spacing and case conversion after splitting the title.
+        ns = self.exact_aliases.get(prefix)
+        if ns is None:
+            ns = self.aliases.get(self.alias_key(self.spacing(prefix)))
         body = body.strip(' ')
         if not separator or ns not in (-2, 6) or not body or any(c in body for c in '|\0'):
             raise ValueError('Unsupported or invalid File/Media title: ' + raw[:160])
