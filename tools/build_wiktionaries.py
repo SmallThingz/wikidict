@@ -4914,7 +4914,7 @@ def initial_sealed_blob_successor(original, native_roles):
         raise ValueError('Initial sealed execution changed its original unused driver or live helper')
     allowed = {'artifact','source','producer_source','compiled_source_authority','source_payload_files',
         'source_payload_git','source_root','compilation_recipe','actual_emission_result','qualification_closure',
-        'qualification_scope','previous_role_binding'}
+        'qualification_scope','previous_role_binding','source_paths'}
     references = []
     for name in BLOB_TOOL_NAMES:
         before, after = original[name], current[name]
@@ -4945,6 +4945,10 @@ def initial_sealed_blob_successor(original, native_roles):
         _, target_references = initial_sealed_target_emission(after,native_roles,target=target,full_graph=not(writer_only or verify_only or merge_only))
         references.extend([after['previous_role_binding'],*target_references])
         source = retained_source_manifest(after['source']); inventory = source.get('files',source)
+        if after['source_paths'] != before['source_paths']:
+            compiled = (retained_source_manifest(after['compiled_source_authority'])
+                        if 'compiled_source_authority' in after else source)
+            require_retained_role_projection(name, after['source_paths'], inventory, compiled, full=True)
         for relative in after['source_paths']:
             identity = (dict(inventory[relative], mode=source.get('modes',{}).get(relative,inventory[relative].get('mode',0o644)))
                         if 'source_guard_manifest' in recipe else native_roles.compilation_identity(after,relative))
@@ -6097,6 +6101,27 @@ RETAINED_BUNDLE_DEPENDENCIES = frozenset((
     'worker_main_c', 'zig', 'clang', 'extraction_helper'))
 
 
+def require_retained_role_projection(role, projection, inventory, compiled, *, full=False):
+    entry_point = {
+        'dict-blob-build': 'tools/blob_build.zig', 'dict-blob-merge': 'tools/blob_merge.zig',
+        'dict-blob-verify': 'tools/blob_verify.zig', 'dict-bundle-build': 'tools/bundle_build.zig',
+    }[role]
+    required = set(RETAINED_NATIVE_ABI_PATHS)
+    if role in BLOB_TOOL_NAMES and (full or not required.issubset(inventory)):
+        # A blob-only build need not compile the worker. Authenticate its
+        # entire emitted graph and each interface it actually exchanges.
+        required = {path for _, members, paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES
+                    if role in members for path in paths}
+        required.update(inventory)
+        required.update(compiled.get('files', compiled))
+    required.add(entry_point)
+    if not isinstance(projection, list) or not all(isinstance(p, str) for p in projection):
+        raise ValueError('Retained native role lacks its source/ABI projection')
+    selected = set(projection)
+    if len(selected) != len(projection) or not required <= selected or not selected.issubset(inventory):
+        raise ValueError('Retained native role lacks its source/ABI projection')
+
+
 class RetainedNativeToolRoles:
     """Select caller-qualified roles, retaining their original source authority.
 
@@ -6153,24 +6178,8 @@ class RetainedNativeToolRoles:
             if self.initial_sealed_generation is None:
                 st=root.stat()
                 self.directories[root]=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
-            entry_point = {
-                'dict-blob-build': 'tools/blob_build.zig',
-                'dict-blob-merge': 'tools/blob_merge.zig',
-                'dict-blob-verify': 'tools/blob_verify.zig',
-                'dict-bundle-build': 'tools/bundle_build.zig'}[role]
             projection = row['source_paths']
-            required = set(RETAINED_NATIVE_ABI_PATHS)
-            if role in BLOB_TOOL_NAMES and not required.issubset(inventory):
-                # A blob-only build need not compile the worker. Authenticate its
-                # entire emitted graph and each interface it actually exchanges.
-                required = {path for _, members, paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES
-                            if role in members for path in paths}
-                required.update(inventory)
-                required.update(compiled.get('files', compiled))
-            required.add(entry_point)
-            if (not isinstance(projection, list) or len(set(projection)) != len(projection)
-                    or not required <= set(projection)):
-                raise ValueError('Retained native role lacks its source/ABI projection')
+            require_retained_role_projection(role, projection, inventory, compiled)
             payloads=row.get('source_payload_files',{})
             if not isinstance(payloads,dict) or not set(payloads)<=set(projection):
                 raise ValueError('Retained source payload mapping differs from projection')

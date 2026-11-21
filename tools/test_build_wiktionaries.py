@@ -13342,6 +13342,31 @@ class InitialSealedWriterOnlyTests(unittest.TestCase):
                          lambda:f.roles.prepare(['dump','out','--expander-only'],'testwiktionary','20261001')):
                 with self.assertRaises(ValueError):call()
 
+    def test_closed_writer_accepts_a_changed_projection_only_for_its_full_new_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = self.fixture(Path(tmp))
+            row = f.current['dict-blob-build']
+            source = b.retained_source_manifest(row['source'])
+            for relative in ('tools/blob_build.zig', 'src/encoder/presentation_compile.zig'):
+                payload = f.root / 'writer-build' / relative
+                payload.parent.mkdir(parents=True, exist_ok=True)
+                payload.write_text(relative)
+                payload.chmod(0o444)
+                descriptor = dict(_initial_sealed_reference(payload), mode=0o444)
+                source['files'][relative] = descriptor
+                source['modes'][relative] = 0o444
+                row['source_payload_files'][relative] = descriptor
+            row['source'] = _initial_sealed_write(f.root/'writer-build-source.json', source)
+            row['producer_source'] = row['source']['sha256']
+            row['source_paths'] = sorted(source['files'])
+            self.republish(f)
+            self.assertNotEqual(row['source_paths'], f.original['dict-blob-build']['source_paths'])
+            b.initial_sealed_role_successor(f.original, f.roles)
+            for omit in ('src/encoder/presentation_compile.zig', 'tools/blob_build.zig'):
+                row['source_paths'] = sorted(set(source['files']) - {omit})
+                with self.subTest(omit=omit), self.assertRaises(ValueError):
+                    b.initial_sealed_role_successor(f.original, f.roles)
+
     def test_writer_only_accepts_independently_closed_current_companions(self):
         with tempfile.TemporaryDirectory() as tmp:
             f = self.fixture(Path(tmp))
