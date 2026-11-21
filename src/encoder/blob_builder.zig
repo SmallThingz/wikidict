@@ -4269,6 +4269,190 @@ fn tsongaTranslationSections(ns: *const @import("namespace_registry").Registry, 
     return if (corroborated) sections else null;
 }
 
+const PairedOrthographyField = struct { language: []const u8, variant: []const u8 };
+
+fn pairedOrthographyField(line: []const u8) ?PairedOrthographyField {
+    if (!std.mem.startsWith(u8, line, "'''")) return null;
+    const close = std.mem.indexOfPos(u8, line, 3, ":''' ") orelse return null;
+    const label = line[3..close];
+    const middle = std.mem.indexOf(u8, label, " word (") orelse return null;
+    const suffix = " orthography)";
+    if (middle == 0 or !std.mem.endsWith(u8, label, suffix)) return null;
+    const name = label[0..middle];
+    const variant_start = middle + " word (".len;
+    if (variant_start >= label.len - suffix.len or std.mem.indexOfAny(u8, name, "'{}[]<>&|=:\t\r\n") != null or
+        !std.mem.eql(u8, name, std.mem.trim(u8, name, " "))) return null;
+    const value = std.mem.trim(u8, line[close + 5..], " \t\r");
+    if (value.len == 0 or std.mem.indexOfAny(u8, value, "'{}[]<>&|\t\r\n") != null or !std.unicode.utf8ValidateSlice(value)) return null;
+    return .{ .language = name, .variant = label[variant_start .. label.len - suffix.len] };
+}
+
+fn pairedOrthographyCategoryLine(ns: *const @import("namespace_registry").Registry, line: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, "[[") or !std.mem.endsWith(u8, line, "]]")) return false;
+    const target = line[2 .. line.len - 2];
+    return target.len != 0 and target[0] != ':' and std.mem.indexOfAny(u8, target, "[]{}<>|") == null and ns.ofTitle(target).id == 14;
+}
+
+fn pairedOrthographyBreakLine(line: []const u8) bool {
+    const tag = blobs.wikitext_syntax.tagAt(line, 0) orelse return false;
+    return tag.is("br") and !tag.closing and tag.end == line.len and std.mem.trim(u8, tag.attrs, " \t\r\n").len == 0;
+}
+
+fn pairedOrthographyBareFileLine(ns: *const @import("namespace_registry").Registry, line: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, "[[") or !std.mem.endsWith(u8, line, "]]")) return false;
+    const target = line[2 .. line.len - 2];
+    if (target.len == 0 or target[0] == ':' or std.mem.indexOfAny(u8, target, "[]{}<>|\t\r\n") != null or
+        !std.unicode.utf8ValidateSlice(target)) return false;
+    const file = ns.ofTitle(target);
+    return file.id == 6 and std.mem.trim(u8, file.text, " ").len != 0;
+}
+
+fn pairedOrthographyQualifiers(tail: []const u8) bool {
+    var remaining = tail;
+    while (remaining.len != 0) {
+        if (remaining[0] != '(') return false;
+        const close = std.mem.indexOfScalar(u8, remaining, ')') orelse return false;
+        const value = remaining[1..close];
+        if (std.mem.trim(u8, value, " \t").len == 0 or std.mem.indexOfAny(u8, value, "'{}[]<>&|()\r\n") != null) return false;
+        remaining = remaining[close + 1..];
+        if (remaining.len != 0 and remaining[0] != ' ' and remaining[0] != '\t') return false;
+        remaining = std.mem.trimStart(u8, remaining, " \t");
+    }
+    return true;
+}
+
+fn pairedOrthographyPrefix(ns: *const @import("namespace_registry").Registry, raw: []const u8) bool {
+    // Ordinary pages leave this global fallback after at most 4096 bytes,
+    // before comparing the complete raw/expanded buffers or inspecting a body.
+    const prefix = raw[0..@min(raw.len, 4096)];
+    var leading_file = false; var needs_break = false; var category_seen = false;
+    var lines = std.mem.splitScalar(u8, prefix, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0) continue;
+        if (raw_line[0] == ' ' or raw_line[0] == '\t') return false;
+        if (needs_break) {
+            if (!pairedOrthographyBreakLine(line)) return false;
+            needs_break = false; continue;
+        }
+        if (pairedOrthographyCategoryLine(ns, line)) { category_seen = true; continue; }
+        if (!leading_file and !category_seen and pairedOrthographyBareFileLine(ns, line)) {
+            leading_file = true; needs_break = true; continue;
+        }
+        if (leading_file and !category_seen) return false;
+        const field = pairedOrthographyField(line) orelse return false;
+        return std.mem.eql(u8, field.variant, "South African");
+    }
+    return false;
+}
+
+// The two authored orthography fields declare a language, while an independent
+// trusted category corroborates it. Neither the edition nor a gloss owns it.
+fn unsectionedPairedOrthographyLanguage(codes: LanguageCodes, raw_source: ?[]const u8, expanded: MissingText) ?ResolvedLanguage {
+    const ns = codes.namespace_catalog orelse return null;
+    const raw = raw_source orelse return null;
+    if (!pairedOrthographyPrefix(ns, raw)) return null;
+    if (expanded.unknown or expanded.lost_missing_range or expanded.ranges.len != 0 or expanded.literal_curly_ranges.len != 0 or
+        expanded.generated_links.len != 0 or expanded.generated_source != null or !std.mem.eql(u8, raw, expanded.bytes)) return null;
+    const ordinary = codes.resolve_fn orelse return null;
+    var owner: ?ResolvedLanguage = null;
+    var category_owner: ?ResolvedLanguage = null;
+    var recognized_category: ?ResolvedLanguage = null;
+    var variants: u8 = 0;
+    var gloss = false;
+    var started = false;
+    var leading_file = false; var needs_break = false;
+    var bracket_depth: usize = 0;
+    var bracket_start: usize = 0;
+    var position: usize = 0;
+    var lines = std.mem.splitScalar(u8, raw, '\n');
+    while (lines.next()) |raw_line| {
+        const start = position; position += raw_line.len + 1;
+        const root = bracket_depth == 0;
+        // A monotonic census quarantines cross-line links. Templates, comments
+        // and protected/other HTML tags are declined by this closed BR-only form.
+        var at: usize = 0;
+        while (at < raw_line.len) {
+            const byte = raw_line[at];
+            if (byte == '{' or byte == '}' or byte == 0) return null;
+            if (byte == '<') {
+                const tag = blobs.wikitext_syntax.tagAt(raw_line, at) orelse return null;
+                if (!tag.is("br") or tag.closing or std.mem.trim(u8, tag.attrs, " \t\r\n").len != 0) return null;
+                at = tag.end; continue;
+            }
+            if (byte == '[') {
+                if (bracket_depth == 2) return null;
+                if (bracket_depth == 0) bracket_start = start + at;
+                bracket_depth += 1;
+            } else if (byte == ']') {
+                if (bracket_depth == 0) return null;
+                bracket_depth -= 1;
+                if (bracket_depth == 0) {
+                    const link = raw[bracket_start .. start + at + 1];
+                    // Only disjoint outer link bodies are inspected, once each.
+                    if (std.mem.startsWith(u8, link, "[[") and std.mem.endsWith(u8, link, "]]")) {
+                        const body = link[2 .. link.len - 2];
+                        if (std.mem.indexOfAny(u8, body, "[]{}<>\r\n") == null) {
+                            const pipe = std.mem.indexOfScalar(u8, body, '|') orelse body.len;
+                            const target = std.mem.trim(u8, body[0..pipe], " \t");
+                            const category = ns.ofTitle(target);
+                            if (target.len != 0 and target[0] != ':' and category.id == 14) {
+                                if (ordinary(codes.ctx, category.text)) |recognized| {
+                                    if (recognized_category) |prior| if (!std.mem.eql(u8, prior.code, recognized.code)) return null;
+                                    recognized_category = recognized;
+                                }
+                                if (plainBoldPrefixAuthority(codes, category.text)) |trusted| {
+                                    if (category_owner) |prior| if (!std.mem.eql(u8, prior.code, trusted.code)) return null;
+                                    category_owner = trusted;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            at += 1;
+        }
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or !root) continue;
+        if (raw_line[0] == ' ' or raw_line[0] == '\t' or line[0] == '=') return null;
+        if (!started and needs_break) {
+            if (!pairedOrthographyBreakLine(line)) return null;
+            needs_break = false; continue;
+        }
+        if (pairedOrthographyCategoryLine(ns, line)) continue;
+        if (!started and !leading_file and pairedOrthographyBareFileLine(ns, line)) {
+            leading_file = true; needs_break = true; continue;
+        }
+        if (pairedOrthographyField(line)) |field| {
+            const language = ordinary(codes.ctx, field.language) orelse return null;
+            const trusted = plainBoldPrefixAuthority(codes, field.language) orelse return null;
+            if (!std.mem.eql(u8, language.code, trusted.code)) return null;
+            if (owner) |prior| { if (!std.mem.eql(u8, prior.code, trusted.code)) return null; } else owner = trusted;
+            const bit: u8 = if (std.mem.eql(u8, field.variant, "South African")) 1 else if (std.mem.eql(u8, field.variant, "Lesotho")) 2 else return null;
+            if ((variants & bit) != 0 or gloss or (variants == 0 and bit != 1)) return null;
+            variants |= bit; started = true;
+            continue;
+        }
+        if (!started) return null;
+        const gloss_label = "'''English translation:''' ''";
+        if (std.mem.startsWith(u8, line, gloss_label)) {
+            if (variants != 3 or gloss or ordinary(codes.ctx, "English") == null) return null;
+            const body = line[gloss_label.len..];
+            const close = std.mem.indexOf(u8, body, "''") orelse return null;
+            const meaning = body[0..close];
+            if (std.mem.trim(u8, meaning, " \t\r").len == 0 or std.mem.indexOfAny(u8, meaning, "'{}[]<>&|\t\r\n") != null) return null;
+            const tail = std.mem.trim(u8, body[close + 2..], " \t\r");
+            if (!pairedOrthographyQualifiers(tail)) return null;
+            gloss = true;
+        } else if (std.mem.indexOf(u8, line, " word (") != null or std.mem.startsWith(u8, line, "'''English translation:")) return null;
+    }
+    const declared = owner orelse return null;
+    const category = category_owner orelse return null;
+    if (bracket_depth != 0 or variants != 3 or !gloss or !std.mem.eql(u8, category.code, declared.code)) return null;
+    if (recognized_category) |recognized| if (!std.mem.eql(u8, recognized.code, declared.code)) return null;
+    return declared;
+}
+
 fn unsectionedPlainBoldPrefixLanguage(codes: LanguageCodes, raw_source: ?[]const u8, source: []const u8) ?ResolvedLanguage {
     const raw = raw_source orelse return null;
     // A root label and a literal category must independently agree in both
@@ -6501,6 +6685,7 @@ fn processMain(
                     break :paragraph paragraph_support;
                 } orelse
                 tsongaLabelledHeadword(codes, title, raw_source, source_missing) orelse
+                unsectionedPairedOrthographyLanguage(codes, raw_source, source_missing) orelse
                 unsectionedPlainBoldPrefixLanguage(codes, raw_source, source) orelse
                 unsectionedLanguage(codes, raw_source orelse source) orelse unsectionedExpandedLanguage(codes, source) orelse unsectionedAfrikaansExpandedLanguage(codes, source)
         else
@@ -24111,6 +24296,131 @@ test "SS bold banner recognition rejects protected malformed POS and generic cod
     for ([_][]const u8{ "nowiki", "comment", "pre", "wrong-category" }) |title| {
         const entry = (try LeadingRegionFixture.entry(a, root, "Unclassified", title)).?;
         try std.testing.expectEqualStrings("", entry.language_code);
+    }
+
+}
+
+test "paired orthography owner requires clean identical source both authored forms gloss and independent trusted category" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const F = struct {
+        fn resolve(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            if (ctx) |raw_counter| { const counter: *usize = @ptrCast(@alignCast(@constCast(raw_counter))); counter.* += 1; }
+            if (std.mem.eql(u8, value, "Sesotho") or std.mem.eql(u8, value, "st") or std.mem.eql(u8, value, "ordinary-st")) return .{ .code = "st", .heading = "Sesotho" };
+            if (std.mem.eql(u8, value, "English") or std.mem.eql(u8, value, "en")) return .{ .code = "en", .heading = "Senyesemane" };
+            return null;
+        }
+        fn trusted(ctx: ?*const anyopaque, value: []const u8) ?ResolvedLanguage {
+            return if (std.mem.eql(u8, value, "Sesotho")) resolve(ctx, value) else null;
+        }
+    };
+    var ns = try @import("namespace_registry").Registry.init(a, @embedFile("testdata/st-paired-orthography/namespace-registry.tsv")); defer ns.deinit();
+    const codes: LanguageCodes = .{ .namespace_catalog = &ns, .resolve_fn = F.resolve, .strong_fn = F.trusted, .trusted_fn = F.trusted };
+    const raw = @embedFile("testdata/st-paired-orthography/bosweu.raw.wikitext");
+    const owner = unsectionedPairedOrthographyLanguage(codes, raw, .untracked(raw)) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("st", owner.code);
+    try std.testing.expectEqualStrings("Sesotho", owner.heading);
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, null, .untracked(raw)) == null);
+    var no_trust = codes; no_trust.strong_fn = null; no_trust.trusted_fn = null;
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(no_trust, raw, .untracked(raw)) == null);
+    var unknown: MissingText = .untracked(raw); unknown.unknown = true;
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, unknown) == null);
+    var lost: MissingText = .untracked(raw); lost.lost_missing_range = true;
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, lost) == null);
+    var missing: MissingText = .untracked(raw); missing.ranges = &.{.{ .start = 0, .end = 1, .occurrence = 1 }};
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, missing) == null);
+    var literal: MissingText = .untracked(raw); literal.literal_curly_ranges = &.{.{ .start = 0, .end = 1 }};
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, literal) == null);
+    var generated: MissingText = .untracked(raw); generated.generated_source = raw;
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, generated) == null);
+    const link: missing_dependency.generated_link.Bound = .{ .root = raw, .start = 0, .end = 1,
+        .value = .{ .token = "fixture", .argument = "fixture", .target = "fixture", .label = "fixture" } };
+    var generated_link: MissingText = .untracked(raw); generated_link.generated_links = &.{.{ .start = 0, .end = 1, .bound = &link }};
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, generated_link) == null);
+    for ([_][2][]const u8{
+        .{ "[[Category:Sesotho]]", "" },
+        .{ "[[Category:Sesotho]]", "[[:Category:Sesotho]]" },
+        .{ "[[Category:Sesotho]]", "[[Category:English]]" },
+        .{ "'''Sesotho word (Lesotho orthography):''' -soeu", "" },
+        .{ "'''English translation:''' ''white'' (adjective)", "" },
+        .{ "'''English translation:''' ''white'' (adjective)", "'''English translation:''' ''''" },
+        .{ "Sesotho word (Lesotho orthography)", "English word (Lesotho orthography)" },
+        .{ "Sesotho word (Lesotho orthography)", "ordinary-st word (Lesotho orthography)" },
+        .{ "Sesotho word (Lesotho orthography)", "Sesotho word (Other orthography)" },
+        .{ "'''Sesotho word (South African orthography):''' -sweu", " 'Sesotho word (South African orthography):' -sweu" },
+        .{ "'''Sesotho word (South African orthography):''' -sweu", "<nowiki>'''Sesotho word (South African orthography):''' -sweu</nowiki>" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, raw, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, raw, altered));
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, raw, .untracked(altered)) == null);
+    }
+    for ([_][]const u8{
+        "Incidental explanation of a word card:\n",
+        "<!--quoted example-->\n",
+        "==English==\n",
+    }) |prefix| {
+        const altered = try std.mem.concat(a, u8, &.{ prefix, raw });
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+    }
+    for ([_][]const u8{
+        "\n'''Sesotho word (Lesotho orthography):''' duplicate\n",
+        "\n'''English word (Other orthography):''' foreign\n",
+        "\n[[Category:English]]\n",
+        "\n==Unresolved language==\n# body\n",
+    }) |suffix| {
+        const altered = try std.mem.concat(a, u8, &.{ raw, suffix });
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+    }
+    const lesotho = "'''Sesotho word (Lesotho orthography):''' -soeu";
+    const gloss_line = "'''English translation:''' ''white'' (adjective)";
+    for ([_][]const u8{ lesotho, gloss_line }) |declaration| {
+        const nested = try std.fmt.allocPrint(a, "[[quoted example|\n{s}\n]]", .{declaration});
+        const altered = try std.mem.replaceOwned(u8, a, raw, declaration, nested);
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+        const external = try std.fmt.allocPrint(a, "[https://example.invalid/quoted\n{s}\n]", .{declaration});
+        const crossed = try std.mem.replaceOwned(u8, a, raw, declaration, external);
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, crossed, .untracked(crossed)) == null);
+    }
+    for ([_][]const u8{
+        "\n[[outer|[[Category:English]]]]\n",
+        "\n[[unclosed ordinary link\n",
+        "\n<nowiki>\n[[Category:English]]\n</nowiki>\n",
+        "\n<!-- cross-line\n'''Sesotho word (Lesotho orthography):''' example\n-->\n",
+    }) |tail| {
+        const altered = try std.mem.concat(a, u8, &.{ raw, tail });
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+    }
+    var lookups: usize = 0;
+    var counting = codes; counting.ctx = &lookups;
+    const long_prose = try a.alloc(u8, 16384); @memset(long_prose, 'x');
+    const near_miss = try std.mem.concat(a, u8, &.{ "[[Category:Sesotho]]\n", long_prose, "\n", raw });
+    try std.testing.expect(unsectionedPairedOrthographyLanguage(counting, near_miss, .untracked(near_miss)) == null);
+    try std.testing.expectEqual(@as(usize, 0), lookups);
+
+    inline for (.{ @embedFile("testdata/st-paired-orthography/tsamaile.raw.wikitext"), @embedFile("testdata/st-paired-orthography/divouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/livouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/libouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/mokorotlo.raw.wikitext"), @embedFile("testdata/st-paired-orthography/mekorotlo.raw.wikitext") }) |genuine| {
+        const owned = unsectionedPairedOrthographyLanguage(codes, genuine, .untracked(genuine)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("st", owned.code);
+    }
+    inline for (.{ @embedFile("testdata/st-paired-orthography/e.raw.wikitext"), @embedFile("testdata/st-paired-orthography/le.raw.wikitext"), @embedFile("testdata/st-paired-orthography/ho.raw.wikitext"), @embedFile("testdata/st-paired-orthography/bana.raw.wikitext"), @embedFile("testdata/st-paired-orthography/ee.raw.wikitext"), @embedFile("testdata/st-paired-orthography/sereledi.raw.wikitext"), @embedFile("testdata/st-paired-orthography/likolo.raw.wikitext") }) |genuine| {
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, genuine, .untracked(genuine)) == null);
+    }
+    for ([_][]const u8{ "(adjective) ()", "(adjective) (nested (bad))", "(adjective)(plural)", "(adjective) trailing", "(adjective) (<ref>hidden</ref>)" }) |tail| {
+        const altered = try std.mem.replaceOwned(u8, a, raw, "(adjective)", tail);
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
+    }
+    const hat = @embedFile("testdata/st-paired-orthography/mokorotlo.raw.wikitext");
+    for ([_][2][]const u8{
+        .{ "[[Image:Katiba.gif]]", "[[Image:Katiba.gif|thumb]]" },
+        .{ "[[Image:Katiba.gif]]", "[[Image:Katiba.gif|Sesotho]]" },
+        .{ "[[Image:Katiba.gif]]", "[[:Image:Katiba.gif]]" },
+        .{ "[[Image:Katiba.gif]]", "[[Katiba.gif]]" },
+        .{ "[[Category:Sesotho]]", "" },
+        .{ "[[Image:Katiba.gif]]\n<br>", "[[Image:Katiba.gif]]" },
+    }) |change| {
+        const altered = try std.mem.replaceOwned(u8, a, hat, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, hat, altered));
+        try std.testing.expect(unsectionedPairedOrthographyLanguage(codes, altered, .untracked(altered)) == null);
     }
 
 }

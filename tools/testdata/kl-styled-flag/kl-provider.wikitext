@@ -1,0 +1,3 @@
+__NOEDITSECTION__
+=<div style="background-color:#d4e4f4">&nbsp;[[Image:Flag of Greenland.svg|20px]] Kalaallisut</div>=
+<noinclude>[[Category:Skabelon:Oqaatsit|kl]]</noinclude><includeonly>[[Category:Kalaallisut]]</includeonly>

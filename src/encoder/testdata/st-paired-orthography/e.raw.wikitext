@@ -1,0 +1,163 @@
+'''1'''
+<br />
+'''Sesotho word (South African orthography):''' e
+<br />
+'''Sesotho word (Lesotho orthography):''' e
+<br />
+<br />
+<br />
+'''English translation:''' ''yes''
+<br />
+<br />
+'''Similar words:''' [[ee]] ''yes''; [[tjhee]] ''(no)''
+----
+'''2'''
+<br />
+e - subject concord
+<br />
+<br />
+In Sesotho nouns are divided into various noun classes. The noun class
+determines the subject concord for instance - this is very important in the construction
+of sentences.
+<br />
+<div align="center">
+  <center>
+  <table border="1" cellspacing="1">
+    <tr>
+      <td align="center"><b><font face="Arial" size="3">Class</font></b></td>
+      <td align="center"><b><font face="Arial" size="3">Prefix</font></b></td>
+      <td align="center"><b><font face="Arial" size="3">Subject&nbsp;<br />
+        concord</font></b></td>
+      <td align="center"><b><font face="Arial" size="3">Example</font></b></td>
+      <td align="center"><b><font face="Arial" size="3">Translation<br />
+        of example</font></b></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">1</font></td>
+      <td align="center"><font face="Arial" size="2">mo-</font></td>
+      <td align="center"><font face="Arial" size="2">o</font></td>
+      <td align="center"><font face="Arial" size="2"><b>mo</b>sadi</font></td>
+      <td align="center"><font face="Arial" size="2">woman</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">2</font></td>
+      <td align="center"><font face="Arial" size="2">ba-</font></td>
+      <td align="center"><font face="Arial" size="2">ba</font></td>
+      <td align="center"><font face="Arial" size="2"><b>ba</b>sadi</font></td>
+      <td align="center"><font face="Arial" size="2">women</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">1a</font></td>
+      <td align="center"><font face="Arial" size="2">-</font></td>
+      <td align="center"><font face="Arial" size="2">o</font></td>
+      <td align="center"><font face="Arial" size="2">ntate</font></td>
+      <td align="center"><font face="Arial" size="2">father</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">2a</font></td>
+      <td align="center"><font face="Arial" size="2">ba-</font></td>
+      <td align="center"><font face="Arial" size="2">ba</font></td>
+      <td align="center"><font face="Arial" size="2"><b>bo</b>ntate</font></td>
+      <td align="center"><font face="Arial" size="2">fathers</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">3</font></td>
+      <td align="center"><font face="Arial" size="2">mo-</font></td>
+      <td align="center"><font face="Arial" size="2">o</font></td>
+      <td align="center"><font face="Arial" size="2"><b>mo</b>se</font></td>
+      <td align="center"><font face="Arial" size="2">dress</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">4</font></td>
+      <td align="center"><font face="Arial" size="2">me-</font></td>
+      <td align="center"><font face="Arial" size="2">e</font></td>
+      <td align="center"><font face="Arial" size="2"><b>me</b>se</font></td>
+      <td align="center"><font face="Arial" size="2">dresses</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">5</font></td>
+      <td align="center"><font face="Arial" size="2">le-</font></td>
+      <td align="center"><font face="Arial" size="2">le</font></td>
+      <td align="center"><font face="Arial" size="2"><b>le</b>leme</font></td>
+      <td align="center"><font face="Arial" size="2">tongue</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">6</font></td>
+      <td align="center"><font face="Arial" size="2">ma-</font></td>
+      <td align="center"><font face="Arial" size="2">a</font></td>
+      <td align="center"><font face="Arial" size="2"><b>ma</b>leme</font></td>
+      <td align="center"><font face="Arial" size="2">tongues</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">7</font></td>
+      <td align="center"><font face="Arial" size="2">se-</font></td>
+      <td align="center"><font face="Arial" size="2">se</font></td>
+      <td align="center"><font face="Arial" size="2"><b>se</b>fate</font></td>
+      <td align="center"><font face="Arial" size="2">tree</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">8</font></td>
+      <td align="center"><font face="Arial" size="2">di-</font></td>
+      <td align="center"><font face="Arial" size="2">di</font></td>
+      <td align="center"><font face="Arial" size="2"><b>di</b>fate</font></td>
+      <td align="center"><font face="Arial" size="2">trees</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">9</font></td>
+      <td align="center"><font face="Arial" size="2">-</font></td>
+      <td align="center"><font face="Arial" size="2">e</font></td>
+      <td align="center"><font face="Arial" size="2">ntja</font></td>
+      <td align="center"><font face="Arial" size="2">dog</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">10</font></td>
+      <td align="center"><font face="Arial" size="2">di-</font></td>
+      <td align="center"><font face="Arial" size="2">di</font></td>
+      <td align="center"><font face="Arial" size="2"><b>di</b>ntja</font></td>
+      <td align="center"><font face="Arial" size="2">dogs</font></td>
+    </tr>
+    <tr>
+      <td align="center" colspan="5"><font size="2" face="Arial">Classes 11, 12
+        and 13 are mainly used in languages such as isiZulu and isiXhosa</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">14</font></td>
+      <td align="center"><font face="Arial" size="2">bo-</font></td>
+      <td align="center"><font face="Arial" size="2">bo</font></td>
+      <td align="center"><font face="Arial" size="2"><b>bo</b>hobe</font></td>
+      <td align="center"><font face="Arial" size="2">bread</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">15</font></td>
+      <td align="center"><font face="Arial" size="2">ho-</font></td>
+      <td align="center"><font face="Arial" size="2">ho</font></td>
+      <td align="center"><font face="Arial" size="2"><b>ho</b> tsamaja</font></td>
+      <td align="center"><font face="Arial" size="2">to walk</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">16</font></td>
+      <td align="center"><font face="Arial" size="2">-</font></td>
+      <td align="center"><font face="Arial" size="2">ho</font></td>
+      <td align="center"><font face="Arial" size="2">fatshe</font></td>
+      <td align="center"><font face="Arial" size="2">down</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">17</font></td>
+      <td align="center"><font face="Arial" size="2">ho-</font></td>
+      <td align="center"><font face="Arial" size="2">ho</font></td>
+      <td align="center"><font face="Arial" size="2"><b>ho</b>dimo</font></td>
+      <td align="center"><font face="Arial" size="2">up</font></td>
+    </tr>
+    <tr>
+      <td align="center"><font face="Arial" size="2">18</font></td>
+      <td align="center"><font face="Arial" size="2">mo-</font></td>
+      <td align="center"><font face="Arial" size="2">o</font></td>
+      <td align="center"><font face="Arial" size="2"><b>mo</b>se</font></td>
+      <td align="center"><font face="Arial" size="2">abroad</font></td>
+    </tr>
+  </table>
+  </center>
+</div>
+
+[[Category:Sesotho]]
+[[Category:Sesotho pronouns]]

@@ -1,0 +1,3 @@
+__NOEDITSECTION__
+=<div style="background-color:#d4e4f4">&nbsp;Afar</div>=
+<noinclude>[[Category:Skabelon:Oqaatsit|aa]]</noinclude>

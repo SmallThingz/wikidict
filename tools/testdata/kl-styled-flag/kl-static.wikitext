@@ -1,0 +1,16 @@
+__NOEDITSECTION__
+=<div style="background-color:#d4e4f4">&nbsp;[[Image:Flag of Greenland.svg|20px]] Kalaallisut</div>=
+[[Category:Kalaallisut]]
+=== Taggit ===
+# Illoqarfik [[Kalaallit Nunaat]].
+
+=== Nutsigaq ===
+{| border=0 width=100% style="margin-top:10px; clear:right;"
+|-
+|bgcolor="#FFFFE0" valign=top |
+{|
+*Tuluit: Nuuk (capital of Greenland)
+
+|}</div>
+
+[[Sumut atassuseq:Kalaallisut]]

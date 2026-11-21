@@ -1,0 +1,10 @@
+{{-kl-}}
+=== Taggit ===
+# Illoqarfik [[Kalaallit Nunaat]].
+
+=== Nutsigaq ===
+{{Nutsigaq|
+*Tuluit: Nuuk (capital of Greenland)
+}}
+
+[[Sumut atassuseq:Kalaallisut]]

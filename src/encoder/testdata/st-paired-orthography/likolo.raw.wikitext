@@ -1,0 +1,20 @@
+'''Sesotho word (South African orthography):''' dikolo
+<br>
+'''Sesotho word (Lesotho orthography):''' likolo
+<br>
+<br>
+'''Noun class:''' 8
+<br>
+'''Subject concord:''' di/li
+<br>
+<br>
+'''English translation:''' ''schools'' (noun)
+<br>
+'''Word origin:''' From ''skool'' (Afrikaans)
+<br>
+<br>
+'''Derivative(s)/Related word(s):''' [[sekolo]] (singular); [[sekolong]] (at the school)
+
+[[pt:likolo
+
+[[Category:Sesotho]]

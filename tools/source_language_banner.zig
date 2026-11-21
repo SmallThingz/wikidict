@@ -38,6 +38,7 @@ fn hiddenCategory(source: []const u8, ns: *const namespaces.Registry, behavior: 
 pub fn parse(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
     const result = parseKnownNames(source, ns, behavior, registry, code) orelse
         parseFlaggedName(source, ns, behavior, registry, code) orelse
+        parseStyledFlagCategory(source, ns, behavior, registry, code) orelse
         parseLiteralCode(source, ns, behavior, registry, code) orelse
         parseEmphasizedCode(source, ns, behavior, registry, code) orelse
         parseCategoryLinkedHeading(source, ns, behavior, registry, code) orelse
@@ -131,6 +132,49 @@ fn parseFlaggedName(source: []const u8, ns: *const namespaces.Registry, behavior
     const category = tail["<includeonly>".len .. tail.len - "</includeonly>".len];
     if (!hiddenCategory(category, ns, behavior)) return null;
     return .{ .heading = heading.title, .level = heading.level, .target = label, .label = label };
+}
+
+// The complete static declaration binds its indexed language code to a plain
+// local label through both the documentation sort key and emitted category.
+// The retained background and icon lend no language or rendering authority.
+fn parseStyledFlagCategory(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {
+    if (source.len > 4096 or !registry.codes.contains(code) or !std.unicode.utf8ValidateSlice(source)) return null;
+    const control = "__NOEDITSECTION__";
+    if (!std.mem.startsWith(u8, source, control ++ "\n")) return null;
+    if (((controlAt(behavior, source, 0) catch return null) orelse return null) != control.len) return null;
+    const rest = source[control.len + 1 ..];
+    const end = std.mem.indexOfScalar(u8, rest, '\n') orelse return null;
+    const heading = syntax.controlHeading(rest[0..end], null) orelse return null;
+    const prefix = "<div style=\"background-color:#d4e4f4\">&nbsp;[[";
+    const suffix = "</div>";
+    if (heading.level != 1 or !std.mem.startsWith(u8, heading.title, prefix) or
+        !std.mem.endsWith(u8, heading.title, suffix) or containsControl(behavior, heading.title)) return null;
+    const body = heading.title[prefix.len .. heading.title.len - suffix.len];
+    const close = std.mem.indexOf(u8, body, "]] ") orelse return null;
+    const image = body[0..close];
+    const pipe = std.mem.indexOfScalar(u8, image, '|') orelse return null;
+    const target = image[0..pipe];
+    if (!plain(target) or std.mem.indexOfScalar(u8, target, '#') != null or
+        !std.mem.eql(u8, image[pipe + 1 ..], "20px")) return null;
+    const file = ns.ofTitle(target);
+    if (file.id != 6 or std.mem.trim(u8, file.text, " ").len == 0) return null;
+    const label = body[close + 3 ..];
+    if (!plain(label) or !std.mem.eql(u8, label, std.mem.trim(u8, label, " ")) or
+        !registry.sourceBannerCategoryNameCompatible(code, label)) return null;
+    const tail = std.mem.trimEnd(u8, rest[end + 1 ..], "\r\n");
+    const doc_prefix = "<noinclude>[[Category:Skabelon:Oqaatsit|";
+    const middle = "]]</noinclude><includeonly>[[Category:";
+    const tail_suffix = "]]</includeonly>";
+    if (!std.mem.startsWith(u8, tail, doc_prefix) or !std.mem.endsWith(u8, tail, tail_suffix)) return null;
+    const documentation_end = std.mem.indexOf(u8, tail, middle) orelse return null;
+    if (!std.mem.eql(u8, tail[doc_prefix.len..documentation_end], code)) return null;
+    const category_label = tail[documentation_end + middle.len .. tail.len - tail_suffix.len];
+    if (!std.mem.eql(u8, category_label, label)) return null;
+    // Namespace spelling must have its actual captured category meaning.
+    if (ns.ofTitle("Category:Skabelon:Oqaatsit").id != 14 or
+        !hiddenCategory(tail["<noinclude>".len .. documentation_end + 2], ns, behavior) or
+        !hiddenCategory(tail[documentation_end + "]]</noinclude><includeonly>".len .. tail.len - "</includeonly>".len], ns, behavior)) return null;
+    return .{ .heading = heading.title, .level = 1, .target = label, .label = label, .authority = .category_declaration };
 }
 
 fn parseKnownNames(source: []const u8, ns: *const namespaces.Registry, behavior: ?*const Behavior, registry: *const languages.Registry, code: []const u8) ?languages.SourceLanguageBanner {

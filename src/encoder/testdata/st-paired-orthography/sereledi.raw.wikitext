@@ -1,0 +1,20 @@
+'''Sesotho word (South African orthography):''' sereledi
+<br>
+'''Sesotho word (Lesotho orthography):''' sereleli
+<br>
+<br>
+'''Noun class:''' 7
+<br>
+'''Subject concord:''' se
+<br>
+<br>
+'''English translation:''' ''cream''
+<b>
+<br>
+'''Derivative(s)/Related word(s):'''
+<br>
+'''Example of usage:'''
+<br>
+'''Similar words:'''
+
+[[Category:Sesotho]]

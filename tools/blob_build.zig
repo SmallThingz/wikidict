@@ -68795,3 +68795,363 @@ test "SS d191 complete defaults and 194 captured Figure facts load through norma
         try std.testing.expect(ns.language_conversion == null);
     }
 }
+
+const StPairedOrthographyTesting = if (@import("builtin").is_test) struct {
+    const prefix = "testdata/st-paired-orthography/";
+    const cases = .{
+        .{ "bosweu", @embedFile("testdata/st-paired-orthography/bosweu.raw.wikitext"), @embedFile("testdata/st-paired-orthography/bosweu.reader.json") },
+        .{ "dilotho", @embedFile("testdata/st-paired-orthography/dilotho.raw.wikitext"), @embedFile("testdata/st-paired-orthography/dilotho.reader.json") },
+        .{ "toeba", @embedFile("testdata/st-paired-orthography/toeba.raw.wikitext"), @embedFile("testdata/st-paired-orthography/toeba.reader.json") },
+        .{ "tsamaile", @embedFile("testdata/st-paired-orthography/tsamaile.raw.wikitext"), @embedFile("testdata/st-paired-orthography/tsamaile.reader.json") },
+        .{ "divouto", @embedFile("testdata/st-paired-orthography/divouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/divouto.reader.json") },
+        .{ "livouto", @embedFile("testdata/st-paired-orthography/livouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/livouto.reader.json") },
+        .{ "libouto", @embedFile("testdata/st-paired-orthography/libouto.raw.wikitext"), @embedFile("testdata/st-paired-orthography/libouto.reader.json") },
+        .{ "mokorotlo", @embedFile("testdata/st-paired-orthography/mokorotlo.raw.wikitext"), @embedFile("testdata/st-paired-orthography/mokorotlo.reader.json") },
+        .{ "mekorotlo", @embedFile("testdata/st-paired-orthography/mekorotlo.raw.wikitext"), @embedFile("testdata/st-paired-orthography/mekorotlo.reader.json") },
+    };
+    fn entry(io: std.Io, a: std.mem.Allocator, output: []const u8, owner: []const u8, title: []const u8) !?encoder.presentation_types.Entry {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, "languages", encoder.blob_catalog.languageBlobFilename(owner, &filename) });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, path, a, .limited(1024 * 1024));
+        const blob = try encoder.blob_format.inspect(bytes);
+        var index = try blob.buildTrustedIndexAlloc(a); defer index.deinit(a);
+        const record = (try index.find(title)) orelse return null;
+        const stored = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, try blob.languageMetadata());
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, stored));
+        return stored.entry;
+    }
+} else struct {};
+
+test "ordinary paired Sesotho cards preserve complete original Reader bodies both spellings styles links and codec" {
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator(); const io = std.testing.io; const F = StPairedOrthographyTesting;
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/st-paired-orthography/namespace-registry.tsv")); defer ns.deinit();
+    var registry = language_registry.Registry.empty(a); defer registry.deinit();
+    try registry.addTsv(@embedFile("testdata/st-paired-orthography/language-registry.tsv"));
+    const owner = registry.resolveStrong("Sesotho") orelse registry.resolveTrusted("Sesotho") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("st", owner.code);
+    try std.testing.expectEqualStrings("Sesotho", owner.heading);
+    const codes = languageCodes(&registry, &ns);
+    const output = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}/st-cards", .{tmp.sub_path});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    inline for (F.cases) |case| try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, case[0], case[1], case[1], null);
+    const source = F.cases[0][1];
+    const changes = [_][2][]const u8{
+        .{ "[[Category:Sesotho]]", "" },
+        .{ "[[Category:Sesotho]]", "[[Category:English]]" },
+        .{ "'''Sesotho word (Lesotho orthography):''' -soeu", "" },
+        .{ "'''English translation:''' ''white'' (adjective)", "" },
+        .{ "Sesotho word (Lesotho orthography)", "English word (Lesotho orthography)" },
+        .{ "Sesotho word (Lesotho orthography)", "Sesotho word (Other orthography)" },
+    };
+    for (changes, 0..) |change, i| {
+        const altered = try std.mem.replaceOwned(u8, a, source, change[0], change[1]);
+        try std.testing.expect(!std.mem.eql(u8, source, altered));
+        const title = try std.fmt.allocPrint(a, "negative-{d}", .{i});
+        try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, title, altered, altered, null);
+    }
+    const incidental = try std.mem.concat(a, u8, &.{ "Discussion of a sample card:\n", source });
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "incidental", incidental, incidental, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "category-only", "[[Category:Sesotho]]\nordinary prose", "[[Category:Sesotho]]\nordinary prose", null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "expanded-only", source, "unrelated original source", null);
+    var no_trust = codes; no_trust.strong_fn = null; no_trust.trusted_fn = null;
+    writer.language_codes = no_trust;
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "ordinary-alias-only", source, source, null);
+    _ = try writer.finish(codes);
+    var projected_bare_images: usize = 0;
+    inline for (F.cases) |case| {
+        const actual = (try F.entry(io, a, output, owner.heading, case[0])) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("st", actual.language_code);
+        const T = encoder.presentation_types;
+        const captured = try std.json.parseFromSliceLeaky(struct { entries: []const T.Entry }, a, case[2], .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), captured.entries.len);
+        const before = captured.entries[0];
+        try std.testing.expectEqualStrings("", before.language_code);
+        try std.testing.expectEqualStrings(case[0], actual.title);
+        try std.testing.expectEqualStrings(owner.heading, actual.language.?);
+        try std.testing.expectEqual(before.kind, actual.kind);
+        try std.testing.expectEqualDeep(before.display_title, actual.display_title);
+        try std.testing.expectEqualDeep(before.preamble_spans, actual.preamble_spans);
+        try std.testing.expectEqualDeep(before.references, actual.references);
+        try std.testing.expectEqualDeep(before.media, actual.media);
+        try std.testing.expectEqualDeep(before.redirect, actual.redirect);
+        try std.testing.expectEqualDeep(before.alias, actual.alias);
+        try std.testing.expectEqualDeep(before.body_adjoining, actual.body_adjoining);
+        try std.testing.expectEqualDeep(before.body_typography, actual.body_typography);
+        try std.testing.expectEqualDeep(before.organization, actual.organization);
+        try std.testing.expectEqual(@as(usize, 0), actual.organization.lexemes.len);
+        try std.testing.expectEqual(before.sections.len, actual.sections.len);
+        for (before.sections, actual.sections, 0..) |old_section, new_section, section_index| {
+            try std.testing.expectEqual(old_section.level, new_section.level);
+            try std.testing.expectEqualStrings(old_section.anchor, new_section.anchor);
+            try std.testing.expectEqualStrings(old_section.anchor_fallback, new_section.anchor_fallback);
+            if (section_index == 0 and std.mem.startsWith(u8, case[1], "[[Image:Katiba.gif]]\n")) {
+                // The original capture predates typed images. This bare source has no caption or options.
+                try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, case[1], "[[Image:"));
+                try std.testing.expectEqual(@as(usize, 1), before.sections.len);
+                try std.testing.expect(old_section.blocks.len > 0);
+                try std.testing.expect(old_section.blocks[0].spans.len > 0);
+                var image_actions: usize = 0;
+                for (old_section.blocks) |block| for (block.spans) |span| {
+                    if (std.mem.eql(u8, span.target, "File:Katiba.gif")) image_actions += 1;
+                };
+                try std.testing.expectEqual(@as(usize, 1), image_actions);
+                const old_image = old_section.blocks[0].spans[0];
+                try std.testing.expectEqual(.link, old_image.kind);
+                try std.testing.expectEqualStrings("Image:Katiba.gif", old_image.text);
+                try std.testing.expectEqualStrings("File:Katiba.gif", old_image.target);
+                try std.testing.expectEqualStrings("wikidict-media wikidict-media-file-4b61746962612e676966", old_image.classes);
+                try std.testing.expect(old_image.image == null);
+                const expected_blocks = try a.dupe(T.Block, old_section.blocks);
+                const expected_spans = try a.dupe(T.Span, old_section.blocks[0].spans);
+                expected_spans[0].text = "";
+                expected_spans[0].image = .{ .file = "Katiba.gif" };
+                expected_blocks[0].spans = expected_spans;
+                // Deep equality retains every action/style field, every other span, and the full image defaults.
+                try std.testing.expectEqualDeep(expected_blocks, new_section.blocks);
+                projected_bare_images += 1;
+            } else {
+                try std.testing.expectEqualDeep(old_section.blocks, new_section.blocks);
+            }
+        }
+        const payload = try encoder.presentation_document.compileClassifiedWithHeadingAnchorsAlloc(a, case[0], .language,
+            owner.heading, owner.code, encoder.presentation_document.MissingText.untracked(case[1]), null, codes.link_trail, &ns, null, null,
+            .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+        const reference = try encoder.presentation_codec.decodeAlloc(a, payload, case[0], .language, .{ .code = owner.code, .heading = owner.heading });
+        try std.testing.expectEqualDeep(reference.entry, actual);
+    }
+    try std.testing.expectEqual(@as(usize, 2), projected_bare_images);
+    for (changes, 0..) |_, i| {
+        const title = try std.fmt.allocPrint(a, "negative-{d}", .{i});
+        try std.testing.expect((try F.entry(io, a, output, owner.heading, title)) == null);
+        const unknown = (try F.entry(io, a, output, "Unclassified", title)) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualStrings("", unknown.language_code);
+    }
+    for ([_][]const u8{ "incidental", "category-only", "expanded-only", "ordinary-alias-only" }) |title| {
+        try std.testing.expect((try F.entry(io, a, output, owner.heading, title)) == null);
+        try std.testing.expectEqualStrings("", ((try F.entry(io, a, output, "Unclassified", title)) orelse return error.TestUnexpectedResult).language_code);
+    }
+}
+
+
+const KlStyledFlagBannerTest = struct {
+    const T = encoder.presentation_types;
+    const providers = [_]struct { code: []const u8, title: []const u8, page: u64, revision: u64, source: []const u8, xml: []const u8, raw: []const u8, expanded: []const u8, reader: []const u8, sections: usize, label: []const u8, term: []const u8 }{
+        .{ .code = "kl", .title = "Nuuk", .page = 2462, .revision = 20156, .source = @embedFile("testdata/kl-styled-flag/kl-provider.wikitext"), .xml = @embedFile("testdata/kl-styled-flag/kl-provider.xmltext"), .raw = @embedFile("testdata/kl-styled-flag/kl-raw.wikitext"), .expanded = @embedFile("testdata/kl-styled-flag/kl-static.wikitext"), .reader = @embedFile("testdata/kl-styled-flag/kl-reader.json"), .sections = 3, .label = "Kalaallisut", .term = "Kalaallit Nunaat" },
+        .{ .code = "sv", .title = "Sverige", .page = 2461, .revision = 20166, .source = @embedFile("testdata/kl-styled-flag/sv-provider.wikitext"), .xml = @embedFile("testdata/kl-styled-flag/sv-provider.xmltext"), .raw = @embedFile("testdata/kl-styled-flag/sv-raw.wikitext"), .expanded = @embedFile("testdata/kl-styled-flag/sv-static.wikitext"), .reader = @embedFile("testdata/kl-styled-flag/sv-reader.json"), .sections = 2, .label = "Svenskisuut", .term = "Svenskit Nunaat" },
+    };
+    fn install(io: std.Io, a: std.mem.Allocator, root: []const u8, present: bool) !void {
+        try DvShyOwnerTest.file(io, a, root, "manifest.jsonl", "");
+        try DvShyOwnerTest.file(io, a, root, "language-registry.tsv", @embedFile("testdata/kl-styled-flag/language-registry.tsv"));
+        var rows: std.ArrayList(u8) = .empty;
+        for (providers) |p| try rows.appendSlice(a, try std.fmt.allocPrint(a,
+            "0\t0\tIlisserut:{s}\t\t{d}\t{d}\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t1\n",
+            .{ if (present) try std.fmt.allocPrint(a, "-{s}-", .{p.code}) else try std.fmt.allocPrint(a, "unrelated-{s}", .{p.code}), p.page, p.revision }));
+        try DvShyOwnerTest.file(io, a, root, "page-index.tsv", rows.items);
+        var templates = try dump_source.TemplateSourceWriter.init(io, a, root); defer templates.deinit();
+        for (providers, 0..) |p, i| try templates.append(i, p.page, p.revision, p.xml);
+        try templates.finish(try std.fs.path.join(a, &.{root, "page-index.tsv"}));
+    }
+    fn witnesses(a: std.mem.Allocator, entry: T.Entry, code: []const u8, owner: ?[]const u8) !void {
+        const kl = std.mem.eql(u8, code, "kl");
+        const file = if (kl) "Flag of Greenland.svg" else "Flag of Sweden.svg";
+        const label = if (kl) "Kalaallisut" else "Svenskisuut";
+        const definition = entry.sections[1].blocks[0];
+        try std.testing.expect(definition.kind == .definition);
+        try std.testing.expectEqualStrings("#", definition.list_path);
+        try std.testing.expectEqualStrings("1", definition.number);
+        try std.testing.expectEqual(@as(u8, 1), definition.depth);
+        var body: std.ArrayList(u8) = .empty;
+        for (definition.spans) |span| try body.appendSlice(a, span.text);
+        try std.testing.expectEqualStrings(if (kl) "Illoqarfik Kalaallit Nunaat." else "Svenskit Nunaat.", body.items);
+        try std.testing.expectEqual(@as(usize, 1), entry.media.len);
+        try std.testing.expectEqualStrings(file, entry.media[0].file);
+        try std.testing.expect(entry.media[0].kind == .image);
+        var flags: usize = 0;
+        var painted_label = false;
+        for (entry.sections[0].blocks) |block| for (block.spans) |span| {
+            if (span.image) |image| {
+                try std.testing.expectEqualStrings(file, image.file);
+                try std.testing.expectEqual(@as(?u32, 20), image.width_px);
+                flags += 1;
+            }
+            if (std.mem.indexOf(u8, span.text, label) != null) {
+                try std.testing.expectEqualStrings("#d4e4f4", span.background orelse return error.TestUnexpectedResult);
+                painted_label = true;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), flags);
+        try std.testing.expect(painted_label);
+        if (owner) |language| {
+            try std.testing.expectEqual(@as(usize, 1), entry.organization.lexemes.len);
+            const noun = entry.organization.lexemes[0];
+            try std.testing.expectEqualStrings("Noun", noun.kind);
+            try std.testing.expectEqualStrings(language, noun.language);
+            try std.testing.expectEqual(@as(usize, 1), noun.section);
+            try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+            try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+            try std.testing.expect(noun.definitions[0].parent == null);
+        }
+    }
+    fn roundtrip(a: std.mem.Allocator, entry: T.Entry) !void {
+        const stored: T.Stored = .{ .entry = entry };
+        const bytes = try encoder.presentation_codec.encodeAlloc(a, stored);
+        const decoded = try encoder.presentation_codec.decodeAlloc(a, bytes, entry.title, .language, .{ .heading = entry.language.?, .code = entry.language_code });
+        try std.testing.expectEqualDeep(stored, decoded);
+        try std.testing.expectEqualSlices(u8, bytes, try encoder.presentation_codec.encodeAlloc(a, decoded));
+    }
+};
+
+test "KL styled flag declarations bind exact indexed providers without aliases or conflicting names" {
+    const F = KlStyledFlagBannerTest;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try F.install(io, a, root, true);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/kl-styled-flag/namespace-registry.tsv")); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    try std.testing.expect(registry.resolve("Svenskisuut") == null and registry.resolveTrusted("Svenskisuut") == null);
+    for (F.providers) |p| {
+        const proof = source_language_banner.parse(p.source, &ns, null, &registry, p.code).?;
+        try std.testing.expect(proof.authority == .category_declaration and proof.level == 1);
+        try std.testing.expectEqualStrings(p.label, proof.label);
+        try std.testing.expect(registry.matchesSourceLanguageBanner(p.code, proof.heading, 1));
+        try std.testing.expect(!registry.matchesSourceLanguageBanner(p.code, proof.heading, 2));
+        for ([_][]const u8{
+            try std.mem.concat(a, u8, &.{p.source, "\nvisible"}),
+            try std.mem.replaceOwned(u8, a, p.source, "|20px", "|0px"),
+            try std.mem.replaceOwned(u8, a, p.source, "|20px", "|{{width}}px"),
+            try std.mem.replaceOwned(u8, a, p.source, "Image:", "Category:"),
+            try std.mem.replaceOwned(u8, a, p.source, "&nbsp;", "&nbsp;other"),
+            try std.mem.replaceOwned(u8, a, p.source, "#d4e4f4", "#d4e4f4;display:none"),
+            try std.mem.replaceOwned(u8, a, p.source, "<div style=", "<div class=\"unknown\" style="),
+            try std.mem.replaceOwned(u8, a, p.source, "<includeonly>[[Category:", "<includeonly>[[Category:other"),
+            try std.mem.replaceOwned(u8, a, p.source, "Skabelon:Oqaatsit|", "Skabelon:Oqaatsit|other"),
+            try std.mem.replaceOwned(u8, a, p.source, "<noinclude>", "<onlyinclude>"),
+            try std.mem.replaceOwned(u8, a, p.source, "__NOEDITSECTION__", "__TOC__"),
+        }) |bad| try std.testing.expect(source_language_banner.parse(bad, &ns, null, &registry, p.code) == null);
+        try std.testing.expect(source_language_banner.parse(p.source, &ns, null, &registry, "en") == null);
+        const category = try std.fmt.allocPrint(a, "<includeonly>[[Category:{s}]]</includeonly>", .{p.label});
+        const documentation = try std.fmt.allocPrint(a, "<noinclude>[[Category:Skabelon:Oqaatsit|{s}]]</noinclude>", .{p.code});
+        for ([_][]const u8{
+            try std.mem.replaceOwned(u8, a, p.source, category, ""),
+            try std.mem.replaceOwned(u8, a, p.source, documentation, ""),
+            try std.mem.replaceOwned(u8, a, p.source, "[[Category:", "[[:Category:"),
+            try std.mem.replaceOwned(u8, a, p.source, "&nbsp;", "{{space}}"),
+        }) |bad| try std.testing.expect(source_language_banner.parse(bad, &ns, null, &registry, p.code) == null);
+    }
+    try registry.addLocalAlias("Svenskisuut", "en");
+    const sv = F.providers[1];
+    try std.testing.expect(source_language_banner.parse(sv.source, &ns, null, &registry, "sv") == null);
+}
+
+test "KL genuine Nuuk and Sverige retain complete flagged bodies and codec through source owned normal Writer" {
+    const F = KlStyledFlagBannerTest; const T = F.T;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    for (F.providers) |p| {
+        const old = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, p.reader, .{ .ignore_unknown_fields = true });
+        try std.testing.expectEqual(@as(usize, 1), old.value.entries.len); const before = old.value.entries[0];
+        try std.testing.expectEqualStrings("", before.language_code);
+        try std.testing.expectEqual(p.sections, before.sections.len);
+        try std.testing.expectEqualStrings(p.term, before.sections[1].blocks[0].spans[if (std.mem.eql(u8, p.code, "kl")) 1 else 0].target);
+        try F.roundtrip(a, before);
+        for ([_]enum { complete, missing_provider, without_callback }{ .complete, .missing_provider, .without_callback }) |mode| {
+            var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+            try F.install(io, a, root, mode != .missing_provider);
+            var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/kl-styled-flag/namespace-registry.tsv")); defer ns.deinit();
+            var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); var codes = languageCodes(&registry, &ns);
+            if (mode == .without_callback) codes.source_banner_fn = null;
+            // Source-instantiated static providers, not a retained expansion.
+            // Compile the entire current body independently; no historical
+            // geometry or representation difference is normalized into a pass.
+            var report: encoder.presentation_document.Fallbacks = .{};
+            const baseline_bytes = try encoder.presentation_document.compileReportedWithLinkTrailAlloc(a, p.title, .language, "Unclassified", "", p.expanded, null, .{}, &ns, &report);
+            const baseline = (try encoder.presentation_codec.decodeAlloc(a, baseline_bytes, p.title, .language, .{ .heading = "Unclassified", .code = "" })).entry;
+            try std.testing.expectEqual(p.sections, baseline.sections.len);
+            try std.testing.expectEqualStrings(p.term, baseline.sections[1].blocks[0].spans[if (std.mem.eql(u8, p.code, "kl")) 1 else 0].target);
+            try std.testing.expectEqual(@as(usize, 1), baseline.media.len);
+            for (before.sections, baseline.sections) |old_section, current_section| try std.testing.expectEqualStrings(old_section.title, current_section.title);
+            const output = try std.fs.path.join(a, &.{root, "blobs"});
+            var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+            try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, p.title, p.expanded, p.raw, null);
+            const stats = try writer.finish(codes);
+            try std.testing.expectEqual(@as(usize, 1), stats.language_records);
+            const owner = if (mode == .complete) registry.resolve(p.code).? else language_registry.Resolved{ .heading = "Unclassified", .code = "" };
+            const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, p.title);
+            // Bind the independently supplied owner through the same public
+            // Document API, so separately joined POS recognition retains its
+            // own lexeme-language fields without normalizing organization.
+            const expected = if (mode == .complete) blk: {
+                const bytes = try encoder.presentation_document.compileClassifiedWithHeadingAnchorsAlloc(a, p.title, .language,
+                    owner.heading, owner.code, encoder.presentation_document.MissingText.untracked(p.expanded), null, .{}, &ns,
+                    null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+                break :blk (try encoder.presentation_codec.decodeAlloc(a, bytes, p.title, .language, .{ .heading = owner.heading, .code = owner.code })).entry;
+            } else baseline;
+            try std.testing.expectEqualDeep(expected, actual);
+            try F.witnesses(a, actual, p.code, if (mode == .complete) owner.heading else null);
+            try F.roundtrip(a, actual);
+        }
+    }
+}
+
+test "KL source owned sju preserves numbered Kisitsit body and styled flag while excluding the distinct Afar provider" {
+    const F = KlStyledFlagBannerTest; const T = F.T;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit(); const a = arena.allocator(); const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup(); const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    try F.install(io, a, root, true);
+    var ns = try namespace_registry.Registry.init(a, @embedFile("testdata/kl-styled-flag/namespace-registry.tsv")); defer ns.deinit();
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit(); const codes = languageCodes(&registry, &ns);
+    const raw = @embedFile("testdata/kl-number-owner/sju.wikitext");
+    const source = @embedFile("testdata/kl-number-owner/sju-static.wikitext");
+    const saved = try std.json.parseFromSlice(struct { entries: []const T.Entry }, a, @embedFile("testdata/kl-number-owner/sju-reader.json"), .{ .ignore_unknown_fields = true });
+    try std.testing.expectEqual(@as(usize, 1), saved.value.entries.len); const before = saved.value.entries[0];
+    try std.testing.expectEqualStrings("sju", before.title);
+    try std.testing.expectEqualStrings("", before.language_code);
+    try std.testing.expectEqual(@as(usize, 2), before.sections.len);
+    try std.testing.expectEqual(@as(usize, 0), before.media.len); // Actual old Writer omitted its source flag.
+    const owner = registry.resolve("sv") orelse return error.TestUnexpectedResult;
+    const output = try std.fs.path.join(a, &.{root, "blobs"});
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit(); writer.language_codes = codes;
+    // Finite substitution of the exact provider, not a captured Worker reply.
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "sju", source, raw, null); _ = try writer.finish(codes);
+    const actual = try GaHtmlLanguageBoundaryFixture.requiredEntry(io, a, output, owner.heading, "sju");
+    try std.testing.expectEqualStrings("sv", actual.language_code);
+    try std.testing.expectEqualStrings(owner.heading, actual.language.?);
+    try std.testing.expectEqual(@as(usize, 2), actual.sections.len);
+    // The original entire numbered section, including anchors and span styles,
+    // remains exact. Header representation follows the selected normal renderer.
+    try std.testing.expectEqualDeep(before.sections[1], actual.sections[1]);
+    const definition = actual.sections[1].blocks[0];
+    try std.testing.expect(definition.kind == .definition and definition.depth == 1);
+    try std.testing.expectEqualStrings("1", definition.number);
+    try std.testing.expectEqualStrings("#", definition.list_path);
+    try std.testing.expectEqualStrings("Kisitsit 7.", definition.spans[0].text);
+    try std.testing.expectEqual(@as(usize, 1), actual.organization.lexemes.len);
+    const noun = actual.organization.lexemes[0];
+    try std.testing.expectEqualStrings("Noun", noun.kind);
+    try std.testing.expectEqualStrings(owner.heading, noun.language);
+    try std.testing.expectEqual(@as(usize, 1), noun.section);
+    try std.testing.expectEqual(@as(usize, 1), noun.definitions.len);
+    try std.testing.expectEqual(@as(usize, 0), noun.definitions[0].block);
+    try std.testing.expect(noun.definitions[0].parent == null);
+    try std.testing.expectEqual(@as(usize, 1), actual.media.len);
+    try std.testing.expectEqualStrings("Flag of Sweden.svg", actual.media[0].file);
+    var flags: usize = 0; var painted = false;
+    for (actual.sections[0].blocks) |block| for (block.spans) |span| {
+        if (span.image) |image| { try std.testing.expectEqualStrings("Flag of Sweden.svg", image.file); try std.testing.expectEqual(@as(?u32, 20), image.width_px); flags += 1; }
+        if (std.mem.indexOf(u8, span.text, "Svenskisuut") != null) { try std.testing.expectEqualStrings("#d4e4f4", span.background orelse return error.TestUnexpectedResult); painted = true; }
+    };
+    try std.testing.expect(flags == 1 and painted);
+    // Full current body conservation uses the same public Document entry point
+    // with the independently supplied source-registry owner, without masking
+    // the historical absence of the flag or claiming old/new media equality.
+    const bytes = try encoder.presentation_document.compileClassifiedWithHeadingAnchorsAlloc(a, "sju", .language,
+        owner.heading, owner.code, encoder.presentation_document.MissingText.untracked(source), null, .{}, &ns,
+        null, null, .{}, null, null, &.{}, null, &.{}, .{ .heading = owner.heading, .code = owner.code });
+    const expected = (try encoder.presentation_codec.decodeAlloc(a, bytes, "sju", .language, .{ .heading = owner.heading, .code = owner.code })).entry;
+    try std.testing.expectEqualDeep(expected, actual);
+    try F.roundtrip(a, actual);
+    // The 93 Afar number pages have a different source declaration without the
+    // image or included category. This fix does not certify that family.
+    try std.testing.expect(source_language_banner.parse(@embedFile("testdata/kl-number-owner/aa-provider.wikitext"), &ns, null, &registry, "aa") == null);
+}

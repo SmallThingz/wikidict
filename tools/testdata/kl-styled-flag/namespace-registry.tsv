@@ -1,0 +1,28 @@
+# wikidict-namespace-registry-v1
+# wiki	klwiktionary
+# dump-date	20261001
+# content-language	kl
+-2	Media	Media	case-sensitive	0	0	0		compile_only	virtual_namespace
+-1	Immikkut	Special	first-letter	0	0	0		compile_only	virtual_namespace	Speciel
+0			case-sensitive	0	1	0		main	dictionary_entries
+1	Oqallinneq	Talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Diskussion
+2	Atuisoq	User	first-letter	1	0	0		compile_only	standard_build_input	Bruger
+3	Atuisup oqalliffia	User talk	first-letter	1	0	0		compile_only	discussion_namespace	Brugerdiskussion
+4	Wiktionary	Project	case-sensitive	1	0	0		compile_only	standard_build_input	WT
+5	Wiktionary-p oqalliffia	Project talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Wiktionary talk	Wiktionary-diskussion	Wiktionaryip oqalliffia
+6	Fiileq	File	case-sensitive	0	0	0		compile_only	standard_build_input	Billede	Fil	Image
+7	Fiilip oqalliffia	File talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Billeddiskussion	Fildiskussion	Image talk
+8	MediaWiki	MediaWiki	first-letter	1	0	0		compile_only	standard_build_input
+9	MediaWikip oqalliffia	MediaWiki talk	first-letter	1	0	0		compile_only	discussion_namespace	MediaWiki-diskussion
+10	Ilisserut	Template	case-sensitive	1	0	0		compile_only	standard_build_input	Skabelon
+11	Ilisserummi oqallinneq	Template talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Skabelondiskussion
+12	Ikiuutit	Help	case-sensitive	1	0	0		compile_only	standard_build_input	Hjælp
+13	Ikiuutini oqallinneq	Help talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Hjælp-diskussion
+14	Sumut atassuseq	Category	case-sensitive	0	0	0		compile_only	standard_build_input	Kategori
+15	Sumut atassusermi oqallinneq	Category talk	case-sensitive	1	0	0		compile_only	discussion_namespace	Kategoridiskussion
+710	TimedText	TimedText	case-sensitive	0	0	0		compile_only	ancillary_site_input
+711	TimedText talk	TimedText talk	case-sensitive	0	0	0		compile_only	discussion_namespace
+828	Modul	Module	case-sensitive	1	0	0		compile_only	standard_build_input
+829	Moduldiskussion	Module talk	case-sensitive	1	0	0		compile_only	discussion_namespace
+1728	Event	Event	case-sensitive	1	0	0		compile_only	ancillary_site_input
+1729	Event talk	Event talk	case-sensitive	1	0	0		compile_only	discussion_namespace
