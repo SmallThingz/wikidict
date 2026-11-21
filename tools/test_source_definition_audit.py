@@ -145,8 +145,23 @@ class SourceDefinitionTests(unittest.TestCase):
         self.assertEqual(compiled_line(spans), expected)
         spans[1], spans[3] = spans[3], spans[1]
         self.assertNotEqual(compiled_line(spans), expected)
-        for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part|cat]]'):
+        for source in ('A [[cat]]s.', '[[other]], [[cat]]', '[[cat]] and [[broken', "[[cat|''cat'']]", '[[cat#part]]'):
             self.assertIsNone(simple_line(source, 'other'))
+
+    def test_haf_definition_keeps_the_authored_destination_section(self):
+        source = '[[hav]], [[haf#Kernewek|haf]]'
+        expected = ('hav, haf', ((0, 3, 'hav'), (5, 8, 'haf#Kernewek')))
+        self.assertEqual(simple_line(source, 'haf'), expected)
+        prefix = [dict(kind='link', text='hav', target='hav'), dict(kind='text', text=', ')]
+        link = dict(kind='link', text='haf', target='haf')
+        for fields in (dict(target='haf#Kernewek'), dict(target_fragment='Kernewek')):
+            self.assertEqual(compiled_line(prefix + [link | fields]), expected)
+        for fields in ({}, dict(target_fragment=''), dict(target_fragment='Kembrek'),
+                       dict(target='Kernewek', target_fragment='haf')):
+            self.assertNotEqual(compiled_line(prefix + [link | fields]), expected)
+        self.assertNotEqual(compiled_line([link | dict(target_fragment='')]), simple_line('[[haf]]', 'other'))
+        for unsupported in ('[[#Kernewek|haf]]', '[[haf#|haf]]', '[[haf#a#b|haf]]', '[[haf|haf]]'):
+            self.assertIsNone(simple_line(unsupported, 'haf'))
 
     def test_clipped_semantics_are_not_simple_definition_witnesses(self):
         plain = dict(kind='text', text='meaning')

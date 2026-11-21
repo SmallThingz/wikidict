@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 HEADING = re.compile(r'==\s*([^=\[\]{}<>|]+?)\s*==')
 LINKED_HEADING = re.compile(r'==[ \t]*\[\[([^\[\]{}<>|#:_&=\'\n]+)\]\][ \t]*==')
 STANDALONE_COMMENT = re.compile(r'^[ \t]*<!--([^<>\r\n]*)-->[ \t]*(?=\r?$)', re.MULTILINE)
-LINK = re.compile(r'\[\[([^|#:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
+LINK = re.compile(r'\[\[([^|:\[\]{}<>_&]+?)(?:\|([^|\[\]{}<>_&]+?))?\]\]')
 PLAIN = re.compile(r"[^\[\]{}<>|&#=]+")
 BARE_URL = re.compile(r'https?://[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?:/[A-Za-z0-9_./~-]*)?')
 LABELED_URL = re.compile(r'\[(' + BARE_URL.pattern + r') ([^\[\]{}<>|&#=\n]+)\]')
@@ -99,6 +99,11 @@ def simple_line(source, title, trail_rule=None):
         if literal and ("''" in literal or not PLAIN.fullmatch(literal)):
             return None
         target, label = match[1], match[2] or match[1]
+        if '#' in target:
+            page, _, fragment = target.partition('#')
+            if (match[2] is None or not page or not fragment or '#' in fragment or
+                    page.strip() != page or fragment.strip() != fragment):
+                return None
         if (target.strip() != target or target.casefold() == title.casefold() or "''" in label
                 or (trail_rule is None and match.end() < len(source) and source[match.end()].isalpha())):
             # A self-link may lose its action. Link trails depend on the edition.
@@ -150,9 +155,16 @@ def compiled_line(spans):
             return None
         text = span['text'] + span.get('trail', '')
         if span['kind'] == 'link':
-            if span.get('target_fragment') or span.get('trail'):
+            if span.get('trail'):
                 return None
-            links.append((offset, offset + len(text), span['target']))
+            target = span['target']
+            fragment = span.get('target_fragment')
+            if fragment is not None:
+                # Older Reader exports store the same destination as page#section.
+                if not isinstance(fragment, str) or '#' in target:
+                    return None
+                target += '#' + fragment
+            links.append((offset, offset + len(text), target))
         elif span['kind'] == 'external_link':
             target = span.get('target') or ''
             if (span.get('trail') or not text or not BARE_URL.fullmatch(target) or
