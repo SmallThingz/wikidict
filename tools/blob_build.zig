@@ -370,7 +370,7 @@ fn writeMissingBuildInputFailure(context: FailureReceiptContext, job: ExpansionJ
 }
 
 fn recordExpansionFailure(err: anyerror, job: ExpansionJob, failure: ?bundle_expander.Failure) anyerror {
-    if (err != error.InterfaceMessageSnapshotMissing and err != error.FileMetadataSnapshotMissing) return err;
+    if (err != error.InterfaceMessageSnapshotMissing and err != error.FileMetadataSnapshotMissing and err != error.LanguageNameSnapshotMissing) return err;
     const precise = failure orelse return err;
     if (!std.mem.eql(u8, precise.stage, "expand") or !std.mem.eql(u8, precise.error_name, @errorName(err))) return err;
     const context = failure_receipt_context orelse return err;
@@ -2677,7 +2677,7 @@ fn auditablePresentationError(err: anyerror) bool {
 }
 
 fn auditableExpansionInputFailure(err: anyerror, failure: ?bundle_expander.Failure) bool {
-    if (err != error.FileMetadataSnapshotMissing and err != error.InterfaceMessageSnapshotMissing) return false;
+    if (err != error.FileMetadataSnapshotMissing and err != error.InterfaceMessageSnapshotMissing and err != error.LanguageNameSnapshotMissing) return false;
     const reply = failure orelse return false;
     return std.mem.eql(u8, reply.stage, "expand") and std.mem.eql(u8, reply.error_name, @errorName(err));
 }
@@ -3828,7 +3828,7 @@ test "presentation failure receipt round trips exact invocation and page identit
 }
 
 test "missing interface input receipt preserves exact source and worker evidence without replacing the error" {
-    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing }) |expected_error| {
+    inline for (.{ error.InterfaceMessageSnapshotMissing, error.FileMetadataSnapshotMissing, error.LanguageNameSnapshotMissing }) |expected_error| {
         const a = std.testing.allocator;
         const io = std.testing.io;
         var tmp = std.testing.tmpDir(.{});
@@ -3837,7 +3837,7 @@ test "missing interface input receipt preserves exact source and worker evidence
         defer a.free(path);
         const args = [_][]const u8{ "dump", "out", "--failure-receipt", path, "--invocation-id", "0123456789abcdef0123456789abcdef" };
         const context: FailureReceiptContext = .{ .io = io, .a = a, .path = path, .invocation_id = args[args.len - 1], .invocation_args = &args };
-        const job: ExpansionJob = .{ .index_offset = 7, .ordinal = 12, .ns = .{ .id = 0, .kind = .language }, .title = "quoted \"input\"", .source = if (expected_error == error.InterfaceMessageSnapshotMissing) "{{int:Show}}\n" else "{{#tag:phonos|Keep|file=Uncaptured.ogg}}", .page_id = 34, .revision_id = 56 };
+        const job: ExpansionJob = .{ .index_offset = 7, .ordinal = 12, .ns = .{ .id = 0, .kind = .language }, .title = "quoted \"input\"", .source = if (expected_error == error.InterfaceMessageSnapshotMissing) "{{int:Show}}\n" else if (expected_error == error.FileMetadataSnapshotMissing) "{{#tag:phonos|Keep|file=Uncaptured.ogg}}" else "{{#language:en|tpi}}", .page_id = 34, .revision_id = 56 };
         const failure: bundle_expander.Failure = .{ .stage = "expand", .error_name = @errorName(expected_error), .detail = "retained worker detail\n" };
         failure_receipt_context = context;
         defer failure_receipt_context = null;
@@ -5077,7 +5077,8 @@ test "operational expansion timeouts cannot become successful empty pages" {
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.OutOfMemory, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.InterfaceMessageSnapshotMissing, null)) == null);
     try std.testing.expect((try expansionFallbackReasonAlloc(a, error.FileMetadataSnapshotMissing, null)) == null);
-    inline for (.{ "OutOfMemory", "Timeout", "InterfaceMessageSnapshotMissing", "FileMetadataSnapshotMissing" }) |name| {
+    try std.testing.expect((try expansionFallbackReasonAlloc(a, error.LanguageNameSnapshotMissing, null)) == null);
+    inline for (.{ "OutOfMemory", "Timeout", "InterfaceMessageSnapshotMissing", "FileMetadataSnapshotMissing", "LanguageNameSnapshotMissing" }) |name| {
         try std.testing.expect((try expansionFallbackReasonAlloc(a, error.ExpansionFailed, .{
             .stage = "expand",
             .error_name = name,
@@ -49437,7 +49438,7 @@ test "diagnostic audit consumes typed expansion input failures without expanded 
     const job: ExpansionJob = .{ .ordinal = 4659, .index_offset = 77, .ns = .{ .id = 0, .kind = .language }, .title = "poissonnier", .source = raw, .page_id = 101, .revision_id = 202, .index_line = index };
     var slot = PreparedSlotControl.init(io, &completion, job);
     defer slot.arena.deinit();
-    inline for (.{ error.FileMetadataSnapshotMissing, error.InterfaceMessageSnapshotMissing }) |err| {
+    inline for (.{ error.FileMetadataSnapshotMissing, error.InterfaceMessageSnapshotMissing, error.LanguageNameSnapshotMissing }) |err| {
         slot.failure = err;
         slot.worker.last_failure = .{ .stage = "expand", .error_name = @errorName(err), .detail = "original worker detail\nnot a provider-query binding" };
         slot.busy = true;
@@ -49453,24 +49454,24 @@ test "diagnostic audit consumes typed expansion input failures without expanded 
     }
     try std.testing.expect(!try consumeExpandedPage(&writer, job, .{ .source = "[https:// broken" }, a, &audit));
     try auditControlEmptySpools(&writer);
-    audit.selected = 5;
-    audit.dispatched = 5;
-    audit.consumed += 3; // Three direct Writer calls, in addition to two consumed slots.
-    try audit.finish(true, true, 5);
+    audit.selected = 7;
+    audit.dispatched = 7;
+    audit.consumed += 4; // Four direct Writer calls, in addition to three consumed slots.
+    try audit.finish(true, true, 7);
     const summary = try auditControlSummary(a, inputs.audit_root);
     try std.testing.expect(summary.object.get("range_complete").?.bool);
     try std.testing.expect(summary.object.get("failure_index_complete").?.bool);
     try std.testing.expect(!summary.object.get("inventory_complete").?.bool);
     try std.testing.expect(!summary.object.get("expansion_complete").?.bool);
-    try std.testing.expectEqual(@as(i64, 2), summary.object.get("expansion_input_failures").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), summary.object.get("expansion_input_failures").?.integer);
     try std.testing.expectEqual(@as(i64, 1), summary.object.get("presentation_failures").?.integer);
-    try std.testing.expectEqual(@as(i64, 3), summary.object.get("compile_attempts").?.integer);
-    try std.testing.expectEqual(@as(i64, 2), summary.object.get("succeeded").?.integer);
-    try std.testing.expectEqual(@as(i64, 3), summary.object.get("failed").?.integer);
+    try std.testing.expectEqual(@as(i64, 4), summary.object.get("compile_attempts").?.integer);
+    try std.testing.expectEqual(@as(i64, 3), summary.object.get("succeeded").?.integer);
+    try std.testing.expectEqual(@as(i64, 4), summary.object.get("failed").?.integer);
     try std.testing.expectEqual(@as(i64, 0), summary.object.get("expansion_fallbacks").?.integer);
     const lines = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64 * 1024));
     var rows = std.mem.splitScalar(u8, lines, '\n');
-    inline for (.{ error.FileMetadataSnapshotMissing, error.InterfaceMessageSnapshotMissing }) |err| {
+    inline for (.{ error.FileMetadataSnapshotMissing, error.InterfaceMessageSnapshotMissing, error.LanguageNameSnapshotMissing }) |err| {
         const row = (try std.json.parseFromSliceLeaky(std.json.Value, a, rows.next().?, .{})).object;
         try std.testing.expectEqualStrings("wikidict.presentation-audit.input-failure.v1", row.get("schema").?.string);
         try std.testing.expectEqualStrings(@errorName(err), row.get("error_name").?.string);
@@ -49520,6 +49521,9 @@ test "diagnostic input continuation keeps normal throws mismatched replies and o
     const cases = [_]struct { err: anyerror, reply: ?bundle_expander.Failure, diagnostic: bool }{
         .{ .err = error.FileMetadataSnapshotMissing, .reply = .{ .stage = "expand", .error_name = "FileMetadataSnapshotMissing", .detail = "normal production" }, .diagnostic = false },
         .{ .err = error.InterfaceMessageSnapshotMissing, .reply = .{ .stage = "expand", .error_name = "InterfaceMessageSnapshotMissing", .detail = "normal production" }, .diagnostic = false },
+        .{ .err = error.LanguageNameSnapshotMissing, .reply = .{ .stage = "expand", .error_name = "LanguageNameSnapshotMissing", .detail = "normal production" }, .diagnostic = false },
+        .{ .err = error.LanguageNameSnapshotMissing, .reply = null, .diagnostic = true },
+        .{ .err = error.LanguageNameSnapshotMissing, .reply = .{ .stage = "load", .error_name = "LanguageNameSnapshotMissing", .detail = "wrong stage" }, .diagnostic = true },
         .{ .err = error.FileMetadataSnapshotMissing, .reply = null, .diagnostic = true },
         .{ .err = error.FileMetadataSnapshotMissing, .reply = .{ .stage = "load", .error_name = "FileMetadataSnapshotMissing", .detail = "wrong stage" }, .diagnostic = true },
         .{ .err = error.FileMetadataSnapshotMissing, .reply = .{ .stage = "expand", .error_name = "InterfaceMessageSnapshotMissing", .detail = "wrong type" }, .diagnostic = true },
@@ -49548,16 +49552,17 @@ test "diagnostic input records preserve payload caps and propagate report IO and
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const a = arena.allocator();
+    inline for (.{ error.FileMetadataSnapshotMissing, error.InterfaceMessageSnapshotMissing, error.LanguageNameSnapshotMissing }) |input_error| {
     inline for (.{ "input-payload-cap", "input-report-cap", "input-io", "input-oom" }) |label| {
         const inputs = try auditControlInputs(a, label, 0);
         defer std.Io.Dir.cwd().deleteTree(io, inputs.root) catch {};
         var audit = try PresentationAudit.init(io, a, inputs.audit_root, inputs.context);
         defer audit.deinit();
         const job: ExpansionJob = .{ .ordinal = 0, .index_offset = 0, .ns = .{ .id = 0, .kind = .language }, .title = "raw request", .source = "raw source" };
-        const reply: bundle_expander.Failure = .{ .stage = "expand", .error_name = "FileMetadataSnapshotMissing", .detail = "exact detail" };
+        const reply: bundle_expander.Failure = .{ .stage = "expand", .error_name = @errorName(input_error), .detail = "exact detail" };
         if (comptime std.mem.eql(u8, label, "input-payload-cap")) {
             audit.payload_bytes = 64 * 1024 * 1024;
-            try audit.recordExpansionInputFailure(error.FileMetadataSnapshotMissing, job, reply);
+            try audit.recordExpansionInputFailure(input_error, job, reply);
             const lines = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(a, &.{ inputs.audit_root, "failures.jsonl" }), a, .limited(64 * 1024));
             const row = (try std.json.parseFromSliceLeaky(std.json.Value, a, std.mem.trim(u8, lines, "\n"), .{})).object;
             inline for (.{ "raw_source", "worker_reply" }) |field| {
@@ -49567,13 +49572,13 @@ test "diagnostic input records preserve payload caps and propagate report IO and
             try std.testing.expectEqual(@as(usize, 64 * 1024 * 1024), audit.payload_bytes);
         } else if (comptime std.mem.eql(u8, label, "input-report-cap")) {
             audit.report_bytes = 256 * 1024 * 1024;
-            try std.testing.expectError(error.AuditReportLimitExceeded, audit.recordExpansionInputFailure(error.FileMetadataSnapshotMissing, job, reply));
+            try std.testing.expectError(error.AuditReportLimitExceeded, audit.recordExpansionInputFailure(input_error, job, reply));
             try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
         } else if (comptime std.mem.eql(u8, label, "input-io")) {
             const path = try std.fs.path.join(a, &.{ inputs.audit_root, "failure-00000001-raw.wikitext" });
             try std.Io.Dir.cwd().createDir(io, path, .default_dir);
-            if (audit.recordExpansionInputFailure(error.FileMetadataSnapshotMissing, job, reply)) |_| return error.TestUnexpectedResult else |err| {
-                try std.testing.expect(err != error.FileMetadataSnapshotMissing);
+            if (audit.recordExpansionInputFailure(input_error, job, reply)) |_| return error.TestUnexpectedResult else |err| {
+                try std.testing.expect(err != input_error);
             }
             try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
         } else {
@@ -49581,13 +49586,14 @@ test "diagnostic input records preserve payload caps and propagate report IO and
             const original_allocator = audit.allocator;
             audit.allocator = fail.allocator();
             defer audit.allocator = original_allocator;
-            try std.testing.expectError(error.OutOfMemory, audit.recordExpansionInputFailure(error.FileMetadataSnapshotMissing, job, reply));
+            try std.testing.expectError(error.OutOfMemory, audit.recordExpansionInputFailure(input_error, job, reply));
             try std.testing.expectEqual(@as(usize, 0), audit.failure_records);
         }
-        audit.abort(error.FileMetadataSnapshotMissing);
+        audit.abort(input_error);
         const summary = try auditControlSummary(a, inputs.audit_root);
         try std.testing.expect(!summary.object.get("range_complete").?.bool);
         try std.testing.expect(!summary.object.get("expansion_complete").?.bool);
+    }
     }
 }
 
