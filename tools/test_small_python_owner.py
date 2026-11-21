@@ -1,4 +1,5 @@
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -187,6 +188,12 @@ class SourceValidationTests(unittest.TestCase):
                 owner.prepare(dict(config, child_nice=10))
             with self.assertRaisesRegex(ValueError, 'Invalid resource profile'):
                 owner.prepare(dict(config, profile=dict(config['profile'], wall_seconds=0)))
+            for invalid in (False, 0, -1, '512'):
+                with self.subTest(open_files=invalid), self.assertRaisesRegex(ValueError, 'Invalid open-file request'):
+                    owner.prepare(dict(config, profile=dict(config['profile'], max_open_files=invalid)))
+            with mock.patch.object(owner.resource, 'getrlimit', return_value=(256, 512)), \
+                    self.assertRaisesRegex(ValueError, 'Inherited open-file hard limit'):
+                owner.prepare(dict(config, profile=dict(config['profile'], max_open_files=8192)))
             bulk_read.assert_not_called()
         child = owner.prepare(config)[3]
         self.assertEqual([config['input_ref'], str(output)], json.loads(child[3]))
@@ -203,6 +210,16 @@ class SourceValidationTests(unittest.TestCase):
         self.assertEqual(23, result['returncode'])
         self.assertEqual(plan['argv'], result['argv'])
         self.assertEqual(ref(output / 'tests.stdout'), result['stdout'])
+
+    def test_referenced_sources_require_the_authenticated_plan_and_original_bootstrap(self):
+        guards = [self.bound, dict(self.bound, path=str(self.root / 'guardian'))]
+        plan = {'source_refs': [*guards, dict(self.bound, path=str(self.root / 'other'))]}
+        config = dict(source_refs=guards, source_refs_ref=self.bound, input_ref=self.bound)
+        self.assertEqual(plan['source_refs'], owner.selected_source_refs(config, plan))
+        with self.assertRaisesRegex(ValueError, 'reference differs'):
+            owner.selected_source_refs(dict(config, source_refs_ref=dict(self.bound, bytes=0)), plan)
+        with self.assertRaisesRegex(ValueError, 'bootstrap guards differ'):
+            owner.selected_source_refs(dict(config, source_refs=guards[::-1]), plan)
 
     def test_direct_receipts_keep_all_refs_console_is_compact_and_post_pass_fresh(self):
         from types import SimpleNamespace
@@ -244,10 +261,30 @@ class DirectCliWatchdogTests(unittest.TestCase):
             output = Path(tmp)
             command = output / 'command.json'
             memory = 256 * 1024**2
-            code = "import os,sys,json;sys.path.insert(0," + repr(str(resources.parent)) + ");import build_resource_limits as l;assert l.inside_watchdog();assert l.inside_watchdog();assert os.getpid()==os.getsid(0)==os.getpgrp();assert os.getppid()==int(os.environ[l.WATCHDOG_PARENT_PID]);assert l.watchdog_physical_memory_limit_bytes()==" + str(memory) + ";print(json.dumps(dict(pid=os.getpid(),parent=os.getppid(),session=os.getsid(0),budget=l.watchdog_physical_memory_limit_bytes())));print('direct stderr',file=sys.stderr);sys.exit(" + str(expected_exit) + ")"
+            code = f"""
+import json, os, resource, sys
+sys.path.insert(0, {str(resources.parent)!r})
+import build_resource_limits as limits
+assert limits.inside_watchdog()
+assert limits.inside_watchdog()
+assert os.getpid() == os.getsid(0) == os.getpgrp()
+assert os.getppid() == int(os.environ[limits.WATCHDOG_PARENT_PID])
+assert limits.watchdog_physical_memory_limit_bytes() == {memory}
+print(json.dumps(dict(pid=os.getpid(), parent=os.getppid(), session=os.getsid(0),
+                      budget=limits.watchdog_physical_memory_limit_bytes(),
+                      open_files=resource.getrlimit(resource.RLIMIT_NOFILE)[0])))
+print('direct stderr', file=sys.stderr)
+sys.exit({expected_exit})
+"""
             plan = dict(qualification_root=str(output), cwd=str(root), argv=[sys.executable, '-B', '-c', code], env={}, scope='actual direct-exec one-use watchdog proof fixture', source_refs=[ref(resources), ref(guardian)])
+            if expected_exit == 0:
+                plan['source_refs'].append(ref(selected))
             command.write_text(json.dumps(plan))
             config = dict(input_ref=ref(command), output_root=str(output), source_refs=[ref(resources), ref(guardian)], child_nice=max(0, os.getpriority(os.PRIO_PROCESS, 0)), direct_cli=True, profile=dict(memory_bytes=memory, reserve_bytes=1024**3, cpu_seconds=120, wall_seconds=60, max_tasks=32, disk_floor_bytes=1024**2, cpus=[min(os.sched_getaffinity(0))]))
+            if expected_exit == 0:
+                config['source_refs_ref'] = config['input_ref']
+                hard = owner.resource.getrlimit(owner.resource.RLIMIT_NOFILE)[1]
+                config['profile']['max_open_files'] = 8192 if hard == owner.resource.RLIM_INFINITY else min(8192, hard)
             self.assertEqual(expected_exit, direct.run(config))
             result = json.loads((output / 'result01.json').read_text())
             owner_result = json.loads((output / 'direct-runtime01/owner-result.json').read_text())
@@ -260,6 +297,15 @@ class DirectCliWatchdogTests(unittest.TestCase):
             self.assertEqual('direct stderr\n', (output / 'tests.stderr').read_text())
             self.assertEqual(proof['pid'], proof['session']); self.assertEqual(os.getpid(), proof['parent'])
             self.assertEqual(memory, proof['budget']); self.assertEqual(memory, report['memory_limit_bytes'])
+            self.assertEqual(report['max_open_files'], proof['open_files'])
+            if expected_exit == 0:
+                self.assertEqual(config['profile']['max_open_files'], report['max_open_files'])
+                runtime = output / 'direct-runtime01'
+                self.assertEqual(plan['source_refs'], json.loads((runtime / 'start.json').read_text())['source_refs'])
+                for phase in ('before', 'after'):
+                    with gzip.open(runtime / f'source-validation-{phase}01.json.gz', 'rt') as stream:
+                        checked = json.load(stream)
+                    self.assertEqual(set(checked['path_identities']), {r['path'] for r in plan['source_refs']})
             self.assertEqual('child_exit', report['termination_reason']); self.assertTrue(report['cleanup_complete'])
 
     def test_actual_direct_cli_preserves_one_use_proof_and_success(self):

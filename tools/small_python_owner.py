@@ -1,9 +1,12 @@
-"""The existing small Python watchdog owner, with task bindings supplied as JSON.
+"""Run a pinned command under the watchdog with a JSON resource profile.
 
-One common future owner retains direct09 watchdog/execve behavior and result shape.
 Source authentication streams each distinct stable object once per independent
 pre/post pass, with a separate fd/path check for every bound path.
+For a large inventory, set source_refs_ref to input_ref and keep the first two
+command source_refs in the config. start.json retains the complete list and
+the two validation reports are gzip-compressed JSON in this mode.
 """
+import gzip
 import hashlib
 import json
 import os
@@ -28,6 +31,29 @@ def inherited_child_nice(config):
     return value
 
 
+def selected_source_refs(config, plan):
+    bootstrap = config['source_refs']
+    if 'source_refs_ref' not in config:
+        return bootstrap
+    if config['source_refs_ref'] != config['input_ref']:
+        raise ValueError('Source list reference differs from authenticated command')
+    refs = plan.get('source_refs')
+    if not isinstance(refs, list) or len(refs) < 2 or len(bootstrap) != 2 or bootstrap != refs[:2]:
+        raise ValueError('Referenced source list bootstrap guards differ')
+    return refs
+
+
+def save_source_check(runtime, name, check, compact):
+    if compact:
+        with gzip.open(runtime / (name + '.gz'), 'xt', compresslevel=1, encoding='utf-8') as stream:
+            json.dump(check, stream, separators=(',', ':'), sort_keys=True)
+            stream.write('\n')
+    else:
+        with (runtime / name).open('x') as stream:
+            json.dump(check, stream, indent=2, sort_keys=True)
+            stream.write('\n')
+
+
 def prepare(config, *, source_checks=None):
     """Resolve data once and reject setup mistakes before host admission."""
     command = absolute_path(config['input_ref']['path'])
@@ -47,7 +73,7 @@ def prepare(config, *, source_checks=None):
     if not isinstance(argv, list) or not argv or not all(isinstance(x, str) for x in argv):
         raise ValueError('Command argv must be a nonempty string list')
     absolute_path(argv[0])
-    refs = config['source_refs']
+    refs = selected_source_refs(config, plan)
     if len(refs) < 2:
         raise ValueError('Resource helper and guardian bindings are required')
     known = {(r['path'], r['bytes'], r['sha256']) for r in refs}
@@ -58,6 +84,13 @@ def prepare(config, *, source_checks=None):
     for name in ('memory_bytes', 'reserve_bytes', 'cpu_seconds', 'wall_seconds', 'max_tasks', 'disk_floor_bytes'):
         if type(profile[name]) is not int or profile[name] <= 0:
             raise ValueError('Invalid resource profile: ' + name)
+    if 'max_open_files' in profile:
+        requested = profile['max_open_files']
+        if type(requested) is not int or not 1 <= requested <= sys.maxsize:
+            raise ValueError('Invalid open-file request')
+        hard = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+        if hard != resource.RLIM_INFINITY and hard < requested:
+            raise ValueError('Inherited open-file hard limit is below the explicit request')
     if not profile['cpus'] or any(type(c) is not int or c < 0 for c in profile['cpus']):
         raise ValueError('Invalid CPU set')
     # The watchdog prepends its selected interpreter. This is an argument tail.
@@ -78,7 +111,8 @@ def prepare(config, *, source_checks=None):
 def run(config):
     source_checks = []
     plan, output, runtime, child = prepare(config, source_checks=source_checks)
-    refs = config['source_refs']
+    refs = selected_source_refs(config, plan)
+    compact = 'source_refs_ref' in config
     profile = config['profile']
     sys.path.insert(0, str(absolute_path(refs[0]['path']).parent))
     import build_resource_limits as limits
@@ -88,9 +122,7 @@ def run(config):
     if Path(guardian.__file__).resolve() != absolute_path(refs[1]['path']):
         raise ValueError('Unexpected guardian')
     runtime.mkdir()
-    with (runtime / 'source-validation-before01.json').open('x') as stream:
-        json.dump(source_checks[0], stream, indent=2, sort_keys=True)
-        stream.write('\n')
+    save_source_check(runtime, 'source-validation-before01.json', source_checks.pop(), compact)
     resource.setrlimit(resource.RLIMIT_CPU, (profile['cpu_seconds'], profile['cpu_seconds']))
     os.sched_setaffinity(0, set(profile['cpus']))
     child_nice = inherited_child_nice(config)
@@ -110,12 +142,11 @@ def run(config):
     console.update(source_ref_count=len(refs), source_refs_sha256=hashlib.sha256(encoded_refs).hexdigest(), source_receipt=str(runtime / 'start.json'))
     print('CHECK', json.dumps(console), flush=True)
     supervised_started = time.monotonic()
-    code = limits.supervise_watchdog(argv=child, report_path=runtime / 'watchdog.json', wall_seconds=profile['wall_seconds'], memory_limit_bytes=profile['memory_bytes'], address_space_limit_bytes='unlimited', max_tasks=profile['max_tasks'], max_cpus=len(set(profile['cpus'])), disk_paths=[runtime], disk_floor_bytes=profile['disk_floor_bytes'], host_observation=host, child_nice=child_nice)
+    watchdog_options = {'max_open_files': profile['max_open_files']} if 'max_open_files' in profile else {}
+    code = limits.supervise_watchdog(argv=child, report_path=runtime / 'watchdog.json', wall_seconds=profile['wall_seconds'], memory_limit_bytes=profile['memory_bytes'], address_space_limit_bytes='unlimited', max_tasks=profile['max_tasks'], max_cpus=len(set(profile['cpus'])), disk_paths=[runtime], disk_floor_bytes=profile['disk_floor_bytes'], host_observation=host, child_nice=child_nice, **watchdog_options)
     after = authenticate_sources(refs)
     authenticate(config['input_ref'], capture=False)
-    with (runtime / 'source-validation-after01.json').open('x') as stream:
-        json.dump(after, stream, indent=2, sort_keys=True)
-        stream.write('\n')
+    save_source_check(runtime, 'source-validation-after01.json', after, compact)
     if config.get('direct_cli', False):
         streams = {}
         for key in ('stdout', 'stderr'):
