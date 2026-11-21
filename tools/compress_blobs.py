@@ -7,9 +7,12 @@ import lzma
 import os
 from pathlib import Path
 import subprocess
+import stat
 import time
 
 MAX_XZ_WORKERS = 4
+SHARD_BATCH_FILES = 128
+SHARD_BATCH_BYTES = 8 * 1024 * 1024
 
 def max_workers():
     return max(1, min(MAX_XZ_WORKERS, os.cpu_count() or 1))
@@ -36,11 +39,16 @@ def _validate_raw_blob(path):
 def compress_small_batch_keep(paths, block_size):
     """Publish a bounded small-file batch, retaining every raw recovery copy."""
     paths = [Path(path) for path in paths]
-    if not 1 <= len(paths) <= 128 or len(set(paths)) != len(paths):
+    if not 1 <= len(paths) <= SHARD_BATCH_FILES or len(set(paths)) != len(paths):
         raise ValueError('Small compression batch must have 1 through 128 unique files')
+    total_bytes = 0
     for path in paths:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64*1024:
-            raise ValueError('Expected small regular blob: ' + str(path))
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('Expected regular blob: ' + str(path))
+        total_bytes += info.st_size
+    if total_bytes > SHARD_BATCH_BYTES:
+        raise ValueError('Compression batch exceeds its byte budget')
     started = time.perf_counter()
     _encode_verified_batch(paths, block_size)
     print(f'small batch: {len(paths)} blobs; {time.perf_counter()-started:.3f}s; verified; raw retained', flush=True)

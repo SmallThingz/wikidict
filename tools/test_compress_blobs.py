@@ -229,7 +229,9 @@ class SmallKeepBatchTests(unittest.TestCase):
 
     def test_batch_bounds_and_existing_recovery_refused_before_launch(self):
         bad = [[], self.paths*2, [self.paths[0]]*129]
-        self.paths[0].write_bytes(b'WIKBLB08'+b'x'*65529)
+        # Individual files can fit while their sum exceeds the staging budget.
+        with self.paths[0].open('r+b') as stream:
+            stream.truncate(compress_blobs.SHARD_BATCH_BYTES)
         bad.append(self.paths)
         with mock.patch.object(compress_blobs.subprocess, 'run') as run:
             for paths in bad:

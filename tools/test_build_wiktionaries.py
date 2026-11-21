@@ -1867,7 +1867,9 @@ class BuildTest(PreparedToolsFixture):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);raws=[root/f'{n:03}.wikblb' for n in range(130)]
             for raw in raws:raw.write_bytes(b'WIKBLB08x')
-            large=root/'001a.wikblb';large.write_bytes(b'WIKBLB08'+b'x'*65529)
+            large=root/'001a.wikblb'
+            with large.open('wb') as stream:
+                stream.write(b'WIKBLB08'); stream.truncate(b.SHARD_BATCH_BYTES + 1)
             calls=[]
             def encode(paths,block):
                 calls.append(('batch',len(paths)))
@@ -1880,6 +1882,43 @@ class BuildTest(PreparedToolsFixture):
                 b.compress_verified_shard(root)
             self.assertEqual(calls,[('single','001a.wikblb'),('batch',128),('batch',2)])
             self.assertTrue(all(not raw.exists() for raw in raws+[large]))
+
+    def test_shard_batches_medium_files_within_total_byte_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raws = [root / f'{index}.wikblb' for index in range(4)]
+            for raw in raws:
+                raw.write_bytes(b'WIKBLB08' + bytes(70000))
+            calls = []
+            encode = b.compress_small_batch_keep
+            def record(paths, block):
+                calls.append(list(paths))
+                return encode(paths, block)
+            with patch.object(b, 'SHARD_BATCH_BYTES', 150000), patch.object(b, 'compress_small_batch_keep', side_effect=record):
+                b.compress_verified_shard(root)
+            self.assertEqual(calls, [raws[:2], raws[2:]])
+            for raw in raws:
+                self.assertFalse(raw.exists())
+                self.assertEqual(lzma.decompress(raw.with_suffix('.wikblb.xz').read_bytes()), b'WIKBLB08' + bytes(70000))
+
+    def test_resume_syncs_existing_target_before_removing_any_raw(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raws = [root / f'{index}.wikblb' for index in range(3)]
+            for raw in raws:
+                raw.write_bytes(b'WIKBLB08resume')
+            target = raws[-1].with_suffix('.wikblb.xz')
+            target.write_bytes(lzma.compress(raws[-1].read_bytes()))
+            real_sync = os.fsync
+            def sync(fd):
+                if os.path.samestat(os.fstat(fd), target.stat()):
+                    raise OSError('existing target sync failed')
+                real_sync(fd)
+            with patch.object(os, 'fsync', side_effect=sync), self.assertRaisesRegex(OSError, 'existing target sync failed'):
+                b.compress_verified_shard(root)
+            self.assertTrue(all(raw.exists() for raw in raws))
+            b.compress_verified_shard(root)
+            self.assertTrue(all(not raw.exists() for raw in raws))
 
     def test_compressed_shard_recovery_preserves_only_verified_copy_on_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

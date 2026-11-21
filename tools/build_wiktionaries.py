@@ -676,7 +676,7 @@ def bootstrap_python_tooling(selection=None):
 _PYTHON_TOOLING=bootstrap_python_tooling()
 prepared_child_imports()
 
-from compress_blobs import compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
+from compress_blobs import SHARD_BATCH_BYTES, SHARD_BATCH_FILES, compress, compress_many, compress_small_batch_keep, default_workers, verify_round_trip
 from build_disk_limits import BUILD_DISK_RESERVE_BYTES, require_merge_disk_space, compressed_blob_size
 from build_artifact_root import configure_artifact_root, artifact_path, remove_artifact_tree, unlink_artifact, execution_paths, refuse_execution_destinations, PRODUCER_SOURCE_FILES, PRODUCER_SOURCE_DIRECTORIES
 from download_wiktionaries import digest, language_registry_snapshot, validate_item, write_language_registry, select_manifest_files, derived_registry_paths, load_input_manifest
@@ -7689,6 +7689,11 @@ def compress_verified_shard(shard):
             if target.exists():
                 if not stat.S_ISREG(target.lstat().st_mode): raise ValueError(f'Unsafe compressed shard: {target}')
                 verify_round_trip(raw,target)
+                # A previous attempt may have left this target. Fresh encoders
+                # already sync each verified inode before its final rename.
+                fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+                try: os.fsync(fd)
+                finally: os.close(fd)
             else:
                 missing.append(raw)
         if len(missing) > 1:
@@ -7696,23 +7701,25 @@ def compress_verified_shard(shard):
         elif missing:
             compress(missing[0],1024*1024,workers=1)
         parents = sorted({raw.parent for raw in raws})
-        for raw in raws:
-            fd = os.open(Path(str(raw)+'.xz'),os.O_RDONLY|os.O_NOFOLLOW)
-            try: os.fsync(fd)
-            finally: os.close(fd)
         # Every target and renamed entry is durable before the first raw deletion.
         for parent in parents: sync_shard_directory(parent)
         for raw in raws: unlink_artifact(raw)
         for parent in parents: sync_shard_directory(parent)
 
     pending = []
+    pending_bytes = 0
     for raw in list(shard_blob_paths(shard)):
         if not raw.name.endswith('.wikblb'): continue
-        if raw.stat().st_size > 64*1024:
+        size = raw.stat().st_size
+        if size > SHARD_BATCH_BYTES:
             commit_batch([raw])
-        else:
-            pending.append(raw)
-            if len(pending) == 128: commit_batch(pending); pending = []
+            continue
+        if len(pending) == SHARD_BATCH_FILES or pending_bytes + size > SHARD_BATCH_BYTES:
+            commit_batch(pending)
+            pending = []
+            pending_bytes = 0
+        pending.append(raw)
+        pending_bytes += size
     if pending: commit_batch(pending)
 
 
