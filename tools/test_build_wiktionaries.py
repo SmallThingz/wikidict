@@ -14016,6 +14016,53 @@ class CompactPreparedFigureVerdictTests(unittest.TestCase):
 
 
 class InitialSealedSitelinksUpdateTests(unittest.TestCase):
+    def test_second_append_uses_the_previous_result_and_archived_intermediate_seal(self):
+        write = _initial_sealed_write
+        with ReadonlyPreparedRetainedTests().fixture() as fixture:
+            first = InitialSealedProviderUpdateTests().updated(fixture, sitelinks=True)
+            name = 'wikibase-sitelinks.tsv'
+            archive = write(fixture.root / 'intermediate-seal.json', first.current)
+            source = fixture.root / 'second-sitelinks.tsv'
+            source.write_bytes(first.source.read_bytes() + b'Q1860\tzhwiki\tEnglish\n')
+            selected = _initial_sealed_reference(source)
+            data = dict(first.data, original_seal=first.current_ref, selected_source=selected,
+                        selected_rows=[['Q1860', 'zhwiki', 'English']])
+            inputs = write(fixture.root / 'second-input.json', data)
+            seal = copy.deepcopy(first.current)
+            value = [selected['bytes'], selected['sha256']]
+            seal['identity']['providers'][name] = value
+            seal['identity']['assets'] = [[name, *value] if row[0] == name else row for row in seal['identity']['assets']]
+            seal['runtime_stamps']['assets'][name] = [1, 4, 33188, selected['bytes'], 8, 9]
+            seal['runtime_stamps']['snapshot_links'][name] = str(source)
+            seal['provider_update']['previous_seal_sha256'] = first.current_ref['sha256']
+            live = write(Path(first.original['path']), seal)
+            result = dict(first.changed, original_seal_archive=archive, original_seal_sha256=first.current_ref['sha256'],
+                          cumulative_original_seal_sha256=first.original['sha256'], prior_provider_update_result=first.update['result'],
+                          prior_provider_update_closure=first.update['closure'], current_seal=live, current_seal_sha256=live['sha256'],
+                          input_authority=inputs, aliases={name: str(source)})
+            result_ref = write(fixture.root / 'second-result.json', result)
+            closure = dict(first.closed, restoration_result=result_ref, original_seal_archive=archive,
+                           input_authority=inputs, current_seal=live, aliases=result['aliases'])
+            update = dict(first.update, previous_update=first.update, result=result_ref, original_seal_archive=archive,
+                          input_authority=inputs, current_seal=live, closure=write(fixture.root / 'second-closure.json', closure))
+            def verify():
+                selection = dict(first.selected, sitelinks_provider_update=update)
+                first.records['dict-bundle-build']['initial_sealed_generation'] = write(fixture.root / 'selection.json', selection)
+                return b.RetainedNativeToolRoles(first.records, zig_sha256=fixture.identity['zig_sha256'])
+            with patch.object(fixture.native_cache, 'frozen_runtime_context', return_value=seal):
+                roles = verify()
+                roles.require_unchanged()
+                self.assertEqual(roles.closed_native_origin, seal)
+                self.assertIn(Path(archive['path']), roles.inputs)
+                good_result = update['result']
+                update['result'] = write(fixture.root / 'wrong-chain.json', dict(result, prior_provider_update_closure={}))
+                with self.assertRaisesRegex(ValueError, 'exact prior transition'):
+                    verify()
+                update['result'] = good_result
+                Path(archive['path']).write_bytes(b'{}')
+                with self.assertRaises(ValueError):
+                    verify()
+
     def test_sitelinks_current_archive_constructor_adoption_and_dispatch(self):
         with ReadonlyPreparedRetainedTests().fixture() as f:
             u=InitialSealedProviderUpdateTests().updated(f,sitelinks=True)

@@ -1039,14 +1039,16 @@ def _sitelinks_append(before, after, selected_rows):
                 raise ValueError('Duplicate sitelinks Provider pair')
             result[key] = cells[2]
         return comments, result
-    old_comments, old = rows(before)
     comments, current = rows(after)
+    old_comments, old = rows(before) if before is not None else (comments, {})
     if (not isinstance(selected_rows, list) or not selected_rows
             or any(not isinstance(row, list) or len(row) != 3
                    or any(not isinstance(value, str) for value in row) for row in selected_rows)
             or selected_rows != sorted(selected_rows)
             or len({tuple(row[:2]) for row in selected_rows}) != len(selected_rows)):
         raise ValueError('Invalid selected sitelinks additions')
+    if before is None and (len(selected_rows) != 1 or selected_rows[0][1] == '*' or not selected_rows[0][2]):
+        raise ValueError('Initial sitelinks Provider requires one positive exact pair')
     added = {key: value for key, value in current.items() if key not in old}
     if (comments != old_comments or any(current.get(key) != value for key, value in old.items())
             or added != {tuple(row[:2]): row[2] for row in selected_rows}

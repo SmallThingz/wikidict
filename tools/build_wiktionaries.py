@@ -6797,18 +6797,20 @@ class RetainedNativeToolRoles:
         self._closed_native_context=(root,dump,whole['seal']['sha256'])
         return context
 
-    def closed_execution_origin(self):
-        """Authenticate the selected closed producer, never current compiler source."""
+    def _verified_provider_history(self, selected, result, plan, root, update, *, sitelinks_update):
+        """Verify each provider-only change from the original seal to the live one."""
         import extraction_cache as cache
-        selected,result,plan,workspace=initial_sealed_generation(self.initial_sealed_generation,self)
-        original_reference=result['completed_expander_seal'];reference=original_reference
-        root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
-        sitelinks_update=selected.get('sitelinks_provider_update') is not None
-        update=selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'));update_references=[]
-        update_kind='sitelinks' if sitelinks_update else 'file_metadata'
-        if update is None:
-            seal=prepared_metadata(reference);ready_seal=seal
-        else:
+        original_reference = result['completed_expander_seal']
+        update_kind = 'sitelinks' if sitelinks_update else 'file_metadata'
+        update_references = []
+        updates = [update]
+        if isinstance(update,dict) and 'previous_update' in update:
+            if not sitelinks_update or not isinstance(update['previous_update'],dict):
+                raise ValueError('Only a declared sitelinks append may have a prior transition')
+            updates = [update['previous_update'],
+                       {key:value for key,value in update.items() if key!='previous_update'}]
+        step_origin=original_reference
+        for step_index,update in enumerate(updates):
             required={'result','closure','input_authority','original_seal_archive','current_seal','helper','snapshot_metadata_refresh_authority','wire_correspondence'}
             if not isinstance(update,dict) or set(update)!=required:
                 raise ValueError('Invalid closed prepared Provider update selection')
@@ -6819,25 +6821,53 @@ class RetainedNativeToolRoles:
                     or any(changed.get(k)is not True for k in ('passed','ready','source_after','original_native_producer_unchanged','original_source_receipt_unchanged','logical_provider_identity_changed_only_'+update_kind,'all_other_native_asset_stamps_unchanged_except_bound_book_ctime','source_metadata_and_nlinks_unchanged'))
                     or changed.get('compiler_executed')is not False or changed.get('worker_rebuilt')is not False or changed.get('lua_pages_executed')!=0):
                 raise ValueError('Prepared Provider update is not independently closed')
+            seal=prepared_metadata(update['original_seal_archive'])
+            if step_index == 0:
+                origin_seal = seal
+            else:
+                previous = updates[0]
+                if (changed.get('prior_provider_update_result') != previous['result']
+                        or changed.get('prior_provider_update_closure') != previous['closure']
+                        or changed.get('cumulative_original_seal_sha256') != original_reference['sha256']
+                        or seal != previous_ready_seal):
+                    raise ValueError('Prepared sitelinks append lost its exact prior transition')
+            name='wikibase-sitelinks.tsv' if sitelinks_update else 'file-metadata.tsv'
+            first_sitelinks=(sitelinks_update and name in seal['identity']['providers']
+                and seal['identity']['providers'][name] is None)
+            if first_sitelinks and (any(row[0]==name for row in seal['identity']['assets'])
+                    or name in seal['runtime_stamps']['assets']
+                    or name in seal['runtime_stamps']['snapshot_links']):
+                raise ValueError('Initial sitelinks Provider origin is not absent')
+            original_preparation=data.get('original_preparation')
+            if first_sitelinks and 'original_preparation' not in data:
+                # The closed first-provider transaction binds its original closure directly.
+                if data.get('original_closure')!=selected['preparation_closure']:
+                    raise ValueError('Initial sitelinks Provider original closure differs')
+                original_preparation=prepared_metadata(data['original_closure']).get('preparation_result')
             if (closed.get('restoration_result')!=update['result'] or closed.get('input_authority')!=update['input_authority'] or changed.get('input_authority')!=update['input_authority']
-                    or data.get('original_preparation')!=selected['preparation_result'] or data.get('original_closure')!=selected['preparation_closure']
-                    or data.get('root')!=str(root) or data.get('dump')!=plan['dump']['path'] or data.get('original_seal')!=original_reference
+                    or original_preparation!=selected['preparation_result'] or data.get('original_closure')!=selected['preparation_closure']
+                    or data.get('root')!=str(root) or data.get('dump')!=plan['dump']['path'] or data.get('original_seal')!=step_origin
                     or data.get('helper')!=update['helper'] or changed.get('worker')!=result['worker'] or closed.get('original_worker')!=result['worker']
                     or changed.get('current_seal')!=update['current_seal'] or closed.get('current_seal')!=update['current_seal']
                     or changed.get('original_seal_archive')!=update['original_seal_archive'] or closed.get('original_seal_archive')!=update['original_seal_archive']
-                    or any(update['original_seal_archive'][k]!=original_reference[k]for k in ('bytes','sha256'))
-                    or changed.get('original_seal_sha256')!=original_reference['sha256']
+                    or any(update['original_seal_archive'][k]!=step_origin[k]for k in ('bytes','sha256'))
+                    or changed.get('original_seal_sha256')!=step_origin['sha256']
                     or update['current_seal']['path']!=original_reference['path']):
                 raise ValueError('Prepared Provider update changed original preparation or output origin')
-            seal=prepared_metadata(update['original_seal_archive']);reference=update['current_seal'];ready_seal=prepared_metadata(reference)
+            reference=update['current_seal']
+            ready_reference = (updates[1]['original_seal_archive']
+                if step_index == 0 and len(updates) == 2 else reference)
+            if any(ready_reference[k] != reference[k] for k in ('bytes','sha256')):
+                raise ValueError('Prepared sitelinks intermediate seal archive differs')
+            ready_seal=prepared_metadata(ready_reference)
             baseline=seal
             refresh=update['snapshot_metadata_refresh_authority']
             if (data.get('snapshot_metadata_refresh_authority')!=refresh or changed.get('snapshot_metadata_refresh_authority')!=refresh or closed.get('snapshot_metadata_refresh_authority')!=refresh):
                 raise ValueError('Prepared Provider metadata custody authority differs')
             if refresh is not None:
                 authority=prepared_metadata(refresh)
-                if authority.get('old_seal')!=original_reference:raise ValueError('Prepared Provider custody has another original seal')
-                baseline=cache._snapshot_metadata_refresh(root,seal,original_reference['sha256'],authority['receipt'])
+                if authority.get('old_seal')!=step_origin:raise ValueError('Prepared Provider custody has another original seal')
+                baseline=cache._snapshot_metadata_refresh(root,seal,step_origin['sha256'],authority['receipt'])
                 update_references.append(refresh)
             wire=prepared_metadata(update['wire_correspondence'])
             if (wire.get('original_preparation')!=selected['preparation_result']
@@ -6851,23 +6881,46 @@ class RetainedNativeToolRoles:
             if any(actual[key]!=source[key]for key in ('path','bytes','sha256')):
                 raise ValueError('Prepared Provider update source differs')
             if sitelinks_update:
-                old_source=baseline['runtime_stamps']['snapshot_links'][name]
-                old=self.bind_input(Path(old_source))
-                if [old['bytes'],old['sha256']]!=baseline['identity']['providers'][name]:
-                    raise ValueError('Prepared sitelinks original source differs')
-                cache._sitelinks_append(Path(old_source).read_bytes(),Path(source['path']).read_bytes(),data.get('selected_rows'))
+                before=None
+                if not first_sitelinks:
+                    old_source=baseline['runtime_stamps']['snapshot_links'][name]
+                    old=self.bind_input(Path(old_source))
+                    if [old['bytes'],old['sha256']]!=baseline['identity']['providers'][name]:
+                        raise ValueError('Prepared sitelinks original source differs')
+                    before=Path(old_source).read_bytes()
+                cache._sitelinks_append(before,Path(source['path']).read_bytes(),data.get('selected_rows'))
             expected=dict(baseline);expected['identity']=dict(baseline['identity']);expected['identity']['providers']=dict(baseline['identity']['providers'])
             expected['identity']['providers'][name]=value
             expected['identity']['assets']=[[name,*value]if row[0]==name else row for row in baseline['identity']['assets']]
+            if first_sitelinks:
+                expected['identity']['assets']=sorted([*baseline['identity']['assets'],[name,*value]])
             expected['runtime_stamps']=dict(baseline['runtime_stamps']);expected['runtime_stamps']['assets']=dict(baseline['runtime_stamps']['assets']);expected['runtime_stamps']['snapshot_links']=dict(baseline['runtime_stamps']['snapshot_links'])
             expected['runtime_stamps']['assets'][name]=ready_seal['runtime_stamps']['assets'][name]
             expected['runtime_stamps']['snapshot_links'][name]=source['path']
             expected['provenance']='ordinary-sitelinks-provider-update' if sitelinks_update else 'ordinary-file-metadata-provider-update'
-            expected['provider_update']=dict(original_seal_sha256=original_reference['sha256'],previous_seal_sha256=original_reference['sha256'],original_providers={name:seal['identity']['providers'][name]})
+            expected['provider_update']=dict(original_seal_sha256=original_reference['sha256'],previous_seal_sha256=step_origin['sha256'],original_providers={name:origin_seal['identity']['providers'][name]})
             if (expected!=ready_seal or changed.get('aliases')!={name:source['path']} or closed.get('aliases')!={name:source['path']}
                     or data['selected_source']['path']!=ready_seal['runtime_stamps']['snapshot_links'][name]):
                 raise ValueError('Prepared Provider update exceeds its authorized data delta')
-            update_references.extend([update[k]for k in ('result','closure','input_authority','original_seal_archive','current_seal','helper','wire_correspondence')])
+            update_references.extend([update[k]for k in ('result','closure','input_authority','original_seal_archive','helper','wire_correspondence')])
+            update_references.append(ready_reference)
+            previous_ready_seal=ready_seal
+            step_origin=reference
+        return origin_seal, ready_seal, reference, update_references
+
+    def closed_execution_origin(self):
+        """Authenticate the selected closed producer, never current compiler source."""
+        import extraction_cache as cache
+        selected,result,plan,workspace=initial_sealed_generation(self.initial_sealed_generation,self)
+        original_reference=result['completed_expander_seal'];reference=original_reference
+        root=workspace/'expander'/'.bundle-expander';deps=self.records['dict-bundle-build']['dependencies']
+        sitelinks_update=selected.get('sitelinks_provider_update') is not None
+        update=selected.get('sitelinks_provider_update',selected.get('file_metadata_provider_update'));update_references=[]
+        if update is None:
+            seal=prepared_metadata(reference);ready_seal=seal
+        else:
+            seal, ready_seal, reference, update_references = self._verified_provider_history(
+                selected, result, plan, root, update, sitelinks_update=sitelinks_update)
         ready_seal_reference=reference
         producer=seal['identity']['producer']
         options = initial_sealed_context_options(selected, self,

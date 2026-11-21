@@ -3348,6 +3348,16 @@ class SitelinksProviderUpdateTests(unittest.TestCase):
     call = CompletedExpanderTests.call
     binding = CompletedExpanderTests.binding
 
+    def test_first_sitelink_requires_exactly_one_observed_positive_pair(self):
+        positive = ['Q1860', 'zhwiki', 'English']
+        payload = b'# source\nQ1860\tzhwiki\tEnglish\n'
+        self.assertEqual(cache._sitelinks_append(None, payload, [positive]), [positive])
+        for row in (['Q1860', 'zhwiki', ''], ['Q1860', '*', '']):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                cache._sitelinks_append(None, ('\t'.join(row) + '\n').encode(), [row])
+        with self.assertRaises(ValueError):
+            cache._sitelinks_append(None, payload + b'Q2\tzhwiki\tEarth\n', [positive, ['Q2', 'zhwiki', 'Earth']])
+
     def sitelinks_fixture(self):
         self.zig_tool['tool_sha256'] = cache.sha256(Path(self.graph['zig']))
         self.tool['tool'] = cache.tool_identity(Path(self.graph['clang']))
