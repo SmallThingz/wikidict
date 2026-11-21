@@ -6153,12 +6153,21 @@ class RetainedNativeToolRoles:
             if self.initial_sealed_generation is None:
                 st=root.stat()
                 self.directories[root]=(st.st_dev,st.st_ino,st.st_mode,st.st_uid)
-            required = {*RETAINED_NATIVE_ABI_PATHS, {
+            entry_point = {
                 'dict-blob-build': 'tools/blob_build.zig',
                 'dict-blob-merge': 'tools/blob_merge.zig',
                 'dict-blob-verify': 'tools/blob_verify.zig',
-                'dict-bundle-build': 'tools/bundle_build.zig'}[role]}
+                'dict-bundle-build': 'tools/bundle_build.zig'}[role]
             projection = row['source_paths']
+            required = set(RETAINED_NATIVE_ABI_PATHS)
+            if role in BLOB_TOOL_NAMES and not required.issubset(inventory):
+                # A blob-only build need not compile the worker. Authenticate its
+                # entire emitted graph and each interface it actually exchanges.
+                required = {path for _, members, paths in RETAINED_NATIVE_ROLE_ABI_INTERFACES
+                            if role in members for path in paths}
+                required.update(inventory)
+                required.update(compiled.get('files', compiled))
+            required.add(entry_point)
             if (not isinstance(projection, list) or len(set(projection)) != len(projection)
                     or not required <= set(projection)):
                 raise ValueError('Retained native role lacks its source/ABI projection')

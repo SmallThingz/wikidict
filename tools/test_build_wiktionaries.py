@@ -8541,6 +8541,41 @@ class RetainedNativeRoleTests(unittest.TestCase):
             self.assertEqual(record['native_role_provenance'],roles)
             self.assertNotIn('source',record)
 
+    def test_scoped_writer_authenticates_its_complete_input_and_only_shared_interfaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roles, compiler = self.fixture(root)
+            writer = roles['dict-blob-build']
+            inputs = b.retained_source_manifest(writer['source'])
+            wire = {path for _, members, paths in b.RETAINED_NATIVE_ROLE_ABI_INTERFACES
+                    if 'dict-blob-build' in members for path in paths}
+            for path in set(b.RETAINED_NATIVE_ABI_PATHS) - wire:
+                inputs.pop(path)
+            def set_manifest():
+                file = root / 'writer-source.json'
+                file.write_text(json.dumps(inputs))
+                writer['source'] = dict(path=str(file), bytes=file.stat().st_size, sha256=b.sha256_file(file))
+                writer['producer_source'] = writer['source']['sha256']
+                writer['source_paths'] = list(inputs)
+
+            set_manifest()
+            zig = b.sha256_file(compiler)
+            self.assertEqual(b.RetainedNativeToolRoles(roles, zig_sha256=zig).provenance(), roles)
+            writer['source_paths'].remove('src/encoder/presentation_compile.zig')
+            with self.assertRaises(ValueError):
+                b.RetainedNativeToolRoles(roles, zig_sha256=zig)
+            set_manifest()
+            for path in [*sorted(wire), 'tools/blob_build.zig']:
+                saved = inputs.pop(path)
+                set_manifest()
+                with self.subTest(missing=path), self.assertRaises(ValueError):
+                    b.RetainedNativeToolRoles(roles, zig_sha256=zig)
+                inputs[path] = saved
+            set_manifest()
+            roles['dict-bundle-build']['source_paths'].remove('src/lua/runtime/value_leaf.zig')
+            with self.assertRaises(ValueError):
+                b.RetainedNativeToolRoles(roles, zig_sha256=zig)
+
     def test_retained_roles_refuse_wrong_role_bytes_source_abi_and_dependencies(self):
         for failure in ('role','bytes','source','abi','dependency','missing-dependency','compiler'):
             with self.subTest(failure=failure),tempfile.TemporaryDirectory() as tmp:
