@@ -1510,6 +1510,45 @@ pub const Registry = struct {
     }
 
 
+    pub fn isLaoCodeTemplate(self: *const Registry, title: []const u8) bool {
+        if (self.codes.contains(title)) return true;
+        if (title.len != 2 and title.len != 3) return false;
+        for (title) |byte| if (!std.ascii.isLower(byte)) return false;
+        return true;
+    }
+
+    /// A Lao translation label is a code-named template whose entire expansion
+    /// is one link to a language name. The wiki's paired translation template
+    /// uses the same code for its `lang` and `xml:lang` attributes.
+    pub fn addLaoLanguageLink(self: *Registry, code_value: []const u8, source: []const u8) !void {
+        if (!std.mem.eql(u8, self.content_code orelse return, "lo") or !self.isLaoCodeTemplate(code_value)) return;
+        const prefix = "ພາສາ";
+        const raw = std.mem.trim(u8, source, " \t\r\n");
+        if (!std.mem.startsWith(u8, raw, "[[" ++ prefix) or !std.mem.endsWith(u8, raw, "]]")) return;
+        const label = raw[2 .. raw.len - 2];
+        const name = label[prefix.len..];
+        if (name.len == 0) return;
+        const text = std.unicode.Utf8View.init(name) catch return;
+        var points = text.iterator();
+        while (points.nextCodepoint()) |point| switch (point) {
+            0x0e81...0x0e82, 0x0e84, 0x0e86...0x0e8a, 0x0e8c...0x0ea3, 0x0ea5,
+            0x0ea7...0x0ebd, 0x0ec0...0x0ec4, 0x0ec8...0x0ece, 0x0edc...0x0edf => {},
+            else => return,
+        };
+        // Record competing declarations before testing the shorter name. This
+        // makes the result independent of template order, even on a collision.
+        try self.addSourceTemplateLabel(label, code_value);
+        const conflicting = if (self.local_aliases.get(label)) |owner| owner == null else false;
+        if (conflicting or !self.sourceBannerLiteralCodeNameCompatible(code_value, name))
+        {
+            if (self.local_aliases.getPtr(label)) |slot| slot.* = null;
+            if (!self.names.contains(label) and !self.isLanguageBoundary(label)) {
+                const owned = self.arena.allocator();
+                try self.ambiguous.put(owned, try owned.dupe(u8, label), {});
+            }
+        }
+    }
+
     /// Import a label proved by an authenticated static hyphen-code template.
     /// Keep canonical names and existing trust unchanged, and retain folded
     /// collisions with every imported name or prior local declaration.
@@ -2150,6 +2189,36 @@ fn validLocalHeading(value: []const u8) bool {
 
 fn validLocalLabel(value: []const u8) bool {
     return value.len != 0 and std.mem.indexOfAny(u8, value, "\x00\n\r\t") == null;
+}
+
+test "Lao code links preserve canonical names and refuse markup and conflicting owners" {
+    const a = std.testing.allocator;
+    const corpus = "# content-language\tlo\n# mediawiki\nlo\tລາວ\nda\tແດນິຊ\tDansk\nja\tຍີ່ປຸ່ນ\t日本語\nyue\tກວາງຕຸ້ງ\nzh-yue\tCantonese alias\n";
+    for ([_]bool{ false, true }) |reverse| {
+        var registry = Registry.empty(a);
+        defer registry.deinit();
+        try registry.addTsv(corpus);
+        const danish = "[[ພາສາດານມາກ]]"; // Template:da, page 28059, revision 51433
+        const japanese = "[[ພາສາຍີ່ປຸ່ນ]]"; // Template:ja, page 9576, revision 17490
+        try registry.addLaoLanguageLink("da", danish);
+        try registry.addLaoLanguageLink("ja", japanese);
+        try std.testing.expectEqualStrings("da", registry.resolveTrusted("ພາສາດານມາກ").?.code);
+        try std.testing.expectEqualStrings("ຍີ່ປຸ່ນ", registry.resolveTrusted("ພາສາຍີ່ປຸ່ນ").?.heading);
+        try registry.addLaoLanguageLink("zh-yue", "[[ພາສາກວາງຕຸ້ງ]]");
+        try std.testing.expect(registry.resolveTrusted("ພາສາກວາງຕຸ້ງ") == null);
+        const conflict = "[[ພາສາກຂ]]";
+        try registry.addLaoLanguageLink(if (reverse) "ja" else "da", conflict);
+        try registry.addLaoLanguageLink(if (reverse) "da" else "ja", conflict);
+        try registry.addLaoLanguageLink("da", conflict);
+        try std.testing.expect(registry.resolveTrusted("ພາສາກຂ") == null);
+        try std.testing.expect(registry.isLanguageBoundary("ພາສາກຂ"));
+        for ([_][]const u8{ "[[ພາສາກ|ກ]]", "[[ພາສາກ#ກ]]", "[[ພາສາກ]]<!--x-->", "[[:ພາສາກ]]", "[[ພາສາກ]][[ກ]]", "*{{da}}: {{ກ|da|ກ}}" }) |source|
+            try registry.addLaoLanguageLink("da", source);
+        try std.testing.expect(!registry.isLanguageBoundary("ພາສາກ"));
+        try registry.addLaoLanguageLink("xx", "[[ພາສາກ]]");
+        try std.testing.expect(registry.resolveTrusted("ພາສາກ") == null);
+        try std.testing.expect(registry.isLanguageBoundary("ພາສາກ"));
+    }
 }
 
 fn literalString(expression: *const lua_parser.Expr) ?[]const u8 {

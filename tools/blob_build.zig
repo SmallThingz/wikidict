@@ -2048,7 +2048,10 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         const et_literal = std.mem.eql(u8, namespaces.wiki, "etwiktionary") and
             std.mem.eql(u8, namespaces.content_language, "et") and parenthetical_title.id == 10 and
             registry.codes.contains(parenthetical_title.text);
-        if (et_literal or ts_english) {
+        const lo_literal = std.mem.eql(u8, namespaces.wiki, "lowiktionary") and
+            std.mem.eql(u8, namespaces.content_language, "lo") and parenthetical_title.id == 10 and
+            registry.isLaoCodeTemplate(parenthetical_title.text);
+        if (et_literal or ts_english or lo_literal) {
             if (literal_template_seen.contains(parenthetical_title.text)) return error.DuplicateLanguageTemplateSource;
             const key = try a.dupe(u8, parenthetical_title.text);
             literal_template_seen.put(a, key, {}) catch |err| { a.free(key); return err; };
@@ -2111,12 +2114,12 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         const parenthetical_heading = std.mem.eql(u8, title.text, "přeserbšćenje");
         const name_table = std.mem.eql(u8, title.text, "codetolang");
         const equals_label = title.text.len >= 3 and title.text[0] == '=' and title.text[title.text.len - 1] == '=';
-        const message_link = !equals_label and !nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and registry.codes.contains(title.text);
+        const message_link = !equals_label and !nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and (lo_literal or registry.codes.contains(title.text));
         const code = if (nom_section or linked_heading or fixed_linked_tail or parenthetical_heading or name_table) "" else if (message_link) title.text else if (equals_label) title.text[1 .. title.text.len - 1] else blk: {
             if (title.text.len < 3 or title.text[0] != '-' or title.text[title.text.len - 1] != '-') continue;
             break :blk title.text[1 .. title.text.len - 1];
         };
-        if (!nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and !registry.codes.contains(code)) continue;
+        if (!nom_section and !linked_heading and !fixed_linked_tail and !parenthetical_heading and !name_table and !lo_literal and !registry.codes.contains(code)) continue;
         if (templates == null) {
             templates = (try view.templates(root, namespaces)) orelse return;
             const behavior_path = try std.fs.path.join(a, &.{ root, "behavior-switches.tsv" }); defer a.free(behavior_path);
@@ -2153,6 +2156,8 @@ fn loadSourceLanguageBannersWithRows(io: std.Io, a: std.mem.Allocator, root: []c
         } else if (message_link) {
             if (ts_english and std.mem.eql(u8, row.content_model, "wikitext"))
                 try addTsongaEnglishLink(registry, code, decoded orelse raw);
+            if (lo_literal and std.mem.eql(u8, row.content_model, "wikitext"))
+                try registry.addLaoLanguageLink(code, decoded orelse raw);
             if (et_literal and std.mem.eql(u8, row.content_model, "wikitext"))
                 try registry.addSourceLiteralPreferredHeading(namespaces.wiki, code, decoded orelse raw);
             if (source_language_banner.messageLinkTarget(decoded orelse raw, namespaces, code)) |target|
@@ -11299,6 +11304,63 @@ const LoLiteralSwitchTest = struct {
         try writer.finish(index_path);
     }
 };
+
+test "normal Lao indexed code links split mixed lexical sections and leave translation-only text unowned" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{}); defer tmp.cleanup();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator); defer arena.deinit();
+    const a = arena.allocator();
+    const root = try std.fmt.allocPrint(a, ".zig-cache/tmp/{s}", .{tmp.sub_path});
+    var ns = try namespace_registry.Registry.init(a, LoLiteralSwitchTest.namespaces); defer ns.deinit();
+    try tmp.dir.writeFile(io, .{ .sub_path = "language-registry.tsv", .data = LoLiteralSwitchTest.registry ++ "da\tແດນິຊ\tDansk\nja\tຍີ່ປຸ່ນ\t日本語\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "manifest.jsonl", .data = "" });
+    const index = "0\t0\tແມ່ແບບ:da\t\t28059\t51433\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" ++
+        "0\t0\tແມ່ແບບ:ja\t\t9576\t17490\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n" ++
+        "0\t0\tແມ່ແບບ:xx\t\t1\t1\t2026-10-01T00:00:00Z\tA\twikitext\t10\t1\t0\n";
+    const index_path = try std.fs.path.join(a, &.{ root, "page-index.tsv" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "page-index.tsv", .data = index });
+    var provider = try dump_source.TemplateSourceWriter.init(io, a, root); defer provider.deinit();
+    try provider.append(0, 28059, 51433, "[[ພາສາດານມາກ]]");
+    try provider.append(1, 9576, 17490, "[[ພາສາຍີ່ປຸ່ນ]]");
+    try provider.append(2, 1, 1, "[[ພາສາກ]]");
+    try provider.finish(index_path);
+    var registry = try loadLanguageRegistry(io, a, root, &ns); defer registry.deinit();
+    const codes = languageCodes(&registry, &ns);
+    const output = try std.fs.path.join(a, &.{ root, "output" });
+    var writer = try encoder.blob_builder.Writer.init(io, a, output); defer writer.deinit();
+    writer.language_codes = codes;
+    const mixed = "==ພາສາດານມາກ==\n# [[dansk]]\n==ພາສາກ==\n# [[neutral]]\n==ພາສາຍີ່ປຸ່ນ==\n# [[日本語]]";
+    const translation = "*{{da}}: {{ກ|da|dansk}}";
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "mixed", mixed, mixed, null);
+    try writer.addExpandedPage(a, .{ .id = 0, .kind = .language }, "translation", "*[[ພາສາດານມາກ]]: <span lang=\"da\">[[dansk]]</span>", translation, null);
+    _ = try writer.finish(codes);
+    const owners = [_]struct { heading: []const u8, code: []const u8, link: []const u8 }{
+        .{ .heading = "ແດນິຊ", .code = "da", .link = "dansk" },
+        .{ .heading = "Unclassified", .code = "", .link = "neutral" },
+        .{ .heading = "ຍີ່ປຸ່ນ", .code = "ja", .link = "日本語" },
+    };
+    for (owners) |owner| {
+        var filename: [encoder.blob_catalog.language_blob_filename_len]u8 = undefined;
+        const path = try std.fs.path.join(a, &.{ output, encoder.blob_catalog.language_directory, encoder.blob_catalog.languageBlobFilename(owner.heading, &filename) });
+        var mapped = try mmapPath(io, path); defer mapped.deinit();
+        const blob = try encoder.blob_format.inspect(mapped.bytes);
+        const meta = try blob.languageMetadata();
+        try std.testing.expectEqualStrings(owner.code, meta.code);
+        var titles = try blob.buildTrustedIndexAlloc(a); defer titles.deinit(a);
+        const record = (try titles.find("mixed")) orelse return error.TestUnexpectedResult;
+        const doc = try encoder.presentation_codec.decodeAlloc(a, record.payload, record.title, .language, meta);
+        var n: usize = 0;
+        for (doc.entry.sections) |section| for (section.blocks) |block| for (block.spans) |span| {
+            if (span.kind == .link) {
+                try std.testing.expectEqualStrings(owner.link, span.target);
+                n += 1;
+            }
+        };
+        try std.testing.expectEqual(@as(usize, 1), n);
+        try std.testing.expectEqualSlices(u8, record.payload, try encoder.presentation_codec.encodeAlloc(a, doc));
+        try std.testing.expectEqual(owner.code.len == 0, (try titles.find("translation")) != null);
+    }
+}
 
 test "literal code language switch validates complete source and existing owners" {
     const a = std.testing.allocator;
