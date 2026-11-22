@@ -9725,6 +9725,10 @@ def main():
     if a.reviewed_nonlexical_review is not None and len(groups)!=1:
         p.error('A reviewed nonlexical source manifest requires exactly one edition')
     try:
+        if a.staged_input_root is not None:
+            # Reject an unusable repack before resolving or acquiring its edition snapshots.
+            selected_staged_input_root(next(iter(groups.values())), a.staged_input_root, a.output,
+                                       a.raw_shard_root, a.extraction_cache_root)
         require_auxiliary_tooling(auxiliary)
         if a.compact_phase_provenance and a.retained_native_roles_ref is None:
             raise ValueError('--compact-phase-provenance requires --retained-native-roles-ref')

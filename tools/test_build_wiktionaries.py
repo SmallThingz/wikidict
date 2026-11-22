@@ -6737,6 +6737,26 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
                 self.assertEqual(len(calls),1);self.assertEqual(self.identities(borrowed),before)
                 self.assertFalse((root/'output'/item['wiki']/(item['date']+'.shards')/'input/pages.xml.zst').exists())
 
+    def test_cli_rejects_overlapping_cache_before_resolving_edition_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            item, borrowed = self.fixture(root)
+            write_test_manifest(root, dict(files=[item]))
+            before = self.identities(borrowed)
+            argv = ['build_wiktionaries.py', '--downloads', str(root), '--output', str(root/'output'),
+                    '--wikis', item['wiki'], '--threads', '1', '--jobs', '1',
+                    '--staged-input-root', str(borrowed), '--extraction-cache-root', str(borrowed/'cache')]
+            with (patch.object(sys, 'argv', argv), patch.object(b, 'safe_worker_budget', return_value=4),
+                  patch.object(b, 'resolve_edition_snapshot_options') as resolve, patch.object(b, 'build_groups') as build,
+                  contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as error):
+                b.main()
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn('Borrowed staged input overlaps owned build paths', stderr.getvalue())
+            resolve.assert_not_called()
+            build.assert_not_called()
+            self.assertEqual(self.identities(borrowed), before)
+            self.assertFalse((root/'output').exists())
+
     def test_explicit_cli_and_scheduler_forward_one_selected_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);item,borrowed=self.fixture(root);write_test_manifest(root,dict(files=[item]))
