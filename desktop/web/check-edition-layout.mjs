@@ -16,8 +16,8 @@ const web = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(web, '../..');
 const widths = [1000, 640];
 if (process.argv.slice(2).join(' ') === '--help') {
-  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--compare-transport] [--pause-after-members N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
-  console.log('A fresh directory records an atomic checkpoint after each member. --resume reuses completed members under the same inputs and renderer. --pause-after-members N stops cleanly with exit 75 for a bounded run.');
+  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--compare-transport] [--pause-after-members N] [--checkpoint-rows N] [--pause-after-rows N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
+  console.log('Atomic checkpoints retain each completed member and at most 2048 processed rows within a member. --resume requires the same inputs and renderer. --checkpoint-rows N (1..2048) selects a smaller interval; --pause-after-rows N stops at the next checkpoint. Pause options exit 75.');
   console.log('Reads an existing local edition inventory and its sibling Reader checks, then writes editions.jsonl, issues.jsonl, progress.jsonl and sampled viewport PNGs. Exit 2 means enumeration or a required layout check was incomplete.');
   process.exit(0);
 }
@@ -35,7 +35,13 @@ const compareTransport=option('--compare-transport');
 const resume = option('--resume');
 const pause = option('--pause-after-members', true);
 if (pause !== null) assert(/^[1-9]\d*$/.test(pause) && Number.isSafeInteger(Number(pause)));
+const checkpointRowsOption = option('--checkpoint-rows', true);
+const checkpointRows = checkpointRowsOption === null ? 2048 : Number(checkpointRowsOption);
+assert(Number.isSafeInteger(checkpointRows) && checkpointRows > 0 && checkpointRows <= 2048);
+const pauseRows = option('--pause-after-rows', true);
+if (pauseRows !== null) assert(/^[1-9]\d*$/.test(pauseRows) && Number.isSafeInteger(Number(pauseRows)));
 let processedThisInvocation = 0;
+let processedRowsThisInvocation = 0;
 let figureWitness;
 const flag = editions.indexOf('--figure-witness');
 if (flag >= 0) {
@@ -50,6 +56,11 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 async function fileDigest(file) {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest('hex');
+}
+function indexDigest(index) {
+  const hash = createHash('sha256').update(JSON.stringify(index.metadata) + '\n');
+  for (const row of index.rows) hash.update(JSON.stringify(row) + '\n');
   return hash.digest('hex');
 }
 const inventoryBytes = await readFile(inventory);
@@ -326,14 +337,14 @@ try {
   for (const file of inputPaths) sources[file] = await fileDigest(path.join(web,file));
   const binding = {version:1, selected, inventory:digest(inventoryBytes), reader:digest(readerTable), sources,
     bundle:digest(js), css:digest(css), font:digest(font), browser:browser.version(),
-    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, compareTransport:!!compareTransport, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
+    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, checkpointRows, compareTransport:!!compareTransport, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
   let scrollDigest=saved?.scrollDigest ?? null;
   let witnessDigest = saved?.witnessDigest ?? null;
   const syncFile = async filename => {const f=await open(filename,'r'); try {await f.sync();} finally {await f.close();}};
-  async function commit(editionIndex, nextMember, stat, screens) {
+  async function commit(editionIndex, nextMember, stat, screens, activeMember = null) {
     const logs = {};
     for (const [name,log] of Object.entries(journals)) {await log.sync(); logs[name]=log.position();}
-    const state = {binding,witnessDigest,scrollDigest,editionIndex,nextMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
+    const state = {binding,witnessDigest,scrollDigest,editionIndex,nextMember,activeMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
     const tmp = `${checkpointPath}.next`;
     await writeFile(tmp,JSON.stringify({state,sha256:digest(JSON.stringify(state))})+'\n'); await syncFile(tmp);
     await rename(tmp,checkpointPath); await directory.sync();
@@ -493,6 +504,7 @@ try {
     assert.equal(stat.completedMembers + stat.indexFailures,firstMember);
     for (let mi=firstMember; mi<members.length; ++mi) {
       const [member,authority]=members[mi];
+      const active = mi === firstMember ? previous?.activeMember : null;
       assert(!path.isAbsolute(member) && member.split('/').every(s => s && s !== '..' && s !== '.'));
       const filename = path.join(root,member);
       let source, index;
@@ -501,13 +513,25 @@ try {
         const blob = await openAsBlob(filename);
         assert.equal(blob.size, authority.size); assert.equal(await fileDigest(filename), authority.sha256);
         source = await openSource(blob); index = await buildIndex(source);
-      } catch(e) { ++stat.indexFailures; await issue({member}, {archiveOrIndex: String(e.message||e)}); }
+      } catch(e) {
+        if (active) throw e; // Never replace credited rows with a new index-failure result.
+        ++stat.indexFailures; await issue({member}, {archiveOrIndex: String(e.message||e)});
+      }
       costs.memberInput+=performance.now()-memberStarted;
       if (index) {
-        stat.indexed += index.rows.length;
         const kind = index.metadata.kind;
-        stat.byKind[kind] = (stat.byKind[kind] || 0) + index.rows.length;
-        let batch = [], batchBytes = 0, checkpoint = 0;
+        const memberIdentity = {member, size:authority.size, sha256:authority.sha256,
+          sourceSize:source.size, indexSha256:indexDigest(index), rows:index.rows.length, kind};
+        const firstOrdinal = active?.nextOrdinal ?? 0;
+        if (active) {
+          const {nextOrdinal, ...identity} = active;
+          assert.deepEqual(identity,memberIdentity,'Resumed member or index changed');
+          assert(Number.isSafeInteger(nextOrdinal) && nextOrdinal > 0 && nextOrdinal < index.rows.length);
+        } else {
+          stat.indexed += index.rows.length;
+          stat.byKind[kind] = (stat.byKind[kind] || 0) + index.rows.length;
+        }
+        let batch = [], batchBytes = 0, checkpoint = firstOrdinal;
         async function checkpointThrough(ordinal) {
           await progress.writeFile(JSON.stringify({edition, member, ordinal, completeHash, indexed:stat.indexed,
             decoded:stat.decoded, views:stat.views, issues:stat.issues, elapsedSeconds:(performance.now()-started)/1000})+'\n');
@@ -568,11 +592,10 @@ try {
               } catch(e) {await issue(where, {sample: String(e.message || e)});}
             }
           }
-          const ordinal = batch.at(-1).identity.ordinal;
-          if (ordinal - checkpoint >= 2048) { await checkpointThrough(ordinal); checkpoint = ordinal; }
           batch = []; batchBytes = 0;
         }
-        for (const [ordinal,row] of index.rows.entries()) {
+        for (let ordinal=firstOrdinal; ordinal<index.rows.length; ++ordinal) {
+          const row = index.rows[ordinal];
           const identity = {member, ordinal, title:row.title, offset:row.offset, length:row.length};
           // A single oversized entry still gets its own batch.
           if (batch.length && (batch.length >= 24 || batchBytes + row.length > 256*1024)) await flush();
@@ -587,12 +610,27 @@ try {
             batch.push({entry,identity}); batchBytes += row.length; ++stat.decoded;
             costs.readAndDecode+=performance.now()-readStarted;
           } catch(e) {await issue(identity,{decodeError: String(e.message || e)});}
+          ++processedRowsThisInvocation;
+          const nextOrdinal = ordinal + 1;
+          if (nextOrdinal - checkpoint >= checkpointRows && nextOrdinal < index.rows.length) {
+            // Commit only after both widths and every decode failure in this prefix.
+            // This also bounds replay when every row fails before entering a batch.
+            await flush(); await checkpointThrough(ordinal);
+            stat.elapsedSeconds=priorSeconds+(performance.now()-started)/1000;
+            await commit(editionIndex,mi,stat,screens,{...memberIdentity,nextOrdinal});
+            checkpoint=nextOrdinal;
+            if (pauseRows !== null && processedRowsThisInvocation >= Number(pauseRows)) {
+              console.log(JSON.stringify({paused:true,edition,nextMember:mi,nextOrdinal}));
+              process.exitCode=75; break;
+            }
+          }
         }
+        if (process.exitCode === 75) break;
         await flush(); ++stat.completedMembers; await checkpointThrough(index.rows.length - 1);
       }
       stat.elapsedSeconds=priorSeconds+(performance.now()-started)/1000;
       await commit(editionIndex,mi+1,stat,screens);
-      if (++processedThisInvocation === Number(pause)) {
+      if (++processedThisInvocation === Number(pause) || (pauseRows !== null && processedRowsThisInvocation >= Number(pauseRows))) {
         console.log(JSON.stringify({paused:true,edition,nextMember:mi+1})); process.exitCode=75; break;
       }
     }
