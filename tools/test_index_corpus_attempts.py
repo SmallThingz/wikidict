@@ -65,7 +65,8 @@ class AttemptIndexTests(unittest.TestCase):
 
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
                        input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
-                       snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None, extra_refs=()):
+                       snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None, extra_refs=(),
+                       input_selection_key='input_selection'):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
@@ -77,8 +78,8 @@ class AttemptIndexTests(unittest.TestCase):
                     if snapshot_context:
                         inputs.update(snapshot_context)
                     selection = record(root / 'inputs.json', inputs)
-                    command.update(input_step='ordinary_whole', input_selection=selection,
-                                   source_refs=[builder, selection, manifest])
+                    command.update(input_step='ordinary_whole', source_refs=[builder, selection, manifest])
+                    command[input_selection_key] = selection
                     if snapshot:
                         command['input_step'] = 'whole build using the sealed worker'
                         command['source_refs'][1] = dict(selection, mode=0o644)
@@ -151,14 +152,17 @@ class AttemptIndexTests(unittest.TestCase):
 
             from index_corpus_attempts import read_execution
             base = workspace / 'receipts'
-            freeze(input_selection=True)
-            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
-            freeze(input_selection=True, guard_selector=False)
-            with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
-                read_execution(base, path, guardian=True)
-            freeze(input_selection=True, selected_manifest=record(root / 'unselected.json', b'{}'))
-            with self.assertRaisesRegex(ValueError, 'Selected input manifest differs'):
-                read_execution(base, path, guardian=True)
+            for key in ('input_selection', 'selection'):
+                with self.subTest(input_selection_key=key):
+                    ordinary = dict(input_selection=True, input_selection_key=key)
+                    freeze(**ordinary)
+                    self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+                    freeze(**ordinary, guard_selector=False)
+                    with self.assertRaisesRegex(ValueError, 'Unguarded Python catalog member'):
+                        read_execution(base, path, guardian=True)
+                    freeze(**ordinary, selected_manifest=record(root / 'unselected.json', b'{}'))
+                    with self.assertRaisesRegex(ValueError, 'Selected input manifest differs'):
+                        read_execution(base, path, guardian=True)
             snapshot = record(root / 'languages.tsv', b'Sesotho\tst\n')
             flags = ('--exact-snapshot-selection', '--language-registry-snapshot', snapshot['path'])
             freeze(flags, input_selection=True, snapshot=snapshot)

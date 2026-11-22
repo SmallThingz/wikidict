@@ -128,14 +128,14 @@ def guardian_whole(path, closure, result):
         selection = command['selection']
         if selection not in command['source_refs']:
             raise ValueError(f'Edition selection was not guarded: {path}')
-        catalog_ref = json.loads(checked(selection))['python_tooling']
+        catalog_ref = json.loads(checked(selection)).get('python_tooling')
     if catalog_ref is not None:
         if json.loads(checked(catalog_ref)) != catalog:
             raise ValueError(f'Python catalog differs: {path}')
     else:
         # Older drivers put the manifest in the selection. Exact-snapshot builds
         # pin it directly in the command and list the auxiliary files separately.
-        selection = command.get('input_selection')
+        selection = command.get('input_selection', command.get('selection'))
         if (not isinstance(selection, dict) or not {'path', 'bytes', 'sha256'} <= selection.keys()
                 or not any(all(ref.get(key) == value for key, value in selection.items()) for ref in refs)):
             raise ValueError(f'Missing guarded whole-edition selection: {path}')
