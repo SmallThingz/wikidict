@@ -8,6 +8,20 @@ import path from 'node:path';
 import {openSource} from './xz.js';
 const fixture=process.env.WIKBLB_FIXTURE || '../tests/fixtures/languages/ba118bf7fc9c1aedc1edb28a0aa86e0b43b681f222af6616e13c43be87815b06.wikblb';
 const raw=new Uint8Array(await readFile(fixture));
+test('index preserves UTF-8 titles across input windows and enforces the byte limit', async () => {
+  const source = bytes => new RawSource(new Blob([bytes]));
+  // The first byte of é is the last byte of the first index window.
+  const large = Buffer.alloc(256 * 1024 - 6);
+  large.write('DPR2');
+  const payload = Buffer.from('DPR2');
+  const title = 'é'.repeat(32768);
+  const index = await buildIndex(source(dictionaryBlob(7, [['a', large], [title, payload]])));
+  assert.deepEqual(index.rows.map(row => row.title), ['a', title]);
+  const tooLong = source(dictionaryBlob(7, [['a', large], [title + 'x', payload]]));
+  await assert.rejects(() => buildIndex(tooLong));
+  const truncated = source(Buffer.concat([Buffer.from('WIKBLB08\x07'), Buffer.from('unterminated')]));
+  await assert.rejects(() => buildIndex(truncated), /Truncated dictionary/);
+});
 test('binary and seekable multiblock XZ produce identical records',async()=>{
  const encoded=execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
  const a=new RawSource(new Blob([raw])),b=await openSource(new Blob([encoded]));

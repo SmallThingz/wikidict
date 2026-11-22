@@ -299,8 +299,36 @@ export function decodeAlias(bytes, rawKey) {
 
 export async function buildIndex(source) {
   let p=0, buffer=new Uint8Array(), start=-1;
-  const byte=async()=>{require(p<source.size,'Truncated dictionary');if(p<start||p>=start+buffer.length){start=p;buffer=await source.read(p,Math.min(256*1024,source.size-p));}return buffer[p++-start];};
-  const nul=async()=>{const value=[];while(true){const b=await byte();if(b===0)return {text:utf8.decode(new Uint8Array(value)),raw:value};require(value.length<65536);value.push(b);}};
+  async function refill() {
+    require(p < source.size, 'Truncated dictionary');
+    start = p;
+    buffer = await source.read(p, Math.min(256 * 1024, source.size - p));
+    require(buffer.length > 0, 'Truncated dictionary');
+  }
+  async function nul() {
+    let prefix;
+    while (true) {
+      if (p >= start + buffer.length) await refill();
+      const at = p - start;
+      const remaining = 65536 - (prefix?.length ?? 0);
+      const window = buffer.subarray(at, at + remaining + 1);
+      const end = window.indexOf(0);
+      const part = end < 0 ? window : window.subarray(0, end);
+      require(part.length <= remaining);
+      p += part.length;
+      let raw = part;
+      if (prefix) {
+        raw = new Uint8Array(prefix.length + part.length);
+        raw.set(prefix);
+        raw.set(part, prefix.length);
+      }
+      if (end >= 0) {
+        ++p;
+        return {text: utf8.decode(raw), raw};
+      }
+      prefix = raw;
+    }
+  }
   // The title scan usually brought the record prefix (or the whole alias) into memory.
   const recordBytes = length => {
     const at = p - start;
@@ -316,7 +344,13 @@ export async function buildIndex(source) {
     const {text:title,raw}=await nul();require(title.length>0);
     if(previous){let i=0;while(i<Math.min(previous.length,raw.length)&&previous[i]===raw[i])i++;require(i<Math.min(previous.length,raw.length)?previous[i]<raw[i]:previous.length<raw.length,'Unsorted dictionary');}previous=raw;
     let length=0,multiplier=1,n=0,b;
-    do{b=await byte();require(n++<8);length+=(b&127)*multiplier;multiplier*=128;}while(b&128);
+    do {
+      if (p >= start + buffer.length) await refill();
+      b = buffer[p++ - start];
+      require(n++ < 8);
+      length += (b & 127) * multiplier;
+      multiplier *= 128;
+    } while (b & 128);
     require(n===1||b!==0);require(Number.isSafeInteger(length)&&length>=4&&length<=128*1024*1024&&length<=source.size-p);
     if(kind==='alias'){
       const {alias}=decodeAlias(await recordBytes(length),title);
