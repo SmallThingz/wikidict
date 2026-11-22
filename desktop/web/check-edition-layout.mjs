@@ -3,8 +3,9 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {createReadStream, openAsBlob} from 'node:fs';
-import {mkdir, open, readFile, realpath, writeFile} from 'node:fs/promises';
+import {mkdir, open, readFile, realpath, rename, writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {build} from 'esbuild';
@@ -15,11 +16,23 @@ const web = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(web, '../..');
 const widths = [1000, 640];
 if (process.argv.slice(2).join(' ') === '--help') {
-  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--figure-witness FILE.json]');
+  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--pause-after-members N] [--figure-witness FILE.json]');
+  console.log('A fresh directory records an atomic checkpoint after each member. --resume reuses completed members under the same inputs and renderer. --pause-after-members N stops cleanly with exit 75 for a bounded run.');
   console.log('Reads an existing local edition inventory and its sibling Reader checks, then writes editions.jsonl, issues.jsonl, progress.jsonl and sampled viewport PNGs. Exit 2 means enumeration or a required layout check was incomplete.');
   process.exit(0);
 }
 const [inventory, destination, ...editions] = process.argv.slice(2);
+function option(name, takesValue = false) {
+  const index = editions.indexOf(name);
+  if (index < 0) return null;
+  const removed = editions.splice(index, takesValue ? 2 : 1);
+  if (takesValue) assert(removed[1], `Missing value for ${name}`);
+  return takesValue ? removed[1] : true;
+}
+const resume = option('--resume');
+const pause = option('--pause-after-members', true);
+if (pause !== null) assert(/^[1-9]\d*$/.test(pause) && Number.isSafeInteger(Number(pause)));
+let processedThisInvocation = 0;
 let figureWitness;
 const flag = editions.indexOf('--figure-witness');
 if (flag >= 0) {
@@ -64,10 +77,39 @@ for (const [, , relative] of selections.values()) {
   const root = path.resolve(repo, relative);
   if (outputPath === root || outputPath.startsWith(root + path.sep)) throw Error('Output inside edition');
 }
-await mkdir(out, {mode: 0o700});
-const failures = await open(path.join(out, 'issues.jsonl'), 'wx');
-const summary = await open(path.join(out, 'editions.jsonl'), 'wx');
-const progress = await open(path.join(out, 'progress.jsonl'), 'wx');
+if (!resume) await mkdir(out, {mode: 0o700});
+assert.equal(await realpath(out), outputPath, 'Output directory must not be a symlink');
+const directory = await open(out, 'r');
+// flock(1) locks the inherited open file description, which this process retains.
+const lock = spawnSync('flock', ['-n','3'], {stdio:['ignore','ignore','inherit',directory.fd]});
+assert.equal(lock.status, 0, 'Layout output is in use or cannot be locked');
+const checkpointPath = path.join(out, 'checkpoint.json');
+let saved;
+if (resume) {
+  const {state, sha256} = JSON.parse(await readFile(checkpointPath,'utf8'));
+  assert.equal(digest(JSON.stringify(state)),sha256,'Damaged checkpoint');
+  saved=state;
+}
+const journals = {};
+async function journal(name) {
+  const filename = path.join(out, `${name}.jsonl`);
+  const handle = await open(filename, resume ? 'a+' : 'wx');
+  const hash = createHash('sha256');
+  const prefix = saved?.logs[name];
+  let bytes = 0;
+  if (resume) {
+    assert(Number.isSafeInteger(prefix?.bytes) && prefix.bytes >= 0 && prefix.bytes <= (await handle.stat()).size);
+    if (prefix.bytes) for await (const chunk of createReadStream(filename,{end:prefix.bytes-1})) hash.update(chunk);
+    assert.equal(hash.copy().digest('hex'), prefix.sha256, `Committed ${name} journal changed`);
+    bytes = prefix.bytes;
+  }
+  return journals[name] = {
+    handle, async writeFile(line) {await handle.writeFile(line); hash.update(line); bytes += Buffer.byteLength(line);},
+    sync: () => handle.sync(), close: () => handle.close(),
+    position: () => ({bytes, sha256:hash.copy().digest('hex')})
+  };
+}
+const failures = await journal('issues'), summary = await journal('editions'), progress = await journal('progress');
 const productBundle = await build({stdin: {contents: "export {renderEntry} from './renderer.js'; export {mediaView,loadInlineImage,inlineImageActionURL} from './media.js';", resolveDir: web}, bundle: true, format: 'iife', globalName: 'Product', write: false});
 const js = productBundle.outputFiles[0].text;
 const css = await readFile(path.join(web, 'style.css'), 'utf8');
@@ -173,6 +215,7 @@ async function sample(page, payload, filename, keyboard) {
   const bytes = await page.screenshot({path: path.join(out, filename)});
   // Inspect the sampled compositor image. Count changed pixels against the
   // main surface; the layout assertions above operate on DOM geometry only.
+  const frameHandle=await open(path.join(out,filename),'r'); try {await frameHandle.sync();} finally {await frameHandle.close();}
   const pixels = await page.evaluate(async encoded => {
     const data = Uint8Array.from(atob(encoded), char => char.charCodeAt(0));
     const image = await createImageBitmap(new Blob([data], {type:'image/png'}));
@@ -219,6 +262,45 @@ async function sample(page, payload, filename, keyboard) {
 
 let issueCount = 0, incompleteEditions = 0;
 try {
+  for (const [edition,,relative,sha] of selected) {
+    const bytes = await readFile(path.resolve(repo,relative,'complete.json'));
+    assert.equal(digest(bytes),sha,`Published manifest changed for ${edition}`);
+  }
+  const inputPaths = ['check-edition-layout.mjs','blob.js','validate.js','xz.js','package.json','pnpm-lock.yaml'];
+  const sources = {};
+  for (const file of inputPaths) sources[file] = await fileDigest(path.join(web,file));
+  const binding = {version:1, selected, inventory:digest(inventoryBytes), reader:digest(readerTable), sources,
+    bundle:digest(js), css:digest(css), font:digest(font), browser:browser.version(),
+    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, figureWitness:figureWitness ?? null};
+  let witnessDigest = saved?.witnessDigest ?? null;
+  const syncFile = async filename => {const f=await open(filename,'r'); try {await f.sync();} finally {await f.close();}};
+  async function commit(editionIndex, nextMember, stat, screens) {
+    const logs = {};
+    for (const [name,log] of Object.entries(journals)) {await log.sync(); logs[name]=log.position();}
+    const state = {binding,witnessDigest,editionIndex,nextMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
+    const tmp = `${checkpointPath}.next`;
+    await writeFile(tmp,JSON.stringify({state,sha256:digest(JSON.stringify(state))})+'\n'); await syncFile(tmp);
+    await rename(tmp,checkpointPath); await directory.sync();
+  }
+  if (saved) {
+    assert.deepEqual(saved.binding,binding,'Resume input or renderer changed');
+    assert(Number.isSafeInteger(saved.editionIndex) && saved.editionIndex >= 0 && saved.editionIndex <= selected.length);
+    const summarize = (await readFile(path.join(out,'editions.jsonl'))).subarray(0,journals.editions.position().bytes).toString();
+    const credited = summarize.trimEnd() ? summarize.trimEnd().split('\n').map(line=>JSON.parse(line)) : [];
+    assert.deepEqual(credited.map(row=>row.edition),editions.slice(0,saved.editionIndex));
+    if (saved.stat) {
+      assert.equal(saved.stat.edition,editions[saved.editionIndex]);
+      credited.push(saved.stat);
+    }
+    for (const row of credited) for (const sample of row.samples) if (sample.filename) {
+      assert.equal(path.basename(sample.filename),sample.filename);
+      assert.equal(await fileDigest(path.join(out,sample.filename)),sample.sha256,'Committed sample changed');
+    }
+    if (witnessDigest) assert.equal(await fileDigest(path.join(out,'figure-witness.json')),witnessDigest);
+    // Discard only uncredited tail writes, after validating every journal and input.
+    for (const log of Object.values(journals)) await log.handle.truncate(log.position().bytes);
+    issueCount=saved.issueCount; incompleteEditions=saved.incompleteEditions;
+  } else await commit(0,0,null,null);
   const pages = [];
   for (const width of widths) {
     const page = await browser.newPage({viewport: {width, height: 800}});
@@ -228,7 +310,7 @@ try {
     await page.evaluate(async () => { const faces = await document.fonts.load('16px Reader'); await document.fonts.ready; if (!faces.length || faces.some(face => face.status !== 'loaded') || !document.fonts.check('16px Reader')) throw Error('Product Reader font failed to load'); });
     pages.push(page);
   }
-  if (figureWitness) {
+  if (figureWitness && !witnessDigest) {
     const w = figureWitness;
     const selection = selections.get(w.edition);
     assert(selection && selection[3] === w.completeSha256 && !editions.includes(w.edition));
@@ -252,9 +334,14 @@ try {
       assert(figure.words.length && figure.words.every(word=>word.lines===1));
     }
   }
-  for (const [edition, selectedStatus, relative, completeHash] of selected) {
+  if (figureWitness && !witnessDigest) {
+    const filename = path.join(out,'figure-witness.json'); await syncFile(filename); witnessDigest=await fileDigest(filename);
+  }
+  for (let editionIndex=saved?.editionIndex ?? 0; editionIndex < selected.length; ++editionIndex) {
+    const [edition,selectedStatus,relative,completeHash]=selected[editionIndex];
+    const previous=saved?.editionIndex===editionIndex ? saved : null;
     const started = performance.now();
-    const stat = {edition, selectedStatus, completeHash, indexed: 0, decoded: 0, views: [0,0], members: 0, completedMembers: 0, byKind: {}, issues: 0, categories: {}, samples: [], indexFailures: 0};
+    const stat = previous?.stat ?? {edition, selectedStatus, completeHash, indexed: 0, decoded: 0, views: [0,0], members: 0, completedMembers: 0, byKind: {}, issues: 0, categories: {}, samples: [], indexFailures: 0};
     async function issue(identity, problems) {
       ++stat.issues; ++issueCount;
       for (const k of Object.keys(problems)) stat.categories[k] = (stat.categories[k] || 0) + 1;
@@ -262,16 +349,21 @@ try {
     }
     const root = path.resolve(repo, relative);
     const manifest = await readFile(path.join(root,'complete.json'));
-    assert.equal(digest(manifest), completeHash);
+    assert.equal(digest(manifest),completeHash);
     const complete = JSON.parse(manifest);
     assert.equal(complete.edition, edition);
     const members = Object.entries(complete.publication_files).filter(([n]) => /\.wikblb(?:\.xz)?$/.test(n));
     assert.equal(members.length, complete.blobs);
     if (selectedStatus === 'empty') assert(complete.status === 'empty' && !members.length);
     stat.members = members.length;
-    const screens = widths.map(() => new Set());
-    stat.layout = widths.map(width => ({width, bodyTextNodes:0, visibleLinks:0, tableCells:0, emptyBodyViews:0}));
-    for (const [member, authority] of members) {
+    const screens = widths.map((_,i) => new Set(previous?.screens?.[i]));
+    stat.layout ??= widths.map(width => ({width, bodyTextNodes:0, visibleLinks:0, tableCells:0, emptyBodyViews:0}));
+    const priorSeconds=stat.elapsedSeconds ?? 0;
+    const firstMember = previous?.nextMember ?? 0;
+    assert(Number.isSafeInteger(firstMember) && firstMember >= 0 && firstMember <= members.length);
+    assert.equal(stat.completedMembers + stat.indexFailures,firstMember);
+    for (let mi=firstMember; mi<members.length; ++mi) {
+      const [member,authority]=members[mi];
       assert(!path.isAbsolute(member) && member.split('/').every(s => s && s !== '..' && s !== '.'));
       const filename = path.join(root,member);
       let source, index;
@@ -279,74 +371,82 @@ try {
         const blob = await openAsBlob(filename);
         assert.equal(blob.size, authority.size); assert.equal(await fileDigest(filename), authority.sha256);
         source = await openSource(blob); index = await buildIndex(source);
-      } catch(e) { ++stat.indexFailures; await issue({member}, {archiveOrIndex: String(e.message||e)}); continue; }
-      stat.indexed += index.rows.length;
-      const kind = index.metadata.kind;
-      stat.byKind[kind] = (stat.byKind[kind] || 0) + index.rows.length;
-      let batch = [], batchBytes = 0, checkpoint = 0;
-      async function checkpointThrough(ordinal) {
-        await progress.writeFile(JSON.stringify({edition, member, ordinal, completeHash, indexed:stat.indexed,
-          decoded:stat.decoded, views:stat.views, issues:stat.issues, elapsedSeconds:(performance.now()-started)/1000})+'\n');
-      }
-      async function flush() {
-        if (!batch.length) return;
-        for (const [i, page] of pages.entries()) {
-          const width = widths[i];
-          const entries = batch.map(r => r.entry);
-          const rows = await inspectEntries(page, edition, entries);
-          assert.equal(rows.length, batch.length);
-          for (const [n, metrics] of rows.entries()) {
-            const {entry, identity} = batch[n];
-            const where = {...identity, width};
-            if (metrics.error) {
-              await issue(where, {renderError:metrics.error});
-              if (!screens[i].has('render-error')) {
-                screens[i].add('render-error');
-                try {
-                  const frame=await sample(page,{edition,entries:[entry]},`${edition}-${width}-render-error.png`,false);
-                  stat.samples.push({...where,reason:'render-error',...frame});
-                } catch(e) { await issue(where,{sample:String(e.message || e)}); }
-              }
-              continue;
-            }
-            ++stat.views[i];
-            stat.layout[i].bodyTextNodes += metrics.bodyNodes;
-            stat.layout[i].visibleLinks += metrics.links;
-            stat.layout[i].tableCells += metrics.cells;
-            if (!metrics.bodyNodes) ++stat.layout[i].emptyBodyViews;
-            const bad = Object.keys(metrics.problems).length > 0;
-            if (bad) await issue(where, metrics.problems);
-            const reason = bad && !screens[i].has('issue') ? 'issue' : metrics.keyboardLink && !screens[i].has('keyboard') ? 'keyboard' : !screens[i].has('first') ? 'first' : null;
-            if (!reason) continue;
-            screens[i].add('first'); screens[i].add(reason);
-            if (metrics.keyboardLink) screens[i].add('keyboard');
-            try {
-              const frame = await sample(page, {edition, entries:[entry]}, `${edition}-${width}-${reason}.png`, metrics.keyboardLink);
-              stat.samples.push({...where, reason, ...frame});
-              if (frame.renderError || frame.keyboard?.unconfirmed) await issue(where, {sample: frame.renderError || 'Keyboard activation unconfirmed'});
-            } catch(e) {await issue(where, {sample: String(e.message || e)});}
-          }
+      } catch(e) { ++stat.indexFailures; await issue({member}, {archiveOrIndex: String(e.message||e)}); }
+      if (index) {
+        stat.indexed += index.rows.length;
+        const kind = index.metadata.kind;
+        stat.byKind[kind] = (stat.byKind[kind] || 0) + index.rows.length;
+        let batch = [], batchBytes = 0, checkpoint = 0;
+        async function checkpointThrough(ordinal) {
+          await progress.writeFile(JSON.stringify({edition, member, ordinal, completeHash, indexed:stat.indexed,
+            decoded:stat.decoded, views:stat.views, issues:stat.issues, elapsedSeconds:(performance.now()-started)/1000})+'\n');
         }
-        const ordinal = batch.at(-1).identity.ordinal;
-        if (ordinal - checkpoint >= 2048) { await checkpointThrough(ordinal); checkpoint = ordinal; }
-        batch = []; batchBytes = 0;
+        async function flush() {
+          if (!batch.length) return;
+          for (const [i, page] of pages.entries()) {
+            const width = widths[i];
+            const entries = batch.map(r => r.entry);
+            const rows = await inspectEntries(page, edition, entries);
+            assert.equal(rows.length, batch.length);
+            for (const [n, metrics] of rows.entries()) {
+              const {entry, identity} = batch[n];
+              const where = {...identity, width};
+              if (metrics.error) {
+                await issue(where, {renderError:metrics.error});
+                if (!screens[i].has('render-error')) {
+                  screens[i].add('render-error');
+                  try {
+                    const frame=await sample(page,{edition,entries:[entry]},`${edition}-${width}-render-error.png`,false);
+                    stat.samples.push({...where,reason:'render-error',...frame});
+                  } catch(e) { await issue(where,{sample:String(e.message || e)}); }
+                }
+                continue;
+              }
+              ++stat.views[i];
+              stat.layout[i].bodyTextNodes += metrics.bodyNodes;
+              stat.layout[i].visibleLinks += metrics.links;
+              stat.layout[i].tableCells += metrics.cells;
+              if (!metrics.bodyNodes) ++stat.layout[i].emptyBodyViews;
+              const bad = Object.keys(metrics.problems).length > 0;
+              if (bad) await issue(where, metrics.problems);
+              const reason = bad && !screens[i].has('issue') ? 'issue' : metrics.keyboardLink && !screens[i].has('keyboard') ? 'keyboard' : !screens[i].has('first') ? 'first' : null;
+              if (!reason) continue;
+              screens[i].add('first'); screens[i].add(reason);
+              if (metrics.keyboardLink) screens[i].add('keyboard');
+              try {
+                const frame = await sample(page, {edition, entries:[entry]}, `${edition}-${width}-${reason}.png`, metrics.keyboardLink);
+                stat.samples.push({...where, reason, ...frame});
+                if (frame.renderError || frame.keyboard?.unconfirmed) await issue(where, {sample: frame.renderError || 'Keyboard activation unconfirmed'});
+              } catch(e) {await issue(where, {sample: String(e.message || e)});}
+            }
+          }
+          const ordinal = batch.at(-1).identity.ordinal;
+          if (ordinal - checkpoint >= 2048) { await checkpointThrough(ordinal); checkpoint = ordinal; }
+          batch = []; batchBytes = 0;
+        }
+        for (const [ordinal,row] of index.rows.entries()) {
+          const identity = {member, ordinal, title:row.title, offset:row.offset, length:row.length};
+          // A single oversized entry still gets its own batch.
+          if (batch.length && (batch.length >= 24 || batchBytes + row.length > 256*1024)) await flush();
+          try {
+            const payload = await source.read(row.offset,row.length);
+            const alias = index.metadata.kind === 'alias' ? decodeAlias(payload, row.raw_key ?? row.title) : null;
+            const entry = alias ? alias.entry : decode(payload, {...index.metadata, title:row.title});
+            // A raw alias presentation and its destination have distinct stored bodies.
+            entry.source_edition = edition;
+            entry.source_title = alias ? alias.alias.source_title : ['language','supplemental'].includes(index.metadata.kind) ? row.title : null;
+            batch.push({entry,identity}); batchBytes += row.length; ++stat.decoded;
+          } catch(e) {await issue(identity,{decodeError: String(e.message || e)});}
+        }
+        await flush(); ++stat.completedMembers; await checkpointThrough(index.rows.length - 1);
       }
-      for (const [ordinal,row] of index.rows.entries()) {
-        const identity = {member, ordinal, title:row.title, offset:row.offset, length:row.length};
-        // A single oversized entry still gets its own batch.
-        if (batch.length && (batch.length >= 24 || batchBytes + row.length > 256*1024)) await flush();
-        try {
-          const payload = await source.read(row.offset,row.length);
-          const alias = index.metadata.kind === 'alias' ? decodeAlias(payload, row.raw_key ?? row.title) : null;
-          const entry = alias ? alias.entry : decode(payload, {...index.metadata, title:row.title});
-          // A raw alias presentation and its destination have distinct stored bodies.
-          entry.source_edition = edition;
-          entry.source_title = alias ? alias.alias.source_title : ['language','supplemental'].includes(index.metadata.kind) ? row.title : null;
-          batch.push({entry,identity}); batchBytes += row.length; ++stat.decoded;
-        } catch(e) {await issue(identity,{decodeError: String(e.message || e)});}
+      stat.elapsedSeconds=priorSeconds+(performance.now()-started)/1000;
+      await commit(editionIndex,mi+1,stat,screens);
+      if (++processedThisInvocation === Number(pause)) {
+        console.log(JSON.stringify({paused:true,edition,nextMember:mi+1})); process.exitCode=75; break;
       }
-      await flush(); ++stat.completedMembers; await checkpointThrough(index.rows.length - 1);
     }
+    if (process.exitCode === 75) break;
     stat.enumerated = stat.members === stat.completedMembers && !stat.indexFailures;
     const expected = expectedCounts.get(edition);
     if (expected?.sha === completeHash && /^\d+$/.test(expected.count)) {
@@ -356,10 +456,11 @@ try {
     stat.emptyCatalog = selectedStatus === 'empty' && !stat.members;
     stat.fullLayoutAtBothWidths = !stat.emptyCatalog && stat.enumerated && stat.decoded===stat.indexed && stat.views.every(n => n===stat.indexed);
     if (!(stat.fullLayoutAtBothWidths || stat.emptyCatalog) || stat.categories.missingHeading) ++incompleteEditions;
-    stat.elapsedSeconds = (performance.now()-started)/1000;
+    stat.elapsedSeconds = priorSeconds+(performance.now()-started)/1000;
     await summary.writeFile(JSON.stringify(stat)+'\n'); await summary.sync(); await failures.sync();
+    await commit(editionIndex+1,0,null,null);
     console.log(JSON.stringify({edition,indexed:stat.indexed,views:stat.views,issues:stat.issues,elapsedSeconds:stat.elapsedSeconds}));
   }
-  await writeFile(path.join(out,'run.json'),JSON.stringify({editions,widths,inventorySha256:digest(inventoryBytes),readerTableSha256:digest(readerTable),productBundleSha256:digest(js),cssSha256:digest(css),fontSha256:digest(font),browser:browser.version(),issues:issueCount,incompleteEditions})+'\n');
-  if (incompleteEditions) process.exitCode = 2;
-} finally {await browser.close(); await summary.close(); await failures.close(); await progress.close();}
+  if (process.exitCode !== 75) await writeFile(path.join(out,'run.json'),JSON.stringify({editions,widths,inventorySha256:digest(inventoryBytes),readerTableSha256:digest(readerTable),productBundleSha256:digest(js),cssSha256:digest(css),fontSha256:digest(font),browser:browser.version(),issues:issueCount,incompleteEditions})+'\n');
+  if (process.exitCode !== 75 && incompleteEditions) process.exitCode = 2;
+} finally {await browser.close(); await summary.close(); await failures.close(); await progress.close(); await directory.close();}
