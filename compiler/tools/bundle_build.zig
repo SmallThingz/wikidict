@@ -53,6 +53,7 @@ const Options = struct {
     extraction_cache_root: ?[]const u8 = null,
     verified_dump_sha256: ?[]const u8 = null,
     verified_index_sha256: ?[]const u8 = null,
+    verified_source_pages: ?u64 = null,
     bzip2_source_directory: ?[]const u8 = null,
 };
 
@@ -232,6 +233,11 @@ fn parseOptions(args: []const []const u8) !Options {
             index += 1;
             if (index >= args.len or options.verified_index_sha256 != null) return error.Usage;
             options.verified_index_sha256 = args[index];
+        } else if (std.mem.eql(u8, args[index], "--verified-source-pages")) {
+            index += 1;
+            if (index >= args.len or options.verified_source_pages != null or args[index].len == 0) return error.Usage;
+            for (args[index]) |digit| if (!std.ascii.isDigit(digit)) return error.Usage;
+            options.verified_source_pages = std.fmt.parseInt(u64, args[index], 10) catch return error.Usage;
         } else if (std.mem.eql(u8, args[index], "--expansion-timeout-ms")) {
             index += 1;
             if (index >= args.len or options.expansion_timeout_ms != null) return error.Usage;
@@ -250,6 +256,7 @@ fn parseOptions(args: []const []const u8) !Options {
     }
     if ((options.extraction_cache_root == null) != (options.verified_dump_sha256 == null) or
         (options.extraction_cache_root == null) != (options.verified_index_sha256 == null)) return error.Usage;
+    if (options.verified_source_pages != null and (options.extraction_cache_root == null or options.bzip2_source_directory == null or options.sealed_frontend_reference != null)) return error.Usage;
     for ([_]?[]const u8{ options.verified_dump_sha256, options.verified_index_sha256 }) |maybe_digest| {
         if (maybe_digest) |digest| {
             if (digest.len != 64) return error.Usage;
@@ -453,15 +460,21 @@ fn extractionCacheCommand(
     io: std.Io,
     a: std.mem.Allocator,
     action: []const u8,
-    cache_root: []const u8,
-    dump_sha256: []const u8,
-    index_sha256: []const u8,
+    options: Options,
     expander_root: []const u8,
     dump: ?[]const u8,
 ) !bool {
     const helper = try std.fs.path.join(a, &.{ paths.project_root, "compiler", "tools", "extraction_cache.py" });
-    const argv = [_][]const u8{ "python3", "-I", "-S", "-B", helper, action, cache_root, paths.modules, dump_sha256, index_sha256, expander_root, dump orelse "" };
-    var child = try std.process.spawn(io, .{ .argv = if (dump != null) &argv else argv[0 .. argv.len - 1], .stdin = .ignore });
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(a);
+    try argv.appendSlice(a, &.{ "python3", "-I", "-S", "-B", helper, action, options.extraction_cache_root.?, paths.modules, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root });
+    if (dump) |path| try argv.append(a, path);
+    var count_buffer: [20]u8 = undefined;
+    if (options.verified_source_pages) |pages| {
+        const count = try std.fmt.bufPrint(&count_buffer, "{d}", .{pages});
+        try argv.appendSlice(a, &.{ "--verified-source-pages", count });
+    }
+    var child = try std.process.spawn(io, .{ .argv = argv.items, .stdin = .ignore });
     defer child.kill(io);
     const term = try child.wait(io);
     if (term == .exited and term.exited == 0) return true;
@@ -1417,8 +1430,8 @@ pub fn main(init: std.process.Init) !void {
     const leaf_bc = try installCachedLeafBitcode(init.io, a, llvm_dir);
     const cache_hit = if (options.sealed_frontend_reference != null)
         try probeSealedFrontend(init.io, a, marker, options, expander_root)
-    else if (options.extraction_cache_root) |cache|
-        try extractionCacheCommand(init.io, a, "probe", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root, dump)
+    else if (options.extraction_cache_root != null)
+        try extractionCacheCommand(init.io, a, "probe", options, expander_root, dump)
     else
         false;
     if (cache_hit and options.sealed_frontend_reference == null) {
@@ -1430,8 +1443,8 @@ pub fn main(init: std.process.Init) !void {
         try extractAndCompile(init.io, a, marker, dump, expander_root, llvm_dir, options.parse_workers, cpu_limit, leaf_bc, options.bzip2_source_directory);
         // compiler-inputs.ready follows indexed transclusion closure. Publish
         // only after the extractor has exited successfully.
-        if (options.extraction_cache_root) |cache|
-            _ = try extractionCacheCommand(init.io, a, "publish", cache, options.verified_dump_sha256.?, options.verified_index_sha256.?, expander_root, null);
+        if (options.extraction_cache_root != null)
+            _ = try extractionCacheCommand(init.io, a, "publish", options, expander_root, null);
     }
 
     // The native worker is a transient bundle compiler. It never belongs in the
@@ -1802,6 +1815,20 @@ test "abandoned object cache session is killed and reaped without publication" {
     session.child.kill(io); // Cleanup after a joined child is harmless.
 }
 
+
+test "archive extraction cache accepts a verified page count including zero" {
+    const base = [_][]const u8{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "/original/parts", "--extraction-cache-root", "cache", "--verified-dump-sha256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "--verified-index-sha256", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
+    try std.testing.expect((try parseOptions(&base)).verified_source_pages == null);
+    try std.testing.expectEqual(@as(?u64, 0), (try parseOptions(&(base ++ .{ "--verified-source-pages", "0" }))).verified_source_pages);
+    try std.testing.expectEqual(@as(?u64, 1118), (try parseOptions(&(base ++ .{ "--verified-source-pages", "1118" }))).verified_source_pages);
+    for ([_][]const u8{ "", "-1", "+2", "1_118", "18446744073709551616" }) |invalid| {
+        const args = base ++ [_][]const u8{ "--verified-source-pages", invalid };
+        try std.testing.expectError(error.Usage, parseOptions(&args));
+    }
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{"--verified-source-pages"})));
+    try std.testing.expectError(error.Usage, parseOptions(&(base ++ .{ "--verified-source-pages", "0", "--verified-source-pages", "1" })));
+    try std.testing.expectError(error.Usage, parseOptions(&.{ "/original/blocks.json", "/work/new", "--bzip2-source-directory", "/original/parts", "--verified-source-pages", "1118" }));
+}
 
 test "original archive caller keeps descriptor and extractor Writer flags explicit" {
     const a = std.testing.allocator;

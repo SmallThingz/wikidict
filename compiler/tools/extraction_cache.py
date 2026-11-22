@@ -143,8 +143,9 @@ def _read_source_receipt(root):
 
 
 def _receipt_indexes(root):
-    return [_receipt_identity(root / name, index=True) for name in
-            ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")]
+    names = ("page-index.tsv", "page-title-index.bin", "dump-streams.tsv")
+    raw = _raw_original_index(root)
+    return [None if raw and name == "dump-streams.tsv" else _receipt_identity(root / name,index=True) for name in names]
 
 
 def _valid_archive_binding(binding):
@@ -1992,7 +1993,9 @@ def cache_path(root, key):
 def extraction_files(root):
     # Legacy generations have no full-scan proof and retain the tail guard.
     proof = "extraction-completion.json"
-    return (*FILES, proof) if os.path.lexists(root / proof) else FILES
+    raw = _raw_original_index(root)
+    files = tuple(name for name in FILES if not (raw and name == 'dump-streams.tsv'))
+    return (*files, proof) if os.path.lexists(root / proof) else files
 
 
 def walk_assets(root):
@@ -2020,9 +2023,18 @@ def walk_assets(root):
     return names
 
 
-def record_assets(root):
-    return [[name, (root / name).stat().st_size, sha256(root / name)]
-            for name in walk_assets(root)]
+def record_assets(root, *, _verified=None):
+    records=[]
+    for name in walk_assets(root):
+        path=root/name
+        checked=(_verified or {}).get(name)
+        if checked is not None:
+            stamp,digest=checked
+            if _full_stamp(path.stat())!=stamp:
+                raise ValueError('Owned cache artifact changed after verified hardlink')
+            records.append([name,stamp[3],digest])
+        else:records.append([name,path.stat().st_size,sha256(path)])
+    return records
 
 
 def last_nonempty_line(path, tail_bytes=256 * 1024):
@@ -2039,12 +2051,149 @@ def last_nonempty_line(path, tail_bytes=256 * 1024):
     return lines[-1]
 
 
-def validate_extraction_completion(root):
+RAW_COMPLETION_SCHEMA = 'wikidict.extraction-completion.raw-original.v1'
+
+
+def _raw_original_index(root):
+    """Recognize only the native raw-coordinate v3 transport contract."""
+    try:
+        regular(root / 'page-title-index.bin')
+        with (root / 'page-title-index.bin').open('rb') as stream:header = stream.read(64)
+        if len(header) != 64 or header[:8] != b'DPTIDX01' or int.from_bytes(header[8:16], 'little') != 0:
+            return False
+        _, receipt = _read_source_receipt(root)
+        return (isinstance(receipt,dict) and receipt.get('version') == 3
+                and _valid_archive_binding(receipt.get('transport'))
+                and isinstance(receipt.get('indexes'),list) and len(receipt['indexes']) == 3
+                and receipt['indexes'][2] is None and not os.path.lexists(root / 'dump-streams.tsv'))
+    except (OSError,ValueError,TypeError,json.JSONDecodeError):
+        return False
+
+
+def _original_raw_bounds(root, verified_source_pages=None):
+    selection = _source_transport(root)
+    if selection is None:raise ValueError('Original raw completion requires explicit source transport')
+    directory = read_marker(selection[0])
+    if (not isinstance(directory,dict) or directory.get('format') != 'wikidict-bzip2-blocks-v1'
+            or type(directory.get('xml_bytes')) is not int or not 0 <= directory['xml_bytes'] <= 2**64-1):
+        raise ValueError('Invalid original XML byte bound')
+    declared = directory.get('source_pages')
+    if declared is not None and (type(declared) is not int or not 0 <= declared <= 2**64-1):
+        raise ValueError('Invalid original source page count')
+    if verified_source_pages is not None:
+        if (type(verified_source_pages) is not int or not 0 <= verified_source_pages <= 2**64-1
+                or (declared is not None and declared != verified_source_pages)):
+            raise ValueError('Verified original source page count differs')
+        declared = verified_source_pages
+    if declared is None:raise ValueError('Raw original cache requires an externally verified source page count')
+    return dict(pages=declared,xml_bytes=directory['xml_bytes'])
+
+
+def _raw_completion(root, bounds, binding, *, verified=None):
+    if (not _raw_original_index(root) or not isinstance(bounds,dict) or set(bounds) != {'pages','xml_bytes'}
+            or any(type(v) is not int or not 0 <= v <= 2**64-1 for v in bounds.values())):
+        raise ValueError('Invalid raw original completion bounds')
+    guarded = tuple(root/name for name in ('page-index.tsv','page-title-index.bin','extraction-source.json'))
+    before = {path:_full_stamp(path.stat()) for path in guarded}
+    _, receipt = _read_source_receipt(root)
+    if receipt['transport'] != binding or receipt['indexes'] != _receipt_indexes(root):
+        raise ValueError('Raw original completion SourceReceipt changed')
+    title = root / 'page-title-index.bin'
+    with title.open('rb') as stream:header=stream.read(64)
+    capacity,rows,unique,page_size=(int.from_bytes(header[o:o+8],'little')for o in range(16,48,8))
+    page = root / 'page-index.tsv'
+    if (capacity < 8 or capacity & (capacity-1) or unique > rows or rows > capacity
+            or title.stat().st_size != 64+16*capacity or page.stat().st_size != page_size or rows != bounds['pages']):
+        raise ValueError('Raw original title index differs from verified source count')
+    count=0;last_end=0;page_hash=hashlib.sha256()
+    with page.open('rb') as stream:
+        for raw in iter(lambda:stream.readline(16*1024*1024+1),b''):
+            page_hash.update(raw)
+            if len(raw)>16*1024*1024 or not raw.endswith(b'\n') or b'\r' in raw:
+                raise ValueError('Invalid raw original page index row')
+            fields=raw[:-1].split(b'\t')
+            if len(fields) not in (12,14) or not fields[2] or not fields[6] or not fields[8]:
+                raise ValueError('Invalid raw original page index fields')
+            raw.decode('utf-8')
+            values=[]
+            for i in (0,1,4,5,9):
+                if not re.fullmatch(rb'[0-9]+',fields[i]):raise ValueError('Invalid raw original numeric field')
+                value=int(fields[i]);maximum=2**32-1 if i==9 else 2**64-1
+                if value>maximum:raise ValueError('Raw original numeric field overflow')
+                values.append(value)
+            offset,length=values[:2]
+            if (offset>bounds['xml_bytes'] or length>bounds['xml_bytes']-offset
+                    or (length and offset<last_end) or fields[10] not in (b'0',b'1') or fields[11] not in (b'0',b'1')):
+                raise ValueError('Raw original XML extent is outside its source')
+            if length:last_end=offset+length
+            if len(fields)==14 and (fields[12]!=b'mw-export-0.11-single-main-wikitext-v1'
+                    or fields[10]!=b'1' or fields[8]!=b'wikitext'
+                    or not re.fullmatch(rb'0|[1-9][0-9]*',fields[13]) or int(fields[13])>2**64-1):
+                raise ValueError('Invalid raw original revision size proof')
+            count+=1
+    if count != rows:raise ValueError('Raw original TSV count differs from native title index')
+    value = dict(schema=RAW_COMPLETION_SCHEMA,version=1,coordinate_kind='original-bzip2-global-xml-v1',
+                **bounds,source_transport=binding,page_index_sha256=page_hash.hexdigest(),
+                title_index_sha256=sha256(title),source_receipt_sha256=sha256(root/'extraction-source.json'))
+    if any(_full_stamp(path.stat()) != stamp for path,stamp in before.items()):
+        raise ValueError('Raw original indexes changed during completion validation')
+    if verified is not None:
+        if verified:raise ValueError('Raw proof output must be empty')
+        verified.update(value=value,stamps=before,digests={page:value['page_index_sha256'],title:value['title_index_sha256'],root/'extraction-source.json':value['source_receipt_sha256']})
+    return value
+
+
+def _ensure_raw_completion(root, expected):
+    if not _raw_original_index(root):return
+    selected = _source_transport(root)
+    if selected is None:raise ValueError('Raw original publication lacks explicit transport')
+    current = completed_source_binding(root, selected[0])
+    bounds=expected.get('original_xml_bounds')
+    if bounds is None:bounds=_original_raw_bounds(root)
+    binding=expected.get('source_transport')
+    if current['receipt']['transport'] != binding:raise ValueError('Raw original publication transport differs')
+    verified={}
+    value=_raw_completion(root,bounds,binding,verified=verified)
+    path=root/'extraction-completion.json'
+    if os.path.lexists(path):
+        if read_marker(path)!=value:raise ValueError('Raw original completion proof changed')
+    else:
+        # This is a new cache-completion output derived from the completed
+        # native indexes and externally bound input, never a synthetic stream.
+        write_private_marker(path,value)
+    if any(_full_stamp(p.stat())!=stamp for p,stamp in verified['stamps'].items()):
+        raise ValueError('Raw indexes changed before completion publication')
+    verified['stamps'][path]=_full_stamp(path.stat());verified['digests'][path]=sha256(path)
+    return verified
+
+
+def _validate_raw_completion(root, expected=None, verified=None, verified_out=None):
+    proof=read_marker(root/'extraction-completion.json')
+    if not isinstance(proof,dict) or proof.get('schema')!=RAW_COMPLETION_SCHEMA:
+        raise ValueError('Missing raw original completion proof')
+    bounds={name:proof.get(name)for name in ('pages','xml_bytes')}
+    binding=proof.get('source_transport')
+    if expected is not None:
+        if expected.get('source_transport')!=binding or expected.get('original_xml_bounds')!=bounds:
+            raise ValueError('Raw original proof differs from selected input bounds')
+    if verified is not None:
+        if (verified['value']!=proof or any(_full_stamp(p.stat())!=stamp for p,stamp in verified['stamps'].items())):
+            raise ValueError('Verified raw completion artifact changed')
+        return
+    if _raw_completion(root,bounds,binding,verified=verified_out)!=proof:
+        raise ValueError('Raw original completion proof differs from native outputs')
+
+
+def validate_extraction_completion(root, *, expected=None, verified_raw=None):
     """Reject internally consistent but prematurely terminated extractions."""
     ready = root / "compiler-inputs.ready"
     regular(ready)
     if ready.read_bytes() != b"complete\n":
         raise ValueError("Invalid compiler inputs completion marker")
+
+    if _raw_original_index(root):
+        _validate_raw_completion(root, expected, verified_raw)
+        return
 
     stream_fields = last_nonempty_line(root / "dump-streams.tsv").split(b"\t")
     page_fields = last_nonempty_line(root / "page-index.tsv").split(b"\t")
@@ -2113,6 +2262,12 @@ def extraction_ownership_proven(root):
         fields = {"version", "extractor_args", "dump_sha256", "index_sha256",
                   "namespace_registry_sha256", "transclusion_redirects_sha256",
                   "page_redirects_sha256", "unicode_case", "tool"}
+        raw_bounds = identity_record.get('original_xml_bounds')
+        if raw_bounds is not None:
+            fields.add('original_xml_bounds')
+            if (not isinstance(raw_bounds,dict) or set(raw_bounds) != {'pages','xml_bytes'}
+                    or any(type(v) is not int or not 0 <= v <= 2**64-1 for v in raw_bounds.values())
+                    or not _valid_archive_binding(identity_record.get('source_transport'))):return False
         if 'source_transport' in identity_record:
             fields.add('source_transport')
             if not _valid_archive_binding(identity_record['source_transport']):
@@ -2153,7 +2308,11 @@ def extraction_ownership_proven(root):
                          all(part not in ("", ".", "..") for part in name.split("/")))):
                 return False
             names.append(name)
-        return (names == sorted(set(names)) and set(FILES) <= set(names))
+        required = set(FILES)
+        if raw_bounds is not None:
+            required.remove('dump-streams.tsv');required.add('extraction-completion.json')
+            if 'dump-streams.tsv' in names:return False
+        return (names == sorted(set(names)) and required <= set(names))
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
 
@@ -2190,10 +2349,16 @@ def validate(root, expected, *, validated_names=None):
         return False
     if record.get("identity") != expected:
         return False
+    verified_raw=None;verified_assets=None
+    if _raw_original_index(root):
+        verified_raw={}
+        _validate_raw_completion(root,expected,verified_out=verified_raw)
+        verified_assets={path.relative_to(root).as_posix():(stamp,verified_raw['digests'][path])
+                         for path,stamp in verified_raw['stamps'].items()}
     assets = record.get("assets")
-    if not isinstance(assets, list) or assets != record_assets(root):
+    if not isinstance(assets, list) or assets != record_assets(root,_verified=verified_assets):
         return False
-    validate_extraction_completion(root)
+    validate_extraction_completion(root, expected=expected, verified_raw=verified_raw)
     if validated_names is not None:
         validated_names.extend(row[0] for row in assets)
     return True
@@ -2315,6 +2480,7 @@ def probe(root, expected, output, *, dump=None, _after_verified=None):
 
 
 def publish(root, expected, source):
+    verified_raw = _ensure_raw_completion(source, expected)
     timing = optional_phase_timing(_cache_phase_event)
     completed = False
     try:
@@ -2330,7 +2496,7 @@ def publish(root, expected, source):
             timing.switch("preflight")
             timing.count(files=len(walk_assets(source)))
         if timing is not None: timing.switch("completion")
-        validate_extraction_completion(source)
+        validate_extraction_completion(source,expected=expected,verified_raw=verified_raw)
         if timing is not None: timing.switch("destination_selection")
         if destination.exists() or destination.is_symlink():
             try:
@@ -2358,17 +2524,29 @@ def publish(root, expected, source):
         if timing is not None: timing.switch("link_copy")
         temporary = Path(tempfile.mkdtemp(prefix=".part-", dir=root))
         try:
+            verified_links={}
             for name in extraction_files(source):
                 original = source / name
                 regular(original)
+                stamp=verified_raw['stamps'].get(original) if verified_raw is not None else None
+                if stamp is not None and _full_stamp(original.stat())!=stamp:
+                    raise ValueError('Verified raw artifact changed before owned cache link')
                 link_or_copy(original, temporary / name)
+                if stamp is not None:
+                    after=_full_stamp((temporary/name).stat())
+                    # Only our same-inode hardlink may change ctime. Copies
+                    # get an independent hash rather than borrowing this proof.
+                    if after[:2]==stamp[:2]:
+                        if after[:5]!=stamp[:5] or _full_stamp(original.stat())!=after:
+                            raise ValueError('Raw artifact changed during owned cache link')
+                        verified_links[name]=(after,verified_raw['digests'][original])
             module_source = source / TREE
             if module_source.is_symlink() or not module_source.is_dir():
                 raise ValueError("Missing regular modules directory")
             shutil.copytree(module_source, temporary / TREE, symlinks=False,
                             copy_function=link_or_copy)
             if timing is not None: timing.switch("record_assets_hash")
-            assets = record_assets(temporary)
+            assets = record_assets(temporary,_verified=verified_links)
             if timing is not None:
                 timing.count(files=len(assets), bytes=sum(row[1] for row in assets))
                 timing.switch("seal_cleanup")
@@ -3446,7 +3624,7 @@ def probe_sealed_frontend(cache_root, executable, dump_sha, index_sha, output, d
     return 0
 
 
-def _frontend_extraction_identity(executable, dump_sha, index_sha, output):
+def _frontend_extraction_identity(executable, dump_sha, index_sha, output, verified_source_pages=None):
     redirects, page_redirects = output / 'transclusion-redirects.tsv', output / 'page-redirects.tsv'
     if page_redirects.exists() or page_redirects.is_symlink():
         page_redirects = page_redirects.resolve(strict=True); regular(page_redirects)
@@ -3456,10 +3634,20 @@ def _frontend_extraction_identity(executable, dump_sha, index_sha, output):
     selection = _source_transport(output)
     if selection is not None:
         value['source_transport'] = selection[1]
+        if verified_source_pages is not None or _raw_original_index(output):
+            value['original_xml_bounds'] = _original_raw_bounds(output, verified_source_pages)
+    elif verified_source_pages is not None:
+        raise ValueError('Verified source count requires original archive transport')
     return value
 
 
 def main(argv):
+    verified_source_pages = None
+    if '--verified-source-pages' in argv:
+        if (argv.count('--verified-source-pages') != 1 or argv[-2] != '--verified-source-pages'
+                or re.fullmatch('[0-9]+',argv[-1]) is None or int(argv[-1]) > 2**64-1):
+            raise ValueError('Invalid verified source page count')
+        verified_source_pages = int(argv[-1]);argv = argv[:-2]
     if len(argv) == 10 and argv[1] == "probe-sealed-frontend":
         _, _, cache, executable, dump_sha, index_sha, root, dump, graph, reference = argv
         return probe_sealed_frontend(Path(cache), executable, dump_sha, index_sha, Path(root),
@@ -3490,7 +3678,7 @@ def main(argv):
             (len(argv) == 8 and argv[1] == "probe")):
         raise SystemExit("usage: extraction_cache.py probe|publish CACHE_ROOT EXTRACTOR DUMP_SHA256 INDEX_SHA256 EXPANDER_ROOT [DUMP for probe]")
     _, action, root, executable, dump_sha256, index_sha256, output = argv[:7]
-    expected = _frontend_extraction_identity(executable, dump_sha256, index_sha256, Path(output))
+    expected = _frontend_extraction_identity(executable, dump_sha256, index_sha256, Path(output), verified_source_pages)
     if action == "probe":
         return probe(Path(root), expected, Path(output), dump=Path(argv[7]) if len(argv) == 8 else None)
     if 'source_transport' in expected:

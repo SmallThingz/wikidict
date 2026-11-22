@@ -17903,4 +17903,17 @@ class ReviewedOriginalArchiveCompatibilityTests(unittest.TestCase):
                 self.assertEqual(review.read_bytes(),b'{"reviewed_rows":"retain"}')
 
 
+class VerifiedSourceCountForwardingTests(unittest.TestCase):
+    def test_only_explicit_bridged_archive_cache_forwards_real_count(self):
+        with tempfile.TemporaryDirectory()as tmp:
+            staged=dict(version=b.ORIGINAL_BZIP2_INPUT_VERSION,source_pages=1118,dump_sha256='a'*64,index_sha256='b'*64)
+            self.assertEqual([],b.extraction_cache_args(None,staged))
+            self.assertEqual(['--verified-source-pages','1118'],b.extraction_cache_args(Path(tmp),staged)[-2:])
+            old=dict(staged,version=b.DUMP_STAGING_VERSION)
+            self.assertNotIn('--verified-source-pages',b.extraction_cache_args(Path(tmp),old))
+            for value in (None,True,-1,2**64):
+                with self.subTest(value=value),self.assertRaises(ValueError):b.extraction_cache_args(Path(tmp),dict(staged,source_pages=value))
+            with self.assertRaises(ValueError):b.extraction_cache_args(Path(tmp),dict(staged,version=b.FRESH_BZIP2_INPUT_VERSION))
+
+
 if __name__=='__main__':unittest.main()

@@ -1,6 +1,8 @@
 import gzip
+import hashlib
 import importlib.util
 import json
+import struct
 import tempfile
 import unittest
 from unittest import mock
@@ -4639,6 +4641,92 @@ class ObjectCacheSessionTests(unittest.TestCase):
             p.write_text(json.dumps(value))
         with self.assertRaisesRegex(ValueError,'Clang native target or compile flags changed'):
             self.session(output,change_snapshot)
+
+
+class RawOriginalCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.base=Path(self.tmp.name);self.source=self.base/'source';self.source.mkdir()
+        self.archives=self.base/'archives';self.archives.mkdir();(self.archives/'part.bz2').write_bytes(b'BZh9fixture')
+        self.dump=self.base/'blocks.json';self.dump.write_text(json.dumps(dict(format='wikidict-bzip2-blocks-v1',xml_bytes=100,parts=[])))
+        self.descriptor=json.dumps(dict(format='wikidict-source-transport-v1',transport='bzip2-blocks',block_directory=str(self.dump),source_directory=str(self.archives))).encode()
+        self.binding=dict(kind='bzip2-blocks',descriptor_sha256=list(hashlib.sha256(self.descriptor).digest()),block_directory_sha256=list(hashlib.sha256(self.dump.read_bytes()).digest()))
+        self.source.joinpath('modules').mkdir();self.source.joinpath('modules/1.lua').write_text('return 1')
+        for name in cache.FILES:
+            if name!='dump-streams.tsv':self.source.joinpath(name).write_text('controlled '+name)
+        self.source.joinpath('compiler-inputs.ready').write_text('complete\n')
+        self.source.joinpath('namespace-registry.tsv').write_text('namespace')
+        self.source.joinpath('source-transport.json').write_bytes(self.descriptor)
+        self.rows=[b'5\t4\tT1\t\t1\t11\t2026\tu\twikitext\t0\t1\t0\n',b'20\t0\tT2\t\t2\t12\t2026\tu\twikitext\t0\t1\t0\n']
+        self.install_indexes(self.rows)
+        self.cache=self.base/'cache'
+        self.tool=mock.patch.object(cache,'tool_identity',return_value=dict(extractor_sha256='e'*64,libraries=[]));self.tool.start();self.addCleanup(self.tool.stop)
+        self.unicode=mock.patch.object(cache,'unicode_case_identity',return_value={'libraries':[]});self.unicode.start();self.addCleanup(self.unicode.stop)
+
+    def install_indexes(self,rows):
+        self.source.joinpath('page-index.tsv').write_bytes(b''.join(rows))
+        header=bytearray(64)
+        header[:8]=b'DPTIDX01'
+        for at,value in ((8,0),(16,8),(24,len(rows)),(32,len(rows)),(40,len(b''.join(rows)))):struct.pack_into('<Q',header,at,value)
+        self.source.joinpath('page-title-index.bin').write_bytes(header+bytes(16*8))
+        receipt=dict(version=3,source=cache._receipt_identity(self.dump),indexes=[cache._receipt_identity(self.source/'page-index.tsv',index=True),cache._receipt_identity(self.source/'page-title-index.bin',index=True),None],namespace_sha256=list(hashlib.sha256(b'namespace').digest()),redirects_sha256=None,transport=self.binding)
+        self.source.joinpath('extraction-source.json').write_text(json.dumps(receipt))
+
+    def expected(self,pages=2):return cache._frontend_extraction_identity('extractor','a'*64,'b'*64,self.source,pages)
+    def output(self,name='output'):
+        root=self.base/name;root.mkdir();root.joinpath('namespace-registry.tsv').write_text('namespace');root.joinpath('source-transport.json').write_bytes(self.descriptor);return root
+
+    def test_real_raw_shape_miss_publish_hit_without_stream_table(self):
+        expected=self.expected();output=self.output()
+        self.assertEqual(cache.MISS,cache.probe(self.cache,expected,output,dump=self.dump))
+        self.assertEqual(0,cache.publish(self.cache,expected,self.source))
+        self.assertEqual(0,cache.probe(self.cache,expected,output,dump=self.dump))
+        self.assertFalse((output/'dump-streams.tsv').exists())
+        self.assertEqual(self.source.joinpath('page-index.tsv').stat().st_ino,output.joinpath('page-index.tsv').stat().st_ino)
+        cache.validate_extraction_completion(output,expected=expected)
+        generation=next(p for p in self.cache.iterdir()if not p.name.startswith('.'))
+        self.assertTrue(cache.extraction_ownership_proven(generation))
+
+    def test_self_consistent_shortened_pair_refuses_external_count(self):
+        expected=self.expected();self.install_indexes(self.rows[:1])
+        with self.assertRaisesRegex(ValueError,'verified source count'):cache.publish(self.cache,expected,self.source)
+        self.assertFalse(self.cache.exists())
+
+    def test_xml_extent_bound_refuses_even_with_consistent_indexes(self):
+        expected=self.expected();self.install_indexes([self.rows[0],self.rows[1].replace(b'20\t0',b'99\t2')])
+        with self.assertRaisesRegex(ValueError,'outside its source'):cache.publish(self.cache,expected,self.source)
+
+    def test_missing_count_cannot_be_inferred_from_native_header(self):
+        with self.assertRaisesRegex(ValueError,'externally verified'):cache._frontend_extraction_identity('extractor','a'*64,'b'*64,self.source)
+        raw=json.loads(self.dump.read_text());raw['source_pages']=2;self.dump.write_text(json.dumps(raw))
+        with self.assertRaisesRegex(ValueError,'differs'):cache._original_raw_bounds(self.source,1)
+
+    def test_swapped_sidecar_or_source_descriptor_misses_before_ownership(self):
+        expected=self.expected();cache.publish(self.cache,expected,self.source)
+        for mode in ('sidecar','source'):
+            out=self.output('changed-'+mode);descriptor=json.loads(self.descriptor)
+            if mode=='sidecar':
+                path=self.base/'other-blocks.json';path.write_bytes(self.dump.read_bytes());descriptor['block_directory']=str(path)
+            else:
+                path=self.base/'other-archives';path.mkdir();descriptor['source_directory']=str(path)
+            out.joinpath('source-transport.json').write_text(json.dumps(descriptor))
+            self.assertEqual(cache.MISS,cache.probe(self.cache,expected,out,dump=Path(descriptor['block_directory'])))
+            self.assertFalse(out.joinpath('page-index.tsv').exists())
+
+    def test_null_table_requires_raw_kind_and_v3_receipt(self):
+        for mode in ('kind','receipt'):
+            self.install_indexes(self.rows)
+            if mode=='kind':
+                p=self.source/'page-title-index.bin';data=bytearray(p.read_bytes());struct.pack_into('<Q',data,8,2);p.write_bytes(data)
+            else:
+                p=self.source/'extraction-source.json';v=json.loads(p.read_text());v['version']=2;p.write_text(json.dumps(v))
+            self.assertFalse(cache._raw_original_index(self.source))
+            with self.assertRaises(ValueError):cache._receipt_indexes(self.source)
+
+    def test_cli_count_is_strict_and_bound_to_original_input(self):
+        for count in ('-1','1.2','18446744073709551616'):
+            with self.subTest(count=count),self.assertRaises(ValueError):cache.main(['x','publish','root','exe','a'*64,'b'*64,'out','--verified-source-pages',count])
+        with self.assertRaisesRegex(ValueError,'SourceReceipt changed'):cache._raw_completion(self.source,{'pages':2,'xml_bytes':100},dict(self.binding,kind='other'))
 
 
 if __name__ == "__main__":

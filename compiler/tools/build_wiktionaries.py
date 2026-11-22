@@ -8512,9 +8512,15 @@ def extraction_cache_args(cache_root, staged):
     cache_root=Path(cache_root).absolute()
     if cache_root.is_symlink() or (cache_root.exists() and not cache_root.is_dir()):
         raise ValueError('Extraction cache root must be a regular directory')
-    return ['--extraction-cache-root',str(cache_root),
+    args = ['--extraction-cache-root',str(cache_root),
             '--verified-dump-sha256',staged['dump_sha256'],
             '--verified-index-sha256',staged['index_sha256']]
+    if staged.get('version') == ORIGINAL_BZIP2_INPUT_VERSION:
+        pages=staged.get('source_pages')
+        if type(pages) is not int or not 0 <= pages <= 2**64-1:
+            raise ValueError('Original archive cache requires verified source pages')
+        args += ['--verified-source-pages',str(pages)]
+    return args
 
 
 def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_unix, expansion_workers=None, interwiki_snapshot=None, interwiki_sha=None, auxiliary_snapshots=None, auxiliary_hashes=None, expansion_timeout_ms=None, build_identity=None, page_links_snapshot=None, page_redirects_snapshot=None, raw_shards_path=None, compress_shards=False, extraction_cache_root=None, reviewed_nonlexical=None, llvm_workers=None, staged_input_root=None, _staged_input_guard=None, presentation_audit_pages=None, retained_roles=None, continue_failed_shards=False, provider_update=None, shard_pages=None):
