@@ -16,33 +16,51 @@ export function validatePublicationName(name,metadata) {
 }
 const rawKey=row=>row.raw_key??row.title;
 const group=d=>publicationGroup(d.name);
-function makeHit(owner,row,context) {
+function makeHit(owner,row,context,sourceEdition=group(context)?.split('/')[0]||null) {
   return {dictionary:owner.id,context:context.id,raw_key:rawKey(row),title:row.title,
-    language:context.metadata.language,kind:row.source_kind||owner.metadata.kind,source_edition:group(context)?.split('/')[0]||null};
+    language:context.metadata.language,kind:row.source_kind||owner.metadata.kind,source_edition:sourceEdition};
 }
 export function collections(dictionaries) {
   for(const d of dictionaries)validatePublicationName(d.name,d.metadata);
   const aliases=dictionaries.filter(d=>d.metadata.kind==='alias'),ordinary=dictionaries.filter(d=>d.metadata.kind!=='alias');
-  const seen=new Set();
-  for(const d of aliases)if(group(d))for(const row of d.rows){
-    const key=group(d)+'\0'+rawKey(row);
-    if(seen.has(key))throw Error('Duplicate compiled alias in this edition');
-    seen.add(key);
+  const seen=new Set(),aliasesByEdition=new Map(),kindsByEdition=new Map();
+  for(const owner of aliases){
+    const edition=group(owner);
+    if(!edition)continue;
+    if(!aliasesByEdition.has(edition))aliasesByEdition.set(edition,[]);
+    aliasesByEdition.get(edition).push(owner);
+    for(const row of owner.rows){
+      const key=edition+'\0'+rawKey(row);
+      if(seen.has(key))throw Error('Duplicate compiled alias in this edition');
+      seen.add(key);
+    }
   }
   const views=ordinary.map(context=>{
-    const entries=context.rows.map(row=>({owner:context,row})),keys=new Set(context.rows.map(row=>row.title));
-    for(const owner of aliases)if(group(context)&&group(owner)===group(context))for(const row of owner.rows)if(row.source_kind===context.metadata.kind){
+    const edition=group(context),entries=context.rows.map(row=>({owner:context,row}));
+    if(!edition)return {context,entries};
+    if(!kindsByEdition.has(edition))kindsByEdition.set(edition,new Set());
+    kindsByEdition.get(edition).add(context.metadata.kind);
+    const overlays=aliasesByEdition.get(edition);
+    if(!overlays)return {context,entries};
+    const keys=new Set(context.rows.map(row=>row.title));
+    for(const owner of overlays)for(const row of owner.rows)if(row.source_kind===context.metadata.kind){
       if(keys.has(row.title))throw Error('Compiled alias collides with a definition');
       keys.add(row.title);entries.push({owner,row});
     }
     return {context,entries};
   });
   for(const owner of aliases){
-    const entries=owner.rows.filter(row=>!group(owner)||!ordinary.some(d=>group(d)===group(owner)&&d.metadata.kind===row.source_kind)).map(row=>({owner,row}));
+    const kinds=kindsByEdition.get(group(owner));
+    const entries=owner.rows.filter(row=>!kinds?.has(row.source_kind)).map(row=>({owner,row}));
     if(entries.length)views.push({context:owner,entries});
   }
   for(const view of views){
-    view.hits=view.entries.map(({owner,row})=>({...makeHit(owner,row,view.context),normalized:row.title.toLocaleLowerCase()}));
+    const sourceEdition=group(view.context)?.split('/')[0]||null;
+    view.hits=view.entries.map(({owner,row})=>{
+      const hit=makeHit(owner,row,view.context,sourceEdition);
+      hit.normalized=row.title.toLocaleLowerCase();
+      return hit;
+    });
     view.hits.sort((a,b)=>a.normalized<b.normalized?-1:a.normalized>b.normalized?1:0);
   }
   return views;
