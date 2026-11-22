@@ -11,16 +11,23 @@ try{
    const main = document.querySelector('main');
    const action = {kind:'link',target:'File:Sugar-485057.jpg',text:' ',trail:''};
    const values = [action,{...action,text:'Sugar caption'},{...action,tooltip:'Authored tooltip'},
-     {...action,target_fragment:'detail'},{...action,target:'Ordinary target'}];
-   main.replaceChildren(Renderer.spans(values,()=>{},true));
+     {...action,target_fragment:'detail'},{...action,target:'ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ',text:'\u00a0'},
+     {...action,target:'#en'},{...action,target:'',target_fragment:'en'}];
+   window.linkActions=[];
+   main.replaceChildren(Renderer.spans(values,(...args)=>window.linkActions.push(args),true));
    return [...main.querySelectorAll('a')].map(a=>[a.getAttribute('aria-label'),a.textContent,a.title]);
  });
  assert.deepEqual(names,[['File:Sugar-485057.jpg',' ',''],[null,'Sugar caption',''],[null,' ','Authored tooltip'],
-   ['File:Sugar-485057.jpg#detail',' ',''],[null,' ','']]);
+   ['File:Sugar-485057.jpg#detail',' ',''],['ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ','\u00a0',''],['#en',' ',''],['#en',' ','']]);
  assert.equal(await page.getByRole('link',{name:'File:Sugar-485057.jpg',exact:true}).count(),1);
  assert.equal(await page.getByRole('link',{name:'Sugar caption',exact:true}).count(),1);
  assert.equal(await page.getByRole('link',{name:'Authored tooltip',exact:true}).count(),1);
  assert.match(await page.getByRole('link',{name:'Authored tooltip',exact:true}).ariaSnapshot(),/link "Authored tooltip"/);
+ for(const [link,expected] of [[page.getByRole('link',{name:'ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ',exact:true}),['ⵓⵙⵎⵉⴷ ⴰⵏⴰⴱⴰⵡ']],
+   [page.getByRole('link',{name:'#en',exact:true}).nth(0),['#en']],
+   [page.getByRole('link',{name:'#en',exact:true}).nth(1),['','en']]]) {
+   await link.focus();await page.keyboard.press('Enter');assert.deepEqual(await page.evaluate(()=>window.linkActions.at(-1)),expected);
+ }
 
  if (!process.argv.includes('--file-action-names-only')) {
  if(process.env.WIKIDICT_WEB_IMAGE_THEME_ONLY!=='1'&&process.env.WIKIDICT_WEB_CAPTION_ONLY!=='1'){

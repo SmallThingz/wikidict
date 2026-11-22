@@ -394,10 +394,41 @@ try {
         const source=await openSource(await openAsBlob(filename)),index=await buildIndex(source);
         for (const j of items) {
           const row=index.rows[j.ordinal]; assert.equal(row.title,j.title); assert.equal(row.offset,j.offset); assert.equal(row.length,j.length);
-          assert.equal(index.metadata.kind,'language');
-          const entry=decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title}); entry.source_title=row.title;entry.source_edition=group.edition;
+          const payload=await source.read(row.offset,row.length);
+          assert(index.metadata.kind==='language' || (j.namedActions && index.metadata.kind==='alias'));
+          const alias=index.metadata.kind==='alias' ? decodeAlias(payload,row.raw_key ?? row.title) : null;
+          const entry=alias ? alias.entry : decode(payload,{...index.metadata,title:row.title});
+          entry.source_title=alias ? alias.alias.source_title : row.title;
+          entry.source_edition=group.edition;
           const page=pages[widths.indexOf(j.width)];
           const [layout]=await page.evaluate(inspectBatch,{entries:[entry],edition:group.edition});
+          if (j.namedActions) {
+            assert.equal(layout.error,undefined);
+            assert.equal(layout.problems.unnamedLinkCandidates ?? 0,0);
+            for (const {target,text,count} of j.namedActions) {
+              const links=page.getByRole('link',{name:target,exact:true}).and(page.locator('main a[aria-label]'));
+              assert.equal(await links.count(),count);
+              for (const link of await links.all()) {
+                const geometry=await link.evaluate(a=>{
+                  const label=a.getAttribute('aria-label');
+                  const box=a.getBoundingClientRect().toJSON();
+                  a.removeAttribute('aria-label');
+                  try {return {box,withoutLabel:a.getBoundingClientRect().toJSON()};}
+                  finally {a.setAttribute('aria-label',label);}
+                });
+                assert.deepEqual(geometry.box,geometry.withoutLabel);
+                assert(geometry.box.height>0);
+                assert.equal(await link.textContent(),text);
+                assert.equal(await link.getAttribute('href'),'#'+encodeURIComponent(target));
+                const accessibility=await link.ariaSnapshot();
+                const activation=await activateLink(page,link);
+                assert.equal(activation.unconfirmed,false);
+                await reviewed.writeFile(JSON.stringify({edition:group.edition,member,ordinal:j.ordinal,width:j.width,
+                  title:row.title,target,box:geometry.box,accessibility,activation})+'\n');
+              }
+            }
+            continue;
+          }
           if (j.fileAction) {
             const {href,name,box}=j.fileAction;
             assert.equal(layout.problems.unnamedLinkCandidates ?? 0,0);

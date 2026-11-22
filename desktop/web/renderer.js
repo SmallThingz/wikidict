@@ -216,9 +216,8 @@ export function spans(values = [], onLink = () => {}, preserve = false, explanat
       const unresolved=node('span');unresolved.setAttribute('role','link');unresolved.setAttribute('aria-disabled','true');unresolved.dataset.actionTarget=span.target;unresolved.append(el);el=unresolved;
     } else if (span.kind === 'link' && (span.target||span.target_fragment) && !span.image?.map) {
       const link = node('a'); link.href = span.target_fragment==null?'#'+encodeURIComponent(span.target):span.target===''?'#'+encodeURIComponent(span.target_fragment):'#'+encodeURIComponent(span.target)+'#'+encodeURIComponent(span.target_fragment);
-      // Older records can encode a thumbnail as a whitespace-only File link.
-      // Keep the authored inline box and action while naming its destination.
-      if (span.target?.startsWith('File:') && !span.image && !span.ruby && !el.textContent.trim() && !span.tooltip?.trim()) {
+      // Some table and thumbnail links contain only a space. Keep its layout and name the action.
+      if (!span.image && !span.ruby && !span.text?.trim() && !span.tooltip?.trim()) {
         link.setAttribute('aria-label', span.explanation?.trim() || (span.target_fragment ? `${span.target}#${span.target_fragment}` : span.target));
       }
       link.addEventListener('click', event => { event.preventDefault(); if(withinSummary)event.stopPropagation(); if(span.target_fragment==null)onLink(span.target);else onLink(span.target,span.target_fragment); }); link.append(el); el = link;
