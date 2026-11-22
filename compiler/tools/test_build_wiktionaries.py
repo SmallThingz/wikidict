@@ -6959,7 +6959,8 @@ class BorrowedStagedInputTests(PreparedToolsFixture):
                     calls.append(argv);raise self.RouteReached()
                 def one_shot(argv,*args,**kwargs):check(tool_arguments(argv))
                 def preparation(*args,**kwargs):check(kwargs['expander_args'])
-                with patch.object(b,'PROJECT',root),patch.object(b,'source_fingerprint',return_value='source'), \
+                with patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b,'PROJECT',root),patch.object(b,'source_fingerprint',return_value='source'), \
                      patch.object(b,'SHARD_PAGES',0 if sharded else 100000), \
                      patch.object(b,'stage_seekable_dump',side_effect=AssertionError('duplicate repack')), \
                      patch.object(b,'timed_run',side_effect=one_shot),patch.object(b,'prepare_blob_tools',side_effect=preparation):
@@ -17262,6 +17263,246 @@ class FittingPreparedFigureVerdictWireTests(unittest.TestCase):
         adapter.assert_not_called()
         self.assertEqual(len(offered), 9)
         self.assertEqual(published, offered)
+
+
+
+
+
+class OriginalArchiveStagedInputTests(PreparedToolsFixture):
+    class RouteReached(RuntimeError):pass
+
+    def fixture(self, root):
+        item,legacy=BorrowedStagedInputTests.fixture(self,root)
+        old=json.loads((legacy/'.complete.json').read_text())
+        selected=root/'archive-input';selected.mkdir()
+        source=root/'original-archives';source.mkdir()
+        oldpart=root/item['wiki']/item['date']/item['name']
+        part=source/item['name'];part.write_bytes(oldpart.read_bytes());oldpart.unlink()
+        directory=root/'blocks.json'
+        block=dict(format='wikidict-bzip2-blocks-v1',xml_bytes=43,
+            parts=[dict(name=item['name'],size=item['size'],sha1=item['sha1'],xml_bytes=43,blocks=[[32,128,43,9]])],
+            zstd_frame_bridge=dict(frames=[[0,43]],dump_bytes=old['dump_size'],dump_sha256=old['dump_sha256'],
+                offset_index_bytes=old['index_size'],offset_index_sha256=old['index_sha256']))
+        directory.write_text(json.dumps(block))
+        marker=dict(version=b.ORIGINAL_BZIP2_INPUT_VERSION,input_sha256=old['input_sha256'],
+            source_pages=old['source_pages'],dump_size=old['dump_size'],dump_sha256=old['dump_sha256'],
+            index_size=old['index_size'],index_sha256=old['index_sha256'],
+            block_directory=dict(path=str(directory),bytes=directory.stat().st_size,sha256=b.sha256_file(directory)),
+            source_directory=str(source))
+        (selected/'.complete.json').write_text(json.dumps(marker))
+        return item,selected,marker,directory,source,part
+
+    def rewrite(self, selected, marker, directory=None, block=None):
+        if block is not None:
+            directory.write_text(json.dumps(block))
+            marker['block_directory']=dict(path=str(directory),bytes=directory.stat().st_size,sha256=b.sha256_file(directory))
+        (selected/'.complete.json').write_text(json.dumps(marker))
+
+    def test_explicit_marker_binds_bridge_and_parts_without_materialization_or_duplicate_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+            with patch.object(b,'digest',side_effect=AssertionError('duplicate physical digest')):
+                with b.borrowed_staged_input([item],selected,root/'new-output') as (borrowed,guard):
+                    self.assertEqual(borrowed,selected);guard()
+                    self.assertEqual(b.selected_staged_dump(borrowed),directory)
+                    record,identities=b.validated_staged_dump([item],borrowed)
+                    self.assertEqual(record,marker)
+                    self.assertTrue({selected,selected/'.complete.json',directory,source,part}<=set(identities))
+            self.assertEqual(list(selected.iterdir()),[selected/'.complete.json'])
+            self.assertTrue(part.exists())
+
+    def test_marker_bridge_manifest_and_unknown_version_refuse_without_fallback(self):
+        for mode in ('fingerprint','count','dump_size','index_sha','block_sha','part_name','part_sha','part_duplicate','unknown','extra'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                block=json.loads(directory.read_text())
+                if mode=='fingerprint':marker['input_sha256']='0'*64
+                if mode=='count':marker['source_pages']=True
+                if mode=='dump_size':marker['dump_size']+=1
+                if mode=='index_sha':marker['index_sha256']='0'*64
+                if mode=='block_sha':marker['block_directory']['sha256']='0'*64
+                if mode=='part_name':block['parts'][0]['name']='../foreign.xml.bz2'
+                if mode=='part_sha':block['parts'][0]['sha1']='0'*40
+                if mode=='part_duplicate':block['parts']*=2
+                if mode=='unknown':marker['version']='wikidict-original-bzip2-input-v99'
+                if mode=='extra':marker['unchecked_override']=True
+                self.rewrite(selected,marker,directory,block if mode.startswith('part_') else None)
+                with patch.object(b,'cached_shard_dump',side_effect=AssertionError('fallback restage')):
+                    with self.assertRaises((ValueError,OSError)):
+                        with b.borrowed_staged_input([item],selected,root/'out'):self.fail('bad archive accepted')
+
+    def test_aliases_and_external_owned_output_overlap_are_rejected(self):
+        for mode in ('source_alias','block_alias','part_alias','source_cache','block_output','marker_cache'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                output=root/'out';options={}
+                if mode=='source_alias':
+                    alias=root/'alias';alias.symlink_to(source,target_is_directory=True);marker['source_directory']=str(alias)
+                if mode=='block_alias':
+                    alias=root/'alias';alias.symlink_to(directory);marker['block_directory']['path']=str(alias)
+                if mode=='part_alias':
+                    target=root/'part';part.rename(target);part.symlink_to(target)
+                if mode=='source_cache':options['extraction_cache_root']=source/'cache'
+                if mode=='block_output':
+                    target=output/item['wiki']/(item['date']+'.building')/'blocks.json';target.parent.mkdir(parents=True)
+                    directory.rename(target);marker['block_directory']['path']=str(target)
+                if mode=='marker_cache':options['raw_shard_root']=selected
+                self.rewrite(selected,marker)
+                with self.assertRaises((ValueError,OSError)):
+                    with b.borrowed_staged_input([item],selected,output,**options):self.fail('unsafe path accepted')
+
+    def test_live_identity_checks_cover_parts_directory_marker_and_block_on_failure(self):
+        for which in ('part','source','marker','block'):
+            with self.subTest(which=which),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                with self.assertRaisesRegex(ValueError,'changed during build') as error:
+                    with b.borrowed_staged_input([item],selected,root/'out'):
+                        if which=='source':(source/'unexpected').write_bytes(b'change membership')
+                        else:
+                            path={'part':part,'marker':selected/'.complete.json','block':directory}[which]
+                            replacement=root/'replacement';replacement.write_bytes(path.read_bytes());os.replace(replacement,path)
+                        raise self.RouteReached('preserve original failure')
+                self.assertIsInstance(error.exception.__context__,self.RouteReached)
+
+    def test_both_preparation_routes_use_physical_directory_and_hash_parts_once(self):
+        for sharded in (False,True):
+            with self.subTest(sharded=sharded),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                tool=root/'zig';tool.write_bytes(b'fixture compiler identity');tool.chmod(0o700)
+                calls=[]
+                def check(argv):
+                    self.assertEqual(argv[0],str(directory))
+                    self.assertEqual(argv[argv.index('--bzip2-source-directory')+1],str(source))
+                    self.assertEqual(argv[argv.index('--verified-dump-sha256')+1],marker['dump_sha256'])
+                    self.assertEqual(argv[argv.index('--verified-index-sha256')+1],marker['index_sha256'])
+                    calls.append(argv);raise self.RouteReached()
+                def direct(argv,*args,**kw):check(tool_arguments(argv))
+                def prepared(*args,**kw):check(kw['expander_args'])
+                with patch.object(b.shutil,'which',return_value=str(tool)), \
+                     patch.object(b,'PROJECT',root),patch.object(b,'source_fingerprint',return_value='source'), \
+                     patch.object(b,'SHARD_PAGES',0 if sharded else 100000), \
+                     patch.object(b,'cached_shard_dump',side_effect=AssertionError('archive must not restage')), \
+                     patch.object(b,'timed_run',side_effect=direct),patch.object(b,'prepare_blob_tools',side_effect=prepared), \
+                     patch.object(b,'digest',wraps=b.digest) as hashes:
+                    with self.assertRaises(self.RouteReached):
+                        b.build([item],root,root/'out',str(tool),1,staged_input_root=selected)
+                self.assertEqual(len(calls),1)
+                self.assertEqual([c.args[0] for c in hashes.call_args_list],[part])
+                state=b.read_build_envelope(root/'out'/item['wiki']/(item['date']+'.shards')/'state.json')
+                self.assertEqual(state['original_archive_input']['selection'],marker)
+                self.assertEqual(state['original_archive_input']['marker']['sha256'],b.sha256_file(selected/'.complete.json'))
+                self.assertFalse((selected/'pages.xml.zst').exists())
+
+    def test_wrong_original_part_bytes_refuse_before_any_native_preparation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+            raw=bytearray(part.read_bytes());raw[-1]^=1;part.write_bytes(raw)
+            with patch.object(b,'PROJECT',root),patch.object(b,'prepare_blob_tools',side_effect=AssertionError('unverified source reached native')):
+                with self.assertRaisesRegex(ValueError,'Missing or unverified download'):
+                    b.build([item],root,root/'out','not-invoked',1,staged_input_root=selected)
+
+    def test_writer_retry_acknowledged_and_audit_receive_same_explicit_archive(self):
+        for mode in ('continuous','retry','acknowledged','audit'):
+            with self.subTest(mode=mode),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+                marker['source_pages']=2;self.rewrite(selected,marker)
+                workspace=root/'workspace';expander=workspace/'expander/.bundle-expander';expander.mkdir(parents=True)
+                (expander/'page-index.tsv').write_text('0\n1\n')
+                shard=root/'shards';tool=fixture_blob_tool(workspace);tools={n:tool for n in b.BLOB_TOOL_NAMES}
+                def check(argv):
+                    self.assertEqual(argv[0],str(directory))
+                    self.assertEqual(argv[argv.index('--bzip2-source-directory')+1],str(source))
+                def direct(argv,*args,**kwargs):check(argv);raise self.RouteReached()
+                def retry(tool,argv,*args,**kwargs):
+                    check(argv)
+                    if mode=='audit':
+                        failure=b.DeterministicPresentationFailure(subprocess.CalledProcessError(1,argv),root/'failure.json')
+                        failure.presentation_continuation_safe=True;failure.error_name='UncompiledPresentation';raise failure
+                    raise self.RouteReached()
+                @contextlib.contextmanager
+                def acknowledged(tool,argv):check(argv);raise self.RouteReached();yield
+                with patch.object(b,'expander_ready',return_value=True),patch.object(b,'prepare_blob_tools',return_value=tools), \
+                     patch.object(b.PreparedBlobTool,'run',side_effect=direct), \
+                     patch.object(b,'build_shard_with_retries',side_effect=retry), \
+                     patch.object(b,'supports_acknowledged_shards',return_value=mode=='acknowledged'), \
+                     patch.object(b,'acknowledged_shards',side_effect=acknowledged):
+                    def run():
+                        b.build_sharded(directory,root/'staging',workspace,root/'registry','never',1,[item],123,
+                            staged_input_root=selected,raw_shards_path=None,compress_shards=mode!='continuous',
+                            presentation_audit_pages=1 if mode=='audit' else None,shard_pages=1)
+                    if mode=='audit':
+                        with self.assertRaises(b.DeterministicPresentationFailure) as failure:run()
+                        with self.assertRaises(self.RouteReached):failure.exception.presentation_audit()
+                    else:
+                        with self.assertRaises(self.RouteReached):run()
+
+class OriginalArchiveSelectionTests(PreparedToolsFixture):
+    fixture=OriginalArchiveStagedInputTests.fixture
+    RouteReached=OriginalArchiveStagedInputTests.RouteReached
+    def test_nonselected_xml_named_artifact_uses_its_own_downloaded_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);item,selected,marker,directory,source,part=self.fixture(root)
+            name='testwiktionary-20260901-extra.xml.sql.gz';data=b'own downloaded SQL bytes'
+            extra=dict(item,name=name,url=item['url'].rsplit('/',1)[0]+'/'+name,
+                       size=len(data),sha1=hashlib.sha1(data).hexdigest())
+            download=root/item['wiki']/item['date']/name;download.write_bytes(data)
+            shadow=source/name;shadow.write_bytes(b'x'*len(data))
+            with patch.object(b,'PROJECT',root),patch.object(b,'build_input_identity',side_effect=self.RouteReached), \
+                 patch.object(b,'digest',wraps=b.digest) as hashes:
+                with self.assertRaises(self.RouteReached):
+                    b.build([item,extra],root,root/'out','never',1,staged_input_root=selected)
+            self.assertEqual([c.args[0] for c in hashes.call_args_list],[part,download])
+            download.write_bytes(b'x'*len(data));shadow.write_bytes(data)
+            with patch.object(b,'PROJECT',root),patch.object(b,'build_input_identity') as identity:
+                with self.assertRaisesRegex(ValueError,'Missing or unverified download'):
+                    b.build([item,extra],root,root/'out','never',1,staged_input_root=selected)
+                identity.assert_not_called()
+
+
+class OriginalArchivePublicationTests(PublicationCompilerFixture):
+    prepare=PublicationResumeTests.prepare
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # This metadata fixture is never executed; allow noexec scratch roots.
+        compiler=Path(os.environ['PATH'].split(os.pathsep,1)[0])/'zig'
+        original=b.shutil.which
+        cls.enterClassContext(patch.object(b.shutil,'which',side_effect=lambda command,*args,**kwargs:
+            str(compiler) if command=='zig' else original(command,*args,**kwargs)))
+
+    def test_published_transport_and_coordinate_version_are_consistent_on_resume(self):
+        for archive in (False,True):
+            with self.subTest(archive=archive),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);original=b.build_input_identity
+                def identity(*args,**kwargs):
+                    value=original(*args,**kwargs)
+                    if archive:
+                        value['original_archive_input']={'selection':{'version':b.ORIGINAL_BZIP2_INPUT_VERSION}}
+                    return value
+                with patch.object(b,'PROJECT',root),patch.object(b,'build_input_identity',side_effect=identity), \
+                     patch.object(b,'compress_many',side_effect=PublicationResumeTests.compress_reason_count_fixture):
+                    item,target,workspace=self.prepare(root)
+                    path=target/'complete.json';raw=path.read_bytes();metadata=json.loads(raw)
+                    self.assertEqual(metadata['dump_staging_version'],b.DUMP_STAGING_VERSION)
+                    self.assertEqual((metadata['dump_codec'],metadata['dump_stream_kind']),
+                                     ('bzip2','original-bzip2-blocks') if archive else ('zstd','multistream-zstd'))
+                    with patch.object(b,'run_checked') as native:
+                        self.assertEqual(b.build([item],root,root/'output','zig',1),'existing_output')
+                        native.assert_not_called()
+                    for codec,stream in [('unknown','unknown'),('zstd','original-bzip2-blocks'),
+                                         ('bzip2','multistream-zstd'),
+                                         ('zstd','multistream-zstd') if archive else ('bzip2','original-bzip2-blocks')]:
+                        wrong=dict(metadata,dump_codec=codec,dump_stream_kind=stream)
+                        path.write_text(json.dumps(wrong));before=path.read_bytes()
+                        with self.assertRaisesRegex(ValueError,'Inconsistent publication dump transport'):
+                            b.build([item],root,root/'output','zig',1)
+                        self.assertEqual(path.read_bytes(),before)
+                    wrong=dict(metadata,dump_staging_version='guessed-coordinate-version')
+                    path.write_text(json.dumps(wrong))
+                    with self.assertRaisesRegex(ValueError,'Outdated dump staging'):
+                        b.build([item],root,root/'output','zig',1)
+                    path.write_bytes(raw)
 
 
 if __name__=='__main__':unittest.main()

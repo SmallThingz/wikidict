@@ -4062,7 +4062,7 @@ def writer_figure_binding(workspace, expected, build_identity, dump, reference, 
         prepared_metadata(staged['completion'])
     else:
         raise ValueError('Writer Figure failed configuration has invalid staged input custody')
-    if staged_path / 'pages.xml.zst' != Path(dump):
+    if selected_staged_dump(staged_path) != Path(dump):
         raise ValueError('Writer Figure failed configuration selects another dump')
     if {name: row.get('sha256') for name, row in selected.get('auxiliary_snapshots', {}).items()} != original.get('auxiliary_snapshot_sha256'):
         raise ValueError('Writer Figure failed configuration selects another input tuple')
@@ -6103,9 +6103,97 @@ def prepare_shard_workspace(workspace, expected, now_unix=None, raw_shards_path=
     return now_unix
 
 
+ORIGINAL_BZIP2_INPUT_VERSION = 'wikidict-original-bzip2-input-v1'
+
+
+def _staged_path_stamp(path, *, directory=False):
+    info=path.lstat()
+    if (path.resolve(strict=True)!=path or any(p.is_symlink() for p in (path,*path.parents))
+            or not (stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode))):
+        raise ValueError('Unsafe original archive input path')
+    return (info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
+
+
+def original_archive_record(root):
+    if root is None:return None
+    record=read_small_json(Path(root)/'.complete.json')
+    return record if isinstance(record,dict) and record.get('version')==ORIGINAL_BZIP2_INPUT_VERSION else None
+
+
+def original_archive_paths(record):
+    ref=record.get('block_directory')
+    if (not isinstance(ref,dict) or set(ref)!={'path','bytes','sha256'}
+            or type(ref['bytes']) is not int or not 0<ref['bytes']<=64*1024*1024
+            or not isinstance(ref['sha256'],str) or re.fullmatch('[0-9a-f]{64}',ref['sha256']) is None):
+        raise ValueError('Invalid original block directory reference')
+    paths=[]
+    for text in (ref['path'],record.get('source_directory')):
+        if not isinstance(text,str) or not Path(text).is_absolute() or str(Path(text))!=text:
+            raise ValueError('Original archive paths must be direct absolute paths')
+        paths.append(Path(text))
+    return paths
+
+
+def validated_original_archive(items,root,record):
+    fields={'version','input_sha256','source_pages','dump_size','dump_sha256','index_size','index_sha256',
+            'block_directory','source_directory'}
+    if (set(record)!=fields or record['input_sha256']!=dump_input_fingerprint(items)
+            or type(record['source_pages']) is not int or record['source_pages']<0):
+        raise ValueError('Original archive marker differs from selected inputs')
+    for label in ('dump','index'):
+        if (type(record[label+'_size']) is not int or record[label+'_size']<=0
+                or not isinstance(record[label+'_sha256'],str)
+                or re.fullmatch('[0-9a-f]{64}',record[label+'_sha256']) is None):
+            raise ValueError('Invalid original archive logical identity')
+    block,source=original_archive_paths(record)
+    marker=root/'.complete.json'
+    before={root:_staged_path_stamp(root,directory=True),marker:_staged_path_stamp(marker),
+            block:_staged_path_stamp(block),source:_staged_path_stamp(source,directory=True)}
+    ref=record['block_directory']
+    if before[block][3]!=ref['bytes'] or sha256_file(block)!=ref['sha256']:
+        raise ValueError('Original block directory bytes differ')
+    directory=read_small_json(block,64*1024*1024)
+    if not isinstance(directory,dict) or directory.get('format')!='wikidict-bzip2-blocks-v1':
+        raise ValueError('Invalid original block directory format')
+    bridge=directory.get('zstd_frame_bridge')
+    if (not isinstance(bridge,dict) or any(bridge.get(key)!=record[field] for key,field in (
+            ('dump_bytes','dump_size'),('dump_sha256','dump_sha256'),
+            ('offset_index_bytes','index_size'),('offset_index_sha256','index_sha256')))):
+        raise ValueError('Original block directory logical bridge differs')
+    parts=directory.get('parts')
+    expected=[(item['name'],item['size'],item['sha1']) for item in sorted(items,key=lambda x:x['name'])]
+    if (not isinstance(parts,list) or any(not isinstance(p,dict) for p in parts)
+            or [(p.get('name'),p.get('size'),p.get('sha1')) for p in parts]!=expected):
+        raise ValueError('Original block directory parts differ from manifest')
+    for name,size,_ in expected:
+        if not isinstance(name,str) or Path(name).name!=name or name in ('.','..'):
+            raise ValueError('Invalid original archive part name')
+        path=source/name
+        before[path]=_staged_path_stamp(path)
+        if before[path][3]!=size:raise ValueError('Original archive part size differs')
+    if read_small_json(marker)!=record:
+        raise ValueError('Original archive marker changed')
+    for path,identity in before.items():
+        if _staged_path_stamp(path,directory=path in (root,source))!=identity:
+            raise ValueError('Original archive input changed during validation')
+    # Physical SHA1 verification remains in the ordinary verify_downloads phase.
+    return record,before
+
+
+def selected_staged_dump(root):
+    record=original_archive_record(root)
+    return original_archive_paths(record)[0] if record is not None else Path(root)/'pages.xml.zst'
+
+
+def original_archive_args(record):
+    return ['--bzip2-source-directory',record['source_directory']] if record is not None else []
+
+
 def validated_staged_dump(items, cache):
     """Authenticate an existing repack; never create, repair or retire it."""
     cache=Path(cache)
+    archive=original_archive_record(cache)
+    if archive is not None:return validated_original_archive(items,cache,archive)
     paths=[cache/name for name in ('pages.xml.zst','pages-index.txt.bz2','.complete.json')]
     if cache.is_symlink() or not cache.is_dir() or any(p.is_symlink() for p in paths):
         raise ValueError('Unsafe staged input root')
@@ -6148,9 +6236,20 @@ def selected_staged_input_root(items, root, output, raw_shard_root=None, extract
     if raw_shard_root is not None:protected.append(Path(raw_shard_root).absolute())
     if extraction_cache_root is not None:protected.append(Path(extraction_cache_root).absolute())
     protected=[variant for path in protected for variant in (path,path.resolve())]
-    if any(root.is_relative_to(p) or p.is_relative_to(root) for p in protected):
+    borrowed=[root,root/'.complete.json']
+    archive=original_archive_record(root)
+    if archive is not None:
+        block,source=original_archive_paths(archive)
+        _staged_path_stamp(block);_staged_path_stamp(source,directory=True)
+        borrowed.extend((block,source))
+    if any(path.is_relative_to(p) or p.is_relative_to(path) for path in borrowed for p in protected):
         raise ValueError('Borrowed staged input overlaps owned build paths')
     return root
+
+
+def current_xml_inputs(items):
+    return [item for item in items if '-pages-meta-current' in item['name']
+            and re.search(r'\.xml(?:-p[0-9]+p[0-9]+)?\.bz2$', item['name'])]
 
 
 @contextmanager
@@ -6160,12 +6259,13 @@ def borrowed_staged_input(items, root, output, raw_shard_root=None, extraction_c
     if root is None:
         yield None,None
         return
-    _,before=validated_staged_dump([item for item in items if '.xml' in item['name']],root)
+    _,before=validated_staged_dump(current_xml_inputs(items),root)
     def check():
         for path,expected in before.items():
             info=path.lstat()
             actual=(info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns)
-            if path.is_symlink() or actual!=expected or root.resolve(strict=True)!=root:
+            if (any(p.is_symlink() for p in (path,*path.parents)) or actual!=expected
+                    or path.resolve(strict=True)!=path or root.resolve(strict=True)!=root):
                 raise ValueError('Borrowed staged input changed during build')
     try:
         yield root,check
@@ -8312,6 +8412,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
     validate_presentation_audit_pages(presentation_audit_pages, continue_failed_shards)
     validate_llvm_workers(llvm_workers)
     if type(compress_shards) is not bool: raise ValueError('Invalid compressed shard mode')
+    archive_args=original_archive_args(original_archive_record(staged_input_root))
     timeout_args=expansion_deadline_args(expansion_timeout_ms)
     if raw_shards_path is not None:
         raw_shards_path=external_raw_shards(workspace,raw_shards_path,create=True)
@@ -8393,7 +8494,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         staged=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
         extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
         tools=prepare_blob_tools(workspace,zig,edition,date,build_identity,
-                  expander_args=[str(dump),str(expander_build),
+                  expander_args=[str(dump),str(expander_build),*archive_args,
                      *(['--expander-only'] if retained_roles is not None else []),
                      *(['--interwiki-map-snapshot',str(interwiki_snapshot)] if interwiki_snapshot else []),
                      *pipeline_snapshot_args(registry,native_snapshots,page_links_snapshot,page_redirects_snapshot),
@@ -8424,7 +8525,7 @@ def build_sharded(dump, staging, workspace, registry, zig, workers, items, now_u
         reviewed_path = nonlexical.materialize(reviewed_nonlexical,dump,index_path,workspace/nonlexical.NAME)
         nonlexical.bind_identity(workspace,build_identity,reviewed_nonlexical)
     reviewed_args = ['--reviewed-nonlexical',str(reviewed_path)] if reviewed_path is not None else []
-    writer_input_args = []
+    writer_input_args = list(archive_args)
     if writer_transition is not None or closed_whole is not None:
         roots={Path(auxiliary_snapshots[name]).parent for name in WRITER_FIGURE_ROLES}
         if len(roots)!=1:raise ValueError('Writer Figure observations require one complete pinned root')
@@ -8849,9 +8950,23 @@ NOW_UNIX_NAME = '.build-now-unix.json'
 DUMP_STAGING_VERSION = 'page-aligned-zstd-parallel-v2'
 VERIFIED_CONTENT = f'dump-staging-version={DUMP_STAGING_VERSION}\n'
 
-def require_current_staging_version(path, version):
+def publication_dump_transport(identity):
+    archive=identity.get('original_archive_input') if isinstance(identity,dict) else None
+    if archive is None:
+        return {'dump_codec':'zstd','dump_stream_kind':'multistream-zstd'}
+    if (not isinstance(archive,dict) or not isinstance(archive.get('selection'),dict)
+            or archive['selection'].get('version')!=ORIGINAL_BZIP2_INPUT_VERSION):
+        raise ValueError('Invalid publication archive transport selection')
+    return {'dump_codec':'bzip2','dump_stream_kind':'original-bzip2-blocks'}
+
+
+def require_current_staging_version(path, version, metadata=None):
     if version != DUMP_STAGING_VERSION:
         raise ValueError(f'Outdated dump staging at {path}; rebuild in a new output directory (existing output preserved)')
+    if metadata is not None:
+        expected=publication_dump_transport(metadata.get('build_inputs'))
+        if any(metadata.get(key)!=value for key,value in expected.items()):
+            raise ValueError(f'Inconsistent publication dump transport at {path}')
 
 def publication_inventory(root, *, allow_raw=False, allow_fallback_pair=False):
     """Pin verified data bytes so resume cannot bless missing or changed output."""
@@ -9231,7 +9346,7 @@ def _publish_verified_staging(staging, target, edition, date, compression_worker
             sync_shard_directory(staging)
             del inventory[FALLBACK_REPORT_NAME]
     metadata = {'edition':edition,'date':date,'dump_staging_version':DUMP_STAGING_VERSION,
-        'dump_codec':'zstd','dump_stream_kind':'multistream-zstd',
+        **publication_dump_transport(build_identity),
         'status':'built' if compressed else 'empty', 'fallback_pages':fallback_pages,
         'fallback_reason_counts':fallback_reasons,
         'fallback_report':fallback_name, 'compression':'xz -0; 1 MiB blocks','blobs':len(compressed),
@@ -9308,16 +9423,21 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         # Fail early for missing inputs. build_input_identity validates their
         # contents together after download and compiler verification.
         preflight_selected_auxiliary_inputs(auxiliary_snapshots)
+    xml=current_xml_inputs(items)
+    archive_names={item['name'] for item in xml}
+    archive=original_archive_record(staged_input_root)
+    archive_source=Path(archive['source_directory']) if archive is not None else None
     with build_phase(phase_edition,phase_date,'verify_downloads',files=len(items)) as result:
         verified_bytes=0
         for item in items:
             validate_item(item)
-            source = downloads / item['wiki'] / item['date'] / item['name']
+            source = (archive_source/item['name'] if archive_source is not None and item['name'] in archive_names
+                      else downloads / item['wiki'] / item['date'] / item['name'])
             if not source.is_file() or source.stat().st_size != item['size'] or digest(source) != item['sha1']:
                 raise ValueError(f'Missing or unverified download: {source}')
             verified_bytes+=item['size']
         result['verified_bytes']=verified_bytes
-    xml = [x for x in items if '-pages-meta-current' in x['name'] and re.search(r'\.xml(?:-p[0-9]+p[0-9]+)?\.bz2$', x['name'])]
+        if _staged_input_guard is not None:_staged_input_guard()
     if not xml:
         raise ValueError('No full-namespace current XML in snapshot')
     edition,date=items[0]['wiki'],items[0]['date']
@@ -9331,6 +9451,8 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             interwiki_sha=None
         reviewed = nonlexical.load_review(reviewed_nonlexical_review,items,namespace)
         build_identity=build_input_identity(items,zig,None,interwiki_sha,expansion_timeout_ms,auxiliary_snapshots,downloads,reviewed,validate_auxiliary=True, **({'native_roles':retained_roles} if retained_roles is not None else {}), **shard_page_options(shard_pages))
+        if archive is not None:
+            build_identity['original_archive_input']=dict(marker=prepared_metadata_ref(staged_input_root/'.complete.json'),selection=archive)
         generation=getattr(_PREPARED_SOURCE,'value',None)
         if generation is not None:generation.require_identity(build_identity)
         auxiliary_hashes=build_identity['auxiliary_snapshot_sha256']
@@ -9362,7 +9484,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
             metadata={}
         if not isinstance(metadata,dict): metadata={}
         metadata=restore_publication_metadata(target,metadata)
-        require_current_staging_version(target,metadata.get('dump_staging_version'))
+        require_current_staging_version(target,metadata.get('dump_staging_version'),metadata)
         if metadata.get('edition')!=edition or metadata.get('date')!=date:
             raise ValueError('Existing output identifies a different edition or date')
         if now_unix is not None and metadata.get('now_unix')!=now_unix:
@@ -9436,25 +9558,26 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
     with build_phase(phase_edition,phase_date,'workspace_setup'):
         workspace=target.with_name(date+'.shards')
         expected=shard_state(items,registry,interwiki_snapshot=interwiki_snapshot,auxiliary_snapshots=auxiliary_snapshots,reviewed_nonlexical=reviewed,**({'build_identity':build_identity} if 'retained_runtime_source' in build_identity else {}), **shard_page_options(shard_pages))
+        if archive is not None:expected['original_archive_input']=build_identity['original_archive_input']
         raw_shards_path=(Path(raw_shard_root).absolute()/edition/(date+'.raw-shards')) if raw_shard_root is not None else None
         update_args={}
         if (getattr(_PREPARED_SOURCE,'value',None) is None and getattr(_PREPARED_SOURCE,'request',None) is None
                 and WIKIBASE_PROVIDER_ROLES <= set(auxiliary_hashes)):
-            update_dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst'
+            update_dump=(selected_staged_dump(staged_input_root) if staged_input_root is not None else workspace/'input/pages.xml.zst')
             update_args=dict(provider_update=provider_update,build_identity=build_identity,dump=update_dump)
         if retained_roles is not None and retained_roles.sealed_expander_recovery is not None:
             update_args.update(sealed_recovery=retained_roles.sealed_expander_recovery, native_roles=retained_roles,
-                               build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+                               build_identity=build_identity, dump=(selected_staged_dump(staged_input_root) if staged_input_root is not None else workspace/'input/pages.xml.zst'))
         if writer_transition is not None:
             update_args=dict(writer_figure_transition=writer_transition, native_roles=retained_roles,
-                             build_identity=build_identity, dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+                             build_identity=build_identity, dump=(selected_staged_dump(staged_input_root) if staged_input_root is not None else workspace/'input/pages.xml.zst'))
         if initial_generation is not None or closed_whole is not None:
             update_args=dict(native_roles=retained_roles,auxiliary_snapshots=auxiliary_snapshots,
-                             build_identity=build_identity,dump=(staged_input_root if staged_input_root is not None else workspace/'input')/'pages.xml.zst')
+                             build_identity=build_identity,dump=(selected_staged_dump(staged_input_root) if staged_input_root is not None else workspace/'input/pages.xml.zst'))
             update_args['closed_whole_execution' if closed_whole is not None else 'initial_generation']=closed_whole if closed_whole is not None else initial_generation
         now_unix=prepare_shard_workspace(workspace,expected,now_unix,**({'raw_shards_path':raw_shards_path} if raw_shards_path is not None else {}),**update_args)
         if reviewed is not None:nonlexical.pin_review(reviewed,workspace/'reviewed-nonlexical-source.json')
-    dump=(staged_input_root/'pages.xml.zst') if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace,workers)
+    dump=selected_staged_dump(staged_input_root) if staged_input_root is not None else cached_shard_dump(xml,downloads,workspace,workers)
     source_metadata=read_small_json((staged_input_root if staged_input_root is not None else workspace/'input')/'.complete.json')
     if not isinstance(source_metadata,dict) or type(source_metadata.get('source_pages')) is not int or source_metadata['source_pages']<0:
         raise ValueError('Staged dump lacks a verified source page count')
@@ -9502,7 +9625,7 @@ def _build_locked(items, downloads, output, zig, compression_workers=None, expan
         if getattr(_PREPARED_SOURCE,'value',None) is not None:
             raise ValueError('Nonsharded builds cannot consume a released native source lease')
         extraction_cache=edition_extraction_cache(workspace, extraction_cache_root)
-        timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),
+        timed_run([zig,'build','-j1','-Doptimize=fast','--summary','all','build-dictionary','--',str(dump),str(staging),*original_archive_args(archive),
                      *(['--interwiki-map-snapshot',str(pinned)] if pinned else []),
                      *pipeline_snapshot_args(registry,aux_pinned,page_links_snapshot,page_redirects_snapshot),
                      '--llvm-workers',str(llvm_workers),'--parse-workers',str(min(workers,64)),
@@ -9731,7 +9854,7 @@ def main():
     p.add_argument('--presentation-audit-pages',type=int,metavar='N',help='After a bound presentation failure, audit at most N rows from the failed shard start using the same worker; edition remains failed and unpublished, original deadline applies')
     p.add_argument('--shard-pages',type=int,metavar='N',help='Positive verified shard checkpoint interval; default 100000 pages. Smaller shards increase verification/compression/merge overhead.')
     p.add_argument('--compress-shards',action='store_true',help='Verify and compress each temporary shard, then merge directly to compressed output')
-    p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack input directory for exactly one edition; validates existing marker and bytes, never copies or retires it')
+    p.add_argument('--staged-input-root',type=Path,metavar='DIR',help='Read-only completed repack or explicit original-bzip2 input marker for one edition; validates declared inputs, never copies or retires them')
     p.add_argument('--extraction-cache-root',type=Path,metavar='DIR',help='Existing verified native extraction/object cache for one edition; cache identities are checked against fresh build inputs')
     p.add_argument('--raw-shard-root',type=Path,metavar='DIR',help='Optional raw shard volume; input/native caches and merged publication remain under --output')
     p.add_argument('--zig',default=shutil.which('zig') or 'zig')
