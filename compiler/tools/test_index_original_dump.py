@@ -90,6 +90,57 @@ class OriginalXmlParts(unittest.TestCase):
         self.assertEqual([p['name'] for p in seq['parts']],['a.bz2','z.bz2'])
         with self.assertRaises(ValueError): index_parts(items+items,self.base,1)
 
+    def test_fresh_build_from_split_originals_has_only_current_source_coordinates(self):
+        import json
+        from index_original_dump import prepare_build_input, write_directory
+
+        source = self.base / 'srwiktionary' / '20261001'
+        source.mkdir(parents=True)
+        items = []
+        for index, raw in enumerate([b'<mediawiki><page>a</page><pa', b'ge>b</page></mediawiki>']):
+            name = f'part{index}.xml.bz2'
+            packed = bz2.compress(raw)
+            (source / name).write_bytes(packed)
+            items.append(dict(wiki=source.parent.name, date=source.name, name=name, size=len(packed),
+                              sha1=hashlib.sha1(packed).hexdigest()))
+        out = self.base / 'blocks.json'
+        blocks = write_directory(items[::-1], self.base, out, workers=2, count_pages=True)
+        self.assertEqual(blocks['source_pages'], 2)
+        self.assertNotIn('zstd_frame_bridge', blocks)
+        root = self.base / 'selected'
+        digest = hashlib.sha256(out.read_bytes()).hexdigest()
+        marker = prepare_build_input(root, out, digest, items, self.base)
+        self.assertEqual(json.loads((root / '.complete.json').read_bytes()), marker)
+        self.assertEqual(set(marker), {'version', 'source_pages', 'input_sha256', 'source_directory', 'block_directory'})
+        self.assertEqual(marker['version'], 'wikidict-original-bzip2-fresh-input-v1')
+        self.assertEqual(marker['source_pages'], 2)
+        self.assertEqual(marker['block_directory']['sha256'], digest)
+        self.assertEqual(sorted(p.name for p in self.base.iterdir()), ['blocks.json', 'selected', 'srwiktionary'])
+        for changes in [{'source_pages': None}, {'source_pages': False}, {'source_pages': -1}, {'zstd_frame_bridge': {}}]:
+            with self.subTest(changes=changes):
+                out.write_text(json.dumps(blocks | changes))
+                with self.assertRaisesRegex(ValueError, 'counted original XML'):
+                    prepare_build_input(self.base / 'wrong', out, hashlib.sha256(out.read_bytes()).hexdigest(), items, self.base)
+                self.assertFalse((self.base / 'wrong').exists())
+
+    def test_fresh_count_validates_unfinished_xml_and_accepts_empty_source(self):
+        from index_original_dump import write_directory
+
+        source = self.base / 'aawiktionary' / '20261001'
+        source.mkdir(parents=True)
+        name = 'empty.xml.bz2'
+        out = self.base / 'blocks.json'
+        for raw, expected in [(b'<mediawiki><page>unfinished', None), (b'<mediawiki/>', 0)]:
+            packed = bz2.compress(raw)
+            (source / name).write_bytes(packed)
+            items = [dict(wiki=source.parent.name, date=source.name, name=name, size=len(packed), sha1=hashlib.sha1(packed).hexdigest())]
+            if expected is None:
+                with self.assertRaisesRegex(ValueError, 'Truncated XML'):
+                    write_directory(items, self.base, out, count_pages=True)
+                self.assertFalse(out.exists())
+            else:
+                self.assertEqual(write_directory(items, self.base, out, count_pages=True)['source_pages'], expected)
+
     def test_select_existing_blocks_without_repacking_or_replacing_a_stage(self):
         import json
         from build_wiktionaries import DUMP_STAGING_VERSION, _stage_seekable_dump, dump_input_fingerprint

@@ -190,27 +190,32 @@ in a JSON file. A fresh index can process up to four archive parts in parallel.
 For a single-part download it inflates up to four blocks concurrently and
 feeds verified XML to the framer in source order. `--workers 1` uses the serial
 reader. Both paths check the same SHA-1, block CRCs and stream CRCs.
-The ordinary corpus build above still uses the Zstandard staging path.
+The ordinary corpus build above defaults to Zstandard staging. To prepare an
+original-archive input for the native builder, give the indexer a new output
+file and a new build-input directory. It counts pages while it verifies the
+original archives. This requires only the downloaded dump and its manifest.
 
 ```sh
 python3.14 compiler/tools/index_original_dump.py --downloads data/dumps \
   --manifest data/dumps/manifest.json --manifest-sha256 "$manifest_sha256" \
-  --edition enwiktionary --output en-blocks.json
+  --edition enwiktionary --output en-blocks.json --build-input-root en-original-input
 ```
 
-Use the digest of the selected download manifest for `manifest_sha256`. To
+Use the digest of the selected download manifest for `manifest_sha256`. Keep the
+archives, the block directory and the input marker together for the build. The
+native builder selects that input with `--staged-input-root en-original-input`.
+An index-only invocation can omit `--build-input-root`. To
 read an existing page index in its original coordinates, also supply the
 historical `--stage-receipt` and the authenticated `--page-index-sha256` and
 `--page-index-size`. This mode rebuilds the original frame stream and its
 offset index in memory, verifies both digests and the source page count, and
 adds the logical frame ranges to the same JSON output.
 
-To select an already verified index for a build, pass `--build-input-root` with
-a new directory name, `--existing-blocks-sha256` for the JSON file at `--output`,
-and `--stage-receipt-sha256` for the retained stage receipt. Keep the same
-manifest, edition and page-index arguments. This writes a small `.complete.json`
-pointing to the original archives and their block directory. It does not repeat
-decompression or create a staged XML file.
+To reuse an already verified, page-counted index, pass `--build-input-root` with
+a new directory name and `--existing-blocks-sha256` for the JSON at `--output`.
+For a historical frame index also pass `--stage-receipt-sha256` and the original
+stage and page-index arguments. Both modes write a `.complete.json` pointing to
+the original archives and block directory. Reselection takes no decompression.
 
 The build pipeline:
 

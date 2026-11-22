@@ -198,28 +198,59 @@ def ordered_parts(items):
     return items
 
 
-def index_parts(items, downloads, workers=1):
+def index_parts(items, downloads, workers=1, *, count_pages=False):
     """Return a sidecar only after every selected compressed input authenticates."""
+    from build_wiktionaries import SplitXmlPage, STAGE_MAX_MEMBER_BYTES, STAGE_TARGET_BYTES, XmlFrames
+
     if type(workers) is not int or workers < 1:
         raise ValueError('Expected a positive worker count')
     items = ordered_parts(items)
-
-    def index(item):
-        return index_part(downloads / item['wiki'] / item['date'] / item['name'], item['size'], item['sha1'])
-
     slots = min(workers, len(os.sched_getaffinity(0)), 4)
-    if len(items) == 1 and slots > 1:
-        item = items[0]
+
+    def scan(item, block_workers, framer):
+        def observe(raw):
+            # Count with the same XML boundaries as ordinary staging, discarding each batch.
+            for _ in framer.feed(raw):
+                pass
+        path = downloads / item['wiki'] / item['date'] / item['name']
+        return _index_part(path, item['size'], item['sha1'], observe if framer is not None else None, block_workers)
+
+    def independent(item, block_workers=None):
+        if block_workers is None:
+            block_workers = slots if len(items) == 1 else 1
+        framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, item['name'],
+                           part_boundary=len(items) > 1) if count_pages else None
         try:
-            parts = [_index_part(downloads / item['wiki'] / item['date'] / item['name'], item['size'], item['sha1'], None, slots)]
+            part = scan(item, block_workers, framer)
         except AmbiguousBlockBoundary:
-            parts = [index(item)]
-    elif slots == 1:
-        parts = list(map(index, items))
-    else:
-        with ThreadPoolExecutor(max_workers=min(slots, len(items))) as pool:
-            parts = list(pool.map(index, items))
-    return dict(format='wikidict-bzip2-blocks-v1', xml_bytes=sum(part['xml_bytes'] for part in parts), parts=parts)
+            return independent(item, 1)  # Discard any XML counted before the false boundary.
+        if framer is not None:
+            for _ in framer.finish():
+                pass
+        return part, framer.pages if framer is not None else 0
+
+    try:
+        if len(items) > 1 and slots > 1:
+            with ThreadPoolExecutor(max_workers=min(slots, len(items))) as pool:
+                records = list(pool.map(independent, items))
+        else:
+            records = list(map(independent, items))
+        parts = [part for part, _ in records]
+        pages = sum(count for _, count in records)
+    except SplitXmlPage:
+        # One XML page can span physical parts. Retain only its unfinished bytes.
+        framer = XmlFrames(STAGE_TARGET_BYTES, STAGE_MAX_MEMBER_BYTES, items[0]['name'])
+        parts = []
+        for item in items:
+            framer.source = item['name']
+            parts.append(scan(item, 1, framer))
+        for _ in framer.finish():
+            pass
+        pages = framer.pages
+    directory = dict(format='wikidict-bzip2-blocks-v1', xml_bytes=sum(part['xml_bytes'] for part in parts), parts=parts)
+    if count_pages:
+        directory['source_pages'] = pages
+    return directory
 
 
 def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, split_parts=True):
@@ -310,7 +341,7 @@ def verified_frame_bridge(items, downloads, stage, page_index, *, workers=1, spl
     return dict(format='wikidict-bzip2-blocks-v1', xml_bytes=xml_size, parts=parts, zstd_frame_bridge=bridge)
 
 
-def write_directory(items, downloads, output, workers=1, *, stage=None, page_index=None):
+def write_directory(items, downloads, output, workers=1, *, stage=None, page_index=None, count_pages=False):
     """Install one authenticated directory without replacing an earlier selection."""
     if os.path.lexists(output):
         raise FileExistsError(output)
@@ -322,7 +353,7 @@ def write_directory(items, downloads, output, workers=1, *, stage=None, page_ind
     if (stage is None) != (page_index is None):
         raise ValueError('The retained staging and page index identities must be provided together')
     if stage is None:
-        result = index_parts(items, downloads, workers)
+        result = index_parts(items, downloads, workers, count_pages=count_pages)
     else:
         from build_wiktionaries import SplitXmlPage
         try:
@@ -358,9 +389,9 @@ def read_bound_json(path, expected_sha256):
     return json.loads(raw), stamp
 
 
-def prepare_build_input(root, output, block_sha256, items, downloads, stage, page_index):
-    """Select an earned block directory and its original logical stage for a build."""
-    from build_wiktionaries import DUMP_STAGING_VERSION, dump_input_fingerprint
+def prepare_build_input(root, output, block_sha256, items, downloads, stage=None, page_index=None):
+    """Select an authenticated fresh or historically bridged archive directory."""
+    from build_wiktionaries import dump_input_fingerprint
 
     blocks, stamp = read_bound_json(output, block_sha256)
     items = ordered_parts(items)
@@ -371,26 +402,17 @@ def prepare_build_input(root, output, block_sha256, items, downloads, stage, pag
             or any(not (directory / name).is_file() or (directory / name).stat().st_size != size
                    for name, size, _ in parts)):
         raise ValueError('Block directory differs from the official archive inventory')
-    bridge = blocks.get('zstd_frame_bridge')
-    if (not isinstance(bridge, dict) or stage.get('version') != DUMP_STAGING_VERSION
-            or stage.get('input_sha256') != dump_input_fingerprint(items)
-            or stage.get('dump_codec') != 'zstd' or stage.get('dump_stream_kind') != 'multistream-zstd'
-            or type(stage.get('source_pages')) is not int or stage['source_pages'] < 0
-            or type(page_index.get('bytes')) is not int or page_index['bytes'] <= 0
-            or not isinstance(page_index.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', page_index['sha256'])
-            or type(bridge.get('page_index_bytes')) is not int
-            or bridge.get('page_index_bytes') != page_index['bytes']
-            or bridge.get('page_index_sha256') != page_index['sha256']):
-        raise ValueError('Original index and retained stage select different inputs')
-    marker = dict(version='wikidict-original-bzip2-input-v1', source_pages=stage['source_pages'],
-                  input_sha256=stage['input_sha256'], source_directory=str(directory),
+    if (stage is None) != (page_index is None):
+        raise ValueError('Select both the retained stage and its page index, or neither')
+    marker = dict(input_sha256=dump_input_fingerprint(items), source_directory=str(directory),
                   block_directory=dict(path=str(output.absolute()), bytes=stamp[2], sha256=block_sha256))
-    for role, byte_key, hash_key in [('dump', 'dump_bytes', 'dump_sha256'), ('index', 'offset_index_bytes', 'offset_index_sha256')]:
-        size, digest = bridge[byte_key], bridge[hash_key]
-        if (type(size) is not int or size <= 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)
-                or (size, digest) != (stage.get(role + '_size'), stage.get(role + '_sha256'))):
-            raise ValueError(f'Retained {role} differs from the authenticated frame bridge')
-        marker[role + '_size'], marker[role + '_sha256'] = size, digest
+    if stage is None:
+        pages = blocks.get('source_pages')
+        if 'zstd_frame_bridge' in blocks or type(pages) is not int or pages < 0:
+            raise ValueError('Fresh builds require a counted original XML block directory')
+        marker.update(version='wikidict-original-bzip2-fresh-input-v1', source_pages=pages)
+    else:
+        marker = bridged_build_marker(marker, blocks.get('zstd_frame_bridge'), stage, page_index)
     root.mkdir(mode=0o700)
     try:
         with tempfile.NamedTemporaryFile(mode='w', encoding='utf8', dir=root) as temporary:
@@ -409,6 +431,29 @@ def prepare_build_input(root, output, block_sha256, items, downloads, stage, pag
     return marker
 
 
+def bridged_build_marker(base, bridge, stage, page_index):
+    from build_wiktionaries import DUMP_STAGING_VERSION
+
+    if (not isinstance(bridge, dict) or stage.get('version') != DUMP_STAGING_VERSION
+            or stage.get('input_sha256') != base['input_sha256']
+            or stage.get('dump_codec') != 'zstd' or stage.get('dump_stream_kind') != 'multistream-zstd'
+            or type(stage.get('source_pages')) is not int or stage['source_pages'] < 0
+            or type(page_index.get('bytes')) is not int or page_index['bytes'] <= 0
+            or not isinstance(page_index.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', page_index['sha256'])
+            or type(bridge.get('page_index_bytes')) is not int
+            or bridge.get('page_index_bytes') != page_index['bytes']
+            or bridge.get('page_index_sha256') != page_index['sha256']):
+        raise ValueError('Original index and retained stage select different inputs')
+    marker = dict(version='wikidict-original-bzip2-input-v1', source_pages=stage['source_pages'], **base)
+    for role, byte_key, hash_key in [('dump', 'dump_bytes', 'dump_sha256'), ('index', 'offset_index_bytes', 'offset_index_sha256')]:
+        size, digest = bridge[byte_key], bridge[hash_key]
+        if (type(size) is not int or size <= 0 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)
+                or (size, digest) != (stage.get(role + '_size'), stage.get(role + '_sha256'))):
+            raise ValueError(f'Retained {role} differs from the authenticated frame bridge')
+        marker[role + '_size'], marker[role + '_sha256'] = size, digest
+    return marker
+
+
 def main():
     import argparse
     from download_wiktionaries import load_input_manifest, select_manifest_files
@@ -424,17 +469,17 @@ def main():
     parser.add_argument('--stage-receipt', type=Path, help='Reproduce a retained Zstandard stage and its stream index in memory')
     parser.add_argument('--page-index-size', type=int, help='Authenticated uncompressed size of the retained page-index.tsv')
     parser.add_argument('--page-index-sha256', help='Authenticated SHA-256 of the retained page-index.tsv')
-    parser.add_argument('--build-input-root', type=Path, help='Create a new read-only input selection directory for a bridged index')
+    parser.add_argument('--build-input-root', type=Path, help='Select fresh original XML or a retained logical stage in a new build-input directory')
     parser.add_argument('--existing-blocks-sha256', help='Reuse the exact block directory at --output when preparing a build input')
     parser.add_argument('--stage-receipt-sha256', help='Authenticated stage receipt digest, required for reuse of an existing index')
     args = parser.parse_args()
     bridge = (args.stage_receipt, args.page_index_size, args.page_index_sha256)
     if any(value is not None for value in bridge) and any(value is None for value in bridge):
         parser.error('--stage-receipt, --page-index-size and --page-index-sha256 belong together')
-    if args.build_input_root and (not args.stage_receipt or os.path.lexists(args.build_input_root)):
-        parser.error('--build-input-root requires a retained stage and an unused destination')
-    if args.existing_blocks_sha256 and not (args.build_input_root and args.stage_receipt_sha256):
-        parser.error('Reusing a block directory requires --build-input-root and --stage-receipt-sha256')
+    if args.build_input_root and os.path.lexists(args.build_input_root):
+        parser.error('--build-input-root requires an unused destination')
+    if args.existing_blocks_sha256 and (not args.build_input_root or (args.stage_receipt and not args.stage_receipt_sha256)):
+        parser.error('Reusing a block directory requires --build-input-root and a digest for any retained stage receipt')
     if args.stage_receipt_sha256 and not args.stage_receipt:
         parser.error('--stage-receipt-sha256 requires --stage-receipt')
     downloads = args.downloads.absolute()
@@ -445,12 +490,13 @@ def main():
              else json.loads(args.stage_receipt.read_bytes()) if args.stage_receipt else None)
     page_index = dict(bytes=args.page_index_size, sha256=args.page_index_sha256) if args.stage_receipt else None
     if not args.existing_blocks_sha256:
-        result = write_directory(items, downloads, args.output, args.workers, stage=stage, page_index=page_index)
+        result = write_directory(items, downloads, args.output, args.workers, stage=stage, page_index=page_index,
+                                 count_pages=args.build_input_root is not None and stage is None)
         print(f'{args.edition}: indexed {len(result["parts"])} archive parts, {result["xml_bytes"]} XML bytes; directory {args.output.stat().st_size} bytes')
     if args.build_input_root:
         digest = args.existing_blocks_sha256 or hashlib.sha256(args.output.read_bytes()).hexdigest()
-        prepare_build_input(args.build_input_root, args.output, digest, items, downloads, stage, page_index)
-        print(f'{args.edition}: selected {stage["source_pages"]} source pages in {args.build_input_root}')
+        marker = prepare_build_input(args.build_input_root, args.output, digest, items, downloads, stage, page_index)
+        print(f'{args.edition}: selected {marker["source_pages"]} source pages in {args.build_input_root}')
 
 
 if __name__ == '__main__':
