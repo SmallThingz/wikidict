@@ -21,6 +21,30 @@ test('binary and seekable multiblock XZ produce identical records',async()=>{
  assert.ok(index.rows.some(x=>x.title==='cat'));
  for(const offset of [0,65530,131068,raw.length-12])assert.deepEqual(await b.read(offset,12),raw.slice(offset,offset+12));
 });
+test('import validates skipped XZ blocks once, including their integrity checks',async()=>{
+  const encoded=execFileSync('xz',['-1','--block-size=64KiB','-c'],{input:raw});
+  const source=await openSource(new Blob([encoded]));
+  assert.ok(source.blocks.length>=3);
+  await source.read(0,1);
+  await source.read(source.size-1,1);
+  const visited=[];
+  const decodeBlock=source.block.bind(source);
+  source.block=number=>{visited.push(number);return decodeBlock(number);};
+  await source.verifyAllBlocks();
+  assert.deepEqual(visited,source.blocks.slice(1,-1).map((_,i)=>i+1));
+  visited.length=0;
+  await source.verifyAllBlocks();
+  assert.deepEqual(visited,[]);
+
+  const middle=source.blocks[1];
+  const corrupt=Buffer.from(encoded);
+  corrupt[middle.offset+Math.ceil(middle.packed/4)*4-1]^=1;
+  const damaged=await openSource(new Blob([corrupt]));
+  await damaged.read(0,1);
+  await assert.rejects(()=>damaged.verifyAllBlocks());
+  await assert.rejects(()=>damaged.verifyAllBlocks());
+});
+
 test('concatenated streams and damaged framing',async()=>{
  const first=execFileSync('xz',['-1','-c'],{input:raw.slice(0,100000)}),second=execFileSync('xz',['-1','-c'],{input:raw.slice(100000)});
  const source=await openSource(new Blob([first,new Uint8Array(4),second]));

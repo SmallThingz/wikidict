@@ -42,7 +42,14 @@ export class XzSource {
     const stream=new XzReadableStream(encoded.stream()).getReader(),parts=[];let length=0;
     try{while(true){const {done,value}=await stream.read();if(done)break;length+=value.length;check(length<=b.size);parts.push(value);}check(length===b.size);}finally{await stream.cancel();}
     const bytes=new Uint8Array(length);let p=0;for(const part of parts){bytes.set(part,p);p+=part.length;}
+    // The decoder has consumed the complete block, including its integrity check.
+    b.verified=true;
     this.cache={number,bytes};return bytes;
+  }
+  async verifyAllBlocks(){
+    for(let i=0;i<this.blocks.length;i++){
+      if(!this.blocks[i].verified)await this.block(i);
+    }
   }
   async read(offset,length){
     check(offset>=0&&length>=0&&offset+length<=this.size&&length<=128*1024*1024);

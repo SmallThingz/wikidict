@@ -15,8 +15,8 @@ async function action(type,args){switch(type){
   if(args.sha256){const hash=sha256.create(),reader=args.file.stream().getReader();while(true){const {value,done}=await reader.read();if(done)break;hash.update(value);}const actual=Array.from(hash.digest(),x=>x.toString(16).padStart(2,'0')).join('');if(actual!==args.sha256.toLowerCase())throw Error('Dictionary checksum mismatch');}
  const src=await openSource(args.file),index=await buildIndex(src),name=args.file.name||args.name||'Dictionary';
   validatePublicationName(name,index.metadata);
-  // Visit every XZ block to validate it, including blocks skipped by record framing.
-  if(src.blocks)for(let i=0;i<src.blocks.length;i++)await src.block(i);
+  // Validate blocks skipped by record framing before committing the immutable file.
+  if(src.verifyAllBlocks)await src.verifyAllBlocks();
   const id=crypto.randomUUID(),data={id,name,file:args.file,...index};
   const next=[...(await library()),data],nextViews=collections(next);
   await dbcall('dictionaries','readwrite',s=>s.put(data));catalog=next;views=nextViews;loaded.set(id,{...data,source:src});return id;
