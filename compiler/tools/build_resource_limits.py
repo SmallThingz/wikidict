@@ -270,10 +270,13 @@ def _process_table():
         if not entry.name.isdigit():
             continue
         try:
-            raw = Path(entry.path, 'stat').read_text()
-            fields = raw[raw.rfind(')') + 2:].split()
+            # The parenthesized command name is an opaque byte string. Only
+            # the following ASCII fields through rss are needed for custody.
+            with open(entry.path + '/stat', 'rb', buffering=0) as status:
+                raw = status.read()
+            fields = raw[raw.rfind(b')') + 2:].split(None, 22)
             table[int(entry.name)] = {
-                'state': fields[0], 'ppid': int(fields[1]), 'pgrp': int(fields[2]),
+                'state': fields[0].decode('ascii'), 'ppid': int(fields[1]), 'pgrp': int(fields[2]),
                 'session': int(fields[3]), 'nice': int(fields[16]), 'threads': int(fields[17]),
                 'start': int(fields[19]), 'vsize': int(fields[20]),
                 'rss': int(fields[21]) * page_bytes,

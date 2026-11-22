@@ -1,18 +1,72 @@
 import contextlib
+import functools
 import io
 import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 import build_resource_limits as limits
-import build_wiktionaries as builder
+
+
+def isolated_watchdog_test(function):
+    """Keep a real watchdog's small envelope independent of the suite process."""
+    @functools.wraps(function)
+    def run(self):
+        selected = f'{Path(__file__).stem}.{type(self).__name__}.{function.__name__}'
+        if os.environ.get('WIKIDICT_ISOLATED_WATCHDOG_TEST') == selected:
+            return function(self)
+        env = dict(os.environ, WIKIDICT_ISOLATED_WATCHDOG_TEST=selected)
+        paths = [str(Path(__file__).resolve().parent), str(Path(limits.__file__).resolve().parent)]
+        if env.get('PYTHONPATH'):
+            paths.append(env['PYTHONPATH'])
+        env['PYTHONPATH'] = os.pathsep.join(paths)
+        command = [sys.executable, '-B']
+        if sys.pycache_prefix is not None:
+            command += ['-X', 'pycache_prefix=' + sys.pycache_prefix]
+        command += ['-m', 'unittest', selected]
+        result = subprocess.run(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+    return run
 
 
 class ResourceLimitsTest(unittest.TestCase):
+    def setUp(self):
+        # Watchdog children cannot inherit unittest discovery's sys.path edits.
+        paths = [str(Path(limits.__file__).resolve().parent)]
+        if os.environ.get('PYTHONPATH'):
+            paths.append(os.environ['PYTHONPATH'])
+        imports = patch.dict(os.environ, {'PYTHONPATH': os.pathsep.join(paths)})
+        imports.start()
+        self.addCleanup(imports.stop)
+
+    def test_real_watchdog_envelope_is_independent_of_large_suite_process(self):
+        retained = bytearray(64 * 1024**2)
+        for offset in range(0, len(retained), os.sysconf('SC_PAGE_SIZE')):
+            retained[offset] = 1
+        lines = Path('/proc/self/smaps_rollup').read_text().splitlines()
+        pss = next(int(line.split()[1]) * 1024 for line in lines if line.startswith('Pss:'))
+        self.assertGreater(pss, 64 * 1024**2)
+        self.test_watchdog_wall_limit_reaps_own_child()
+        self.assertEqual(retained[0], 1)
+
+    def test_process_table_keeps_numeric_fields_after_opaque_command_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            process = Path(tmp, '123')
+            process.mkdir()
+            fields = [b'S'] + [str(i).encode() for i in range(1, 50)]
+            (process / 'stat').write_bytes(b'123 (worker) \xff\n(name) ' + b' '.join(fields))
+            entry = Mock(path=str(process))
+            entry.name = '123'
+            with patch.object(os, 'scandir', return_value=[entry]):
+                self.assertEqual(limits._process_table(), {123: dict(
+                    state='S', ppid=1, pgrp=2, session=3, nice=16, threads=17,
+                    start=19, vsize=20, rss=21 * os.sysconf('SC_PAGE_SIZE'))})
+
     def test_watchdog_cpu_set_reserves_four_logical_cpus_and_prefers_cores(self):
         topology = {**{cpu: (0, cpu // 2) for cpu in range(8)},
                     **{cpu: (0, cpu + 12) for cpu in range(8, 12)}}
@@ -40,6 +94,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(limits._watchdog_cpu_set(8, set(range(12))), list(range(8)))
 
     def test_cli_ignores_host_free_ram_but_requires_containment(self):
+        import build_wiktionaries as builder
         read_text = Path.read_text
         def reject_host_memory(path, *args, **kwargs):
             if path == Path('/proc/self/mountinfo'):
@@ -176,6 +231,7 @@ class ResourceLimitsTest(unittest.TestCase):
                         limits.inside_envelope()
 
     def test_cli_refuses_without_delegation_before_reading_manifest(self):
+        import build_wiktionaries as builder
         with tempfile.TemporaryDirectory() as tmp:
             parent = Path(tmp)
             self.parent(parent, controllers='')
@@ -190,6 +246,7 @@ class ResourceLimitsTest(unittest.TestCase):
             launch.assert_not_called()
 
     def test_project_resource_lock_refuses_second_corpus_invocation(self):
+        import build_wiktionaries as builder
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / '.tmp' / 'build-resources.lock'
             with builder.acquire_build_resource_lock(path):
@@ -208,6 +265,7 @@ class ResourceLimitsTest(unittest.TestCase):
                 limits._delegated_parent(outside, root)
 
     def test_help_does_not_require_cgroup_or_manifest(self):
+        import build_wiktionaries as builder
         output = io.StringIO()
         with patch.object(sys, 'argv', ['build_wiktionaries.py', '--help']), \
              patch.object(builder, 'safe_worker_budget', return_value=0), \
@@ -222,6 +280,7 @@ class ResourceLimitsTest(unittest.TestCase):
         launch.assert_not_called()
 
     def test_worker_budget_does_not_read_host_free_ram(self):
+        import build_wiktionaries as builder
         with patch.dict(os.environ, {}, clear=True), \
              patch.object(Path, 'read_text', side_effect=AssertionError('host free RAM was read')) as memory, \
              patch.object(builder, 'load_average', return_value=0), \
@@ -467,6 +526,7 @@ class ResourceLimitsTest(unittest.TestCase):
             swap_allowed=True, swap_counted_as_ram_headroom=False,
             poll_seconds=0.2, kernel_hard_cap=False), sample)
 
+    @isolated_watchdog_test
     def test_runtime_pressure_does_not_stop_a_started_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'watchdog.json'
@@ -486,6 +546,7 @@ class ResourceLimitsTest(unittest.TestCase):
             remaining = limits._process_table().get(report['child_pid'])
             self.assertTrue(remaining is None or remaining['start'] != report['child_start_time_ticks'])
 
+    @isolated_watchdog_test
     def test_runtime_pressure_does_not_weaken_own_memory_cap(self):
         original_sample = limits._owned_sample
 
@@ -532,6 +593,7 @@ class ResourceLimitsTest(unittest.TestCase):
             with self.assertRaises(limits.ContainmentUnavailable):
                 limits._guardian_child_start(path, 200, 100, 10, 101)
 
+    @isolated_watchdog_test
     def test_missing_first_child_snapshot_uses_guardian_birth_for_cleanup(self):
         real_popen, real_table = limits.subprocess.Popen, limits._process_table
         children = []
@@ -575,6 +637,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
             children[0].kill.assert_not_called()
 
+    @isolated_watchdog_test
     def test_watchdog_wall_limit_reaps_own_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -661,6 +724,7 @@ class ResourceLimitsTest(unittest.TestCase):
                                              limits.signal.SIGKILL)
                         guardian.wait(timeout=5)
 
+    @isolated_watchdog_test
     def test_watchdog_normal_guardian_exit_after_five_seconds_is_reaped(self):
         with self.guardian_normal_done_fixture('time.sleep(6.0)') as (report_path, guardians):
             status = limits.supervise_watchdog(
@@ -678,6 +742,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(guardian_report['status'], 'disarmed')
             self.assertEqual(guardian_report['reason'], 'normal_done')
 
+    @isolated_watchdog_test
     def test_watchdog_nonterminating_guardian_still_fails_cleanup(self):
         with self.guardian_normal_done_fixture('time.sleep(60.0)') as (report_path, guardians):
             with patch.object(limits, 'WATCHDOG_GUARDIAN_CLEANUP_SECONDS', 0.25, create=True):
@@ -696,6 +761,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(len(guardians), 1)
             self.assertIsNone(guardians[0].poll())
 
+    @isolated_watchdog_test
     def test_watchdog_normal_exit_with_native_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -709,6 +775,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(report['child_exit_status'], 0)
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
 
+    @isolated_watchdog_test
     def test_watchdog_controller_exit_reaps_orphan_native_child(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -734,6 +801,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertFalse(Path('/proc', str(report['child_pid'])).exists())
             self.assertFalse(Path('/proc', str(native_pid)).exists())
 
+    @isolated_watchdog_test
     def test_watchdog_rapid_native_child_exit_churn(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / 'watchdog.json'
@@ -747,6 +815,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertLessEqual(report['peak_tasks'], 4)
 
 
+    @isolated_watchdog_test
     def test_finite_virtual_limit_is_separate_from_sampled_physical_budget(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path=Path(tmp)/'watchdog.json'
@@ -784,6 +853,7 @@ class ResourceLimitsTest(unittest.TestCase):
                 limits.supervise_watchdog(argv=['-c','raise SystemExit(99)'],child_nice=0)
             launch.assert_not_called()
 
+    @isolated_watchdog_test
     def test_watchdog_reports_actual_default_child_priority_without_weakening_limits(self):
         inherited=os.getpriority(os.PRIO_PROCESS,0)
         expected=inherited
@@ -798,6 +868,7 @@ class ResourceLimitsTest(unittest.TestCase):
             self.assertEqual(64*1024**2,report['memory_limit_bytes'])
             self.assertLessEqual(report['peak_pss_bytes'],64*1024**2)
 
+    @isolated_watchdog_test
     def test_watchdog_absolute_child_priority_retains_inherited_priority(self):
         inherited=os.getpriority(os.PRIO_PROCESS,0)
         with tempfile.TemporaryDirectory() as tmp:
@@ -1072,9 +1143,11 @@ class WatchdogOpenFilesTest(unittest.TestCase):
             remaining = limits._process_table().get(report['child_pid'])
             self.assertTrue(remaining is None or remaining['start'] != report['child_start_time_ticks'])
 
+    @isolated_watchdog_test
     def test_watchdog_real_child_default_open_files_512(self):
         self.run_child_open_files()
 
+    @isolated_watchdog_test
     def test_watchdog_real_child_android_open_files_8192(self):
         self.run_child_open_files(8192)
 
