@@ -17,15 +17,20 @@ add_library(wikidict-product STATIC
     InlineAudioControls.hpp
 )
 add_library(wikidict-gui SHARED main.cpp)
-# Link the resource objects directly so each consumer registers its fonts, even
-# when no C++ translation unit explicitly references the generated initializers.
-add_library(wikidict-fonts OBJECT)
+# Qt propagates the resource initializers to each consumer of this library.
+add_library(wikidict-fonts STATIC)
 set_target_properties(wikidict-fonts PROPERTIES POSITION_INDEPENDENT_CODE ON
     CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES AUTOMOC OFF AUTOUIC OFF)
 target_link_libraries(wikidict-fonts PRIVATE Qt6::Core)
-target_sources(wikidict-gui PRIVATE $<TARGET_OBJECTS:wikidict-fonts>)
+target_link_libraries(wikidict-gui PRIVATE wikidict-fonts)
 set(WIKIDICT_SHARED_FONT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../shared/fonts")
-qt_add_resources(wikidict-fonts supplementary_han_font PREFIX "/fonts"
+function(wikidict_add_large_font name)
+    # Embed the payload after compilation. The temporary object also needs to
+    # link into the shared GUI library on platforms that require PIC.
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    qt_add_resources(wikidict-fonts ${name} BIG_RESOURCES PREFIX "/fonts" ${ARGN})
+endfunction()
+wikidict_add_large_font(supplementary_han_font
     BASE "${WIKIDICT_SHARED_FONT_DIR}"
     FILES "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB.ttf"
           "${WIKIDICT_SHARED_FONT_DIR}/HanaMinB-LICENSE.txt")
@@ -42,7 +47,7 @@ qt_add_resources(wikidict-fonts kana_font PREFIX "/fonts"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-Regular.ttf"
           "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NotoSerifHentaigana-OFL.txt")
 
-qt_add_resources(wikidict-fonts egyptian_font PREFIX "/fonts"
+wikidict_add_large_font(egyptian_font
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/fonts"
     FILES "${CMAKE_CURRENT_SOURCE_DIR}/fonts/NewGardinerOmni2d4.ttf")
 
@@ -165,7 +170,7 @@ if(BUILD_TESTING)
         set_property(SOURCE ../tests/MainWindowTest.cpp ../tests/MainWindowInlineActionTest.cpp APPEND PROPERTY
             COMPILE_OPTIONS "$<$<CONFIG:Release>:-O0>")
     endif()
-    target_sources(dict-qt-tests PRIVATE $<TARGET_OBJECTS:wikidict-fonts>)
+    target_link_libraries(dict-qt-tests PRIVATE wikidict-fonts)
 
     target_compile_features(dict-qt-tests PRIVATE cxx_std_20)
     target_compile_options(dict-qt-tests PRIVATE -Wall -Wextra -Wpedantic)
