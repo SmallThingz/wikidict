@@ -16,7 +16,7 @@ const web = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(web, '../..');
 const widths = [1000, 640];
 if (process.argv.slice(2).join(' ') === '--help') {
-  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--compare-transport] [--pause-after-members N] [--checkpoint-rows N] [--pause-after-rows N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
+  console.log('node desktop/web/check-edition-layout.mjs INVENTORY.tsv NEW_OUTPUT_DIR EDITION... [--resume] [--compare-transport] [--verify-viewport-parity] [--pause-after-members N] [--checkpoint-rows N] [--pause-after-rows N] [--scroll-review CASES.json] [--figure-witness FILE.json]');
   console.log('Atomic checkpoints retain each completed member and at most 2048 processed rows within a member. --resume requires the same inputs and renderer. --checkpoint-rows N (1..2048) selects a smaller interval; --pause-after-rows N stops at the next checkpoint. Pause options exit 75.');
   console.log('Reads an existing local edition inventory and its sibling Reader checks, then writes editions.jsonl, issues.jsonl, progress.jsonl and sampled viewport PNGs. Exit 2 means enumeration or a required layout check was incomplete.');
   process.exit(0);
@@ -33,6 +33,7 @@ const scrollFile = option('--scroll-review',true);
 const scrollCases = scrollFile ? JSON.parse(await readFile(scrollFile,'utf8')) : null;
 const compareTransport=option('--compare-transport');
 const resume = option('--resume');
+const verifyViewport = !!option('--verify-viewport-parity');
 const pause = option('--pause-after-members', true);
 if (pause !== null) assert(/^[1-9]\d*$/.test(pause) && Number.isSafeInteger(Number(pause)));
 const checkpointRowsOption = option('--checkpoint-rows', true);
@@ -337,14 +338,15 @@ try {
   for (const file of inputPaths) sources[file] = await fileDigest(path.join(web,file));
   const binding = {version:1, selected, inventory:digest(inventoryBytes), reader:digest(readerTable), sources,
     bundle:digest(js), css:digest(css), font:digest(font), browser:browser.version(),
-    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, checkpointRows, compareTransport:!!compareTransport, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
+    executable:await fileDigest(process.env.CHROMIUM || '/opt/brave-bin/brave'), node:process.version, widths, checkpointRows, verifyViewport, compareTransport:!!compareTransport, scrollCasesSha256:scrollCases ? digest(JSON.stringify(scrollCases)) : null, figureWitness:figureWitness ?? null};
+  let parityDigest = saved?.parityDigest ?? null;
   let scrollDigest=saved?.scrollDigest ?? null;
   let witnessDigest = saved?.witnessDigest ?? null;
   const syncFile = async filename => {const f=await open(filename,'r'); try {await f.sync();} finally {await f.close();}};
   async function commit(editionIndex, nextMember, stat, screens, activeMember = null) {
     const logs = {};
     for (const [name,log] of Object.entries(journals)) {await log.sync(); logs[name]=log.position();}
-    const state = {binding,witnessDigest,scrollDigest,editionIndex,nextMember,activeMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
+    const state = {binding,parityDigest,witnessDigest,scrollDigest,editionIndex,nextMember,activeMember,stat,screens:screens?.map(v=>[...v]) ?? null,issueCount,incompleteEditions,logs};
     const tmp = `${checkpointPath}.next`;
     await writeFile(tmp,JSON.stringify({state,sha256:digest(JSON.stringify(state))})+'\n'); await syncFile(tmp);
     await rename(tmp,checkpointPath); await directory.sync();
@@ -363,21 +365,54 @@ try {
       assert.equal(path.basename(sample.filename),sample.filename);
       assert.equal(await fileDigest(path.join(out,sample.filename)),sample.sha256,'Committed sample changed');
     }
+    if (parityDigest) assert.equal(await fileDigest(path.join(out,'viewport-parity.json')),parityDigest);
     if (scrollDigest) assert.equal(await fileDigest(path.join(out,'scroll-review.jsonl')),scrollDigest);
     if (witnessDigest) assert.equal(await fileDigest(path.join(out,'figure-witness.json')),witnessDigest);
     // Discard only uncredited tail writes, after validating every journal and input.
     for (const log of Object.values(journals)) await log.handle.truncate(log.position().bytes);
     issueCount=saved.issueCount; incompleteEditions=saved.incompleteEditions;
   } else await commit(0,0,null,null);
-  const pages = [];
-  for (const width of widths) {
+  let activePage;
+  let rowsOnPage = 0;
+  async function openViewport(width) {
     const page = await browser.newPage({viewport: {width, height: 800}});
     await page.route('**/*', route => route.request().url() === 'https://reader.invalid/reader.ttf' ? route.fulfill({body: font, contentType:'font/ttf',headers:{'access-control-allow-origin':'*'}}) : route.abort());
     await page.setContent('<base href="https://reader.invalid/"><style>' + css + '</style><main></main>');
     await page.addScriptTag({content: js});
     await page.evaluate(async () => { const faces = await document.fonts.load('16px Reader'); await document.fonts.ready; if (!faces.length || faces.some(face => face.status !== 'loaded') || !document.fonts.check('16px Reader')) throw Error('Product Reader font failed to load'); });
-    pages.push(page);
+    return page;
   }
+  async function reopenPage() {
+    if (activePage) await activePage.close();
+    activePage = await openViewport(widths[0]);
+    rowsOnPage = 0;
+  }
+  async function viewport(width) {
+    if (activePage.viewportSize().width !== width) {
+      await activePage.evaluate(() => {
+        document.querySelector('main').replaceChildren();
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+        if (location.hash) history.replaceState(null, '', location.href.split('#')[0]);
+        window.auditActions = [];
+        scrollTo(0, 0);
+      });
+      await activePage.setViewportSize({width,height:800});
+    }
+    return activePage;
+  }
+  async function parityObservation(page, edition, entry) {
+    const [observed] = await page.evaluate(inspectBatch,{edition,entries:[entry],measureFigure:true});
+    const {batchExecutionMs,...metrics}=observed;
+    const geometry=await page.evaluate(async function viewportGeometry() {
+      await document.fonts.ready;
+      const root=document.querySelector('main'); const box=root.getBoundingClientRect();
+      return {width:innerWidth,font:document.fonts.check('16px Reader'),rect:[box.x,box.y,box.width,box.height],text:root.innerText};
+    });
+    const link=page.locator('main a[href^="#"]').filter({hasText:/\S/}).first();
+    const activation=await link.count()?await activateLink(page,link):null;
+    return {metrics,geometry,activation};
+  }
+  await reopenPage();
   if (scrollCases && !saved?.scrollDigest) {
     const target=path.join(out,'scroll-review.jsonl');
     const reviewed=await open(target,'w');
@@ -400,7 +435,7 @@ try {
           const entry=alias ? alias.entry : decode(payload,{...index.metadata,title:row.title});
           entry.source_title=alias ? alias.alias.source_title : row.title;
           entry.source_edition=group.edition;
-          const page=pages[widths.indexOf(j.width)];
+          const page=await viewport(j.width);
           const [layout]=await page.evaluate(inspectBatch,{entries:[entry],edition:group.edition});
           if (j.namedActions) {
             assert.equal(layout.error,undefined);
@@ -494,7 +529,8 @@ try {
     const entry = decode(await source.read(row.offset,row.length),{...index.metadata,title:row.title});
     entry.source_edition=w.edition; entry.source_title=row.title;
     const views = [];
-    for (const [i,page] of pages.entries()) {
+    for (const [i,width] of widths.entries()) {
+      const page=await viewport(width);
       const [result] = await page.evaluate(inspectBatch,{entries:[entry],edition:w.edition,measureFigure:true});
       views.push({width:widths[i],...result});
     }
@@ -569,12 +605,29 @@ try {
         }
         async function flush() {
           if (!batch.length) return;
+          if (rowsOnPage + batch.length > 256) await reopenPage();
+          rowsOnPage += batch.length;
           const entries=batch.map(r=>r.entry);
           const encodeStarted=performance.now();
           const encoded=JSON.stringify({edition,entries});
           costs.encode=(costs.encode || 0)+performance.now()-encodeStarted;
-          for (const [i, page] of pages.entries()) {
-            const width = widths[i];
+          if (verifyViewport && !parityDigest) {
+            const results=[];
+            for(const width of widths) {
+              const original=await openViewport(width);
+              let reference;
+              try {reference=await parityObservation(original,edition,entries[0]);} finally {await original.close();}
+              const observed=await parityObservation(await viewport(width),edition,entries[0]);
+              assert.deepEqual(observed,reference,'Viewport reuse changed genuine entry geometry or keyboard action');
+              results.push({width,metrics:observed.metrics,geometry:{...observed.geometry,text:digest(observed.geometry.text)},activation:observed.activation});
+            }
+            const report = path.join(out, 'viewport-parity.json');
+            await writeFile(report, JSON.stringify({edition,identity:batch[0].identity,results}) + '\n');
+            await syncFile(report);
+            parityDigest = await fileDigest(report);
+          }
+          for (const [i,width] of widths.entries()) {
+            const page=await viewport(width);
             const batchStarted=performance.now();
             const rows = await inspectEntries(page,edition,entries,encoded);
             const encodedMs=performance.now()-batchStarted;

@@ -39,17 +39,19 @@ const calls = [];
 async function run(output, mode, args = [], changedIndex = false) {
   const attempt = [];
   calls.push(attempt);
-  const proc = {argv:['node',sourcePath,inventory,output,'testwiktionary','--checkpoint-rows','1',...args],
+  const proc = {argv:['node',sourcePath,inventory,output,'testwiktionary','--checkpoint-rows','1',...(mode === 'normal' ? ['--verify-viewport-parity'] : []),...args],
     env:{...process.env,CHROMIUM:'/usr/bin/true'},version:process.version,exitCode:undefined};
   const context = vm.createContext({console:{log(){}},process:proc,Buffer,URL,performance,Uint8Array,TextDecoder,TextEncoder,setTimeout,clearTimeout});
-  let widthsCreated = 0;
   const browser = {
     version:()=> 'deterministic-browser-double',isConnected:()=>true,close:async()=>{},
-    async newPage() {
-      const width = [1000,640][widthsCreated++];
-      return {route:async()=>{},setContent:async()=>{},addScriptTag:async()=>{},isClosed:()=>false,
+    async newPage({viewport}) {
+      let width = viewport.width;
+      return {viewportSize:()=>({width,height:800}), setViewportSize:async size=>{width=size.width;}, close:async()=>{},
+        locator:()=>({filter:()=>({first:()=>({count:async()=>0})})}),
+        route:async()=>{},setContent:async()=>{},addScriptTag:async()=>{},isClosed:()=>false,
         screenshot:async({path:target})=>{await writeFile(target,png);return png;},
         async evaluate(fn,arg) {
+          if (fn.name === 'viewportGeometry') return {width,font:true,rect:[0,0,width,10],text:'test entry'};
           if (fn.name === 'inspectBatch') {
             const {entries} = typeof arg === 'string' ? JSON.parse(arg) : arg;
             return entries.map(entry => {
@@ -131,6 +133,11 @@ try {
         await writeFile(file,'UNCOMMITTED-TAIL',{flag:'a'});
       }
       if (mode === 'normal' && checkpoints === 1) {
+        const report=path.join(resumed,'viewport-parity.json'), proof=await readFile(report);
+        assert.equal(sha(proof),saved.parityDigest);
+        await writeFile(report,'changed parity evidence');
+        await assert.rejects(run(resumed,mode,['--resume']));
+        await writeFile(report,proof);
         await assert.rejects(run(resumed,mode,['--resume'],true),/Resumed member or index changed/);
         const damaged = Buffer.from(memberBytes); damaged[damaged.length-1] ^= 1;
         const corrupt = path.join(root,'corrupt-member'); await writeFile(corrupt,damaged);
