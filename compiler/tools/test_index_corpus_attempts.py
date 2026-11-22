@@ -373,7 +373,7 @@ class AttemptIndexTests(unittest.TestCase):
                 log = b''.join(b'BUILD_PHASE ' + json.dumps(event).encode() + b'\n' for event in events)
                 if elapsed is not None:
                     phase = dict(edition='enwiktionary', date='20261001', phase='edition_build')
-                    for event in [dict(event='start'), dict(event='end', seconds=elapsed, status='failure')]:
+                    for event in [dict(event='start'), dict(event='end', seconds=elapsed, status='failure', execution_mode='existing_output')]:
                         log += b'BUILD_PHASE ' + json.dumps({**phase, **event}).encode() + b'\n'
                 result = dict(stdout=record(run / 'tests.stdout', log), returncode=1,
                               elapsed_seconds=10, argv=['build', '--wikis', 'enwiktionary'])
@@ -393,6 +393,18 @@ class AttemptIndexTests(unittest.TestCase):
                 rows = list(csv.DictReader(stream, delimiter='\t'))
             self.assertEqual([(r['attempt'], r['production_seconds']) for r in rows],
                              [('example', ''), ('example/runtime02', '7.500')])
+            self.assertEqual([r['execution_mode'] for r in rows], ['', 'existing_output'])
+            # An older index can be enriched from its original authenticated log.
+            for row in rows:
+                del row['execution_mode']
+            with index.open('w', newline='') as stream:
+                writer = csv.DictWriter(stream, fieldnames=rows[0], delimiter='\t')
+                writer.writeheader()
+                writer.writerows(rows)
+            subprocess.run(command, cwd=root, capture_output=True, check=True)
+            with index.open() as stream:
+                self.assertEqual([r['execution_mode'] for r in csv.DictReader(stream, delimiter='\t')],
+                                 ['', 'existing_output'])
             before = index.stat()
             subprocess.run(command, cwd=root, capture_output=True, check=True)
             self.assertEqual(before.st_mtime_ns, index.stat().st_mtime_ns)

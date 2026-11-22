@@ -421,7 +421,8 @@ def read_execution(base, path, guardian=False):
                 command_seconds=f"{result['elapsed_seconds']:.3f}", closed_unix=closure['closed_unix'],
                 stdout_sha256=stdout['sha256'], closure_sha256=hashlib.sha256(data).hexdigest(),
                 closure_path=str(path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path),
-                closure_join='original-terminal-unknown' if child_only else 'reaped')
+                closure_join='original-terminal-unknown' if child_only else 'reaped',
+                execution_mode=end.get('execution_mode', '') if end else '')
 
 
 def refresh_retry_times(path, attempts):
@@ -474,6 +475,9 @@ def merge_rows(out, base, rows, retry_times=None):
                     # The previous schema admitted only reaped closures.
                     row['closure_join'] = 'reaped'
                     migrated = True
+                if 'execution_mode' not in row:
+                    row['execution_mode'] = ''
+                    migrated = True
                 name = row['attempt']
                 if name in previous or name != attempt_key(base, Path.cwd() / row['closure_path']):
                     raise ValueError(f'Ambiguous existing attempt {name}')
@@ -488,8 +492,13 @@ def merge_rows(out, base, rows, retry_times=None):
             checked_row = {key: str(value) for key, value in row.items()}
             if saved == checked_row:
                 continue
-            if (row['production_status'] != 'failed-before-production'
-                    or saved != {**checked_row, 'production_status': 'no-terminal-production-clock'}):
+            prior = dict(saved)
+            if not prior['execution_mode']:
+                prior['execution_mode'] = checked_row['execution_mode']
+            if (prior['production_status'] == 'no-terminal-production-clock'
+                    and checked_row['production_status'] == 'failed-before-production'):
+                prior['production_status'] = 'failed-before-production'
+            if prior != checked_row:
                 raise ValueError(f"Existing attempt differs: {row['attempt']}")
             previous[row['attempt']] = checked_row
             reclassified = True

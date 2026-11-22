@@ -559,6 +559,10 @@ The [full-edition attempt log](data/corpus-campaign-current01/local-full-build-a
 lists the retained native driver's completed invocations, including failures. It
 reports production time only when the builder recorded its end. Command time
 includes setup and shutdown. A successful build can appear in both tables.
+The `execution_mode` column identifies publication resumes and checks of
+existing output when the original log recorded that distinction. A
+`resumed_publication` time measures the final publication step. Use the
+earlier producing attempt to account for the cost of compiling those pages.
 To update the attempt log, run `python3 compiler/tools/index_corpus_attempts.py
 --receipts DRIVER_DIR --output ATTEMPTS.tsv --add ATTEMPT_DIR` from the checkout
 root. Supply the attempt directory name relative to the retained driver. The
