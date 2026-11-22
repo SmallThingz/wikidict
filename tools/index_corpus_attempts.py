@@ -124,6 +124,22 @@ def guardian_whole(path, closure, result):
     dated_snapshots = None
     deferred_preflight = False
     catalog_ref = command.get('current_python_catalog')
+    if catalog_ref is None and 'python_tooling' in command and not {'selection', 'input_selection'}.intersection(command):
+        # Direct builds can pin the catalog and input files in the command
+        # itself, without a separate selection file. Match actual arguments.
+        catalog_ref = command['python_tooling']
+        guarded = {(ref['path'], ref['sha256'], ref['bytes']) for ref in refs}
+        if catalog_ref not in refs or any((ref['path'], ref['sha256'], ref['bytes']) not in guarded
+                for ref in [catalog['selector'], *catalog['modules'].values()]):
+            raise ValueError(f'Unguarded direct Python tooling: {path}')
+        manifests = [ref for ref in refs if ref['path'] == str(manifest_path)]
+        if len(manifests) != 1 or manifests[0]['sha256'] != manifest_hash or manifests[0]['bytes'] != manifest_path.stat().st_size:
+            raise ValueError(f'Selected input manifest differs: {path}')
+        guarded_paths = {ref['path'] for ref in refs}
+        for arg in argv:
+            name = arg.split('=', 1)[0]
+            if name.startswith('--') and name.endswith('-snapshot') and option(name) not in guarded_paths:
+                raise ValueError(f'Unguarded snapshot {name}: {path}')
     if catalog_ref is None and 'selection' in command:
         selection = command['selection']
         if selection not in command['source_refs']:

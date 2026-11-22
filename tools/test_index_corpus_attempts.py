@@ -66,12 +66,14 @@ class AttemptIndexTests(unittest.TestCase):
             def freeze(extra=(), watchdog_code=0, *, exit_code=0, detached=False, selected_catalog=False,
                        input_selection=False, guard_selector=True, selected_manifest=None, cleanup=True,
                        snapshot=None, guard_snapshot=True, bootstrap_copy=None, snapshot_context=None, extra_refs=(),
-                       input_selection_key='input_selection'):
+                       input_selection_key='input_selection', direct_catalog=False):
                 command = dict(argv=argv + list(extra), cwd=str(workspace), env={},
                     source_refs=[builder], current_python_catalog=catalog_ref, qualification_root=str(run))
                 if selected_catalog:
                     selection = record(root / 'selection.json', dict(python_tooling=command.pop('current_python_catalog')))
                     command.update(selection=selection, source_refs=[builder, selection, catalog_ref])
+                if direct_catalog:
+                    command['python_tooling'] = command.pop('current_python_catalog')
                 if input_selection:
                     command.pop('current_python_catalog')
                     inputs = dict(snapshots={'language-registry': snapshot}) if snapshot else dict(manifest=selected_manifest or manifest)
@@ -152,6 +154,16 @@ class AttemptIndexTests(unittest.TestCase):
 
             from index_corpus_attempts import read_execution
             base = workspace / 'receipts'
+            direct_refs = [selector, manifest, catalog_ref]
+            freeze(direct_catalog=True, extra_refs=direct_refs)
+            self.assertEqual(read_execution(base, path, guardian=True)['production_seconds'], '2.500')
+            for ref in direct_refs:
+                freeze(direct_catalog=True, extra_refs=[r for r in direct_refs if r != ref])
+                with self.assertRaises(ValueError):
+                    read_execution(base, path, guardian=True)
+            freeze(('--site-info-snapshot', str(root / 'other')), direct_catalog=True, extra_refs=direct_refs)
+            with self.assertRaisesRegex(ValueError, 'Unguarded snapshot'):
+                read_execution(base, path, guardian=True)
             for key in ('input_selection', 'selection'):
                 with self.subTest(input_selection_key=key):
                     ordinary = dict(input_selection=True, input_selection_key=key)
